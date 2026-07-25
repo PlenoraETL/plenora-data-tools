@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# fuzz-campaign.sh — campagna lunga di fuzzing per plenora-data-tools.
+#
+# Esegue OGNI target cargo-fuzz in sequenza, ciascuno per FUZZ_HOURS_PER_TARGET
+# ore (default 1), dentro il container nightly con risorse limitate. Corpus e
+# crash artifact restano sulla macchina host (volume /work):
+#
+#   fuzz/corpus/<target>/            corpus accumulato (riusato tra run)
+#   fuzz/artifacts/<target>/         crash artifact (input minimizzabile)
+#   fuzz/campaign-logs/<target>.log  log libFuzzer dell'ultimo run
+#
+# Uso:
+#   scripts/fuzz-campaign.sh                      # tutti i target, 1h ciascuno
+#   FUZZ_HOURS_PER_TARGET=2 scripts/fuzz-campaign.sh
+#   FUZZ_TARGETS="plan_v4_parse diff_kernels" scripts/fuzz-campaign.sh
+#   FUZZ_JOBS=4 FUZZ_WORKERS=4 scripts/fuzz-campaign.sh   # fork paralleli
+#
+# Per una campagna 1-2 giorni: FUZZ_HOURS_PER_TARGET=1.5 circa copre 17
+# target in ~26 ore. Interruzione pulita con Ctrl-C (il run corrente viene
+# terminato, il corpus e' gia' su disco).
+
+set -euo pipefail
+
+IMAGE="${FUZZ_IMAGE:-plenora-rust:nightly-fuzz}"
+# cargo-fuzz non e' installato nell'immagine: si usa il binario precompilato
+# Linux condiviso dei progetti plenora (montato read-only su /fuzzbin).
+CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
+FUZZBIN_HOST="${FUZZBIN_HOST:-C:/tmp/plenora-geo-tools-arrow/.fuzz-cargo/bin}"
+HOURS="${FUZZ_HOURS_PER_TARGET:-1}"
+CPUS="${FUZZ_CPUS:-4}"
+MEMORY="${FUZZ_MEMORY:-10g}"
+JOBS="${FUZZ_JOBS:-1}"
+WORKERS="${FUZZ_WORKERS:-1}"
+
+ALL_TARGETS=(
+    # Portati da plenora-nogeo-tools
+    plan_contract string_chain candidate_chain binary_ops
+    reshape_policies extended_ops advanced_ops
+    # Portati da plenora-geo-tools-arrow
+    wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
+    # Nuovi (Fase 2A)
+    plan_v4_parse analyze_table analyze_geo diff_kernels executor_dag
+)
+TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
+
+SECONDS_PER_TARGET=$(awk "BEGIN { printf \"%d\", $HOURS * 3600 }")
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
+
+echo "== campagna fuzz: ${#TARGETS[@]} target x ${HOURS}h (image ${IMAGE}, cpus=${CPUS}, mem=${MEMORY})"
+
+for target in "${TARGETS[@]}"; do
+    mkdir -p "$PROJECT_ROOT/fuzz/artifacts/$target" "$PROJECT_ROOT/fuzz/corpus/$target"
+    log="$PROJECT_ROOT/fuzz/campaign-logs/$target.log"
+    echo "== $(date -Is) start $target (max_total_time=${SECONDS_PER_TARGET}s)"
+    # NB: nessun --rm se si vogliono ispezionare i container falliti; qui
+    # --rm perche' corpus/artifact/log sono tutti sul volume host.
+    MSYS_NO_PATHCONV=1 docker run --rm \
+        --cpus="$CPUS" --memory="$MEMORY" \
+        -v "$PROJECT_ROOT:/work" \
+        -v "$FUZZBIN_HOST:/fuzzbin:ro" \
+        -w /work/fuzz \
+        -e CARGO_TERM_COLOR=never \
+        "$IMAGE" \
+        "$CARGO_FUZZ" fuzz run "$target" -- \
+            -max_total_time="$SECONDS_PER_TARGET" \
+            -artifact_prefix="/work/fuzz/artifacts/$target/" \
+            -jobs="$JOBS" -workers="$WORKERS" \
+            -timeout=60 -rss_limit_mb=8192 \
+        2>&1 | tee "$log" || true
+    crashes=$(find "$PROJECT_ROOT/fuzz/artifacts/$target" -type f ! -name '.*' | wc -l)
+    echo "== $(date -Is) end   $target (crash artifact: $crashes)"
+done
+
+echo "== campagna terminata: $(date -Is)"
+find "$PROJECT_ROOT/fuzz/artifacts" -type f ! -name '.*' -print

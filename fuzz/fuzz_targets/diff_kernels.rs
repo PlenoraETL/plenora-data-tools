@@ -77,13 +77,13 @@ fn typed_column(kind: u8, payload: &[u8], variant: usize) -> ArrayRef {
         2 => Arc::new(Float64Array::from(
             (0..rows)
                 .map(|row| {
-                    (row % null_period != 0).then(|| edge_float(payload[row] + variant as u8))
+                    (row % null_period != 0).then(|| edge_float(payload[row].wrapping_add(variant as u8)))
                 })
                 .collect::<Vec<_>>(),
         )) as ArrayRef,
         3 => Arc::new(BooleanArray::from(
             (0..rows)
-                .map(|row| (row % null_period != 0).then_some((payload[row] + variant as u8) % 2 == 0))
+                .map(|row| (row % null_period != 0).then_some(payload[row].wrapping_add(variant as u8) % 2 == 0))
                 .collect::<Vec<_>>(),
         )) as ArrayRef,
         _ => Arc::new(StringArray::from(
@@ -260,7 +260,7 @@ fn assert_identical(kernel: &RecordBatch, oracle: &RecordBatch, context: &str) {
 }
 
 fn diff_filter(selector: u8, payload: &[u8]) {
-    let column = typed_column(selector, payload);
+    let column = typed_column(selector, payload, 0);
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new(
             "c",
@@ -292,7 +292,7 @@ fn diff_filter(selector: u8, payload: &[u8]) {
 fn diff_coalesce(selector: u8, payload: &[u8]) {
     let columns = 1 + payload.first().copied().unwrap_or_default() as usize % 3;
     let arrays: Vec<ArrayRef> = (0..columns)
-        .map(|n| typed_column(selector, &payload[n..]))
+        .map(|n| typed_column(selector, payload, n))
         .collect();
     let fields: Vec<Field> = (0..columns)
         .map(|n| Field::new(format!("c{n}"), arrays[n].data_type().clone(), true))
@@ -302,8 +302,24 @@ fn diff_coalesce(selector: u8, payload: &[u8]) {
     let Some(fast) = coalesce_fast(&batch, &indices) else {
         return; // tipo non coperto dal fast path: niente differenziale
     };
+    // Oracolo: replica del percorso generico (`quality::coalesce_generic`,
+    // pub(crate)): concat delle colonne + take del primo non-null per riga.
     let refs: Vec<&dyn Array> = batch.columns().iter().map(|c| c.as_ref()).collect();
-    let oracle = arrow_select::coalesce::coalesce(&refs).expect("oracolo coalesce");
+    let combined = arrow_select::concat::concat(&refs).expect("concat oracolo");
+    let take_indices: Vec<Option<u64>> = (0..batch.num_rows())
+        .map(|row| {
+            indices
+                .iter()
+                .position(|index| !batch.column(*index).is_null(row))
+                .map(|position| (position * batch.num_rows() + row) as u64)
+        })
+        .collect();
+    let oracle = arrow_select::take::take(
+        combined.as_ref(),
+        &UInt64Array::from(take_indices),
+        None,
+    )
+    .expect("take oracolo");
     assert!(
         fast.to_data() == oracle.to_data(),
         "coalesce: fast path diverso dall'oracolo"

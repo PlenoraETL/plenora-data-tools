@@ -881,7 +881,7 @@ pub struct TableDiff {
 struct DiffRow {
     old_row: Option<usize>,
     new_row: Option<usize>,
-    status: String,
+    status: &'static str,
     changed: Option<String>,
     old_values: Option<String>,
 }
@@ -1101,8 +1101,8 @@ pub fn table_diff(
     let mut after = String::new();
     for (old_row, new_row) in matched {
         let (status, changed, old_values) = match (old_row, new_row) {
-            (None, Some(_)) => ("ADDED".to_owned(), None, None),
-            (Some(_), None) => ("DELETED".to_owned(), None, None),
+            (None, Some(_)) => ("ADDED", None, None),
+            (Some(_), None) => ("DELETED", None, None),
             (Some(old_row), Some(new_row)) => {
                 let mut changed = Vec::new();
                 let mut old_values = Vec::new();
@@ -1119,10 +1119,10 @@ pub fn table_diff(
                     }
                 }
                 if changed.is_empty() {
-                    ("UNCHANGED".to_owned(), None, None)
+                    ("UNCHANGED", None, None)
                 } else {
                     (
-                        "MODIFIED".to_owned(),
+                        "MODIFIED",
                         Some(changed.join(&config.separator)),
                         Some(old_values.join(&config.separator)),
                     )
@@ -1192,15 +1192,24 @@ pub fn table_diff(
             DataType::Utf8,
             selector == 1 || selector == 2,
         ));
-        columns.push(Arc::new(StringArray::from(
-            rows.iter()
-                .map(|row| match selector {
-                    0 => Some(row.status.clone()),
-                    1 => row.changed.clone(),
-                    _ => row.old_values.clone(),
-                })
-                .collect::<Vec<_>>(),
-        )));
+        // StringBuilder diretto: stessi valori e stessi null della costruzione
+        // originale via Vec<Option<String>>, senza un clone di String per riga.
+        let mut builder = StringBuilder::with_capacity(
+            rows.len(),
+            rows.len().saturating_mul(8).min(64 * 1024 * 1024),
+        );
+        for row in &rows {
+            let value = match selector {
+                0 => Some(row.status),
+                1 => row.changed.as_deref(),
+                _ => row.old_values.as_deref(),
+            };
+            match value {
+                Some(value) => builder.append_value(value),
+                None => builder.append_null(),
+            }
+        }
+        columns.push(Arc::new(builder.finish()));
     }
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(fields)),
@@ -2247,6 +2256,53 @@ mod tests {
     // riferimento indipendente (usa `composite_key`, mantenuta come oracolo).
     // -------------------------------------------------------------------
 
+    /// Copia verbatim della struct `DiffRow` pre-ottimizzazione (con
+    /// `status: String`) e di `diff_values`, usate da `table_diff_reference`.
+    struct DiffRowRef {
+        old_row: Option<usize>,
+        new_row: Option<usize>,
+        status: String,
+        changed: Option<String>,
+        old_values: Option<String>,
+    }
+
+    /// Copia verbatim di `diff_values` pre-ottimizzazione.
+    fn diff_values_reference(
+        left: &ArrayRef,
+        right: &ArrayRef,
+        rows: &[DiffRowRef],
+    ) -> Result<ArrayRef> {
+        if left.data_type() != right.data_type() {
+            return Err(PlenoraError::Schema(format!(
+                "table_diff richiede tipi Arrow identici, trovati {} e {}",
+                left.data_type(),
+                right.data_type()
+            )));
+        }
+        let combined =
+            plenora_core::arrow::select::concat::concat(&[left.as_ref(), right.as_ref()])?;
+        let indices = rows
+            .iter()
+            .map(|row| {
+                let index = if let Some(new_row) = row.new_row {
+                    left.len().saturating_add(new_row)
+                } else {
+                    row.old_row.ok_or_else(|| {
+                        PlenoraError::Contract("riga table_diff senza sorgente".into())
+                    })?
+                };
+                u32::try_from(index)
+                    .map(Some)
+                    .map_err(|_| PlenoraError::Contract("indice table_diff oltre u32".into()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(plenora_core::arrow::select::take::take(
+            combined.as_ref(),
+            &UInt32Array::from(indices),
+            None,
+        )?)
+    }
+
     /// Copia verbatim dell'implementazione di `table_diff`
     /// pre-ottimizzazione.
     #[allow(clippy::too_many_lines)]
@@ -2353,7 +2409,7 @@ mod tests {
                 (None, None) => unreachable!(),
             };
             if status != "UNCHANGED" || config.include_unchanged == "yes" {
-                rows.push(DiffRow {
+                rows.push(DiffRowRef {
                     old_row,
                     new_row,
                     status,
@@ -2388,7 +2444,7 @@ mod tests {
                     .with_name(name)
                     .with_nullable(true),
             );
-            columns.push(diff_values(left_column, right_column, &rows)?);
+            columns.push(diff_values_reference(left_column, right_column, &rows)?);
         }
         for (position, name) in compare.iter().enumerate() {
             let left_column = left.column(left_compare[position]);
@@ -2402,7 +2458,7 @@ mod tests {
                     .with_name(name)
                     .with_nullable(true),
             );
-            columns.push(diff_values(left_column, right_column, &rows)?);
+            columns.push(diff_values_reference(left_column, right_column, &rows)?);
         }
         for (name, selector) in [
             ("_diff_status", 0_usize),

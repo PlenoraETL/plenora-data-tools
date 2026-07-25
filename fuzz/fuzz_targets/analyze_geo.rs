@@ -135,7 +135,7 @@ fuzz_target!(|payload: &[u8]| {
     let table = cases();
     let selector = payload.first().copied().unwrap_or_default() as usize;
     let (op, arity, tabular, base) = &table[selector % table.len()];
-    let patch = serde_json::from_slice::<Value>(&payload[1..]).ok();
+    let patch = serde_json::from_slice::<Value>(payload.get(1..).unwrap_or(&[])).ok();
     let config = merge(base, patch);
     let plan_crs = projected_crs();
     let input = if *tabular {

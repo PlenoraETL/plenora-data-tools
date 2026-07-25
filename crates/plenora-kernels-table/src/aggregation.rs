@@ -1252,19 +1252,21 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
             let start = (position + 1).saturating_sub(config.window);
             let window = &numbers[start..=position];
             // Aggregazione della finestra senza allocazioni: una passata per
-            // conteggio/somma/estremi (due per stddev), nello stesso ordine
-            // di iterazione del `Vec` ricostruito a ogni riga dall'originale
-            // (somme nello stesso ordine: bit f64 identici).
+            // conteggio/somma/estremi (due per stddev), replicando ESATTAMENTE
+            // le riduzioni originali sul `Vec` ricostruito a ogni riga:
+            // - `Iterator::sum::<f64>` parte da -0.0 (sum([-0.0]) = -0.0);
+            // - `reduce(f64::min/max)` parte dal primo elemento (finestra di
+            //   solo NaN -> NaN, non +/-inf).
             let mut count = 0_usize;
-            let mut sum = 0.0_f64;
-            let mut minimum = f64::INFINITY;
-            let mut maximum = f64::NEG_INFINITY;
+            let mut sum = -0.0_f64;
+            let mut minimum: Option<f64> = None;
+            let mut maximum: Option<f64> = None;
             for value in window.iter().flatten() {
                 count += 1;
                 sum += value;
                 if track_extrema {
-                    minimum = f64::min(minimum, *value);
-                    maximum = f64::max(maximum, *value);
+                    minimum = Some(minimum.map_or(*value, |min| f64::min(min, *value)));
+                    maximum = Some(maximum.map_or(*value, |max| f64::max(max, *value)));
                 }
             }
             if count < config.min_periods {
@@ -1274,8 +1276,8 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
             values.push(match config.function {
                 RollingKind::Sum => Some(sum),
                 RollingKind::Mean => count.to_f64().map(|length| sum / length),
-                RollingKind::Min => (count > 0).then_some(minimum),
-                RollingKind::Max => (count > 0).then_some(maximum),
+                RollingKind::Min => minimum,
+                RollingKind::Max => maximum,
                 RollingKind::Stddev if count <= config.ddof => None,
                 RollingKind::Stddev => {
                     let length = count.to_f64().ok_or_else(|| {
@@ -3271,6 +3273,26 @@ mod tests {
             ddof: 1,
             output_column: "num_roll".into(),
         });
+        // Finestra di un solo elemento NaN: min/max devono restituire NaN
+        // (reduce dal primo elemento), non +/-inf; somma NaN invariata.
+        for function in [
+            RollingKind::Sum,
+            RollingKind::Mean,
+            RollingKind::Min,
+            RollingKind::Max,
+            RollingKind::Stddev,
+        ] {
+            assert_rolling_parity(&single, &RollingWindow {
+                column: "num".into(),
+                function,
+                group_by: Some("g".into()),
+                order_column: None,
+                window: 1,
+                min_periods: 1,
+                ddof: 0,
+                output_column: "num_roll".into(),
+            });
+        }
     }
 
     #[test]

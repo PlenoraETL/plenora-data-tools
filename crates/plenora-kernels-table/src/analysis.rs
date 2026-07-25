@@ -269,15 +269,53 @@ impl JsonTargets {
     }
 }
 
-/// Stato della scansione JSON di una riga (fast path): mappa di output,
-/// buffer riusato per il path corrente e flag per le chiavi "ambigue"
-/// (vuote o contenenti '.'). Con chiavi ambigue due derivazioni diverse
-/// possono produrre lo stesso path appiattito e l'originale risolve il
-/// conflitto iterando le chiavi in ordine lessicografico (BTreeMap di
-/// serde_json): non riproducibile in streaming ordine-documento, quindi il
-/// driver ricade sul parsing completo per quella riga.
+/// Colonne path -> valori dense per riga (null dove il path manca),
+/// costruite direttamente durante la scansione: evita la BTreeMap per
+/// riga, la raccolta/ordinamento delle chiavi per cella e la copia dei
+/// valori nelle colonne di output dell'implementazione originale.
+#[derive(Default)]
+struct PathColumns {
+    paths: Vec<String>,
+    index: HashMap<String, usize>,
+    columns: Vec<Vec<Option<String>>>,
+}
+
+impl PathColumns {
+    fn insert(&mut self, row: usize, path: &str, text: String) {
+        let id = match self.index.get(path) {
+            Some(&id) => id,
+            None => {
+                let id = self.columns.len();
+                self.index.insert(path.to_owned(), id);
+                self.paths.push(path.to_owned());
+                self.columns.push(Vec::new());
+                id
+            }
+        };
+        let column = &mut self.columns[id];
+        if column.len() > row {
+            // Chiave duplicata nello stesso oggetto: come serde_json,
+            // vince l'ultima occorrenza.
+            column[row] = Some(text);
+        } else {
+            column.resize(row, None);
+            column.push(Some(text));
+        }
+    }
+}
+
+/// Stato della scansione JSON di una riga (fast path): buffer delle celle
+/// emesse dalla riga (path, testo), buffer riusato per il path corrente e
+/// flag per le chiavi "ambigue" (vuote o contenenti '.'). Le celle sono
+/// riversate nelle colonne solo a riga valida: JSON invalido o radice non
+/// oggetto scartano il buffer (l'originale produce una riga vuota). Con
+/// chiavi ambigue due derivazioni diverse possono produrre lo stesso path
+/// appiattito e l'originale risolve il conflitto iterando le chiavi in
+/// ordine lessicografico (BTreeMap di serde_json): non riproducibile in
+/// streaming ordine-documento, quindi il driver ricade sul parsing
+/// completo per quella riga.
 struct RowFlatten<'a> {
-    out: &'a mut BTreeMap<String, String>,
+    cells: &'a mut Vec<(String, String)>,
     path: String,
     max: usize,
     targets: Option<&'a JsonTargets>,
@@ -286,10 +324,13 @@ struct RowFlatten<'a> {
 
 impl RowFlatten<'_> {
     fn emit(&mut self, text: String) {
-        self.out.insert(self.path.clone(), text);
+        // Le chiavi duplicate nello stesso oggetto restano nel buffer in
+        // ordine di documento: al riversamento vince l'ultima, come in
+        // serde_json.
+        self.cells.push((self.path.clone(), text));
     }
 
-    fn walk_map<'de, A: MapAccess<'de>>(&mut self, mut map: A, depth: usize) -> Result<(), A::Error> {
+    fn walk_map<'de, A: MapAccess<'de>>(&mut self, mut map: A, depth: usize) -> std::result::Result<(), A::Error> {
         if depth > self.max {
             // Oggetto oltre max_level: l'originale lo scarta senza
             // emettere nulla (ma il parser valida comunque il contenuto).
@@ -342,7 +383,7 @@ struct LeafSeed<'a, 'b> {
 impl<'de> DeserializeSeed<'de> for LeafSeed<'_, '_> {
     type Value = ();
 
-    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
     where
         D: de::Deserializer<'de>,
     {
@@ -357,13 +398,13 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
         formatter.write_str("un valore JSON")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<Self::Value, A::Error> {
         // Un oggetto non e' mai emesso direttamente: si attraversa (il
         // limite di livello e' applicato da walk_map).
         self.row.walk_map(map, self.depth)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<Self::Value, A::Error> {
         if self.capture {
             // Stesso Value dell'originale: la serializzazione compatta e'
             // identica per costruzione.
@@ -375,35 +416,35 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
         Ok(())
     }
 
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+    fn visit_str<E: de::Error>(self, value: &str) -> std::result::Result<Self::Value, E> {
         if self.capture {
             self.row.emit(value.to_owned());
         }
         Ok(())
     }
 
-    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+    fn visit_bool<E: de::Error>(self, value: bool) -> std::result::Result<Self::Value, E> {
         if self.capture {
             self.row.emit(value.to_string());
         }
         Ok(())
     }
 
-    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+    fn visit_i64<E: de::Error>(self, value: i64) -> std::result::Result<Self::Value, E> {
         if self.capture {
             self.row.emit(value.to_string());
         }
         Ok(())
     }
 
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+    fn visit_u64<E: de::Error>(self, value: u64) -> std::result::Result<Self::Value, E> {
         if self.capture {
             self.row.emit(value.to_string());
         }
         Ok(())
     }
 
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+    fn visit_f64<E: de::Error>(self, value: f64) -> std::result::Result<Self::Value, E> {
         if self.capture {
             // Stessa formattazione di serde_json::Number (ryu), usata da
             // value_text sull'albero Value.
@@ -412,7 +453,7 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
         Ok(())
     }
 
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
         if self.capture {
             self.row.emit(String::new());
         }
@@ -429,7 +470,7 @@ struct RootSeed<'a, 'b> {
 impl<'de> DeserializeSeed<'de> for RootSeed<'_, '_> {
     type Value = ();
 
-    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
     where
         D: de::Deserializer<'de>,
     {
@@ -444,54 +485,58 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
         formatter.write_str("un valore JSON")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<Self::Value, A::Error> {
         self.row.walk_map(map, 0)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
         while seq.next_element::<IgnoredAny>()?.is_some() {}
         Ok(())
     }
 
-    fn visit_bool<E: de::Error>(self, _value: bool) -> Result<Self::Value, E> {
+    fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 
-    fn visit_i64<E: de::Error>(self, _value: i64) -> Result<Self::Value, E> {
+    fn visit_i64<E: de::Error>(self, _value: i64) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 
-    fn visit_u64<E: de::Error>(self, _value: u64) -> Result<Self::Value, E> {
+    fn visit_u64<E: de::Error>(self, _value: u64) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 
-    fn visit_f64<E: de::Error>(self, _value: f64) -> Result<Self::Value, E> {
+    fn visit_f64<E: de::Error>(self, _value: f64) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 
-    fn visit_str<E: de::Error>(self, _value: &str) -> Result<Self::Value, E> {
+    fn visit_str<E: de::Error>(self, _value: &str) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
         Ok(())
     }
 }
 
-/// Appiattisce una riga JSON nella mappa path -> testo. Fast path: parsing
-/// streaming con serde (stessa validazione di `from_str::<Value>`, quindi
-/// errori, limiti di annidamento e resa testuale identici), senza
-/// costruire l'albero `Value` e saltando i sotto-alberi non richiesti.
-/// JSON invalido o radice non-oggetto => mappa vuota (come l'originale);
-/// chiavi vuote o con '.' => fallback al parsing completo della riga.
+/// Appiattisce una riga JSON nelle colonne path -> testo. Fast path:
+/// parsing streaming con serde (stessa validazione di
+/// `from_str::<Value>`, quindi errori, limiti di annidamento e resa
+/// testuale identici), senza costruire l'albero `Value` e saltando i
+/// sotto-alberi non richiesti. JSON invalido o radice non-oggetto =>
+/// nessuna emissione (come l'originale); chiavi vuote o con '.' =>
+/// fallback al parsing completo della riga.
 fn flatten_row(
     text: &str,
     max: usize,
     targets: Option<&JsonTargets>,
-    out: &mut BTreeMap<String, String>,
+    row_index: usize,
+    cells: &mut Vec<(String, String)>,
+    out: &mut PathColumns,
 ) {
+    cells.clear();
     let mut row = RowFlatten {
-        out,
+        cells,
         path: String::new(),
         max,
         targets,
@@ -504,14 +549,20 @@ fn flatten_row(
     };
     if row.weird_key {
         // Fallback: algoritmo originale (ordine di emissione sulle chiavi
-        // ordinate, risoluzione dei conflitti inclusa).
-        row.out.clear();
+        // ordinate, risoluzione dei conflitti inclusa); sostituisce le
+        // emissioni del fast path per questa riga.
+        let mut map = BTreeMap::new();
         let parsed = serde_json::from_str::<Value>(text)
             .ok()
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-        flatten(&parsed, "", 0, max, row.out);
-    } else if !valid {
-        row.out.clear();
+        flatten(&parsed, "", 0, max, &mut map);
+        for (path, text) in map {
+            out.insert(row_index, &path, text);
+        }
+    } else if valid {
+        for (path, text) in row.cells.drain(..) {
+            out.insert(row_index, &path, text);
+        }
     }
 }
 
@@ -535,25 +586,31 @@ pub fn flatten_json(
     } else {
         Some(JsonTargets::from_outputs(&config.output_columns, &prefix))
     };
-    let rows = (0..batch.num_rows())
-        .map(|row| {
-            let mut values = BTreeMap::new();
-            if let Some(text) = scalar_as_string(source.as_ref(), row)? {
-                flatten_row(&text, config.max_level, targets.as_ref(), &mut values);
+    let mut columns = PathColumns::default();
+    let mut cells: Vec<(String, String)> = Vec::new();
+    if let Some(values) = source.as_any().downcast_ref::<StringArray>() {
+        // Caso comune: documenti utf8 prestati senza copia (identico al
+        // to_owned di scalar_as_string, compresa la gestione dei null).
+        for (row, text) in values.iter().enumerate() {
+            if let Some(text) = text {
+                flatten_row(text, config.max_level, targets.as_ref(), row, &mut cells, &mut columns);
             }
-            Ok(values)
-        })
-        .collect::<Result<Vec<BTreeMap<String, String>>>>()?;
+        }
+    } else {
+        for row in 0..batch.num_rows() {
+            if let Some(text) = scalar_as_string(source.as_ref(), row)? {
+                flatten_row(&text, config.max_level, targets.as_ref(), row, &mut cells, &mut columns);
+            }
+        }
+    }
+    // Colonne dense: null dove il path manca nella riga.
+    for column in &mut columns.columns {
+        column.resize(batch.num_rows(), None);
+    }
     let keys: Vec<String> = if config.output_columns.is_empty() {
-        let mut keys = rows
-            .iter()
-            .flat_map(|row| row.keys().cloned())
-            .collect::<Vec<_>>();
-        keys.sort();
-        keys.dedup();
-        keys.into_iter()
-            .map(|key| format!("{prefix}{key}"))
-            .collect()
+        let mut paths = columns.paths.clone();
+        paths.sort();
+        paths.into_iter().map(|key| format!("{prefix}{key}")).collect()
     } else {
         config.output_columns.clone()
     };
@@ -568,10 +625,13 @@ pub fn flatten_json(
         let path = output.strip_prefix(&prefix).ok_or_else(|| {
             PlenoraError::Contract(format!("output {output} non inizia con prefix"))
         })?;
-        let values = rows
-            .iter()
-            .map(|row| row.get(path).cloned())
-            .collect::<Vec<_>>();
+        let values: Vec<Option<&str>> = match columns.index.get(path) {
+            Some(&id) => columns.columns[id]
+                .iter()
+                .map(|value| value.as_deref())
+                .collect(),
+            None => vec![None; batch.num_rows()],
+        };
         result = replace_or_append(
             &result,
             &output,
@@ -1364,11 +1424,16 @@ mod tests {
             vec!["doc_b".to_owned()],       // path che punta a un oggetto
             vec!["doc_arr".to_owned()],     // path che punta a un array
             vec!["doc_a.a".to_owned(), "doc_a.a.a".to_owned()], // path annidati
+            vec!["doc_a".to_owned(), "doc_a".to_owned()], // output duplicati
         ] {
             for max_level in 0..=3 {
                 assert_flatten_equiv(&docs, &flatten_config(max_level, output_columns.clone()), &limits);
             }
         }
+        // batch vuoto, discovery e selettivo
+        let empty = docs_batch(vec![]);
+        assert_flatten_equiv(&empty, &flatten_config(2, vec![]), &limits);
+        assert_flatten_equiv(&empty, &flatten_config(2, vec!["doc_a".to_owned()]), &limits);
     }
 
     #[test]

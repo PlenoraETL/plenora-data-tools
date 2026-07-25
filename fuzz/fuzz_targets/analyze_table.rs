@@ -101,7 +101,7 @@ fuzz_target!(|payload: &[u8]| {
     let table = cases();
     let selector = payload.first().copied().unwrap_or_default() as usize;
     let (op, arity, base) = &table[selector % table.len()];
-    let patch = serde_json::from_slice::<Value>(&payload[1..]).ok();
+    let patch = serde_json::from_slice::<Value>(payload.get(1..).unwrap_or(&[])).ok();
     let config = merge(base, patch);
     let input = contract();
     let inputs: Vec<DataContract> = (0..*arity).map(|_| input.clone()).collect();
