@@ -1,5 +1,7 @@
 /target
+target-*/
 **/*.rs.bk
 /.venv-doc
 /fuzz/artifacts
 /fuzz/corpus
+.debug_*.sh
