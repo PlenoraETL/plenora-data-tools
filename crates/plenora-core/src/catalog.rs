@@ -122,10 +122,12 @@ pub struct OperationDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogo unificato delle 135 operazioni (Fase 1, decisione D17/D20; +4
+// Catalogo unificato delle 142 operazioni (Fase 1, decisione D17/D20; +4
 // estensioni geo v1.1: from_wkt, geometry_accessors, collect,
 // line_locate_point; +4 estensioni table v1.1: select_columns, limit, top_n,
-// stable_fingerprint).
+// stable_fingerprint; +3 estensioni geo v1.2: generate_grid, subdivide,
+// snap; +4 estensioni table v1.2: align_schema, concat_by_name,
+// hmac_sha256, validate_rules).
 //
 // Sorgenti dei metadati:
 // - `plenora-nogeo-tools/src/catalog.rs`  (62 op tabellari -> `table.*`);
@@ -186,7 +188,7 @@ macro_rules! op {
     };
 }
 
-/// Catalogo unificato: 66 operazioni tabellari + 69 geografiche.
+/// Catalogo unificato: 70 operazioni tabellari + 72 geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
     // --- Tabellari Manipola-compat (37) -----------------------------------
     op!("table.add_row_number", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
@@ -325,11 +327,23 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.geometry_accessors", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     op!("geo.collect", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Known), &[], CanonicalOrder, KernelValidated),
     op!("geo.line_locate_point", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    // --- Estensioni geo v1.2 (3) ---------------------------------------------
+    op!("geo.generate_grid", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!("geo.subdivide", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    // `snap`: il riferimento da config (`reference_wkb`) e' assunto nello
+    // stesso CRS dell'input (convenzione D16): requisito SameProjected per
+    // l'unica colonna, come le distanze "unarie".
+    op!("geo.snap", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     // --- Estensioni table v1.1 (4) -------------------------------------------
     op!("table.limit", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], InputOrder, KernelValidated),
     op!("table.select_columns", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
     op!("table.stable_fingerprint", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
     op!("table.top_n", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
+    // --- Estensioni table v1.2 (4) -------------------------------------------
+    op!("table.align_schema", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.concat_by_name", Table, Extension, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, KernelValidated),
+    op!("table.hmac_sha256", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.validate_rules", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
 ];
 
 /// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
@@ -501,17 +515,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_135_unique_ids() {
-        assert_eq!(CATALOG.len(), 135);
+    fn catalog_has_142_unique_ids() {
+        assert_eq!(CATALOG.len(), 142);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Table).count(),
-            66
+            70
         );
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Geo).count(),
-            69
+            72
         );
     }
 

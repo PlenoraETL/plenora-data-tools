@@ -152,6 +152,15 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             "select_columns",
             false,
         ),
+        "align_schema" => {
+            let config = decode::<columns::AlignSchema>(step)?;
+            let names: Vec<_> = config
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect();
+            validate_name_list(&names, limits.max_columns, "align_schema", false)
+        }
         "concat_columns" => {
             let config = decode::<columns::ConcatColumns>(step)?;
             validate_name_list(&config.columns, limits.max_columns, "concat_columns", false)?;
@@ -694,6 +703,15 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             )?;
             validate_output_name(&config.output_column)
         }
+        "hmac_sha256" => {
+            let config = decode::<security::HmacSha256>(step)?;
+            validate_name_list(&config.columns, limits.max_columns, "hmac_sha256", false)?;
+            validate_output_name(&config.output_column)?;
+            if config.key_env.trim().is_empty() {
+                return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+            }
+            Ok(())
+        }
         "explode" => {
             let config = decode::<reshape::Explode>(step)?;
             validate_output_name(&config.column)?;
@@ -797,12 +815,21 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             }
             Ok(())
         }
+        "validate_rules" => {
+            let config = decode::<governance::ValidateRules>(step)?;
+            let names: Vec<_> = config.rules.iter().map(|rule| rule.name.clone()).collect();
+            validate_name_list(&names, limits.max_columns, "validate_rules", false)
+        }
         "union_distinct" | "intersect" | "except" => {
             decode::<setops::SetOperation>(step)?;
             Ok(())
         }
         "concat" => {
             decode::<joins::Concat>(step)?;
+            Ok(())
+        }
+        "concat_by_name" => {
+            decode::<joins::ConcatByName>(step)?;
             Ok(())
         }
         "cross_join" => {
@@ -897,6 +924,7 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "rename" => columns::rename(batch, &decode(step)?),
         "reorder_columns" => columns::reorder_columns(batch, &decode(step)?),
         "select_columns" => columns::select_columns(batch, &decode(step)?),
+        "align_schema" => columns::align_schema(batch, &decode(step)?),
         "concat_columns" => columns::concat_columns(batch, &decode(step)?, limits),
         "split_column" => columns::split_column(batch, &decode(step)?, limits),
         "string_pad" => strings::string_pad(batch, &decode(step)?, limits),
@@ -945,6 +973,8 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "timezone_convert" => dates::timezone_convert(batch, &decode(step)?),
         "sha256_hash" => security::sha256_hash(batch, &decode(step)?),
         "stable_fingerprint" => security::stable_fingerprint(batch, &decode(step)?),
+        "hmac_sha256" => security::hmac_sha256(batch, &decode(step)?),
+        "validate_rules" => governance::validate_rules(batch, &decode(step)?),
         "explode" => reshape::explode(batch, &decode(step)?, limits),
         "unnest" => reshape::unnest(batch, &decode(step)?, limits),
         operation => Err(PlenoraError::Unsupported(operation.into())),
@@ -1014,6 +1044,9 @@ pub fn execute_binary(
     let output = match dispatch_name(&step.operation) {
         "join" => joins::join(&left, &right, &decode(step)?, plan.limits()),
         "concat" => joins::concat(&left, &right, &decode(step)?, plan.limits()),
+        "concat_by_name" => {
+            joins::concat_by_name(&[&left, &right], &decode(step)?, plan.limits())
+        }
         "cross_join" => joins::cross_join(&left, &right, &decode(step)?, plan.limits()),
         "table_diff" => reshape::table_diff(&left, &right, &decode(step)?, plan.limits()),
         "semi_join" => joins::semi_join(&left, &right, &decode(step)?),

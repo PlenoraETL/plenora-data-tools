@@ -6,7 +6,7 @@ use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
     UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Schema};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
@@ -738,6 +738,140 @@ pub fn concat(
         })
         .collect::<Vec<_>>();
     let schema = Schema::new_with_metadata(fields, left.schema().metadata().clone());
+    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
+}
+
+// ---------------------------------------------------------------------------
+// table.concat_by_name (estensione v1.2)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConcatByName {
+    /// strict = true: tutti gli schemi devono essere identici (stesse colonne,
+    /// stessi tipi, stesso ordine) — stesso vincolo di `concat`.
+    #[serde(default)]
+    pub strict: bool,
+}
+
+/// Schema unione per `concat_by_name`: colonne nell'ordine di prima apparizione
+/// sugli input, in ordine di input. Per nome: stesso `DataType` ovunque
+/// (altrimenti errore, nessun cast); nullable se almeno un input non ha la
+/// colonna o ce l'ha nullable. In strict mode gli schemi devono essere
+/// identici per sequenza (nome + tipo).
+fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Field>> {
+    let first = inputs[0];
+    if strict {
+        for other in &inputs[1..] {
+            if first.num_columns() != other.num_columns()
+                || first
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(other.schema().fields())
+                    .any(|(left, right)| {
+                        left.name() != right.name() || left.data_type() != right.data_type()
+                    })
+            {
+                return Err(PlenoraError::Schema(
+                    "concat_by_name strict richiede schemi identici".into(),
+                ));
+            }
+        }
+        return Ok(first
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let nullable = inputs
+                    .iter()
+                    .any(|input| input.schema().field(index).is_nullable());
+                field.as_ref().clone().with_nullable(nullable)
+            })
+            .collect());
+    }
+    let mut fields: Vec<Field> = Vec::new();
+    for input in inputs {
+        for field in input.schema().fields() {
+            if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
+                if existing.data_type() != field.data_type() {
+                    return Err(PlenoraError::Schema(format!(
+                        "concat_by_name: tipi incompatibili per la colonna {} ({:?} vs {:?})",
+                        field.name(),
+                        existing.data_type(),
+                        field.data_type()
+                    )));
+                }
+                if field.is_nullable() && !existing.is_nullable() {
+                    *existing = existing.clone().with_nullable(true);
+                }
+            } else {
+                fields.push(field.as_ref().clone());
+            }
+        }
+    }
+    // Colonna assente in almeno un input -> nullable (le righe di quell'input
+    // sono null su quella colonna).
+    for field in &mut fields {
+        if !field.is_nullable()
+            && inputs
+                .iter()
+                .any(|input| input.schema().index_of(field.name()).is_err())
+        {
+            *field = field.clone().with_nullable(true);
+        }
+    }
+    Ok(fields)
+}
+
+/// Concatenazione N-aria per NOME colonna, non per posizione (estensione
+/// v1.2): per ogni colonna dello schema unione tutte le righe di tutti gli
+/// input, nell'ordine degli input; gli input senza quella colonna
+/// contribuiscono con null. Con `strict` gli schemi devono essere identici.
+pub fn concat_by_name(
+    inputs: &[&RecordBatch],
+    config: &ConcatByName,
+    limits: &Limits,
+) -> Result<RecordBatch> {
+    if inputs.is_empty() {
+        return Err(PlenoraError::Contract(
+            "concat_by_name richiede almeno un input".into(),
+        ));
+    }
+    let first = inputs[0];
+    let mut rows = 0_usize;
+    for input in inputs {
+        rows = rows
+            .checked_add(input.num_rows())
+            .ok_or_else(|| PlenoraError::Contract("overflow concat_by_name".into()))?;
+    }
+    if rows > limits.max_rows {
+        return Err(PlenoraError::Contract(
+            "concat_by_name supera max_rows".into(),
+        ));
+    }
+    let fields = union_schema_by_name(inputs, config.strict)?;
+    let columns = fields
+        .iter()
+        .map(|field| {
+            let parts: Vec<ArrayRef> = inputs
+                .iter()
+                .map(|input| match input.schema().index_of(field.name()) {
+                    Ok(index) => Arc::clone(input.column(index)),
+                    Err(_) => {
+                        plenora_core::arrow::array::new_null_array(
+                            field.data_type(),
+                            input.num_rows(),
+                        )
+                    }
+                })
+                .collect();
+            let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
+            plenora_core::arrow::select::concat::concat(&refs).map_err(PlenoraError::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let schema = Schema::new_with_metadata(fields, first.schema().metadata().clone());
     Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
 }
 
@@ -1578,5 +1712,119 @@ mod tests {
         ]);
         assert_join_identical(&left, &right, &["k"], &["k"], &ALL_HOWS);
         assert_membership_identical(&left, &right, &["k"], &["k"]);
+    }
+
+    // -------------------------------------------------------------------
+    // table.concat_by_name (estensione v1.2)
+    // -------------------------------------------------------------------
+
+    fn concat_config(strict: bool) -> ConcatByName {
+        ConcatByName { strict }
+    }
+
+    #[test]
+    fn concat_by_name_permuted_schemas_and_missing_columns() {
+        // Schemi permutati e colonne disgiunte: unione per nome, null dove
+        // la colonna manca, ordine degli input conservato.
+        let first = batch(vec![
+            ("a", i64_column(&[Some(1), Some(2)])),
+            ("b", utf8_column(&[Some("x"), Some("y")])),
+        ]);
+        let second = batch(vec![
+            ("b", utf8_column(&[Some("z")])),
+            ("a", i64_column(&[Some(3)])),
+            ("c", utf8_column(&[Some("only-second")])),
+        ]);
+        let output = concat_by_name(
+            &[&first, &second],
+            &concat_config(false),
+            &Limits::default(),
+        )
+        .expect("concat_by_name");
+        let schema = output.schema();
+        let names: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["a", "b", "c"], "ordine di prima apparizione");
+        assert_eq!(output.num_rows(), 3);
+        let a = output
+            .column_by_name("a")
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .expect("a");
+        assert_eq!(
+            (0..3)
+                .map(|row| (!a.is_null(row)).then(|| a.value(row)))
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+        let b = output
+            .column_by_name("b")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .expect("b");
+        assert_eq!(b.value(2), "z");
+        let c = output
+            .column_by_name("c")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .expect("c");
+        assert!(c.is_null(0) && c.is_null(1), "input senza la colonna -> null");
+        assert_eq!(c.value(2), "only-second");
+        assert!(output.schema().field_with_name("c").expect("c").is_nullable());
+        // Input singolo: passthrough (schema e valori identici).
+        let single = concat_by_name(&[&first], &concat_config(false), &Limits::default())
+            .expect("input singolo");
+        assert_eq!(single.num_rows(), first.num_rows());
+        assert_eq!(single.num_columns(), first.num_columns());
+        // Tre input: ancora per nome.
+        let third = batch(vec![("a", i64_column(&[Some(4)]))]);
+        let output = concat_by_name(
+            &[&first, &second, &third],
+            &concat_config(false),
+            &Limits::default(),
+        )
+        .expect("tre input");
+        assert_eq!(output.num_rows(), 4);
+        let a = output
+            .column_by_name("a")
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .expect("a");
+        assert_eq!(a.value(3), 4);
+    }
+
+    #[test]
+    fn concat_by_name_rejects_incompatible_types_and_strict_mismatch() {
+        let left = batch(vec![("a", i64_column(&[Some(1)]))]);
+        let right = batch(vec![("a", utf8_column(&[Some("x")]))]);
+        let error = concat_by_name(&[&left, &right], &concat_config(false), &Limits::default())
+            .expect_err("tipi incompatibili");
+        assert!(error.to_string().contains("tipi incompatibili"));
+        // Strict: stessa unione di colonne ma ordine permutato -> errore.
+        let permuted = batch(vec![
+            ("b", utf8_column(&[Some("x")])),
+            ("a", i64_column(&[Some(1)])),
+        ]);
+        let wide = batch(vec![
+            ("a", i64_column(&[Some(1)])),
+            ("b", utf8_column(&[Some("x")])),
+        ]);
+        assert!(
+            concat_by_name(&[&wide, &permuted], &concat_config(true), &Limits::default()).is_err()
+        );
+        // Strict con schemi identici: ok.
+        let other = batch(vec![
+            ("a", i64_column(&[Some(2)])),
+            ("b", utf8_column(&[Some("y")])),
+        ]);
+        let output = concat_by_name(&[&wide, &other], &concat_config(true), &Limits::default())
+            .expect("strict ok");
+        assert_eq!(output.num_rows(), 2);
+        // Zero input: errore di contratto.
+        assert!(concat_by_name(&[], &concat_config(false), &Limits::default()).is_err());
+        // Config strict: campo sconosciuto rifiutato.
+        assert!(serde_json::from_value::<ConcatByName>(
+            serde_json::json!({"strict": false, "surprise": 1})
+        )
+        .is_err());
     }
 }

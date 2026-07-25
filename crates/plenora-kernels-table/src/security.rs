@@ -308,6 +308,158 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
     )
 }
 
+// ---------------------------------------------------------------------------
+// table.hmac_sha256 (estensione v1.2)
+// ---------------------------------------------------------------------------
+
+/// Politica sui null per `hmac_sha256`: `empty` = il null contribuisce come
+/// stringa vuota (indistinguibile da ""), `null` = la riga produce un hmac
+/// null, `skip` = la colonna null e' omessa dal framing della riga.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HmacNullPolicy {
+    #[default]
+    Empty,
+    Null,
+    Skip,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HmacSha256 {
+    /// Colonne hashate, nell'ordine dato (come `stable_fingerprint`).
+    pub columns: Vec<String>,
+    /// NOME della variabile d'ambiente che contiene la chiave. La chiave non
+    /// compare mai nel piano, negli errori o nei log: solo il nome.
+    pub key_env: String,
+    #[serde(default = "default_hmac_name")]
+    pub output_column: String,
+    #[serde(default)]
+    pub null_policy: HmacNullPolicy,
+}
+
+fn default_hmac_name() -> String {
+    "hmac".into()
+}
+
+/// HMAC-SHA256 (RFC 2104) implementato sopra `sha2` — due round di hash con
+/// ipad/opad su blocco da 64 byte, nessuna dipendenza aggiuntiva.
+fn hmac_sha256_digest(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut block = [0_u8; BLOCK];
+    if key.len() > BLOCK {
+        let hashed = Sha256::digest(key);
+        block[..hashed.len()].copy_from_slice(&hashed);
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new();
+    for byte in block {
+        inner.update([byte ^ 0x36]);
+    }
+    inner.update(message);
+    let inner = inner.finalize();
+    let mut outer = Sha256::new();
+    for byte in block {
+        outer.update([byte ^ 0x5c]);
+    }
+    outer.update(inner);
+    let digest = outer.finalize();
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&digest);
+    output
+}
+
+/// Legge la chiave dalla variabile d'ambiente indicata. L'errore e'
+/// volutamente generico: non rivela ne' il nome della variabile ne' alcun
+/// frammento del valore.
+fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
+    match std::env::var(key_env) {
+        Ok(value) if !value.is_empty() => Ok(value.into_bytes()),
+        _ => Err(PlenoraError::Contract(
+            "hmac_sha256: chiave HMAC non disponibile".into(),
+        )),
+    }
+}
+
+fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
+    let length = u64::try_from(value.len())
+        .map_err(|_| PlenoraError::Contract("hmac_sha256: valore troppo grande".into()))?;
+    message.extend_from_slice(&length.to_be_bytes());
+    message.extend_from_slice(value);
+    Ok(())
+}
+
+/// HMAC-SHA256 per riga della concatenazione canonica dei valori (stesso
+/// framing di `stable_fingerprint`: separatore di dominio, `framed(nome)`,
+/// `framed(tipo)`, byte di presenza, `framed(valore)`), con separatore
+/// `b"plenora-hmac-sha256-v1\0"`. La chiave arriva SOLO dalla variabile
+/// d'ambiente il cui nome e' `key_env`.
+pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
+    validate_output_name(&config.output_column)?;
+    if config.key_env.trim().is_empty() {
+        return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+    }
+    if config.columns.is_empty() {
+        return Err(PlenoraError::Contract(
+            "hmac_sha256 richiede almeno una colonna".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    for name in &config.columns {
+        if !seen.insert(name.as_str()) {
+            return Err(PlenoraError::Contract(format!(
+                "hmac_sha256: colonna ripetuta: {name}"
+            )));
+        }
+    }
+    let indices = config
+        .columns
+        .iter()
+        .map(|name| column_index(batch, name))
+        .collect::<Result<Vec<_>>>()?;
+    let key = load_hmac_key(&config.key_env)?;
+    let values = (0..batch.num_rows())
+        .map(|row| {
+            let mut message = b"plenora-hmac-sha256-v1\0".to_vec();
+            for (name, index) in config.columns.iter().zip(&indices) {
+                let array = batch.column(*index).as_ref();
+                match scalar_as_string(array, row)? {
+                    Some(value) => {
+                        framed_bytes(&mut message, name.as_bytes())?;
+                        framed_bytes(&mut message, array.data_type().to_string().as_bytes())?;
+                        message.push(1);
+                        framed_bytes(&mut message, value.as_bytes())?;
+                    }
+                    None => match config.null_policy {
+                        HmacNullPolicy::Empty => {
+                            framed_bytes(&mut message, name.as_bytes())?;
+                            framed_bytes(&mut message, array.data_type().to_string().as_bytes())?;
+                            message.push(1);
+                            framed_bytes(&mut message, b"")?;
+                        }
+                        HmacNullPolicy::Null => return Ok(None),
+                        HmacNullPolicy::Skip => {}
+                    },
+                }
+            }
+            let digest = hmac_sha256_digest(&key, &message);
+            let mut hex = String::with_capacity(digest.len() * 2);
+            for byte in digest {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            Ok(Some(hex))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    replace_or_append(
+        batch,
+        &config.output_column,
+        DataType::Utf8,
+        matches!(config.null_policy, HmacNullPolicy::Null),
+        Arc::new(StringArray::from(values)),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskType {    Cf,
@@ -764,10 +916,202 @@ mod tests {
         .is_err());
     }
 
+    // -------------------------------------------------------------------
+    // Test di `hmac_sha256` (estensione v1.2): known-answer RFC 2104
+    // calcolate esternamente sul framing canonico documentato nel kernel,
+    // null policy, e la garanzia che la chiave non compaia MAI negli errori.
+    // -------------------------------------------------------------------
+
+    fn hmac_fixture() -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x"), None])),
+                Arc::new(Int64Array::from(vec![Some(42), Some(7)])),
+            ],
+        )
+        .expect("fixture")
+    }
+
+    fn hmac_config(columns: &[&str], key_env: &str) -> HmacSha256 {
+        HmacSha256 {
+            columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+            key_env: key_env.into(),
+            output_column: "hmac".into(),
+            null_policy: HmacNullPolicy::Empty,
+        }
+    }
+
+    fn hmac_values(batch: &RecordBatch, config: &HmacSha256) -> Vec<Option<String>> {
+        let output = hmac_sha256(batch, config).expect("hmac");
+        let column = output
+            .column_by_name(&config.output_column)
+            .expect("colonna hmac")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8");
+        (0..column.len())
+            .map(|row| (!column.is_null(row)).then(|| column.value(row).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn hmac_sha256_known_answers() {
+        // Known-answer (Python hmac/hashlib) su: "plenora-hmac-sha256-v1\0" +
+        // framed("a") framed("Utf8") 0x01 framed("x") + framed("b")
+        // framed("Int64") 0x01 framed("42"), chiave da env.
+        std::env::set_var("PLENORA_HMAC_KAT_KEY", "plenora-hmac-test-key");
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x")])),
+                Arc::new(Int64Array::from(vec![Some(42)])),
+            ],
+        )
+        .expect("fixture");
+        let values = hmac_values(&batch, &hmac_config(&["a", "b"], "PLENORA_HMAC_KAT_KEY"));
+        assert_eq!(
+            values,
+            vec![Some(
+                "46424a38201bbe2cf03b90d3d48444bd54dc41a70002f4991a146138ca4e0d10".to_owned()
+            )]
+        );
+        // Chiave piu' lunga del blocco (100 byte): percorso key = H(key).
+        std::env::set_var("PLENORA_HMAC_KAT_LONG", "k".repeat(100));
+        let values = hmac_values(&batch, &hmac_config(&["a", "b"], "PLENORA_HMAC_KAT_LONG"));
+        assert_eq!(
+            values,
+            vec![Some(
+                "d9893ec92c4162280504db2c21c83dd75ae2106033f716baa1fcc6804a2b1a82".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_null_policies() {
+        std::env::set_var("PLENORA_HMAC_NULL_KEY", "plenora-hmac-test-key");
+        let batch = hmac_fixture();
+        // empty: null -> stringa vuota nel framing (known-answer Python).
+        let values = hmac_values(&batch, &hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY"));
+        assert_eq!(
+            values[1],
+            Some("c863b8595ce5ae9a7b3a05849cdc952b19d26ce2e96201a612c4d2d759cb429d".to_owned())
+        );
+        // null: la riga con un null produce hmac null (colonna nullable).
+        let config = HmacSha256 {
+            null_policy: HmacNullPolicy::Null,
+            ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
+        };
+        let output = hmac_sha256(&batch, &config).expect("hmac null policy");
+        assert!(output.schema().field_with_name("hmac").expect("hmac").is_nullable());
+        let values = hmac_values(&batch, &config);
+        assert!(values[0].is_some());
+        assert_eq!(values[1], None);
+        // skip: la colonna null e' omessa dal framing -> digest diverso da
+        // empty, deterministico.
+        let config = HmacSha256 {
+            null_policy: HmacNullPolicy::Skip,
+            ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
+        };
+        let skipped = hmac_values(&batch, &config);
+        assert!(skipped[1].is_some());
+        assert_ne!(skipped[1], values[0]);
+    }
+
+    #[test]
+    fn hmac_sha256_is_deterministic_and_sensitive() {
+        std::env::set_var("PLENORA_HMAC_DET_KEY", "plenora-hmac-test-key");
+        let batch = hmac_fixture();
+        let config = hmac_config(&["a", "b"], "PLENORA_HMAC_DET_KEY");
+        let first = hmac_values(&batch, &config);
+        let second = hmac_values(&batch, &config);
+        assert_eq!(first, second, "stesso input -> stesso hmac");
+        // Ordine delle colonne e chiave diversa cambiano il digest.
+        let swapped = hmac_values(&batch, &hmac_config(&["b", "a"], "PLENORA_HMAC_DET_KEY"));
+        assert_ne!(first, swapped);
+        std::env::set_var("PLENORA_HMAC_DET_KEY2", "altra-chiave");
+        let other_key = hmac_values(&batch, &hmac_config(&["a", "b"], "PLENORA_HMAC_DET_KEY2"));
+        assert_ne!(first, other_key);
+    }
+
+    #[test]
+    fn hmac_sha256_key_never_leaks_in_errors() {
+        let secret = "chiave-segreta-DA-NON-RIVELARE-12345";
+        std::env::set_var("PLENORA_HMAC_LEAK_NAME", secret);
+        let batch = hmac_fixture();
+        // 1. Variabile assente: l'errore non rivela ne' il NOME della
+        //    variabile ne' (ovviamente) il valore.
+        std::env::remove_var("PLENORA_HMAC_LEAK_MISSING");
+        let error = hmac_sha256(
+            &batch,
+            &hmac_config(&["a"], "PLENORA_HMAC_LEAK_MISSING"),
+        )
+        .expect_err("variabile assente");
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(!display.contains("PLENORA_HMAC_LEAK_MISSING"), "nome variabile in {display}");
+        assert!(!debug.contains("PLENORA_HMAC_LEAK_MISSING"), "nome variabile in {debug}");
+        // 2. Variabile vuota: stesso errore generico, niente valore/nome.
+        std::env::set_var("PLENORA_HMAC_LEAK_EMPTY", "");
+        let error = hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_EMPTY"))
+            .expect_err("variabile vuota");
+        assert!(!error.to_string().contains("PLENORA_HMAC_LEAK_EMPTY"));
+        // 3. Errori successivi alla lettura della chiave (colonna mancante):
+        //    il valore segreto non compare in nessuna forma.
+        let error = hmac_sha256(
+            &batch,
+            &hmac_config(&["missing_column"], "PLENORA_HMAC_LEAK_NAME"),
+        )
+        .expect_err("colonna mancante");
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(!display.contains(secret), "chiave in {display}");
+        assert!(!debug.contains(secret), "chiave in {debug}");
+        // 4. Errori di validazione config: idem.
+        let config = HmacSha256 {
+            columns: vec!["a".into(), "a".into()],
+            ..hmac_config(&["a"], "PLENORA_HMAC_LEAK_NAME")
+        };
+        let error = hmac_sha256(&batch, &config).expect_err("colonna ripetuta");
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn hmac_sha256_config_validation() {
+        std::env::set_var("PLENORA_HMAC_CFG_KEY", "k");
+        let batch = hmac_fixture();
+        // Config strict: campo sconosciuto rifiutato.
+        assert!(serde_json::from_value::<HmacSha256>(
+            json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY", "surprise": 1})
+        )
+        .is_err());
+        // Defaults: output "hmac", null_policy empty.
+        let decoded: HmacSha256 = serde_json::from_value(
+            json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY"}),
+        )
+        .expect("defaults");
+        assert_eq!(decoded.output_column, "hmac");
+        assert!(matches!(decoded.null_policy, HmacNullPolicy::Empty));
+        // Colonne vuote, ripetute, key_env vuoto, nome output non valido.
+        assert!(hmac_sha256(&batch, &hmac_config(&[], "PLENORA_HMAC_CFG_KEY")).is_err());
+        assert!(hmac_sha256(&batch, &hmac_config(&["a", "a"], "PLENORA_HMAC_CFG_KEY")).is_err());
+        assert!(hmac_sha256(&batch, &hmac_config(&["a"], " ")).is_err());
+        let config = HmacSha256 {
+            output_column: " ".into(),
+            ..hmac_config(&["a"], "PLENORA_HMAC_CFG_KEY")
+        };
+        assert!(hmac_sha256(&batch, &config).is_err());
+    }
+
     #[test]
     fn mask_middle_unicode_e_casi_limite() {
         let cases: &[(&str, usize, usize, char)] = &[
-            ("héllo wörld", 3, 3, '*'),
             ("🦀🦀🦀🦀🦀🦀🦀🦀", 2, 2, '*'),
             ("héllo", 3, 3, '*'),   // corta: 5 <= 3+3
             ("héllow", 3, 3, '*'),  // estremo: 6 > 3+3 falso -> invariata

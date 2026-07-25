@@ -1,9 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, StringArray};
-use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::arrow::array::{
+    new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
+    Float64Array, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
+    TimestampMillisecondArray, UInt64Array,
+};
+use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::Limits;
 use plenora_core::{PlenoraError, Result};
@@ -66,6 +71,268 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
             .map_err(|_| PlenoraError::Schema(format!("colonna non trovata: {name}")))?;
         fields.push(schema.field(index).clone());
         columns.push(Arc::clone(batch.column(index)));
+    }
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        columns,
+    )?)
+}
+
+// ---------------------------------------------------------------------------
+// table.align_schema (estensione v1.2)
+// ---------------------------------------------------------------------------
+
+/// Tipo dichiarato di `align_schema`: set chiuso di nomi, nessuna sintassi
+/// libera. Il mapping su `DataType` e' fisso e documentato in
+/// [`AlignType::data_type`]: mai cast implicito tra tipi diversi.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub enum AlignType {
+    Utf8,
+    Int64,
+    UInt64,
+    Float64,
+    Boolean,
+    Date32,
+    Timestamp,
+    Decimal128,
+    Binary,
+}
+
+impl AlignType {
+    /// `DataType` Arrow corrispondente: `Timestamp` = millisecondi senza
+    /// timezone (coerente col profilo scalare), `Decimal128` = precisione 38,
+    /// scala 10.
+    #[must_use]
+    pub fn data_type(self) -> DataType {
+        match self {
+            Self::Utf8 => DataType::Utf8,
+            Self::Int64 => DataType::Int64,
+            Self::UInt64 => DataType::UInt64,
+            Self::Float64 => DataType::Float64,
+            Self::Boolean => DataType::Boolean,
+            Self::Date32 => DataType::Date32,
+            Self::Timestamp => DataType::Timestamp(TimeUnit::Millisecond, None),
+            Self::Decimal128 => DataType::Decimal128(38, 10),
+            Self::Binary => DataType::Binary,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlignColumn {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub align_type: AlignType,
+    /// Valore scalare per una colonna assente in input (default: colonna di
+    /// null). Ignorato se la colonna esiste gia'.
+    #[serde(default)]
+    pub default: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlignSchema {
+    pub columns: Vec<AlignColumn>,
+    /// Colonne di input non elencate: scartate (default) o preservate in coda
+    /// nell'ordine originale.
+    #[serde(default)]
+    pub keep_extra: bool,
+}
+
+/// Precisione/scala fisse del mapping `AlignType::Decimal128`.
+const ALIGN_DECIMAL_PRECISION: u8 = 38;
+const ALIGN_DECIMAL_SCALE: i8 = 10;
+
+/// Parsing `Decimal128(38, 10)` di un letterale testuale: segno opzionale,
+/// parte intera e frazionaria solo cifre, al massimo 10 decimali (nessun
+/// arrotondamento: piu' cifre della scala -> errore).
+fn parse_align_decimal(text: &str) -> Option<i128> {
+    let negative = text.starts_with('-');
+    let digits = text.trim_start_matches(['-', '+']);
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() > usize::from(ALIGN_DECIMAL_SCALE.cast_unsigned())
+    {
+        return None;
+    }
+    let whole: i128 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    let scale = 10_i128.checked_pow(u32::try_from(ALIGN_DECIMAL_SCALE).ok()?)?;
+    let mut fraction_value = 0_i128;
+    for byte in fraction.bytes() {
+        fraction_value = fraction_value
+            .checked_mul(10)?
+            .checked_add(i128::from(byte - b'0'))?;
+    }
+    for _ in fraction.len()..usize::from(ALIGN_DECIMAL_SCALE.cast_unsigned()) {
+        fraction_value = fraction_value.checked_mul(10)?;
+    }
+    let scaled = whole.checked_mul(scale)?.checked_add(fraction_value)?;
+    Some(if negative { -scaled } else { scaled })
+}
+
+/// Materializza una colonna costante di `rows` righe dal `default` JSON:
+/// stessa conversione validata da [`check_align_default`] (fail-closed in
+/// validazione, mai a meta' dei dati).
+fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Result<ArrayRef> {
+    let invalid = || {
+        PlenoraError::Contract(format!(
+            "align_schema: default {value} non convertibile in {align_type:?}"
+        ))
+    };
+    let string = || match value {
+        Value::String(text) => Ok(text.clone()),
+        _ => Err(invalid()),
+    };
+    let array: ArrayRef = match align_type {
+        AlignType::Utf8 => Arc::new(StringArray::from(vec![string()?; rows])),
+        AlignType::Int64 => {
+            let parsed = match value {
+                Value::Number(number) => number.as_i64(),
+                Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            Arc::new(Int64Array::from(vec![parsed; rows]))
+        }
+        AlignType::UInt64 => {
+            let parsed = match value {
+                Value::Number(number) => number.as_u64(),
+                Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            Arc::new(UInt64Array::from(vec![parsed; rows]))
+        }
+        AlignType::Float64 => {
+            let parsed = match value {
+                Value::Number(number) => number.as_f64(),
+                Value::String(text) => text.trim().replace(',', ".").parse().ok(),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            Arc::new(Float64Array::from(vec![parsed; rows]))
+        }
+        AlignType::Boolean => {
+            let parsed = match value {
+                Value::Bool(flag) => Some(*flag),
+                Value::String(text) if text.eq_ignore_ascii_case("true") => Some(true),
+                Value::String(text) if text.eq_ignore_ascii_case("false") => Some(false),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            Arc::new(BooleanArray::from(vec![parsed; rows]))
+        }
+        AlignType::Date32 => {
+            let text = string()?;
+            let date = chrono::NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
+                .map_err(|_| invalid())?;
+            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                .ok_or_else(|| PlenoraError::Contract("epoch date32 non valida".into()))?;
+            let days = i32::try_from((date - epoch).num_days()).map_err(|_| invalid())?;
+            Arc::new(Date32Array::from(vec![days; rows]))
+        }
+        AlignType::Timestamp => {
+            let text = string()?;
+            let timestamp = chrono::DateTime::parse_from_rfc3339(text.trim())
+                .map_err(|_| invalid())?;
+            Arc::new(TimestampMillisecondArray::from(vec![
+                timestamp.timestamp_millis();
+                rows
+            ]))
+        }
+        AlignType::Decimal128 => {
+            let text = match value {
+                Value::Number(number) => number.to_string(),
+                Value::String(text) => text.trim().to_owned(),
+                _ => return Err(invalid()),
+            };
+            let parsed = parse_align_decimal(&text).ok_or_else(invalid)?;
+            Arc::new(
+                Decimal128Array::from(vec![parsed; rows])
+                    .with_precision_and_scale(ALIGN_DECIMAL_PRECISION, ALIGN_DECIMAL_SCALE)
+                    .map_err(PlenoraError::from)?,
+            )
+        }
+        AlignType::Binary => {
+            let text = string()?;
+            Arc::new(BinaryArray::from(vec![text.as_bytes(); rows]))
+        }
+    };
+    debug_assert_eq!(array.data_type(), &align_type.data_type());
+    Ok(array)
+}
+
+/// Valida il `default` di una colonna dichiarata senza materializzarlo
+/// (per l'analisi a secco del contratto).
+pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
+    align_default_column(value, align_type, 1).map(|_| ())
+}
+
+/// Allinea lo schema dell'input all'elenco dichiarato (estensione v1.2):
+/// riordina/proietta secondo `columns`; una colonna assente e' aggiunta come
+/// colonna di null (o riempita col `default` scalare, non nullable); una
+/// colonna presente con tipo diverso dal dichiarato e' un errore di
+/// contratto (mai cast implicito). Le colonne non elencate sono scartate,
+/// salvo `keep_extra` (appendono in coda nell'ordine originale).
+pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
+    if config.columns.is_empty() {
+        return Err(PlenoraError::Contract(
+            "align_schema richiede almeno una colonna".into(),
+        ));
+    }
+    let schema = batch.schema();
+    let mut seen = HashSet::new();
+    let mut fields = Vec::with_capacity(config.columns.len());
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(config.columns.len());
+    for declared in &config.columns {
+        validate_output_name(&declared.name)?;
+        if !seen.insert(declared.name.as_str()) {
+            return Err(PlenoraError::Contract(format!(
+                "align_schema: colonna ripetuta: {}",
+                declared.name
+            )));
+        }
+        let data_type = declared.align_type.data_type();
+        if let Ok(index) = schema.index_of(&declared.name) {
+            let field = schema.field(index);
+            if field.data_type() != &data_type {
+                return Err(PlenoraError::Contract(format!(
+                    "align_schema: colonna {} di tipo {:?}, atteso {:?} (nessun cast implicito)",
+                    declared.name,
+                    field.data_type(),
+                    data_type
+                )));
+            }
+            fields.push(field.clone());
+            columns.push(Arc::clone(batch.column(index)));
+        } else if let Some(default) = &declared.default {
+            columns.push(align_default_column(
+                default,
+                declared.align_type,
+                batch.num_rows(),
+            )?);
+            fields.push(Field::new(&declared.name, data_type, false));
+        } else {
+            fields.push(Field::new(&declared.name, data_type.clone(), true));
+            columns.push(new_null_array(&data_type, batch.num_rows()));
+        }
+    }
+    if config.keep_extra {
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            if !seen.contains(field.name().as_str()) {
+                fields.push(field.as_ref().clone());
+                columns.push(Arc::clone(column));
+            }
+        }
     }
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
@@ -525,5 +792,236 @@ mod tests {
         )
         .expect("alphabetical");
         assert_eq!(reordered.schema().field(0).name(), "a");
+    }
+
+    // -------------------------------------------------------------------
+    // table.align_schema (estensione v1.2)
+    // -------------------------------------------------------------------
+
+    fn align_fixture() -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("extra", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec![Some("x"), None])),
+                Arc::new(Float64Array::from(vec![Some(1.5), Some(2.5)])),
+            ],
+        )
+        .expect("fixture")
+    }
+
+    fn align(config: serde_json::Value) -> AlignSchema {
+        serde_json::from_value(config).expect("config align_schema")
+    }
+
+    #[test]
+    fn align_schema_reorders_projects_and_fills_missing() {
+        let input = align_fixture();
+        let output = align_schema(
+            &input,
+            &align(json!({
+                "columns": [
+                    {"name": "name", "type": "Utf8"},
+                    {"name": "id", "type": "Int64"},
+                    {"name": "note", "type": "Utf8"}
+                ]
+            })),
+        )
+        .expect("align");
+        // Riordino + proiezione: `extra` scartata, `note` aggiunta di null.
+        let schema = output.schema();
+        let names: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["name", "id", "note"]);
+        assert_eq!(output.num_rows(), 2);
+        let note = output
+            .column_by_name("note")
+            .expect("note")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8");
+        assert!(note.is_null(0) && note.is_null(1));
+        assert!(output.schema().field_with_name("note").expect("note").is_nullable());
+        // Zero-copy sulle colonne passthrough.
+        assert!(Arc::ptr_eq(
+            output.column_by_name("name").expect("name"),
+            input.column_by_name("name").expect("name")
+        ));
+        // keep_extra: le colonne non elencate sopravvivono in coda.
+        let output = align_schema(
+            &input,
+            &align(json!({
+                "columns": [{"name": "id", "type": "Int64"}],
+                "keep_extra": true
+            })),
+        )
+        .expect("align keep_extra");
+        let schema = output.schema();
+        let names: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["id", "name", "extra"]);
+    }
+
+    #[test]
+    fn align_schema_default_values_per_type() {
+        let input = align_fixture();
+        let output = align_schema(
+            &input,
+            &align(json!({
+                "columns": [
+                    {"name": "id", "type": "Int64"},
+                    {"name": "s", "type": "Utf8", "default": "n/d"},
+                    {"name": "i", "type": "Int64", "default": -7},
+                    {"name": "u", "type": "UInt64", "default": "42"},
+                    {"name": "f", "type": "Float64", "default": "2,5"},
+                    {"name": "b", "type": "Boolean", "default": "true"},
+                    {"name": "d", "type": "Date32", "default": "2026-07-25"},
+                    {"name": "t", "type": "Timestamp", "default": "2026-07-25T00:00:00Z"},
+                    {"name": "dc", "type": "Decimal128", "default": "-12.34"},
+                    {"name": "bin", "type": "Binary", "default": "abc"}
+                ]
+            })),
+        )
+        .expect("align defaults");
+        assert_eq!(output.num_columns(), 10);
+        assert_eq!(output.num_rows(), 2);
+        // Le colonne da default sono non nullable e costanti.
+        let schema = output.schema();
+        for name in ["s", "i", "u", "f", "b", "d", "t", "dc", "bin"] {
+            let field = schema.field_with_name(name).expect(name);
+            assert!(!field.is_nullable(), "{name} nullable");
+            assert_eq!(output.column_by_name(name).expect(name).null_count(), 0);
+        }
+        assert_eq!(
+            output
+                .column_by_name("s")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .expect("s")
+                .value(0),
+            "n/d"
+        );
+        assert_eq!(
+            output
+                .column_by_name("i")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                .expect("i")
+                .value(1),
+            -7
+        );
+        assert_eq!(
+            output
+                .column_by_name("u")
+                .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
+                .expect("u")
+                .value(0),
+            42
+        );
+        assert_eq!(
+            output
+                .column_by_name("f")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>())
+                .expect("f")
+                .value(0),
+            2.5
+        );
+        assert!(
+            output
+                .column_by_name("b")
+                .and_then(|c| c.as_any().downcast_ref::<BooleanArray>())
+                .expect("b")
+                .value(0)
+        );
+        // 2026-07-25 = 20659 giorni dall'epoch.
+        assert_eq!(
+            output
+                .column_by_name("d")
+                .and_then(|c| c.as_any().downcast_ref::<Date32Array>())
+                .expect("d")
+                .value(0),
+            20_659
+        );
+        assert_eq!(
+            output
+                .column_by_name("t")
+                .and_then(|c| c.as_any().downcast_ref::<TimestampMillisecondArray>())
+                .expect("t")
+                .value(0),
+            1_784_937_600_000
+        );
+        let decimal = output
+            .column_by_name("dc")
+            .and_then(|c| c.as_any().downcast_ref::<Decimal128Array>())
+            .expect("dc");
+        assert_eq!(decimal.data_type(), &DataType::Decimal128(38, 10));
+        // -12.34 con scala 10 = -12.34 * 10^10.
+        assert_eq!(decimal.value(0), -123_400_000_000_i128);
+        assert_eq!(
+            output
+                .column_by_name("bin")
+                .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
+                .expect("bin")
+                .value(0),
+            b"abc"
+        );
+    }
+
+    #[test]
+    fn align_schema_rejects_type_mismatch_and_bad_configs() {
+        let input = align_fixture();
+        // Tipo diverso dal dichiarato: errore, mai cast implicito.
+        let error = align_schema(
+            &input,
+            &align(json!({"columns": [{"name": "id", "type": "Utf8"}]})),
+        )
+        .expect_err("mismatch");
+        assert!(error.to_string().contains("nessun cast implicito"));
+        // Anche un tipo "vicino" ma diverso (Int64 vs Timestamp) e' un errore.
+        assert!(align_schema(
+            &input,
+            &align(json!({"columns": [{"name": "id", "type": "Timestamp"}]})),
+        )
+        .is_err());
+        // Colonne vuote, ripetute, default non convertibile.
+        assert!(align_schema(&input, &align(json!({"columns": []}))).is_err());
+        assert!(align_schema(
+            &input,
+            &align(json!({"columns": [
+                {"name": "id", "type": "Int64"},
+                {"name": "id", "type": "Int64"}
+            ]})),
+        )
+        .is_err());
+        assert!(align_schema(
+            &input,
+            &align(json!({"columns": [{"name": "n", "type": "Int64", "default": "abc"}]})),
+        )
+        .is_err());
+        // Decimal con piu' cifre della scala: nessun arrotondamento implicito.
+        assert!(align_schema(
+            &input,
+            &align(json!({"columns": [
+                {"name": "dc", "type": "Decimal128", "default": "1.00000000001"}
+            ]})),
+        )
+        .is_err());
+        // Config strict: tipo fuori dal set chiuso e campo sconosciuto.
+        assert!(serde_json::from_value::<AlignSchema>(
+            json!({"columns": [{"name": "x", "type": "Int32"}]})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<AlignSchema>(
+            json!({"columns": [{"name": "x", "type": "Utf8", "surprise": 1}]})
+        )
+        .is_err());
     }
 }

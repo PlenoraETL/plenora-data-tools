@@ -11,7 +11,7 @@
 //!   (framing WKB v2 `PLNGEO2`), `spatial-join` (v2), `transform-arrow`
 //!   (envelope v3 `PLNGEO3`), `pair-arrow` (v3), `self-test --output`;
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
-//!   `plenora-core`, 135 operazioni) e `validate --plan --inputs ...`;
+//!   `plenora-core`, 142 operazioni) e `validate --plan --inputs ...`;
 //! - Fase 2A: collegamento al DAG v4. Se il piano dichiara `schema_version: 4`,
 //!   `validate` e `run` usano il planner/executor del DAG
 //!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani

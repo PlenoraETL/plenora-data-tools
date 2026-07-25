@@ -1,4 +1,4 @@
-//! Inferenza a secco del `DataContract` di output per le 66 operazioni
+//! Inferenza a secco del `DataContract` di output per le 70 operazioni
 //! `table.*` del catalogo (Fase 2A-2, Architetture.md par. 4.3 e 6.1, ADR 5).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
@@ -70,7 +70,7 @@ const MAX_EXPRESSION_NODES: usize = 4_096;
 /// - `Contract`: config non valida, arieta' errata, colonne mancanti,
 ///   vincoli di tipo o parametri violati, collisioni di naming;
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
-// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 66 op.
+// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 70 op.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_table_contract(
     op: &str,
@@ -192,6 +192,10 @@ pub fn analyze_table_contract(
         "table.limit" => analyze_limit(id, inputs, config, fields),
         "table.top_n" => analyze_top_n(id, inputs, config, fields),
         "table.stable_fingerprint" => analyze_stable_fingerprint(id, inputs, config, fields),
+        "table.align_schema" => analyze_align_schema(id, inputs, config, fields),
+        "table.concat_by_name" => analyze_concat_by_name(id, inputs, config, fields),
+        "table.validate_rules" => analyze_validate_rules(id, inputs, config, fields),
+        "table.hmac_sha256" => analyze_hmac_sha256(id, inputs, config, fields),
         _ => Err(PlenoraError::Unsupported(format!(
             "{id}: analyze_contract non disponibile"
         ))),
@@ -771,6 +775,38 @@ fn analyze_stable_fingerprint(
         input,
         fields,
         &[(config.output_column, DataType::Utf8, false)],
+    )
+}
+
+fn analyze_hmac_sha256(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: security::HmacSha256 = typed(op, config)?;
+    let input = &inputs[0];
+    check_output_name(op, &config.output_column)?;
+    if config.key_env.trim().is_empty() {
+        return contract_error(op, "key_env vuoto");
+    }
+    // La chiave NON e' mai letta in analisi: nel contratto passa solo il nome
+    // della variabile d'ambiente, mai il valore.
+    if config.columns.is_empty() {
+        return contract_error(op, "columns vuoto");
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for name in &config.columns {
+        if !seen.insert(name.as_str()) {
+            return contract_error(op, format!("colonna ripetuta in columns: {name}"));
+        }
+        require_scalar_string(op, input, name)?;
+    }
+    let nullable = matches!(config.null_policy, security::HmacNullPolicy::Null);
+    analyze_append(
+        input,
+        fields,
+        &[(config.output_column, DataType::Utf8, nullable)],
     )
 }
 
@@ -1380,6 +1416,95 @@ fn analyze_select_columns(
     let properties = scrub_dropped_geometry(
         ContractProperties {
             sorted_by: if removed_any {
+                None
+            } else {
+                input.properties.sorted_by.clone()
+            },
+            row_count: input.properties.row_count.clone(),
+        },
+        dropped_geometry,
+    );
+    finish(schema, geometry, active, properties)
+}
+
+fn analyze_align_schema(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: columns::AlignSchema = typed(op, config)?;
+    let input = &inputs[0];
+    if config.columns.is_empty() {
+        return contract_error(op, "columns vuoto");
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut fields_out = Vec::with_capacity(config.columns.len());
+    let mut added_any = false;
+    for declared in &config.columns {
+        check_output_name(op, &declared.name)?;
+        if !seen.insert(declared.name.as_str()) {
+            return contract_error(op, format!("colonna ripetuta in columns: {}", declared.name));
+        }
+        let data_type = declared.align_type.data_type();
+        if let Ok(field) = input.schema.field_with_name(&declared.name) {
+            // Mai cast implicito: il tipo dichiarato deve essere identico.
+            if field.data_type() != &data_type {
+                return contract_error(
+                    op,
+                    format!(
+                        "colonna {} di tipo {:?}, atteso {:?} (nessun cast implicito)",
+                        declared.name,
+                        field.data_type(),
+                        data_type
+                    ),
+                );
+            }
+            fields_out.push(field.clone());
+        } else {
+            added_any = true;
+            // Il default e' validato a secco con la stessa conversione del
+            // kernel: mai un errore a meta' dei dati.
+            if let Some(default) = &declared.default {
+                columns::check_align_default(default, declared.align_type)?;
+            }
+            fields.derive(&declared.name);
+            fields_out.push(Field::new(
+                &declared.name,
+                data_type,
+                declared.default.is_none(),
+            ));
+        }
+    }
+    let removed_any = !config.keep_extra
+        && input
+            .schema
+            .fields()
+            .iter()
+            .any(|field| !seen.contains(field.name().as_str()));
+    if config.keep_extra {
+        for field in input.schema.fields() {
+            if !seen.contains(field.name().as_str()) {
+                fields_out.push(field.as_ref().clone());
+            }
+        }
+    }
+    let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
+    let geometry =
+        propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let dropped_geometry = if geometry.is_none() {
+        input.geometries.first().map(|g| g.field_id)
+    } else {
+        None
+    };
+    let active = input
+        .active_geometry
+        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    // 1:1 sulle righe: row_count invariato. sorted_by solo se l'insieme delle
+    // colonne e' invariato (permutazione pura, nessuna chiave rimossa).
+    let properties = scrub_dropped_geometry(
+        ContractProperties {
+            sorted_by: if added_any || removed_any {
                 None
             } else {
                 input.properties.sorted_by.clone()
@@ -2371,6 +2496,159 @@ fn analyze_reconcile(
     )
 }
 
+fn analyze_validate_rules(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: governance::ValidateRules = typed(op, config)?;
+    let input = &inputs[0];
+    if config.rules.is_empty() {
+        return contract_error(op, "rules vuoto");
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for rule in &config.rules {
+        if rule.name.trim().is_empty() {
+            return contract_error(op, "nome regola vuoto");
+        }
+        if !seen.insert(rule.name.as_str()) {
+            return contract_error(op, format!("regola ripetuta: {}", rule.name));
+        }
+        let Some(column) = rule.column.as_deref() else {
+            return contract_error(op, format!("regola {} senza column", rule.name));
+        };
+        let field = field_of(op, input, column)?;
+        let needs_value = !matches!(
+            rule.operator,
+            governance::RuleOperator::Isnull | governance::RuleOperator::Notnull
+        );
+        if needs_value != rule.value.is_some() {
+            return contract_error(
+                op,
+                format!(
+                    "regola {}: value {} per l'operatore",
+                    rule.name,
+                    if needs_value { "obbligatorio" } else { "non ammesso" }
+                ),
+            );
+        }
+        let expected = rule.value.as_ref().map_or_else(String::new, json_text);
+        match rule.operator {
+            governance::RuleOperator::Isnull | governance::RuleOperator::Notnull => {}
+            governance::RuleOperator::Eq | governance::RuleOperator::Ne => {
+                if !governance::is_rule_comparable(field.data_type()) {
+                    return contract_error(
+                        op,
+                        format!(
+                            "regola {}: tipo {:?} non confrontabile",
+                            rule.name,
+                            field.data_type()
+                        ),
+                    );
+                }
+                if governance::is_rule_numeric(field.data_type())
+                    && expected.parse::<f64>().is_err()
+                {
+                    return contract_error(
+                        op,
+                        format!("regola {}: confronto numerico con valore non numerico", rule.name),
+                    );
+                }
+            }
+            governance::RuleOperator::Gt
+            | governance::RuleOperator::Ge
+            | governance::RuleOperator::Lt
+            | governance::RuleOperator::Le => {
+                if !governance::is_rule_numeric(field.data_type()) {
+                    return contract_error(
+                        op,
+                        format!(
+                            "regola {}: confronto ordinato richiede colonna numerica (tipo {:?})",
+                            rule.name,
+                            field.data_type()
+                        ),
+                    );
+                }
+                if expected.parse::<f64>().is_err() {
+                    return contract_error(
+                        op,
+                        format!(
+                            "regola {}: confronto ordinato richiede un valore numerico",
+                            rule.name
+                        ),
+                    );
+                }
+            }
+            governance::RuleOperator::Range => {
+                if !governance::is_rule_numeric(field.data_type()) {
+                    return contract_error(
+                        op,
+                        format!(
+                            "regola {}: range richiede colonna numerica (tipo {:?})",
+                            rule.name,
+                            field.data_type()
+                        ),
+                    );
+                }
+                let Some((low, high)) = expected.split_once(',') else {
+                    return contract_error(op, format!("regola {}: range richiede min,max", rule.name));
+                };
+                if low.trim().parse::<f64>().is_err() || high.trim().parse::<f64>().is_err() {
+                    return contract_error(
+                        op,
+                        format!("regola {}: estremi range non numerici", rule.name),
+                    );
+                }
+            }
+            governance::RuleOperator::Regex => {
+                if field.data_type() != &DataType::Utf8 {
+                    return contract_error(
+                        op,
+                        format!(
+                            "regola {}: regex richiede colonna Utf8 (tipo {:?})",
+                            rule.name,
+                            field.data_type()
+                        ),
+                    );
+                }
+                if expected.len() > Limits::default().max_regex_bytes {
+                    return contract_error(op, format!("regola {}: pattern oltre max_regex_bytes", rule.name));
+                }
+                regex::Regex::new(&expected).map_err(|error| {
+                    PlenoraError::Contract(format!(
+                        "{op}: regola {}: regex non valida: {error}",
+                        rule.name
+                    ))
+                })?;
+            }
+        }
+    }
+    match config.output_mode {
+        governance::ValidateOutputMode::Annotate => analyze_append(
+            input,
+            fields,
+            &[
+                ("_valid".to_owned(), DataType::Boolean, false),
+                ("_errors".to_owned(), DataType::Utf8, false),
+                ("_warnings".to_owned(), DataType::Utf8, false),
+            ],
+        ),
+        governance::ValidateOutputMode::Summary => {
+            // Dataset nuovo: una riga per regola, nessuna colonna d'input.
+            for name in ["name", "errors", "warnings"] {
+                fields.derive(name);
+            }
+            let schema = Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("errors", DataType::Int64, false),
+                Field::new("warnings", DataType::Int64, false),
+            ]);
+            finish(schema, None, None, ContractProperties::default())
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // reshape.rs
 // ---------------------------------------------------------------------------
@@ -3054,6 +3332,105 @@ fn check_same_schema(op: &str, left: &DataContract, right: &DataContract) -> Res
     Ok(())
 }
 
+fn analyze_concat_by_name(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: joins::ConcatByName = typed(op, config)?;
+    let _ = fields;
+    let first = &inputs[0];
+    // Schema unione: stesse regole del kernel (ordine di prima apparizione,
+    // tipi identici per nome, nullable se assente in almeno un input).
+    let fields_out: Vec<Field> = if config.strict {
+        for other in &inputs[1..] {
+            check_same_schema(op, first, other)?;
+        }
+        first
+            .schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let nullable = inputs
+                    .iter()
+                    .any(|input| input.schema.field(index).is_nullable());
+                field.as_ref().clone().with_nullable(nullable)
+            })
+            .collect()
+    } else {
+        let mut union: Vec<Field> = Vec::new();
+        for input in inputs {
+            for field in input.schema.fields() {
+                if let Some(existing) = union.iter_mut().find(|f| f.name() == field.name()) {
+                    if existing.data_type() != field.data_type() {
+                        return contract_error(
+                            op,
+                            format!(
+                                "tipi incompatibili per la colonna {} ({:?} vs {:?})",
+                                field.name(),
+                                existing.data_type(),
+                                field.data_type()
+                            ),
+                        );
+                    }
+                    if field.is_nullable() && !existing.is_nullable() {
+                        *existing = existing.clone().with_nullable(true);
+                    }
+                } else {
+                    union.push(field.as_ref().clone());
+                }
+            }
+        }
+        for field in &mut union {
+            if !field.is_nullable()
+                && inputs
+                    .iter()
+                    .any(|input| input.schema.field_with_name(field.name()).is_err())
+            {
+                *field = field.clone().with_nullable(true);
+            }
+        }
+        union
+    };
+    let schema = Schema::new_with_metadata(fields_out, first.schema.metadata().clone());
+    // Geometria: propagata solo se TUTTI gli input hanno la colonna con lo
+    // stesso tipo (altrimenti le righe degli input senza la colonna
+    // sarebbero null materializzati, non passthrough D16).
+    let geometry = first
+        .geometries
+        .first()
+        .filter(|geometry| {
+            inputs.iter().all(|input| {
+                input
+                    .schema
+                    .field_with_name(&geometry.name)
+                    .is_ok_and(|field| {
+                        Some(field.data_type())
+                            == first
+                                .schema
+                                .field_with_name(&geometry.name)
+                                .ok()
+                                .map(|source| source.data_type())
+                    })
+            })
+        })
+        .and_then(|geometry| propagate_geometry(first, &schema, Some(&geometry.name)));
+    let active = first
+        .active_geometry
+        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    finish(
+        schema,
+        geometry,
+        active,
+        ContractProperties {
+            sorted_by: None,
+            row_count: sum_row_count(inputs),
+        },
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SetOp {
     UnionDistinct,
@@ -3286,7 +3663,7 @@ mod tests {
             .iter()
             .filter(|op| op.family == Family::Table)
             .collect();
-        assert_eq!(table_ops.len(), 66);
+        assert_eq!(table_ops.len(), 70);
         for descriptor in table_ops {
             let inputs = vec![tabular_contract(), right_contract()];
             let result =
@@ -3498,6 +3875,158 @@ mod tests {
         // Default (tutte le colonne): lo schema di test contiene List/Struct,
         // non leggibili via profilo scalare -> fail-closed in validazione.
         assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({})).to_string().contains("scalare"));
+    }
+
+    #[test]
+    fn v1_2_extensions_analyze_contracts() {
+        // align_schema: riordino/proiezione + colonna aggiunta di null (o
+        // default non nullable); mismatch di tipo -> errore (mai cast).
+        let output = ok(
+            "table.align_schema",
+            &[proven_contract()],
+            json!({"columns": [
+                {"name": "name", "type": "Utf8"},
+                {"name": "id", "type": "Int64"},
+                {"name": "note", "type": "Utf8"},
+                {"name": "score", "type": "Float64", "default": 0}
+            ]}),
+        );
+        let names: Vec<_> = output
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["name", "id", "note", "score"]);
+        assert_field(&output, "note", &DataType::Utf8, true);
+        assert_field(&output, "score", &DataType::Float64, false);
+        // Colonne rimosse/aggiunte: sorted_by eliminato, row_count invariato.
+        assert!(output.properties.sorted_by.is_none());
+        assert_eq!(proven_rows(&output), 100);
+        // Permutazione pura con keep_extra: sorted_by preservato.
+        let output = ok(
+            "table.align_schema",
+            &[proven_contract()],
+            json!({"columns": [
+                {"name": "name", "type": "Utf8"},
+                {"name": "id", "type": "Int64"}
+            ], "keep_extra": true}),
+        );
+        assert!(output.properties.sorted_by.is_some());
+        // Geometria dichiarata col tipo giusto (Binary) e' propagata.
+        let output = ok(
+            "table.align_schema",
+            &[geo_contract()],
+            json!({"columns": [{"name": "geom", "type": "Binary"}, {"name": "id", "type": "Int64"}]}),
+        );
+        assert_eq!(output.geometries.len(), 1);
+        assert_eq!(output.active_geometry, Some(FieldId(7)));
+        // Errori: tipo diverso, default non convertibile, duplicati, vuoto.
+        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "id", "type": "Utf8"}]})).to_string().contains("cast implicito"));
+        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "x", "type": "Int64", "default": "abc"}]})).to_string().contains("default"));
+        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "id", "type": "Int64"}, {"name": "id", "type": "Int64"}]})).to_string().contains("ripetuta"));
+        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
+
+        // concat_by_name: unione per nome su schemi diversi.
+        let (a, b) = simple_pair();
+        let third = DataContract::new(
+            Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("extra", DataType::Int64, false),
+            ])),
+            Vec::new(),
+            None,
+            ContractProperties {
+                sorted_by: None,
+                row_count: Some(ContractProperty::new(
+                    PropertyConfidence::Proven(25),
+                    PropertyScope::Dataset,
+                )),
+            },
+        )
+        .unwrap();
+        let output = ok("table.concat_by_name", &[a, b, third], json!({}));
+        let names: Vec<_> = output
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["id", "name", "extra"]);
+        // id manca nel terzo input -> nullable; row_count = somma esatta.
+        assert_field(&output, "id", &DataType::Int64, true);
+        assert_eq!(proven_rows(&output), 175);
+        // Tipi incompatibili per nome: errore.
+        let incompatible = DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            true,
+        )])));
+        let (a, b) = simple_pair();
+        assert!(err("table.concat_by_name", &[a, incompatible, b], json!({})).to_string().contains("incompatibili"));
+        // Strict: schemi permutati -> errore.
+        let permuted = DataContract::tabular(Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("id", DataType::Int64, false),
+        ])));
+        let (a, _) = simple_pair();
+        assert!(err("table.concat_by_name", &[a, permuted], json!({"strict": true})).to_string().contains("schemi"));
+
+        // validate_rules annotate: tre colonne non nullable, row_count 1:1.
+        let output = ok(
+            "table.validate_rules",
+            &[proven_contract()],
+            json!({"rules": [
+                {"name": "r1", "operator": "gt", "column": "value", "value": 0},
+                {"name": "r2", "operator": "regex", "column": "name", "value": "^[a-z]+$", "severity": "warning"}
+            ]}),
+        );
+        assert_field(&output, "_valid", &DataType::Boolean, false);
+        assert_field(&output, "_errors", &DataType::Utf8, false);
+        assert_field(&output, "_warnings", &DataType::Utf8, false);
+        assert_eq!(proven_rows(&output), 100);
+        // Summary: dataset nuovo (name, errors, warnings).
+        let output = ok(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"output_mode": "summary", "rules": [
+                {"name": "r1", "operator": "isnull", "column": "name"}
+            ]}),
+        );
+        assert_eq!(output.schema.fields().len(), 3);
+        assert_field(&output, "name", &DataType::Utf8, false);
+        assert_field(&output, "errors", &DataType::Int64, false);
+        assert!(output.geometries.is_empty());
+        // Errori di validazione: regex invalida, ordinato su Utf8, regex su
+        // numerica, value mancante/non ammesso, regola duplicata.
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "regex", "column": "name", "value": "("}]})).to_string().contains("regex"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "gt", "column": "name", "value": 1}]})).to_string().contains("numerica"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "regex", "column": "id", "value": "1"}]})).to_string().contains("Utf8"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "eq", "column": "id"}]})).to_string().contains("value"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "isnull", "column": "id", "value": 1}]})).to_string().contains("value"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [
+            {"name": "r", "operator": "isnull", "column": "id"},
+            {"name": "r", "operator": "notnull", "column": "id"}
+        ]})).to_string().contains("ripetuta"));
+        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": []})).to_string().contains("rules"));
+
+        // hmac_sha256: append Utf8; nullable solo con null_policy "null".
+        let output = ok(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": ["id", "name"], "key_env": "PLENORA_HMAC"}),
+        );
+        assert_field(&output, "hmac", &DataType::Utf8, false);
+        let output = ok(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": ["id"], "key_env": "PLENORA_HMAC", "null_policy": "null"}),
+        );
+        assert_field(&output, "hmac", &DataType::Utf8, true);
+        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": [], "key_env": "K"})).to_string().contains("columns"));
+        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id"], "key_env": " "})).to_string().contains("key_env"));
+        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["lst"], "key_env": "K"})).to_string().contains("scalare"));
+        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id", "id"], "key_env": "K"})).to_string().contains("ripetuta"));
     }
 
     #[test]

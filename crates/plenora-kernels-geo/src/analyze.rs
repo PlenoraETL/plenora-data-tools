@@ -1,4 +1,4 @@
-//! Inferenza a secco dei `DataContract` per le 69 operazioni `geo.*`
+//! Inferenza a secco dei `DataContract` per le 72 operazioni `geo.*`
 //! (Architetture.md par. 4.3 e 6.1, ADR 5 — Fase 2A-2b).
 //!
 //! [`analyze_geo_contract`] e' l'`analyze_contract` del catalogo per la
@@ -65,6 +65,22 @@
 //!   attributi non sono propagati);
 //! - `line_locate_point`: aggiunge `fraction` Float64 nullable (punto da
 //!   config `point_wkb`, stessa convenzione D16 di `other_wkb`);
+//! - `generate_grid` (v1.2, generativa): come `from_coords` richiede un input
+//!   senza geometrie (l'input funge da trigger, le sue colonne non sono
+//!   propagate: l'output e' una riga per cella). Schema nuovo: `geometry`
+//!   (nuovo `FieldId`, non null), `cell_i`/`cell_j` UInt64 non null, piu'
+//!   `centroid_x`/`centroid_y` Float64 non null se `include_centroid`. CRS da
+//!   config `crs` o di piano. Extent finito e non degenere, `cell_size > 0`,
+//!   numero celle entro [`crate::extensions2::MAX_GRID_CELLS`]; il conteggio
+//!   esatto e' esposto come `row_count` `Estimated` (la convenzione v1
+//!   riserva `Proven` alle fonti dimostrabili dagli header);
+//! - `subdivide` (v1.2): espansione 1:N come `explode` (`__parent_index`,
+//!   `row_count` eliminato, `sorted_by` preservato); `max_vertices >= 4`;
+//!   `output_column` rinomina la colonna geometria (stesso `FieldId`);
+//! - `snap` (v1.2): 1:1 in place, schema invariato; `reference_wkb` (hex)
+//!   validato strutturalmente E decodificato in analisi, `tolerance >= 0`;
+//!   il riferimento e' assunto nello stesso CRS dell'input (D16), requisito
+//!   `SameProjected` come le distanze "unarie";
 //! - `geometry_diagnostics`: la colonna geometria e' **sostituita** dalle 10
 //!   colonne diagnostiche [`DIAGNOSTIC_COLUMNS`] (il contratto diventa
 //!   non-geografico), come nel kernel legacy.
@@ -113,7 +129,8 @@ use std::sync::Arc;
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, CrsRequirement, Family, OperationDescriptor};
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldAllocator, GeometryColumnContract, GeometryDimensions,
+    ContractProperties, ContractProperty, DataContract, FieldAllocator, GeometryColumnContract,
+    GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -149,6 +166,14 @@ pub const DEFAULT_X_COLUMN: &str = "x";
 pub const DEFAULT_Y_COLUMN: &str = "y";
 /// Default della colonna frazione di `line_locate_point`.
 pub const FRACTION_COLUMN: &str = "fraction";
+/// Colonna indice di colonna della cella di `generate_grid`.
+pub const CELL_I_COLUMN: &str = "cell_i";
+/// Colonna indice di riga della cella di `generate_grid`.
+pub const CELL_J_COLUMN: &str = "cell_j";
+/// Colonna X del centroide cella di `generate_grid` (`include_centroid`).
+pub const CENTROID_X_COLUMN: &str = "centroid_x";
+/// Colonna Y del centroide cella di `generate_grid` (`include_centroid`).
+pub const CENTROID_Y_COLUMN: &str = "centroid_y";
 
 /// Le 6 colonne di `geometry_accessors`, in ordine canonico di output
 /// (indipendente dall'ordine di `fields` in config).
@@ -409,6 +434,47 @@ struct CollectConfig {
 struct LineLocatePointConfig {
     point_wkb: String,
     output_column: Option<String>,
+}
+
+/// Extent di `generate_grid`: finito e non degenere (dominio verificato dal
+/// kernel [`crate::extensions2::GridExtent`]).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GridExtentConfig {
+    xmin: f64,
+    ymin: f64,
+    xmax: f64,
+    ymax: f64,
+}
+
+/// `generate_grid` (v1.2, generativa): `shape` default `square`,
+/// `include_centroid` default false, CRS da `crs` o di piano.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerateGridConfig {
+    extent: GridExtentConfig,
+    cell_size: f64,
+    shape: Option<crate::extensions2::GridShape>,
+    crs: Option<String>,
+    include_centroid: Option<bool>,
+}
+
+/// `subdivide` (v1.2): `output_column` rinomina la colonna geometria
+/// (default: nome invariato, in place come `explode`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubdivideConfig {
+    max_vertices: usize,
+    output_column: Option<String>,
+}
+
+/// `snap` (v1.2): riferimento WKB hex da config (convenzione D16, stesso CRS
+/// dell'input), validato strutturalmente e decodificato in analisi.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapConfig {
+    reference_wkb: String,
+    tolerance: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1052,136 @@ fn analyze_line_locate_point(
     analyze_add_column(op, input, name, DataType::Float64)
 }
 
+/// `generate_grid` (v1.2, generativa): input senza geometrie (trigger); lo
+/// schema di output e' nuovo (geometria nuovo `FieldId` non null +
+/// `cell_i`/`cell_j`, piu' centroidi opzionali) e il numero di celle,
+/// limitato da [`crate::extensions2::MAX_GRID_CELLS`], e' noto a secco
+/// (`row_count` `Estimated` col valore esatto).
+fn analyze_generate_grid(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+    plan_crs: Option<&ResolvedCrs>,
+    requirement: CrsRequirement,
+    fields_allocator: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let parsed: GenerateGridConfig = parse_config(op, config)?;
+    if !input.geometries.is_empty() {
+        return Err(PlenoraError::Schema(format!(
+            "{op}: l'input ha gia' una colonna geometria"
+        )));
+    }
+    let extent = crate::extensions2::GridExtent::new(
+        parsed.extent.xmin,
+        parsed.extent.ymin,
+        parsed.extent.xmax,
+        parsed.extent.ymax,
+    )
+    .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+    let shape = parsed.shape.unwrap_or(crate::extensions2::GridShape::Square);
+    let cells = crate::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
+        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+    let crs = match &parsed.crs {
+        Some(definition) => resolve_definition(definition, plan_crs)?,
+        None => plan_crs.cloned().ok_or_else(|| {
+            PlenoraError::Crs(format!("{op}: CRS obbligatorio (config `crs` o CRS di piano)"))
+        })?,
+    };
+    validate_requirement(requirement, &[&crs])?;
+    let mut fields = vec![new_geometry_field(DEFAULT_GEOMETRY_COLUMN, &crs, false)?];
+    fields.push(Field::new(CELL_I_COLUMN, DataType::UInt64, false));
+    fields.push(Field::new(CELL_J_COLUMN, DataType::UInt64, false));
+    if parsed.include_centroid.unwrap_or(false) {
+        fields.push(Field::new(CENTROID_X_COLUMN, DataType::Float64, false));
+        fields.push(Field::new(CENTROID_Y_COLUMN, DataType::Float64, false));
+    }
+    let field_id = fields_allocator.alloc();
+    let geometry = GeometryColumnContract {
+        field_id,
+        name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
+        crs,
+        dimensions: GeometryDimensions::Xy,
+        nullable: false,
+    };
+    let mut properties = ContractProperties::default();
+    properties.row_count = Some(ContractProperty::new(
+        PropertyConfidence::Estimated(cells),
+        PropertyScope::Dataset,
+    ));
+    DataContract::new(
+        Arc::new(Schema::new(fields)),
+        vec![geometry],
+        Some(field_id),
+        properties,
+    )
+}
+
+/// `subdivide` (v1.2): espansione 1:N come `explode` (`__parent_index`,
+/// `sorted_by` preservato, `row_count` eliminato); `output_column` rinomina
+/// la colonna geometria preservando il `FieldId`.
+fn analyze_subdivide(
+    op: &str,
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+    config: &Value,
+) -> Result<DataContract> {
+    let parsed: SubdivideConfig = parse_config(op, config)?;
+    if parsed.max_vertices < crate::extensions2::MIN_SUBDIVIDE_VERTICES {
+        return Err(invalid_param(
+            op,
+            "max_vertices",
+            "deve essere almeno 4 (anello chiuso minimo)",
+        ));
+    }
+    let mut fields = output_fields(input);
+    let mut output_geometry = geometry.clone();
+    if let Some(name) = parsed.output_column.as_deref() {
+        if !ensure_name(name) {
+            return Err(invalid_param(op, "output_column", "non deve essere vuoto"));
+        }
+        if name != geometry.name {
+            ensure_name_free(op, &fields, name)?;
+            let position = fields
+                .iter()
+                .position(|field| field.name() == &geometry.name)
+                .ok_or_else(|| {
+                    PlenoraError::Schema(format!(
+                        "colonna geometria `{}` assente dallo schema",
+                        geometry.name
+                    ))
+                })?;
+            let field = &fields[position];
+            fields[position] = Field::new(name, field.data_type().clone(), field.is_nullable())
+                .with_metadata(field.metadata().clone());
+            output_geometry.name = name.to_owned();
+        }
+    }
+    ensure_name_free(op, &fields, PARENT_INDEX_COLUMN)?;
+    fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
+    let mut properties = input.properties.clone();
+    properties.row_count = None;
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        )),
+        vec![output_geometry],
+        input.active_geometry,
+        properties,
+    )
+}
+
+/// `snap` (v1.2): 1:1 in place; `reference_wkb` validato strutturalmente e
+/// decodificato in analisi, `tolerance` finita e non negativa.
+fn analyze_snap(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
+    let parsed: SnapConfig = parse_config(op, config)?;
+    let bytes = validate_wkb_hex(op, "reference_wkb", &parsed.reference_wkb)?;
+    crate::geometry_from_wkb(&bytes)
+        .map_err(|_| invalid_param(op, "reference_wkb", "WKB non decodificabile"))?;
+    ensure_non_negative(op, "tolerance", parsed.tolerance)?;
+    Ok(input.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Validazione parametri per gruppo di operazioni.
 // ---------------------------------------------------------------------------
@@ -1196,6 +1392,14 @@ fn analyze_unary(
             validate_requirement(requirement, &[&geometry.crs])?;
             analyze_line_locate_point(op, input, config)
         }
+        "geo.subdivide" => {
+            validate_requirement(requirement, &[&geometry.crs])?;
+            analyze_subdivide(op, input, geometry, config)
+        }
+        "geo.snap" => {
+            validate_requirement(requirement, &[&geometry.crs])?;
+            analyze_snap(op, input, config)
+        }
         "geo.polygonize" => {
             let parsed: PolygonizeConfig = parse_config(op, config)?;
             let _ = (&parsed.node_input, &parsed.require_complete);
@@ -1350,6 +1554,13 @@ pub fn analyze_geo_contract(
         })?;
         return analyze_from_wkt(op, &inputs[0], config, plan_crs, requirement, fields);
     }
+    if descriptor.id == "geo.generate_grid" {
+        let op = descriptor.id;
+        let requirement = descriptor.crs_requirement.ok_or_else(|| {
+            PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+        })?;
+        return analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields);
+    }
     match descriptor.arity {
         Arity::Unary => analyze_unary(descriptor, &inputs[0], config, plan_crs),
         Arity::BinaryOrdered => analyze_binary(descriptor, inputs, config),
@@ -1474,6 +1685,9 @@ mod tests {
         FromCoords,
         /// Input tabellare WKT + colonna geometria nullable con nuovo FieldId.
         FromWkt,
+        /// Griglia generativa: schema nuovo (geometria non null nuovo FieldId,
+        /// cell_i/cell_j, centroidi opzionali) + row_count esatto.
+        Grid { centroid: bool },
         /// Schema invariato, CRS del contratto aggiornato al target.
         Reprojected,
     }
@@ -1578,6 +1792,11 @@ mod tests {
                 json!({"point_wkb": point_wkb_hex()}),
                 Expect::Appended(vec![float_column(FRACTION_COLUMN)]),
             ),
+            unary(
+                "geo.snap",
+                json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
+                Expect::Unchanged,
+            ),
             // --- Espansioni 1:N ---------------------------------------------
             unary(
                 "geo.explode",
@@ -1592,6 +1811,11 @@ mod tests {
             unary(
                 "geo.split",
                 other_wkb_config(),
+                Expect::Appended(vec![(PARENT_INDEX_COLUMN, DataType::UInt64, false)]),
+            ),
+            unary(
+                "geo.subdivide",
+                json!({"max_vertices": 8}),
                 Expect::Appended(vec![(PARENT_INDEX_COLUMN, DataType::UInt64, false)]),
             ),
             // --- Aggregazioni a sole geometrie ------------------------------
@@ -1615,6 +1839,11 @@ mod tests {
                 "geo.from_wkt",
                 json!({"wkt_column": "wkt"}),
                 Expect::FromWkt,
+            ),
+            unary(
+                "geo.generate_grid",
+                json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0}, "cell_size": 5.0}),
+                Expect::Grid { centroid: false },
             ),
             unary(
                 "geo.reproject",
@@ -1742,6 +1971,8 @@ mod tests {
             tabular_contract()
         } else if case.op == "geo.from_wkt" {
             wkt_tabular_contract()
+        } else if case.op == "geo.generate_grid" {
+            tabular_contract()
         } else {
             geo_contract(input_crs_for(case.op))
         };
@@ -1803,15 +2034,15 @@ mod tests {
     }
 
     #[test]
-    fn table_covers_all_and_only_the_69_catalog_geo_ops() {
+    fn table_covers_all_and_only_the_72_catalog_geo_ops() {
         let catalog_ops: HashSet<&str> = CATALOG
             .iter()
             .filter(|op| op.family == Family::Geo)
             .map(|op| op.id)
             .collect();
-        assert_eq!(catalog_ops.len(), 69);
+        assert_eq!(catalog_ops.len(), 72);
         let case_ops: HashSet<&str> = cases().iter().map(|case| case.op).collect();
-        assert_eq!(case_ops.len(), 69, "casi duplicati nella tabella");
+        assert_eq!(case_ops.len(), 72, "casi duplicati nella tabella");
         assert_eq!(catalog_ops, case_ops);
     }
 
@@ -1907,6 +2138,31 @@ mod tests {
                     .expect("geo JSON");
                     assert_eq!(geo.get("crs").and_then(Value::as_str), Some("EPSG:32632"));
                 }
+                Expect::Grid { centroid } => {
+                    let mut expected = vec![
+                        (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+                        (CELL_I_COLUMN, DataType::UInt64, false),
+                        (CELL_J_COLUMN, DataType::UInt64, false),
+                    ];
+                    if *centroid {
+                        expected.push((CENTROID_X_COLUMN, DataType::Float64, false));
+                        expected.push((CENTROID_Y_COLUMN, DataType::Float64, false));
+                    }
+                    assert_eq!(signatures(&output), expected, "{}: schema", case.op);
+                    let geometry = output.active_geometry_column().expect("geometria creata");
+                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
+                    assert!(!geometry.nullable, "{}: geometria di griglia non null", case.op);
+                    assert_eq!(geometry.crs.definition(), "EPSG:32632");
+                    assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
+                    // Il numero di celle (2x2 con cell_size 5 su extent 10x10)
+                    // e' noto a secco.
+                    let row_count = output
+                        .properties
+                        .row_count
+                        .as_ref()
+                        .expect("row_count della griglia");
+                    assert_eq!(row_count.value(), Some(&4), "{}: conteggio celle", case.op);
+                }
                 Expect::Reprojected => {
                     assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria in output");
@@ -1929,7 +2185,7 @@ mod tests {
                 }
             }
             // L'allocatore non viene consumato dalle op che non creano geometrie.
-            if case.op != "geo.from_coords" && case.op != "geo.from_wkt" {
+            if !matches!(case.op, "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid") {
                 assert_eq!(allocator.peek(), FieldId(100), "{}: allocatore intatto", case.op);
             }
         }
@@ -1943,8 +2199,8 @@ mod tests {
     fn every_geo_op_rejects_an_input_without_geometry() {
         for case in cases() {
             let mut allocator = FieldAllocator::new(0);
-            let result = if case.op == "geo.from_coords" || case.op == "geo.from_wkt" {
-                // from_coords e from_wkt sono le uniche che richiedono zero
+            let result = if matches!(case.op, "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid") {
+                // from_coords, from_wkt e generate_grid richiedono zero
                 // geometrie: un input gia' geometrico deve fallire.
                 analyze_geo_contract(
                     case.op,
@@ -2170,7 +2426,7 @@ mod tests {
     #[test]
     fn configs_are_strictly_validated() {
         let inputs = [geo_contract(projected_crs())];
-        let bad_configs: [(&str, Value); 22] = [
+        let bad_configs: [(&str, Value); 31] = [
             ("geo.buffer", json!({})),                                  // distance mancante
             ("geo.buffer", json!({"distance": 1.0, "bogus": 1})),       // campo sconosciuto
             ("geo.buffer", json!({"distance": "molto"})),               // tipo errato
@@ -2193,6 +2449,15 @@ mod tests {
             ("geo.collect", json!({"group_by": ["geometry"]})),         // geometria come chiave
             ("geo.line_locate_point", json!({})),                       // point_wkb mancante
             ("geo.line_locate_point", json!({"point_wkb": "zz"})),      // hex non valido
+            ("geo.generate_grid", json!({})),                           // extent mancante
+            ("geo.generate_grid", json!({"extent": {"xmin": 5.0, "ymin": 0.0, "xmax": 5.0, "ymax": 1.0}, "cell_size": 1.0})), // extent degenere
+            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 0.0})), // cell_size nulla
+            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "shape": "triangle"})), // forma sconosciuta
+            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "bogus": 1})), // campo sconosciuto
+            ("geo.subdivide", json!({})),                               // max_vertices mancante
+            ("geo.subdivide", json!({"max_vertices": 3})),              // sotto il minimo 4
+            ("geo.snap", json!({"tolerance": 0.5})),                    // reference_wkb mancante
+            ("geo.snap", json!({"reference_wkb": point_wkb_hex(), "tolerance": -1.0})), // tolleranza negativa
         ];
         for (op, config) in bad_configs {
             let result = analyze_one(op, &inputs, &config, None);
@@ -2440,6 +2705,130 @@ mod tests {
         );
         assert!(output.properties.sorted_by.is_some());
         assert!(output.properties.row_count.is_some());
+    }
+
+    #[test]
+    fn generate_grid_resolves_crs_centroids_and_the_cell_limit() {
+        let inputs = [tabular_contract()];
+        let plan = projected_crs();
+        let extent = json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0}, "cell_size": 5.0});
+
+        // CRS obbligatorio: senza config `crs` ne' CRS di piano fallisce.
+        let result = analyze_one("geo.generate_grid", &inputs, &extent, None);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS mancante accettato");
+
+        // include_centroid: due colonne Float64 non null in coda; shape hex.
+        let mut config = extent.clone();
+        config["include_centroid"] = json!(true);
+        config["shape"] = json!("hex");
+        config["crs"] = json!("EPSG:32632");
+        let output = analyze_one("geo.generate_grid", &inputs, &config, Some(&plan))
+            .expect("griglia esagonale con centroidi");
+        let expected: Vec<(&str, DataType, bool)> = vec![
+            (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+            (CELL_I_COLUMN, DataType::UInt64, false),
+            (CELL_J_COLUMN, DataType::UInt64, false),
+            (CENTROID_X_COLUMN, DataType::Float64, false),
+            (CENTROID_Y_COLUMN, DataType::Float64, false),
+        ];
+        assert_eq!(signatures(&output), expected);
+        assert_eq!(output.geometries[0].crs.definition(), "EPSG:32632");
+
+        // Limite celle: extent enorme con celle piccole fallisce in analisi.
+        let over_limit = json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1e6, "ymax": 1e6}, "cell_size": 1.0});
+        let result = analyze_one("geo.generate_grid", &inputs, &over_limit, Some(&plan));
+        assert!(matches!(result, Err(PlenoraError::Contract(_))), "limite celle non applicato");
+
+        // Extent con span che overflowa il conteggio celle (coordinate finite
+        // ma prodotto colonne x righe non rappresentabile).
+        let nan_extent = json!({"extent": {"xmin": -1e308, "ymin": 0.0, "xmax": 1e308, "ymax": 1.0}, "cell_size": 1.0});
+        assert!(analyze_one("geo.generate_grid", &inputs, &nan_extent, Some(&plan)).is_err());
+    }
+
+    #[test]
+    fn subdivide_expands_like_explode_and_can_rename_the_geometry() {
+        let inputs = [contract_with_properties()];
+        let output = analyze_one(
+            "geo.subdivide",
+            &inputs,
+            &json!({"max_vertices": 16}),
+            None,
+        )
+        .expect("subdivide");
+        // Espansione stabile: sorted_by preservato, row_count eliminato.
+        assert!(output.properties.sorted_by.is_some());
+        assert!(output.properties.row_count.is_none());
+        assert_eq!(
+            output.schema.fields().last().expect("ultima colonna").name(),
+            PARENT_INDEX_COLUMN
+        );
+        // FieldId preservato (geometria in place).
+        assert_eq!(output.geometries[0].field_id, FieldId(2));
+
+        // output_column rinomina la geometria (stesso FieldId); collisione
+        // con una colonna esistente rifiutata.
+        let output = analyze_one(
+            "geo.subdivide",
+            &inputs,
+            &json!({"max_vertices": 16, "output_column": "parts"}),
+            None,
+        )
+        .expect("rinomina geometria");
+        assert_eq!(output.geometries[0].name, "parts");
+        assert_eq!(output.geometries[0].field_id, FieldId(2));
+        assert!(output.schema.field_with_name("parts").is_ok());
+        assert!(analyze_one(
+            "geo.subdivide",
+            &inputs,
+            &json!({"max_vertices": 16, "output_column": "id"}),
+            None
+        )
+        .is_err());
+        assert!(analyze_one(
+            "geo.subdivide",
+            &inputs,
+            &json!({"max_vertices": 16, "output_column": "  "}),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn snap_validates_the_reference_and_requires_a_projected_input() {
+        let inputs = [contract_with_properties()];
+        let output = analyze_one(
+            "geo.snap",
+            &inputs,
+            &json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
+            None,
+        )
+        .expect("snap");
+        // 1:1 streaming: schema e proprieta' preservati.
+        assert_eq!(signatures(&output), signatures(&inputs[0]));
+        assert!(output.properties.sorted_by.is_some());
+        assert!(output.properties.row_count.is_some());
+
+        // Hex valido ma non decodificabile (byte residui dopo la geometria).
+        let mut trailing = point_wkb_hex();
+        trailing.push_str("00");
+        assert!(analyze_one(
+            "geo.snap",
+            &inputs,
+            &json!({"reference_wkb": trailing, "tolerance": 0.5}),
+            None
+        )
+        .is_err());
+
+        // SameProjected: input geografico rifiutato (il riferimento da config
+        // e' assunto nello stesso CRS dell'input).
+        let geographic = [geo_contract(geographic_crs())];
+        let result = analyze_one(
+            "geo.snap",
+            &geographic,
+            &json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
+            None,
+        );
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "input geografico accettato");
     }
 
     #[test]

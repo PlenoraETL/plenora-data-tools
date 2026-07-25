@@ -179,8 +179,23 @@ fn every_unary_operation_executes_its_safe_profile() {
             "table.stable_fingerprint",
             json!({"columns":["id","group"],"algorithm":"sha256"}),
         ),
+        // Estensioni table v1.2: anche qui id canonici, nessun alias legacy.
+        (
+            "table.align_schema",
+            json!({"columns":[{"name":"id","type":"Int64"},{"name":"note","type":"Utf8","default":"n/d"}]}),
+        ),
+        (
+            "table.hmac_sha256",
+            json!({"columns":["id","group"],"key_env":"PLENORA_FULL_CATALOG_HMAC_KEY"}),
+        ),
+        (
+            "table.validate_rules",
+            json!({"rules":[{"name":"id_pos","operator":"gt","column":"id","value":0}]}),
+        ),
     ];
     let input = fixture();
+    // La chiave HMAC arriva solo dall'ambiente (mai dal piano).
+    std::env::set_var("PLENORA_FULL_CATALOG_HMAC_KEY", "full-catalog-key");
     for (operation, config) in cases {
         let output = execute_batch(input.clone(), &plan(operation, config));
         assert!(output.is_ok(), "{operation}: {:?}", output.err());
@@ -192,6 +207,7 @@ fn every_binary_operation_executes_its_safe_profile() {
     let input = fixture();
     let cases = [
         ("concat", json!({"ignore_index":true})),
+        ("table.concat_by_name", json!({})),
         ("cross_join", json!({})),
         (
             "join",
