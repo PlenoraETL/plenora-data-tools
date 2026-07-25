@@ -122,9 +122,10 @@ pub struct OperationDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogo unificato delle 131 operazioni (Fase 1, decisione D17/D20; +4
+// Catalogo unificato delle 135 operazioni (Fase 1, decisione D17/D20; +4
 // estensioni geo v1.1: from_wkt, geometry_accessors, collect,
-// line_locate_point).
+// line_locate_point; +4 estensioni table v1.1: select_columns, limit, top_n,
+// stable_fingerprint).
 //
 // Sorgenti dei metadati:
 // - `plenora-nogeo-tools/src/catalog.rs`  (62 op tabellari -> `table.*`);
@@ -185,7 +186,7 @@ macro_rules! op {
     };
 }
 
-/// Catalogo unificato: 62 operazioni tabellari + 69 geografiche.
+/// Catalogo unificato: 66 operazioni tabellari + 69 geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
     // --- Tabellari Manipola-compat (37) -----------------------------------
     op!("table.add_row_number", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
@@ -324,6 +325,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.geometry_accessors", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     op!("geo.collect", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Known), &[], CanonicalOrder, KernelValidated),
     op!("geo.line_locate_point", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    // --- Estensioni table v1.1 (4) -------------------------------------------
+    op!("table.limit", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], InputOrder, KernelValidated),
+    op!("table.select_columns", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.stable_fingerprint", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.top_n", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
 ];
 
 /// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
@@ -495,13 +501,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_131_unique_ids() {
-        assert_eq!(CATALOG.len(), 131);
+    fn catalog_has_135_unique_ids() {
+        assert_eq!(CATALOG.len(), 135);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Table).count(),
-            62
+            66
         );
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Geo).count(),

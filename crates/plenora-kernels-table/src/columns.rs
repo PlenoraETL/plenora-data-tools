@@ -38,6 +38,43 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SelectColumns {
+    pub columns: Vec<String>,
+}
+
+/// Proiezione positiva (estensione v1.1): output = le colonne elencate,
+/// nell'ordine dato. Zero-copy: gli array Arrow sono riusati (Arc clone),
+/// nessuna copia dei dati. Errore se una colonna manca o e' ripetuta.
+pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
+    if config.columns.is_empty() {
+        return Err(PlenoraError::Contract(
+            "select_columns richiede almeno una colonna".into(),
+        ));
+    }
+    let schema = batch.schema();
+    let mut seen = HashSet::new();
+    let mut fields = Vec::with_capacity(config.columns.len());
+    let mut columns = Vec::with_capacity(config.columns.len());
+    for name in &config.columns {
+        if !seen.insert(name.as_str()) {
+            return Err(PlenoraError::Contract(format!(
+                "colonna ripetuta nella proiezione: {name}"
+            )));
+        }
+        let index = schema
+            .index_of(name)
+            .map_err(|_| PlenoraError::Schema(format!("colonna non trovata: {name}")))?;
+        fields.push(schema.field(index).clone());
+        columns.push(Arc::clone(batch.column(index)));
+    }
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        columns,
+    )?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenamePair {
     pub old_name: String,
     pub new_name: String,
@@ -394,6 +431,67 @@ mod tests {
             max_splits: -1,
         };
         assert!(split_column(&input, &too_many, &one_output).is_err());
+    }
+
+    #[test]
+    fn select_columns_projects_in_given_order_zero_copy() {
+        let input = batch();
+        // Proiezione con ordine rovesciato rispetto allo schema.
+        let projected = select_columns(
+            &input,
+            &SelectColumns {
+                columns: vec!["a".into(), "z".into()],
+            },
+        )
+        .expect("projection");
+        assert_eq!(projected.schema().field(0).name(), "a");
+        assert_eq!(projected.schema().field(1).name(), "z");
+        assert_eq!(projected.num_rows(), input.num_rows());
+        // Zero-copy: stessi array Arrow (stesso puntatore dati).
+        assert!(Arc::ptr_eq(
+            projected.column(0),
+            input.column_by_name("a").expect("a")
+        ));
+        assert!(Arc::ptr_eq(
+            projected.column(1),
+            input.column_by_name("z").expect("z")
+        ));
+        // Metadata di schema preservati.
+        assert_eq!(projected.schema().metadata(), input.schema().metadata());
+        // Selezione di una sola colonna.
+        let single = select_columns(
+            &input,
+            &SelectColumns {
+                columns: vec!["z".into()],
+            },
+        )
+        .expect("single");
+        assert_eq!(single.num_columns(), 1);
+    }
+
+    #[test]
+    fn select_columns_rejects_empty_missing_and_duplicates() {
+        let input = batch();
+        assert!(select_columns(&input, &SelectColumns { columns: vec![] }).is_err());
+        assert!(select_columns(
+            &input,
+            &SelectColumns {
+                columns: vec!["missing".into()],
+            },
+        )
+        .is_err());
+        assert!(select_columns(
+            &input,
+            &SelectColumns {
+                columns: vec!["a".into(), "a".into()],
+            },
+        )
+        .is_err());
+        // Config strict: campo sconosciuto rifiutato.
+        assert!(serde_json::from_value::<SelectColumns>(
+            json!({"columns": ["a"], "surprise": true})
+        )
+        .is_err());
     }
 
     #[test]

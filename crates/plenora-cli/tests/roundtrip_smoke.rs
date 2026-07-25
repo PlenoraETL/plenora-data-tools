@@ -33,7 +33,7 @@ fn catalog_unificato_e_filtro_famiglia() {
     let output = cli().arg("catalog").output().expect("catalog");
     assert!(output.status.success());
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
-    assert_eq!(parsed.as_array().expect("array").len(), 131);
+    assert_eq!(parsed.as_array().expect("array").len(), 135);
 
     let table = cli()
         .args(["catalog", "--family", "table"])
@@ -41,7 +41,7 @@ fn catalog_unificato_e_filtro_famiglia() {
         .expect("catalog table");
     assert!(table.status.success());
     let parsed: serde_json::Value = serde_json::from_slice(&table.stdout).expect("JSON");
-    assert_eq!(parsed.as_array().expect("array").len(), 62);
+    assert_eq!(parsed.as_array().expect("array").len(), 66);
 
     let geo = cli()
         .args(["catalog", "--family", "geo"])

@@ -170,6 +170,15 @@ fn every_unary_operation_executes_its_safe_profile() {
             "md5_hash",
             json!({"columns":["group","text"],"output_column":"hash","normalize":true}),
         ),
+        // Estensioni table v1.1: raggiungibili via id canonico (come le
+        // estensioni geo v1.1, nessun alias legacy aggiunto al catalogo).
+        ("table.select_columns", json!({"columns":["id","num"]})),
+        ("table.limit", json!({"n":2,"offset":1})),
+        ("table.top_n", json!({"columns":["num"],"n":2,"descending":true})),
+        (
+            "table.stable_fingerprint",
+            json!({"columns":["id","group"],"algorithm":"sha256"}),
+        ),
     ];
     let input = fixture();
     for (operation, config) in cases {

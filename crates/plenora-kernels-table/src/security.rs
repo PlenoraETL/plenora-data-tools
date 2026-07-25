@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{builder::StringBuilder, Array, RecordBatch, StringArray};
@@ -182,10 +184,133 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FingerprintAlgorithm {
+    #[default]
+    Sha256,
+    Md5,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StableFingerprint {
+    /// Colonne hashate, nell'ordine dato. Vuoto (default) = tutte le colonne
+    /// nell'ordine dello schema.
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default = "default_fingerprint_name")]
+    pub output_column: String,
+    #[serde(default)]
+    pub algorithm: FingerprintAlgorithm,
+}
+
+fn default_fingerprint_name() -> String {
+    "fingerprint".into()
+}
+
+/// Frame lunghezza+valore (u64 big-endian): nessuna ambiguita' di
+/// concatenazione tra parti adiacenti.
+fn framed_digest<D: Digest>(digest: &mut D, value: &[u8]) -> Result<()> {
+    let length = u64::try_from(value.len())
+        .map_err(|_| PlenoraError::Contract("stable_fingerprint: valore troppo grande".into()))?;
+    digest.update(length.to_be_bytes());
+    digest.update(value);
+    Ok(())
+}
+
+/// Codifica canonica di una riga (estensione v1.1), byte esatti:
+///
+/// - separatore di dominio `b"plenora-fingerprint-v1\0"`;
+/// - per ogni colonna, nell'ordine di config (o dello schema se omessa):
+///   `framed(nome)`, `framed(tipo Arrow)`, poi un byte di presenza: `0x00`
+///   per null, `0x01` seguito da `framed(valore)` per un valore;
+/// - il valore e' la rappresentazione testuale di `scalar_as_string`, senza
+///   alcuna normalizzazione (trim/case): null e stringa vuota restano
+///   distinti, e righe diverse non collidono per costruzione.
+///
+/// Determinismo assoluto: stessi byte in input -> stesso digest su qualunque
+/// run o macchina (gli algoritmi sono sha2/md5 su un byte stream fisso).
+fn fingerprint_rows<D: Digest>(
+    batch: &RecordBatch,
+    names: &[String],
+    indices: &[usize],
+) -> Result<Vec<String>> {
+    (0..batch.num_rows())
+        .map(|row| {
+            let mut digest = D::new();
+            digest.update(b"plenora-fingerprint-v1\0");
+            for (name, index) in names.iter().zip(indices) {
+                framed_digest(&mut digest, name.as_bytes())?;
+                framed_digest(
+                    &mut digest,
+                    batch.column(*index).data_type().to_string().as_bytes(),
+                )?;
+                match scalar_as_string(batch.column(*index).as_ref(), row)? {
+                    Some(value) => {
+                        digest.update([1]);
+                        framed_digest(&mut digest, value.as_bytes())?;
+                    }
+                    None => digest.update([0]),
+                }
+            }
+            // Esadecimale minuscolo, byte per byte: identico al formato
+            // `{:x}` dei digest md5/sha2, ma senza bound generico `LowerHex`.
+            let digest = digest.finalize();
+            let mut hex = String::with_capacity(digest.len() * 2);
+            for byte in digest {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            Ok(hex)
+        })
+        .collect()
+}
+
+pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Result<RecordBatch> {
+    validate_output_name(&config.output_column)?;
+    let names: Vec<String> = if config.columns.is_empty() {
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect()
+    } else {
+        let mut seen = HashSet::new();
+        for name in &config.columns {
+            if !seen.insert(name.as_str()) {
+                return Err(PlenoraError::Contract(format!(
+                    "stable_fingerprint: colonna ripetuta: {name}"
+                )));
+            }
+        }
+        config.columns.clone()
+    };
+    if names.is_empty() {
+        return Err(PlenoraError::Contract(
+            "stable_fingerprint richiede almeno una colonna".into(),
+        ));
+    }
+    let indices = names
+        .iter()
+        .map(|name| column_index(batch, name))
+        .collect::<Result<Vec<_>>>()?;
+    let values = match config.algorithm {
+        FingerprintAlgorithm::Sha256 => fingerprint_rows::<Sha256>(batch, &names, &indices)?,
+        FingerprintAlgorithm::Md5 => fingerprint_rows::<Md5>(batch, &names, &indices)?,
+    };
+    replace_or_append(
+        batch,
+        &config.output_column,
+        DataType::Utf8,
+        false,
+        Arc::new(StringArray::from(values)),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MaskType {
-    Cf,
+pub enum MaskType {    Cf,
     Email,
     Phone,
     Iban,
@@ -370,6 +495,7 @@ mod tests {
     use super::*;
     use plenora_core::arrow::array::{Array, Int64Array};
     use plenora_core::arrow::schema::{Field, Schema};
+    use serde_json::json;
 
     /// Copia verbatim di `mask_middle` pre-ottimizzazione.
     fn mask_middle_reference(value: &str, start: usize, end: usize, mask: char) -> String {
@@ -508,6 +634,134 @@ mod tests {
             chars_end: 3,
             mask_char: "*".into(),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Test di `stable_fingerprint` (estensione v1.1): known-answer calcolata
+    // a mano sull'encoding canonico documentato nel kernel, piu' sensibilita'
+    // e determinismo.
+    // -------------------------------------------------------------------
+
+    fn fingerprint_fixture() -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("")])),
+                Arc::new(Int64Array::from(vec![Some(42), Some(7), Some(7)])),
+            ],
+        )
+        .expect("fixture")
+    }
+
+    fn fingerprint_values(batch: &RecordBatch, config: &StableFingerprint) -> Vec<String> {
+        let output = stable_fingerprint(batch, config).expect("fingerprint");
+        let column = output
+            .column_by_name(&config.output_column)
+            .expect("colonna fingerprint")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8");
+        (0..column.len()).map(|row| column.value(row).to_owned()).collect()
+    }
+
+    fn fingerprint_config(columns: &[&str]) -> StableFingerprint {
+        StableFingerprint {
+            columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+            output_column: "fingerprint".into(),
+            algorithm: FingerprintAlgorithm::Sha256,
+        }
+    }
+
+    #[test]
+    fn stable_fingerprint_known_answer_sha256_and_md5() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x")])),
+                Arc::new(Int64Array::from(vec![Some(42)])),
+            ],
+        )
+        .expect("fixture");
+        // Known-answer sull'encoding: "plenora-fingerprint-v1\0" +
+        // framed("a") framed("Utf8") 0x01 framed("x") +
+        // framed("b") framed("Int64") 0x01 framed("42").
+        let sha = fingerprint_values(&batch, &fingerprint_config(&["a", "b"]));
+        assert_eq!(
+            sha,
+            vec!["4e1f09e49d945536920b917446d005d90e62d4bb2cc231557ed6a8bef6c4f21f"]
+        );
+        let md5 = fingerprint_values(
+            &batch,
+            &StableFingerprint {
+                algorithm: FingerprintAlgorithm::Md5,
+                ..fingerprint_config(&["a", "b"])
+            },
+        );
+        assert_eq!(md5, vec!["79a680c00d6257fa3364bb4b40e7963d"]);
+    }
+
+    #[test]
+    fn stable_fingerprint_is_deterministic_and_sensitive() {
+        let batch = fingerprint_fixture();
+        let config = fingerprint_config(&["a", "b"]);
+        let first = fingerprint_values(&batch, &config);
+        let second = fingerprint_values(&batch, &config);
+        assert_eq!(first, second, "stesso input -> stesso hash");
+        assert!(first.iter().all(|value| value.len() == 64));
+        // Righe diverse -> hash diversi; null ed empty string distinti.
+        assert_ne!(first[0], first[1]);
+        assert_ne!(first[1], first[2], "null e stringa vuota devono differire");
+        // L'ordine delle colonne di config cambia il digest.
+        let swapped = fingerprint_values(&batch, &fingerprint_config(&["b", "a"]));
+        assert_ne!(first, swapped);
+        // Un subset di colonne ignora le altre.
+        let subset = fingerprint_values(&batch, &fingerprint_config(&["b"]));
+        assert_eq!(subset[1], subset[2], "stessa colonna b -> stesso hash");
+        assert_ne!(subset[0], subset[1]);
+    }
+
+    #[test]
+    fn stable_fingerprint_defaults_and_validation() {
+        let batch = fingerprint_fixture();
+        // Default: tutte le colonne in ordine di schema, output "fingerprint",
+        // algoritmo sha256.
+        let decoded: StableFingerprint = serde_json::from_value(json!({})).expect("defaults");
+        assert!(decoded.columns.is_empty());
+        assert_eq!(decoded.output_column, "fingerprint");
+        assert!(matches!(decoded.algorithm, FingerprintAlgorithm::Sha256));
+        let output = stable_fingerprint(&batch, &decoded).expect("fingerprint");
+        assert_eq!(output.num_columns(), 3);
+        assert_eq!(output.num_rows(), batch.num_rows());
+        let schema = output.schema();
+        let field = schema
+            .field_with_name("fingerprint")
+            .expect("colonna output");
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert!(!field.is_nullable());
+        // Tutte le colonne di default = stesso hash di columns esplicite nello
+        // stesso ordine.
+        assert_eq!(
+            fingerprint_values(&batch, &decoded),
+            fingerprint_values(&batch, &fingerprint_config(&["a", "b"]))
+        );
+        // Errori: colonna mancante, duplicata, campo config sconosciuto.
+        assert!(stable_fingerprint(&batch, &fingerprint_config(&["missing"])).is_err());
+        assert!(stable_fingerprint(&batch, &fingerprint_config(&["a", "a"])).is_err());
+        assert!(serde_json::from_value::<StableFingerprint>(json!({"algo": "sha256"})).is_err());
+        assert!(stable_fingerprint(
+            &batch,
+            &StableFingerprint {
+                output_column: " ".into(),
+                ..fingerprint_config(&["a"])
+            },
+        )
+        .is_err());
     }
 
     #[test]

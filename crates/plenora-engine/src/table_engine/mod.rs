@@ -6,7 +6,7 @@
 //!
 //! - `Plan`/`Step`/`ValidatedPlan` e la validazione del contratto
 //!   (`schema_version`, limiti, regola "catena binaria = 1 step", config
-//!   fail-closed per le 62 operazioni tabellari);
+//!   fail-closed per le 66 operazioni tabellari);
 //! - `execute_batch` ed `execute_binary` con normalizzazione
 //!   `LargeUtf8 -> Utf8` e rimozione dei metadata `pandas`.
 //!

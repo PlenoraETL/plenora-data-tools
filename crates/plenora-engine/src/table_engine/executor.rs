@@ -146,6 +146,12 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             "reorder_columns",
             true,
         ),
+        "select_columns" => validate_name_list(
+            &decode::<columns::SelectColumns>(step)?.columns,
+            limits.max_columns,
+            "select_columns",
+            false,
+        ),
         "concat_columns" => {
             let config = decode::<columns::ConcatColumns>(step)?;
             validate_name_list(&config.columns, limits.max_columns, "concat_columns", false)?;
@@ -235,6 +241,16 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             let config = decode::<utility::UuidGenerator>(step)?;
             validate_output_name(&config.output_column)
         }
+        "limit" => {
+            let config = decode::<utility::Limit>(step)?;
+            let max_rows: u64 = limits.max_rows.try_into().unwrap_or(u64::MAX);
+            if config.n > max_rows || config.offset > max_rows {
+                return Err(PlenoraError::Contract(
+                    "limit: n/offset oltre max_rows".into(),
+                ));
+            }
+            Ok(())
+        }
         "lookup" => {
             let config = decode::<analysis::Lookup>(step)?;
             validate_output_name(&config.column)?;
@@ -303,6 +319,15 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
         "sort" => {
             let config = decode::<aggregation::Sort>(step)?;
             validate_name_list(&config.columns, limits.max_columns, "sort", false)
+        }
+        "top_n" => {
+            let config = decode::<aggregation::TopN>(step)?;
+            validate_name_list(&config.columns, limits.max_columns, "top_n", false)?;
+            let max_rows: u64 = limits.max_rows.try_into().unwrap_or(u64::MAX);
+            if config.n > max_rows {
+                return Err(PlenoraError::Contract("top_n: n oltre max_rows".into()));
+            }
+            Ok(())
         }
         "distinct" => {
             let config = decode::<aggregation::Distinct>(step)?;
@@ -659,6 +684,16 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             }
             Ok(())
         }
+        "stable_fingerprint" => {
+            let config = decode::<security::StableFingerprint>(step)?;
+            validate_name_list(
+                &config.columns,
+                limits.max_columns,
+                "stable_fingerprint",
+                true,
+            )?;
+            validate_output_name(&config.output_column)
+        }
         "explode" => {
             let config = decode::<reshape::Explode>(step)?;
             validate_output_name(&config.column)?;
@@ -861,6 +896,7 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "drop_columns" => columns::drop_columns(batch, &decode(step)?),
         "rename" => columns::rename(batch, &decode(step)?),
         "reorder_columns" => columns::reorder_columns(batch, &decode(step)?),
+        "select_columns" => columns::select_columns(batch, &decode(step)?),
         "concat_columns" => columns::concat_columns(batch, &decode(step)?, limits),
         "split_column" => columns::split_column(batch, &decode(step)?, limits),
         "string_pad" => strings::string_pad(batch, &decode(step)?, limits),
@@ -874,6 +910,7 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "string_extract" => strings::string_extract(batch, &decode(step)?, limits),
         "date_extract" => utility::date_extract(batch, &decode(step)?),
         "uuid_generator" => utility::uuid_generator(batch, &decode(step)?),
+        "limit" => utility::limit(batch, &decode(step)?),
         "lookup" => analysis::lookup(batch, &decode(step)?),
         "flatten_json" => analysis::flatten_json(batch, &decode(step)?, limits),
         "mask_data" => security::mask_data(batch, &decode(step)?),
@@ -883,6 +920,7 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "sample" => analysis::sample(batch, &decode(step)?),
         "statistics" => analysis::statistics(batch, &decode(step)?),
         "sort" => aggregation::sort(batch, &decode(step)?),
+        "top_n" => aggregation::top_n(batch, &decode(step)?),
         "distinct" => aggregation::distinct(batch, &decode(step)?),
         "dedup_advanced" => aggregation::dedup_advanced(batch, &decode(step)?),
         "aggregate" => aggregation::aggregate(batch, &decode(step)?),
@@ -906,6 +944,7 @@ fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<Rec
         "date_diff" => dates::date_diff(batch, &decode(step)?),
         "timezone_convert" => dates::timezone_convert(batch, &decode(step)?),
         "sha256_hash" => security::sha256_hash(batch, &decode(step)?),
+        "stable_fingerprint" => security::stable_fingerprint(batch, &decode(step)?),
         "explode" => reshape::explode(batch, &decode(step)?, limits),
         "unnest" => reshape::unnest(batch, &decode(step)?, limits),
         operation => Err(PlenoraError::Unsupported(operation.into())),

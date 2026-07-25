@@ -302,6 +302,39 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Limit {
+    pub n: u64,
+    #[serde(default)]
+    pub offset: u64,
+}
+
+/// Prime `n` righe dopo `offset` (estensione v1.1). Schema invariato, ordine
+/// delle righe preservato (slicing puro, zero-copy sui dati Arrow).
+///
+/// Semantica per-batch: come tutte le op `Streaming` del profilo, il kernel
+/// opera sul singolo `RecordBatch` che riceve e non mantiene stato
+/// inter-batch; su uno stream di piu' batch l'executor applica l'operazione
+/// a ciascun batch (stesso modello di `filter`/`distinct`). Se in futuro
+/// servisse un limite globale sull'intero stream servira' un operatore con
+/// stato nel layer engine, non un kernel puro.
+pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
+    let rows = u64::try_from(batch.num_rows())
+        .map_err(|_| PlenoraError::Contract("limit: righe oltre u64".into()))?;
+    let start = config.offset.min(rows);
+    let count = config.n.min(rows - start);
+    let start = usize::try_from(start)
+        .map_err(|_| PlenoraError::Contract("limit: offset oltre usize".into()))?;
+    let count = usize::try_from(count)
+        .map_err(|_| PlenoraError::Contract("limit: n oltre usize".into()))?;
+    if start == 0 && count == batch.num_rows() {
+        // Finestra che copre l'intero batch: nessuna copia.
+        return Ok(batch.clone());
+    }
+    Ok(batch.slice(start, count))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UuidGenerator {
     #[serde(default = "default_uuid_name")]
     pub output_column: String,
@@ -327,6 +360,7 @@ pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<Rec
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
+    use serde_json::json;
 
     use super::*;
 
@@ -415,6 +449,64 @@ mod tests {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
             (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
         }
+    }
+
+    #[test]
+    fn limit_slices_rows_and_preserves_schema() {
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("d"),
+                    Some("e"),
+                ])),
+            ],
+        )
+        .expect("fixture");
+        let ids = |batch: &RecordBatch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("ids")
+                .values()
+                .to_vec()
+        };
+        // n semplice.
+        let first = limit(&input, &Limit { n: 2, offset: 0 }).expect("limit");
+        assert_eq!(ids(&first), vec![0, 1]);
+        assert_eq!(first.schema(), input.schema());
+        // offset + n.
+        let window = limit(&input, &Limit { n: 2, offset: 1 }).expect("window");
+        assert_eq!(ids(&window), vec![1, 2]);
+        // null preservato nella finestra.
+        assert!(window.column(1).is_null(1));
+        // n = 0: batch vuoto con schema invariato.
+        let empty = limit(&input, &Limit { n: 0, offset: 0 }).expect("empty");
+        assert_eq!(empty.num_rows(), 0);
+        assert_eq!(empty.schema(), input.schema());
+        // n > righe: tutto il batch.
+        let all = limit(&input, &Limit { n: 100, offset: 0 }).expect("all");
+        assert_eq!(all.num_rows(), 5);
+        // offset oltre le righe: vuoto; offset parziale: clampa.
+        assert_eq!(
+            limit(&input, &Limit { n: 3, offset: 10 })
+                .expect("beyond")
+                .num_rows(),
+            0
+        );
+        assert_eq!(ids(&limit(&input, &Limit { n: 3, offset: 3 }).expect("tail")), vec![3, 4]);
+        // Default serde: offset 0; config strict.
+        let decoded: Limit = serde_json::from_value(json!({"n": 1})).expect("default offset");
+        assert_eq!(decoded.offset, 0);
+        assert!(serde_json::from_value::<Limit>(json!({"n": 1, "bogus": 1})).is_err());
     }
 
     #[test]

@@ -129,7 +129,7 @@ fn invalid_plan_is_rejected_before_input_is_opened() {
 
 #[test]
 fn informational_commands_and_argument_errors_are_stable() {
-    // Il catalogo storico di 62 operazioni tabellari si ottiene ora filtrando
+    // Il catalogo delle 66 operazioni tabellari si ottiene ora filtrando
     // il catalogo unificato per `Family::Table` (CLI: `catalog --family table`).
     let catalog = Command::new(executable())
         .args(["catalog", "--family", "table"])

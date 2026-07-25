@@ -1,4 +1,4 @@
-//! Inferenza a secco del `DataContract` di output per le 62 operazioni
+//! Inferenza a secco del `DataContract` di output per le 66 operazioni
 //! `table.*` del catalogo (Fase 2A-2, Architetture.md par. 4.3 e 6.1, ADR 5).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
@@ -70,7 +70,7 @@ const MAX_EXPRESSION_NODES: usize = 4_096;
 /// - `Contract`: config non valida, arieta' errata, colonne mancanti,
 ///   vincoli di tipo o parametri violati, collisioni di naming;
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
-// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 62 op.
+// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 66 op.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_table_contract(
     op: &str,
@@ -188,6 +188,10 @@ pub fn analyze_table_contract(
         "table.assert_metadata" => analyze_assert_metadata(id, inputs, config, fields),
         "table.assert_foreign_key" => analyze_assert_foreign_key(id, inputs, config, fields),
         "table.reconcile" => analyze_reconcile(id, inputs, config, fields),
+        "table.select_columns" => analyze_select_columns(id, inputs, config, fields),
+        "table.limit" => analyze_limit(id, inputs, config, fields),
+        "table.top_n" => analyze_top_n(id, inputs, config, fields),
+        "table.stable_fingerprint" => analyze_stable_fingerprint(id, inputs, config, fields),
         _ => Err(PlenoraError::Unsupported(format!(
             "{id}: analyze_contract non disponibile"
         ))),
@@ -575,6 +579,22 @@ fn analyze_date_extract(
     analyze_append(input, fields, &produced)
 }
 
+fn analyze_limit(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: utility::Limit = typed(op, config)?;
+    let input = &inputs[0];
+    let _ = fields;
+    let _ = config;
+    let mut output = input.clone();
+    // Righe rimosse (per-batch), ordine relativo e schema invariati.
+    output.properties = sorted_only(input);
+    Ok(output)
+}
+
 // ---------------------------------------------------------------------------
 // strings.rs / security.rs
 // ---------------------------------------------------------------------------
@@ -705,6 +725,47 @@ fn analyze_sha256_hash(
     // A differenza di md5_hash il kernel non vieta columns vuoto.
     for name in &config.columns {
         require_scalar_string(op, input, name)?;
+    }
+    analyze_append(
+        input,
+        fields,
+        &[(config.output_column, DataType::Utf8, false)],
+    )
+}
+
+fn analyze_stable_fingerprint(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: security::StableFingerprint = typed(op, config)?;
+    let input = &inputs[0];
+    check_output_name(op, &config.output_column)?;
+    if config.columns.is_empty() {
+        // Default: tutte le colonne dello schema; il kernel legge ogni valore
+        // via `scalar_as_string`, quindi i tipi fuori profilo (List, Struct)
+        // fallirebbero a runtime: fail-closed gia' in validazione.
+        for field in input.schema.fields() {
+            if !is_scalar_string(field.data_type()) {
+                return contract_error(
+                    op,
+                    format!(
+                        "colonna {}: tipo {:?} non leggibile come scalare testuale",
+                        field.name(),
+                        field.data_type()
+                    ),
+                );
+            }
+        }
+    } else {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for name in &config.columns {
+            if !seen.insert(name.as_str()) {
+                return contract_error(op, format!("colonna ripetuta in columns: {name}"));
+            }
+            require_scalar_string(op, input, name)?;
+        }
     }
     analyze_append(
         input,
@@ -1284,6 +1345,52 @@ fn analyze_split_column(
     analyze_append(input, fields, &produced)
 }
 
+fn analyze_select_columns(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: columns::SelectColumns = typed(op, config)?;
+    let input = &inputs[0];
+    let _ = fields;
+    if config.columns.is_empty() {
+        return contract_error(op, "columns vuoto");
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut fields_out = Vec::with_capacity(config.columns.len());
+    for name in &config.columns {
+        if !seen.insert(name.as_str()) {
+            return contract_error(op, format!("colonna ripetuta in columns: {name}"));
+        }
+        fields_out.push(field_of(op, input, name)?.clone());
+    }
+    let removed_any = fields_out.len() != input.schema.fields().len();
+    let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
+    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let dropped_geometry = if geometry.is_none() {
+        input.geometries.first().map(|g| g.field_id)
+    } else {
+        None
+    };
+    let active = input
+        .active_geometry
+        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    // Come drop_columns: una colonna rimossa puo' essere chiave di ordinamento.
+    let properties = scrub_dropped_geometry(
+        ContractProperties {
+            sorted_by: if removed_any {
+                None
+            } else {
+                input.properties.sorted_by.clone()
+            },
+            row_count: input.properties.row_count.clone(),
+        },
+        dropped_geometry,
+    );
+    finish(schema, geometry, active, properties)
+}
+
 // ---------------------------------------------------------------------------
 // cleansing.rs
 // ---------------------------------------------------------------------------
@@ -1466,6 +1573,30 @@ fn analyze_sort(
     output.properties = ContractProperties {
         sorted_by: Some(proven_sorted(keys)),
         row_count: input.properties.row_count.clone(),
+    };
+    Ok(output)
+}
+
+fn analyze_top_n(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: aggregation::TopN = typed(op, config)?;
+    let input = &inputs[0];
+    if config.columns.is_empty() {
+        return contract_error(op, "columns vuoto");
+    }
+    for name in &config.columns {
+        field_of(op, input, name)?;
+    }
+    let keys: Vec<FieldId> = config.columns.iter().map(|name| fields.intern(name)).collect();
+    let mut output = input.clone();
+    // Come sort, ma emesse esattamente min(n, righe) righe.
+    output.properties = ContractProperties {
+        sorted_by: Some(proven_sorted(keys)),
+        row_count: map_row_count(input, |rows| rows.min(config.n)),
     };
     Ok(output)
 }
@@ -3155,7 +3286,7 @@ mod tests {
             .iter()
             .filter(|op| op.family == Family::Table)
             .collect();
-        assert_eq!(table_ops.len(), 62);
+        assert_eq!(table_ops.len(), 66);
         for descriptor in table_ops {
             let inputs = vec![tabular_contract(), right_contract()];
             let result =
@@ -3294,6 +3425,79 @@ mod tests {
         assert!(overwritten.schema.field_with_name("name_masked").is_err());
         assert_field(&overwritten, "name", &DataType::Utf8, true);
         assert!(err("table.mask_data", &[tabular_contract()], json!({"maskings": []})).to_string().contains("maskings"));
+    }
+
+    #[test]
+    fn v1_1_extensions_analyze_contracts() {
+        // select_columns: proiezione nell'ordine dato, geometria propagata se
+        // selezionata inalterata.
+        let output = ok(
+            "table.select_columns",
+            &[geo_contract()],
+            json!({"columns": ["id", "geom"]}),
+        );
+        assert_eq!(output.schema.fields().len(), 2);
+        assert_eq!(output.schema.field(0).name(), "id");
+        assert_eq!(output.schema.field(1).name(), "geom");
+        assert_eq!(output.geometries.len(), 1);
+        assert_eq!(output.active_geometry, Some(FieldId(7)));
+        // Geometria non selezionata: contratto tabellare.
+        let output = ok(
+            "table.select_columns",
+            &[geo_contract()],
+            json!({"columns": ["name", "id"]}),
+        );
+        assert!(output.geometries.is_empty());
+        assert!(output.active_geometry.is_none());
+        // Una colonna rimossa puo' essere chiave: sorted_by eliminato,
+        // row_count invariato (1:1 sulle righe).
+        let output = ok(
+            "table.select_columns",
+            &[proven_contract()],
+            json!({"columns": ["id"]}),
+        );
+        assert!(output.properties.sorted_by.is_none());
+        assert_eq!(proven_rows(&output), 100);
+        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
+        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": ["missing"]})).to_string().contains("missing"));
+        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": ["id", "id"]})).to_string().contains("ripetuta"));
+
+        // limit: schema invariato, ordine preservato, row_count non esatto.
+        let output = ok("table.limit", &[proven_contract()], json!({"n": 10}));
+        assert_eq!(output.schema.fields().len(), base_fields().len());
+        assert!(output.properties.sorted_by.is_some());
+        assert!(output.properties.row_count.is_none());
+        assert!(err("table.limit", &[tabular_contract()], json!({})).to_string().contains("config"));
+
+        // top_n: sorted_by Proven sulle chiavi, row_count = min(n, righe).
+        let output = ok(
+            "table.top_n",
+            &[proven_contract()],
+            json!({"columns": ["value"], "n": 10}),
+        );
+        assert_eq!(proven_sorted_keys(&output).len(), 1);
+        assert_eq!(proven_rows(&output), 10);
+        let output = ok(
+            "table.top_n",
+            &[proven_contract()],
+            json!({"columns": ["value"], "n": 10_000}),
+        );
+        assert_eq!(proven_rows(&output), 100);
+        assert!(err("table.top_n", &[tabular_contract()], json!({"columns": [], "n": 1})).to_string().contains("columns"));
+        assert!(err("table.top_n", &[tabular_contract()], json!({"columns": ["missing"], "n": 1})).to_string().contains("missing"));
+
+        // stable_fingerprint: append Utf8 non nullable; colonne validate.
+        let output = ok(
+            "table.stable_fingerprint",
+            &[tabular_contract()],
+            json!({"columns": ["id", "name"]}),
+        );
+        assert_field(&output, "fingerprint", &DataType::Utf8, false);
+        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({"columns": ["lst"]})).to_string().contains("scalare"));
+        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({"columns": ["id", "id"]})).to_string().contains("ripetuta"));
+        // Default (tutte le colonne): lo schema di test contiene List/Struct,
+        // non leggibili via profilo scalare -> fail-closed in validazione.
+        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({})).to_string().contains("scalare"));
     }
 
     #[test]

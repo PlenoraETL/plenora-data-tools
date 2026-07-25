@@ -207,6 +207,77 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TopN {
+    pub columns: Vec<String>,
+    pub n: u64,
+    #[serde(default)]
+    pub descending: bool,
+}
+
+/// Prime `n` righe secondo l'ordinamento di `sort` (estensione v1.1):
+/// stessa semantica null (null in coda in ascendente), `total_cmp` sui
+/// numerici e stabilita' (spareggio sull'indice originale). L'output e'
+/// identico a `sort` seguito da `limit(n)`, ma con `n << righe` evita il
+/// sort completo: `select_nth_unstable_by` partiziona gli indici in O(righe)
+/// e solo i primi `n` selezionati vengono ordinati. Il confronto include lo
+/// spareggio sull'indice, quindi e' un ordine totale e la permutazione
+/// finale coincide esattamente con quella dello stable sort completo.
+pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
+    let indices = config
+        .columns
+        .iter()
+        .map(|name| column_index(batch, name))
+        .collect::<Result<Vec<_>>>()?;
+    if indices.is_empty() {
+        return Err(PlenoraError::Contract("top_n richiede colonne".into()));
+    }
+    let n = usize::try_from(config.n)
+        .map_err(|_| PlenoraError::Contract("top_n: n oltre usize".into()))?
+        .min(batch.num_rows());
+    if n == 0 {
+        // n = 0: batch vuoto con schema invariato (colonne gia' validate).
+        return Ok(batch.slice(0, 0));
+    }
+    let comparators = indices
+        .iter()
+        .map(|index| ColumnComparator::new(*index, batch.column(*index)))
+        .collect::<Vec<_>>();
+    let mut rows: Vec<usize> = (0..batch.num_rows()).collect();
+    let mut failure: Option<PlenoraError> = None;
+    let mut compare = |left: &usize, right: &usize| {
+        for comparator in &comparators {
+            match comparator.compare(batch, *left, *right) {
+                Ok(Ordering::Equal) => {}
+                Ok(ordering) => {
+                    return if config.descending {
+                        ordering.reverse()
+                    } else {
+                        ordering
+                    };
+                }
+                Err(error) => {
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                    return Ordering::Equal;
+                }
+            }
+        }
+        left.cmp(right)
+    };
+    if n < rows.len() {
+        rows.select_nth_unstable_by(n - 1, &mut compare);
+        rows.truncate(n);
+    }
+    rows.sort_by(&mut compare);
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    select_rows(batch, &rows)
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Keep {
@@ -1744,6 +1815,184 @@ mod tests {
             },
         );
         assert_eq!(by_flag, vec![1, 2, 0, 3]);
+    }
+
+    // -------------------------------------------------------------------
+    // Test-oracolo di `top_n` (estensione v1.1): l'oracolo e' la coppia
+    // `sort` + slice delle prime n posizioni, eseguita sul kernel `sort`
+    // gia' validato. Il confronto e' sull'intero RecordBatch (schema,
+    // valori, null mask), non solo sugli id.
+    // -------------------------------------------------------------------
+
+    fn oracle_sort_then_limit(batch: &RecordBatch, config: &TopN) -> RecordBatch {
+        let sorted = sort(
+            batch,
+            &Sort {
+                columns: config.columns.clone(),
+                ascending: !config.descending,
+            },
+        )
+        .expect("oracle sort");
+        let n = usize::try_from(config.n)
+            .expect("n")
+            .min(sorted.num_rows());
+        sorted.slice(0, n)
+    }
+
+    fn assert_top_n_matches_oracle(batch: &RecordBatch, config: &TopN) {
+        let fast = top_n(batch, config).expect("top_n");
+        let oracle = oracle_sort_then_limit(batch, config);
+        assert_eq!(fast, oracle, "config: {config:?}");
+    }
+
+    fn numeric_batch(values: &[Option<f64>]) -> RecordBatch {
+        let ids = (0..values.len())
+            .map(|row| i64::try_from(row).expect("id"))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("num", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(Float64Array::from(values.to_vec())),
+            ],
+        )
+        .expect("fixture")
+    }
+
+    #[test]
+    fn top_n_matches_sort_plus_limit_on_duplicates_nan_signed_zero_and_nulls() {
+        // Duplicati, NaN, -0.0, null: ogni n e ogni direzione contro l'oracolo.
+        let values = vec![
+            Some(0.0),
+            Some(f64::NAN),
+            Some(-0.0),
+            None,
+            Some(1.0),
+            Some(1.0),
+            Some(f64::NAN),
+            None,
+            Some(-0.0),
+            Some(0.0),
+        ];
+        let batch = numeric_batch(&values);
+        for n in [0_u64, 1, 3, 5, 9, 10, 11, 1_000] {
+            for descending in [false, true] {
+                assert_top_n_matches_oracle(
+                    &batch,
+                    &TopN {
+                        columns: vec!["num".into()],
+                        n,
+                        descending,
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn top_n_matches_oracle_on_duplicate_heavy_multi_column_input() {
+        // Chiavi molto duplicate su due colonne (testo + numerico): la
+        // stabilita' sullo spareggio d'indice deve riprodurre il sort.
+        let rows = 2_000_usize;
+        let ids = (0..rows)
+            .map(|row| i64::try_from(row).expect("id"))
+            .collect::<Vec<_>>();
+        let groups = (0..rows)
+            .map(|row| ["a", "b", "c"][row % 3].to_owned())
+            .collect::<Vec<_>>();
+        let nums = (0..rows)
+            .map(|row| match row % 7 {
+                0 => None,
+                5 => Some(f64::NAN),
+                _ => Some(f64::from(u32::try_from(row % 11).expect("key")) - 5.0),
+            })
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("group", DataType::Utf8, true),
+                Field::new("num", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(StringArray::from(groups)),
+                Arc::new(Float64Array::from(nums)),
+            ],
+        )
+        .expect("fixture");
+        for n in [1_u64, 7, 100, 2_000, 5_000] {
+            for descending in [false, true] {
+                assert_top_n_matches_oracle(
+                    &batch,
+                    &TopN {
+                        columns: vec!["group".into(), "num".into()],
+                        n,
+                        descending,
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn top_n_edge_cases_and_config_validation() {
+        let batch = numeric_batch(&[Some(2.0), Some(1.0), None]);
+        // n = 0: batch vuoto, schema invariato.
+        let empty = top_n(
+            &batch,
+            &TopN {
+                columns: vec!["num".into()],
+                n: 0,
+                descending: false,
+            },
+        )
+        .expect("n=0");
+        assert_eq!(empty.num_rows(), 0);
+        assert_eq!(empty.schema(), batch.schema());
+        // Errori: colonne vuote, colonna mancante, config non strict.
+        assert!(top_n(
+            &batch,
+            &TopN {
+                columns: vec![],
+                n: 1,
+                descending: false,
+            },
+        )
+        .is_err());
+        assert!(top_n(
+            &batch,
+            &TopN {
+                columns: vec!["missing".into()],
+                n: 1,
+                descending: false,
+            },
+        )
+        .is_err());
+        let decoded: TopN = serde_json::from_value(serde_json::json!({"columns": ["num"], "n": 2}))
+            .expect("default descending");
+        assert!(!decoded.descending);
+        assert!(serde_json::from_value::<TopN>(
+            serde_json::json!({"columns": ["num"], "n": 2, "ascending": true})
+        )
+        .is_err());
+        // Tipo non confrontabile (LargeUtf8): stesso errore di `sort`.
+        let large = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("c", DataType::LargeUtf8, true)])),
+            vec![Arc::new(LargeStringArray::from(vec![Some("b"), Some("a")]))],
+        )
+        .expect("fixture");
+        assert!(top_n(
+            &large,
+            &TopN {
+                columns: vec!["c".into()],
+                n: 1,
+                descending: false,
+            },
+        )
+        .is_err());
     }
 
     // -------------------------------------------------------------------
