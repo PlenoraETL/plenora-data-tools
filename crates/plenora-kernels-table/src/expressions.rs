@@ -7,7 +7,7 @@ use plenora_core::arrow::array::{
     RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, TimeUnit};
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeDelta};
 use num_traits::ToPrimitive;
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,6 +22,10 @@ pub enum OutputType {
     Number,
     Boolean,
     Text,
+    /// Date32 nativo (prodotto da `date_trunc` su colonna Date32).
+    Date32,
+    /// Timestamp(ms) nativo senza timezone (prodotto da `date_trunc`).
+    TimestampMs,
 }
 
 const fn default_output_type() -> OutputType {
@@ -114,6 +118,25 @@ pub enum Function {
     Abs,
     Round,
     Year,
+    /// `substring(string, start, len?)`: `start` 0-based, conteggio per
+    /// carattere Unicode; `len` omesso = fino a fine stringa.
+    Substring,
+    /// `regex_replace(string, pattern, replacement)`: sintassi della crate
+    /// `regex`, gruppi di cattura espansibili con `$1`/`$name` nel replacement.
+    RegexReplace,
+    /// `between(value, low, high)`: inclusivo su entrambi gli estremi.
+    Between,
+    /// `in(value, [letterali])`: membership su lista di letterali scalari.
+    In,
+    Greatest,
+    Least,
+    Floor,
+    Ceil,
+    Power,
+    /// `date_trunc(unit, value)`: `unit` letterale del set chiuso
+    /// year/month/day/hour/minute/second; `value` colonna Date32 o
+    /// Timestamp(ms) letta NATIVAMENTE (output Date32/TimestampMs).
+    DateTrunc,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +145,10 @@ enum Scalar {
     Number(f64),
     Boolean(bool),
     Text(String),
+    /// Data nativa (giorni dall'epoca): prodotta solo da `date_trunc`.
+    Date32(i32),
+    /// Timestamp nativo (ms dall'epoca, UTC naive): solo da `date_trunc`.
+    TimestampMs(i64),
 }
 
 fn literal(value: &Value) -> Result<Scalar> {
@@ -207,6 +234,8 @@ fn compare(left: Scalar, right: Scalar) -> Result<Option<Ordering>> {
         (Scalar::Number(left), Scalar::Number(right)) => Ok(Some(left.total_cmp(&right))),
         (Scalar::Text(left), Scalar::Text(right)) => Ok(Some(left.cmp(&right))),
         (Scalar::Boolean(left), Scalar::Boolean(right)) => Ok(Some(left.cmp(&right))),
+        (Scalar::Date32(left), Scalar::Date32(right)) => Ok(Some(left.cmp(&right))),
+        (Scalar::TimestampMs(left), Scalar::TimestampMs(right)) => Ok(Some(left.cmp(&right))),
         _ => Err(PlenoraError::Schema(
             "confronto expression fra tipi incompatibili".into(),
         )),
@@ -284,6 +313,290 @@ fn binary(op: BinaryOperator, left: Scalar, right: Scalar) -> Result<Scalar> {
         BinaryOperator::LessEqual => Ok(compare(left, right)?.map_or(Scalar::Null, |value| {
             Scalar::Boolean(value != Ordering::Greater)
         })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// date_trunc / in: nodi speciali valutati in `evaluate` (non in `function`)
+// perche' richiedono accesso all'AST degli argomenti: `date_trunc` legge la
+// colonna temporalmente tipizzata (Date32/Timestamp ms) in modo nativo e `in`
+// accetta una lista di letterali (non uno scalare).
+// ---------------------------------------------------------------------------
+
+/// Unita' di troncamento di `date_trunc`: set chiuso, validato staticamente
+/// in `validate`/`analyze` (l'unita' deve essere un letterale stringa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TruncUnit {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+fn trunc_unit(value: &str) -> Result<TruncUnit> {
+    match value {
+        "year" => Ok(TruncUnit::Year),
+        "month" => Ok(TruncUnit::Month),
+        "day" => Ok(TruncUnit::Day),
+        "hour" => Ok(TruncUnit::Hour),
+        "minute" => Ok(TruncUnit::Minute),
+        "second" => Ok(TruncUnit::Second),
+        other => Err(PlenoraError::Contract(format!(
+            "date_trunc: unita' non valida: {other}"
+        ))),
+    }
+}
+
+/// L'unita' di `date_trunc` deve essere un letterale stringa del set chiuso:
+/// cosi' la validazione a secco rifiuta unita' sconosciute senza dati.
+fn literal_unit(expression: &Expression) -> Result<TruncUnit> {
+    match expression {
+        Expression::Literal {
+            value: Value::String(unit),
+        } => trunc_unit(unit),
+        _ => Err(PlenoraError::Contract(
+            "date_trunc: unit deve essere un letterale stringa".into(),
+        )),
+    }
+}
+
+fn date32_epoch() -> NaiveDate {
+    NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoca Date32 valida")
+}
+
+/// Unita' sub-day non ammesse su Date32 (una data non ha componente oraria).
+fn check_date32_unit(unit: TruncUnit) -> Result<()> {
+    if matches!(unit, TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second) {
+        return Err(PlenoraError::Contract(
+            "date_trunc: unita' sub-day non ammessa su Date32".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Troncamento Date32 (giorni dall'epoca) a year/month/day.
+fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
+    check_date32_unit(unit)?;
+    let date = date32_epoch() + TimeDelta::days(i64::from(days));
+    let truncated = match unit {
+        TruncUnit::Year => NaiveDate::from_ymd_opt(date.year(), 1, 1),
+        TruncUnit::Month => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
+        TruncUnit::Day => Some(date),
+        TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second => unreachable!(),
+    }
+    .ok_or_else(|| PlenoraError::Schema("date_trunc: data fuori range".into()))?;
+    i32::try_from((truncated - date32_epoch()).num_days())
+        .map_err(|_| PlenoraError::Schema("date_trunc: data fuori range Date32".into()))
+}
+
+/// Troncamento Timestamp(ms) naive UTC: year/month via calendario, unita'
+/// day e inferiori per aritmetica sui millisecondi (`rem_euclid` copre i
+/// timestamp pre-1970).
+fn trunc_timestamp_ms_value(ms: i64, unit: TruncUnit) -> Result<i64> {
+    Ok(match unit {
+        TruncUnit::Second => ms - ms.rem_euclid(1_000),
+        TruncUnit::Minute => ms - ms.rem_euclid(60_000),
+        TruncUnit::Hour => ms - ms.rem_euclid(3_600_000),
+        TruncUnit::Day => ms - ms.rem_euclid(86_400_000),
+        TruncUnit::Year | TruncUnit::Month => {
+            let datetime = chrono::DateTime::from_timestamp_millis(ms)
+                .ok_or_else(|| PlenoraError::Schema("date_trunc: timestamp fuori range".into()))?;
+            let date = datetime.date_naive();
+            let first = match unit {
+                TruncUnit::Year => NaiveDate::from_ymd_opt(date.year(), 1, 1),
+                _ => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
+            }
+            .ok_or_else(|| PlenoraError::Schema("date_trunc: data fuori range".into()))?;
+            first
+                .and_hms_opt(0, 0, 0)
+                .ok_or_else(|| PlenoraError::Schema("date_trunc: orario non valido".into()))?
+                .and_utc()
+                .timestamp_millis()
+        }
+    })
+}
+
+/// Valutazione di `date_trunc(unit, value)`: null propagato (tri-state), il
+/// valore e' letto nativamente da `eval_temporal`.
+fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
+    if args.len() != 2 {
+        return Err(PlenoraError::Contract(
+            "date_trunc richiede 2 argomenti".into(),
+        ));
+    }
+    let unit = literal_unit(&args[0])?;
+    match eval_temporal(&args[1], batch, row)? {
+        Scalar::Null => Ok(Scalar::Null),
+        Scalar::Date32(days) => Ok(Scalar::Date32(trunc_date32_days(days, unit)?)),
+        Scalar::TimestampMs(ms) => Ok(Scalar::TimestampMs(trunc_timestamp_ms_value(ms, unit)?)),
+        _ => unreachable!("eval_temporal produce solo valori temporali"),
+    }
+}
+
+/// Sorgente temporale di `date_trunc`: colonna Date32 o Timestamp(ms) letta
+/// nativamente, `date_trunc` annidato, letterale null. Nessun parsing
+/// implicito di stringhe; timestamp timezone-aware rifiutati (decisione
+/// documentata: la semantica tz del troncamento non e' definibile in modo
+/// sicuro, quindi l'output Timestamp e' sempre senza timezone).
+fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
+    match expression {
+        Expression::Column { name } => {
+            let index = column_index(batch, name)?;
+            let array = batch.column(index);
+            match array.data_type() {
+                DataType::Date32 => {
+                    let values = array
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .ok_or_else(|| PlenoraError::Schema("array Date32 incoerente".into()))?;
+                    Ok(if values.is_null(row) {
+                        Scalar::Null
+                    } else {
+                        Scalar::Date32(values.value(row))
+                    })
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                    if timezone.is_some() {
+                        return Err(PlenoraError::Schema(
+                            "date_trunc: timestamp timezone-aware non supportato".into(),
+                        ));
+                    }
+                    let values = array
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .ok_or_else(|| {
+                            PlenoraError::Schema("array Timestamp(ms) incoerente".into())
+                        })?;
+                    Ok(if values.is_null(row) {
+                        Scalar::Null
+                    } else {
+                        Scalar::TimestampMs(values.value(row))
+                    })
+                }
+                other => Err(PlenoraError::Schema(format!(
+                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                ))),
+            }
+        }
+        Expression::Function {
+            name: Function::DateTrunc,
+            args,
+        } => date_trunc_generic(args, batch, row),
+        Expression::Literal {
+            value: Value::Null,
+        } => Ok(Scalar::Null),
+        _ => Err(PlenoraError::Contract(
+            "date_trunc: il valore deve essere una colonna temporale".into(),
+        )),
+    }
+}
+
+/// Valutazione di `in(value, [letterali])`: null propagato; confronti con la
+/// stessa semantica dei `BinaryOperator` (tipi incompatibili -> errore,
+/// elementi null mai uguali). Lista vuota ammessa: sempre `false`.
+fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
+    if args.len() != 2 {
+        return Err(PlenoraError::Contract("in richiede 2 argomenti".into()));
+    }
+    let Expression::Literal {
+        value: Value::Array(items),
+    } = &args[1]
+    else {
+        return Err(PlenoraError::Contract(
+            "in richiede una lista di letterali come secondo argomento".into(),
+        ));
+    };
+    let value = evaluate(&args[0], batch, row)?;
+    if value == Scalar::Null {
+        return Ok(Scalar::Null);
+    }
+    for item in items {
+        if compare(value.clone(), literal(item)?)? == Some(Ordering::Equal) {
+            return Ok(Scalar::Boolean(true));
+        }
+    }
+    Ok(Scalar::Boolean(false))
+}
+
+/// Tipo temporale della radice `date_trunc` ricavato dallo schema del batch:
+/// con `output_type=auto` un input tutto null (o un batch vuoto) deve
+/// produrre comunque Date32/TimestampMs dal tipo della colonna, MAI Utf8.
+/// Gli errori (unita' non valida, colonna non temporale, timezone-aware)
+/// sono gli stessi del percorso di valutazione.
+fn root_temporal_type(expression: &Expression, batch: &RecordBatch) -> Result<Option<OutputType>> {
+    let Expression::Function {
+        name: Function::DateTrunc,
+        args,
+    } = expression
+    else {
+        return Ok(None);
+    };
+    if args.len() != 2 {
+        return Err(PlenoraError::Contract(
+            "date_trunc richiede 2 argomenti".into(),
+        ));
+    }
+    let unit = literal_unit(&args[0])?;
+    let kind = temporal_kind(&args[1], batch)?;
+    if matches!(kind, Some(TemporalKind::Date32)) {
+        check_date32_unit(unit)?;
+    }
+    Ok(kind.map(|kind| match kind {
+        TemporalKind::Date32 => OutputType::Date32,
+        TemporalKind::TimestampMs => OutputType::TimestampMs,
+    }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemporalKind {
+    Date32,
+    TimestampMs,
+}
+
+/// Tipo temporale statico della sorgente di `date_trunc` (senza righe).
+fn temporal_kind(expression: &Expression, batch: &RecordBatch) -> Result<Option<TemporalKind>> {
+    match expression {
+        Expression::Column { name } => {
+            let index = column_index(batch, name)?;
+            match batch.column(index).data_type() {
+                DataType::Date32 => Ok(Some(TemporalKind::Date32)),
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                    if timezone.is_some() {
+                        return Err(PlenoraError::Schema(
+                            "date_trunc: timestamp timezone-aware non supportato".into(),
+                        ));
+                    }
+                    Ok(Some(TemporalKind::TimestampMs))
+                }
+                other => Err(PlenoraError::Schema(format!(
+                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                ))),
+            }
+        }
+        Expression::Function {
+            name: Function::DateTrunc,
+            args,
+        } => {
+            if args.len() != 2 {
+                return Err(PlenoraError::Contract(
+                    "date_trunc richiede 2 argomenti".into(),
+                ));
+            }
+            let unit = literal_unit(&args[0])?;
+            let kind = temporal_kind(&args[1], batch)?;
+            if matches!(kind, Some(TemporalKind::Date32)) {
+                check_date32_unit(unit)?;
+            }
+            Ok(kind)
+        }
+        Expression::Literal {
+            value: Value::Null,
+        } => Ok(None),
+        _ => Err(PlenoraError::Contract(
+            "date_trunc: il valore deve essere una colonna temporale".into(),
+        )),
     }
 }
 
@@ -381,7 +694,135 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 _ => unreachable!(),
             }))
         }
+        Function::Floor | Function::Ceil => {
+            exact_args(&args, 1, "funzione numerica")?;
+            let Some(value) = number(&args[0], "funzione numerica")? else {
+                return Ok(Scalar::Null);
+            };
+            Ok(Scalar::Number(match name {
+                Function::Floor => value.floor(),
+                Function::Ceil => value.ceil(),
+                _ => unreachable!(),
+            }))
+        }
+        Function::Power => {
+            exact_args(&args, 2, "power")?;
+            let (Some(base), Some(exponent)) =
+                (number(&args[0], "power")?, number(&args[1], "power")?)
+            else {
+                return Ok(Scalar::Null);
+            };
+            let value = base.powf(exponent);
+            if value.is_finite() {
+                Ok(Scalar::Number(value))
+            } else {
+                Err(PlenoraError::Schema(
+                    "risultato expression non finito".into(),
+                ))
+            }
+        }
+        Function::Substring => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(PlenoraError::Contract(
+                    "substring richiede 2 o 3 argomenti".into(),
+                ));
+            }
+            let Some(value) = text(args[0].clone(), "substring")? else {
+                return Ok(Scalar::Null);
+            };
+            let Some(start) = substring_index(&args[1], "substring: start")? else {
+                return Ok(Scalar::Null);
+            };
+            let len = match args.get(2) {
+                Some(arg) => match substring_index(arg, "substring: len")? {
+                    Some(len) => Some(len),
+                    // len null -> Null (non equivale a "fino a fine stringa").
+                    None => return Ok(Scalar::Null),
+                },
+                None => None,
+            };
+            let mut chars = value.chars().skip(start);
+            Ok(Scalar::Text(match len {
+                Some(len) => chars.by_ref().take(len).collect(),
+                None => chars.collect(),
+            }))
+        }
+        Function::RegexReplace => {
+            exact_args(&args, 3, "regex_replace")?;
+            let (Some(value), Some(pattern), Some(replacement)) = (
+                text(args[0].clone(), "regex_replace")?,
+                text(args[1].clone(), "regex_replace")?,
+                text(args[2].clone(), "regex_replace")?,
+            ) else {
+                return Ok(Scalar::Null);
+            };
+            let regex = regex::Regex::new(&pattern).map_err(|error| {
+                PlenoraError::Contract(format!("regex_replace: regex non valida: {error}"))
+            })?;
+            Ok(Scalar::Text(
+                regex.replace_all(&value, replacement.as_str()).into_owned(),
+            ))
+        }
+        Function::Between => {
+            exact_args(&args, 3, "between")?;
+            // Inclusivo su entrambi gli estremi; null in qualsiasi posizione
+            // -> Null (stessa tri-state dei confronti binari).
+            if args.iter().any(|arg| *arg == Scalar::Null) {
+                return Ok(Scalar::Null);
+            }
+            let low = compare(args[0].clone(), args[1].clone())?;
+            let high = compare(args[0].clone(), args[2].clone())?;
+            Ok(match (low, high) {
+                (Some(low), Some(high)) => {
+                    Scalar::Boolean(low != Ordering::Less && high != Ordering::Greater)
+                }
+                _ => Scalar::Null,
+            })
+        }
+        Function::Greatest | Function::Least => {
+            let label = if matches!(name, Function::Greatest) {
+                "greatest"
+            } else {
+                "least"
+            };
+            if args.is_empty() {
+                return Err(PlenoraError::Contract(format!(
+                    "{label} richiede argomenti"
+                )));
+            }
+            let mut best = args[0].clone();
+            for value in &args[1..] {
+                let Some(ordering) = compare(best.clone(), value.clone())? else {
+                    // Null propagato come nei confronti binari.
+                    return Ok(Scalar::Null);
+                };
+                let replace = match name {
+                    Function::Greatest => ordering == Ordering::Less,
+                    _ => ordering == Ordering::Greater,
+                };
+                if replace {
+                    best = value.clone();
+                }
+            }
+            Ok(best)
+        }
+        Function::DateTrunc | Function::In => unreachable!(
+            "date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
+        ),
     }
+}
+
+/// Indice di `substring`: numero >= 0 troncato verso zero (`-0.0` vale 0),
+/// saturato a `usize::MAX`; null propagato dal chiamante.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn substring_index(value: &Scalar, context: &str) -> Result<Option<usize>> {
+    let Some(value) = number(value, context)? else {
+        return Ok(None);
+    };
+    if value < 0.0 {
+        return Err(PlenoraError::Contract(format!("{context} negativo")));
+    }
+    Ok(Some(value as usize))
 }
 
 fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
@@ -406,12 +847,18 @@ fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<
             evaluate(left, batch, row)?,
             evaluate(right, batch, row)?,
         ),
-        Expression::Function { name, args } => function(
-            *name,
-            args.iter()
-                .map(|arg| evaluate(arg, batch, row))
-                .collect::<Result<Vec<_>>>()?,
-        ),
+        Expression::Function { name, args } => match name {
+            // Nodi speciali: richiedono l'AST degli argomenti (colonna
+            // temporale nativa / lista di letterali), non scalari valutati.
+            Function::DateTrunc => date_trunc_generic(args, batch, row),
+            Function::In => in_generic(args, batch, row),
+            _ => function(
+                *name,
+                args.iter()
+                    .map(|arg| evaluate(arg, batch, row))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        },
         Expression::Case {
             branches,
             else_value,
@@ -450,9 +897,40 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
             audit(left, depth + 1, nodes, max_nodes)?;
             audit(right, depth + 1, nodes, max_nodes)
         }
-        Expression::Function { args, .. } => {
+        Expression::Function { name, args } => {
             if args.len() > 64 {
                 return Err(PlenoraError::Contract("troppi argomenti expression".into()));
+            }
+            // date_trunc: unita' letterale del set chiuso, rifiutata qui.
+            if matches!(name, Function::DateTrunc) {
+                if args.len() != 2 {
+                    return Err(PlenoraError::Contract(
+                        "date_trunc richiede 2 argomenti".into(),
+                    ));
+                }
+                literal_unit(&args[0])?;
+            }
+            // in: il secondo argomento e' una lista di letterali scalari
+            // (altrimenti `literal` rifiuterebbe l'array come non scalare).
+            if matches!(name, Function::In) {
+                if args.len() != 2 {
+                    return Err(PlenoraError::Contract("in richiede 2 argomenti".into()));
+                }
+                match &args[1] {
+                    Expression::Literal {
+                        value: Value::Array(items),
+                    } => {
+                        for item in items {
+                            literal(item)?;
+                        }
+                    }
+                    _ => {
+                        return Err(PlenoraError::Contract(
+                            "in richiede una lista di letterali come secondo argomento".into(),
+                        ));
+                    }
+                }
+                return audit(&args[0], depth + 1, nodes, max_nodes);
             }
             for arg in args {
                 audit(arg, depth + 1, nodes, max_nodes)?;
@@ -492,6 +970,8 @@ fn resolved_output_type(values: &[Scalar], configured: OutputType) -> Result<Out
             Scalar::Number(_) => OutputType::Number,
             Scalar::Boolean(_) => OutputType::Boolean,
             Scalar::Text(_) => OutputType::Text,
+            Scalar::Date32(_) => OutputType::Date32,
+            Scalar::TimestampMs(_) => OutputType::TimestampMs,
         };
         if resolved.is_some_and(|previous| {
             std::mem::discriminant(&previous) != std::mem::discriminant(&current)
@@ -503,6 +983,28 @@ fn resolved_output_type(values: &[Scalar], configured: OutputType) -> Result<Out
         resolved = Some(current);
     }
     Ok(resolved.unwrap_or(OutputType::Text))
+}
+
+/// Converte uno `Scalar` in giorni Date32 per l'output `date32`.
+fn scalar_date32(value: &Scalar, context: &str) -> Result<Option<i32>> {
+    match value {
+        Scalar::Null => Ok(None),
+        Scalar::Date32(value) => Ok(Some(*value)),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede una data"
+        ))),
+    }
+}
+
+/// Converte uno `Scalar` in ms Timestamp per l'output `timestamp_ms`.
+fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
+    match value {
+        Scalar::Null => Ok(None),
+        Scalar::TimestampMs(value) => Ok(Some(*value)),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede un timestamp"
+        ))),
+    }
 }
 
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
@@ -521,7 +1023,17 @@ fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> Resu
     let values = (0..batch.num_rows())
         .map(|row| evaluate(&config.expression, batch, row))
         .collect::<Result<Vec<_>>>()?;
-    match resolved_output_type(&values, config.output_type)? {
+    let mut resolved = resolved_output_type(&values, config.output_type)?;
+    // Auto con tutti i valori null (o batch vuoto): una radice date_trunc
+    // risolve comunque il tipo temporale dallo schema di input, mai Utf8.
+    if matches!(config.output_type, OutputType::Auto)
+        && values.iter().all(|value| matches!(value, Scalar::Null))
+    {
+        if let Some(temporal) = root_temporal_type(&config.expression, batch)? {
+            resolved = temporal;
+        }
+    }
+    match resolved {
         OutputType::Auto => unreachable!(),
         OutputType::Number => replace_or_append(
             batch,
@@ -556,6 +1068,32 @@ fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> Resu
                 values
                     .into_iter()
                     .map(|value| text(value, "output_type=text"))
+                    .collect::<Result<Vec<_>>>()?,
+            )),
+        ),
+        OutputType::Date32 => replace_or_append(
+            batch,
+            &config.output_column,
+            DataType::Date32,
+            true,
+            Arc::new(Date32Array::from(
+                values
+                    .into_iter()
+                    .map(|value| scalar_date32(&value, "output_type=date32"))
+                    .collect::<Result<Vec<_>>>()?,
+            )),
+        ),
+        // Timestamp timezone-aware rifiutati in ingresso: l'output e'
+        // sempre Timestamp(ms) senza timezone (decisione documentata).
+        OutputType::TimestampMs => replace_or_append(
+            batch,
+            &config.output_column,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+            Arc::new(TimestampMillisecondArray::from(
+                values
+                    .into_iter()
+                    .map(|value| scalar_timestamp_ms(&value, "output_type=timestamp_ms"))
                     .collect::<Result<Vec<_>>>()?,
             )),
         ),
@@ -624,6 +1162,10 @@ enum FastValue<'a> {
     Number(f64),
     Boolean(bool),
     Text(Cow<'a, str>),
+    /// Data nativa (giorni dall'epoca): prodotta solo da `date_trunc`.
+    Date32(i32),
+    /// Timestamp nativo (ms dall'epoca, UTC naive): solo da `date_trunc`.
+    TimestampMs(i64),
 }
 
 /// Accessore di colonna pre-risolto (indice + downcast fatti una volta).
@@ -823,6 +1365,8 @@ fn fast_compare(left: &FastValue<'_>, right: &FastValue<'_>) -> Result<Option<Or
         (FastValue::Number(left), FastValue::Number(right)) => Ok(Some(left.total_cmp(right))),
         (FastValue::Text(left), FastValue::Text(right)) => Ok(Some(left.cmp(right))),
         (FastValue::Boolean(left), FastValue::Boolean(right)) => Ok(Some(left.cmp(right))),
+        (FastValue::Date32(left), FastValue::Date32(right)) => Ok(Some(left.cmp(right))),
+        (FastValue::TimestampMs(left), FastValue::TimestampMs(right)) => Ok(Some(left.cmp(right))),
         _ => Err(PlenoraError::Schema(
             "confronto expression fra tipi incompatibili".into(),
         )),
@@ -1027,7 +1571,119 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
                 _ => unreachable!(),
             }))
         }
+        Function::Floor | Function::Ceil => {
+            exact_args_fast(&args, 1, "funzione numerica")?;
+            let Some(value) = fast_number(&args[0], "funzione numerica")? else {
+                return Ok(FastValue::Null);
+            };
+            Ok(FastValue::Number(match name {
+                Function::Floor => value.floor(),
+                Function::Ceil => value.ceil(),
+                _ => unreachable!(),
+            }))
+        }
+        Function::Power => {
+            exact_args_fast(&args, 2, "power")?;
+            let (Some(base), Some(exponent)) = (
+                fast_number(&args[0], "power")?,
+                fast_number(&args[1], "power")?,
+            ) else {
+                return Ok(FastValue::Null);
+            };
+            let value = base.powf(exponent);
+            if value.is_finite() {
+                Ok(FastValue::Number(value))
+            } else {
+                Err(PlenoraError::Schema(
+                    "risultato expression non finito".into(),
+                ))
+            }
+        }
+        Function::Substring => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(PlenoraError::Contract(
+                    "substring richiede 2 o 3 argomenti".into(),
+                ));
+            }
+            let Some(value) = fast_text(&args[0], "substring")? else {
+                return Ok(FastValue::Null);
+            };
+            let Some(start) = fast_substring_index(&args[1], "substring: start")? else {
+                return Ok(FastValue::Null);
+            };
+            let len = match args.get(2) {
+                Some(arg) => match fast_substring_index(arg, "substring: len")? {
+                    Some(len) => Some(len),
+                    // len null -> Null (non equivale a "fino a fine stringa").
+                    None => return Ok(FastValue::Null),
+                },
+                None => None,
+            };
+            let mut chars = value.chars().skip(start);
+            Ok(FastValue::Text(Cow::Owned(match len {
+                Some(len) => chars.by_ref().take(len).collect(),
+                None => chars.collect(),
+            })))
+        }
+        Function::Between => {
+            exact_args_fast(&args, 3, "between")?;
+            // Inclusivo su entrambi gli estremi; null in qualsiasi posizione
+            // -> Null (stessa tri-state dei confronti binari).
+            if args.iter().any(|arg| matches!(arg, FastValue::Null)) {
+                return Ok(FastValue::Null);
+            }
+            let low = fast_compare(&args[0], &args[1])?;
+            let high = fast_compare(&args[0], &args[2])?;
+            Ok(match (low, high) {
+                (Some(low), Some(high)) => {
+                    FastValue::Boolean(low != Ordering::Less && high != Ordering::Greater)
+                }
+                _ => FastValue::Null,
+            })
+        }
+        Function::Greatest | Function::Least => {
+            let label = if matches!(name, Function::Greatest) {
+                "greatest"
+            } else {
+                "least"
+            };
+            if args.is_empty() {
+                return Err(PlenoraError::Contract(format!(
+                    "{label} richiede argomenti"
+                )));
+            }
+            let mut best = args[0].clone();
+            for value in &args[1..] {
+                let Some(ordering) = fast_compare(&best, value)? else {
+                    // Null propagato come nei confronti binari.
+                    return Ok(FastValue::Null);
+                };
+                let replace = match name {
+                    Function::Greatest => ordering == Ordering::Less,
+                    _ => ordering == Ordering::Greater,
+                };
+                if replace {
+                    best = value.clone();
+                }
+            }
+            Ok(best)
+        }
+        Function::RegexReplace | Function::DateTrunc | Function::In => unreachable!(
+            "regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
+        ),
     }
+}
+
+/// Equivalente di `substring_index` su `FastValue`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn fast_substring_index(value: &FastValue<'_>, context: &str) -> Result<Option<usize>> {
+    let Some(value) = fast_number(value, context)? else {
+        return Ok(None);
+    };
+    if value < 0.0 {
+        return Err(PlenoraError::Contract(format!("{context} negativo")));
+    }
+    Ok(Some(value as usize))
 }
 
 /// Nodo compilato: colonne risolte, letterali pre-materializzati, errori lazy.
@@ -1052,6 +1708,58 @@ enum FastNode<'a> {
         branches: Vec<(Self, Self)>,
         else_value: Box<Self>,
     },
+    /// `date_trunc`: unita' pre-validata, sorgente temporale letta nativamente.
+    DateTrunc {
+        unit: TruncUnit,
+        source: TemporalSource<'a>,
+    },
+    /// `in`: lista di letterali pre-compilati; gli errori degli elementi
+    /// restano lazy come nel generico (rilasciati solo se raggiunti).
+    In {
+        value: Box<Self>,
+        list: Vec<Self>,
+    },
+    /// `regex_replace`: il pattern letterale e' compilato UNA VOLTA in
+    /// compilazione; l'errore di una regex non valida e' rilasciato in
+    /// valutazione, nella stessa posizione del generico (dopo i null check).
+    RegexReplace {
+        value: Box<Self>,
+        pattern: RegexSource<'a>,
+        replacement: Box<Self>,
+    },
+}
+
+/// Sorgente temporale pre-risolta di `date_trunc` (downcast fatto una volta).
+enum TemporalSource<'a> {
+    Date32(&'a Date32Array),
+    TimestampMs(&'a TimestampMillisecondArray),
+    /// `date_trunc` annidato.
+    Nested(Box<FastNode<'a>>),
+    NullLiteral,
+    /// Colonna mancante, tipo non temporale o timezone-aware: errore lazy
+    /// (rilasciato solo se il nodo viene valutato, come nel generico).
+    Error(LazyError),
+}
+
+/// Pattern di `regex_replace`: letterale pre-compilato o espressione
+/// dinamica (compilata per riga, come nel generico).
+enum RegexSource<'a> {
+    /// `Result` della compilazione unica + testo del pattern.
+    Compiled(std::result::Result<regex::Regex, String>, &'a str),
+    Dynamic(Box<FastNode<'a>>),
+}
+
+impl LazyError {
+    /// Converte un errore di validazione (solo Contract/Schema attesi) nella
+    /// forma lazy del fast path.
+    fn from_validation(error: &PlenoraError) -> Self {
+        match error {
+            PlenoraError::Contract(message) => Self::Contract(message.clone()),
+            PlenoraError::Schema(message) => Self::Schema(message.clone()),
+            // Non atteso: i percorsi di validazione emettono solo Contract/Schema.
+            other => Self::Schema(other.to_string()),
+        }
+    }
 }
 
 fn compile_literal(value: &Value) -> FastNode<'_> {
@@ -1088,12 +1796,17 @@ fn compile_expression<'a>(expression: &'a Expression, batch: &'a RecordBatch) ->
             left: Box::new(compile_expression(left, batch)),
             right: Box::new(compile_expression(right, batch)),
         },
-        Expression::Function { name, args } => FastNode::Function {
-            name: *name,
-            args: args
-                .iter()
-                .map(|arg| compile_expression(arg, batch))
-                .collect(),
+        Expression::Function { name, args } => match name {
+            Function::DateTrunc => compile_date_trunc(args, batch),
+            Function::In => compile_in(args, batch),
+            Function::RegexReplace => compile_regex_replace(args, batch),
+            _ => FastNode::Function {
+                name: *name,
+                args: args
+                    .iter()
+                    .map(|arg| compile_expression(arg, batch))
+                    .collect(),
+            },
         },
         Expression::Case {
             branches,
@@ -1110,6 +1823,121 @@ fn compile_expression<'a>(expression: &'a Expression, batch: &'a RecordBatch) ->
                 .collect(),
             else_value: Box::new(compile_expression(else_value, batch)),
         },
+    }
+}
+
+fn compile_date_trunc<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
+    if args.len() != 2 {
+        return FastNode::Error(LazyError::Contract(
+            "date_trunc richiede 2 argomenti".into(),
+        ));
+    }
+    let unit = match literal_unit(&args[0]) {
+        Ok(unit) => unit,
+        Err(error) => return FastNode::Error(LazyError::from_validation(&error)),
+    };
+    FastNode::DateTrunc {
+        unit,
+        source: compile_temporal(&args[1], batch),
+    }
+}
+
+/// Equivalente statico di `eval_temporal`: risolve la colonna temporale una
+/// volta sola mantenendo gli errori lazy (stessa posizione del generico).
+fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> TemporalSource<'a> {
+    match expression {
+        Expression::Column { name } => {
+            let Ok(index) = column_index(batch, name) else {
+                return TemporalSource::Error(LazyError::Schema(format!(
+                    "colonna non trovata: {name}"
+                )));
+            };
+            let array = batch.column(index);
+            match array.data_type() {
+                DataType::Date32 => array
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .map_or_else(
+                        || TemporalSource::Error(LazyError::Schema("array Date32 incoerente".into())),
+                        TemporalSource::Date32,
+                    ),
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                    if timezone.is_some() {
+                        return TemporalSource::Error(LazyError::Schema(
+                            "date_trunc: timestamp timezone-aware non supportato".into(),
+                        ));
+                    }
+                    array
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .map_or_else(
+                            || {
+                                TemporalSource::Error(LazyError::Schema(
+                                    "array Timestamp(ms) incoerente".into(),
+                                ))
+                            },
+                            TemporalSource::TimestampMs,
+                        )
+                }
+                other => TemporalSource::Error(LazyError::Schema(format!(
+                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                ))),
+            }
+        }
+        Expression::Function {
+            name: Function::DateTrunc,
+            args,
+        } => TemporalSource::Nested(Box::new(compile_date_trunc(args, batch))),
+        Expression::Literal {
+            value: Value::Null,
+        } => TemporalSource::NullLiteral,
+        _ => TemporalSource::Error(LazyError::Contract(
+            "date_trunc: il valore deve essere una colonna temporale".into(),
+        )),
+    }
+}
+
+fn compile_in<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
+    if args.len() != 2 {
+        return FastNode::Error(LazyError::Contract("in richiede 2 argomenti".into()));
+    }
+    let Expression::Literal {
+        value: Value::Array(items),
+    } = &args[1]
+    else {
+        return FastNode::Error(LazyError::Contract(
+            "in richiede una lista di letterali come secondo argomento".into(),
+        ));
+    };
+    FastNode::In {
+        value: Box::new(compile_expression(&args[0], batch)),
+        list: items.iter().map(compile_literal).collect(),
+    }
+}
+
+fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
+    if args.len() != 3 {
+        return FastNode::Error(LazyError::Contract(
+            "regex_replace richiede 3 argomenti".into(),
+        ));
+    }
+    // Pattern letterale: compilato una volta; il testo resta disponibile per
+    // la verifica dei null in valutazione (ordine identico al generico).
+    let pattern = match &args[1] {
+        Expression::Literal {
+            value: Value::String(pattern),
+        } => RegexSource::Compiled(
+            regex::Regex::new(pattern).map_err(|error| {
+                format!("regex_replace: regex non valida: {error}")
+            }),
+            pattern.as_str(),
+        ),
+        other => RegexSource::Dynamic(Box::new(compile_expression(other, batch))),
+    };
+    FastNode::RegexReplace {
+        value: Box::new(compile_expression(&args[0], batch)),
+        pattern,
+        replacement: Box::new(compile_expression(&args[2], batch)),
     }
 }
 
@@ -1151,6 +1979,88 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
             }
             evaluate_fast(else_value, row)
         }
+        FastNode::DateTrunc { unit, source } => {
+            let value = match source {
+                TemporalSource::Date32(values) => {
+                    if values.is_null(row) {
+                        FastValue::Null
+                    } else {
+                        FastValue::Date32(values.value(row))
+                    }
+                }
+                TemporalSource::TimestampMs(values) => {
+                    if values.is_null(row) {
+                        FastValue::Null
+                    } else {
+                        FastValue::TimestampMs(values.value(row))
+                    }
+                }
+                TemporalSource::Nested(node) => evaluate_fast(node, row)?,
+                TemporalSource::NullLiteral => FastValue::Null,
+                TemporalSource::Error(error) => return Err(error.build()),
+            };
+            match value {
+                FastValue::Null => Ok(FastValue::Null),
+                FastValue::Date32(days) => Ok(FastValue::Date32(trunc_date32_days(days, *unit)?)),
+                FastValue::TimestampMs(ms) => {
+                    Ok(FastValue::TimestampMs(trunc_timestamp_ms_value(ms, *unit)?))
+                }
+                _ => unreachable!("la sorgente temporale produce solo valori temporali"),
+            }
+        }
+        FastNode::In { value, list } => {
+            let value = evaluate_fast(value, row)?;
+            if matches!(value, FastValue::Null) {
+                return Ok(FastValue::Null);
+            }
+            for item in list {
+                if fast_compare(&value, &evaluate_fast(item, row)?)? == Some(Ordering::Equal) {
+                    return Ok(FastValue::Boolean(true));
+                }
+            }
+            Ok(FastValue::Boolean(false))
+        }
+        FastNode::RegexReplace {
+            value,
+            pattern,
+            replacement,
+        } => {
+            // Stesso ordine del generico: valutazione argomenti, estrazione
+            // testi (errori di tipo anche su righe null), poi null check.
+            let value = evaluate_fast(value, row)?;
+            let dynamic = match pattern {
+                RegexSource::Compiled(..) => None,
+                RegexSource::Dynamic(node) => Some(evaluate_fast(node, row)?),
+            };
+            let replacement = evaluate_fast(replacement, row)?;
+            let value = fast_text(&value, "regex_replace")?;
+            let pattern_text = match (pattern, &dynamic) {
+                (RegexSource::Compiled(_, text), None) => Some(*text),
+                (RegexSource::Dynamic(_), Some(value)) => fast_text(value, "regex_replace")?,
+                _ => unreachable!(),
+            };
+            let replacement = fast_text(&replacement, "regex_replace")?;
+            let (Some(value), Some(pattern_text), Some(replacement)) =
+                (value, pattern_text, replacement)
+            else {
+                return Ok(FastValue::Null);
+            };
+            let owned;
+            let regex = match pattern {
+                RegexSource::Compiled(compiled, _) => compiled
+                    .as_ref()
+                    .map_err(|message| PlenoraError::Contract(message.clone()))?,
+                RegexSource::Dynamic(_) => {
+                    owned = regex::Regex::new(pattern_text).map_err(|error| {
+                        PlenoraError::Contract(format!("regex_replace: regex non valida: {error}"))
+                    })?;
+                    &owned
+                }
+            };
+            Ok(FastValue::Text(Cow::Owned(
+                regex.replace_all(value, replacement).into_owned(),
+            )))
+        }
     }
 }
 
@@ -1169,6 +2079,8 @@ fn resolved_output_type_fast(
             FastValue::Number(_) => OutputType::Number,
             FastValue::Boolean(_) => OutputType::Boolean,
             FastValue::Text(_) => OutputType::Text,
+            FastValue::Date32(_) => OutputType::Date32,
+            FastValue::TimestampMs(_) => OutputType::TimestampMs,
         };
         if resolved.is_some_and(|previous| {
             std::mem::discriminant(&previous) != std::mem::discriminant(&current)
@@ -1180,6 +2092,28 @@ fn resolved_output_type_fast(
         resolved = Some(current);
     }
     Ok(resolved.unwrap_or(OutputType::Text))
+}
+
+/// Equivalente di `scalar_date32` su `FastValue`.
+fn fast_scalar_date32(value: &FastValue<'_>, context: &str) -> Result<Option<i32>> {
+    match value {
+        FastValue::Null => Ok(None),
+        FastValue::Date32(value) => Ok(Some(*value)),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede una data"
+        ))),
+    }
+}
+
+/// Equivalente di `scalar_timestamp_ms` su `FastValue`.
+fn fast_scalar_timestamp_ms(value: &FastValue<'_>, context: &str) -> Result<Option<i64>> {
+    match value {
+        FastValue::Null => Ok(None),
+        FastValue::TimestampMs(value) => Ok(Some(*value)),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede un timestamp"
+        ))),
+    }
 }
 
 struct FastProgram<'a> {
@@ -1197,7 +2131,17 @@ impl<'a> FastProgram<'a> {
         let values = (0..batch.num_rows())
             .map(|row| evaluate_fast(&self.root, row))
             .collect::<Result<Vec<_>>>()?;
-        match resolved_output_type_fast(&values, config.output_type)? {
+        let mut resolved = resolved_output_type_fast(&values, config.output_type)?;
+        // Auto con tutti i valori null: una radice date_trunc risolve il tipo
+        // temporale dallo schema di input, mai Utf8 (come il generico).
+        if matches!(config.output_type, OutputType::Auto)
+            && values.iter().all(|value| matches!(value, FastValue::Null))
+        {
+            if let Some(temporal) = root_temporal_type(&config.expression, batch)? {
+                resolved = temporal;
+            }
+        }
+        match resolved {
             OutputType::Auto => unreachable!(),
             OutputType::Number => replace_or_append(
                 batch,
@@ -1232,6 +2176,32 @@ impl<'a> FastProgram<'a> {
                     values
                         .iter()
                         .map(|value| fast_text(value, "output_type=text"))
+                        .collect::<Result<Vec<_>>>()?,
+                )),
+            ),
+            OutputType::Date32 => replace_or_append(
+                batch,
+                &config.output_column,
+                DataType::Date32,
+                true,
+                Arc::new(Date32Array::from(
+                    values
+                        .iter()
+                        .map(|value| fast_scalar_date32(value, "output_type=date32"))
+                        .collect::<Result<Vec<_>>>()?,
+                )),
+            ),
+            // Timestamp timezone-aware rifiutati in ingresso: l'output e'
+            // sempre Timestamp(ms) senza timezone (decisione documentata).
+            OutputType::TimestampMs => replace_or_append(
+                batch,
+                &config.output_column,
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+                Arc::new(TimestampMillisecondArray::from(
+                    values
+                        .iter()
+                        .map(|value| fast_scalar_timestamp_ms(value, "output_type=timestamp_ms"))
                         .collect::<Result<Vec<_>>>()?,
                 )),
             ),

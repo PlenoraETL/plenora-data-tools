@@ -161,9 +161,11 @@ type WkbCells = Vec<Vec<u8>>;
 
 fn build_fixture(count: usize, make: impl Fn(&mut Rng, usize) -> Geometry<f64>) -> WkbCells {
     let mut rng = Rng::seeded();
-    (0..count)
-        .map(|index| enc_cell(&make(&mut rng, index)))
-        .collect()
+    let mut cells = Vec::with_capacity(count);
+    for index in 0..count {
+        cells.push(enc_cell(&make(&mut rng, index)));
+    }
+    cells
 }
 
 /// Punti uniformi in [0, 10000)^2 (EPSG:3857-like).
@@ -627,6 +629,18 @@ fn record(
         "note": note,
     });
     println!("{}", serde_json::to_string(&entry).expect("JSON"));
+    // Streaming: ogni misura e' anche accodata a geo_sweep.jsonl (sopravvive
+    // a un eventuale stallo del container prima della scrittura finale).
+    let directory = std::path::Path::new("benchmarks/sweep");
+    std::fs::create_dir_all(directory).expect("mkdir benchmarks/sweep");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("geo_sweep.jsonl"))
+    {
+        use std::io::Write as _;
+        let _ = writeln!(file, "{}", serde_json::to_string(&entry).expect("JSON"));
+    }
     results.push(Measurement {
         op,
         kind,
@@ -953,6 +967,9 @@ fn write_outputs(results: &[Measurement]) {
 
 fn main() {
     let mut results: Vec<Measurement> = Vec::new();
+    let directory = std::path::Path::new("benchmarks/sweep");
+    std::fs::create_dir_all(directory).expect("mkdir benchmarks/sweep");
+    let _ = std::fs::remove_file(directory.join("geo_sweep.jsonl"));
 
     // --- Riferimenti adapter (decode/encode puri) ---------------------------
     let decode_op = |payload: &Vec<u8>| -> Result<usize, String> {
@@ -1364,12 +1381,12 @@ fn main() {
     sweep_collective(
         &mut results,
         "geo.collect",
-        "poly_simple groups of 10",
-        &[10_000, 100_000],
+        "grid100 groups of 10",
+        &[1_000, 10_000],
         1.0,
-        "raggruppamento senza unione, gruppi di 10 poligoni",
+        "raggruppamento senza unione, gruppi di 10 rettangoli adiacenti (MultiPolygon valido per costruzione)",
         &|n| {
-            let geoms = decode_prefix(polys_wkb(), n)?;
+            let geoms = decode_prefix(grid_wkb(), n)?;
             let options = as_options(geoms);
             options
                 .par_chunks(10)

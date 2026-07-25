@@ -19,7 +19,17 @@ use plenora_kernels_table::{
 use super::contract::{dispatch_name, Step, ValidatedPlan};
 use super::Limits;
 
+#[cfg(test)]
+thread_local! {
+    /// Contatore delle deserializzazioni di config (test E1/V2): thread-local
+    /// per non interferire con i test paralleli; il percorso per batch non
+    /// deve mai incrementarlo.
+    static DECODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn decode<T: DeserializeOwned>(step: &Step) -> Result<T> {
+    #[cfg(test)]
+    DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
     serde_json::from_value(step.config.clone()).map_err(PlenoraError::from)
 }
 
@@ -927,66 +937,384 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
     )?)
 }
 
-fn execute_step(batch: &RecordBatch, step: &Step, limits: &Limits) -> Result<RecordBatch> {
-    match dispatch_name(&step.operation) {
-        "drop_columns" => columns::drop_columns(batch, &decode(step)?),
-        "rename" => columns::rename(batch, &decode(step)?),
-        "reorder_columns" => columns::reorder_columns(batch, &decode(step)?),
-        "select_columns" => columns::select_columns(batch, &decode(step)?),
-        "align_schema" => columns::align_schema(batch, &decode(step)?),
-        "concat_columns" => columns::concat_columns(batch, &decode(step)?, limits),
-        "split_column" => columns::split_column(batch, &decode(step)?, limits),
-        "string_pad" => strings::string_pad(batch, &decode(step)?, limits),
-        "string_length" => strings::string_length(batch, &decode(step)?),
-        "text_normalize" => strings::text_normalize(batch, &decode(step)?, limits),
-        "fill_na" => cleansing::fill_na(batch, &decode(step)?),
-        "replace" => cleansing::replace(batch, &decode(step)?),
-        "type_cast" => cleansing::type_cast(batch, &decode(step)?),
-        "filter" => filtering::filter(batch, &decode(step)?),
-        "conditional" => filtering::conditional(batch, &decode(step)?),
-        "string_extract" => strings::string_extract(batch, &decode(step)?, limits),
-        "date_extract" => utility::date_extract(batch, &decode(step)?),
-        "uuid_generator" => utility::uuid_generator(batch, &decode(step)?),
-        "limit" => utility::limit(batch, &decode(step)?),
-        "lookup" => analysis::lookup(batch, &decode(step)?),
-        "flatten_json" => analysis::flatten_json(batch, &decode(step)?, limits),
-        "mask_data" => security::mask_data(batch, &decode(step)?),
-        "md5_hash" => security::md5_hash(batch, &decode(step)?),
-        "add_row_number" => utility::add_row_number(batch, &decode(step)?),
-        "bin" => analysis::bin(batch, &decode(step)?),
-        "sample" => analysis::sample(batch, &decode(step)?),
-        "statistics" => analysis::statistics(batch, &decode(step)?),
-        "sort" => aggregation::sort(batch, &decode(step)?),
-        "top_n" => aggregation::top_n(batch, &decode(step)?),
-        "distinct" => aggregation::distinct(batch, &decode(step)?),
-        "dedup_advanced" => aggregation::dedup_advanced(batch, &decode(step)?),
-        "aggregate" => aggregation::aggregate(batch, &decode(step)?),
-        "window_function" => aggregation::window_function(batch, &decode(step)?),
-        "rolling_window" => aggregation::rolling_window(batch, &decode(step)?),
-        "melt" => reshape::melt(batch, &decode(step)?, limits),
-        "pivot" => reshape::pivot(batch, &decode(step)?, limits),
-        "transpose" => reshape::transpose(batch, &decode(step)?, limits),
-        "formula" => formula::formula(batch, &decode(step)?),
-        "expression" => expressions::expression(batch, &decode(step)?),
-        "assert_cardinality" => governance::assert_cardinality(batch, &decode(step)?),
-        "assert_metadata" => governance::assert_metadata(batch, &decode(step)?),
-        "assert_schema" => quality::assert_schema(batch, &decode(step)?),
-        "assert_not_null" => quality::assert_not_null(batch, &decode(step)?),
-        "assert_unique" => quality::assert_unique(batch, &decode(step)?),
-        "assert_range" => quality::assert_range(batch, &decode(step)?),
-        "assert_regex" => quality::assert_regex(batch, &decode(step)?),
-        "coalesce" => quality::coalesce(batch, &decode(step)?),
-        "date_format" => dates::date_format(batch, &decode(step)?),
-        "date_add" => dates::date_add(batch, &decode(step)?),
-        "date_diff" => dates::date_diff(batch, &decode(step)?),
-        "timezone_convert" => dates::timezone_convert(batch, &decode(step)?),
-        "sha256_hash" => security::sha256_hash(batch, &decode(step)?),
-        "stable_fingerprint" => security::stable_fingerprint(batch, &decode(step)?),
-        "hmac_sha256" => security::hmac_sha256(batch, &decode(step)?),
-        "validate_rules" => governance::validate_rules(batch, &decode(step)?),
-        "explode" => reshape::explode(batch, &decode(step)?, limits),
-        "unnest" => reshape::unnest(batch, &decode(step)?, limits),
-        operation => Err(PlenoraError::Unsupported(operation.into())),
+/// Config tipizzata di un passo tabellare (E1/V2): deserializzata UNA VOLTA
+/// in `Plan::validate` e riusata da ogni batch — niente JSON nel percorso
+/// caldo. Ogni variante e' `Box`ata: le config hanno dimensioni molto
+/// eterogenee e l'allocazione avviene una sola volta a monte dello stream.
+///
+/// Il dispatch resta quello esistente, per nome di operazione: `prepare_step`
+/// mappa il nome sulla variante (stessa tabella di `validate_step_contract`),
+/// `execute_step`/`execute_binary` fanno match sulla variante senza parsing.
+#[derive(Debug)]
+pub(crate) enum PreparedStep {
+    /// `drop_columns`.
+    DropColumns(Box<columns::DropColumns>),
+    /// `rename`.
+    Rename(Box<columns::Rename>),
+    /// `reorder_columns`.
+    ReorderColumns(Box<columns::ReorderColumns>),
+    /// `select_columns`.
+    SelectColumns(Box<columns::SelectColumns>),
+    /// `align_schema`.
+    AlignSchema(Box<columns::AlignSchema>),
+    /// `concat_columns`.
+    ConcatColumns(Box<columns::ConcatColumns>),
+    /// `split_column`.
+    SplitColumn(Box<columns::SplitColumn>),
+    /// `string_pad`.
+    StringPad(Box<strings::StringPad>),
+    /// `string_length`.
+    StringLength(Box<strings::StringLength>),
+    /// `text_normalize`.
+    TextNormalize(Box<strings::TextNormalize>),
+    /// `fill_na`.
+    FillNa(Box<cleansing::FillNa>),
+    /// `replace`.
+    Replace(Box<cleansing::Replace>),
+    /// `type_cast`.
+    TypeCast(Box<cleansing::TypeCast>),
+    /// `filter`.
+    Filter(Box<filtering::Filter>),
+    /// `conditional`.
+    Conditional(Box<filtering::Conditional>),
+    /// `string_extract`.
+    StringExtract(Box<strings::StringExtract>),
+    /// `date_extract`.
+    DateExtract(Box<utility::DateExtract>),
+    /// `uuid_generator`.
+    UuidGenerator(Box<utility::UuidGenerator>),
+    /// `limit`.
+    Limit(Box<utility::Limit>),
+    /// `lookup`.
+    Lookup(Box<analysis::Lookup>),
+    /// `flatten_json`.
+    FlattenJson(Box<analysis::FlattenJson>),
+    /// `mask_data`.
+    MaskData(Box<security::MaskData>),
+    /// `md5_hash`.
+    Md5Hash(Box<security::Md5Hash>),
+    /// `add_row_number`.
+    AddRowNumber(Box<utility::AddRowNumber>),
+    /// `bin`.
+    Bin(Box<analysis::Bin>),
+    /// `sample`.
+    Sample(Box<analysis::Sample>),
+    /// `statistics`.
+    Statistics(Box<analysis::Statistics>),
+    /// `sort`.
+    Sort(Box<aggregation::Sort>),
+    /// `top_n`.
+    TopN(Box<aggregation::TopN>),
+    /// `distinct`.
+    Distinct(Box<aggregation::Distinct>),
+    /// `dedup_advanced`.
+    DedupAdvanced(Box<aggregation::DedupAdvanced>),
+    /// `aggregate`.
+    Aggregate(Box<aggregation::Aggregate>),
+    /// `window_function`.
+    WindowFunction(Box<aggregation::WindowFunction>),
+    /// `rolling_window`.
+    RollingWindow(Box<aggregation::RollingWindow>),
+    /// `melt`.
+    Melt(Box<reshape::Melt>),
+    /// `pivot`.
+    Pivot(Box<reshape::Pivot>),
+    /// `transpose`.
+    Transpose(Box<reshape::Transpose>),
+    /// `formula`.
+    Formula(Box<formula::Formula>),
+    /// `expression`.
+    Expression(Box<expressions::ExpressionTransform>),
+    /// `assert_cardinality`.
+    AssertCardinality(Box<governance::AssertCardinality>),
+    /// `assert_metadata`.
+    AssertMetadata(Box<governance::AssertMetadata>),
+    /// `assert_schema`.
+    AssertSchema(Box<quality::AssertSchema>),
+    /// `assert_not_null`.
+    AssertNotNull(Box<quality::AssertNotNull>),
+    /// `assert_unique`.
+    AssertUnique(Box<quality::AssertUnique>),
+    /// `assert_range`.
+    AssertRange(Box<quality::AssertRange>),
+    /// `assert_regex`.
+    AssertRegex(Box<quality::AssertRegex>),
+    /// `coalesce`.
+    Coalesce(Box<quality::Coalesce>),
+    /// `date_format`.
+    DateFormat(Box<dates::DateFormat>),
+    /// `date_add`.
+    DateAdd(Box<dates::DateAdd>),
+    /// `date_diff`.
+    DateDiff(Box<dates::DateDiff>),
+    /// `timezone_convert`.
+    TimezoneConvert(Box<dates::TimezoneConvert>),
+    /// `sha256_hash`.
+    Sha256Hash(Box<security::Sha256Hash>),
+    /// `stable_fingerprint`.
+    StableFingerprint(Box<security::StableFingerprint>),
+    /// `hmac_sha256`.
+    HmacSha256(Box<security::HmacSha256>),
+    /// `validate_rules`.
+    ValidateRules(Box<governance::ValidateRules>),
+    /// `explode`.
+    Explode(Box<reshape::Explode>),
+    /// `unnest`.
+    Unnest(Box<reshape::Unnest>),
+    /// `join`.
+    Join(Box<joins::Join>),
+    /// `concat`.
+    Concat(Box<joins::Concat>),
+    /// `concat_by_name`.
+    ConcatByName(Box<joins::ConcatByName>),
+    /// `cross_join`.
+    CrossJoin(Box<joins::CrossJoin>),
+    /// `table_diff`.
+    TableDiff(Box<reshape::TableDiff>),
+    /// `semi_join`.
+    SemiJoin(Box<joins::MembershipJoin>),
+    /// `anti_join`.
+    AntiJoin(Box<joins::MembershipJoin>),
+    /// `asof_join`.
+    AsOfJoin(Box<joins::AsOfJoin>),
+    /// `fuzzy_join`.
+    FuzzyJoin(Box<fuzzy::FuzzyJoin>),
+    /// `union_distinct`.
+    UnionDistinct(Box<setops::SetOperation>),
+    /// `intersect`.
+    Intersect(Box<setops::SetOperation>),
+    /// `except`.
+    Except(Box<setops::SetOperation>),
+    /// `assert_foreign_key`.
+    AssertForeignKey(Box<governance::ForeignKey>),
+    /// `reconcile`.
+    Reconcile(Box<governance::Reconcile>),
+}
+
+impl PreparedStep {
+    /// Nome di dispatch dell'operazione (attribution errori e scelta spill).
+    #[must_use]
+    pub(crate) const fn name(&self) -> &'static str {
+        match self {
+            Self::DropColumns(_) => "drop_columns",
+            Self::Rename(_) => "rename",
+            Self::ReorderColumns(_) => "reorder_columns",
+            Self::SelectColumns(_) => "select_columns",
+            Self::AlignSchema(_) => "align_schema",
+            Self::ConcatColumns(_) => "concat_columns",
+            Self::SplitColumn(_) => "split_column",
+            Self::StringPad(_) => "string_pad",
+            Self::StringLength(_) => "string_length",
+            Self::TextNormalize(_) => "text_normalize",
+            Self::FillNa(_) => "fill_na",
+            Self::Replace(_) => "replace",
+            Self::TypeCast(_) => "type_cast",
+            Self::Filter(_) => "filter",
+            Self::Conditional(_) => "conditional",
+            Self::StringExtract(_) => "string_extract",
+            Self::DateExtract(_) => "date_extract",
+            Self::UuidGenerator(_) => "uuid_generator",
+            Self::Limit(_) => "limit",
+            Self::Lookup(_) => "lookup",
+            Self::FlattenJson(_) => "flatten_json",
+            Self::MaskData(_) => "mask_data",
+            Self::Md5Hash(_) => "md5_hash",
+            Self::AddRowNumber(_) => "add_row_number",
+            Self::Bin(_) => "bin",
+            Self::Sample(_) => "sample",
+            Self::Statistics(_) => "statistics",
+            Self::Sort(_) => "sort",
+            Self::TopN(_) => "top_n",
+            Self::Distinct(_) => "distinct",
+            Self::DedupAdvanced(_) => "dedup_advanced",
+            Self::Aggregate(_) => "aggregate",
+            Self::WindowFunction(_) => "window_function",
+            Self::RollingWindow(_) => "rolling_window",
+            Self::Melt(_) => "melt",
+            Self::Pivot(_) => "pivot",
+            Self::Transpose(_) => "transpose",
+            Self::Formula(_) => "formula",
+            Self::Expression(_) => "expression",
+            Self::AssertCardinality(_) => "assert_cardinality",
+            Self::AssertMetadata(_) => "assert_metadata",
+            Self::AssertSchema(_) => "assert_schema",
+            Self::AssertNotNull(_) => "assert_not_null",
+            Self::AssertUnique(_) => "assert_unique",
+            Self::AssertRange(_) => "assert_range",
+            Self::AssertRegex(_) => "assert_regex",
+            Self::Coalesce(_) => "coalesce",
+            Self::DateFormat(_) => "date_format",
+            Self::DateAdd(_) => "date_add",
+            Self::DateDiff(_) => "date_diff",
+            Self::TimezoneConvert(_) => "timezone_convert",
+            Self::Sha256Hash(_) => "sha256_hash",
+            Self::StableFingerprint(_) => "stable_fingerprint",
+            Self::HmacSha256(_) => "hmac_sha256",
+            Self::ValidateRules(_) => "validate_rules",
+            Self::Explode(_) => "explode",
+            Self::Unnest(_) => "unnest",
+            Self::Join(_) => "join",
+            Self::Concat(_) => "concat",
+            Self::ConcatByName(_) => "concat_by_name",
+            Self::CrossJoin(_) => "cross_join",
+            Self::TableDiff(_) => "table_diff",
+            Self::SemiJoin(_) => "semi_join",
+            Self::AntiJoin(_) => "anti_join",
+            Self::AsOfJoin(_) => "asof_join",
+            Self::FuzzyJoin(_) => "fuzzy_join",
+            Self::UnionDistinct(_) => "union_distinct",
+            Self::Intersect(_) => "intersect",
+            Self::Except(_) => "except",
+            Self::AssertForeignKey(_) => "assert_foreign_key",
+            Self::Reconcile(_) => "reconcile",
+        }
+    }
+}
+
+/// Deserializza la config di un passo nella sua forma tipizzata (E1/V2).
+/// Chiamata una sola volta per passo da `Plan::validate`, mai per batch;
+/// il dispatch per nome e' lo stesso di `validate_step_contract`.
+#[allow(clippy::too_many_lines)] // Mirror of the audited dispatcher, one arm per operation.
+pub(crate) fn prepare_step(step: &Step) -> Result<PreparedStep> {
+    Ok(match dispatch_name(&step.operation) {
+        "drop_columns" => PreparedStep::DropColumns(Box::new(decode(step)?)),
+        "rename" => PreparedStep::Rename(Box::new(decode(step)?)),
+        "reorder_columns" => PreparedStep::ReorderColumns(Box::new(decode(step)?)),
+        "select_columns" => PreparedStep::SelectColumns(Box::new(decode(step)?)),
+        "align_schema" => PreparedStep::AlignSchema(Box::new(decode(step)?)),
+        "concat_columns" => PreparedStep::ConcatColumns(Box::new(decode(step)?)),
+        "split_column" => PreparedStep::SplitColumn(Box::new(decode(step)?)),
+        "string_pad" => PreparedStep::StringPad(Box::new(decode(step)?)),
+        "string_length" => PreparedStep::StringLength(Box::new(decode(step)?)),
+        "text_normalize" => PreparedStep::TextNormalize(Box::new(decode(step)?)),
+        "fill_na" => PreparedStep::FillNa(Box::new(decode(step)?)),
+        "replace" => PreparedStep::Replace(Box::new(decode(step)?)),
+        "type_cast" => PreparedStep::TypeCast(Box::new(decode(step)?)),
+        "filter" => PreparedStep::Filter(Box::new(decode(step)?)),
+        "conditional" => PreparedStep::Conditional(Box::new(decode(step)?)),
+        "string_extract" => PreparedStep::StringExtract(Box::new(decode(step)?)),
+        "date_extract" => PreparedStep::DateExtract(Box::new(decode(step)?)),
+        "uuid_generator" => PreparedStep::UuidGenerator(Box::new(decode(step)?)),
+        "limit" => PreparedStep::Limit(Box::new(decode(step)?)),
+        "lookup" => PreparedStep::Lookup(Box::new(decode(step)?)),
+        "flatten_json" => PreparedStep::FlattenJson(Box::new(decode(step)?)),
+        "mask_data" => PreparedStep::MaskData(Box::new(decode(step)?)),
+        "md5_hash" => PreparedStep::Md5Hash(Box::new(decode(step)?)),
+        "add_row_number" => PreparedStep::AddRowNumber(Box::new(decode(step)?)),
+        "bin" => PreparedStep::Bin(Box::new(decode(step)?)),
+        "sample" => PreparedStep::Sample(Box::new(decode(step)?)),
+        "statistics" => PreparedStep::Statistics(Box::new(decode(step)?)),
+        "sort" => PreparedStep::Sort(Box::new(decode(step)?)),
+        "top_n" => PreparedStep::TopN(Box::new(decode(step)?)),
+        "distinct" => PreparedStep::Distinct(Box::new(decode(step)?)),
+        "dedup_advanced" => PreparedStep::DedupAdvanced(Box::new(decode(step)?)),
+        "aggregate" => PreparedStep::Aggregate(Box::new(decode(step)?)),
+        "window_function" => PreparedStep::WindowFunction(Box::new(decode(step)?)),
+        "rolling_window" => PreparedStep::RollingWindow(Box::new(decode(step)?)),
+        "melt" => PreparedStep::Melt(Box::new(decode(step)?)),
+        "pivot" => PreparedStep::Pivot(Box::new(decode(step)?)),
+        "transpose" => PreparedStep::Transpose(Box::new(decode(step)?)),
+        "formula" => PreparedStep::Formula(Box::new(decode(step)?)),
+        "expression" => PreparedStep::Expression(Box::new(decode(step)?)),
+        "assert_cardinality" => PreparedStep::AssertCardinality(Box::new(decode(step)?)),
+        "assert_metadata" => PreparedStep::AssertMetadata(Box::new(decode(step)?)),
+        "assert_schema" => PreparedStep::AssertSchema(Box::new(decode(step)?)),
+        "assert_not_null" => PreparedStep::AssertNotNull(Box::new(decode(step)?)),
+        "assert_unique" => PreparedStep::AssertUnique(Box::new(decode(step)?)),
+        "assert_range" => PreparedStep::AssertRange(Box::new(decode(step)?)),
+        "assert_regex" => PreparedStep::AssertRegex(Box::new(decode(step)?)),
+        "coalesce" => PreparedStep::Coalesce(Box::new(decode(step)?)),
+        "date_format" => PreparedStep::DateFormat(Box::new(decode(step)?)),
+        "date_add" => PreparedStep::DateAdd(Box::new(decode(step)?)),
+        "date_diff" => PreparedStep::DateDiff(Box::new(decode(step)?)),
+        "timezone_convert" => PreparedStep::TimezoneConvert(Box::new(decode(step)?)),
+        "sha256_hash" => PreparedStep::Sha256Hash(Box::new(decode(step)?)),
+        "stable_fingerprint" => PreparedStep::StableFingerprint(Box::new(decode(step)?)),
+        "hmac_sha256" => PreparedStep::HmacSha256(Box::new(decode(step)?)),
+        "validate_rules" => PreparedStep::ValidateRules(Box::new(decode(step)?)),
+        "explode" => PreparedStep::Explode(Box::new(decode(step)?)),
+        "unnest" => PreparedStep::Unnest(Box::new(decode(step)?)),
+        "join" => PreparedStep::Join(Box::new(decode(step)?)),
+        "concat" => PreparedStep::Concat(Box::new(decode(step)?)),
+        "concat_by_name" => PreparedStep::ConcatByName(Box::new(decode(step)?)),
+        "cross_join" => PreparedStep::CrossJoin(Box::new(decode(step)?)),
+        "table_diff" => PreparedStep::TableDiff(Box::new(decode(step)?)),
+        "semi_join" => PreparedStep::SemiJoin(Box::new(decode(step)?)),
+        "anti_join" => PreparedStep::AntiJoin(Box::new(decode(step)?)),
+        "asof_join" => PreparedStep::AsOfJoin(Box::new(decode(step)?)),
+        "fuzzy_join" => PreparedStep::FuzzyJoin(Box::new(decode(step)?)),
+        "union_distinct" => PreparedStep::UnionDistinct(Box::new(decode(step)?)),
+        "intersect" => PreparedStep::Intersect(Box::new(decode(step)?)),
+        "except" => PreparedStep::Except(Box::new(decode(step)?)),
+        "assert_foreign_key" => PreparedStep::AssertForeignKey(Box::new(decode(step)?)),
+        "reconcile" => PreparedStep::Reconcile(Box::new(decode(step)?)),
+        operation => return Err(PlenoraError::Unsupported(operation.into())),
+    })
+}
+
+/// Esegue un passo unario sulla batch usando la config gia' tipizzata
+/// (E1/V2: nessuna deserializzazione nel percorso caldo).
+#[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
+fn execute_step(batch: &RecordBatch, step: &PreparedStep, limits: &Limits) -> Result<RecordBatch> {
+    match step {
+        PreparedStep::DropColumns(config) => columns::drop_columns(batch, config),
+        PreparedStep::Rename(config) => columns::rename(batch, config),
+        PreparedStep::ReorderColumns(config) => columns::reorder_columns(batch, config),
+        PreparedStep::SelectColumns(config) => columns::select_columns(batch, config),
+        PreparedStep::AlignSchema(config) => columns::align_schema(batch, config),
+        PreparedStep::ConcatColumns(config) => columns::concat_columns(batch, config, limits),
+        PreparedStep::SplitColumn(config) => columns::split_column(batch, config, limits),
+        PreparedStep::StringPad(config) => strings::string_pad(batch, config, limits),
+        PreparedStep::StringLength(config) => strings::string_length(batch, config),
+        PreparedStep::TextNormalize(config) => strings::text_normalize(batch, config, limits),
+        PreparedStep::FillNa(config) => cleansing::fill_na(batch, config),
+        PreparedStep::Replace(config) => cleansing::replace(batch, config),
+        PreparedStep::TypeCast(config) => cleansing::type_cast(batch, config),
+        PreparedStep::Filter(config) => filtering::filter(batch, config),
+        PreparedStep::Conditional(config) => filtering::conditional(batch, config),
+        PreparedStep::StringExtract(config) => strings::string_extract(batch, config, limits),
+        PreparedStep::DateExtract(config) => utility::date_extract(batch, config),
+        PreparedStep::UuidGenerator(config) => utility::uuid_generator(batch, config),
+        PreparedStep::Limit(config) => utility::limit(batch, config),
+        PreparedStep::Lookup(config) => analysis::lookup(batch, config),
+        PreparedStep::FlattenJson(config) => analysis::flatten_json(batch, config, limits),
+        PreparedStep::MaskData(config) => security::mask_data(batch, config),
+        PreparedStep::Md5Hash(config) => security::md5_hash(batch, config),
+        PreparedStep::AddRowNumber(config) => utility::add_row_number(batch, config),
+        PreparedStep::Bin(config) => analysis::bin(batch, config),
+        PreparedStep::Sample(config) => analysis::sample(batch, config),
+        PreparedStep::Statistics(config) => analysis::statistics(batch, config),
+        PreparedStep::Sort(config) => aggregation::sort(batch, config),
+        PreparedStep::TopN(config) => aggregation::top_n(batch, config),
+        PreparedStep::Distinct(config) => aggregation::distinct(batch, config),
+        PreparedStep::DedupAdvanced(config) => aggregation::dedup_advanced(batch, config),
+        PreparedStep::Aggregate(config) => aggregation::aggregate(batch, config),
+        PreparedStep::WindowFunction(config) => aggregation::window_function(batch, config),
+        PreparedStep::RollingWindow(config) => aggregation::rolling_window(batch, config),
+        PreparedStep::Melt(config) => reshape::melt(batch, config, limits),
+        PreparedStep::Pivot(config) => reshape::pivot(batch, config, limits),
+        PreparedStep::Transpose(config) => reshape::transpose(batch, config, limits),
+        PreparedStep::Formula(config) => formula::formula(batch, config),
+        PreparedStep::Expression(config) => expressions::expression(batch, config),
+        PreparedStep::AssertCardinality(config) => governance::assert_cardinality(batch, config),
+        PreparedStep::AssertMetadata(config) => governance::assert_metadata(batch, config),
+        PreparedStep::AssertSchema(config) => quality::assert_schema(batch, config),
+        PreparedStep::AssertNotNull(config) => quality::assert_not_null(batch, config),
+        PreparedStep::AssertUnique(config) => quality::assert_unique(batch, config),
+        PreparedStep::AssertRange(config) => quality::assert_range(batch, config),
+        PreparedStep::AssertRegex(config) => quality::assert_regex(batch, config),
+        PreparedStep::Coalesce(config) => quality::coalesce(batch, config),
+        PreparedStep::DateFormat(config) => dates::date_format(batch, config),
+        PreparedStep::DateAdd(config) => dates::date_add(batch, config),
+        PreparedStep::DateDiff(config) => dates::date_diff(batch, config),
+        PreparedStep::TimezoneConvert(config) => dates::timezone_convert(batch, config),
+        PreparedStep::Sha256Hash(config) => security::sha256_hash(batch, config),
+        PreparedStep::StableFingerprint(config) => security::stable_fingerprint(batch, config),
+        PreparedStep::HmacSha256(config) => security::hmac_sha256(batch, config),
+        PreparedStep::ValidateRules(config) => governance::validate_rules(batch, config),
+        PreparedStep::Explode(config) => reshape::explode(batch, config, limits),
+        PreparedStep::Unnest(config) => reshape::unnest(batch, config, limits),
+        binary => Err(PlenoraError::Unsupported(binary.name().into())),
     }
 }
 
@@ -1004,8 +1332,13 @@ pub fn execute_batch(mut batch: RecordBatch, plan: &ValidatedPlan) -> Result<Rec
     }
     batch = normalize_large_utf8(&batch)?;
     validate_batch(&batch, plan.limits())?;
-    for (index, step) in plan.steps().iter().enumerate() {
-        batch = execute_step(&batch, step, plan.limits()).map_err(|error| PlenoraError::Step {
+    for (index, (step, prepared)) in plan
+        .steps()
+        .iter()
+        .zip(plan.prepared_steps())
+        .enumerate()
+    {
+        batch = execute_step(&batch, prepared, plan.limits()).map_err(|error| PlenoraError::Step {
             node: index.to_string(),
             operation: step.operation.clone(),
             reason: error.to_string(),
@@ -1035,14 +1368,14 @@ pub fn execute_binary(
     let right = normalize_large_utf8(right)?;
     validate_batch(&left, plan.limits())?;
     validate_batch(&right, plan.limits())?;
-    let step = &plan.steps()[0];
+    let prepared = &plan.prepared_steps()[0];
     if matches!(
-        dispatch_name(&step.operation),
-        "union_distinct" | "intersect" | "except"
+        prepared,
+        PreparedStep::UnionDistinct(_) | PreparedStep::Intersect(_) | PreparedStep::Except(_)
     ) && spill::should_spill(&left, &right, plan.limits())
     {
         let output = spill::execute_set_operation(
-            dispatch_name(&step.operation),
+            prepared.name(),
             &left,
             &right,
             plan.limits(),
@@ -1050,27 +1383,119 @@ pub fn execute_binary(
         validate_batch(&output, plan.limits())?;
         return Ok(output);
     }
-    let output = match dispatch_name(&step.operation) {
-        "join" => joins::join(&left, &right, &decode(step)?, plan.limits()),
-        "concat" => joins::concat(&left, &right, &decode(step)?, plan.limits()),
-        "concat_by_name" => {
-            joins::concat_by_name(&[&left, &right], &decode(step)?, plan.limits())
+    let output = match prepared {
+        PreparedStep::Join(config) => joins::join(&left, &right, config, plan.limits()),
+        PreparedStep::Concat(config) => joins::concat(&left, &right, config, plan.limits()),
+        PreparedStep::ConcatByName(config) => {
+            joins::concat_by_name(&[&left, &right], config, plan.limits())
         }
-        "cross_join" => joins::cross_join(&left, &right, &decode(step)?, plan.limits()),
-        "table_diff" => reshape::table_diff(&left, &right, &decode(step)?, plan.limits()),
-        "semi_join" => joins::semi_join(&left, &right, &decode(step)?),
-        "anti_join" => joins::anti_join(&left, &right, &decode(step)?),
-        "asof_join" => joins::asof_join(&left, &right, &decode(step)?, plan.limits()),
-        "fuzzy_join" => fuzzy::fuzzy_join(&left, &right, &decode(step)?, plan.limits()),
-        "union_distinct" => setops::union_distinct(&left, &right, &decode(step)?, plan.limits()),
-        "intersect" => setops::intersect(&left, &right, &decode(step)?),
-        "except" => setops::except(&left, &right, &decode(step)?),
-        "assert_foreign_key" => {
-            governance::assert_foreign_key(&left, &right, &decode(step)?, plan.limits())
+        PreparedStep::CrossJoin(config) => joins::cross_join(&left, &right, config, plan.limits()),
+        PreparedStep::TableDiff(config) => reshape::table_diff(&left, &right, config, plan.limits()),
+        PreparedStep::SemiJoin(config) => joins::semi_join(&left, &right, config),
+        PreparedStep::AntiJoin(config) => joins::anti_join(&left, &right, config),
+        PreparedStep::AsOfJoin(config) => joins::asof_join(&left, &right, config, plan.limits()),
+        PreparedStep::FuzzyJoin(config) => fuzzy::fuzzy_join(&left, &right, config, plan.limits()),
+        PreparedStep::UnionDistinct(config) => {
+            setops::union_distinct(&left, &right, config, plan.limits())
         }
-        "reconcile" => governance::reconcile(&left, &right, &decode(step)?, plan.limits()),
-        operation => Err(PlenoraError::Unsupported(operation.into())),
+        PreparedStep::Intersect(config) => setops::intersect(&left, &right, config),
+        PreparedStep::Except(config) => setops::except(&left, &right, config),
+        PreparedStep::AssertForeignKey(config) => {
+            governance::assert_foreign_key(&left, &right, config, plan.limits())
+        }
+        PreparedStep::Reconcile(config) => {
+            governance::reconcile(&left, &right, config, plan.limits())
+        }
+        unary => Err(PlenoraError::Unsupported(unary.name().into())),
     }?;
     validate_batch(&output, plan.limits())?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::arrow::array::Int64Array;
+    use plenora_core::arrow::schema::{DataType, Field, Schema};
+    use serde_json::json;
+
+    use super::*;
+    use crate::table_engine::{Plan, Step, SCHEMA_VERSION};
+
+    fn ids_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![3, 1, 2])) as ArrayRef],
+        )
+        .expect("batch di test")
+    }
+
+    fn decode_calls() -> usize {
+        DECODE_CALLS.with(std::cell::Cell::get)
+    }
+
+    /// E1/V2: la config di un passo e' deserializzata una sola volta in
+    /// `Plan::validate`; l'esecuzione di N batch non deve mai ri-parsare.
+    #[test]
+    fn config_deserialized_once_at_validation_never_per_batch() {
+        let plan = Plan {
+            schema_version: SCHEMA_VERSION,
+            limits: Limits::default(),
+            steps: vec![Step {
+                operation: "sort".into(),
+                config: json!({"columns": ["id"]}),
+            }],
+        }
+        .validate()
+        .expect("piano valido");
+
+        // La validazione deserializza (contratto + forma preparata): il
+        // contatore deve osservarlo, altrimenti il test non prova nulla.
+        let at_prepare = decode_calls();
+        assert!(
+            at_prepare > 0,
+            "atteso almeno un parse in validate, osservati {at_prepare}"
+        );
+        assert_eq!(plan.prepared_steps().len(), 1);
+        assert_eq!(plan.prepared_steps()[0].name(), "sort");
+
+        DECODE_CALLS.with(|calls| calls.set(0));
+        let mut last_rows = 0;
+        for _ in 0..1000 {
+            let output = execute_batch(ids_batch(), &plan).expect("batch");
+            last_rows = output.num_rows();
+        }
+        assert_eq!(last_rows, 3);
+        assert_eq!(
+            decode_calls(),
+            0,
+            "deserializzazioni nel percorso per batch"
+        );
+    }
+
+    /// Anche il percorso binario usa la config preparata: nessun parse in
+    /// `execute_binary`.
+    #[test]
+    fn binary_execution_does_not_reparse_config() {
+        let plan = Plan {
+            schema_version: SCHEMA_VERSION,
+            limits: Limits::default(),
+            steps: vec![Step {
+                operation: "concat".into(),
+                config: json!({}),
+            }],
+        }
+        .validate()
+        .expect("piano binario valido");
+        assert!(plan.requires_secondary());
+
+        DECODE_CALLS.with(|calls| calls.set(0));
+        let output = execute_binary(&ids_batch(), &ids_batch(), &plan).expect("concat");
+        assert_eq!(output.num_rows(), 6);
+        assert_eq!(
+            decode_calls(),
+            0,
+            "deserializzazioni nel percorso binario"
+        );
+    }
 }

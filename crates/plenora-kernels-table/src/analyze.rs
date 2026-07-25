@@ -1992,13 +1992,19 @@ fn analyze_formula(
 }
 
 /// Tipo statico di un sotto-albero `Expression` (`Any` = letterale null,
-/// tipo deciso dai dati ma coerente con qualsiasi altro).
+/// tipo deciso dai dati ma coerente con qualsiasi altro). `Date32` e
+/// `TimestampMs` sono i tipi temporali NATIVI prodotti da `date_trunc`
+/// (decisione registrata: nessuna degradazione a Number per l'output di
+/// `date_trunc`; le colonne Date32/Timestamp lette direttamente restano
+/// `Number`, come nel kernel).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum StaticType {
     Any,
     Number,
     Boolean,
     Text,
+    Date32,
+    TimestampMs,
 }
 
 fn meet_types(op: &str, left: StaticType, right: StaticType) -> Result<StaticType> {
@@ -2101,6 +2107,18 @@ fn infer_expression_type(
             }
         }
         Expression::Function { name, args } => {
+            // Nodi speciali: la lista di `in` non e' uno scalare valutabile
+            // e `date_trunc` ha regole di tipo temporali native dedicate.
+            if matches!(name, Function::DateTrunc) {
+                return infer_date_trunc_type(op, input, args);
+            }
+            if matches!(name, Function::In) {
+                if args.len() != 2 {
+                    return contract_error(op, "in richiede 2 argomenti");
+                }
+                infer_expression_type(op, input, &args[0])?;
+                return Ok(StaticType::Boolean);
+            }
             let types = args
                 .iter()
                 .map(|argument| infer_expression_type(op, input, argument))
@@ -2137,6 +2155,35 @@ fn infer_expression_type(
                     }
                     Ok(StaticType::Number)
                 }
+                Function::Substring => {
+                    // (testo, numero, numero?) -> testo
+                    if let Some((first, rest)) = types.split_first() {
+                        expect_type(op, *first, StaticType::Text, "substring")?;
+                        for item in rest {
+                            expect_type(op, *item, StaticType::Number, "substring")?;
+                        }
+                    }
+                    Ok(StaticType::Text)
+                }
+                Function::RegexReplace => {
+                    for item in &types {
+                        expect_type(op, *item, StaticType::Text, "regex_replace")?;
+                    }
+                    Ok(StaticType::Text)
+                }
+                Function::Between => {
+                    // Omogeneita' degli operandi come i confronti binari.
+                    fold(&types)?;
+                    Ok(StaticType::Boolean)
+                }
+                Function::Greatest | Function::Least => fold(&types),
+                Function::Floor | Function::Ceil | Function::Power => {
+                    for item in &types {
+                        expect_type(op, *item, StaticType::Number, "funzione numerica")?;
+                    }
+                    Ok(StaticType::Number)
+                }
+                Function::DateTrunc | Function::In => unreachable!(),
             }
         }
         Expression::Case {
@@ -2168,17 +2215,107 @@ fn analyze_expression(
         expressions::OutputType::Number => DataType::Float64,
         expressions::OutputType::Boolean => DataType::Boolean,
         expressions::OutputType::Text => DataType::Utf8,
+        expressions::OutputType::Date32 => DataType::Date32,
+        expressions::OutputType::TimestampMs => DataType::Timestamp(TimeUnit::Millisecond, None),
         expressions::OutputType::Auto => {
             // Auto e' risolto dal kernel sui dati: l'analisi statica prova a
-            // determinarlo dall'AST; tutto-null -> Text come il kernel.
+            // determinarlo dall'AST; tutto-null -> Text come il kernel, salvo
+            // radice date_trunc (tipo temporale dalla colonna di input).
             match infer_expression_type(op, input, &config.expression)? {
                 StaticType::Number => DataType::Float64,
                 StaticType::Boolean => DataType::Boolean,
                 StaticType::Any | StaticType::Text => DataType::Utf8,
+                StaticType::Date32 => DataType::Date32,
+                StaticType::TimestampMs => DataType::Timestamp(TimeUnit::Millisecond, None),
             }
         }
     };
     analyze_append(input, fields, &[(config.output_column, data_type, true)])
+}
+
+/// Regole di tipo di `date_trunc` (tipi temporali nativi, decisione
+/// registrata): l'unita' e' un letterale del set chiuso; il tipo di output
+/// discende dal tipo della colonna di input (anche su dati tutti null);
+/// nessun parsing implicito di stringhe; timestamp timezone-aware rifiutati
+/// (semantica tz del troncamento non definibile in modo sicuro: l'output e'
+/// sempre naive).
+fn infer_date_trunc_type(
+    op: &str,
+    input: &DataContract,
+    args: &[expressions::Expression],
+) -> Result<StaticType> {
+    if args.len() != 2 {
+        return contract_error(op, "date_trunc richiede 2 argomenti");
+    }
+    let expressions::Expression::Literal {
+        value: Value::String(unit),
+    } = &args[0]
+    else {
+        return contract_error(op, "date_trunc: unit deve essere un letterale stringa");
+    };
+    if !matches!(
+        unit.as_str(),
+        "year" | "month" | "day" | "hour" | "minute" | "second"
+    ) {
+        return contract_error(op, format!("date_trunc: unita' non valida: {unit}"));
+    }
+    temporal_static_type(op, input, &args[1], unit)
+}
+
+/// Tipo temporale statico della sorgente di `date_trunc`; `unit` e' l'unita'
+/// del livello corrente (sub-day rifiutata su Date32).
+fn temporal_static_type(
+    op: &str,
+    input: &DataContract,
+    expression: &expressions::Expression,
+    unit: &str,
+) -> Result<StaticType> {
+    use expressions::Expression;
+    match expression {
+        Expression::Column { name } => {
+            let field = field_of(op, input, name)?;
+            match field.data_type() {
+                DataType::Date32 => {
+                    if matches!(unit, "hour" | "minute" | "second") {
+                        return contract_error(
+                            op,
+                            "date_trunc: unita' sub-day non ammessa su Date32",
+                        );
+                    }
+                    Ok(StaticType::Date32)
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                    if timezone.is_some() {
+                        return contract_error(
+                            op,
+                            "date_trunc: timestamp timezone-aware non supportato",
+                        );
+                    }
+                    Ok(StaticType::TimestampMs)
+                }
+                other => contract_error(
+                    op,
+                    format!(
+                        "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                    ),
+                ),
+            }
+        }
+        Expression::Function {
+            name: expressions::Function::DateTrunc,
+            args,
+        } => {
+            let kind = infer_date_trunc_type(op, input, args)?;
+            if kind == StaticType::Date32 && matches!(unit, "hour" | "minute" | "second") {
+                return contract_error(op, "date_trunc: unita' sub-day non ammessa su Date32");
+            }
+            Ok(kind)
+        }
+        Expression::Literal {
+            value: Value::Null,
+        } => Ok(StaticType::Any),
+        _ => contract_error(op, "date_trunc: il valore deve essere una colonna temporale"),
+    }
 }
 
 // ---------------------------------------------------------------------------

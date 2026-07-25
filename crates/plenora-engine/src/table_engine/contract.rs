@@ -71,6 +71,10 @@ pub struct Plan {
 pub struct ValidatedPlan {
     limits: Limits,
     steps: Vec<Step>,
+    /// Config tipizzate dei passi, allineate per indice a `steps` (E1/V2):
+    /// deserializzate una volta in `Plan::validate`, mai nel percorso per
+    /// batch. `Arc` per clonare il piano senza ri-allocare le config.
+    prepared: std::sync::Arc<[super::executor::PreparedStep]>,
 }
 
 impl Plan {
@@ -146,9 +150,19 @@ impl Plan {
             })?;
         }
 
+        // E1/V2: la config di ogni passo e' deserializzata nella sua forma
+        // tipizzata UNA VOLTA qui; l'esecuzione per batch usa solo queste
+        // (irraggiungibile un fallimento: stessa validazione di cui sopra).
+        let prepared = self
+            .steps
+            .iter()
+            .map(super::executor::prepare_step)
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(ValidatedPlan {
             limits: self.limits,
             steps: self.steps,
+            prepared: prepared.into(),
         })
     }
 }
@@ -162,6 +176,13 @@ impl ValidatedPlan {
     #[must_use]
     pub fn steps(&self) -> &[Step] {
         &self.steps
+    }
+
+    /// Config tipizzate dei passi, allineate per indice a [`Self::steps`]
+    /// (E1/V2: percorso per batch senza parsing JSON).
+    #[must_use]
+    pub(crate) fn prepared_steps(&self) -> &[super::executor::PreparedStep] {
+        &self.prepared
     }
 
     #[must_use]

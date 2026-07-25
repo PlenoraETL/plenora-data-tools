@@ -159,16 +159,61 @@ pub struct OperationDescriptor {
 // ---------------------------------------------------------------------------
 
 macro_rules! op {
+    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (ADR 4).
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident) => {
         op!($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat,
             kernel_version = 1)
     };
-    // Variante con `kernel_version` esplicita (ADR 4): l'incremento segue le
-    // ottimizzazioni/riscritture del kernel a semantica invariata.
+    // Variante con versioni esplicite: `semantic_version`,
+    // `config_schema_version`, `contract_analysis_version` e `kernel_version`
+    // sono tutte opzionali (default 1) e ammesse in qualsiasi combinazione e
+    // ordine; chiave duplicata o sconosciuta -> errore di compilazione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
-     kernel_version = $kernel_version:expr) => {
+     $($versions:tt)+) => {
+        op!(@munch
+            ($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat)
+            (1, 1, 1, 1)
+            $($versions)+)
+    };
+    // Muncher: consuma una chiave per passo aggiornando l'accumulatore
+    // (semantic, config_schema, contract_analysis, kernel).
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        semantic_version = $v:expr) => {
+        op!(@build ($($base)*) ($v, $c, $a, $k))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        semantic_version = $v:expr, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($v, $c, $a, $k) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        config_schema_version = $v:expr) => {
+        op!(@build ($($base)*) ($s, $v, $a, $k))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        config_schema_version = $v:expr, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $v, $a, $k) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        contract_analysis_version = $v:expr) => {
+        op!(@build ($($base)*) ($s, $c, $v, $k))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        contract_analysis_version = $v:expr, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $v, $k) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        kernel_version = $v:expr) => {
+        op!(@build ($($base)*) ($s, $c, $a, $v))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+        kernel_version = $v:expr, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $a, $v) $($rest)+)
+    };
+    (@build ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
+     $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident)
+     ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr)) => {
         OperationDescriptor {
             id: $id,
             family: Family::$family,
@@ -181,10 +226,10 @@ macro_rules! op {
             required_capabilities: $caps,
             determinism: DeterminismPolicy::$det,
             maturity: Maturity::$mat,
-            semantic_version: 1,
-            config_schema_version: 1,
-            contract_analysis_version: 1,
-            kernel_version: $kernel_version,
+            semantic_version: $semantic,
+            config_schema_version: $config_schema,
+            contract_analysis_version: $contract_analysis,
+            kernel_version: $kernel,
         }
     };
 }
@@ -250,7 +295,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.timezone_convert", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.union_distinct", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
     op!("table.unnest", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.expression", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    // expression v2 (Fase estensione funzioni/temporali): nuove funzioni
+    // (substring, regex_replace, between, in, greatest, least, floor, ceil,
+    // power) e date_trunc con output Date32/TimestampMs nativi -> tutte e 4
+    // le versioni incrementate (ADR 4).
+    op!("table.expression", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol,
+        semantic_version = 2, config_schema_version = 2, contract_analysis_version = 2, kernel_version = 3),
     op!("table.assert_cardinality", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_metadata", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_foreign_key", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
@@ -603,6 +653,29 @@ mod tests {
         assert_eq!(find_operation("geo_buffer").map(|op| op.id), Some("geo.buffer"));
         assert_eq!(find_operation("translate").map(|op| op.id), Some("geo.translate"));
         assert!(find_operation("nonexistent_op").is_none());
+    }
+
+    #[test]
+    fn versions_default_to_one_and_expression_is_v2() {
+        // Default: tutte e 4 le componenti a 1 per le op senza incrementi.
+        let filter = find_operation("table.filter").expect("table.filter");
+        assert_eq!(filter.semantic_version, 1);
+        assert_eq!(filter.config_schema_version, 1);
+        assert_eq!(filter.contract_analysis_version, 1);
+        assert_eq!(filter.kernel_version, 2);
+        // Macro estesa: le 4 versioni di table.expression sono tutte esplicite.
+        let expression = find_operation("table.expression").expect("table.expression");
+        assert_eq!(expression.semantic_version, 2);
+        assert_eq!(expression.config_schema_version, 2);
+        assert_eq!(expression.contract_analysis_version, 2);
+        assert_eq!(expression.kernel_version, 3);
+        // Nessuna versione puo' essere 0 in tutto il catalogo.
+        for op in CATALOG {
+            assert!(op.semantic_version >= 1, "{} semantic_version", op.id);
+            assert!(op.config_schema_version >= 1, "{} config_schema_version", op.id);
+            assert!(op.contract_analysis_version >= 1, "{} contract_analysis_version", op.id);
+            assert!(op.kernel_version >= 1, "{} kernel_version", op.id);
+        }
     }
 
     #[test]
