@@ -2,7 +2,10 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{builder::StringBuilder, Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    builder::StringBuilder, Array, BooleanArray, Float64Array, Int64Array, RecordBatch,
+    StringArray, UInt64Array,
+};
 use plenora_core::arrow::schema::DataType;
 use md5::{Digest, Md5};
 use serde::Deserialize;
@@ -209,14 +212,117 @@ fn default_fingerprint_name() -> String {
     "fingerprint".into()
 }
 
-/// Frame lunghezza+valore (u64 big-endian): nessuna ambiguita' di
-/// concatenazione tra parti adiacenti.
-fn framed_digest<D: Digest>(digest: &mut D, value: &[u8]) -> Result<()> {
+/// Frame lunghezza+valore (u64 big-endian) accumulato in un buffer di byte:
+/// nessuna ambiguita' di concatenazione tra parti adiacenti. Usato per i
+/// frame costanti per colonna (precomputati una volta per batch) e per i
+/// messaggi per riga di `stable_fingerprint`.
+fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::Contract("stable_fingerprint: valore troppo grande".into()))?;
-    digest.update(length.to_be_bytes());
-    digest.update(value);
+        .map_err(|_| PlenoraError::Contract(format!("{op}: valore troppo grande")))?;
+    message.extend_from_slice(&length.to_be_bytes());
+    message.extend_from_slice(value);
     Ok(())
+}
+
+/// Esadecimale minuscolo in coda a `hex`, byte per byte: identico al
+/// formato `{:x}` dei digest md5/sha2 e al `write!(hex, "{byte:02x}")`
+/// originale, senza passare per il machinery di formattazione a ogni byte.
+fn push_hex(hex: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    hex.reserve(bytes.len() * 2);
+    for &byte in bytes {
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+}
+
+/// Accesso tipizzato a una colonna, risolto una sola volta per batch: evita
+/// la catena di downcast di `scalar_as_string` a ogni cella e le sue
+/// allocazioni sui tipi piu' comuni (Utf8 in prestito, numerici formattati
+/// in un buffer riusato). Gli altri tipi ricadono su `scalar_as_string`,
+/// invariato. I byte prodotti sono identici in tutti i percorsi.
+enum ColumnAccess<'a> {
+    Utf8(&'a StringArray),
+    Int64(&'a Int64Array),
+    Float64(&'a Float64Array),
+    Boolean(&'a BooleanArray),
+    UInt64(&'a UInt64Array),
+    Scalar(&'a dyn Array),
+}
+
+fn column_access(array: &dyn Array) -> ColumnAccess<'_> {
+    if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+        return ColumnAccess::Utf8(values);
+    }
+    if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+        return ColumnAccess::Int64(values);
+    }
+    if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+        return ColumnAccess::Float64(values);
+    }
+    if let Some(values) = array.as_any().downcast_ref::<BooleanArray>() {
+        return ColumnAccess::Boolean(values);
+    }
+    if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+        return ColumnAccess::UInt64(values);
+    }
+    ColumnAccess::Scalar(array)
+}
+
+/// Valore testuale canonico della cella, passato in prestito a `consume`
+/// (dall'array o dal buffer `scratch` riusato): stessi byte e stessi null
+/// di `scalar_as_string` (`write!` usa lo stesso `Display` di `to_string`).
+fn with_cell_value<R>(
+    access: &ColumnAccess<'_>,
+    row: usize,
+    scratch: &mut String,
+    consume: impl FnOnce(Option<&str>) -> Result<R>,
+) -> Result<R> {
+    match access {
+        ColumnAccess::Utf8(values) => {
+            if values.is_null(row) {
+                consume(None)
+            } else {
+                consume(Some(values.value(row)))
+            }
+        }
+        ColumnAccess::Int64(values) => {
+            if values.is_null(row) {
+                return consume(None);
+            }
+            scratch.clear();
+            let _ = write!(scratch, "{}", values.value(row));
+            consume(Some(scratch))
+        }
+        ColumnAccess::Float64(values) => {
+            if values.is_null(row) {
+                return consume(None);
+            }
+            scratch.clear();
+            let _ = write!(scratch, "{}", values.value(row));
+            consume(Some(scratch))
+        }
+        ColumnAccess::Boolean(values) => {
+            if values.is_null(row) {
+                return consume(None);
+            }
+            scratch.clear();
+            let _ = write!(scratch, "{}", values.value(row));
+            consume(Some(scratch))
+        }
+        ColumnAccess::UInt64(values) => {
+            if values.is_null(row) {
+                return consume(None);
+            }
+            scratch.clear();
+            let _ = write!(scratch, "{}", values.value(row));
+            consume(Some(scratch))
+        }
+        ColumnAccess::Scalar(array) => match scalar_as_string(*array, row)? {
+            Some(value) => consume(Some(&value)),
+            None => consume(None),
+        },
+    }
 }
 
 /// Codifica canonica di una riga (estensione v1.1), byte esatti:
@@ -235,35 +341,57 @@ fn fingerprint_rows<D: Digest>(
     batch: &RecordBatch,
     names: &[String],
     indices: &[usize],
-) -> Result<Vec<String>> {
-    (0..batch.num_rows())
-        .map(|row| {
-            let mut digest = D::new();
-            digest.update(b"plenora-fingerprint-v1\0");
-            for (name, index) in names.iter().zip(indices) {
-                framed_digest(&mut digest, name.as_bytes())?;
-                framed_digest(
-                    &mut digest,
-                    batch.column(*index).data_type().to_string().as_bytes(),
-                )?;
-                match scalar_as_string(batch.column(*index).as_ref(), row)? {
+) -> Result<StringArray> {
+    // Framing costante per colonna (`framed(nome)` || `framed(tipo Arrow)`)
+    // e accesso tipizzato ai valori: precomputati UNA volta per batch invece
+    // che a ogni cella (`data_type().to_string()` allocava una String per
+    // cella). Il messaggio di ogni riga e' accumulato in un buffer riusato e
+    // assorbito con un solo `update`; l'hex e' scritto in un buffer riusato
+    // e l'output costruito con StringBuilder presized (niente una String
+    // heap per riga). Il byte stream per riga resta quello dell'encoding
+    // canonico documentato sopra.
+    let mut headers = Vec::with_capacity(names.len());
+    let mut accesses = Vec::with_capacity(names.len());
+    for (name, index) in names.iter().zip(indices) {
+        let column = batch.column(*index);
+        let data_type = column.data_type().to_string();
+        let mut header = Vec::with_capacity(name.len() + data_type.len() + 16);
+        framed_vec(&mut header, name.as_bytes(), "stable_fingerprint")?;
+        framed_vec(&mut header, data_type.as_bytes(), "stable_fingerprint")?;
+        headers.push(header);
+        accesses.push(column_access(column.as_ref()));
+    }
+    let hex_len = <D as Digest>::output_size() * 2;
+    let mut builder = StringBuilder::with_capacity(
+        batch.num_rows(),
+        batch.num_rows().saturating_mul(hex_len),
+    );
+    let mut message = Vec::with_capacity(256);
+    let mut scratch = String::new();
+    let mut hex = String::with_capacity(hex_len);
+    for row in 0..batch.num_rows() {
+        message.clear();
+        message.extend_from_slice(b"plenora-fingerprint-v1\0");
+        for (header, access) in headers.iter().zip(&accesses) {
+            message.extend_from_slice(header);
+            with_cell_value(access, row, &mut scratch, |value| {
+                match value {
                     Some(value) => {
-                        digest.update([1]);
-                        framed_digest(&mut digest, value.as_bytes())?;
+                        message.push(1);
+                        framed_vec(&mut message, value.as_bytes(), "stable_fingerprint")?;
                     }
-                    None => digest.update([0]),
+                    None => message.push(0),
                 }
-            }
-            // Esadecimale minuscolo, byte per byte: identico al formato
-            // `{:x}` dei digest md5/sha2, ma senza bound generico `LowerHex`.
-            let digest = digest.finalize();
-            let mut hex = String::with_capacity(digest.len() * 2);
-            for byte in digest {
-                let _ = write!(hex, "{byte:02x}");
-            }
-            Ok(hex)
-        })
-        .collect()
+                Ok(())
+            })?;
+        }
+        let mut digest = D::new();
+        digest.update(&message);
+        hex.clear();
+        push_hex(&mut hex, &digest.finalize());
+        builder.append_value(&hex);
+    }
+    Ok(builder.finish())
 }
 
 pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Result<RecordBatch> {
@@ -304,7 +432,7 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
         &config.output_column,
         DataType::Utf8,
         false,
-        Arc::new(StringArray::from(values)),
+        Arc::new(values),
     )
 }
 
@@ -344,7 +472,11 @@ fn default_hmac_name() -> String {
 
 /// HMAC-SHA256 (RFC 2104) implementato sopra `sha2` — due round di hash con
 /// ipad/opad su blocco da 64 byte, nessuna dipendenza aggiuntiva.
-fn hmac_sha256_digest(key: &[u8], message: &[u8]) -> [u8; 32] {
+///
+/// Gli stati Sha256 dopo l'assorbimento di ipad/opad dipendono SOLO dalla
+/// chiave: sono precomputati una volta per batch e clonati per riga (il
+/// byte stream assorbito e' identico alla versione byte-per-byte).
+fn hmac_sha256_states(key: &[u8]) -> (Sha256, Sha256) {
     const BLOCK: usize = 64;
     let mut block = [0_u8; BLOCK];
     if key.len() > BLOCK {
@@ -353,16 +485,25 @@ fn hmac_sha256_digest(key: &[u8], message: &[u8]) -> [u8; 32] {
     } else {
         block[..key.len()].copy_from_slice(key);
     }
-    let mut inner = Sha256::new();
-    for byte in block {
-        inner.update([byte ^ 0x36]);
+    let mut ipad = [0_u8; BLOCK];
+    let mut opad = [0_u8; BLOCK];
+    for (index, byte) in block.iter().enumerate() {
+        ipad[index] = byte ^ 0x36;
+        opad[index] = byte ^ 0x5c;
     }
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    (inner, outer)
+}
+
+/// HMAC di un messaggio a partire dagli stati precomputati (clone per riga).
+fn hmac_sha256_with_states(inner_base: &Sha256, outer_base: &Sha256, message: &[u8]) -> [u8; 32] {
+    let mut inner = inner_base.clone();
     inner.update(message);
     let inner = inner.finalize();
-    let mut outer = Sha256::new();
-    for byte in block {
-        outer.update([byte ^ 0x5c]);
-    }
+    let mut outer = outer_base.clone();
     outer.update(inner);
     let digest = outer.finalize();
     let mut output = [0_u8; 32];
@@ -419,44 +560,73 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let key = load_hmac_key(&config.key_env)?;
-    let values = (0..batch.num_rows())
-        .map(|row| {
-            let mut message = b"plenora-hmac-sha256-v1\0".to_vec();
-            for (name, index) in config.columns.iter().zip(&indices) {
-                let array = batch.column(*index).as_ref();
-                match scalar_as_string(array, row)? {
+    let (inner_base, outer_base) = hmac_sha256_states(&key);
+    // Framing costante per colonna e accesso tipizzato ai valori,
+    // precomputati una volta per batch come in `fingerprint_rows`: il
+    // messaggio per riga e' byte-identico alla versione originale.
+    let mut headers = Vec::with_capacity(config.columns.len());
+    let mut accesses = Vec::with_capacity(config.columns.len());
+    for (name, index) in config.columns.iter().zip(&indices) {
+        let column = batch.column(*index);
+        let data_type = column.data_type().to_string();
+        let mut header = Vec::with_capacity(name.len() + data_type.len() + 16);
+        framed_bytes(&mut header, name.as_bytes())?;
+        framed_bytes(&mut header, data_type.as_bytes())?;
+        headers.push(header);
+        accesses.push(column_access(column.as_ref()));
+    }
+    let mut builder = StringBuilder::with_capacity(
+        batch.num_rows(),
+        batch.num_rows().saturating_mul(64),
+    );
+    let mut message = Vec::with_capacity(256);
+    let mut scratch = String::new();
+    let mut hex = String::with_capacity(64);
+    for row in 0..batch.num_rows() {
+        message.clear();
+        message.extend_from_slice(b"plenora-hmac-sha256-v1\0");
+        let mut null_row = false;
+        for (header, access) in headers.iter().zip(&accesses) {
+            if null_row {
+                break;
+            }
+            with_cell_value(access, row, &mut scratch, |value| {
+                match value {
                     Some(value) => {
-                        framed_bytes(&mut message, name.as_bytes())?;
-                        framed_bytes(&mut message, array.data_type().to_string().as_bytes())?;
+                        message.extend_from_slice(header);
                         message.push(1);
                         framed_bytes(&mut message, value.as_bytes())?;
                     }
                     None => match config.null_policy {
                         HmacNullPolicy::Empty => {
-                            framed_bytes(&mut message, name.as_bytes())?;
-                            framed_bytes(&mut message, array.data_type().to_string().as_bytes())?;
+                            message.extend_from_slice(header);
                             message.push(1);
                             framed_bytes(&mut message, b"")?;
                         }
-                        HmacNullPolicy::Null => return Ok(None),
+                        HmacNullPolicy::Null => null_row = true,
                         HmacNullPolicy::Skip => {}
                     },
                 }
-            }
-            let digest = hmac_sha256_digest(&key, &message);
-            let mut hex = String::with_capacity(digest.len() * 2);
-            for byte in digest {
-                let _ = write!(hex, "{byte:02x}");
-            }
-            Ok(Some(hex))
-        })
-        .collect::<Result<Vec<_>>>()?;
+                Ok(())
+            })?;
+        }
+        if null_row {
+            builder.append_null();
+            continue;
+        }
+        hex.clear();
+        push_hex(
+            &mut hex,
+            &hmac_sha256_with_states(&inner_base, &outer_base, &message),
+        );
+        builder.append_value(&hex);
+    }
     replace_or_append(
         batch,
         &config.output_column,
         DataType::Utf8,
         matches!(config.null_policy, HmacNullPolicy::Null),
-        Arc::new(StringArray::from(values)),
+        Arc::new(builder.finish()),
     )
 }
 
@@ -645,7 +815,9 @@ mod tests {
     // -------------------------------------------------------------------
 
     use super::*;
-    use plenora_core::arrow::array::{Array, Int64Array};
+    use plenora_core::arrow::array::{
+        Array, ArrayRef, BooleanArray, Date32Array, Float64Array, Int64Array, UInt64Array,
+    };
     use plenora_core::arrow::schema::{Field, Schema};
     use serde_json::json;
 
@@ -1265,5 +1437,354 @@ mod tests {
             format!("{:?}", fast.expect_err("fast deve fallire")),
             format!("{:?}", reference.expect_err("ref deve fallire"))
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Test-oracolo di `stable_fingerprint` e `hmac_sha256` (ottimizzazione
+    // sweep2): le implementazioni pre-ottimizzazione sono copiate verbatim
+    // qui sotto come riferimento indipendente, e i digest sono confrontati
+    // riga per riga su una fixture con null, NaN, -0.0, unicode, tipi su
+    // percorso tipizzato e su percorso scalare, tutte le colonne e subset,
+    // entrambi gli algoritmi e tutte le null policy.
+    // -------------------------------------------------------------------
+
+    /// Copia verbatim di `framed_digest` pre-ottimizzazione.
+    fn framed_digest_reference<D: Digest>(digest: &mut D, value: &[u8]) -> Result<()> {
+        let length = u64::try_from(value.len()).map_err(|_| {
+            PlenoraError::Contract("stable_fingerprint: valore troppo grande".into())
+        })?;
+        digest.update(length.to_be_bytes());
+        digest.update(value);
+        Ok(())
+    }
+
+    /// Copia verbatim di `fingerprint_rows` pre-ottimizzazione.
+    fn fingerprint_rows_reference<D: Digest>(
+        batch: &RecordBatch,
+        names: &[String],
+        indices: &[usize],
+    ) -> Result<Vec<String>> {
+        (0..batch.num_rows())
+            .map(|row| {
+                let mut digest = D::new();
+                digest.update(b"plenora-fingerprint-v1\0");
+                for (name, index) in names.iter().zip(indices) {
+                    framed_digest_reference(&mut digest, name.as_bytes())?;
+                    framed_digest_reference(
+                        &mut digest,
+                        batch.column(*index).data_type().to_string().as_bytes(),
+                    )?;
+                    match scalar_as_string(batch.column(*index).as_ref(), row)? {
+                        Some(value) => {
+                            digest.update([1]);
+                            framed_digest_reference(&mut digest, value.as_bytes())?;
+                        }
+                        None => digest.update([0]),
+                    }
+                }
+                let digest = digest.finalize();
+                let mut hex = String::with_capacity(digest.len() * 2);
+                for byte in digest {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                Ok(hex)
+            })
+            .collect()
+    }
+
+    /// Copia verbatim di `stable_fingerprint` pre-ottimizzazione.
+    fn stable_fingerprint_reference(
+        batch: &RecordBatch,
+        config: &StableFingerprint,
+    ) -> Result<RecordBatch> {
+        validate_output_name(&config.output_column)?;
+        let names: Vec<String> = if config.columns.is_empty() {
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().clone())
+                .collect()
+        } else {
+            let mut seen = HashSet::new();
+            for name in &config.columns {
+                if !seen.insert(name.as_str()) {
+                    return Err(PlenoraError::Contract(format!(
+                        "stable_fingerprint: colonna ripetuta: {name}"
+                    )));
+                }
+            }
+            config.columns.clone()
+        };
+        if names.is_empty() {
+            return Err(PlenoraError::Contract(
+                "stable_fingerprint richiede almeno una colonna".into(),
+            ));
+        }
+        let indices = names
+            .iter()
+            .map(|name| column_index(batch, name))
+            .collect::<Result<Vec<_>>>()?;
+        let values = match config.algorithm {
+            FingerprintAlgorithm::Sha256 => {
+                fingerprint_rows_reference::<Sha256>(batch, &names, &indices)?
+            }
+            FingerprintAlgorithm::Md5 => {
+                fingerprint_rows_reference::<Md5>(batch, &names, &indices)?
+            }
+        };
+        replace_or_append(
+            batch,
+            &config.output_column,
+            DataType::Utf8,
+            false,
+            Arc::new(StringArray::from(values)),
+        )
+    }
+
+    /// Copia verbatim di `hmac_sha256_digest` pre-ottimizzazione.
+    fn hmac_sha256_digest_reference(key: &[u8], message: &[u8]) -> [u8; 32] {
+        const BLOCK: usize = 64;
+        let mut block = [0_u8; BLOCK];
+        if key.len() > BLOCK {
+            let hashed = Sha256::digest(key);
+            block[..hashed.len()].copy_from_slice(&hashed);
+        } else {
+            block[..key.len()].copy_from_slice(key);
+        }
+        let mut inner = Sha256::new();
+        for byte in block {
+            inner.update([byte ^ 0x36]);
+        }
+        inner.update(message);
+        let inner = inner.finalize();
+        let mut outer = Sha256::new();
+        for byte in block {
+            outer.update([byte ^ 0x5c]);
+        }
+        outer.update(inner);
+        let digest = outer.finalize();
+        let mut output = [0_u8; 32];
+        output.copy_from_slice(&digest);
+        output
+    }
+
+    /// Copia verbatim di `hmac_sha256` pre-ottimizzazione.
+    fn hmac_sha256_reference(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
+        validate_output_name(&config.output_column)?;
+        if config.key_env.trim().is_empty() {
+            return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+        }
+        if config.columns.is_empty() {
+            return Err(PlenoraError::Contract(
+                "hmac_sha256 richiede almeno una colonna".into(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        for name in &config.columns {
+            if !seen.insert(name.as_str()) {
+                return Err(PlenoraError::Contract(format!(
+                    "hmac_sha256: colonna ripetuta: {name}"
+                )));
+            }
+        }
+        let indices = config
+            .columns
+            .iter()
+            .map(|name| column_index(batch, name))
+            .collect::<Result<Vec<_>>>()?;
+        let key = load_hmac_key(&config.key_env)?;
+        let values = (0..batch.num_rows())
+            .map(|row| {
+                let mut message = b"plenora-hmac-sha256-v1\0".to_vec();
+                for (name, index) in config.columns.iter().zip(&indices) {
+                    let array = batch.column(*index).as_ref();
+                    match scalar_as_string(array, row)? {
+                        Some(value) => {
+                            framed_bytes(&mut message, name.as_bytes())?;
+                            framed_bytes(
+                                &mut message,
+                                array.data_type().to_string().as_bytes(),
+                            )?;
+                            message.push(1);
+                            framed_bytes(&mut message, value.as_bytes())?;
+                        }
+                        None => match config.null_policy {
+                            HmacNullPolicy::Empty => {
+                                framed_bytes(&mut message, name.as_bytes())?;
+                                framed_bytes(
+                                    &mut message,
+                                    array.data_type().to_string().as_bytes(),
+                                )?;
+                                message.push(1);
+                                framed_bytes(&mut message, b"")?;
+                            }
+                            HmacNullPolicy::Null => return Ok(None),
+                            HmacNullPolicy::Skip => {}
+                        },
+                    }
+                }
+                let digest = hmac_sha256_digest_reference(&key, &message);
+                let mut hex = String::with_capacity(digest.len() * 2);
+                for byte in digest {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                Ok(Some(hex))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        replace_or_append(
+            batch,
+            &config.output_column,
+            DataType::Utf8,
+            matches!(config.null_policy, HmacNullPolicy::Null),
+            Arc::new(StringArray::from(values)),
+        )
+    }
+
+    /// Fixture oracolo: null, NaN, -0.0, unicode, stringa vuota; tipi su
+    /// percorso tipizzato (Utf8/Int64/Float64/Boolean/UInt64) e su percorso
+    /// scalare (Date32).
+    fn oracle_fixture() -> RecordBatch {
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![
+                Some("héllo 🦀"),
+                None,
+                Some(""),
+                Some("x"),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(-42),
+                Some(0),
+                None,
+                Some(i64::MAX),
+            ])),
+            Arc::new(Float64Array::from(vec![
+                Some(f64::NAN),
+                Some(-0.0),
+                Some(3.5),
+                None,
+            ])),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                None,
+                Some(false),
+                Some(true),
+            ])),
+            Arc::new(UInt64Array::from(vec![
+                Some(u64::MAX),
+                Some(0),
+                None,
+                Some(7),
+            ])),
+            Arc::new(Date32Array::from(vec![
+                Some(0),
+                Some(19_000),
+                None,
+                Some(-1),
+            ])),
+        ];
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("utf8", DataType::Utf8, true),
+                Field::new("int64", DataType::Int64, true),
+                Field::new("float64", DataType::Float64, true),
+                Field::new("boolean", DataType::Boolean, true),
+                Field::new("uint64", DataType::UInt64, true),
+                Field::new("date32", DataType::Date32, true),
+            ])),
+            columns,
+        )
+        .expect("fixture oracle")
+    }
+
+    /// Valori (con null) della colonna digest di un batch di output.
+    fn output_strings(output: &RecordBatch, name: &str) -> Vec<Option<String>> {
+        let column = output
+            .column_by_name(name)
+            .expect("colonna output")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8");
+        (0..column.len())
+            .map(|row| (!column.is_null(row)).then(|| column.value(row).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn stable_fingerprint_oracle_tutti_i_percorsi() {
+        let batch = oracle_fixture();
+        let subsets: Vec<Vec<&str>> = vec![
+            vec!["utf8", "int64", "float64", "boolean", "uint64", "date32"],
+            vec!["float64", "utf8"],
+            vec!["int64"],
+            vec!["date32", "boolean"],
+        ];
+        for columns in subsets {
+            for algorithm in [FingerprintAlgorithm::Sha256, FingerprintAlgorithm::Md5] {
+                let config = StableFingerprint {
+                    columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+                    output_column: "fingerprint".into(),
+                    algorithm,
+                };
+                let fast = output_strings(
+                    &stable_fingerprint(&batch, &config).expect("fast"),
+                    "fingerprint",
+                );
+                let reference = output_strings(
+                    &stable_fingerprint_reference(&batch, &config).expect("ref"),
+                    "fingerprint",
+                );
+                assert_eq!(fast, reference, "subset {columns:?} algoritmo {algorithm:?}");
+            }
+        }
+        // Default (colonne omesse = tutte, ordine di schema), sha256 e md5.
+        for algorithm in [FingerprintAlgorithm::Sha256, FingerprintAlgorithm::Md5] {
+            let config = StableFingerprint {
+                columns: Vec::new(),
+                output_column: "fingerprint".into(),
+                algorithm,
+            };
+            let fast = output_strings(
+                &stable_fingerprint(&batch, &config).expect("fast"),
+                "fingerprint",
+            );
+            let reference = output_strings(
+                &stable_fingerprint_reference(&batch, &config).expect("ref"),
+                "fingerprint",
+            );
+            assert_eq!(fast, reference, "default algoritmo {algorithm:?}");
+        }
+    }
+
+    #[test]
+    fn hmac_sha256_oracle_tutti_i_percorsi() {
+        std::env::set_var("PLENORA_HMAC_ORACLE_KEY", "chiave-oracolo-🦀-unicode");
+        let batch = oracle_fixture();
+        let subsets: Vec<Vec<&str>> = vec![
+            vec!["utf8", "int64", "float64", "boolean", "uint64", "date32"],
+            vec!["float64", "utf8"],
+            vec!["date32"],
+        ];
+        for columns in subsets {
+            for null_policy in [
+                HmacNullPolicy::Empty,
+                HmacNullPolicy::Null,
+                HmacNullPolicy::Skip,
+            ] {
+                let config = HmacSha256 {
+                    columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+                    key_env: "PLENORA_HMAC_ORACLE_KEY".into(),
+                    output_column: "hmac".into(),
+                    null_policy,
+                };
+                let fast =
+                    output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
+                let reference = output_strings(
+                    &hmac_sha256_reference(&batch, &config).expect("ref"),
+                    "hmac",
+                );
+                assert_eq!(fast, reference, "subset {columns:?} policy {null_policy:?}");
+            }
+        }
     }
 }

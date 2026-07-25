@@ -10,6 +10,8 @@ use plenora_core::{PlenoraError, Result};
 use crate::{
     column_index, replace_or_append, scalar_as_f64, scalar_as_string, validate_output_name,
 };
+use crate::governance::RowKeyEncoder;
+use crate::joins::FastHasher;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -180,7 +182,17 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    let mut seen = HashSet::with_capacity(batch.num_rows());
+    // Fast path (ottimizzazione kernel): chiavi con gli STESSI byte di
+    // `key_for_row` scritte da `RowKeyEncoder` in un buffer riusato (niente
+    // `Vec`/`String` per riga, header di tipo precomputato), `HashSet` con
+    // `FastHasher` (FxHash + splitmix64) al posto di SipHash. Semantica
+    // invariata: scansione in ordine di riga, errore sul primo duplicato con
+    // lo stesso messaggio, skip `nulls_equal=false` identico. L'originale e'
+    // conservato verbatim nei test come oracolo (`assert_unique_reference`).
+    let mut encoder = RowKeyEncoder::new(batch, &indices);
+    let mut seen: HashSet<Vec<u8>, FastHasher> =
+        HashSet::with_capacity_and_hasher(batch.num_rows(), FastHasher::default());
+    let mut key = Vec::new();
     for row in 0..batch.num_rows() {
         if !config.nulls_equal
             && indices
@@ -189,7 +201,8 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         {
             continue;
         }
-        if !seen.insert(key_for_row(batch, &indices, row)?) {
+        encoder.encode_into(row, &mut key)?;
+        if !seen.insert(key.clone()) {
             return Err(PlenoraError::Contract(format!(
                 "assert_unique: duplicato alla riga {row}"
             )));
@@ -350,7 +363,7 @@ pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result
 
 #[cfg(test)]
 mod tests {
-    use plenora_core::arrow::array::{Int64Array, StringArray};
+    use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
@@ -409,5 +422,297 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test-oracolo del fast path di `assert_unique`: l'implementazione
+    // pre-ottimizzazione e' copiata verbatim qui sotto e usata come riferimento.
+    // Ogni scenario confronta esito (ok/errore) e messaggio, che deve essere
+    // byte-identico (stessa chiave duplicata, stessa riga, stesso formato).
+    // -----------------------------------------------------------------------
+
+    /// Copia verbatim dell'implementazione pre-ottimizzazione (oracolo).
+    fn assert_unique_reference(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
+        let indices = config
+            .columns
+            .iter()
+            .map(|name| column_index(batch, name))
+            .collect::<Result<Vec<_>>>()?;
+        let mut seen = HashSet::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            if !config.nulls_equal
+                && indices
+                    .iter()
+                    .any(|index| batch.column(*index).is_null(row))
+            {
+                continue;
+            }
+            if !seen.insert(key_for_row(batch, &indices, row)?) {
+                return Err(PlenoraError::Contract(format!(
+                    "assert_unique: duplicato alla riga {row}"
+                )));
+            }
+        }
+        Ok(batch.clone())
+    }
+
+    fn unique_config(columns: &[&str], nulls_equal: bool) -> AssertUnique {
+        AssertUnique {
+            columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+            nulls_equal,
+        }
+    }
+
+    fn describe(outcome: &Result<RecordBatch>) -> String {
+        match outcome {
+            Ok(batch) => format!("ok ({} righe)", batch.num_rows()),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    /// Esito e messaggio del fast path devono essere identici all'oracolo.
+    fn assert_unique_equivalent(batch: &RecordBatch, config: &AssertUnique) {
+        let reference = assert_unique_reference(batch, config);
+        let fast = assert_unique(batch, config);
+        match (&reference, &fast) {
+            (Ok(expected), Ok(actual)) => {
+                assert_eq!(expected.num_rows(), actual.num_rows());
+                assert_eq!(expected.num_columns(), actual.num_columns());
+            }
+            (Err(expected), Err(actual)) => {
+                assert_eq!(expected.to_string(), actual.to_string());
+            }
+            _ => panic!(
+                "esiti divergenti: reference={} fast={}",
+                describe(&reference),
+                describe(&fast)
+            ),
+        }
+    }
+
+    fn int_batch(ids: Vec<Option<i64>>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(ids))],
+        )
+        .expect("batch int64")
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_on_duplicate_positions() {
+        // Nessun duplicato: output invariato.
+        let unique = int_batch((0..1_000).map(Some).collect());
+        assert_unique_equivalent(&unique, &unique_config(&["id"], true));
+        // Duplicato adiacente in testa (righe 0 e 1): fail-fast, riga 1.
+        let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
+        ids[1] = ids[0];
+        let head = int_batch(ids);
+        assert_unique_equivalent(&head, &unique_config(&["id"], true));
+        let error = assert_unique(&head, &unique_config(&["id"], true)).expect_err("duplicato");
+        assert_eq!(
+            error.to_string(),
+            "contract violation: assert_unique: duplicato alla riga 1"
+        );
+        // Duplicato all'ultima riga (caso peggiore: scansione completa).
+        let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
+        let last = ids.len() - 1;
+        ids[last] = ids[0];
+        assert_unique_equivalent(&int_batch(ids), &unique_config(&["id"], true));
+        // Duplicati distanti (righe 7 e 842).
+        let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
+        ids[842] = ids[7];
+        assert_unique_equivalent(&int_batch(ids), &unique_config(&["id"], true));
+        // Duplicati adiacenti a meta' batch.
+        let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
+        ids[501] = ids[500];
+        assert_unique_equivalent(&int_batch(ids), &unique_config(&["id"], true));
+        // Piu' duplicati: segnalato il primo in ordine di scansione (riga 10).
+        let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
+        ids[10] = ids[3];
+        ids[900] = ids[3];
+        assert_unique_equivalent(&int_batch(ids), &unique_config(&["id"], true));
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_on_nulls_in_keys() {
+        // nulls_equal=true: null == null, due null sono duplicato (riga 3).
+        let with_nulls = int_batch(vec![Some(1), None, Some(2), None]);
+        assert_unique_equivalent(&with_nulls, &unique_config(&["id"], true));
+        // nulls_equal=false: le righe con null nella chiave sono saltate.
+        assert_unique_equivalent(&with_nulls, &unique_config(&["id"], false));
+        // Solo null: saltati tutti con nulls_equal=false, duplicato alla riga 1
+        // con nulls_equal=true.
+        let all_null = int_batch(vec![None, None, None]);
+        assert_unique_equivalent(&all_null, &unique_config(&["id"], true));
+        assert_unique_equivalent(&all_null, &unique_config(&["id"], false));
+        // Duplicato non-null oltre i null saltati (nulls_equal=false).
+        let batch = int_batch(vec![None, Some(5), None, Some(5)]);
+        assert_unique_equivalent(&batch, &unique_config(&["id"], false));
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_on_multicolumn_mixed_types() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, true),
+                Field::new("tag", DataType::Utf8, true),
+                Field::new("val", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("a"),
+                    Some("b"),
+                    Some("a"),
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(1.5),
+                    Some(2.5),
+                    Some(1.5),
+                    Some(1.5),
+                ])),
+            ],
+        )
+        .expect("batch misto");
+        // (id, tag): duplicato alle righe 0 e 1.
+        assert_unique_equivalent(&batch, &unique_config(&["id", "tag"], true));
+        // (id, tag, val): la riga 1 differisce su val, nessun duplicato.
+        assert_unique_equivalent(&batch, &unique_config(&["id", "tag", "val"], true));
+        // Stessa composizione del generico anche con colonna ripetuta.
+        assert_unique_equivalent(&batch, &unique_config(&["id", "id"], true));
+        // Null in una colonna della chiave composta: null == null.
+        let with_null = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, true),
+                Field::new("tag", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(1)])),
+                Arc::new(StringArray::from(vec![None, Some("x"), None])),
+            ],
+        )
+        .expect("batch misto con null");
+        assert_unique_equivalent(&with_null, &unique_config(&["id", "tag"], true));
+        assert_unique_equivalent(&with_null, &unique_config(&["id", "tag"], false));
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_on_nan_and_negative_zero() {
+        // NaN serializza come "NaN": due NaN sono duplicati (riga 3).
+        let nans = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, true)])),
+            vec![Arc::new(Float64Array::from(vec![
+                Some(1.0),
+                Some(f64::NAN),
+                Some(2.0),
+                Some(f64::NAN),
+            ]))],
+        )
+        .expect("batch nan");
+        assert_unique_equivalent(&nans, &unique_config(&["v"], true));
+        // 0.0 -> "0" e -0.0 -> "-0": chiavi diverse, nessun duplicato.
+        let zeros = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, true)])),
+            vec![Arc::new(Float64Array::from(vec![Some(0.0), Some(-0.0)]))],
+        )
+        .expect("batch zeri");
+        assert_unique_equivalent(&zeros, &unique_config(&["v"], true));
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_on_edge_configs() {
+        // Input vuoto: ok per entrambi.
+        let empty = int_batch(Vec::new());
+        assert_unique_equivalent(&empty, &unique_config(&["id"], true));
+        // Nessuna colonna in chiave: chiave vuota per ogni riga, duplicato
+        // alla riga 1 (stessa semantica del generico).
+        let batch = int_batch(vec![Some(1), Some(2), Some(3)]);
+        assert_unique_equivalent(&batch, &unique_config(&[], true));
+        // Colonna mancante: stesso errore di schema.
+        assert_unique_equivalent(&batch, &unique_config(&["missing"], true));
+        let error = assert_unique(&batch, &unique_config(&["missing"], true))
+            .expect_err("colonna mancante");
+        assert!(error.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_across_key_types() {
+        use plenora_core::arrow::array::{
+            BinaryArray, BooleanArray, Date32Array, UInt64Array,
+        };
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("u", DataType::UInt64, true),
+                Field::new("b", DataType::Boolean, true),
+                Field::new("f", DataType::Float64, true),
+                Field::new("s", DataType::Utf8, true),
+                Field::new("d", DataType::Date32, true),
+                Field::new("bin", DataType::Binary, true),
+            ])),
+            vec![
+                Arc::new(UInt64Array::from(vec![Some(7), Some(8), Some(7)])),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false), Some(true)])),
+                Arc::new(Float64Array::from(vec![Some(1.25), Some(2.5), Some(1.25)])),
+                Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("x")])),
+                Arc::new(Date32Array::from(vec![Some(19_000), Some(19_001), Some(19_000)])),
+                Arc::new(BinaryArray::from(vec![
+                    Some(&b"aa"[..]),
+                    Some(&b"bb"[..]),
+                    Some(&b"aa"[..]),
+                ])),
+            ],
+        )
+        .expect("batch multi-tipo");
+        // Duplicato alla riga 2 su ogni colonna, singolarmente (typed e
+        // fallback generico Date32/Binary) e composta.
+        for columns in [
+            vec!["u"],
+            vec!["b"],
+            vec!["f"],
+            vec!["s"],
+            vec!["d"],
+            vec!["bin"],
+            vec!["u", "b", "f", "s", "d", "bin"],
+        ] {
+            assert_unique_equivalent(&batch, &unique_config(&columns, true));
+        }
+    }
+
+    #[test]
+    fn assert_unique_matches_reference_at_scale_with_planted_duplicate() {
+        // 100k righe (id, grp): duplicato piantato alla riga 75_000.
+        let rows = 100_000_usize;
+        let mut ids: Vec<Option<i64>> = Vec::with_capacity(rows);
+        let mut groups: Vec<Option<&str>> = Vec::with_capacity(rows);
+        for row in 0..rows {
+            ids.push(Some(i64::try_from(row).expect("indice i64")));
+            groups.push(Some(if row % 3 == 0 { "a" } else { "b" }));
+        }
+        ids[75_000] = ids[25_000];
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, true),
+                Field::new("grp", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(StringArray::from(groups)),
+            ],
+        )
+        .expect("batch scala");
+        assert_unique_equivalent(&batch, &unique_config(&["id", "grp"], true));
+        // Senza duplicato (chiave composta unica): ok, output invariato.
+        let unique_batch = RecordBatch::try_new(
+            batch.schema(),
+            vec![
+                Arc::new(Int64Array::from(
+                    (0..rows).map(|row| Some(i64::try_from(row).expect("i64"))).collect::<Vec<_>>(),
+                )),
+                batch.column(1).clone(),
+            ],
+        )
+        .expect("batch scala unico");
+        assert_unique_equivalent(&unique_batch, &unique_config(&["id", "grp"], true));
     }
 }

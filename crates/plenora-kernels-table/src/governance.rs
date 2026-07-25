@@ -201,8 +201,9 @@ impl<'a> KeyValueColumn<'a> {
 }
 
 /// Encoder zero-copy di chiavi di riga: stessi byte di `quality::key_for_row`
-/// senza allocare una String per colonna per riga.
-struct RowKeyEncoder<'a> {
+/// senza allocare una String per colonna per riga. Condiviso con il fast path
+/// di `quality::assert_unique` (stesso formato chiave, stesso oracolo).
+pub(crate) struct RowKeyEncoder<'a> {
     columns: Vec<(Vec<u8>, KeyValueColumn<'a>)>,
     text: String,
 }
@@ -245,7 +246,7 @@ type KeySet = HashSet<Vec<u8>, BuildHasherDefault<KeyHasher>>;
 type KeyFreqMap = HashMap<Vec<u8>, usize, BuildHasherDefault<KeyHasher>>;
 
 impl<'a> RowKeyEncoder<'a> {
-    fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
+    pub(crate) fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
         let columns = indices
             .iter()
             .map(|index| {
@@ -265,7 +266,7 @@ impl<'a> RowKeyEncoder<'a> {
 
     /// Scrive in `output` (riusato tra le righe) gli stessi byte di
     /// `quality::key_for_row` per `row`.
-    fn encode_into(&mut self, row: usize, output: &mut Vec<u8>) -> Result<()> {
+    pub(crate) fn encode_into(&mut self, row: usize, output: &mut Vec<u8>) -> Result<()> {
         output.clear();
         for (prefix, column) in &self.columns {
             output.extend_from_slice(prefix);

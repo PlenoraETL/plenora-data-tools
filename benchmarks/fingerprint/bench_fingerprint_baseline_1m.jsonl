@@ -1,0 +1,3 @@
+{"median_seconds":0.648205535,"output_rows":1000000,"peak_rss_kib":327772,"repetitions":3,"rows":1000000,"rows_per_second":1542720.5508203504,"scenario":"stable_fingerprint_sha256_all6"}
+{"median_seconds":0.695524596,"output_rows":1000000,"peak_rss_kib":327772,"repetitions":3,"rows":1000000,"rows_per_second":1437763.6761533015,"scenario":"stable_fingerprint_md5_all6"}
+{"median_seconds":0.662935548,"output_rows":1000000,"peak_rss_kib":327772,"repetitions":3,"rows":1000000,"rows_per_second":1508442.265642391,"scenario":"hmac_sha256_id_text"}

@@ -18,7 +18,7 @@
 //!   `min_points` punti; i cluster sono le componenti connesse per densita'
 //!   dei core point; i punti non-core nel vicinato di un core sono `border`;
 //!   gli altri sono `noise`. Etichette `cluster_id` UInt64 `0..k-1`; noise
-//!   **e border mai assegnati** → `null` (colonna nullable). Un border
+//!   assegnati al cluster che li raggiunge; solo i noise mai assegnati → `null` (colonna nullable). Un border
 //!   raggiungibile da due cluster e' assegnato al primo che lo raggiunge
 //!   (ordine di visita, vedi sotto).
 //! - **Vicinato via R-tree** (`rstar`, gia' dipendenza del crate, come

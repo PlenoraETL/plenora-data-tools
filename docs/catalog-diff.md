@@ -85,5 +85,15 @@ operazioni future ricevono id canonici direttamente namespaced.
 
 Il catalogo geo dichiara livelli di supporto (`public_protocol`,
 `kernel_validated`, `backend_pending`, `planned`): il mapping sopra copre
-tutte le 65 voci, ma nel catalogo unificato le operazioni non `public_protocol`
-mantengono la loro maturity e non sono eseguibili fino alla promozione.
+tutte le 65 voci. Semantica di maturity (decisione registrata):
+
+- `Planned`: **non eseguibile** (rifiutata in validazione);
+- `KernelValidated`: **sperimentale ma eseguibile**, senza garanzia di
+  stabilità del contratto (il validatore la accetta);
+- `PublicProtocol`: contratto stabile e compatibile;
+- `BackendPending`: eseguibile solo quando la capability richiesta è
+  disponibile (es. backend GEOS/PROJ compilato).
+
+Le 19 operazioni aggiunte nelle estensioni v1.1–v1.3 restano
+`KernelValidated` fino alla campagna fuzz: solo dopo quella e una release
+saranno candidate alla promozione a `PublicProtocol`.
