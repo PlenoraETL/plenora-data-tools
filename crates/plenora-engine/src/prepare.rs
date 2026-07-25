@@ -25,14 +25,18 @@
 //! parallelismo adattivo e' Fase 2B): sono validate, propagate nel piano per
 //! osservabilita' e pronte per le scelte migliorative future.
 //!
-//! Limitazioni v1 (fail-closed in `prepare`, mai a meta' esecuzione): le op
-//! geo non coperte dal dispatch v1 (misura/trasformazione 1:1) — es.
-//! `geo.dissolve`, `geo.explode`, predicati, distanze, op binarie geo — e le
-//! op tabellari N-arie con piu' di due input sono rifiutate con
-//! `PlenoraError::Unsupported`.
+//! Limitazioni v1 (fail-closed in `prepare`, mai a meta' esecuzione): il
+//! dispatch copre le trasformazioni geo 1:1 in place, le misure "add
+//! column" e le estensioni geo v1.1-v1.3 (`from_wkt`,
+//! `geometry_accessors`, `collect`, `line_locate_point`, `generate_grid`,
+//! `subdivide`, `snap`, `coverage_validate`, `shared_paths`,
+//! `cluster_dbscan`); le altre op geo — es. `geo.dissolve`, `geo.explode`,
+//! predicati, distanze, op binarie geo — e le op tabellari N-arie con piu'
+//! di due input sono rifiutate con `PlenoraError::Unsupported`.
 
 use std::collections::{BTreeMap, HashMap};
 
+use geo::{Geometry, Point};
 use serde::Deserialize;
 
 use plenora_core::arrow::schema::DataType;
@@ -40,6 +44,8 @@ use plenora_core::catalog::{Arity, ExecutionClass, Family};
 use plenora_core::contract::{DataContract, RuntimeStatistic};
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
+use plenora_kernels_geo::extensions::OnWktError;
+use plenora_kernels_geo::extensions2::{GridExtent, GridShape};
 
 use crate::geo_transport::transport::{
     ArrowOperation, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
@@ -180,12 +186,23 @@ pub enum ParallelismStrategy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeoRole {
     /// Trasformazione 1:1 che sostituisce la geometria in place (schema e
-    /// `FieldId` invariati): buffer, simplify, centroid, reproject, ...
+    /// `FieldId` invariati): buffer, simplify, centroid, reproject, snap, ...
     TransformInPlace,
     /// Misura che aggiunge una colonna scalare (`area`, `length`,
     /// `perimeter`, `vertex_count`, `to_wkt`): semantica v4 "add column",
     /// diversa dal trasporto legacy (che sostituisce la colonna geometria).
+    /// Include gli accessori per riga (`geometry_accessors`,
+    /// `line_locate_point`) e l'etichetta di `cluster_dbscan`.
     MeasureAddColumn,
+    /// Produzione della colonna geometria da una colonna testuale WKT
+    /// (`from_wkt`): l'input non ha geometria, l'output ne guadagna una.
+    ProduceFromText,
+    /// Espansione 1:N allineata alle righe (`subdivide`): una riga di input
+    /// produce una o piu' righe, con `__parent_index` di lineage.
+    OneToMany,
+    /// Op che consuma l'intero input materializzato (segmento `Blocking`):
+    /// `collect`, `generate_grid`, `coverage_validate`, `shared_paths`.
+    WholeTable,
 }
 
 /// Misura geo v1 con semantica "aggiungi colonna" (Fase 2A-4).
@@ -215,6 +232,57 @@ impl MeasureKind {
     }
 }
 
+/// Accessore scalare di `geo.geometry_accessors`, in ordine canonico di
+/// output (lo stesso di `plenora_kernels_geo::analyze::ACCESSOR_COLUMNS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessorKind {
+    /// Nome OGC del tipo (`Utf8`).
+    GeometryType,
+    /// Parti della geometria (`UInt64`).
+    NumGeometries,
+    /// Anelli interni di Polygon/MultiPolygon (`UInt64`).
+    NumInteriorRings,
+    /// WKT del punto iniziale di una linea aperta (`Utf8`, nullable).
+    StartPoint,
+    /// WKT del punto finale di una linea aperta (`Utf8`, nullable).
+    EndPoint,
+    /// Linea chiusa / tipo poligonale (`Boolean`).
+    IsClosed,
+}
+
+impl AccessorKind {
+    /// Tutti gli accessori in ordine canonico di output.
+    pub const ALL: [Self; 6] = [
+        Self::GeometryType,
+        Self::NumGeometries,
+        Self::NumInteriorRings,
+        Self::StartPoint,
+        Self::EndPoint,
+        Self::IsClosed,
+    ];
+
+    /// Nome canonico della colonna (senza `output_prefix`).
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::GeometryType => "geometry_type",
+            Self::NumGeometries => "num_geometries",
+            Self::NumInteriorRings => "num_interior_rings",
+            Self::StartPoint => "start_point",
+            Self::EndPoint => "end_point",
+            Self::IsClosed => "is_closed",
+        }
+    }
+
+    /// Accessore dal nome canonico (difesa in profondita': la selezione e'
+    /// gia' validata in analisi).
+    fn from_canonical_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.canonical_name() == name)
+    }
+}
+
 /// Configurazione preparata di un kernel (E1): tipizzata, rivalidata in
 /// `prepare`, senza JSON nel percorso per batch.
 #[derive(Debug)]
@@ -238,6 +306,89 @@ pub enum PreparedConfig {
     GeoMeasure {
         /// Misura da applicare cella per cella.
         measure: MeasureKind,
+        /// Nome della colonna prodotta (derivato dal contratto di output).
+        output_column: String,
+    },
+    /// `geo.from_wkt` (streaming 1:1): colonna WKT `Utf8` → nuova colonna
+    /// geometria WKB; indice della colonna WKT e politica d'errore risolti
+    /// qui. Eseguito per batch su `extensions::from_wkt_column`.
+    GeoFromWkt {
+        /// Indice risolto della colonna WKT nel batch di input (V2).
+        wkt_column_index: usize,
+        /// Politica sulle celle WKT invalide (default `null`).
+        on_error: OnWktError,
+    },
+    /// `geo.geometry_accessors` (streaming 1:1): colonne accessorie scelte,
+    /// con i nomi di output risolti dal contratto (prefisso applicato).
+    /// Eseguito per batch su `extensions::geometry_accessors`.
+    GeoAccessors {
+        /// Colonne prodotte: (nome di output, accessore) in ordine canonico.
+        columns: Box<[(String, AccessorKind)]>,
+    },
+    /// `geo.line_locate_point` (streaming 1:1 "add column"): punto di
+    /// riferimento decodificato una volta qui (E1), frazione per riga.
+    GeoLineLocatePoint {
+        /// Punto di riferimento (da `point_wkb` hex, convenzione D16).
+        point: Point<f64>,
+        /// Nome della colonna prodotta (derivato dal contratto di output).
+        output_column: String,
+    },
+    /// `geo.subdivide` (streaming OneToMany): espansione 1:N per batch con
+    /// `__parent_index` di lineage, come `explode`.
+    GeoSubdivide {
+        /// Soglia di vertici per parte (rivalidato >= 4).
+        max_vertices: usize,
+    },
+    /// `geo.snap` (streaming 1:1 in place): riferimento decodificato una
+    /// volta qui (E1), tolleranza rivalidata.
+    GeoSnap {
+        /// Geometria di riferimento (da `reference_wkb` hex, D16).
+        reference: Geometry<f64>,
+        /// Distanza massima di aggancio (finita, non negativa).
+        tolerance: f64,
+    },
+    /// `geo.collect` (blocking, ManyToOne): raggruppamento per chiavi
+    /// (responsabilita' dell'engine, come `dissolve`) e collezione per
+    /// gruppo via `extensions::collect_geometries`.
+    GeoCollect {
+        /// Indici risolti delle colonne chiave nel batch di input (V2).
+        group_by_indices: Box<[usize]>,
+    },
+    /// `geo.generate_grid` (blocking, WholeToMany, generativa): l'input
+    /// funge da trigger; la griglia e' prodotta da
+    /// `extensions2::generate_grid_rows` con parametri rivalidati.
+    GeoGenerateGrid {
+        /// Extent della griglia (finito, non degenere).
+        extent: GridExtent,
+        /// Lato cella (finito, > 0).
+        cell_size: f64,
+        /// Forma delle celle (default `square`).
+        shape: GridShape,
+    },
+    /// `geo.coverage_validate` (blocking, WholeToMany): overlap della
+    /// copertura via `extensions3::coverage_validate_rows`.
+    GeoCoverageValidate {
+        /// Area minima di overlap segnalata (default 0).
+        tolerance: f64,
+        /// Limite di issue (default `DEFAULT_MAX_ISSUES`).
+        max_issues: usize,
+    },
+    /// `geo.shared_paths` (blocking, WholeToMany): confini condivisi via
+    /// `extensions3::shared_paths_rows`.
+    GeoSharedPaths {
+        /// Lunghezza minima del segmento collineare (default 0).
+        tolerance: f64,
+        /// Lunghezza minima del tratto condiviso (default 0).
+        min_length: f64,
+    },
+    /// `geo.cluster_dbscan` (blocking, output OneToOne allineato alle
+    /// righe): etichetta UInt64 nullable per riga via
+    /// `cluster::dbscan_column`.
+    GeoClusterDbscan {
+        /// Raggio di vicinato (finito, > 0).
+        eps: f64,
+        /// Punti minimi per un cluster (>= 1).
+        min_points: usize,
         /// Nome della colonna prodotta (derivato dal contratto di output).
         output_column: String,
     },
@@ -784,6 +935,91 @@ struct GeoMeasureConfig {
     output_column: Option<String>,
 }
 
+/// Config serde di `geo.from_wkt` (nomi e domini come `analyze.rs`; la
+/// validazione stretta e' gia' avvenuta nel planner).
+#[derive(Debug, Deserialize)]
+struct GeoFromWktConfig {
+    wkt_column: String,
+    output_column: Option<String>,
+    on_error: Option<OnWktError>,
+    crs: Option<String>,
+}
+
+/// Config serde di `geo.geometry_accessors` (selezione per nome canonico).
+#[derive(Debug, Deserialize)]
+struct GeoAccessorsConfig {
+    fields: Option<Vec<String>>,
+    output_prefix: Option<String>,
+}
+
+/// Config serde di `geo.line_locate_point` (punto WKB hex, D16).
+#[derive(Debug, Deserialize)]
+struct GeoLineLocatePointConfig {
+    point_wkb: String,
+    output_column: Option<String>,
+}
+
+/// Config serde di `geo.subdivide`.
+#[derive(Debug, Deserialize)]
+struct GeoSubdivideConfig {
+    max_vertices: usize,
+    output_column: Option<String>,
+}
+
+/// Config serde di `geo.snap` (riferimento WKB hex, D16).
+#[derive(Debug, Deserialize)]
+struct GeoSnapConfig {
+    reference_wkb: String,
+    tolerance: f64,
+}
+
+/// Config serde di `geo.collect`.
+#[derive(Debug, Deserialize)]
+struct GeoCollectConfig {
+    group_by: Vec<String>,
+}
+
+/// Extent serde di `geo.generate_grid`.
+#[derive(Debug, Deserialize)]
+struct GeoGridExtentConfig {
+    xmin: f64,
+    ymin: f64,
+    xmax: f64,
+    ymax: f64,
+}
+
+/// Config serde di `geo.generate_grid`.
+#[derive(Debug, Deserialize)]
+struct GeoGenerateGridConfig {
+    extent: GeoGridExtentConfig,
+    cell_size: f64,
+    shape: Option<GridShape>,
+    crs: Option<String>,
+    include_centroid: Option<bool>,
+}
+
+/// Config serde di `geo.coverage_validate` (default kernel).
+#[derive(Debug, Deserialize)]
+struct GeoCoverageValidateConfig {
+    tolerance: Option<f64>,
+    max_issues: Option<usize>,
+}
+
+/// Config serde di `geo.shared_paths` (default kernel).
+#[derive(Debug, Deserialize)]
+struct GeoSharedPathsConfig {
+    tolerance: Option<f64>,
+    min_length: Option<f64>,
+}
+
+/// Config serde di `geo.cluster_dbscan`.
+#[derive(Debug, Deserialize)]
+struct GeoClusterDbscanConfig {
+    eps: f64,
+    min_points: usize,
+    output_column: Option<String>,
+}
+
 /// Mapping op geo v4 → [`ArrowOperation`] del trasporto (trasformazioni 1:1
 /// in place coperte dal dispatch v1).
 fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
@@ -896,12 +1132,298 @@ fn prepare_geo(
         ));
     }
 
+    if let Some(prepared) = prepare_geo_extension(node, descriptor, input_contract, output_contract)? {
+        return Ok(prepared);
+    }
+
     Err(PlenoraError::Unsupported(format!(
         "nodo `{}`: {} non e' nel dispatch v1 dell'executor (Fase 2A-4): \
-         coperte le trasformazioni geo 1:1 in place e le misure area/length/\
-         perimeter/vertex_count/to_wkt; il resto e' Fase 2B/2C",
+         coperte le trasformazioni geo 1:1 in place, le misure area/length/\
+         perimeter/vertex_count/to_wkt e le estensioni v1.1-v1.3 (from_wkt, \
+         geometry_accessors, collect, line_locate_point, generate_grid, \
+         subdivide, snap, coverage_validate, shared_paths, cluster_dbscan); \
+         il resto e' Fase 2B/2C",
         node.id, descriptor.id
     )))
+}
+
+/// Estensioni geo v1.1-v1.3: config tipizzate e rivalidate (E1), secondo
+/// operando da config decodificato una volta qui (mai nel loop per batch).
+/// `None` se l'op non e' un'estensione coperta.
+fn prepare_geo_extension(
+    node: &NodeV4,
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+    input_contract: &DataContract,
+    output_contract: &DataContract,
+) -> Result<Option<(PreparedConfig, GeoRole)>> {
+    let prepared = match descriptor.id {
+        "geo.from_wkt" => {
+            let parsed: GeoFromWktConfig = serde_json::from_value(node.config.clone())?;
+            // `output_column` e `crs` sono semantica di contratto (nome e CRS
+            // della colonna prodotta): gia' applicati dal planner.
+            let _ = (&parsed.output_column, &parsed.crs);
+            let (wkt_column_index, _) = input_contract
+                .schema
+                .column_with_name(&parsed.wkt_column)
+                .ok_or_else(|| {
+                    PlenoraError::Schema(format!(
+                        "nodo `{}`: colonna WKT `{}` assente dal contratto di input",
+                        node.id, parsed.wkt_column
+                    ))
+                })?;
+            (
+                PreparedConfig::GeoFromWkt {
+                    wkt_column_index,
+                    on_error: parsed.on_error.unwrap_or(OnWktError::Null),
+                },
+                GeoRole::ProduceFromText,
+            )
+        }
+        "geo.geometry_accessors" => {
+            let parsed: GeoAccessorsConfig = serde_json::from_value(node.config.clone())?;
+            let prefix = parsed.output_prefix.as_deref().unwrap_or("");
+            let mut selected: Vec<AccessorKind> = match &parsed.fields {
+                None => AccessorKind::ALL.to_vec(),
+                Some(names) => names
+                    .iter()
+                    .map(|name| {
+                        AccessorKind::from_canonical_name(name).ok_or_else(|| {
+                            PlenoraError::Contract(format!(
+                                "nodo `{}`: accessorio `{name}` sconosciuto",
+                                node.id
+                            ))
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            };
+            selected.sort_by_key(|kind| {
+                AccessorKind::ALL
+                    .iter()
+                    .position(|canonical| canonical == kind)
+                    .expect("accessorio del canone")
+            });
+            selected.dedup();
+            // I nomi di output (prefisso applicato) devono esistere nel
+            // contratto inferito dal planner (difesa in profondita').
+            let mut columns: Vec<(String, AccessorKind)> = Vec::with_capacity(selected.len());
+            for kind in selected {
+                let name = format!("{prefix}{}", kind.canonical_name());
+                if output_contract.schema.field_with_name(&name).is_err() {
+                    return Err(PlenoraError::Schema(format!(
+                        "nodo `{}`: colonna accessoria `{name}` assente dal contratto \
+                         di output inferito",
+                        node.id
+                    )));
+                }
+                columns.push((name, kind));
+            }
+            (
+                PreparedConfig::GeoAccessors {
+                    columns: columns.into_boxed_slice(),
+                },
+                GeoRole::MeasureAddColumn,
+            )
+        }
+        "geo.line_locate_point" => {
+            let parsed: GeoLineLocatePointConfig = serde_json::from_value(node.config.clone())?;
+            let point = match decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)? {
+                Geometry::Point(point) => point,
+                _ => {
+                    return Err(PlenoraError::Contract(format!(
+                        "nodo `{}`: point_wkb deve essere un Point",
+                        node.id
+                    )))
+                }
+            };
+            let output_column = measure_output_column(
+                &node.id,
+                input_contract,
+                output_contract,
+                parsed.output_column.as_deref(),
+            )?;
+            (
+                PreparedConfig::GeoLineLocatePoint { point, output_column },
+                GeoRole::MeasureAddColumn,
+            )
+        }
+        "geo.subdivide" => {
+            let parsed: GeoSubdivideConfig = serde_json::from_value(node.config.clone())?;
+            // `output_column` e' semantica di contratto (rinomina in place):
+            // gia' applicata dal planner, niente da fare a runtime.
+            let _ = &parsed.output_column;
+            if parsed.max_vertices < plenora_kernels_geo::extensions2::MIN_SUBDIVIDE_VERTICES {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: max_vertices deve essere almeno 4 (anello chiuso minimo)",
+                    node.id
+                )));
+            }
+            (
+                PreparedConfig::GeoSubdivide {
+                    max_vertices: parsed.max_vertices,
+                },
+                GeoRole::OneToMany,
+            )
+        }
+        "geo.snap" => {
+            let parsed: GeoSnapConfig = serde_json::from_value(node.config.clone())?;
+            let reference = decode_wkb_hex(&node.id, "reference_wkb", &parsed.reference_wkb)?;
+            if !parsed.tolerance.is_finite() || parsed.tolerance < 0.0 {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: tolerance deve essere finita e non negativa",
+                    node.id
+                )));
+            }
+            (
+                PreparedConfig::GeoSnap {
+                    reference,
+                    tolerance: parsed.tolerance,
+                },
+                GeoRole::TransformInPlace,
+            )
+        }
+        "geo.collect" => {
+            let parsed: GeoCollectConfig = serde_json::from_value(node.config.clone())?;
+            let mut indices: Vec<usize> = Vec::with_capacity(parsed.group_by.len());
+            for name in &parsed.group_by {
+                let (index, _) = input_contract.schema.column_with_name(name).ok_or_else(|| {
+                    PlenoraError::Schema(format!(
+                        "nodo `{}`: colonna chiave `{name}` assente dal contratto di input",
+                        node.id
+                    ))
+                })?;
+                indices.push(index);
+            }
+            (
+                PreparedConfig::GeoCollect {
+                    group_by_indices: indices.into_boxed_slice(),
+                },
+                GeoRole::WholeTable,
+            )
+        }
+        "geo.generate_grid" => {
+            let parsed: GeoGenerateGridConfig = serde_json::from_value(node.config.clone())?;
+            // `crs` e `include_centroid` sono semantica di contratto (CRS e
+            // colonne dell'output): gia' applicati dal planner.
+            let _ = (&parsed.crs, &parsed.include_centroid);
+            let extent = GridExtent::new(
+                parsed.extent.xmin,
+                parsed.extent.ymin,
+                parsed.extent.xmax,
+                parsed.extent.ymax,
+            )
+            .map_err(|error| {
+                PlenoraError::Contract(format!("nodo `{}`: {error}", node.id))
+            })?;
+            let shape = parsed.shape.unwrap_or(GridShape::Square);
+            // Rivalidazione fisica: cell_size e limite celle (E1).
+            plenora_kernels_geo::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
+                .map_err(|error| {
+                    PlenoraError::Contract(format!("nodo `{}`: {error}", node.id))
+                })?;
+            (
+                PreparedConfig::GeoGenerateGrid {
+                    extent,
+                    cell_size: parsed.cell_size,
+                    shape,
+                },
+                GeoRole::WholeTable,
+            )
+        }
+        "geo.coverage_validate" => {
+            let parsed: GeoCoverageValidateConfig = serde_json::from_value(node.config.clone())?;
+            let tolerance = parsed.tolerance.unwrap_or(0.0);
+            if !tolerance.is_finite() || tolerance < 0.0 {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: tolerance deve essere finita e non negativa",
+                    node.id
+                )));
+            }
+            (
+                PreparedConfig::GeoCoverageValidate {
+                    tolerance,
+                    max_issues: parsed
+                        .max_issues
+                        .unwrap_or(plenora_kernels_geo::extensions3::DEFAULT_MAX_ISSUES),
+                },
+                GeoRole::WholeTable,
+            )
+        }
+        "geo.shared_paths" => {
+            let parsed: GeoSharedPathsConfig = serde_json::from_value(node.config.clone())?;
+            let tolerance = parsed.tolerance.unwrap_or(0.0);
+            let min_length = parsed.min_length.unwrap_or(0.0);
+            for (name, value) in [("tolerance", tolerance), ("min_length", min_length)] {
+                if !value.is_finite() || value < 0.0 {
+                    return Err(PlenoraError::Contract(format!(
+                        "nodo `{}`: {name} deve essere finita e non negativa",
+                        node.id
+                    )));
+                }
+            }
+            (
+                PreparedConfig::GeoSharedPaths {
+                    tolerance,
+                    min_length,
+                },
+                GeoRole::WholeTable,
+            )
+        }
+        "geo.cluster_dbscan" => {
+            let parsed: GeoClusterDbscanConfig = serde_json::from_value(node.config.clone())?;
+            if !parsed.eps.is_finite() || parsed.eps <= 0.0 {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: eps deve essere finito e maggiore di zero",
+                    node.id
+                )));
+            }
+            if parsed.min_points < 1 {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: min_points deve essere almeno 1",
+                    node.id
+                )));
+            }
+            let output_column = measure_output_column(
+                &node.id,
+                input_contract,
+                output_contract,
+                parsed.output_column.as_deref(),
+            )?;
+            (
+                PreparedConfig::GeoClusterDbscan {
+                    eps: parsed.eps,
+                    min_points: parsed.min_points,
+                    output_column,
+                },
+                GeoRole::MeasureAddColumn,
+            )
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(prepared))
+}
+
+/// Decodifica e valida strutturalmente un WKB esadecimale da config
+/// (secondo operando "unario", convenzione D16): una sola volta in
+/// `prepare`, mai nel loop per batch (E1).
+fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>> {
+    let invalid = || {
+        PlenoraError::Contract(format!(
+            "nodo `{node_id}`: {name} non e' WKB esadecimale valido"
+        ))
+    };
+    if hex.len() % 2 != 0 || hex.is_empty() {
+        return Err(invalid());
+    }
+    let bytes: std::result::Result<Vec<u8>, _> = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16))
+        .collect();
+    let bytes = bytes.map_err(|_| invalid())?;
+    plenora_kernels_geo::geometry_from_wkb(&bytes).map_err(|error| {
+        PlenoraError::Contract(format!(
+            "nodo `{node_id}`: {name} non decodificabile: {error}"
+        ))
+    })
 }
 
 /// Nome della colonna prodotta da una misura: la colonna presente nel

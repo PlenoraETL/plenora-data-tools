@@ -35,8 +35,8 @@ pub mod table_engine;
 
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use prepare::{
-    prepare, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer, MeasureKind,
-    MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig, PreparedKernel,
-    RuntimeContext, SegmentMode,
+    prepare, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
+    MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
+    PreparedKernel, RuntimeContext, SegmentMode,
 };
 pub use table_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};

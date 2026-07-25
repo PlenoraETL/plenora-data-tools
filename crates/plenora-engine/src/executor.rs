@@ -34,7 +34,14 @@
 //!   [`crate::geo_transport::transport::transform_batches`]; le misure geo
 //!   "add column" (`geo.area` ecc.) via dispatch dedicato sui kernel
 //!   `plenora_kernels_geo::operations` (la semantica v4 aggiunge una
-//!   colonna, il trasporto legacy la sostituirebbe);
+//!   colonna, il trasporto legacy la sostituirebbe); le estensioni geo
+//!   v1.1-v1.3 via gli adapter Arrow di `plenora_kernels_geo`
+//!   (`extensions`/`extensions2`/`extensions3`/`cluster`): streaming per
+//!   batch (`from_wkt`, `geometry_accessors`, `line_locate_point`, `snap`,
+//!   `subdivide` come espansione 1:N con `__parent_index`), blocking su
+//!   input materializzato (`collect` con raggruppamento per chiavi
+//!   nell'engine, `generate_grid`, `coverage_validate`, `shared_paths`,
+//!   `cluster_dbscan`);
 //! - validazione dinamica in lettura (D8): WKB strutturale per cella sugli
 //!   input con geometria, tramite
 //!   [`plenora_kernels_geo::validate_wkb_contract`], prima che i dati
@@ -62,12 +69,13 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
+use plenora_core::arrow::select::take::take;
 use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
@@ -77,8 +85,8 @@ use crate::geo_transport::publish::publish_atomic;
 use crate::geo_transport::transport::{transform_batches, TransformArrowSchema};
 use crate::planner::ValidatedGraph;
 use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedKernel,
-    RuntimeContext, SegmentMode,
+    prepare, AccessorKind, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig,
+    PreparedKernel, RuntimeContext, SegmentMode,
 };
 use crate::table_engine;
 
@@ -984,6 +992,43 @@ fn run_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch
             measure,
             output_column,
         } => geo_measure_batch(kernel, &batch, *measure, output_column),
+        PreparedConfig::GeoFromWkt {
+            wkt_column_index,
+            on_error,
+        } => geo_from_wkt_batch(kernel, &batch, *wkt_column_index, *on_error),
+        PreparedConfig::GeoAccessors { columns } => geo_accessors_batch(kernel, &batch, columns),
+        PreparedConfig::GeoLineLocatePoint {
+            point,
+            output_column,
+        } => geo_line_locate_point_batch(kernel, &batch, point, output_column),
+        PreparedConfig::GeoSubdivide { max_vertices } => {
+            geo_subdivide_batch(kernel, &batch, *max_vertices)
+        }
+        PreparedConfig::GeoSnap {
+            reference,
+            tolerance,
+        } => geo_snap_batch(kernel, &batch, reference, *tolerance),
+        PreparedConfig::GeoCollect { group_by_indices } => {
+            geo_collect_batch(kernel, &batch, group_by_indices)
+        }
+        PreparedConfig::GeoGenerateGrid {
+            extent,
+            cell_size,
+            shape,
+        } => geo_generate_grid_batch(kernel, extent, *cell_size, *shape),
+        PreparedConfig::GeoCoverageValidate {
+            tolerance,
+            max_issues,
+        } => geo_coverage_validate_batch(kernel, &batch, *tolerance, *max_issues),
+        PreparedConfig::GeoSharedPaths {
+            tolerance,
+            min_length,
+        } => geo_shared_paths_batch(kernel, &batch, *tolerance, *min_length),
+        PreparedConfig::GeoClusterDbscan {
+            eps,
+            min_points,
+            output_column,
+        } => geo_cluster_dbscan_batch(kernel, &batch, *eps, *min_points, output_column),
     }
 }
 
@@ -1101,6 +1146,429 @@ fn measure_f64(
     }
     .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
     Ok(Some(value))
+}
+
+// ---------------------------------------------------------------------------
+// Estensioni geo v1.1-v1.3 (dispatch dedicato sugli adapter Arrow dei kernel)
+// ---------------------------------------------------------------------------
+
+/// Celle WKB della colonna geometria attiva del batch (indice risolto in
+/// `prepare`, V2), con errore attribuito al nodo logico.
+fn kernel_geometry_cells<'a>(
+    kernel: &PreparedKernel,
+    batch: &'a RecordBatch,
+) -> Result<&'a BinaryArray> {
+    let geometry_index = kernel.geometry_column_index.ok_or_else(|| {
+        step_error(
+            kernel,
+            PlenoraError::Schema("op geo senza colonna geometria".into()),
+        )
+    })?;
+    let geometry_name = kernel.input_contracts[0]
+        .active_geometry_column()
+        .map_or("geometry", |geometry| geometry.name.as_str());
+    batch_geometry_cells(batch, geometry_index, geometry_name)
+        .map_err(|error| step_error(kernel, error))
+}
+
+/// Indice risolto della colonna geometria attiva (V2), con errore di nodo.
+fn kernel_geometry_index(kernel: &PreparedKernel) -> Result<usize> {
+    kernel.geometry_column_index.ok_or_else(|| {
+        step_error(
+            kernel,
+            PlenoraError::Schema("op geo senza colonna geometria".into()),
+        )
+    })
+}
+
+/// Batch con una colonna aggiunta in coda: lo schema e' quello del contratto
+/// di output inferito dal planner (fonte unica di verita', E1).
+fn append_output_column(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    column: ArrayRef,
+) -> Result<RecordBatch> {
+    let mut columns = batch.columns().to_vec();
+    columns.push(column);
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.from_wkt` (streaming 1:1): colonna WKT → nuova colonna geometria.
+fn geo_from_wkt_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    wkt_column_index: usize,
+    on_error: plenora_kernels_geo::extensions::OnWktError,
+) -> Result<RecordBatch> {
+    let values = batch
+        .column(wkt_column_index)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| {
+            step_error(
+                kernel,
+                PlenoraError::Schema("colonna WKT non Utf8".into()),
+            )
+        })?;
+    let cells = plenora_kernels_geo::extensions::from_wkt_column(values, on_error)
+        .map_err(|error| step_error(kernel, error))?;
+    let geometry = BinaryArray::from(
+        cells
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<Vec<_>>(),
+    );
+    append_output_column(kernel, batch, std::sync::Arc::new(geometry))
+}
+
+/// `geo.geometry_accessors` (streaming 1:1): colonne accessorie per riga;
+/// geometria null → tutti gli accessori null.
+fn geo_accessors_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    columns: &[(String, AccessorKind)],
+) -> Result<RecordBatch> {
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let mut accessors: Vec<Option<plenora_kernels_geo::extensions::GeometryAccessors>> =
+        Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        if cells.is_null(row) {
+            accessors.push(None);
+            continue;
+        }
+        let geometry = decode_geometry_cell(cells.value(row))
+            .map_err(|error| step_error(kernel, error))?;
+        let values = plenora_kernels_geo::extensions::geometry_accessors(&geometry)
+            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+        accessors.push(Some(values));
+    }
+    let mut produced: Vec<ArrayRef> = Vec::with_capacity(columns.len());
+    for (_, kind) in columns {
+        let column: ArrayRef = match kind {
+            AccessorKind::GeometryType => std::sync::Arc::new(StringArray::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().map(|access| access.geometry_type))
+                    .collect::<Vec<_>>(),
+            )),
+            AccessorKind::NumGeometries => std::sync::Arc::new(UInt64Array::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().map(|access| access.num_geometries))
+                    .collect::<Vec<_>>(),
+            )),
+            AccessorKind::NumInteriorRings => std::sync::Arc::new(UInt64Array::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().map(|access| access.num_interior_rings))
+                    .collect::<Vec<_>>(),
+            )),
+            AccessorKind::StartPoint => std::sync::Arc::new(StringArray::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().and_then(|access| access.start_point.as_deref()))
+                    .collect::<Vec<_>>(),
+            )),
+            AccessorKind::EndPoint => std::sync::Arc::new(StringArray::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().and_then(|access| access.end_point.as_deref()))
+                    .collect::<Vec<_>>(),
+            )),
+            AccessorKind::IsClosed => std::sync::Arc::new(BooleanArray::from(
+                accessors
+                    .iter()
+                    .map(|access| access.as_ref().map(|access| access.is_closed))
+                    .collect::<Vec<_>>(),
+            )),
+        };
+        produced.push(column);
+    }
+    let mut all_columns = batch.columns().to_vec();
+    all_columns.extend(produced);
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), all_columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.line_locate_point` (streaming 1:1 "add column"): frazione [0,1] del
+/// punto di riferimento sulla linea; null per geometrie null o non-linee.
+fn geo_line_locate_point_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    point: &geo::Point<f64>,
+    output_column: &str,
+) -> Result<RecordBatch> {
+    let _ = output_column; // Il nome e' gia' nel contratto di output usato per lo schema.
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let mut values: Vec<Option<f64>> = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        if cells.is_null(row) {
+            values.push(None);
+            continue;
+        }
+        let geometry = decode_geometry_cell(cells.value(row))
+            .map_err(|error| step_error(kernel, error))?;
+        let fraction = plenora_kernels_geo::extensions::line_locate_point(&geometry, point)
+            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+        values.push(fraction);
+    }
+    append_output_column(kernel, batch, std::sync::Arc::new(Float64Array::from(values)))
+}
+
+/// `geo.subdivide` (streaming OneToMany): espansione 1:N per batch con
+/// `__parent_index` di lineage (come `explode`); riga con geometria null
+/// produce una riga con geometria null.
+fn geo_subdivide_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    max_vertices: usize,
+) -> Result<RecordBatch> {
+    let geometry_index = kernel_geometry_index(kernel)?;
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let mut parent_index: Vec<u64> = Vec::new();
+    let mut parts: Vec<Option<Vec<u8>>> = Vec::new();
+    for row in 0..batch.num_rows() {
+        let row_index = row as u64;
+        if cells.is_null(row) {
+            parent_index.push(row_index);
+            parts.push(None);
+            continue;
+        }
+        let pieces = plenora_kernels_geo::extensions2::subdivide_wkb(cells.value(row), max_vertices)
+            .map_err(|error| step_error(kernel, error))?;
+        for piece in pieces {
+            parent_index.push(row_index);
+            parts.push(Some(piece));
+        }
+    }
+    let indices = UInt64Array::from(parent_index);
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns() + 1);
+    for (index, column) in batch.columns().iter().enumerate() {
+        if index == geometry_index {
+            columns.push(std::sync::Arc::new(BinaryArray::from(
+                parts
+                    .iter()
+                    .map(|part| part.as_deref())
+                    .collect::<Vec<_>>(),
+            )));
+        } else {
+            columns.push(
+                take(column.as_ref(), &indices, None)
+                    .map_err(|error| step_error(kernel, PlenoraError::from(error)))?,
+            );
+        }
+    }
+    columns.push(std::sync::Arc::new(indices));
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.snap` (streaming 1:1 in place): vertici agganciati al riferimento
+/// entro tolleranza; schema invariato.
+fn geo_snap_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    reference: &geo::Geometry<f64>,
+    tolerance: f64,
+) -> Result<RecordBatch> {
+    let geometry_index = kernel_geometry_index(kernel)?;
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let snapped = plenora_kernels_geo::extensions2::snap_column(cells, reference, tolerance)
+        .map_err(|error| step_error(kernel, error))?;
+    let mut columns = batch.columns().to_vec();
+    columns[geometry_index] = std::sync::Arc::new(BinaryArray::from(
+        snapped
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<Vec<_>>(),
+    ));
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.collect` (blocking, ManyToOne): raggruppamento canonico per chiavi
+/// (ordine lessicografico della chiave testuale, come `table.aggregate`) e
+/// collezione delle geometrie del gruppo in ordine di input.
+fn geo_collect_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    group_by_indices: &[usize],
+) -> Result<RecordBatch> {
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let geometries = plenora_kernels_geo::arrow_adapter::map_nullable(cells, |payload| {
+        decode_geometry_cell(payload).map(Some)
+    })
+    .map_err(|error| step_error(kernel, error))?;
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for row in 0..batch.num_rows() {
+        let mut key = String::new();
+        for &index in group_by_indices {
+            let column = batch.column(index);
+            key.push_str(&column.data_type().to_string());
+            key.push('\u{1e}');
+            match plenora_kernels_table::scalar_as_string(column.as_ref(), row)
+                .map_err(|error| step_error(kernel, error))?
+            {
+                Some(value) => {
+                    key.push('1');
+                    key.push_str(&value.len().to_string());
+                    key.push(':');
+                    key.push_str(&value);
+                }
+                None => key.push('0'),
+            }
+            key.push('\u{1f}');
+        }
+        groups.entry(key).or_default().push(row);
+    }
+    let mut collected: Vec<Option<Vec<u8>>> = Vec::with_capacity(groups.len());
+    let mut representatives: Vec<u64> = Vec::with_capacity(groups.len());
+    for rows in groups.values() {
+        let group: Vec<Option<geo::Geometry<f64>>> = rows
+            .iter()
+            .map(|&row| geometries[row].clone())
+            .collect();
+        let geometry = plenora_kernels_geo::extensions::collect_geometries(&group)
+            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+        collected.push(match &geometry {
+            Some(geometry) => Some(
+                plenora_kernels_geo::arrow_adapter::encode_geometry(geometry)
+                    .map_err(|error| step_error(kernel, error))?,
+            ),
+            None => None,
+        });
+        representatives.push(rows[0] as u64);
+    }
+    let indices = UInt64Array::from(representatives);
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(group_by_indices.len() + 1);
+    columns.push(std::sync::Arc::new(BinaryArray::from(
+        collected
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<Vec<_>>(),
+    )));
+    for &index in group_by_indices {
+        columns.push(
+            take(batch.column(index).as_ref(), &indices, None)
+                .map_err(|error| step_error(kernel, PlenoraError::from(error)))?,
+        );
+    }
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.generate_grid` (blocking, generativa): l'input funge da trigger; lo
+/// schema di output (con o senza centroidi) decide le colonne prodotte.
+fn geo_generate_grid_batch(
+    kernel: &PreparedKernel,
+    extent: &plenora_kernels_geo::extensions2::GridExtent,
+    cell_size: f64,
+    shape: plenora_kernels_geo::extensions2::GridShape,
+) -> Result<RecordBatch> {
+    let rows = plenora_kernels_geo::extensions2::generate_grid_rows(extent, cell_size, shape)
+        .map_err(|error| step_error(kernel, error))?;
+    let include_centroid = kernel
+        .output_contract
+        .schema
+        .field_with_name("centroid_x")
+        .is_ok();
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(5);
+    columns.push(std::sync::Arc::new(BinaryArray::from(
+        rows.iter().map(|row| row.wkb.as_slice()).collect::<Vec<_>>(),
+    )));
+    columns.push(std::sync::Arc::new(UInt64Array::from_iter_values(
+        rows.iter().map(|row| row.cell_i),
+    )));
+    columns.push(std::sync::Arc::new(UInt64Array::from_iter_values(
+        rows.iter().map(|row| row.cell_j),
+    )));
+    if include_centroid {
+        columns.push(std::sync::Arc::new(Float64Array::from_iter_values(
+            rows.iter().map(|row| row.centroid_x),
+        )));
+        columns.push(std::sync::Arc::new(Float64Array::from_iter_values(
+            rows.iter().map(|row| row.centroid_y),
+        )));
+    }
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.coverage_validate` (blocking, WholeToMany): una riga per overlap.
+fn geo_coverage_validate_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    tolerance: f64,
+    max_issues: usize,
+) -> Result<RecordBatch> {
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let rows = plenora_kernels_geo::extensions3::coverage_validate_rows(cells, tolerance, max_issues)
+        .map_err(|error| step_error(kernel, error))?;
+    let columns: Vec<ArrayRef> = vec![
+        std::sync::Arc::new(StringArray::from(
+            rows.iter().map(|row| row.issue_type).collect::<Vec<_>>(),
+        )),
+        std::sync::Arc::new(UInt64Array::from_iter_values(
+            rows.iter().map(|row| row.index_a),
+        )),
+        std::sync::Arc::new(UInt64Array::from_iter_values(
+            rows.iter().map(|row| row.index_b),
+        )),
+        std::sync::Arc::new(Float64Array::from_iter_values(
+            rows.iter().map(|row| row.area),
+        )),
+        std::sync::Arc::new(BinaryArray::from(
+            rows.iter().map(|row| row.wkb.as_slice()).collect::<Vec<_>>(),
+        )),
+    ];
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.shared_paths` (blocking, WholeToMany): una riga per coppia con
+/// confine condiviso.
+fn geo_shared_paths_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    tolerance: f64,
+    min_length: f64,
+) -> Result<RecordBatch> {
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let rows = plenora_kernels_geo::extensions3::shared_paths_rows(cells, tolerance, min_length)
+        .map_err(|error| step_error(kernel, error))?;
+    let columns: Vec<ArrayRef> = vec![
+        std::sync::Arc::new(UInt64Array::from_iter_values(
+            rows.iter().map(|row| row.index_a),
+        )),
+        std::sync::Arc::new(UInt64Array::from_iter_values(
+            rows.iter().map(|row| row.index_b),
+        )),
+        std::sync::Arc::new(Float64Array::from_iter_values(
+            rows.iter().map(|row| row.shared_length),
+        )),
+        std::sync::Arc::new(BinaryArray::from(
+            rows.iter().map(|row| row.wkb.as_slice()).collect::<Vec<_>>(),
+        )),
+    ];
+    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+}
+
+/// `geo.cluster_dbscan` (blocking, output allineato alle righe): etichetta
+/// UInt64 nullable per riga (noise → null).
+fn geo_cluster_dbscan_batch(
+    kernel: &PreparedKernel,
+    batch: &RecordBatch,
+    eps: f64,
+    min_points: usize,
+    output_column: &str,
+) -> Result<RecordBatch> {
+    let _ = output_column; // Il nome e' gia' nel contratto di output usato per lo schema.
+    let cells = kernel_geometry_cells(kernel, batch)?;
+    let labels = plenora_kernels_geo::cluster::dbscan_column(cells, eps, min_points)
+        .map_err(|error| step_error(kernel, error))?;
+    append_output_column(kernel, batch, std::sync::Arc::new(UInt64Array::from(labels)))
 }
 
 /// Segmento blocking unario: input materializzato (previsto dal piano, V9),

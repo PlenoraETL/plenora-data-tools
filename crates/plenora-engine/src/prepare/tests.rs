@@ -301,3 +301,231 @@ fn unsupported_geo_op_fails_at_prepare_not_mid_stream() {
     let result = prepare(&graph, &RuntimeContext::default());
     assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
 }
+
+// ---------------------------------------------------------------------------
+// Estensioni geo v1.1-v1.3 e table v1.1-v1.3 (classificazione segmenti)
+// ---------------------------------------------------------------------------
+
+/// WKB little-endian di `POINT(0 0)` (riferimento/secondo operando da config).
+const POINT_WKB_HEX: &str = "010100000000000000000000000000000000000000";
+
+#[test]
+fn streaming_geo_extensions_fuse_with_their_roles() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "s", "op": "geo.snap", "in": ["main"],
+                 "config": {"reference_wkb": POINT_WKB_HEX, "tolerance": 0.5}},
+                {"id": "d", "op": "geo.subdivide", "in": ["s"],
+                 "config": {"max_vertices": 8}},
+                {"id": "a", "op": "geo.geometry_accessors", "in": ["d"], "config": {}},
+            ],
+            "output": "a",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    assert_eq!(plan.segments().len(), 1);
+    let segment = &plan.segments()[0];
+    assert_eq!(segment.mode, SegmentMode::GeoFused);
+    let roles: Vec<Option<GeoRole>> = segment.kernels.iter().map(|kernel| kernel.geo_role).collect();
+    assert_eq!(
+        roles,
+        vec![
+            Some(GeoRole::TransformInPlace),
+            Some(GeoRole::OneToMany),
+            Some(GeoRole::MeasureAddColumn),
+        ]
+    );
+    // Config tipizzate risolte in prepare (E1): riferimento decodificato,
+    // soglia e colonne accessorie gia' pronte per il loop per batch.
+    match &segment.kernels[0].config {
+        PreparedConfig::GeoSnap { tolerance, .. } => assert!((*tolerance - 0.5).abs() < f64::EPSILON),
+        other => panic!("config inattesa: {other:?}"),
+    }
+    match &segment.kernels[1].config {
+        PreparedConfig::GeoSubdivide { max_vertices } => assert_eq!(*max_vertices, 8),
+        other => panic!("config inattesa: {other:?}"),
+    }
+    match &segment.kernels[2].config {
+        PreparedConfig::GeoAccessors { columns } => assert_eq!(columns.len(), 6),
+        other => panic!("config inattesa: {other:?}"),
+    }
+}
+
+#[test]
+fn line_locate_point_prepares_typed_point_and_output_column() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "p", "op": "geo.line_locate_point", "in": ["main"],
+                 "config": {"point_wkb": POINT_WKB_HEX}},
+            ],
+            "output": "p",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    let segment = &plan.segments()[0];
+    assert_eq!(segment.mode, SegmentMode::GeoFused);
+    match &segment.kernels[0].config {
+        PreparedConfig::GeoLineLocatePoint { point, output_column } => {
+            assert_eq!((point.x(), point.y()), (0.0, 0.0));
+            assert_eq!(output_column, "fraction");
+        }
+        other => panic!("config inattesa: {other:?}"),
+    }
+}
+
+#[test]
+fn blocking_geo_extensions_are_single_blocking_segments() {
+    let cases = [
+        ("geo.collect", json!({"group_by": ["id"]}), GeoRole::WholeTable),
+        ("geo.coverage_validate", json!({}), GeoRole::WholeTable),
+        ("geo.shared_paths", json!({}), GeoRole::WholeTable),
+        (
+            "geo.cluster_dbscan",
+            json!({"eps": 1.0, "min_points": 2}),
+            GeoRole::MeasureAddColumn,
+        ),
+    ];
+    for (op, config, role) in cases {
+        let graph = validate_plan(
+            &json!({
+                "schema_version": 4,
+                "inputs": ["main"],
+                "nodes": [
+                    {"id": "n", "op": op, "in": ["main"], "config": config},
+                ],
+                "output": "n",
+            }),
+            geo_contract(),
+        );
+        let plan = prepare(&graph, &RuntimeContext::default())
+            .unwrap_or_else(|error| panic!("prepare di {op}: {error}"));
+        assert_eq!(plan.segments().len(), 1, "{op}");
+        let segment = &plan.segments()[0];
+        assert_eq!(segment.mode, SegmentMode::Blocking, "{op}");
+        assert_eq!(segment.parallelism, ParallelismStrategy::BlockingSingleTask, "{op}");
+        assert_eq!(segment.kernels[0].geo_role, Some(role), "{op}");
+    }
+}
+
+#[test]
+fn fuzzy_join_prepares_as_binary_blocking() {
+    let graph = validate(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["left_in", "right_in"],
+            "nodes": [
+                {"id": "j", "op": "table.fuzzy_join", "in": ["left_in", "right_in"],
+                 "config": {
+                    "left_key": "name", "right_key": "name",
+                    "metric": "jaro_winkler", "threshold": 0.8,
+                    "blocking": "prefix",
+                 }},
+            ],
+            "output": "j",
+        })
+        .to_string(),
+        &[
+            ("left_in".to_owned(), table_contract()),
+            ("right_in".to_owned(), table_contract()),
+        ],
+    )
+    .expect("piano valido");
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    assert_eq!(plan.segments().len(), 1);
+    let segment = &plan.segments()[0];
+    assert_eq!(segment.mode, SegmentMode::BinaryBlocking);
+    assert!(
+        matches!(&segment.kernels[0].config, PreparedConfig::TableBinary(_)),
+        "fuzzy_join usa il dispatch binario tabellare"
+    );
+    assert_eq!(segment.input_edges.as_ref(), &["left_in".to_owned(), "right_in".to_owned()]);
+}
+
+#[test]
+fn top_n_prepares_as_blocking_table_unary() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "t", "op": "table.top_n", "in": ["main"],
+                 "config": {"columns": ["id"], "n": 2}},
+            ],
+            "output": "t",
+        }),
+        table_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    assert_eq!(plan.segments()[0].mode, SegmentMode::Blocking);
+    assert!(
+        matches!(&plan.segments()[0].kernels[0].config, PreparedConfig::TableUnary(_)),
+        "top_n unaria blocking via execute_batch"
+    );
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn generative_geo_extensions_prepare_with_their_roles() {
+    let from_wkt = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "crs": "EPSG:32632",
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "w", "op": "geo.from_wkt", "in": ["main"],
+                 "config": {"wkt_column": "name"}},
+            ],
+            "output": "w",
+        }),
+        table_contract(),
+    );
+    let plan = prepare(&from_wkt, &RuntimeContext::default()).expect("prepare from_wkt");
+    let kernel = &plan.segments()[0].kernels[0];
+    assert_eq!(kernel.geo_role, Some(GeoRole::ProduceFromText));
+    match &kernel.config {
+        PreparedConfig::GeoFromWkt {
+            wkt_column_index,
+            on_error,
+        } => {
+            assert_eq!(*wkt_column_index, 1);
+            assert_eq!(*on_error, plenora_kernels_geo::extensions::OnWktError::Null);
+        }
+        other => panic!("config inattesa: {other:?}"),
+    }
+
+    let grid = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "crs": "EPSG:32632",
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "g", "op": "geo.generate_grid", "in": ["main"],
+                 "config": {
+                    "extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0},
+                    "cell_size": 5.0,
+                 }},
+            ],
+            "output": "g",
+        }),
+        table_contract(),
+    );
+    let plan = prepare(&grid, &RuntimeContext::default()).expect("prepare generate_grid");
+    let segment = &plan.segments()[0];
+    assert_eq!(segment.mode, SegmentMode::Blocking);
+    assert_eq!(segment.kernels[0].geo_role, Some(GeoRole::WholeTable));
+    assert!(
+        matches!(&segment.kernels[0].config, PreparedConfig::GeoGenerateGrid { .. }),
+        "config tipizzata della griglia"
+    );
+}
