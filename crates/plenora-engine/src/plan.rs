@@ -27,7 +27,9 @@
 //!   materializzato nella canonicalizzazione; la sua sotto-sezione `plan`
 //!   NON influenza il parsing in corso;
 //! - `output` può riferire un nodo o un input (piano pass-through); ogni nodo
-//!   deve essere antenato dell'output (niente nodi morti);
+//!   deve essere antenato dell'output (niente nodi morti) e ogni input
+//!   dichiarato deve essere referenziato da almeno un nodo (niente input
+//!   morti), a meno che non sia l'output stesso;
 //! - la materializzazione dei default PER OPERAZIONE dentro `config` richiede
 //!   gli schemi di config deserializzati: è Fase 2A-2, qui la config resta
 //!   `serde_json::Value` (l'equivalenza null ≡ `{}` è già applicata).
@@ -552,6 +554,17 @@ impl PlanV4 {
             }
         }
 
+        // --- Input dichiarati ma non referenziati (fan-out 0): resterebbero
+        // sorgenti lette mai usate; l'unico input senza consumatori ammesso
+        // e' quello riferito direttamente dall'output (piano pass-through) ---
+        for input in &self.inputs {
+            if *input != self.output && !fan_out.contains_key(input.as_str()) {
+                return Err(contract_error(format!(
+                    "l'input `{input}` non e' referenziato da alcun nodo del piano",
+                )));
+            }
+        }
+
         // --- Aciclicità, profondità, raggiungibilità dell'output ---
         let topo_order = topological_order(self, plan_limits)?;
         if !input_names.contains(self.output.as_str()) && !node_ids.contains(self.output.as_str()) {
@@ -765,8 +778,24 @@ fn canonical_limits(limits: &Limits) -> Value {
 
 /// Ordine topologico deterministico; su grafo invalido ricade
 /// sull'ordinamento lessicografico degli id (funzione totale).
+///
+/// L'ordinamento NON dipende dai `PlanLimits`: un piano valido oltre i
+/// default (parsing con limiti custom, es. profondita' maggiore) deve
+/// canonicalizzare nello stesso ordine topologico, non ricadere sul
+/// lessicografico. Il fallback resta solo per i grafi ciclici (piani non
+/// passati per [`PlanV4::parse`]).
 fn canonical_node_order(plan: &PlanV4) -> Vec<String> {
-    topological_order(plan, &PlanLimits::default()).unwrap_or_else(|_| {
+    let without_limits = PlanLimits {
+        max_plan_json_bytes: usize::MAX,
+        max_plan_nodes: usize::MAX,
+        max_plan_edges: usize::MAX,
+        max_plan_depth: usize::MAX,
+        max_fan_out: usize::MAX,
+        max_inputs: usize::MAX,
+        max_config_bytes_per_node: usize::MAX,
+        max_identifier_bytes: usize::MAX,
+    };
+    topological_order(plan, &without_limits).unwrap_or_else(|_| {
         let mut ids: Vec<String> = plan.nodes.iter().map(|node| node.id.clone()).collect();
         ids.sort_unstable();
         ids

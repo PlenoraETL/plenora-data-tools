@@ -536,3 +536,55 @@ fn unsupported_and_error_variants_are_puntuali() {
         Err(PlenoraError::Contract(_))
     ));
 }
+
+#[test]
+fn rejects_declared_inputs_never_referenced() {
+    let plan = json!({
+        "schema_version": 4, "inputs": ["main", "ghost"], "output": "a",
+        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
+    })
+    .to_string();
+    let error = parse_err(&plan, &PlanLimits::default());
+    assert!(error.contains("ghost"), "{error}");
+    assert!(error.contains("non e' referenziato"), "{error}");
+
+    // Pass-through: l'input riferito direttamente dall'output non ha
+    // consumatori ma resta valido.
+    let passthrough = json!({
+        "schema_version": 4, "inputs": ["main"], "nodes": [], "output": "main"
+    })
+    .to_string();
+    PlanV4::parse(&passthrough, &PlanLimits::default()).expect("pass-through valido");
+}
+
+#[test]
+fn canonical_order_stays_topological_beyond_default_plan_depth() {
+    // Catena di 300 nodi: oltre il max_plan_depth di default (256) ma valida
+    // con limiti custom. La canonicalizzazione deve restare topologica, non
+    // ricadere sull'ordine lessicografico degli id.
+    let mut nodes = Vec::new();
+    let mut previous = "main".to_owned();
+    for index in 0..300 {
+        // La testa ha id lessicograficamente DOPO gli altri: se l'ordine
+        // fosse lessicografico non comparirebbe per prima.
+        let id = if index == 0 {
+            "zz_head".to_owned()
+        } else {
+            format!("n{index:03}")
+        };
+        nodes.push(json!({"id": id, "op": "table.filter", "in": [previous], "config": {}}));
+        previous = id;
+    }
+    let plan = json!({
+        "schema_version": 4, "inputs": ["main"], "output": previous, "nodes": nodes,
+    })
+    .to_string();
+    let limits = limits_with(|l| l.max_plan_depth = 512);
+    let parsed = PlanV4::parse(&plan, &limits).expect("piano valido con limiti custom");
+    let canonical = parsed.canonical_json();
+    assert_eq!(
+        canonical["nodes"][0]["id"], "zz_head",
+        "ordine topologico anche oltre i PlanLimits di default"
+    );
+    assert_eq!(canonical["nodes"][299]["id"], "n299");
+}

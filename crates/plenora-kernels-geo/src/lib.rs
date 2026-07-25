@@ -113,6 +113,8 @@ fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
 
 pub const MAX_WKB_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_WKB_COMPONENTS: u64 = 100_000;
+/// Profondita' massima di annidamento (multi-geometrie) di default.
+pub const MAX_WKB_DEPTH: usize = 64;
 
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     validate_wkb_contract(payload)?;
@@ -205,9 +207,10 @@ fn checked_count(
 fn validate_wkb_geometry(
     cursor: &mut WkbCursor<'_>,
     depth: usize,
+    max_depth: usize,
     components: &mut u64,
 ) -> Result<u32, PlenoraError> {
-    if depth > 64 {
+    if depth > max_depth {
         return Err(invalid_wkb_structure(
             "annidamento geometrie oltre il limite",
         ));
@@ -276,7 +279,7 @@ fn validate_wkb_geometry(
             let children = cursor.read_u32(little_endian)?;
             let children = checked_count(children, cursor.remaining(), 5)?;
             for _ in 0..children {
-                let child_type = validate_wkb_geometry(cursor, depth + 1, components)?;
+                let child_type = validate_wkb_geometry(cursor, depth + 1, max_depth, components)?;
                 let valid_child = match geometry_type {
                     4 => child_type == 1,
                     5 => child_type == 2,
@@ -299,12 +302,19 @@ fn validate_wkb_geometry(
 }
 
 pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
+    validate_wkb_contract_with_depth(payload, MAX_WKB_DEPTH)
+}
+
+/// Variante con profondita' di annidamento configurabile (il limite arriva
+/// dai `Limits` effettivi del piano, `max_geometry_depth`; il default di
+/// [`validate_wkb_contract`] resta [`MAX_WKB_DEPTH`]).
+pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Result<(), PlenoraError> {
     if payload.len() > MAX_WKB_BYTES {
         return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
     }
     let mut cursor = WkbCursor::new(payload);
     let mut components = 0_u64;
-    validate_wkb_geometry(&mut cursor, 0, &mut components)?;
+    validate_wkb_geometry(&mut cursor, 0, max_depth, &mut components)?;
     if cursor.remaining() != 0 {
         return Err(invalid_wkb_structure("byte residui dopo la geometria"));
     }
@@ -595,6 +605,26 @@ mod tests {
                 "struttura WKB non valida: tipo figlio incompatibile con multi-geometria"
             ));
         }
+    }
+
+    #[test]
+    fn validate_wkb_contract_with_depth_enforces_the_configurable_limit() {
+        // GC(GC(Point)): il punto e' a profondita' 2.
+        let nested = Geometry::GeometryCollection(geo::GeometryCollection(vec![
+            Geometry::GeometryCollection(geo::GeometryCollection(vec![Geometry::Point(
+                Point::new(1.0, 2.0),
+            )])),
+        ]));
+        let payload = nested.to_wkb(CoordDimensions::xy()).unwrap();
+        assert!(validate_wkb_contract_with_depth(&payload, MAX_WKB_DEPTH).is_ok());
+        assert!(validate_wkb_contract_with_depth(&payload, 2).is_ok());
+        assert!(matches!(
+            validate_wkb_contract_with_depth(&payload, 1),
+            Err(PlenoraError::Contract(reason))
+                if reason == "struttura WKB non valida: annidamento geometrie oltre il limite"
+        ));
+        // Il default resta 64 (comportamento invariato di validate_wkb_contract).
+        assert!(validate_wkb_contract(&payload).is_ok());
     }
 
     proptest! {

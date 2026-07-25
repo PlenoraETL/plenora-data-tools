@@ -71,10 +71,13 @@ pub struct GeometryColumnContract {
 /// Unico allocatore condiviso dal planner e dai moduli `analyze_contract`
 /// delle famiglie di kernel (unificazione Fase 2A-3: in precedenza
 /// `plenora-kernels-table` ne definiva uno locale, doppione di questo).
-/// Il planner crea un unico allocatore per l'analisi dell'intero grafo:
-/// [`FieldAllocator::observe`] registra gli ID già assegnati (contratti di
-/// input) per evitare collisioni con i futuri [`FieldAllocator::alloc`];
-/// le colonne propagate mantengono l'ID di input; quelle derivate
+/// Il planner crea un unico allocatore per l'analisi dell'intero grafo e
+/// rimappa i `FieldId` delle geometrie di input con [`FieldAllocator::alloc`]
+/// (senza legare i nomi: due input possono avere colonne omonime);
+/// [`FieldAllocator::observe`] e' chiamato dai moduli `analyze_contract` per
+/// registrare gli ID gia' presenti nei contratti di input di ciascun nodo ed
+/// evitare collisioni con i futuri [`FieldAllocator::alloc`]; le colonne
+/// propagate mantengono l'ID di input; quelle derivate
 /// ([`FieldAllocator::derive`]) ne ricevono uno nuovo; le rinomine spostano
 /// l'identità ([`FieldAllocator::rename`]). L'interning per nome
 /// ([`FieldAllocator::intern`]) rende stabile l'ID di una colonna visibile

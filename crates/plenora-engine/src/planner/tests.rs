@@ -580,3 +580,83 @@ fn identity_accessors_are_consistent() {
         plenora_core::limits::Limits::default().rows.max_rows_per_edge
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regressioni review engine (planner)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extra_input_contract_error_is_deterministic() {
+    // Piu' contratti extra: il messaggio segnala sempre il primo in ordine
+    // lessicografico, non un nome dipendente dall'hash della mappa.
+    let contracts = vec![
+        ("main".to_owned(), table_contract()),
+        ("zeta".to_owned(), table_contract()),
+        ("alfa".to_owned(), table_contract()),
+    ];
+    for _ in 0..8 {
+        let error = validate(&mixed_plan_json(), &contracts).expect_err("input extra");
+        assert!(
+            error.to_string().contains("`alfa`"),
+            "segnalato il primo extra in ordine: {error}"
+        );
+    }
+}
+
+#[test]
+fn compatibility_extra_contract_error_is_deterministic() {
+    let graph = validate_mixed();
+    let contracts = vec![
+        ("zeta".to_owned(), geo_contract(7)),
+        ("main".to_owned(), geo_contract(7)),
+        ("alfa".to_owned(), geo_contract(7)),
+    ];
+    for _ in 0..8 {
+        let error = check_input_compatibility(&graph, &contracts).expect_err("input extra");
+        assert!(
+            error.to_string().contains("`alfa`"),
+            "segnalato il primo extra in ordine: {error}"
+        );
+    }
+}
+
+#[test]
+fn input_geometry_names_are_not_bound_in_the_field_allocator() {
+    // Due input con colonna geometrica omonima: il nome NON e' legato al
+    // FieldId rimappato nell'allocatore (altrimenti l'ultimo input
+    // vincerebbe). Le chiavi interned dagli analyze non devono collidere con
+    // i FieldId delle geometrie di input.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["left", "right"],
+        "nodes": [
+            {"id": "sl", "op": "table.sort", "in": ["left"], "config": {"columns": ["geom"]}},
+            {"id": "ag", "op": "table.aggregate", "in": ["right"],
+             "config": {"group_by": ["id"], "aggregations": []}},
+            {"id": "j", "op": "table.join", "in": ["sl", "ag"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
+        ],
+        "output": "j",
+    })
+    .to_string();
+    let contracts = vec![
+        ("left".to_owned(), geo_contract(4)),
+        ("right".to_owned(), geo_contract(4)),
+    ];
+    let graph = validate(&plan, &contracts).expect("piano valido");
+    let left_geometry = graph.edge_contract("left").unwrap().geometries[0].field_id;
+    let right_geometry = graph.edge_contract("right").unwrap().geometries[0].field_id;
+    assert_ne!(left_geometry, right_geometry, "namespace globale (D16)");
+    let sorted = graph
+        .edge_contract("sl")
+        .unwrap()
+        .properties
+        .sorted_by
+        .as_ref()
+        .and_then(|sorted| sorted.confidence.value().cloned())
+        .expect("sorted_by inferita su sl");
+    assert!(
+        !sorted.contains(&left_geometry) && !sorted.contains(&right_geometry),
+        "la chiave interned non collide coi FieldId delle geometrie di input"
+    );
+}

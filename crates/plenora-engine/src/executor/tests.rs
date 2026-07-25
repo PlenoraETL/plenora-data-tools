@@ -1339,3 +1339,316 @@ fn from_wkt_and_generate_grid_fail_closed_on_crs_without_proj_backend() {
         "atteso errore CRS fail-closed: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regressioni review engine: limiti cablati, tee errori, blocking fail-closed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn whole_to_many_ops_are_exempt_from_expansion_factor() {
+    // 5 rettangoli identici -> C(5,2) = 10 overlap; con fattore 1.0 e base
+    // input (5 righe) il controllo scatterebbe: le op WholeToMany sono
+    // esenti (l'input e' un trigger/insieme da analizzare, non una base
+    // proporzionale; restano i limiti max_rows_per_edge/max_output_rows).
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_expansion_factor": 1.0},
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "v", "op": "geo.coverage_validate", "in": ["main"], "config": {}},
+        ],
+        "output": "v",
+    });
+    let cells: Vec<Option<Vec<u8>>> = (0..5).map(|_| Some(rect_wkb(0.0, 0.0, 4.0, 4.0))).collect();
+    let inputs = single_input("main", vec![geo_batch(&[0, 1, 2, 3, 4], &cells)]);
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
+    )
+    .expect("op WholeToMany esente dal fattore di espansione");
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 10, "un overlap per coppia");
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn generate_grid_expansion_exempt_with_small_trigger() {
+    // Trigger da 5 righe + griglia 100x100 celle (lato 1.0): 10_000 righe
+    // prodotte con fattore 1.0 — esente perche' WholeToMany (ADR 6).
+    let plan = json!({
+        "schema_version": 4,
+        "crs": "EPSG:32632",
+        "limits": {"max_expansion_factor": 1.0},
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "g", "op": "geo.generate_grid", "in": ["main"],
+             "config": {
+                "extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 100.0, "ymax": 100.0},
+                "cell_size": 1.0,
+             }},
+        ],
+        "output": "g",
+    });
+    let inputs = single_input(
+        "main",
+        vec![table_batch(&[1, 2, 3, 4, 5], &["a", "b", "c", "d", "e"])],
+    );
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
+    )
+    .expect("op generativa esente dal fattore di espansione");
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 10_000);
+}
+
+#[test]
+fn payload_bytes_limit_triggers_cumulatively_on_input() {
+    let first = table_batch(&[1, 2], &["a", "b"]);
+    let second = table_batch(&[3], &["c"]);
+    let first_bytes = first.get_array_memory_size() as u64;
+    let total_bytes = first_bytes + second.get_array_memory_size() as u64;
+
+    // Il primo batch entra nel budget, il cumulato no: fail-closed.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_payload_bytes": first_bytes},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input("main", vec![first, second]);
+    let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let error = output.collect_batches().expect_err("payload oltre il limite");
+    assert!(error.to_string().contains("max_payload_bytes"), "{error}");
+
+    // Budget sufficiente per l'intero payload: passa.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_payload_bytes": total_bytes},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input(
+        "main",
+        vec![table_batch(&[1, 2], &["a", "b"]), table_batch(&[3], &["c"])],
+    );
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
+    )
+    .expect("payload entro il limite");
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 3);
+}
+
+/// GC annidata `depth` volte attorno a un punto: il punto e' a profondita'
+/// `depth` nel WKB.
+fn nested_collection_wkb(depth: usize) -> Vec<u8> {
+    let mut geometry = Geometry::Point(Point::new(1.0, 2.0));
+    for _ in 0..depth {
+        geometry = Geometry::GeometryCollection(geo::GeometryCollection(vec![geometry]));
+    }
+    geometry.to_wkb(CoordDimensions::xy()).expect("wkb annidato")
+}
+
+#[test]
+fn geometry_depth_limit_applies_to_nested_wkb() {
+    // Punto a profondita' 2: con max_geometry_depth 1 fallisce in lettura,
+    // con 2 (e col default 64) passa.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_geometry_depth": 1},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])]);
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+    let error = output.collect_batches().expect_err("annidamento oltre il limite");
+    assert!(error.to_string().contains("annidamento"), "{error}");
+
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_geometry_depth": 2},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])]);
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
+    )
+    .expect("annidamento entro il limite");
+    assert_eq!(batches[0].num_rows(), 1);
+}
+
+#[test]
+fn edge_stream_delivers_upstream_error_once_per_reader() {
+    let upstream: BatchStream = Box::new(
+        vec![
+            Ok(table_batch(&[1], &["a"])),
+            Err(PlenoraError::Step {
+                node: "n1".to_owned(),
+                operation: "table.filter".to_owned(),
+                reason: "boom".to_owned(),
+            }),
+        ]
+        .into_iter(),
+    );
+    let shared = EdgeShared::new(upstream);
+    let mut first = shared.register_reader();
+    let mut second = shared.register_reader();
+
+    // Primo consumatore: batch, errore originale, poi chiusura (mai un
+    // iteratore infinito di errori).
+    assert!(matches!(first.next(), Some(Ok(_))));
+    match first.next() {
+        Some(Err(PlenoraError::Step { node, .. })) => assert_eq!(node, "n1"),
+        other => panic!("atteso l'errore Step originale: {other:?}"),
+    }
+    assert!(first.next().is_none(), "errore consegnato una sola volta");
+    assert!(first.next().is_none(), "lo stream resta chiuso");
+
+    // Secondo consumatore: batch bufferizzato, errore UNA volta con
+    // l'attribuzione Step{node, operation} preservata, poi chiusura.
+    assert!(matches!(second.next(), Some(Ok(_))));
+    match second.next() {
+        Some(Err(PlenoraError::Step {
+            node,
+            operation,
+            reason,
+        })) => {
+            assert_eq!(node, "n1");
+            assert_eq!(operation, "table.filter");
+            assert_eq!(reason, "boom");
+        }
+        other => panic!("atteso Step preservato, non Contract declassato: {other:?}"),
+    }
+    assert!(second.next().is_none(), "errore consegnato una sola volta");
+}
+
+#[test]
+fn blocking_segment_fails_closed_when_concatenated_batch_exceeds_byte_cap() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "g", "op": "table.aggregate", "in": ["main"],
+             "config": {"group_by": ["id"], "aggregations": []}},
+        ],
+        "output": "g",
+    });
+    let ids: Vec<i64> = (0..1_000).collect();
+    let names: Vec<String> = ids.iter().map(|id| format!("name{id}")).collect();
+    let batches: Vec<RecordBatch> = (0..4)
+        .map(|_| table_batch(&ids, &names.iter().map(String::as_str).collect::<Vec<_>>()))
+        .collect();
+    // Ogni batch singolo e' sotto il tetto; la concatenazione (4x) no.
+    let cap = batches[0].get_array_memory_size() * 2;
+    let graph =
+        validate(&plan.to_string(), &[("main".to_owned(), table_contract())]).expect("validate");
+    let runtime = RuntimeContext {
+        batch_target: crate::prepare::BatchTarget {
+            target_batch_bytes: cap,
+            max_batch_bytes: cap,
+        },
+        ..RuntimeContext::default()
+    };
+    let inputs = single_input("main", batches);
+    let output = execute(&graph, inputs, runtime).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("tetto byte sul batch concatenato");
+    assert!(error.to_string().contains("max_batch_bytes"), "{error}");
+}
+
+#[test]
+fn blocking_concat_error_is_attributed_to_the_node() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "g", "op": "table.aggregate", "in": ["main"],
+             "config": {"group_by": ["id"], "aggregations": []}},
+        ],
+        "output": "g",
+    });
+    let graph =
+        validate(&plan.to_string(), &[("main".to_owned(), table_contract())]).expect("validate");
+    let physical = Rc::new(prepare(&graph, &RuntimeContext::default()).expect("prepare"));
+    let state = ExecState::new(&physical);
+    let segment_index = physical
+        .segments()
+        .iter()
+        .position(|segment| segment.mode == SegmentMode::Blocking)
+        .expect("segmento blocking");
+    // Batch con stesso numero di colonne ma tipo diverso dal contratto di
+    // input del kernel: concat fallisce e l'errore deve essere attribuito al
+    // nodo (Step), non Arrow nudo.
+    let wrong = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Int64, true),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+        ],
+    )
+    .expect("batch fixture");
+    let error = run_blocking(&physical, segment_index, &state, &[wrong])
+        .expect_err("concat con schema incoerente");
+    match error {
+        PlenoraError::Step {
+            node,
+            operation,
+            reason,
+        } => {
+            assert_eq!(node, "g");
+            assert_eq!(operation, "table.aggregate");
+            assert!(reason.contains("arrow"), "{reason}");
+        }
+        other => panic!("atteso Step con attribuzione nodo: {other:?}"),
+    }
+}
+
+#[test]
+fn binary_blocking_metrics_count_real_input_batches() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["left", "right"],
+        "nodes": [
+            {"id": "j", "op": "table.join", "in": ["left", "right"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
+        ],
+        "output": "j",
+    });
+    let inputs = Inputs::new()
+        .with(
+            "left",
+            Input::from_batches(vec![
+                table_batch(&[1], &["a"]),
+                table_batch(&[2], &["b"]),
+                table_batch(&[3], &["c"]),
+            ])
+            .expect("left"),
+        )
+        .expect("inputs")
+        .with(
+            "right",
+            Input::from_batches(vec![table_batch(&[2], &["bb"])]).expect("right"),
+        )
+        .expect("inputs");
+    let contracts = vec![
+        ("left".to_owned(), table_contract()),
+        ("right".to_owned(), table_contract()),
+    ];
+    let (_, metrics) =
+        output_rows(run(&plan, inputs, &contracts).expect("execute")).expect("stream ok");
+    assert_eq!(
+        metrics.nodes["j"].batches_in, 4,
+        "3 batch left + 1 batch right drenati davvero"
+    );
+    assert_eq!(metrics.nodes["j"].batches_out, 1);
+    let segment = metrics.segments.values().next().expect("segmento binario");
+    assert_eq!(segment.batches_in, 4);
+}

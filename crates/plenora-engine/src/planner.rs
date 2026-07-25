@@ -391,7 +391,8 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     }
     if let Some(extra) = provided
         .keys()
-        .find(|name| !plan_ref.inputs.iter().any(|i| i.as_str() == **name))
+        .filter(|name| !plan_ref.inputs.iter().any(|i| i.as_str() == **name))
+        .min()
     {
         return Err(PlenoraError::Contract(format!(
             "contratto fornito per `{extra}`, non dichiarato tra gli input del piano"
@@ -432,13 +433,17 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
 
     // Passo 5: inferenza dei contratti arco per arco in ordine topologico.
     // Un unico FieldAllocator per grafo; i FieldId delle geometrie di input
-    // sono rimappati all'ingresso (D16) e il nome e' legato al nuovo id.
+    // sono rimappati all'ingresso (D16) con una allocazione fresca SENZA
+    // legare il nome nell'allocatore: input diversi possono dichiarare
+    // colonne omonime e un binding per nome farebbe vincere l'ultimo input
+    // (l'interning per nome resta riservato alle chiavi `sorted_by` degli
+    // analyze).
     let mut fields = FieldAllocator::default();
     let mut edge_contracts: BTreeMap<String, DataContract> = BTreeMap::new();
     for declared in &plan_ref.inputs {
         let mut contract = provided[declared.as_str()].clone();
         for geometry in &mut contract.geometries {
-            let remapped = fields.derive(&geometry.name);
+            let remapped = fields.alloc();
             if contract.active_geometry == Some(geometry.field_id) {
                 contract.active_geometry = Some(remapped);
             }
@@ -597,7 +602,8 @@ pub fn check_input_compatibility(
     }
     if let Some(extra) = provided
         .keys()
-        .find(|name| !graph.plan.plan().inputs.iter().any(|i| i.as_str() == **name))
+        .filter(|name| !graph.plan.plan().inputs.iter().any(|i| i.as_str() == **name))
+        .min()
     {
         return Err(mismatch(format!(
             "contratto fornito per `{extra}`, non dichiarato tra gli input del piano"

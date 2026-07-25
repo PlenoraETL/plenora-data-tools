@@ -49,8 +49,12 @@
 //! - limiti effettivi del piano: `max_input_rows` per input,
 //!   `max_rows_per_edge` per arco intermedio, `max_output_rows`,
 //!   `max_expansion_factor` per nodo (base: input per gli unari,
-//!   left+right per i binari), `max_batches` per arco, `max_wkb_cell_bytes`
-//!   per cella, `max_batch_bytes` per batch (V7, tetto duro);
+//!   left+right per i binari; le op `WholeToMany` generative/diagnostiche
+//!   sono esenti — la base input e' un trigger, insensata come denominatore),
+//!   `max_batches` per arco, `max_wkb_cell_bytes` per cella,
+//!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
+//!   annidamento WKB, `max_batch_bytes` per batch (V7, tetto duro, applicato
+//!   anche al batch concatenato dei segmenti blocking);
 //! - nessun output parziale: [`Output::write_ipc_file`] scrive via
 //!   [`crate::geo_transport::publish::publish_atomic`] (tempfile + persist
 //!   no-clobber solo a stream completato con successo);
@@ -76,10 +80,11 @@ use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
+use plenora_core::catalog::{find_operation, ResultShape};
 use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
-use plenora_kernels_geo::{operations, validate_wkb_contract};
+use plenora_kernels_geo::{operations, validate_wkb_contract_with_depth};
 
 use crate::geo_transport::publish::publish_atomic;
 use crate::geo_transport::transport::{transform_batches, TransformArrowSchema};
@@ -292,8 +297,9 @@ pub struct ExecutionMetrics {
 struct ExecState {
     plan: Rc<ExecutionPlan>,
     metrics: RefCell<ExecutionMetrics>,
-    /// Righe/batch cumulati per input (`max_input_rows`, `max_batches`).
-    input_counts: RefCell<HashMap<String, (u64, u64)>>,
+    /// Righe/batch/byte cumulati per input (`max_input_rows`, `max_batches`,
+    /// `max_payload_bytes`).
+    input_counts: RefCell<HashMap<String, (u64, u64, u64)>>,
     /// Righe/batch cumulati per arco intermedio (`max_rows_per_edge`).
     edge_counts: RefCell<HashMap<String, (u64, u64)>>,
     /// Righe in/out cumulate per nodo (`max_expansion_factor`).
@@ -344,6 +350,48 @@ impl ExecState {
 // Canale d'arco condiviso (fan-out tee, D9/V9/V10)
 // ---------------------------------------------------------------------------
 
+/// Errore di un arco conservato in forma scomposta per la riproduzione ai
+/// consumatori successivi (`PlenoraError` non e' `Clone`): l'attribuzione
+/// `Step{nodo, operazione}` originale e' preservata, non declassata a
+/// `Contract`.
+struct StoredEdgeError {
+    node: Option<String>,
+    operation: Option<String>,
+    reason: String,
+}
+
+impl StoredEdgeError {
+    fn from_error(error: &PlenoraError) -> Self {
+        match error {
+            PlenoraError::Step {
+                node,
+                operation,
+                reason,
+            } => Self {
+                node: Some(node.clone()),
+                operation: Some(operation.clone()),
+                reason: reason.clone(),
+            },
+            other => Self {
+                node: None,
+                operation: None,
+                reason: other.to_string(),
+            },
+        }
+    }
+
+    fn to_error(&self) -> PlenoraError {
+        match (&self.node, &self.operation) {
+            (Some(node), Some(operation)) => PlenoraError::Step {
+                node: node.clone(),
+                operation: operation.clone(),
+                reason: self.reason.clone(),
+            },
+            _ => PlenoraError::Contract(format!("arco interrotto: {}", self.reason)),
+        }
+    }
+}
+
 /// Stato di un arco: upstream lazy, buffer condiviso tra i consumatori e
 /// cursore di lettura per ciascuno.
 struct EdgeShared {
@@ -351,9 +399,8 @@ struct EdgeShared {
     buffer: RefCell<Vec<RecordBatch>>,
     reads: RefCell<Vec<usize>>,
     done: Cell<bool>,
-    /// Messaggio dell'errore upstream (riprodotto ai consumatori successivi:
-    /// `PlenoraError` non e' `Clone`).
-    error: RefCell<Option<String>>,
+    /// Errore upstream, riprodotto una sola volta a ciascun consumatore.
+    error: RefCell<Option<StoredEdgeError>>,
 }
 
 impl EdgeShared {
@@ -374,6 +421,7 @@ impl EdgeShared {
         EdgeStream {
             shared: Rc::clone(self),
             id,
+            error_delivered: false,
         }
     }
 }
@@ -382,6 +430,9 @@ impl EdgeShared {
 struct EdgeStream {
     shared: Rc<EdgeShared>,
     id: usize,
+    /// L'errore dell'arco e' consegnato UNA volta per consumatore, poi lo
+    /// stream termina (`None`): mai un iteratore infinito di errori.
+    error_delivered: bool,
 }
 
 impl EdgeStream {
@@ -422,14 +473,21 @@ impl Iterator for EdgeStream {
                 return Some(Ok(batch));
             }
         }
-        // 2. Upstream esaurito (o in errore).
+        // 2. Upstream esaurito (o in errore): l'errore e' consegnato una
+        // sola volta per consumatore, poi lo stream e' chiuso.
         if self.shared.done.get() {
+            if self.error_delivered {
+                return None;
+            }
             return self
                 .shared
                 .error
                 .borrow()
                 .as_ref()
-                .map(|message| Err(PlenoraError::Contract(format!("arco interrotto: {message}"))));
+                .map(|stored| {
+                    self.error_delivered = true;
+                    Err(stored.to_error())
+                });
         }
         // 3. Pull dall'upstream.
         let item = self.shared.upstream.borrow_mut().as_mut()?.next();
@@ -445,7 +503,8 @@ impl Iterator for EdgeStream {
             }
             Some(Err(error)) => {
                 self.shared.done.set(true);
-                *self.shared.error.borrow_mut() = Some(error.to_string());
+                *self.shared.error.borrow_mut() = Some(StoredEdgeError::from_error(&error));
+                self.error_delivered = true;
                 Some(Err(error))
             }
             None => {
@@ -723,9 +782,10 @@ impl Network {
                 validate_wkb_cells(&state, &batch, index, &edge_name)?;
             }
             let mut counts = state.input_counts.borrow_mut();
-            let entry = counts.entry(edge_name.clone()).or_insert((0, 0));
+            let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
             entry.0 += batch.num_rows() as u64;
             entry.1 += 1;
+            entry.2 += batch.get_array_memory_size() as u64;
             let limits = &state.plan.limits();
             if entry.0 > limits.rows.max_input_rows {
                 return Err(PlenoraError::Contract(format!(
@@ -737,6 +797,12 @@ impl Network {
                 return Err(PlenoraError::Contract(format!(
                     "max_batches superato sull'input `{edge_name}`: {} batch > {}",
                     entry.1, limits.max_batches
+                )));
+            }
+            if entry.2 > limits.max_payload_bytes {
+                return Err(PlenoraError::Contract(format!(
+                    "max_payload_bytes superato sull'input `{edge_name}`: {} byte > {}",
+                    entry.2, limits.max_payload_bytes
                 )));
             }
             Ok(batch)
@@ -805,8 +871,9 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
 }
 
 /// Validazione dinamica in lettura (D8): struttura WKB di ogni cella non
-/// null, con il limite per cella dei limiti effettivi applicato prima del
-/// validatore strutturale (64 MiB, 100k componenti, profondita' 64).
+/// null, con i limiti effettivi del piano applicati prima del validatore
+/// strutturale (`max_wkb_cell_bytes` per cella, `max_geometry_depth` per
+/// l'annidamento; il tetto componenti resta quello del validatore).
 fn validate_wkb_cells(
     state: &ExecState,
     batch: &RecordBatch,
@@ -814,7 +881,9 @@ fn validate_wkb_cells(
     edge: &str,
 ) -> Result<()> {
     let cells = batch_geometry_cells(batch, geometry_index, "geometry")?;
-    let max_cell = state.plan.limits().max_wkb_cell_bytes;
+    let limits = state.plan.limits();
+    let max_cell = limits.max_wkb_cell_bytes;
+    let max_depth = limits.max_geometry_depth as usize;
     for row in 0..batch.num_rows() {
         if cells.is_null(row) {
             continue;
@@ -825,7 +894,7 @@ fn validate_wkb_cells(
                 "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
             )));
         }
-        validate_wkb_contract(payload).map_err(|error| {
+        validate_wkb_contract_with_depth(payload, max_depth).map_err(|error| {
             PlenoraError::Contract(format!(
                 "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
             ))
@@ -860,8 +929,22 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
 
 /// Fattore di espansione per nodo (ADR 6: base input per gli unari,
 /// left+right per i binari).
+///
+/// Esenzione documentata: le op con `result_shape` `WholeToMany`
+/// (`geo.generate_grid`, `geo.coverage_validate`, `geo.shared_paths`) sono
+/// generative/diagnostiche — l'input funge da trigger o da insieme da
+/// analizzare, non da base proporzionale dell'output. Per queste il
+/// controllo sul fattore output/input non si applica: la produzione resta
+/// limitata da `max_rows_per_edge` / `max_output_rows` / `max_batches`
+/// (l'aggiornamento di ADR 6 che recepisce la scelta e' tracciato a parte).
 #[allow(clippy::cast_precision_loss)] // Il fattore e' f64 per contratto (ADR 6); sotto 2^53 righe il confronto e' esatto.
 fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -> Result<()> {
+    let whole_to_many = find_operation(kernel.operation)
+        .and_then(|descriptor| descriptor.result_shape)
+        == Some(ResultShape::WholeToMany);
+    if whole_to_many {
+        return Ok(());
+    }
     let mut rows = state.node_rows.borrow_mut();
     let entry = rows.entry(kernel.node_id.clone()).or_insert((0, 0));
     entry.0 += base_rows;
@@ -1586,8 +1669,11 @@ fn run_blocking(
     let full = if batches.is_empty() {
         RecordBatch::new_empty(schema)
     } else {
-        concat_batches(&schema, batches)?
+        concat_batches(&schema, batches).map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
+    // Il batch concatenato non ha un produttore a monte che ne abbia
+    // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
+    check_batch_bytes(state, &full, &kernel.node_id)?;
     let start = Instant::now();
     let output = run_kernel(kernel, full)?;
     let elapsed = start.elapsed();
@@ -1623,18 +1709,24 @@ fn run_binary_blocking(
     };
     let left_rows = left_batches.iter().map(RecordBatch::num_rows).sum::<usize>() as u64;
     let right_rows = right_batches.iter().map(RecordBatch::num_rows).sum::<usize>() as u64;
+    let batches_in = (left_batches.len() + right_batches.len()) as u64;
     let left_schema = kernel.input_contracts[0].schema.clone();
     let right_schema = kernel.input_contracts[1].schema.clone();
     let left = if left_batches.is_empty() {
         RecordBatch::new_empty(left_schema)
     } else {
-        concat_batches(&left_schema, left_batches)?
+        concat_batches(&left_schema, left_batches)
+            .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     let right = if right_batches.is_empty() {
         RecordBatch::new_empty(right_schema)
     } else {
-        concat_batches(&right_schema, right_batches)?
+        concat_batches(&right_schema, right_batches)
+            .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
+    // Come per il blocking unario: tetto duro V7 sui batch concatenati.
+    check_batch_bytes(state, &left, &kernel.node_id)?;
+    check_batch_bytes(state, &right, &kernel.node_id)?;
     let start = Instant::now();
     let output = table_engine::execute_binary(&left, &right, binary_plan)
         .map_err(|error| step_error(kernel, error))?;
@@ -1649,14 +1741,15 @@ fn run_binary_blocking(
     if segment.output_edge != plan.output_edge() {
         check_edge_batch(state, &kernel.node_id, &output)?;
     }
-    // Metriche per nodo: righe in = left + right.
+    // Metriche per nodo: righe in = left + right, batch in = quelli reali
+    // drenati dai due rami.
     let config = state.plan.metrics_config();
     let mut metrics = state.metrics.borrow_mut();
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
             node.rows_in += left_rows + right_rows;
             node.rows_out += rows_out;
-            node.batches_in += 2;
+            node.batches_in += batches_in;
             node.batches_out += 1;
             node.wall_time += elapsed;
         }
@@ -1665,7 +1758,7 @@ fn run_binary_blocking(
         if let Some(seg) = metrics.segments.get_mut(&segment.id) {
             seg.rows_in += left_rows + right_rows;
             seg.rows_out += rows_out;
-            seg.batches_in += 2;
+            seg.batches_in += batches_in;
             seg.batches_out += 1;
             seg.wall_time += elapsed;
         }
