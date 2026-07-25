@@ -1,4 +1,4 @@
-//! Inferenza a secco del `DataContract` di output per le 70 operazioni
+//! Inferenza a secco del `DataContract` di output per le 71 operazioni
 //! `table.*` del catalogo (Fase 2A-2, Architetture.md par. 4.3 e 6.1, ADR 5).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
@@ -47,8 +47,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, governance,
-    joins, quality, reshape, security, setops, strings, utility, validate_output_name, Limits,
+    aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, fuzzy,
+    governance, joins, quality, reshape, security, setops, strings, utility, validate_output_name,
+    Limits,
 };
 
 /// Numero massimo di nodi AST accettati nell'audit di `table.expression`
@@ -70,7 +71,7 @@ const MAX_EXPRESSION_NODES: usize = 4_096;
 /// - `Contract`: config non valida, arieta' errata, colonne mancanti,
 ///   vincoli di tipo o parametri violati, collisioni di naming;
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
-// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 70 op.
+// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 71 op.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_table_contract(
     op: &str,
@@ -196,6 +197,7 @@ pub fn analyze_table_contract(
         "table.concat_by_name" => analyze_concat_by_name(id, inputs, config, fields),
         "table.validate_rules" => analyze_validate_rules(id, inputs, config, fields),
         "table.hmac_sha256" => analyze_hmac_sha256(id, inputs, config, fields),
+        "table.fuzzy_join" => analyze_fuzzy_join(id, inputs, config, fields),
         _ => Err(PlenoraError::Unsupported(format!(
             "{id}: analyze_contract non disponibile"
         ))),
@@ -3103,6 +3105,53 @@ fn analyze_join(
     finish(schema, geometry, active, ContractProperties::default())
 }
 
+/// `table.fuzzy_join` (estensione v1.3): replica le validazioni statiche del
+/// kernel (`fuzzy::validate_config`, chiavi Utf8 esistenti) e inferisce lo
+/// schema del join Manipola con la chiave destra INCLUSA (suffisso `_R`,
+/// nel fuzzy le due chiavi differiscono) piu' la colonna score Float64 in
+/// coda (nullable solo con `how = left`). Proprieta' declassate: il numero di
+/// righe dipende dai dati e l'ordine non e' quello di nessun input.
+fn analyze_fuzzy_join(
+    op: &str,
+    inputs: &[DataContract],
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let config: fuzzy::FuzzyJoin = typed(op, config)?;
+    let (left, right) = (&inputs[0], &inputs[1]);
+    let _ = fields;
+    fuzzy::validate_config(&config)
+        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+    require_utf8(op, left, &config.left_key)?;
+    require_utf8(op, right, &config.right_key)?;
+    let left_index = left.schema.index_of(&config.left_key).expect("chiave verificata");
+    let (mut fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
+        op,
+        left,
+        right,
+        &HashSet::new(),
+        HorizontalNaming::ManipolaJoin(&[left_index]),
+    )?;
+    let score_name = config.score_name();
+    check_output_name(op, score_name)?;
+    if fields_out.iter().any(|field| field.name() == score_name) {
+        return contract_error(op, format!("collisione fuzzy_join: {score_name}"));
+    }
+    fields_out.push(Field::new(
+        score_name,
+        DataType::Float64,
+        config.how == fuzzy::FuzzyHow::Left,
+    ));
+    if fields_out.len() > Limits::default().max_columns {
+        return contract_error(op, "fuzzy_join supera max_columns");
+    }
+    let schema = Schema::new(fields_out);
+    let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
+    let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
+    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
+    finish(schema, geometry, None, ContractProperties::default())
+}
+
 fn analyze_cross_join(
     op: &str,
     inputs: &[DataContract],
@@ -3663,7 +3712,7 @@ mod tests {
             .iter()
             .filter(|op| op.family == Family::Table)
             .collect();
-        assert_eq!(table_ops.len(), 70);
+        assert_eq!(table_ops.len(), 71);
         for descriptor in table_ops {
             let inputs = vec![tabular_contract(), right_contract()];
             let result =
@@ -4027,6 +4076,64 @@ mod tests {
         assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id"], "key_env": " "})).to_string().contains("key_env"));
         assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["lst"], "key_env": "K"})).to_string().contains("scalare"));
         assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id", "id"], "key_env": "K"})).to_string().contains("ripetuta"));
+    }
+
+    #[test]
+    fn v1_3_extensions_analyze_contracts() {
+        // fuzzy_join: naming Manipola con chiave destra INCLUSA (_R) e score
+        // Float64 in coda (non nullable in inner); proprieta' declassate.
+        let inputs = [proven_contract(), right_contract()];
+        let output = ok(
+            "table.fuzzy_join",
+            &inputs,
+            json!({"left_key": "name", "right_key": "rname", "metric": "jaro_winkler", "threshold": 0.9, "blocking": "prefix"}),
+        );
+        let names: Vec<_> = output
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(
+            names.last(),
+            Some(&"score"),
+            "score in coda: {names:?}"
+        );
+        assert!(names.contains(&"rname_R"), "chiave destra inclusa: {names:?}");
+        assert!(names.contains(&"name"), "chiave sinistra conserva il nome: {names:?}");
+        assert_field(&output, "score", &DataType::Float64, false);
+        assert!(output.properties.sorted_by.is_none());
+        assert!(output.properties.row_count.is_none());
+        // how=left: score nullable; nome personalizzato.
+        let output = ok(
+            "table.fuzzy_join",
+            &[tabular_contract(), right_contract()],
+            json!({"left_key": "name", "right_key": "rname", "metric": "levenshtein", "threshold": 0.5, "blocking": "soundex", "how": "left", "score_column": "similarity"}),
+        );
+        assert_field(&output, "similarity", &DataType::Float64, true);
+        // Soglia validata in analisi: 0 escluso, oltre 1 e NaN rifiutati.
+        for bad in [json!(0.0), json!(-0.1), json!(1.5), json!(null)] {
+            let mut config = json!({"left_key": "name", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "none"});
+            config["threshold"] = bad;
+            assert!(
+                err("table.fuzzy_join", &[tabular_contract(), right_contract()], config)
+                    .to_string()
+                    .contains("fuzzy_join")
+            );
+        }
+        // Chiavi mancanti o non Utf8, blocking_param fuori posto, collisione score.
+        assert!(err("table.fuzzy_join", &[tabular_contract(), right_contract()], json!({"left_key": "missing", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "prefix"})).to_string().contains("missing"));
+        assert!(err("table.fuzzy_join", &[tabular_contract(), right_contract()], json!({"left_key": "id", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "prefix"})).to_string().contains("Utf8"));
+        assert!(err("table.fuzzy_join", &[tabular_contract(), right_contract()], json!({"left_key": "name", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "soundex", "blocking_param": 3})).to_string().contains("blocking_param"));
+        // Collisione score: l'unica possibile e' una chiave sinistra chiamata
+        // come la colonna score (la chiave conserva il nome, le altre colonne
+        // prendono suffisso _L/_R).
+        let key_named_score = DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
+            "score",
+            DataType::Utf8,
+            true,
+        )])));
+        assert!(err("table.fuzzy_join", &[key_named_score, right_contract()], json!({"left_key": "score", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "prefix"})).to_string().contains("collisione"));
     }
 
     #[test]

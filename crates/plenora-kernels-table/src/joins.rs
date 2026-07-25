@@ -146,7 +146,7 @@ impl<'a> FastKeys<'a> {
 /// costo di build/probe su milioni di righe; qui il throughput conta piu'
 /// della resistenza a input avversari.
 #[derive(Default)]
-struct KeyHasher(u64);
+pub(crate) struct KeyHasher(u64);
 
 impl Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -174,7 +174,9 @@ impl Hasher for KeyHasher {
     }
 }
 
-type FastHasher = BuildHasherDefault<KeyHasher>;
+/// Hasher condiviso anche dal blocking di `fuzzy.rs` (stesso profilo di
+/// costo: throughput su milioni di chiavi, non resistenza avversaria).
+pub(crate) type FastHasher = BuildHasherDefault<KeyHasher>;
 
 fn take_optional(array: &dyn plenora_core::arrow::array::Array, rows: &[Option<usize>]) -> Result<ArrayRef> {
     let indices: UInt32Array = rows
@@ -558,7 +560,7 @@ fn probe_range(
 }
 
 #[derive(Clone, Copy)]
-enum HorizontalNames<'a> {
+pub(crate) enum HorizontalNames<'a> {
     ManipolaJoin { left_keys: &'a [usize] },
     PandasCross,
     AsOf,
@@ -582,7 +584,7 @@ fn take_columns(columns: &[ArrayRef], rows: &[Option<usize>]) -> Result<Vec<Arra
     }
 }
 
-fn combine_horizontal(
+pub(crate) fn combine_horizontal(
     left: &RecordBatch,
     right: &RecordBatch,
     left_rows: &[Option<usize>],

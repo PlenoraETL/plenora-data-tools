@@ -1,4 +1,4 @@
-//! Inferenza a secco dei `DataContract` per le 72 operazioni `geo.*`
+//! Inferenza a secco dei `DataContract` per le 75 operazioni `geo.*`
 //! (Architetture.md par. 4.3 e 6.1, ADR 5 — Fase 2A-2b).
 //!
 //! [`analyze_geo_contract`] e' l'`analyze_contract` del catalogo per la
@@ -84,6 +84,16 @@
 //! - `geometry_diagnostics`: la colonna geometria e' **sostituita** dalle 10
 //!   colonne diagnostiche [`DIAGNOSTIC_COLUMNS`] (il contratto diventa
 //!   non-geografico), come nel kernel legacy.
+//! - `coverage_validate`/`shared_paths` (v1.3, WholeToMany): consumano
+//!   l'intera copertura (Blocking) e producono uno schema **nuovo** — una
+//!   riga per issue/tratto condiviso: colonne diagnostiche non-null piu'
+//!   geometria WKB non-null con **nuovo `FieldId`** e CRS dell'input
+//!   (`SameProjected`: aree/lunghezze in unita' di mappa); le colonne
+//!   attributo dell'input non sono propagate e le proprieta' sono azzerate.
+//! - `cluster_dbscan` (v1.3): calcolo globale (Blocking) ma output allineato
+//!   alle righe (OneToOne): aggiunge la colonna `cluster_id` UInt64
+//!   **nullable** (noise → null), nome da `output_column`; `eps` finito e
+//!   `> 0`, `min_points >= 1`; `Projected` (eps in unita' di mappa).
 //!
 //! # Operand i binari "unari" (decisione v1)
 //!
@@ -174,6 +184,18 @@ pub const CELL_J_COLUMN: &str = "cell_j";
 pub const CENTROID_X_COLUMN: &str = "centroid_x";
 /// Colonna Y del centroide cella di `generate_grid` (`include_centroid`).
 pub const CENTROID_Y_COLUMN: &str = "centroid_y";
+/// Colonna tipo issue di `coverage_validate`.
+pub const ISSUE_TYPE_COLUMN: &str = "issue_type";
+/// Colonna primo indice di `coverage_validate`/`shared_paths`.
+pub const INDEX_A_COLUMN: &str = "index_a";
+/// Colonna secondo indice di `coverage_validate`/`shared_paths`.
+pub const INDEX_B_COLUMN: &str = "index_b";
+/// Colonna area dell'overlap di `coverage_validate`.
+pub const ISSUE_AREA_COLUMN: &str = "area";
+/// Colonna lunghezza condivisa di `shared_paths`.
+pub const SHARED_LENGTH_COLUMN: &str = "shared_length";
+/// Default della colonna etichetta di `cluster_dbscan`.
+pub const CLUSTER_ID_COLUMN: &str = "cluster_id";
 
 /// Le 6 colonne di `geometry_accessors`, in ordine canonico di output
 /// (indipendente dall'ordine di `fields` in config).
@@ -475,6 +497,34 @@ struct SubdivideConfig {
 struct SnapConfig {
     reference_wkb: String,
     tolerance: f64,
+}
+
+/// `coverage_validate` (v1.3): tutti i campi opzionali; default kernel
+/// (`tolerance` 0, `max_issues` [`crate::extensions3::DEFAULT_MAX_ISSUES`]).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoverageValidateConfig {
+    tolerance: Option<f64>,
+    max_issues: Option<usize>,
+}
+
+/// `shared_paths` (v1.3): tutti i campi opzionali; default kernel
+/// (`tolerance` 0, `min_length` 0).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharedPathsConfig {
+    tolerance: Option<f64>,
+    min_length: Option<f64>,
+}
+
+/// `cluster_dbscan` (v1.3): `eps` e `min_points` obbligatori; `output_column`
+/// opzionale (default [`CLUSTER_ID_COLUMN`]).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClusterDbscanConfig {
+    eps: f64,
+    min_points: usize,
+    output_column: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1182,6 +1232,107 @@ fn analyze_snap(op: &str, input: &DataContract, config: &Value) -> Result<DataCo
     Ok(input.clone())
 }
 
+/// Costruisce il contratto WholeToMany delle op di copertura v1.3: schema
+/// nuovo con le colonne diagnostiche non-null elencate piu' la geometria WKB
+/// non-null (nuovo `FieldId`, CRS dell'input); proprieta' azzerate.
+fn analyze_coverage_rows(
+    geometry: &GeometryColumnContract,
+    columns: &[(&str, DataType)],
+    fields_allocator: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let mut fields: Vec<Field> = columns
+        .iter()
+        .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
+        .collect();
+    fields.push(new_geometry_field(
+        DEFAULT_GEOMETRY_COLUMN,
+        &geometry.crs,
+        false,
+    )?);
+    let field_id = fields_allocator.alloc();
+    let output_geometry = GeometryColumnContract {
+        field_id,
+        name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
+        crs: geometry.crs.clone(),
+        dimensions: GeometryDimensions::Xy,
+        nullable: false,
+    };
+    DataContract::new(
+        Arc::new(Schema::new(fields)),
+        vec![output_geometry],
+        Some(field_id),
+        ContractProperties::default(),
+    )
+}
+
+/// `coverage_validate` (v1.3): `tolerance` finita non negativa, `max_issues`
+/// maggiore di zero; una riga per overlap.
+fn analyze_coverage_validate(
+    op: &str,
+    geometry: &GeometryColumnContract,
+    config: &Value,
+    fields_allocator: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let parsed: CoverageValidateConfig = parse_config(op, config)?;
+    if let Some(tolerance) = parsed.tolerance {
+        ensure_non_negative(op, "tolerance", tolerance)?;
+    }
+    if let Some(max_issues) = parsed.max_issues {
+        if max_issues == 0 {
+            return Err(invalid_param(op, "max_issues", "deve essere maggiore di zero"));
+        }
+    }
+    analyze_coverage_rows(
+        geometry,
+        &[
+            (ISSUE_TYPE_COLUMN, DataType::Utf8),
+            (INDEX_A_COLUMN, DataType::UInt64),
+            (INDEX_B_COLUMN, DataType::UInt64),
+            (ISSUE_AREA_COLUMN, DataType::Float64),
+        ],
+        fields_allocator,
+    )
+}
+
+/// `shared_paths` (v1.3): `tolerance` e `min_length` finite non negative; una
+/// riga per coppia con confine condiviso.
+fn analyze_shared_paths(
+    op: &str,
+    geometry: &GeometryColumnContract,
+    config: &Value,
+    fields_allocator: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let parsed: SharedPathsConfig = parse_config(op, config)?;
+    if let Some(tolerance) = parsed.tolerance {
+        ensure_non_negative(op, "tolerance", tolerance)?;
+    }
+    if let Some(min_length) = parsed.min_length {
+        ensure_non_negative(op, "min_length", min_length)?;
+    }
+    analyze_coverage_rows(
+        geometry,
+        &[
+            (INDEX_A_COLUMN, DataType::UInt64),
+            (INDEX_B_COLUMN, DataType::UInt64),
+            (SHARED_LENGTH_COLUMN, DataType::Float64),
+        ],
+        fields_allocator,
+    )
+}
+
+/// `cluster_dbscan` (v1.3): `eps` finito e maggiore di zero, `min_points >=
+/// 1`; aggiunge la colonna etichetta UInt64 nullable (noise → null). Output
+/// allineato alle righe: le proprieta' dell'input sono preservate.
+fn analyze_cluster_dbscan(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
+    let parsed: ClusterDbscanConfig = parse_config(op, config)?;
+    ensure_positive(op, "eps", parsed.eps)?;
+    if parsed.min_points < 1 {
+        return Err(invalid_param(op, "min_points", "deve essere almeno 1"));
+    }
+    let name = output_name(op, parsed.output_column.as_deref(), CLUSTER_ID_COLUMN)?;
+    analyze_add_column(op, input, name, DataType::UInt64)
+}
+
 // ---------------------------------------------------------------------------
 // Validazione parametri per gruppo di operazioni.
 // ---------------------------------------------------------------------------
@@ -1293,12 +1444,14 @@ fn analyze_unary_pair(op: &str, input: &DataContract, config: &Value, data_type:
 }
 
 /// Inferenza per le operazioni unarie (tutto tranne `from_coords` e le
-/// binarie, gestite altrove).
+/// binarie, gestite altrove). `fields` alloca i `FieldId` delle op v1.3 che
+/// creano una nuova colonna geometria.
 fn analyze_unary(
     descriptor: &OperationDescriptor,
     input: &DataContract,
     config: &Value,
     plan_crs: Option<&ResolvedCrs>,
+    fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let geometry = single_geometry(op, input)?;
@@ -1399,6 +1552,18 @@ fn analyze_unary(
         "geo.snap" => {
             validate_requirement(requirement, &[&geometry.crs])?;
             analyze_snap(op, input, config)
+        }
+        "geo.coverage_validate" => {
+            validate_requirement(requirement, &[&geometry.crs])?;
+            analyze_coverage_validate(op, geometry, config, fields)
+        }
+        "geo.shared_paths" => {
+            validate_requirement(requirement, &[&geometry.crs])?;
+            analyze_shared_paths(op, geometry, config, fields)
+        }
+        "geo.cluster_dbscan" => {
+            validate_requirement(requirement, &[&geometry.crs])?;
+            analyze_cluster_dbscan(op, input, config)
         }
         "geo.polygonize" => {
             let parsed: PolygonizeConfig = parse_config(op, config)?;
@@ -1562,7 +1727,7 @@ pub fn analyze_geo_contract(
         return analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields);
     }
     match descriptor.arity {
-        Arity::Unary => analyze_unary(descriptor, &inputs[0], config, plan_crs),
+        Arity::Unary => analyze_unary(descriptor, &inputs[0], config, plan_crs, fields),
         Arity::BinaryOrdered => analyze_binary(descriptor, inputs, config),
         Arity::NAry => unreachable!("arieta' N-aria gia' rifiutata"),
     }
@@ -1688,6 +1853,9 @@ mod tests {
         /// Griglia generativa: schema nuovo (geometria non null nuovo FieldId,
         /// cell_i/cell_j, centroidi opzionali) + row_count esatto.
         Grid { centroid: bool },
+        /// Op di copertura v1.3 (WholeToMany): schema nuovo completo (tutto
+        /// non null), geometria con nuovo FieldId e CRS dell'input.
+        CoverageRows(Vec<(&'static str, DataType, bool)>),
         /// Schema invariato, CRS del contratto aggiornato al target.
         Reprojected,
     }
@@ -1796,6 +1964,34 @@ mod tests {
                 "geo.snap",
                 json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
                 Expect::Unchanged,
+            ),
+            // --- Coperture v1.3 (WholeToMany, schema nuovo) ------------------
+            unary(
+                "geo.coverage_validate",
+                json!({}),
+                Expect::CoverageRows(vec![
+                    (ISSUE_TYPE_COLUMN, DataType::Utf8, false),
+                    (INDEX_A_COLUMN, DataType::UInt64, false),
+                    (INDEX_B_COLUMN, DataType::UInt64, false),
+                    (ISSUE_AREA_COLUMN, DataType::Float64, false),
+                    (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+                ]),
+            ),
+            unary(
+                "geo.shared_paths",
+                json!({}),
+                Expect::CoverageRows(vec![
+                    (INDEX_A_COLUMN, DataType::UInt64, false),
+                    (INDEX_B_COLUMN, DataType::UInt64, false),
+                    (SHARED_LENGTH_COLUMN, DataType::Float64, false),
+                    (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+                ]),
+            ),
+            // --- Clustering v1.3 (Blocking, output allineato alle righe) -----
+            unary(
+                "geo.cluster_dbscan",
+                json!({"eps": 10.0, "min_points": 3}),
+                Expect::Appended(vec![(CLUSTER_ID_COLUMN, DataType::UInt64, true)]),
             ),
             // --- Espansioni 1:N ---------------------------------------------
             unary(
@@ -2034,15 +2230,15 @@ mod tests {
     }
 
     #[test]
-    fn table_covers_all_and_only_the_72_catalog_geo_ops() {
+    fn table_covers_all_and_only_the_75_catalog_geo_ops() {
         let catalog_ops: HashSet<&str> = CATALOG
             .iter()
             .filter(|op| op.family == Family::Geo)
             .map(|op| op.id)
             .collect();
-        assert_eq!(catalog_ops.len(), 72);
+        assert_eq!(catalog_ops.len(), 75);
         let case_ops: HashSet<&str> = cases().iter().map(|case| case.op).collect();
-        assert_eq!(case_ops.len(), 72, "casi duplicati nella tabella");
+        assert_eq!(case_ops.len(), 75, "casi duplicati nella tabella");
         assert_eq!(catalog_ops, case_ops);
     }
 
@@ -2163,6 +2359,21 @@ mod tests {
                         .expect("row_count della griglia");
                     assert_eq!(row_count.value(), Some(&4), "{}: conteggio celle", case.op);
                 }
+                Expect::CoverageRows(expected) => {
+                    assert_eq!(signatures(&output), *expected, "{}: schema", case.op);
+                    let geometry = output.active_geometry_column().expect("geometria creata");
+                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
+                    assert!(!geometry.nullable, "{}: geometria non null", case.op);
+                    assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
+                    assert_eq!(
+                        geometry.crs.definition(),
+                        input.geometries[0].crs.definition(),
+                        "{}: CRS dell'input",
+                        case.op
+                    );
+                    assert!(output.properties.sorted_by.is_none(), "{}: proprieta' azzerate", case.op);
+                    assert!(output.properties.row_count.is_none(), "{}: proprieta' azzerate", case.op);
+                }
                 Expect::Reprojected => {
                     assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria in output");
@@ -2185,7 +2396,14 @@ mod tests {
                 }
             }
             // L'allocatore non viene consumato dalle op che non creano geometrie.
-            if !matches!(case.op, "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid") {
+            if !matches!(
+                case.op,
+                "geo.from_coords"
+                    | "geo.from_wkt"
+                    | "geo.generate_grid"
+                    | "geo.coverage_validate"
+                    | "geo.shared_paths"
+            ) {
                 assert_eq!(allocator.peek(), FieldId(100), "{}: allocatore intatto", case.op);
             }
         }
@@ -2426,7 +2644,7 @@ mod tests {
     #[test]
     fn configs_are_strictly_validated() {
         let inputs = [geo_contract(projected_crs())];
-        let bad_configs: [(&str, Value); 31] = [
+        let bad_configs: [(&str, Value); 40] = [
             ("geo.buffer", json!({})),                                  // distance mancante
             ("geo.buffer", json!({"distance": 1.0, "bogus": 1})),       // campo sconosciuto
             ("geo.buffer", json!({"distance": "molto"})),               // tipo errato
@@ -2458,6 +2676,15 @@ mod tests {
             ("geo.subdivide", json!({"max_vertices": 3})),              // sotto il minimo 4
             ("geo.snap", json!({"tolerance": 0.5})),                    // reference_wkb mancante
             ("geo.snap", json!({"reference_wkb": point_wkb_hex(), "tolerance": -1.0})), // tolleranza negativa
+            ("geo.coverage_validate", json!({"tolerance": -1.0})),      // tolleranza negativa
+            ("geo.coverage_validate", json!({"max_issues": 0})),        // limite nullo
+            ("geo.coverage_validate", json!({"bogus": 1})),             // campo sconosciuto
+            ("geo.shared_paths", json!({"min_length": -1.0})),          // lunghezza negativa
+            ("geo.shared_paths", json!({"tolerance": 1.0, "bogus": true})), // campo sconosciuto
+            ("geo.cluster_dbscan", json!({"min_points": 3})),           // eps mancante
+            ("geo.cluster_dbscan", json!({"eps": 0.0, "min_points": 3})), // eps nulla
+            ("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 0})), // min_points nullo
+            ("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 3, "bogus": 1})), // campo sconosciuto
         ];
         for (op, config) in bad_configs {
             let result = analyze_one(op, &inputs, &config, None);
@@ -2829,6 +3056,63 @@ mod tests {
             None,
         );
         assert!(matches!(result, Err(PlenoraError::Crs(_))), "input geografico accettato");
+    }
+
+    #[test]
+    fn coverage_ops_allocate_a_fresh_geometry_and_require_projected_crs() {
+        let inputs = [contract_with_properties()];
+
+        // coverage_validate: schema nuovo, nuovo FieldId, proprieta' azzerate.
+        let output = analyze_one("geo.coverage_validate", &inputs, &json!({}), None)
+            .expect("coverage_validate");
+        let expected: Vec<(&str, DataType, bool)> = vec![
+            (ISSUE_TYPE_COLUMN, DataType::Utf8, false),
+            (INDEX_A_COLUMN, DataType::UInt64, false),
+            (INDEX_B_COLUMN, DataType::UInt64, false),
+            (ISSUE_AREA_COLUMN, DataType::Float64, false),
+            (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+        ];
+        assert_eq!(signatures(&output), expected);
+        assert_eq!(output.geometries[0].field_id, FieldId(0), "allocatore da zero");
+        assert!(!output.geometries[0].nullable);
+        assert_eq!(output.geometries[0].crs.definition(), "EPSG:32632");
+        assert!(output.properties.sorted_by.is_none());
+        assert!(output.properties.row_count.is_none());
+        let field = output
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria");
+        assert_eq!(
+            field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+            Some(GEOARROW_WKB_EXTENSION)
+        );
+
+        // shared_paths: config con parametri; l'allocatore avanza.
+        let mut allocator = FieldAllocator::new(7);
+        let output = analyze_geo_contract(
+            "geo.shared_paths",
+            &inputs,
+            &json!({"tolerance": 1e-6, "min_length": 0.5}),
+            None,
+            &mut allocator,
+        )
+        .expect("shared_paths");
+        let expected: Vec<(&str, DataType, bool)> = vec![
+            (INDEX_A_COLUMN, DataType::UInt64, false),
+            (INDEX_B_COLUMN, DataType::UInt64, false),
+            (SHARED_LENGTH_COLUMN, DataType::Float64, false),
+            (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
+        ];
+        assert_eq!(signatures(&output), expected);
+        assert_eq!(output.geometries[0].field_id, FieldId(7));
+        assert_eq!(allocator.peek(), FieldId(8));
+
+        // SameProjected: input geografico rifiutato da entrambe.
+        let geographic = [geo_contract(geographic_crs())];
+        for op in ["geo.coverage_validate", "geo.shared_paths"] {
+            let result = analyze_one(op, &geographic, &json!({}), None);
+            assert!(matches!(result, Err(PlenoraError::Crs(_))), "{op}: CRS geografico accettato");
+        }
     }
 
     #[test]

@@ -217,6 +217,11 @@ fn every_binary_operation_executes_its_safe_profile() {
             "table_diff",
             json!({"left_keys":["id","group"],"right_keys":["id","group"],"compare_columns":["text","num"],"include_unchanged":"yes","separator":"#"}),
         ),
+        // Estensione table v1.3: id canonico, nessun alias legacy.
+        (
+            "table.fuzzy_join",
+            json!({"left_key":"text","right_key":"text","metric":"jaro_winkler","threshold":0.8,"blocking":"prefix"}),
+        ),
     ];
     for (operation, config) in cases {
         let output = execute_binary(&input, &input, &plan(operation, config));

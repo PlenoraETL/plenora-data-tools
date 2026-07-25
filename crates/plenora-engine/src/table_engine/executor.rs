@@ -12,8 +12,8 @@ use serde::de::DeserializeOwned;
 
 use plenora_kernels_table::validate_output_name;
 use plenora_kernels_table::{
-    aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, governance,
-    joins, quality, reshape, security, setops, spill, strings, utility,
+    aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, fuzzy,
+    governance, joins, quality, reshape, security, setops, spill, strings, utility,
 };
 
 use super::contract::{dispatch_name, Step, ValidatedPlan};
@@ -773,6 +773,15 @@ pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()>
             }
             Ok(())
         }
+        "fuzzy_join" => {
+            let config = decode::<fuzzy::FuzzyJoin>(step)?;
+            validate_output_name(&config.left_key)?;
+            validate_output_name(&config.right_key)?;
+            if let Some(name) = &config.score_column {
+                validate_output_name(name)?;
+            }
+            fuzzy::validate_config(&config)
+        }
         "assert_foreign_key" => {
             let config = decode::<governance::ForeignKey>(step)?;
             validate_name_list(
@@ -1052,6 +1061,7 @@ pub fn execute_binary(
         "semi_join" => joins::semi_join(&left, &right, &decode(step)?),
         "anti_join" => joins::anti_join(&left, &right, &decode(step)?),
         "asof_join" => joins::asof_join(&left, &right, &decode(step)?, plan.limits()),
+        "fuzzy_join" => fuzzy::fuzzy_join(&left, &right, &decode(step)?, plan.limits()),
         "union_distinct" => setops::union_distinct(&left, &right, &decode(step)?, plan.limits()),
         "intersect" => setops::intersect(&left, &right, &decode(step)?),
         "except" => setops::except(&left, &right, &decode(step)?),

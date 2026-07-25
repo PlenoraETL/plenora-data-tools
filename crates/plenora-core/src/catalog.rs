@@ -122,12 +122,13 @@ pub struct OperationDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogo unificato delle 142 operazioni (Fase 1, decisione D17/D20; +4
+// Catalogo unificato delle 146 operazioni (Fase 1, decisione D17/D20; +4
 // estensioni geo v1.1: from_wkt, geometry_accessors, collect,
 // line_locate_point; +4 estensioni table v1.1: select_columns, limit, top_n,
 // stable_fingerprint; +3 estensioni geo v1.2: generate_grid, subdivide,
 // snap; +4 estensioni table v1.2: align_schema, concat_by_name,
-// hmac_sha256, validate_rules).
+// hmac_sha256, validate_rules; +3 estensioni geo v1.3: coverage_validate,
+// shared_paths, cluster_dbscan; +1 estensione table v1.3: fuzzy_join).
 //
 // Sorgenti dei metadati:
 // - `plenora-nogeo-tools/src/catalog.rs`  (62 op tabellari -> `table.*`);
@@ -188,7 +189,7 @@ macro_rules! op {
     };
 }
 
-/// Catalogo unificato: 70 operazioni tabellari + 72 geografiche.
+/// Catalogo unificato: 71 operazioni tabellari + 75 geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
     // --- Tabellari Manipola-compat (37) -----------------------------------
     op!("table.add_row_number", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
@@ -334,6 +335,18 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // stesso CRS dell'input (convenzione D16): requisito SameProjected per
     // l'unica colonna, come le distanze "unarie".
     op!("geo.snap", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // --- Estensioni geo v1.3 (3) ---------------------------------------------
+    // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
+    // input (Blocking) e producono una riga per issue/tratto condiviso
+    // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
+    // quindi SameProjected.
+    op!("geo.coverage_validate", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!("geo.shared_paths", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // `cluster_dbscan`: clustering globale per densita' (vicinati R-tree
+    // sull'intero input) ma output allineato alle righe (un'etichetta UInt64
+    // nullable per riga, noise -> null): Blocking con shape OneToOne; eps in
+    // unita' di mappa, quindi Projected.
+    op!("geo.cluster_dbscan", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     // --- Estensioni table v1.1 (4) -------------------------------------------
     op!("table.limit", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], InputOrder, KernelValidated),
     op!("table.select_columns", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
@@ -344,6 +357,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.concat_by_name", Table, Extension, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, KernelValidated),
     op!("table.hmac_sha256", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
     op!("table.validate_rules", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    // --- Estensioni table v1.3 (1) -------------------------------------------
+    // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
+    // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
+    // output definito (scansione sinistra, indice destro).
+    op!("table.fuzzy_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
 ];
 
 /// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
@@ -515,17 +533,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_142_unique_ids() {
-        assert_eq!(CATALOG.len(), 142);
+    fn catalog_has_146_unique_ids() {
+        assert_eq!(CATALOG.len(), 146);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Table).count(),
-            70
+            71
         );
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Geo).count(),
-            72
+            75
         );
     }
 

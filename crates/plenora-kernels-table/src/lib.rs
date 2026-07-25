@@ -58,6 +58,7 @@ pub mod dates;
 pub mod expressions;
 pub mod filtering;
 pub mod formula;
+pub mod fuzzy;
 pub mod governance;
 pub mod joins;
 pub mod quality;
