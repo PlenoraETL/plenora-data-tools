@@ -456,6 +456,27 @@ fn grid_shift_wkb() -> &'static WkbCells {
     })
 }
 
+/// Poligoni stellati ~100v su griglia spaziata 100 con raggio <= 26:
+/// disgiunti e non tangenti per costruzione (per geo.collect: la validazione
+/// MultiPolygon respinge overlap E contatti lungo un segmento).
+fn collect_polys_wkb() -> &'static WkbCells {
+    static CELLS: OnceLock<WkbCells> = OnceLock::new();
+    CELLS.get_or_init(|| {
+        let mut rng = Rng::seeded();
+        let mut cells = Vec::with_capacity(100_000);
+        for index in 0..100_000_usize {
+            let i = index % 317;
+            let j = index / 317;
+            let cx = 50.0 + i as f64 * 100.0;
+            let cy = 50.0 + j as f64 * 100.0;
+            cells.push(enc_cell(&Geometry::Polygon(star_polygon(
+                &mut rng, cx, cy, 20.0, 100,
+            ))));
+        }
+        cells
+    })
+}
+
 /// WKT di poligoni semplici (per geo.from_wkt).
 fn wkt_polys() -> &'static Vec<String> {
     static CELLS: OnceLock<Vec<String>> = OnceLock::new();
@@ -969,7 +990,14 @@ fn main() {
     let mut results: Vec<Measurement> = Vec::new();
     let directory = std::path::Path::new("benchmarks/sweep");
     std::fs::create_dir_all(directory).expect("mkdir benchmarks/sweep");
-    let _ = std::fs::remove_file(directory.join("geo_sweep.jsonl"));
+    // GEO_SWEEP_SKIP_PREFIX=1: salta gli scenari fino a geo.collect escluso
+    // (gia' misurati) e appende al JSONL esistente; usato per riprendere una
+    // run interrotta senza ripetere la parte per-cella.
+    let skip_prefix = std::env::var_os("GEO_SWEEP_SKIP_PREFIX").is_some();
+    if !skip_prefix {
+        let _ = std::fs::remove_file(directory.join("geo_sweep.jsonl"));
+    }
+    if !skip_prefix {
 
     // --- Riferimenti adapter (decode/encode puri) ---------------------------
     let decode_op = |payload: &Vec<u8>| -> Result<usize, String> {
@@ -1294,10 +1322,10 @@ fn main() {
         "poly_simple x mask",
         &[1_000, 10_000],
         1.5,
-        "poligoni 100v vs maschera (dissolve di 100 rettangoli)",
+        "poligoni 100v vs maschera (dissolve di una striscia centrale della griglia)",
         &|n| {
             let geoms = decode_prefix(polys_wkb(), n)?;
-            let masks = decode_prefix(grid_jitter_wkb(), 100)?;
+            let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
             clip_to_mask(&geoms, &masks)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
@@ -1378,15 +1406,17 @@ fn main() {
                 })
         },
     );
+    } // fine prefisso saltabile (GEO_SWEEP_SKIP_PREFIX)
+
     sweep_collective(
         &mut results,
         "geo.collect",
-        "grid100 groups of 10",
-        &[1_000, 10_000],
+        "disjoint polys groups of 10",
+        &[10_000, 100_000],
         1.0,
-        "raggruppamento senza unione, gruppi di 10 rettangoli adiacenti (MultiPolygon valido per costruzione)",
+        "raggruppamento senza unione, gruppi di 10 poligoni disgiunti (MultiPolygon valido)",
         &|n| {
-            let geoms = decode_prefix(grid_wkb(), n)?;
+            let geoms = decode_prefix(collect_polys_wkb(), n)?;
             let options = as_options(geoms);
             options
                 .par_chunks(10)

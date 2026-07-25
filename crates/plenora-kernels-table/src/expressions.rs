@@ -2224,7 +2224,8 @@ mod tests {
 
     /// Fixture con null, -0.0, zeri, testi (anche data-like) e booleani.
     /// La colonna `nan` contiene NaN: la lettura deve fallire in entrambi i
-    /// percorsi ("expression non accetta numeri non finiti").
+    /// percorsi ("expression non accetta numeri non finiti"). `ts` e `tstz`
+    /// coprono i timestamp nativi (naive e timezone-aware) di `date_trunc`.
     fn fixture() -> RecordBatch {
         RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -2233,6 +2234,16 @@ mod tests {
                 Field::new("i", DataType::Int64, true),
                 Field::new("u", DataType::UInt64, true),
                 Field::new("d", DataType::Date32, true),
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    true,
+                ),
+                Field::new(
+                    "tstz",
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                    true,
+                ),
                 Field::new("s", DataType::Utf8, true),
                 Field::new("b", DataType::Boolean, true),
             ])),
@@ -2277,6 +2288,26 @@ mod tests {
                     Some(1),
                     Some(20_000),
                 ])),
+                // 1970-01-04 05:01:01.007 UTC, epoca, pre-1970, 2023-11-14.
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(86_400_000 * 3 + 3_600_000 * 5 + 61_000 + 7),
+                    None,
+                    Some(0),
+                    Some(-1),
+                    Some(1_700_000_000_123),
+                    Some(-86_400_000),
+                ])),
+                Arc::new(
+                    TimestampMillisecondArray::from(vec![
+                        Some(0),
+                        None,
+                        Some(1),
+                        Some(-1),
+                        Some(1_000),
+                        Some(86_400_000),
+                    ])
+                    .with_timezone("UTC"),
+                ),
                 Arc::new(StringArray::from(vec![
                     Some("Ciao"),
                     None,
@@ -2543,5 +2574,335 @@ mod tests {
             let generic = expression_generic(&empty, &config).expect("generico");
             assert_eq!(output, generic);
         }
+    }
+
+    #[test]
+    fn oracle_nuove_funzioni() {
+        let batch = fixture();
+        let cases = vec![
+            // substring: start 0-based, conteggio per carattere Unicode.
+            func("substring", vec![col("s"), lit(json!(1))]),
+            func("substring", vec![col("s"), lit(json!(1)), lit(json!(2))]),
+            func(
+                "substring",
+                vec![lit(json!("héllo\u{1F600}world")), lit(json!(0)), lit(json!(6))],
+            ),
+            func(
+                "substring",
+                vec![lit(json!("héllo\u{1F600}world")), lit(json!(6)), lit(json!(1))],
+            ),
+            // start oltre la lunghezza -> vuota; len oltre -> troncata.
+            func("substring", vec![col("s"), lit(json!(99))]),
+            func("substring", vec![col("s"), lit(json!(0)), lit(json!(99))]),
+            // Non interi troncati verso zero; -0.0 vale 0.
+            func("substring", vec![col("s"), lit(json!(1.9)), lit(json!(2.5))]),
+            func("substring", vec![col("s"), lit(json!(-0.0))]),
+            // start negativo -> errore; null propagati (anche len null).
+            func("substring", vec![col("s"), lit(json!(-1))]),
+            func("substring", vec![col("s"), lit(Value::Null)]),
+            func("substring", vec![col("s"), lit(json!(0)), lit(Value::Null)]),
+            func("substring", vec![col("n"), lit(json!(0))]),
+            func("substring", vec![col("s")]),
+            // regex_replace: gruppi $1 e $name, regex non valida, null.
+            func(
+                "regex_replace",
+                vec![col("s"), lit(json!("(\\d+)")), lit(json!("[$1]"))],
+            ),
+            func(
+                "regex_replace",
+                vec![
+                    col("s"),
+                    lit(json!("(?P<letter>[a-z]+)")),
+                    lit(json!("$letter$letter")),
+                ],
+            ),
+            func(
+                "regex_replace",
+                vec![lit(json!("abc123")), lit(json!("(bc)(\\d)")), lit(json!("$2$1"))],
+            ),
+            func("regex_replace", vec![col("s"), lit(json!("([")), lit(json!("x"))]),
+            func("regex_replace", vec![col("s"), col("s"), lit(json!("x"))]),
+            func("regex_replace", vec![col("s"), col("n"), lit(json!("x"))]),
+            // Null nel valore: nessuna compilazione della regex (lazy).
+            func(
+                "regex_replace",
+                vec![lit(Value::Null), lit(json!("([")), lit(json!("x"))],
+            ),
+            // between: inclusivo, numerico e testuale; null -> Null.
+            func("between", vec![col("n"), lit(json!(0.0)), lit(json!(4.0))]),
+            func("between", vec![col("s"), lit(json!("a")), lit(json!("c"))]),
+            func("between", vec![col("n"), lit(Value::Null), lit(json!(1))]),
+            func("between", vec![col("n"), lit(json!(1)), col("s")]),
+            func("between", vec![col("i"), lit(json!(10)), lit(json!(0))]),
+            func("between", vec![col("n"), lit(json!(0.0))]),
+            // in: membership su letterali; null propagato; errori di forma.
+            func("in", vec![col("i"), lit(json!([1, 3, 10]))]),
+            func("in", vec![col("s"), lit(json!(["ab", "x42y", null]))]),
+            func("in", vec![col("n"), lit(json!([]))]),
+            func("in", vec![col("s"), lit(json!([1, 2]))]),
+            func("in", vec![col("s"), lit(json!("ab"))]),
+            func("in", vec![col("s"), lit(json!([[1]]))]),
+            func("in", vec![col("s")]),
+            // greatest/least: N-ari, null propagato, total_cmp su -0.0.
+            func("greatest", vec![col("n"), lit(json!(2.0)), col("i")]),
+            func("least", vec![col("n"), lit(json!(2.0)), col("i")]),
+            func("greatest", vec![lit(json!(-0.0)), lit(json!(0.0))]),
+            func("least", vec![lit(json!(-0.0)), lit(json!(0.0))]),
+            func("greatest", vec![col("s"), lit(json!("m"))]),
+            func("greatest", vec![lit(json!(5))]),
+            func("greatest", vec![]),
+            func("greatest", vec![col("n"), col("s")]),
+            func("least", vec![lit(Value::Null), lit(json!(1))]),
+            // floor/ceil/power: numeriche, risultati non finiti rifiutati.
+            func("floor", vec![col("n")]),
+            func("ceil", vec![col("n")]),
+            func("floor", vec![lit(json!(-2.5))]),
+            func("ceil", vec![lit(json!(-2.5))]),
+            func("power", vec![col("n"), lit(json!(2))]),
+            func("power", vec![lit(json!(0.0)), lit(json!(0.0))]),
+            func("power", vec![lit(json!(-2.0)), lit(json!(0.5))]),
+            func("power", vec![lit(json!(1e308)), lit(json!(2))]),
+            func("power", vec![col("s"), lit(json!(2))]),
+            func("power", vec![col("n")]),
+        ];
+        for expression in cases {
+            assert_equivalent(&batch, expression, None);
+        }
+    }
+
+    #[test]
+    fn oracle_date_trunc() {
+        let batch = fixture();
+        for unit in ["year", "month", "day"] {
+            assert_equivalent(
+                &batch,
+                func("date_trunc", vec![lit(json!(unit)), col("d")]),
+                None,
+            );
+            assert_equivalent(
+                &batch,
+                func("date_trunc", vec![lit(json!(unit)), col("ts")]),
+                None,
+            );
+        }
+        for unit in ["hour", "minute", "second"] {
+            assert_equivalent(
+                &batch,
+                func("date_trunc", vec![lit(json!(unit)), col("ts")]),
+                None,
+            );
+            // Unita' sub-day su Date32: errore in entrambi i percorsi.
+            assert_equivalent(
+                &batch,
+                func("date_trunc", vec![lit(json!(unit)), col("d")]),
+                None,
+            );
+        }
+        let cases = vec![
+            // Unita' non valida o non letterale.
+            func("date_trunc", vec![lit(json!("week")), col("ts")]),
+            func("date_trunc", vec![col("s"), col("ts")]),
+            // Input testuale: nessun parsing implicito -> errore.
+            func("date_trunc", vec![lit(json!("day")), col("s")]),
+            // Timezone-aware rifiutato (decisione documentata).
+            func("date_trunc", vec![lit(json!("day")), col("tstz")]),
+            func("date_trunc", vec![lit(json!("day")), col("missing")]),
+            func("date_trunc", vec![lit(json!("day"))]),
+            // Annidamento e letterale null.
+            func(
+                "date_trunc",
+                vec![
+                    lit(json!("year")),
+                    func("date_trunc", vec![lit(json!("month")), col("ts")]),
+                ],
+            ),
+            func("date_trunc", vec![lit(json!("day")), lit(Value::Null)]),
+            // Ramo case non percorso: nessun errore (lazy); percorso: errore.
+            case(
+                vec![(
+                    lit(json!(false)),
+                    func("date_trunc", vec![lit(json!("day")), col("missing")]),
+                )],
+                lit(json!(1)),
+            ),
+            case(
+                vec![(
+                    lit(json!(true)),
+                    func("date_trunc", vec![lit(json!("day")), col("s")]),
+                )],
+                lit(json!(1)),
+            ),
+        ];
+        for expression in cases {
+            assert_equivalent(&batch, expression, None);
+        }
+        // output_type espliciti (coerenti e non).
+        assert_equivalent(
+            &batch,
+            func("date_trunc", vec![lit(json!("month")), col("d")]),
+            Some("date32"),
+        );
+        assert_equivalent(
+            &batch,
+            func("date_trunc", vec![lit(json!("month")), col("d")]),
+            Some("timestamp_ms"),
+        );
+        assert_equivalent(
+            &batch,
+            func("date_trunc", vec![lit(json!("hour")), col("ts")]),
+            Some("timestamp_ms"),
+        );
+        assert_equivalent(
+            &batch,
+            func("date_trunc", vec![lit(json!("hour")), col("ts")]),
+            Some("text"),
+        );
+    }
+
+    #[test]
+    fn date_trunc_valori_e_tipi_nativi() {
+        let batch = fixture();
+        // Date32: year/month sul 2022-01-08 (19000) -> 2022-01-01 (18993).
+        let cfg = config(func("date_trunc", vec![lit(json!("year")), col("d")]), None);
+        let output = expression(&batch, &cfg).expect("date_trunc year");
+        let values = output
+            .column(output.schema().index_of("out").expect("out"))
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .expect("Date32");
+        assert_eq!(values.data_type(), &DataType::Date32);
+        assert_eq!(values.value(0), 0); // 1970-01-01
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), 18_993); // 2022-01-01
+        assert_eq!(values.value(3), -365); // 1969-01-01
+        assert_eq!(values.value(4), 0); // 1970-01-01
+        assert_eq!(values.value(5), 19_723); // 2024-01-01
+
+        let cfg = config(func("date_trunc", vec![lit(json!("day")), col("d")]), None);
+        let output = expression(&batch, &cfg).expect("date_trunc day");
+        let values = output
+            .column(output.schema().index_of("out").expect("out"))
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .expect("Date32");
+        assert_eq!(values.value(2), 19_000); // day: identita'
+
+        // Timestamp(ms): troncamenti aritmetici con rem_euclid (pre-1970).
+        let cfg = config(func("date_trunc", vec![lit(json!("second")), col("ts")]), None);
+        let output = expression(&batch, &cfg).expect("date_trunc second");
+        let values = output
+            .column(output.schema().index_of("out").expect("out"))
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .expect("TimestampMs");
+        assert_eq!(
+            values.data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        );
+        assert_eq!(values.value(0), 86_400_000 * 3 + 3_600_000 * 5 + 61_000);
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), 0);
+        assert_eq!(values.value(3), -1_000); // -1 ms -> secondo precedente
+        assert_eq!(values.value(4), 1_700_000_000_000);
+        assert_eq!(values.value(5), -86_400_000);
+
+        // month/year su timestamp via calendario UTC.
+        let cfg = config(func("date_trunc", vec![lit(json!("month")), col("ts")]), None);
+        let output = expression(&batch, &cfg).expect("date_trunc month");
+        let values = output
+            .column(output.schema().index_of("out").expect("out"))
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .expect("TimestampMs");
+        assert_eq!(values.value(0), 0); // 1970-01-01
+        assert_eq!(values.value(4), 1_698_796_800_000); // 2023-11-01
+        assert_eq!(values.value(5), -2_678_400_000); // 1969-12-01
+    }
+
+    #[test]
+    fn date_trunc_all_null_e_batch_vuoto_tipizzati() {
+        // Tutto null: il tipo esce dalla colonna di input, MAI Utf8.
+        let all_null = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("d", DataType::Date32, true),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            ])),
+            vec![
+                Arc::new(Date32Array::from(vec![None::<i32>, None])),
+                Arc::new(TimestampMillisecondArray::from(vec![None::<i64>, None])),
+            ],
+        )
+        .expect("all-null");
+        let cfg = config(func("date_trunc", vec![lit(json!("month")), col("d")]), None);
+        let output = expression(&all_null, &cfg).expect("all-null Date32");
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(
+            output.schema().field_with_name("out").expect("out").data_type(),
+            &DataType::Date32
+        );
+        let generic = expression_generic(&all_null, &cfg).expect("generico");
+        assert_eq!(output, generic);
+        let cfg = config(func("date_trunc", vec![lit(json!("hour")), col("ts")]), None);
+        let output = expression(&all_null, &cfg).expect("all-null TimestampMs");
+        assert_eq!(
+            output.schema().field_with_name("out").expect("out").data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        );
+        let generic = expression_generic(&all_null, &cfg).expect("generico");
+        assert_eq!(output, generic);
+
+        // Batch vuoto: stessa tipizzazione dalla colonna di input.
+        let empty = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("d", DataType::Date32, true),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            ])),
+            vec![
+                Arc::new(Date32Array::from(Vec::<i32>::new())),
+                Arc::new(TimestampMillisecondArray::from(Vec::<i64>::new())),
+            ],
+        )
+        .expect("empty");
+        let cfg = config(func("date_trunc", vec![lit(json!("year")), col("d")]), None);
+        let output = expression(&empty, &cfg).expect("vuoto Date32");
+        assert_eq!(output.num_rows(), 0);
+        assert_eq!(
+            output.schema().field_with_name("out").expect("out").data_type(),
+            &DataType::Date32
+        );
+        let cfg = config(func("date_trunc", vec![lit(json!("minute")), col("ts")]), None);
+        let output = expression(&empty, &cfg).expect("vuoto TimestampMs");
+        assert_eq!(
+            output.schema().field_with_name("out").expect("out").data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        );
+        // Radice non date_trunc: comportamento invariato (Utf8 vuoto).
+        let cfg = config(col("d"), None);
+        let output = expression(&empty, &cfg).expect("vuoto non temporale");
+        assert_eq!(
+            output.schema().field_with_name("out").expect("out").data_type(),
+            &DataType::Utf8
+        );
+    }
+
+    #[test]
+    fn validate_rifiuta_unita_e_liste_non_valide() {
+        // Unita' fuori dal set chiuso o non letterale: errore in validazione.
+        let bad = config(func("date_trunc", vec![lit(json!("week")), col("d")]), None);
+        assert!(validate(&bad, 100).is_err());
+        let bad = config(func("date_trunc", vec![col("s"), col("d")]), None);
+        assert!(validate(&bad, 100).is_err());
+        let bad = config(func("date_trunc", vec![lit(json!("day"))]), None);
+        assert!(validate(&bad, 100).is_err());
+        // in: il secondo argomento deve essere una lista di letterali scalari.
+        let bad = config(func("in", vec![col("s"), col("s")]), None);
+        assert!(validate(&bad, 100).is_err());
+        let bad = config(func("in", vec![col("s"), lit(json!([[1]]))]), None);
+        assert!(validate(&bad, 100).is_err());
+        // Forme valide accettate.
+        let good = config(func("date_trunc", vec![lit(json!("month")), col("d")]), None);
+        validate(&good, 100).expect("date_trunc valido");
+        let good = config(func("in", vec![col("s"), lit(json!(["a", 1, null, true]))]), None);
+        validate(&good, 100).expect("in valido");
     }
 }

@@ -4829,6 +4829,139 @@ mod tests {
         .contains("missing"));
     }
 
+    /// Contratto con colonne temporali native per `date_trunc`.
+    fn temporal_contract() -> DataContract {
+        DataContract::tabular(Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Date32, true),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new(
+                "tstz",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("name", DataType::Utf8, true),
+        ])))
+    }
+
+    fn date_trunc(unit: &str, column: &str) -> Value {
+        json!({
+            "kind": "function",
+            "name": "date_trunc",
+            "args": [{"kind": "literal", "value": unit}, {"kind": "column", "name": column}]
+        })
+    }
+
+    #[test]
+    fn expression_date_trunc_native_temporal_types() {
+        // Auto: il tipo discende dalla colonna di input (mai Utf8).
+        let date = ok(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("month", "d")}),
+        );
+        assert_field(&date, "e", &DataType::Date32, true);
+        let ts = ok(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("hour", "ts")}),
+        );
+        assert_field(
+            &ts,
+            "e",
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        );
+        // output_type esplicito date32/timestamp_ms.
+        let explicit = ok(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": date_trunc("day", "ts"),
+                "output_type": "timestamp_ms"
+            }),
+        );
+        assert_field(
+            &explicit,
+            "e",
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        );
+        // Annidamento: il tipo discende dalla colonna radice.
+        let nested = ok(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {
+                    "kind": "function",
+                    "name": "date_trunc",
+                    "args": [{"kind": "literal", "value": "year"}, date_trunc("month", "ts")]
+                }
+            }),
+        );
+        assert_field(
+            &nested,
+            "e",
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        );
+        // Unita' invalida, non letterale, sub-day su Date32.
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({"output_column": "e", "expression": date_trunc("week", "ts")})
+            )
+            .to_string()
+            .contains("unita' non valida")
+        );
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({
+                    "output_column": "e",
+                    "expression": {
+                        "kind": "function",
+                        "name": "date_trunc",
+                        "args": [{"kind": "column", "name": "name"}, {"kind": "column", "name": "ts"}]
+                    }
+                })
+            )
+            .to_string()
+            .contains("letterale")
+        );
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({"output_column": "e", "expression": date_trunc("hour", "d")})
+            )
+            .to_string()
+            .contains("sub-day")
+        );
+        // Input testuale (nessun parsing) e timezone-aware: errori in validazione.
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({"output_column": "e", "expression": date_trunc("day", "name")})
+            )
+            .to_string()
+            .contains("Date32 o Timestamp")
+        );
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({"output_column": "e", "expression": date_trunc("day", "tstz")})
+            )
+            .to_string()
+            .contains("timezone-aware")
+        );
+    }
+
     // -- quality / governance ----------------------------------------------------
 
     #[test]
