@@ -281,7 +281,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.assert_range", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_regex", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_schema", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_unique", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
+    op!("table.assert_unique", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.coalesce", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.date_add", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.date_diff", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
@@ -400,12 +400,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // --- Estensioni table v1.1 (4) -------------------------------------------
     op!("table.limit", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], InputOrder, KernelValidated),
     op!("table.select_columns", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
-    op!("table.stable_fingerprint", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.stable_fingerprint", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated, kernel_version = 2),
     op!("table.top_n", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
     // --- Estensioni table v1.2 (4) -------------------------------------------
     op!("table.align_schema", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
     op!("table.concat_by_name", Table, Extension, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, KernelValidated),
-    op!("table.hmac_sha256", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!("table.hmac_sha256", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated, kernel_version = 2),
     op!("table.validate_rules", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
     // --- Estensioni table v1.3 (1) -------------------------------------------
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join

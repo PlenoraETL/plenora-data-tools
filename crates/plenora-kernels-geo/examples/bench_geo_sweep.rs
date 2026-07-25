@@ -23,7 +23,16 @@
 //!
 //! Uso: `bench_geo_sweep` — scrive `benchmarks/sweep/geo_sweep.json` e
 //! `benchmarks/sweep/geo_sweep.md` (relativi alla cwd, /work in Docker) e
-//! stampa le stesse righe JSON su stdout.
+//! stampa le stesse righe JSON su stdout. Ogni misura e' anche accodata in
+//! streaming a `benchmarks/sweep/geo_sweep.jsonl` (sopravvive a uno stallo
+//! del container prima della scrittura finale).
+//!
+//! Note operative:
+//! - kernel WSL2 6.18: sotto carico di allocazioni intensive il processo puo'
+//!   stallare in stato D su `brk`/`__vma_start_write`; mitigato con
+//!   `MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768` (vedi geo_sweep.md);
+//! - `GEO_SWEEP_SKIP_PREFIX=1`: salta gli scenari fino a `geo.collect`
+//!   escluso (gia' misurati) e appende al JSONL esistente (resume manuale).
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]

@@ -1,7 +1,10 @@
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{ArrayRef, RecordBatch, UInt64Array};
+use plenora_core::arrow::array::{
+    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use plenora_core::arrow::schema::DataType;
 use regex::Regex;
 use serde::Deserialize;
@@ -182,13 +185,79 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    // Fast path (ottimizzazione kernel): chiavi con gli STESSI byte di
-    // `key_for_row` scritte da `RowKeyEncoder` in un buffer riusato (niente
-    // `Vec`/`String` per riga, header di tipo precomputato), `HashSet` con
-    // `FastHasher` (FxHash + splitmix64) al posto di SipHash. Semantica
-    // invariata: scansione in ordine di riga, errore sul primo duplicato con
-    // lo stesso messaggio, skip `nulls_equal=false` identico. L'originale e'
-    // conservato verbatim nei test come oracolo (`assert_unique_reference`).
+    // Fast path (ottimizzazione kernel), in due livelli. Semantica identica al
+    // generico (conservato verbatim nei test come oracolo
+    // `assert_unique_reference`): scansione in ordine di riga, errore sul
+    // primo duplicato con lo stesso messaggio, skip `nulls_equal=false`
+    // identico, output invariato in assenza di duplicati.
+    //
+    // 1. Chiave su colonna SINGOLA di tipo Int64/UInt64/Float64/Boolean/Utf8:
+    //    la codifica di `key_for_row` e' iniettiva per colonna (prefisso di
+    //    tipo costante, valore con Display shortest-roundtrip: NaN -> "NaN",
+    //    -0.0 -> "-0" distinto da "0"), quindi l'uguaglianza fra chiavi
+    //    coincide con quella fra valori nativi (Float64 con NaN canonizzato,
+    //    cosi' payload NaN diversi restano "lo stesso NaN" come nelle chiavi
+    //    stringa). `HashSet` di valori nativi o `&str` presi in prestito:
+    //    nessuna allocazione per riga. I null sono contati a parte (un solo
+    //    null ammesso con `nulls_equal=true`, come il marcatore 0 del
+    //    generico).
+    if let [index] = indices.as_slice() {
+        let column = batch.column(*index);
+        if let Some(values) = column.as_any().downcast_ref::<Int64Array>() {
+            return assert_unique_scalar(
+                batch,
+                config.nulls_equal,
+                |row| values.is_null(row),
+                |row| values.value(row),
+            );
+        }
+        if let Some(values) = column.as_any().downcast_ref::<UInt64Array>() {
+            return assert_unique_scalar(
+                batch,
+                config.nulls_equal,
+                |row| values.is_null(row),
+                |row| values.value(row),
+            );
+        }
+        if let Some(values) = column.as_any().downcast_ref::<Float64Array>() {
+            return assert_unique_scalar(
+                batch,
+                config.nulls_equal,
+                |row| values.is_null(row),
+                |row| {
+                    let value = values.value(row);
+                    // NaN canonizzato: payload diversi restano "lo stesso NaN"
+                    // (la chiave stringa e' "NaN" per tutti); -0.0 resta
+                    // distinto da 0.0 ("-0" vs "0").
+                    if value.is_nan() {
+                        0x7ff8_0000_0000_0000_u64
+                    } else {
+                        value.to_bits()
+                    }
+                },
+            );
+        }
+        if let Some(values) = column.as_any().downcast_ref::<BooleanArray>() {
+            return assert_unique_scalar(
+                batch,
+                config.nulls_equal,
+                |row| values.is_null(row),
+                |row| values.value(row),
+            );
+        }
+        if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
+            return assert_unique_scalar(
+                batch,
+                config.nulls_equal,
+                |row| values.is_null(row),
+                |row| values.value(row),
+            );
+        }
+    }
+    // 2. Altrimenti: chiavi con gli STESSI byte di `key_for_row` scritte da
+    //    `RowKeyEncoder` in un buffer riusato (niente `Vec`/`String` per riga,
+    //    header di tipo precomputato), `HashSet` con `FastHasher` (FxHash +
+    //    splitmix64) al posto di SipHash.
     let mut encoder = RowKeyEncoder::new(batch, &indices);
     let mut seen: HashSet<Vec<u8>, FastHasher> =
         HashSet::with_capacity_and_hasher(batch.num_rows(), FastHasher::default());
@@ -203,6 +272,41 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         }
         encoder.encode_into(row, &mut key)?;
         if !seen.insert(key.clone()) {
+            return Err(PlenoraError::Contract(format!(
+                "assert_unique: duplicato alla riga {row}"
+            )));
+        }
+    }
+    Ok(batch.clone())
+}
+
+/// Fast path di `assert_unique` su colonna singola: set di valori nativi
+/// (`i64`/`u64`/`bool`/`&str` presi in prestito) o di bit canonici
+/// (`Float64`, NaN canonizzato), senza allocazioni per riga. Stesso ordine di
+/// scansione, stesso errore e stessa gestione dei null del generico: il null
+/// e' una chiave a parte (marcatore 0 di `key_for_row`), ammesso una sola
+/// volta con `nulls_equal=true`, saltato con `nulls_equal=false`.
+fn assert_unique_scalar<K: Hash + Eq>(
+    batch: &RecordBatch,
+    nulls_equal: bool,
+    is_null: impl Fn(usize) -> bool,
+    key: impl Fn(usize) -> K,
+) -> Result<RecordBatch> {
+    let mut seen: HashSet<K, FastHasher> =
+        HashSet::with_capacity_and_hasher(batch.num_rows(), FastHasher::default());
+    let mut seen_null = false;
+    for row in 0..batch.num_rows() {
+        if is_null(row) {
+            if !nulls_equal {
+                continue;
+            }
+            if seen_null {
+                return Err(PlenoraError::Contract(format!(
+                    "assert_unique: duplicato alla riga {row}"
+                )));
+            }
+            seen_null = true;
+        } else if !seen.insert(key(row)) {
             return Err(PlenoraError::Contract(format!(
                 "assert_unique: duplicato alla riga {row}"
             )));
@@ -548,6 +652,20 @@ mod tests {
         // Duplicato non-null oltre i null saltati (nulls_equal=false).
         let batch = int_batch(vec![None, Some(5), None, Some(5)]);
         assert_unique_equivalent(&batch, &unique_config(&["id"], false));
+        // Fast path tipizzato Utf8: i null sono contati come chiave
+        // (duplicato alla riga 3) con nulls_equal=true, saltati con false.
+        let utf8_nulls = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![
+                Some("a"),
+                None,
+                Some("b"),
+                None,
+            ]))],
+        )
+        .expect("batch utf8 con null");
+        assert_unique_equivalent(&utf8_nulls, &unique_config(&["s"], true));
+        assert_unique_equivalent(&utf8_nulls, &unique_config(&["s"], false));
     }
 
     #[test]

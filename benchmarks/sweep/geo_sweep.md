@@ -100,3 +100,91 @@ restano in memoria).
 | 86 | `geo.reproject` | skipped | - | 0 | 0.0000 | 0 | - | n/a | 374 | backend `proj` non abilitato (BackendPending) |
 | 87 | `geo.polygonize` | skipped | - | 0 | 0.0000 | 0 | - | n/a | 374 | backend `geos` non abilitato (BackendPending) |
 | 88 | `geo.split` | skipped | - | 0 | 0.0000 | 0 | - | n/a | 374 | backend `geos` non abilitato (BackendPending) |
+
+## Commento
+
+**Metodo.** Pipeline per-cella = decode WKB + kernel + encode WKB (come
+l'adapter Arrow del trasporto); `decode_share` = quota di decode(+encode di
+una geometria della stessa fixture — approssimazione) sul tempo per-cella.
+Scala adattiva (target 4 s/run, mediana di 3): le note indicano le riduzioni.
+Run eseguita in Docker `--cpus=4 --memory=10g` (rust:1.92, release, rayon su
+4 thread). Dati grezzi: `geo_sweep.jsonl` (streaming per riga), merge in
+`geo_sweep.json` via `_merge_geo_sweep.py`.
+
+**Avvertenza ambiente.** Il kernel WSL2 6.18 ha uno stallo in
+`brk`/`__vma_start_write` che congela il processo in stato D (race su
+carico di allocazioni intensive); workaround usato nelle run:
+`MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768`
+(`MALLOC_TOP_PAD_=268435456` non si e' dimostrato sufficiente). I container
+andati in stallo restano non killabili fino al restart di Docker Desktop.
+
+**L'adapter WKB e' il collo di bottiglia sistemico.** Riferimenti `_ref.*`:
+punti ~59M geom/s, linee 50v ~6.6M geom/s (~330M vert/s), poligoni 100v
+~97k geom/s (~10M vert/s), poligoni 2000v ~285 geom/s (~0.6M vert/s),
+multipoligoni ~24k/s, eterogeneo ~130k/s. Per vertice, il decode dei
+poligoni e' ~30x piu' lento delle linee (percorso geozero per gli anelli):
+qualsiasi op su poligoni realistici paga il decode piu' del kernel. Tutte le
+op con `decode_share >= 0.5` (centroid 1.03, envelope 0.96, convex_hull
+0.91, area/boundary/bounds/vertex_count/perimeter ~0.51, haversine 0.62,
+length 0.63, line_interpolate_point 0.69, explode 0.50, subdivide 0.56) sono
+gia' coperte dalla fusione di segmento Fase 2C (cache di decode): NON vale
+lavoro diretto sul kernel. Idem, parzialmente, per le op "mixed"
+(0.25-0.5): simplify (entrambe le policy ~32k/s), distance, point_on_surface,
+affine/translate/scale/rotate, snap_to_grid, to_wkt, densify, line_substring,
+line_locate_point, geometry_diagnostics, geometry_accessors.
+
+**Candidati compute-bound (la fusione 2C NON li copre), in priorita':**
+
+1. `geo.snap` — 277 geom/s, share 0.003. Causa trovata: `snap_validated`
+   ricostruisce l'R-tree dei vertici di riferimento a OGNI cella
+   (`snap_column` lo richiama per riga). Fix banale (albero costruito una
+   volta per riferimento/segmento): il costo residuo e' map_coords + lookup
+   per vertice, atteso >100x (verso il regime decode-bound ~50k+ geom/s).
+   ROI piu' alto di tutto lo sweep.
+2. `geo.clean_topology` — 146 geom/s a 1k celle (6.8 s/run): l'op piu' lenta
+   in assoluto, di 40x sul successivo. Collettiva (morfologia gap/overlap su
+   griglia jitterata): profilare la politica first-row-wins, sospetta
+   complessita' superlineare sugli overlap.
+3. `geo.buffer` — 6.7k geom/s, share 0.07. Costo nel buffer della crate
+   `geo` (offset poligonale); op calda nelle pipeline reali, migliorarla
+   richiede lavoro algoritmico diretto (o valutare il backend GEOS).
+4. Predicati DE-9IM (tutti e 11 a ~104-110k/s, share ~0.002): velocita'
+   identiche => il costo e' `relate()` a matrice completa, senza
+   short-circuit nemmeno per intersects/disjoint. Fast path (bbox precheck,
+   early-exit, prepared geometry sul riferimento da config) darebbe un
+   guadagno uniforme su tutta la famiglia, stimabile 3-10x.
+5. Booleane pairwise + clip: intersection 13.0k, difference 12.7k, union
+   11.6k, symmetric_difference 6.6k coppie/s su poligoni 100v (i_overlay);
+   `geo.clip` misurato 1.5k/s ma vedi caveat sotto. `geo.overlay` (183k/s su
+   rettangoli) e `geo.dissolve` (448k/s) sono invece a posto.
+6. `geo.concave_hull` 13.4k/s (share 0.14) e `geo.voronoi` 17.6k/s (10k
+   punti): compute-bound, ottimizzabili ma op meno calde.
+7. `geo.nearest` — 38.7k/s a 10k x 10k: O(n*m) esatto per contratto
+   (restituisce tutti i pareggi). Un indice R-tree come filtro candidati
+   resterebbe esatto ma va gestita la semantica dei ties.
+
+**Lasciare stare:** from_coords 63M/s, haversine 34M/s (gia' decode-bound),
+line_builder 26M/s, sjoin/within/count_points_in_polygons 8.2-8.6M/s
+(R-tree gia' efficace), line_merge 5.3M/s, generate_grid 5.1M/s,
+geodesic_distance/bearing 5.5-6.8M/s, length 4.1M/s, line_interpolate_point
+3.0M/s, line_locate_point 2.2M/s, densify 1.0M/s, polygon_builder 1.1M/s,
+shared_paths 851k/s, cluster_dbscan 800k/s, dissolve 448k/s, frechet 340k/s,
+geodesic_line_length 264k/s, overlay 183k/s, hausdorff 170k/s, delaunay
+120k/s, from_wkt 78k/s (parse WKT), geodesic_area 34k/s, collect 33k/s,
+geometry_accessors 63k/s (mista). Costi gia' vicini al regime dell'adapter o
+assolutamente bassi per i casi d'uso tipici.
+
+**Caveat di misura.**
+- `geo.clip`: nella run misurata la maschera (primi 100 rettangoli) era
+  disgiunta dai poligoni => intersezioni vuote con early-out bbox; il valore
+  1.5k/s e' un UPPER bound. L'example e' stato corretto (maschera = striscia
+  centrale della griglia); rieseguire per il valore realistico, atteso
+  peggiore delle booleane pairwise.
+- `peak_rss_kib` e' il VmHWM cumulativo di processo (le fixture restano in
+  memoria): utile come tetto, non come RSS per-op.
+- Op `BackendPending` (make_valid, reproject, polygonize, split): non
+  misurate, richiedono le feature `geos`/`proj` (build
+  `--features full-backends`).
+- Le scale ridotte (nota "scala ridotta a ...") riflettono il target 4 s/run
+  a 4 CPU: geom/s rimane confrontabile, ma le op piu' lente sono misurate su
+  campioni piccoli (1k-10k celle).
