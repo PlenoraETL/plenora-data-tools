@@ -1,0 +1,10 @@
+{
+  "input_bytes": 374218288,
+  "median_seconds": 5.66e-7,
+  "operation": "drop_columns",
+  "output_bytes": 267109240,
+  "peak_rss_kib": 1489824,
+  "repetitions": 3,
+  "rows": 10000000,
+  "rows_per_second": 17667844522968.2
+}

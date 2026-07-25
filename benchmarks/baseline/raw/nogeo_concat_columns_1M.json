@@ -1,0 +1,11 @@
+[
+  {
+    "name": "concat_columns",
+    "rows": 1000000,
+    "median_seconds": 0.049660183,
+    "rows_per_second": 20136856.926201824,
+    "input_bytes": 45999096,
+    "output_bytes": 117233140,
+    "peak_rss_kib": 233128
+  }
+]

@@ -1,0 +1,161 @@
+[package]
+name = "plenora-data-tools-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Crate cargo-fuzz separato (convenzione standard): NON membro del workspace
+# principale. Le dipendenze path puntano ai crate del workspace; le versioni
+# delle dipendenze comuni sono pinnate come in [workspace.dependencies].
+[workspace]
+
+[dependencies]
+plenora-core = { path = "../crates/plenora-core" }
+plenora-kernels-table = { path = "../crates/plenora-kernels-table" }
+plenora-kernels-geo = { path = "../crates/plenora-kernels-geo" }
+plenora-engine = { path = "../crates/plenora-engine" }
+libfuzzer-sys = "=0.4.10"
+arrow-array = "=59.1.0"
+arrow-schema = "=59.1.0"
+arrow-select = "=59.1.0"
+serde_json = "=1.0.151"
+num-traits = "=0.2.19"
+geo = "=0.33.1"
+geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
+
+# ---------------------------------------------------------------------------
+# Target portati da plenora-nogeo-tools/fuzz (adattati ai nuovi path:
+# plenora_nogeo_tools -> plenora_engine::table_engine).
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "plan_contract"
+path = "fuzz_targets/plan_contract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "string_chain"
+path = "fuzz_targets/string_chain.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "candidate_chain"
+path = "fuzz_targets/candidate_chain.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "binary_ops"
+path = "fuzz_targets/binary_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reshape_policies"
+path = "fuzz_targets/reshape_policies.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extended_ops"
+path = "fuzz_targets/extended_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "advanced_ops"
+path = "fuzz_targets/advanced_ops.rs"
+test = false
+doc = false
+bench = false
+
+# ---------------------------------------------------------------------------
+# Target portati da plenora-geo-tools-arrow/fuzz (adattati ai nuovi path:
+# plenora_geo -> plenora_kernels_geo + plenora_engine::geo_transport).
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "wkb_contract"
+path = "fuzz_targets/wkb_contract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wkt_operations"
+path = "fuzz_targets/wkt_operations.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arrow_envelope"
+path = "fuzz_targets/arrow_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arrow_ipc_decode"
+path = "fuzz_targets/arrow_ipc_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arrow_transform"
+path = "fuzz_targets/arrow_transform.rs"
+test = false
+doc = false
+bench = false
+
+# ---------------------------------------------------------------------------
+# Nuovi target (Fase 2A: plan v4, analyze_contract, differenziale fast path,
+# executor DAG).
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "plan_v4_parse"
+path = "fuzz_targets/plan_v4_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "analyze_table"
+path = "fuzz_targets/analyze_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "analyze_geo"
+path = "fuzz_targets/analyze_geo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "diff_kernels"
+path = "fuzz_targets/diff_kernels.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "executor_dag"
+path = "fuzz_targets/executor_dag.rs"
+test = false
+doc = false
+bench = false

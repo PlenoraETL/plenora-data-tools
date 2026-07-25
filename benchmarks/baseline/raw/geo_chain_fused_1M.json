@@ -1,0 +1,1 @@
+{"benchmark":"chain_fused","rows":1000000,"repetitions":3,"median_seconds":15.792910,"geometries_per_second":63319.6,"input_wkb_bytes":93000000,"peak_rss_kib":315784,"sink":0}

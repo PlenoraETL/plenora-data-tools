@@ -1,0 +1,10 @@
+{
+  "input_bytes": 36583472,
+  "median_seconds": 1.029e-6,
+  "operation": "rename",
+  "output_bytes": 36583472,
+  "peak_rss_kib": 154396,
+  "repetitions": 5,
+  "rows": 1000000,
+  "rows_per_second": 971817298347.9105
+}

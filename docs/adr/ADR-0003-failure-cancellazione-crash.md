@@ -1,0 +1,91 @@
+# ADR 3 — Failure propagation, cancellazione e crash
+
+- **Stato**: accettato (design)
+- **Decisioni collegate**: D12, D14, D21, D23, D24
+- **Riferimenti**: `Architetture.md` §6.4
+
+## Contesto
+
+Nel DAG parallelo un fallimento in un ramo deve fermare l'intera esecuzione in
+modo controllato: niente output parziali, niente risorse trattenute, diagnosi
+sufficiente a capire la causa. Tre livelli di problema: errori attesi,
+cancellazione cooperativa (non sempre possibile per kernel monolitici), e crash
+che nessun meccanismo in-process può intercettare.
+
+## Decisione
+
+### Errori: first-error wins
+
+- Il primo errore **osservato** cancella immediatamente gli altri rami.
+- L'errore **riportato** non è necessariamente il primo osservato: in un DAG
+  parallelo due rami possono fallire quasi contemporaneamente e il "primo"
+  cambierebbe tra esecuzioni. L'errore primario riportato è scelto con regola
+  stabile: (1) errore non causato da cancellazione; (2) minore profondità
+  topologica; (3) `NodeId` minore; (4) sequence number minore. Così la
+  diagnosi è deterministica anche se l'osservazione non lo è.
+- L'errore primario conserva: `execution_id`, nodo, operazione, categoria,
+  source chain interna, indicazione retryable/non-retryable se applicabile.
+  **Mai** valori o payload sensibili.
+- Gli errori secondari (conseguenti alla cancellazione) sono telemetria, non
+  sostituiscono la causa iniziale.
+- **Modalità diagnostica opt-in** (solo per input fidati): l'errore può
+  includere nodo, indice batch, indice riga, colonna e tipo di violazione
+  (es. `node=buffer batch=12 row=941 field=geometry reason=WKB_DEPTH_LIMIT`),
+  con hash o descrizione strutturale del valore — mai il valore.
+
+### Cancellazione
+
+Ogni operazione dichiara in catalogo `cancellation_behavior`:
+
+- `Cooperative`: controlla il token periodicamente durante il lavoro.
+- `BoundaryOnly`: controlla solo ai confini di batch.
+- `NonInterruptible` (alcune chiamate GEOS/PROJ): non offre punti di
+  interruzione. Per queste: nessuna nuova attività dopo la cancellazione,
+  latenza massima **documentata e osservabile nelle metriche**, lease
+  trattenuti visibili al governor, gli altri rami possono attendere il
+  completamento prima del cleanup finale. La v1 accetta questa attesa
+  esplicitamente: **non si promette cancellazione immediata**. Isolamento in
+  processo separato solo per backend dimostrabilmente instabili.
+
+### Panic
+
+- I panic dei worker sono intercettati al confine dell'executor con
+  `catch_unwind`, causano cancellazione globale e sono convertiti in errore
+  interno privo di dati sensibili.
+- I kernel non usano panic per errori attesi.
+- I confini di `catch_unwind` sono dichiarati; i tipi che attraversano il
+  confine rispettano `UnwindSafe` o wrapper espliciti.
+- L'errore primario è preservato; cleanup di spill, code e writer eseguito
+  comunque.
+- **Nessun panic può portare al publish dell'output.**
+
+### Crash non intercettabili
+
+`catch_unwind` non copre `panic = "abort"`, crash in GEOS/PROJ, OOM killer,
+kill esterni, perdita del filesystem. Difesa strutturale:
+
+- directory temporanee isolate per `execution_id`;
+- **lock file come prova principale** di esecuzione viva (rilasciato dal
+  sistema operativo dopo un crash);
+- PID, identificativo host e timestamp di heartbeat come segnali diagnostici
+  aggiuntivi — mai prove sufficienti (PID riutilizzabile; una macchina
+  sospesa/ibernata può rendere vecchio il timestamp senza che l'esecuzione
+  sia orfana);
+- **scavenging all'avvio**: elimina solo directory senza lock attivo **e** con
+  heartbeat scaduto; TTL conservativo;
+- test di riavvio con directory lasciate intenzionalmente incomplete.
+
+### Cleanup e publish
+
+A successo, errore, cancellazione o panic intercettabile: cleanup di tutti i
+file di spill, chiusura di code e broadcaster. Il publish avviene **solo** a
+grafo completato con successo (invariante I8). Nessun nodo produce side effect
+esterni osservabili (invariante I2): solo il sink finale pubblica.
+
+## Conseguenze
+
+- Test obbligatori: errore in un ramo con altri attivi; cancellazione durante
+  kernel lungo; panic con cleanup completo; preservazione dell'errore primario;
+  scavenging dopo riavvio simulato.
+- La CLI resta potenzialmente in attesa di un kernel `NonInterruptible` dopo
+  una cancellazione: comportamento accettato, documentato e osservabile.

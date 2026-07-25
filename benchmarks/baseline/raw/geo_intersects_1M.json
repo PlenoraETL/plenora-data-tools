@@ -1,0 +1,1 @@
+{"benchmark":"intersects","rows":1000000,"repetitions":3,"median_seconds":0.250721,"geometries_per_second":3988499.3,"input_wkb_bytes":93000000,"peak_rss_kib":315500,"sink":29}

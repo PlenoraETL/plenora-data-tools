@@ -1,0 +1,1 @@
+{"benchmark":"centroid","rows":1000000,"repetitions":3,"median_seconds":0.283142,"geometries_per_second":3531794.0,"input_wkb_bytes":93000000,"peak_rss_kib":315464,"sink":21000000}

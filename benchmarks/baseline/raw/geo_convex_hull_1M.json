@@ -1,0 +1,1 @@
+{"benchmark":"convex_hull","rows":1000000,"repetitions":3,"median_seconds":0.600761,"geometries_per_second":1664554.2,"input_wkb_bytes":93000000,"peak_rss_kib":315436,"sink":93000000}

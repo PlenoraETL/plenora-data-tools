@@ -1,0 +1,10 @@
+{
+  "operation": "filter",
+  "rows": 10000000,
+  "repetitions": 3,
+  "median_seconds": 0.310972458,
+  "rows_per_second": 32157188.66009671,
+  "input_bytes": 374218288,
+  "output_bytes": 164080596,
+  "peak_rss_kib": 1488868
+}

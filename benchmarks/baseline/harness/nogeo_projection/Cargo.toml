@@ -1,0 +1,19 @@
+[package]
+name = "nogeo-projection-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Baseline Fase 1f: projection/rename zero-copy per plenora-nogeo-tools"
+
+# Crate autonomo: non entra nel workspace plenora-data-tools.
+[workspace]
+
+[dependencies]
+plenora-nogeo-tools = { path = "../../../../../plenora-nogeo-tools" }
+arrow-array = "=59.1.0"
+arrow-schema = "=59.1.0"
+serde_json = "=1.0.145"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

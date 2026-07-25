@@ -1,0 +1,12 @@
+{"median_seconds":0.002685238,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":372406468.25346583,"scenario":"fill_na_int_value"}
+{"median_seconds":0.00243469,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":410729908.1197195,"scenario":"fill_na_float_ffill"}
+{"median_seconds":0.019161876,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":52186957.05994549,"scenario":"fill_na_utf8_value"}
+{"median_seconds":0.020324609,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":49201438.51229807,"scenario":"fill_na_utf8_ffill"}
+{"median_seconds":0.008101819,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":123429071.91582532,"scenario":"coalesce_int64"}
+{"median_seconds":0.010555934,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":94733445.66193764,"scenario":"coalesce_utf8"}
+{"median_seconds":0.015606327,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":64076576.121979244,"scenario":"type_cast_utf8_int"}
+{"median_seconds":0.024047828,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":41583797.089699745,"scenario":"type_cast_utf8_float"}
+{"median_seconds":0.020756375,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":48177969.41903391,"scenario":"type_cast_utf8_bool"}
+{"median_seconds":0.229427208,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":4358680.945984402,"scenario":"type_cast_utf8_date32"}
+{"median_seconds":0.025185122,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":39705981.968242995,"scenario":"type_cast_int_utf8"}
+{"median_seconds":0.053172668,"output_rows":1000000,"peak_rss_kib":519424,"repetitions":3,"rows":1000000,"rows_per_second":18806654.576746084,"scenario":"type_cast_float_int"}

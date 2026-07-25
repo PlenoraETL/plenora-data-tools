@@ -1,0 +1,11 @@
+[
+  {
+    "name": "text_normalize",
+    "rows": 1000000,
+    "median_seconds": 0.376943314,
+    "rows_per_second": 2652918.7887386167,
+    "input_bytes": 45999096,
+    "output_bytes": 45999096,
+    "peak_rss_kib": 212264
+  }
+]

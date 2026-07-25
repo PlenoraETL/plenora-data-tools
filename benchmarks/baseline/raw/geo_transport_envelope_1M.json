@@ -1,0 +1,1 @@
+{"operation":"envelope","rows":1000000,"envelope_read_seconds":0.558829,"ipc_decode_seconds":0.077493,"transform_seconds":0.178832,"ipc_encode_seconds":0.040561,"envelope_write_seconds":0.089921,"output_bytes":123738824}

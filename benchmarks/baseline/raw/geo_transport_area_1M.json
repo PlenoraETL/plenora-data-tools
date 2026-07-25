@@ -1,0 +1,1 @@
+{"operation":"area","rows":1000000,"envelope_read_seconds":0.705862,"ipc_decode_seconds":0.081624,"transform_seconds":0.085027,"ipc_encode_seconds":0.022653,"envelope_write_seconds":0.029735,"output_bytes":39389832}

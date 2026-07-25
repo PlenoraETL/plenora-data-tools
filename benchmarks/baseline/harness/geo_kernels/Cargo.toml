@@ -1,0 +1,19 @@
+[package]
+name = "geo-kernel-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Baseline Fase 1f: kernel geografici in-process di plenora-geo"
+
+# Crate autonomo: non entra nel workspace plenora-data-tools.
+[workspace]
+
+[dependencies]
+plenora-geo = { path = "../../../../../plenora-geo-tools-arrow" }
+geo = "=0.33.1"
+geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
+serde_json = "=1.0.151"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

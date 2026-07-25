@@ -1,0 +1,11 @@
+[
+  {
+    "name": "five_step_chain",
+    "rows": 10000000,
+    "median_seconds": 4.685715385,
+    "rows_per_second": 2134145.8407849926,
+    "input_bytes": 686480120,
+    "output_bytes": 1412960212,
+    "peak_rss_kib": 3172072
+  }
+]

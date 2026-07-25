@@ -1,0 +1,38 @@
+[package]
+name = "plenora-cli"
+description = "CLI di plenora-data-tools: validate, run, catalog + comandi legacy geo (Architetture.md par. 3.5)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "plenora-data-tools"
+path = "src/main.rs"
+
+# Propagazione coerente dei backend opzionali: i comandi geo legacy
+# (transform, spatial-join, transform-arrow, pair-arrow) richiedono la
+# risoluzione CRS di plenora-kernels-geo dietro proj-backend, esattamente
+# come nei tool di origine.
+[features]
+default = []
+geos-backend = ["plenora-engine/geos-backend", "plenora-kernels-geo/geos-backend"]
+proj-backend = ["plenora-engine/proj-backend", "plenora-kernels-geo/proj-backend"]
+full-backends = ["geos-backend", "proj-backend"]
+
+[dependencies]
+plenora-core.workspace = true
+plenora-engine.workspace = true
+plenora-kernels-geo.workspace = true
+geo.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+# Usato dai test di integrazione portati (WKB di fixture in geo_adversarial.rs).
+geozero.workspace = true
+
+[lints]
+workspace = true

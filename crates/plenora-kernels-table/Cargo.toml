@@ -1,0 +1,30 @@
+[package]
+name = "plenora-kernels-table"
+description = "Kernel tabellari puri su RecordBatch (da plenora-nogeo-tools, Architetture.md par. 3.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+plenora-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+regex.workspace = true
+unicode-normalization.workspace = true
+num-traits.workspace = true
+md-5.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+# rayon: dipendenza di workspace gia' pinnata (=1.12.0, decisione D0), usata
+# per il merge sort parallelo stabile di `table.sort` (Fase post-2A).
+rayon.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

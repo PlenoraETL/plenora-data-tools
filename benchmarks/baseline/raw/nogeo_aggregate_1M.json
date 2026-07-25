@@ -1,0 +1,10 @@
+{
+  "operation": "aggregate",
+  "rows": 1000000,
+  "repetitions": 5,
+  "median_seconds": 0.119385692,
+  "rows_per_second": 8376213.122758462,
+  "input_bytes": 36583472,
+  "output_bytes": 24806,
+  "peak_rss_kib": 153408
+}

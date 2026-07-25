@@ -1,0 +1,12 @@
+{"median_seconds":0.034301105,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":291535797.46191853,"scenario":"fill_na_int_value"}
+{"median_seconds":0.036431911,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":274484640.6766859,"scenario":"fill_na_float_ffill"}
+{"median_seconds":0.200729277,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":49818343.140846364,"scenario":"fill_na_utf8_value"}
+{"median_seconds":0.20959903,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":47710144.460115105,"scenario":"fill_na_utf8_ffill"}
+{"median_seconds":0.08152034,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":122668771.98991074,"scenario":"coalesce_int64"}
+{"median_seconds":0.110404949,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":90575649.82888584,"scenario":"coalesce_utf8"}
+{"median_seconds":0.150903196,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":66267648.83097639,"scenario":"type_cast_utf8_int"}
+{"median_seconds":0.240942976,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":41503596.27001536,"scenario":"type_cast_utf8_float"}
+{"median_seconds":0.198838254,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":50292133.42418507,"scenario":"type_cast_utf8_bool"}
+{"median_seconds":2.299291016,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":4349166.734620946,"scenario":"type_cast_utf8_date32"}
+{"median_seconds":0.237343092,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":42133099.03285494,"scenario":"type_cast_int_utf8"}
+{"median_seconds":0.547200887,"output_rows":10000000,"peak_rss_kib":5156616,"repetitions":3,"rows":10000000,"rows_per_second":18274824.178053644,"scenario":"type_cast_float_int"}

@@ -1,0 +1,1 @@
+{"benchmark":"chain_wkb","rows":1000000,"repetitions":3,"median_seconds":28.991487,"geometries_per_second":34492.9,"input_wkb_bytes":93000000,"peak_rss_kib":315824,"sink":0}

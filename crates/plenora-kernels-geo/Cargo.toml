@@ -1,0 +1,33 @@
+[package]
+name = "plenora-kernels-geo"
+description = "Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB (da plenora-geo-tools-arrow, Architetture.md par. 3.3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+geos-backend = ["dep:geos"]
+proj-backend = ["dep:proj"]
+full-backends = ["geos-backend", "proj-backend"]
+
+[dependencies]
+plenora-core.workspace = true
+geo.workspace = true
+geozero.workspace = true
+wkt.workspace = true
+rayon.workspace = true
+rstar.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+geos = { workspace = true, optional = true }
+proj = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

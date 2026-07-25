@@ -1,0 +1,1 @@
+{"benchmark":"envelope","rows":1000000,"repetitions":3,"median_seconds":0.467522,"geometries_per_second":2138936.1,"input_wkb_bytes":93000000,"peak_rss_kib":315468,"sink":93000000}

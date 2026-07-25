@@ -1,0 +1,1 @@
+{"benchmark":"buffer","rows":1000000,"repetitions":3,"median_seconds":9.560585,"geometries_per_second":104596.1,"input_wkb_bytes":93000000,"peak_rss_kib":315808,"sink":614000000}

@@ -1,0 +1,1 @@
+{"operation":"centroid","rows":1000000,"envelope_read_seconds":0.476798,"ipc_decode_seconds":0.058045,"transform_seconds":0.087636,"ipc_encode_seconds":0.021691,"envelope_write_seconds":0.039726,"output_bytes":55339848}

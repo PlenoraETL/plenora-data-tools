@@ -1,0 +1,10 @@
+{
+  "operation": "sort",
+  "rows": 1000000,
+  "repetitions": 5,
+  "median_seconds": 0.872503745,
+  "rows_per_second": 1146126.8856788687,
+  "input_bytes": 36583472,
+  "output_bytes": 32805294,
+  "peak_rss_kib": 153368
+}

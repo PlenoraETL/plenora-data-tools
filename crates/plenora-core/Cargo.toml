@@ -1,0 +1,19 @@
+[package]
+name = "plenora-core"
+description = "Fondamenta condivise di plenora-data-tools: re-export Arrow, errori, limiti, catalogo, CRS (Architetture.md par. 3.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-ipc.workspace = true
+arrow-select.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

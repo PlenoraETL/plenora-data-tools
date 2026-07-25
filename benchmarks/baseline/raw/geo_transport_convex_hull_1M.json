@@ -1,0 +1,1 @@
+{"operation":"convex_hull","rows":1000000,"envelope_read_seconds":0.368196,"ipc_decode_seconds":0.048976,"transform_seconds":0.159929,"ipc_encode_seconds":0.040627,"envelope_write_seconds":0.089407,"output_bytes":123738824}

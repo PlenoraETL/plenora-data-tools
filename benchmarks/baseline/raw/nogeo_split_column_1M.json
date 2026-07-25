@@ -1,0 +1,11 @@
+[
+  {
+    "name": "split_column",
+    "rows": 1000000,
+    "median_seconds": 0.080391557,
+    "rows_per_second": 12439117.207295787,
+    "input_bytes": 45999096,
+    "output_bytes": 91931116,
+    "peak_rss_kib": 240780
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "operation": "join",
+  "rows": 1000000,
+  "repetitions": 5,
+  "median_seconds": 0.636050895,
+  "rows_per_second": 1572201.2308464719,
+  "input_bytes": 36583472,
+  "output_bytes": 57610492,
+  "peak_rss_kib": 388928
+}

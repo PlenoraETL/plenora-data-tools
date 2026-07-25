@@ -1,0 +1,659 @@
+{
+  "benchmark": "bench_sweep",
+  "escalation_threshold_seconds": 1.0,
+  "results": [
+    {
+      "median_seconds": 0.154539096,
+      "note": "20 bucket equal-width",
+      "op": "table.bin",
+      "output_rows": 1000000,
+      "peak_rss_kib": 329052,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 6470854.469085286
+    },
+    {
+      "median_seconds": 1.511132702,
+      "note": "20 bucket equal-width [10M]",
+      "op": "table.bin",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 6617552.506649412
+    },
+    {
+      "median_seconds": 1.26564556,
+      "note": "JSON annidati 3 livelli",
+      "op": "table.flatten_json",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 790110.6214918495
+    },
+    {
+      "median_seconds": 0.093779889,
+      "note": "mappa 1024 chiavi utf8",
+      "op": "table.lookup",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 10663267.046519963
+    },
+    {
+      "median_seconds": 0.984763079,
+      "note": "mappa 1024 chiavi utf8 [10M]",
+      "op": "table.lookup",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 10154726.769564439
+    },
+    {
+      "median_seconds": 100.600366796,
+      "note": "10 statistiche x 1024 gruppi",
+      "op": "table.statistics",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 9940.321609640108
+    },
+    {
+      "median_seconds": 0.010192166,
+      "note": "fraction 0.1",
+      "op": "table.sample",
+      "output_rows": 100000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 98114571.52483582
+    },
+    {
+      "median_seconds": 0.17207798,
+      "note": "fraction 0.1 [10M]",
+      "op": "table.sample",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 58113187.98605144
+    },
+    {
+      "median_seconds": 2.66e-7,
+      "note": "drop 2 colonne su 6",
+      "op": "table.drop_columns",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 3759398496240.601
+    },
+    {
+      "median_seconds": 2.7e-7,
+      "note": "drop 2 colonne su 6 [10M]",
+      "op": "table.drop_columns",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 37037037037037.04
+    },
+    {
+      "median_seconds": 6.94e-7,
+      "note": "2 rinomini",
+      "op": "table.rename",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 1440922190201.729
+    },
+    {
+      "median_seconds": 6.59e-7,
+      "note": "2 rinomini [10M]",
+      "op": "table.rename",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 15174506828528.074
+    },
+    {
+      "median_seconds": 4.06e-7,
+      "note": "ordine inverso",
+      "op": "table.reorder_columns",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 2463054187192.118
+    },
+    {
+      "median_seconds": 5.06e-7,
+      "note": "ordine inverso [10M]",
+      "op": "table.reorder_columns",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 19762845849802.37
+    },
+    {
+      "median_seconds": 0.032795291,
+      "note": "2 colonne utf8",
+      "op": "table.concat_columns",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2867444,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 30492182.551452283
+    },
+    {
+      "median_seconds": 0.408531558,
+      "note": "2 colonne utf8 [10M]",
+      "op": "table.concat_columns",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2892772,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 24477913.16038307
+    },
+    {
+      "median_seconds": 0.095077329,
+      "note": "3 colonne su '/'",
+      "op": "table.split_column",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2892772,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 10517754.448066162
+    },
+    {
+      "median_seconds": 1.114374077,
+      "note": "3 colonne su '/' [10M]",
+      "op": "table.split_column",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 8973647.365273377
+    },
+    {
+      "median_seconds": 0.009611363,
+      "note": "sostituzione letterale utf8",
+      "op": "table.replace",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 104043515.99247682
+    },
+    {
+      "median_seconds": 0.100311167,
+      "note": "sostituzione letterale utf8 [10M]",
+      "op": "table.replace",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 99689798.24549344
+    },
+    {
+      "median_seconds": 0.111452009,
+      "note": "3 condizioni numeriche",
+      "op": "table.conditional",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 8972471.729962265
+    },
+    {
+      "median_seconds": 1.2065218070000001,
+      "note": "3 condizioni numeriche [10M]",
+      "op": "table.conditional",
+      "output_rows": 10000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 8288287.822053431
+    },
+    {
+      "median_seconds": 6.043457905,
+      "note": "subset key, ~1M valori distinti su 10M righe [10M dichiarate]",
+      "op": "table.distinct",
+      "output_rows": 999943,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 1654681.8323540553
+    },
+    {
+      "median_seconds": 0.452065751,
+      "note": "subset key, order id",
+      "op": "table.dedup_advanced",
+      "output_rows": 631781,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 2212067.598104772
+    },
+    {
+      "median_seconds": 0.206507487,
+      "note": "mean w=10, partizione grp",
+      "op": "table.rolling_window",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 4842439.44143294
+    },
+    {
+      "median_seconds": 0.231101764,
+      "note": "rank, partizione grp, order num",
+      "op": "table.window_function",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 4327098.083076511
+    },
+    {
+      "median_seconds": 0.037104736,
+      "note": "List<Int64> 0..4 elementi (~2.5M out)",
+      "op": "table.explode",
+      "output_rows": 2200340,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 26950737.50154158
+    },
+    {
+      "median_seconds": 0.005040043,
+      "note": "Struct{a,b,c}",
+      "op": "table.unnest",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 198411005.62038854
+    },
+    {
+      "median_seconds": 0.000905232,
+      "note": "8 colonne f64 x 4000 righe (contratto: righe <= max_columns; un take per colonna output)",
+      "op": "table.transpose",
+      "output_rows": 8,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 4000,
+      "rows_per_second": 4418756.738604027
+    },
+    {
+      "median_seconds": 1.080957545,
+      "note": "1M x 1M, chiave id, diff su num",
+      "op": "table.table_diff",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 925105.7126392508
+    },
+    {
+      "median_seconds": 0.005129557,
+      "note": "500k + 500k righe",
+      "op": "table.concat",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 194948608.62253797
+    },
+    {
+      "median_seconds": 0.0345053,
+      "note": "1000 x 1000 righe (righe = output)",
+      "op": "table.cross_join",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 28981055.084291395
+    },
+    {
+      "median_seconds": 0.133593469,
+      "note": "1M x 1M backward su ts int64",
+      "op": "table.asof_join",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 7485395.861679437
+    },
+    {
+      "median_seconds": 0.641312947,
+      "note": "1M + 1M righe, overlap 50%",
+      "op": "table.union_distinct",
+      "output_rows": 1500000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 1559301.1254145163
+    },
+    {
+      "median_seconds": 0.346167662,
+      "note": "1M x 1M righe, overlap 50%",
+      "op": "table.intersect",
+      "output_rows": 500000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 2888773.5908734305
+    },
+    {
+      "median_seconds": 0.6088905,
+      "note": "1M x 1M righe, overlap 50%",
+      "op": "table.except",
+      "output_rows": 500000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 1642331.4208383937
+    },
+    {
+      "median_seconds": 0.166214188,
+      "note": "1 colonna utf8 40 char",
+      "op": "table.md5_hash",
+      "output_rows": 1000000,
+      "peak_rss_kib": 2961904,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 6016333.575566966
+    },
+    {
+      "median_seconds": 1.887040203,
+      "note": "1 colonna utf8 40 char [10M]",
+      "op": "table.md5_hash",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3252268,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 5299304.161141924
+    },
+    {
+      "median_seconds": 0.157255414,
+      "note": "1 colonna utf8 40 char",
+      "op": "table.sha256_hash",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3252268,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 6359081.538521783
+    },
+    {
+      "median_seconds": 2.054740769,
+      "note": "1 colonna utf8 40 char [10M]",
+      "op": "table.sha256_hash",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 4866793.977552114
+    },
+    {
+      "median_seconds": 0.235862648,
+      "note": "mask custom 3+3 su text",
+      "op": "table.mask_data",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 4239755.673395136
+    },
+    {
+      "median_seconds": 2.488145942,
+      "note": "mask custom 3+3 su text [10M]",
+      "op": "table.mask_data",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 4019056.853217334
+    },
+    {
+      "median_seconds": 0.007298128,
+      "note": "stringhe 40 char",
+      "op": "table.string_length",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 137021438.92241955
+    },
+    {
+      "median_seconds": 0.075801344,
+      "note": "stringhe 40 char [10M]",
+      "op": "table.string_length",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 131923782.24850471
+    },
+    {
+      "median_seconds": 0.039728592,
+      "note": "width 48 left su 40 char",
+      "op": "table.string_pad",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 25170788.83641283
+    },
+    {
+      "median_seconds": 0.442821435,
+      "note": "width 48 left su 40 char [10M]",
+      "op": "table.string_pad",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 22582466.000093244
+    },
+    {
+      "median_seconds": 0.002908834,
+      "note": "senza partizione",
+      "op": "table.add_row_number",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 343780360.1030516
+    },
+    {
+      "median_seconds": 0.026330262,
+      "note": "senza partizione [10M]",
+      "op": "table.add_row_number",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 379791131.5884361
+    },
+    {
+      "median_seconds": 0.063000762,
+      "note": "uuid v4 per riga",
+      "op": "table.uuid_generator",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 15872823.887431711
+    },
+    {
+      "median_seconds": 0.802422132,
+      "note": "uuid v4 per riga [10M]",
+      "op": "table.uuid_generator",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 12462268.426065795
+    },
+    {
+      "median_seconds": 0.002522798,
+      "note": "2 colonne",
+      "op": "table.assert_not_null",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 396385283.32430893
+    },
+    {
+      "median_seconds": 0.024699762,
+      "note": "2 colonne [10M]",
+      "op": "table.assert_not_null",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 404862200.6965087
+    },
+    {
+      "median_seconds": 0.003839475,
+      "note": "num in 0..10000",
+      "op": "table.assert_range",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 260452275.37619075
+    },
+    {
+      "median_seconds": 0.039313922,
+      "note": "num in 0..10000 [10M]",
+      "op": "table.assert_range",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 254362818.34206212
+    },
+    {
+      "median_seconds": 0.046838382,
+      "note": "^[0-9a-f]{40}$",
+      "op": "table.assert_regex",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 21350011.620811325
+    },
+    {
+      "median_seconds": 0.473475829,
+      "note": "^[0-9a-f]{40}$ [10M]",
+      "op": "table.assert_regex",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 21120402.325754203
+    },
+    {
+      "median_seconds": 2.07e-7,
+      "note": "6 campi ordinati",
+      "op": "table.assert_schema",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 4830917874396.136
+    },
+    {
+      "median_seconds": 2.17e-7,
+      "note": "6 campi ordinati [10M]",
+      "op": "table.assert_schema",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 46082949308755.76
+    },
+    {
+      "median_seconds": 0.214777855,
+      "note": "chiave id unica",
+      "op": "table.assert_unique",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 4655973.494101615
+    },
+    {
+      "median_seconds": 6e-8,
+      "note": "min_rows=1",
+      "op": "table.assert_cardinality",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 16666666666666.668
+    },
+    {
+      "median_seconds": 5.3e-8,
+      "note": "min_rows=1 [10M]",
+      "op": "table.assert_cardinality",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 188679245283018.88
+    },
+    {
+      "median_seconds": 8.3e-8,
+      "note": "1 chiave metadata",
+      "op": "table.assert_metadata",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 12048192771084.338
+    },
+    {
+      "median_seconds": 7.2e-8,
+      "note": "1 chiave metadata [10M]",
+      "op": "table.assert_metadata",
+      "output_rows": 10000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 10000000,
+      "rows_per_second": 138888888888888.89
+    },
+    {
+      "median_seconds": 0.558058703,
+      "note": "1M chiavi vs 1M referenze",
+      "op": "table.assert_foreign_key",
+      "output_rows": 1000000,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 1791926.1802104714
+    },
+    {
+      "median_seconds": 0.83103501,
+      "note": "1M x 1M, frequenze chiave",
+      "op": "table.reconcile",
+      "output_rows": 5,
+      "peak_rss_kib": 3776848,
+      "repetitions": 3,
+      "rows": 1000000,
+      "rows_per_second": 1203318.738641348
+    }
+  ],
+  "scale_default_rows": 1000000,
+  "scale_escalated_rows": 10000000,
+  "seed": 42
+}

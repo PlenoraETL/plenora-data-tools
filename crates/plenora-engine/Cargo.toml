@@ -1,0 +1,40 @@
+[package]
+name = "plenora-engine"
+description = "Contratto piano, planner (validate), preparer ed executor del DAG (Architetture.md par. 3.4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Propagazione coerente dei backend opzionali di plenora-kernels-geo
+# (make_valid richiede geos, reproject richiede proj).
+[features]
+default = []
+geos-backend = ["plenora-kernels-geo/geos-backend"]
+proj-backend = ["plenora-kernels-geo/proj-backend"]
+full-backends = ["geos-backend", "proj-backend"]
+
+[dependencies]
+plenora-core.workspace = true
+plenora-kernels-table.workspace = true
+plenora-kernels-geo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+# Usati dalla validazione delle config portata da nogeo (regex, timezone).
+regex.workspace = true
+chrono-tz.workspace = true
+# Usati direttamente dal trasporto geo portato (celle WKB, geometrie).
+geo.workspace = true
+geozero.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+# Usato dalle property suite portate (extended_properties.rs).
+num-traits.workspace = true
+
+[lints]
+workspace = true
