@@ -1031,7 +1031,8 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
 
 /// Metriche JSON di un `run` v4: per nodo logico e per segmento (righe,
 /// batch e byte in/out, wall time in millisecondi), i totali di
-/// pubblicazione e l'osservabilita' dei lease di memoria (ADR-0002).
+/// pubblicazione, l'osservabilita' dei lease di memoria e le metriche di
+/// spill aggregate (ADR-0002).
 fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
@@ -1085,6 +1086,11 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
                 .memory
                 .oldest_lease_age
                 .map(|age| age.as_secs_f64() * 1000.0),
+        },
+        "spill": {
+            "bytes_written": metrics.spill.bytes_written,
+            "bytes_read": metrics.spill.bytes_read,
+            "files": metrics.spill.files,
         },
         "nodes": nodes,
         "segments": segments,

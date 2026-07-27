@@ -33,10 +33,19 @@
 //!   corrisponde a `execution_class != Streaming`.
 //!
 //! L'unificazione con il trasporto geo in un DAG unico e' Fase 2.
+//!
+//! Fase 2B M2c (ADR-0002): selezione preventiva dello spill per
+//! `sort`/`distinct`/`aggregate` — sopra la soglia deterministica "byte
+//! stimati dell'input > `max_memory_bytes`" (la stessa del set-op spilled) il
+//! passo usa la variante `*_spilled` di `plenora_kernels_table::spill`.
+//! [`execute_batch_with_spill`] permette al chiamante (l'executor del DAG) di
+//! instradare i file di spill nella directory condivisa del `TempStore`
+//! dell'esecuzione e di raccogliere le metriche (`SpillMetrics`).
 
 mod contract;
 mod executor;
 
 pub use contract::{dispatch_name, Plan, Step, ValidatedPlan, SCHEMA_VERSION};
-pub use executor::{execute_batch, execute_binary};
+pub(crate) use executor::unary_spill_capable;
+pub use executor::{execute_batch, execute_batch_with_spill, execute_binary};
 pub use plenora_kernels_table::Limits;

@@ -2,6 +2,7 @@
 //! esecuzione della catena (port da `plenora-nogeo-tools/src/engine.rs`).
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use std::sync::Arc;
 
@@ -1254,8 +1255,18 @@ pub(crate) fn prepare_step(step: &Step) -> Result<PreparedStep> {
 
 /// Esegue un passo unario sulla batch usando la config gia' tipizzata
 /// (E1/V2: nessuna deserializzazione nel percorso caldo).
+///
+/// `spill_dir` e' la directory di spill del chiamante (`None`: tempdir
+/// posseduta per operazione), `spill_metrics` accumula le metriche degli
+/// spill attivati nella catena (ADR-0002).
 #[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
-fn execute_step(batch: &RecordBatch, step: &PreparedStep, limits: &Limits) -> Result<RecordBatch> {
+fn execute_step(
+    batch: &RecordBatch,
+    step: &PreparedStep,
+    limits: &Limits,
+    spill_dir: Option<&Path>,
+    spill_metrics: &mut spill::SpillMetrics,
+) -> Result<RecordBatch> {
     match step {
         PreparedStep::DropColumns(config) => columns::drop_columns(batch, config),
         PreparedStep::Rename(config) => columns::rename(batch, config),
@@ -1284,11 +1295,15 @@ fn execute_step(batch: &RecordBatch, step: &PreparedStep, limits: &Limits) -> Re
         PreparedStep::Bin(config) => analysis::bin(batch, config),
         PreparedStep::Sample(config) => analysis::sample(batch, config),
         PreparedStep::Statistics(config) => analysis::statistics(batch, config),
-        PreparedStep::Sort(config) => aggregation::sort(batch, config),
+        PreparedStep::Sort(config) => sort_dispatch(batch, config, limits, spill_dir, spill_metrics),
         PreparedStep::TopN(config) => aggregation::top_n(batch, config),
-        PreparedStep::Distinct(config) => aggregation::distinct(batch, config),
+        PreparedStep::Distinct(config) => {
+            distinct_dispatch(batch, config, limits, spill_dir, spill_metrics)
+        }
         PreparedStep::DedupAdvanced(config) => aggregation::dedup_advanced(batch, config),
-        PreparedStep::Aggregate(config) => aggregation::aggregate(batch, config),
+        PreparedStep::Aggregate(config) => {
+            aggregate_dispatch(batch, config, limits, spill_dir, spill_metrics)
+        }
         PreparedStep::WindowFunction(config) => aggregation::window_function(batch, config),
         PreparedStep::RollingWindow(config) => aggregation::rolling_window(batch, config),
         PreparedStep::Melt(config) => reshape::melt(batch, config, limits),
@@ -1318,13 +1333,125 @@ fn execute_step(batch: &RecordBatch, step: &PreparedStep, limits: &Limits) -> Re
     }
 }
 
+// ---------------------------------------------------------------------------
+// Selezione dello spill unario (ADR-0002, Fase 2B M2c)
+// ---------------------------------------------------------------------------
+
+/// Il piano unario e' spill-capable: un solo passo `sort`/`distinct`/
+/// `aggregate` (la forma prodotta da `prepare` per i nodi del DAG), cioe' le
+/// operazioni con variante `*_spilled` in `plenora_kernels_table::spill`.
+/// Usata dall'executor del DAG per la gestione della quota governor.
+pub(crate) fn unary_spill_capable(plan: &ValidatedPlan) -> bool {
+    matches!(
+        plan.prepared_steps(),
+        [PreparedStep::Sort(_) | PreparedStep::Distinct(_) | PreparedStep::Aggregate(_)]
+    )
+}
+
+/// Accumulatore delle metriche di spill della catena (saturating: contatori
+/// di osservabilita', mai un overflow a bloccare l'esecuzione).
+fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMetrics) {
+    total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
+    total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
+    total.files = total.files.saturating_add(delta.files);
+}
+
+/// Workspace di spill per un'operazione: sulla directory del chiamante
+/// (`Some`, es. il `TempStore` condiviso per `execution_id` di
+/// plenora-engine — mai rimossa da qui) o su una tempdir posseduta (`None`,
+/// percorso legacy); la quota resta `limits.max_temp_bytes` in entrambi i
+/// casi.
+fn spill_workspace(spill_dir: Option<&Path>, limits: &Limits) -> Result<spill::RowSpillWorkspace> {
+    match spill_dir {
+        Some(directory) => spill::RowSpillWorkspace::with_directory(directory, limits.max_temp_bytes),
+        None => spill::RowSpillWorkspace::new(limits.max_temp_bytes),
+    }
+}
+
+/// `table.sort` con attivazione preventiva dello spill (ADR-0002): stessa
+/// soglia deterministica del set-op spilled (byte stimati dell'input vs
+/// `max_memory_bytes`); sopra soglia external merge sort su disco, sotto il
+/// percorso in memoria. Output identico nei due casi.
+fn sort_dispatch(
+    batch: &RecordBatch,
+    config: &aggregation::Sort,
+    limits: &Limits,
+    spill_dir: Option<&Path>,
+    spill_metrics: &mut spill::SpillMetrics,
+) -> Result<RecordBatch> {
+    if !spill::should_spill_unary(batch, limits) {
+        return aggregation::sort(batch, config);
+    }
+    let mut workspace = spill_workspace(spill_dir, limits)?;
+    let (output, metrics) = spill::sort_spilled_in(batch, config, limits, &mut workspace)?;
+    accumulate_spill(spill_metrics, metrics);
+    Ok(output)
+}
+
+/// Come [`sort_dispatch`], per `table.distinct`.
+fn distinct_dispatch(
+    batch: &RecordBatch,
+    config: &aggregation::Distinct,
+    limits: &Limits,
+    spill_dir: Option<&Path>,
+    spill_metrics: &mut spill::SpillMetrics,
+) -> Result<RecordBatch> {
+    if !spill::should_spill_unary(batch, limits) {
+        return aggregation::distinct(batch, config);
+    }
+    let mut workspace = spill_workspace(spill_dir, limits)?;
+    let (output, metrics) = spill::distinct_spilled_in(batch, config, limits, &mut workspace)?;
+    accumulate_spill(spill_metrics, metrics);
+    Ok(output)
+}
+
+/// Come [`sort_dispatch`], per `table.aggregate`.
+fn aggregate_dispatch(
+    batch: &RecordBatch,
+    config: &aggregation::Aggregate,
+    limits: &Limits,
+    spill_dir: Option<&Path>,
+    spill_metrics: &mut spill::SpillMetrics,
+) -> Result<RecordBatch> {
+    if !spill::should_spill_unary(batch, limits) {
+        return aggregation::aggregate(batch, config);
+    }
+    let mut workspace = spill_workspace(spill_dir, limits)?;
+    let (output, metrics) = spill::aggregate_spilled_in(batch, config, limits, &mut workspace)?;
+    accumulate_spill(spill_metrics, metrics);
+    Ok(output)
+}
+
 /// Esegue una catena gia' validata su una singola batch Arrow.
 ///
 /// # Errors
 ///
 /// Restituisce un errore contestualizzato col passo se schema, limiti o kernel
 /// non possono garantire un risultato deterministico.
-pub fn execute_batch(mut batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordBatch> {
+pub fn execute_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordBatch> {
+    execute_batch_with_spill(batch, plan, None).map(|(output, _)| output)
+}
+
+/// Come [`execute_batch`], ma con la directory di spill decisa dal chiamante
+/// (ADR-0002, Fase 2B M2c): `Some(dir)` instrada i file di spill di
+/// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione
+/// (il `TempStore` di plenora-engine — creata se manca, mai rimossa da qui;
+/// i file di spill sono comunque ripuliti a fine operazione), `None`
+/// corrisponde al comportamento storico (tempdir posseduta per operazione).
+///
+/// Restituisce anche le metriche di spill aggregate sulla catena (byte
+/// scritti/letti e file materializzati): azzerate se nessun passo ha
+/// spillato.
+///
+/// # Errors
+///
+/// Come [`execute_batch`]; in piu' l'errore dedicato `Contract`
+/// `max_temp_bytes` se la quota temp dello spill e' superata.
+pub fn execute_batch_with_spill(
+    mut batch: RecordBatch,
+    plan: &ValidatedPlan,
+    spill_dir: Option<&Path>,
+) -> Result<(RecordBatch, spill::SpillMetrics)> {
     if plan.requires_secondary() {
         return Err(PlenoraError::Contract(
             "il piano richiede un secondo input".into(),
@@ -1332,13 +1459,14 @@ pub fn execute_batch(mut batch: RecordBatch, plan: &ValidatedPlan) -> Result<Rec
     }
     batch = normalize_large_utf8(&batch)?;
     validate_batch(&batch, plan.limits())?;
+    let mut spill_metrics = spill::SpillMetrics::default();
     for (index, (step, prepared)) in plan
         .steps()
         .iter()
         .zip(plan.prepared_steps())
         .enumerate()
     {
-        batch = execute_step(&batch, prepared, plan.limits()).map_err(|error| PlenoraError::Step {
+        batch = execute_step(&batch, prepared, plan.limits(), spill_dir, &mut spill_metrics).map_err(|error| PlenoraError::Step {
             node: index.to_string(),
             operation: step.operation.clone(),
             // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
@@ -1352,7 +1480,7 @@ pub fn execute_batch(mut batch: RecordBatch, plan: &ValidatedPlan) -> Result<Rec
             reason: error.to_string(),
         })?;
     }
-    Ok(batch)
+    Ok((batch, spill_metrics))
 }
 
 /// Esegue un piano binario validato su due batch complete.
@@ -1377,6 +1505,12 @@ pub fn execute_binary(
         PreparedStep::UnionDistinct(_) | PreparedStep::Intersect(_) | PreparedStep::Except(_)
     ) && spill::should_spill(&left, &right, plan.limits())
     {
+        // NOTA (Fase 2B M2c): il set-op spilled usa ancora una tempdir
+        // posseduta interna a `execute_set_operation` — kernels-table non
+        // espone una variante `*_in` con workspace del chiamante per i
+        // set-op, quindi questo percorso NON transita dalla directory
+        // condivisa del `TempStore` (diversamente da sort/distinct/
+        // aggregate, cfr. `execute_batch_with_spill`).
         let output = spill::execute_set_operation(
             prepared.name(),
             &left,

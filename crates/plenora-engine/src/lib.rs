@@ -48,6 +48,13 @@
 //! negli errori `Step`/`Cancelled` e nel lock del `TempStore`;
 //! `PlenoraError::category()`/`retryable()`; modalita' diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, contesto strutturale, mai valori).
+//!
+//! Fase 2B M2c aggiunge il wiring dello spill generalizzato (ADR-0002):
+//! `table.sort`/`distinct`/`aggregate` attivano preventivamente la variante
+//! `*_spilled` sopra la soglia stimata "byte input > `max_memory_bytes`";
+//! i file di spill vivono nella directory condivisa del [`TempStore`]
+//! dell'esecuzione e le [`SpillMetrics`] aggregate sono esposte in
+//! [`executor::ExecutionMetrics`].
 
 pub mod cancellation;
 pub mod executor;
@@ -68,4 +75,7 @@ pub use prepare::{
     MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
 };
-pub use table_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
+pub use table_engine::{
+    execute_batch, execute_batch_with_spill, execute_binary, Limits, Plan, Step, ValidatedPlan,
+};
+pub use plenora_kernels_table::spill::SpillMetrics;

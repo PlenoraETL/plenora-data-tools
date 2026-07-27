@@ -134,7 +134,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -153,6 +153,7 @@ use plenora_core::contract::{BatchSequence, DataContract};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
 use plenora_kernels_geo::{operations, validate_wkb_contract_with_depth};
+use plenora_kernels_table::spill::SpillMetrics;
 
 use crate::cancellation::CancellationToken;
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
@@ -387,6 +388,11 @@ pub struct ExecutionMetrics {
     /// della lettura delle metriche — lease vivi, byte trattenuti attuali e
     /// di picco, eta' del lease piu' vecchio.
     pub memory: MemoryMetrics,
+    /// Metriche di spill aggregate sull'esecuzione (ADR-0002, Fase 2B M2c):
+    /// byte scritti/letti sui file temporanei e numero di file
+    /// materializzati dai percorsi `*_spilled` di sort/distinct/aggregate.
+    /// Tutte zero se nessun nodo ha spillato.
+    pub spill: SpillMetrics,
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +418,9 @@ struct ExecState {
     /// Store temporaneo dell'esecuzione (ADR 3): heartbeat al punto
     /// centrale, cleanup RAII al `Drop`.
     temp_store: RefCell<TempStore>,
+    /// Metriche di spill aggregate (ADR-0002, Fase 2B M2c): alimentate dai
+    /// percorsi `*_spilled` attivati nei nodi tabellari.
+    spill_metrics: RefCell<SpillMetrics>,
     /// Istante dell'ultimo heartbeat scritto (throttle).
     last_heartbeat: Cell<Instant>,
     /// Righe/batch/byte cumulati per input (`max_input_rows`, `max_batches`,
@@ -468,6 +477,7 @@ impl ExecState {
             cancellation,
             diagnostics,
             temp_store: RefCell::new(temp_store),
+            spill_metrics: RefCell::new(SpillMetrics::default()),
             last_heartbeat: Cell::new(Instant::now()),
             input_counts: RefCell::new(HashMap::new()),
             edge_counts: RefCell::new(HashMap::new()),
@@ -480,7 +490,24 @@ impl ExecState {
     fn metrics(&self) -> ExecutionMetrics {
         let mut metrics = self.metrics.borrow().clone();
         metrics.memory = self.governor.snapshot();
+        metrics.spill = *self.spill_metrics.borrow();
         metrics
+    }
+
+    /// Directory di spill condivisa dell'esecuzione (ADR-0002, Fase 2B M2c):
+    /// sotto-directory `spill/` del `TempStore` — creata dal workspace di
+    /// spill al primo uso, ripulita dei file a fine operazione e rimossa
+    /// interamente dal `Drop` RAII dello store.
+    fn spill_directory(&self) -> PathBuf {
+        self.temp_store.borrow().path().join("spill")
+    }
+
+    /// Accumula le metriche di uno spill attivato in un nodo tabellare.
+    fn add_spill_metrics(&self, delta: SpillMetrics) {
+        let mut total = self.spill_metrics.borrow_mut();
+        total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
+        total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
+        total.files = total.files.saturating_add(delta.files);
     }
 
     /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
@@ -1223,13 +1250,28 @@ impl Network {
                         .kernels
                         .first()
                         .expect("segmento blocking: 1 kernel");
+                    // ADR-0002 (Fase 2B M2c): verso un kernel spill-capable
+                    // la quota governor dei batch drenati e' rilasciata
+                    // subito. La soglia di attivazione dello spill ha la
+                    // stessa grandezza del budget (byte stimati dell'input vs
+                    // `max_memory_bytes`): trattenere i lease renderebbe lo
+                    // spill irraggiungibile (fail-fast al drenaggio, prima
+                    // del dispatch). La memoria di lavoro dell'operatore e'
+                    // auto-limitata dallo spill su disco; approssimazione v1:
+                    // la materializzazione dell'input resta in RAM (lo spill
+                    // in streaming durante il drenaggio e' M3).
+                    let spill_capable = spill_capable_unary(kernel);
                     // ADR 3, M1c: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che
                     // ricevera' i dati (`NonInterruptible`: mai).
                     let mut batches = Vec::new();
                     for item in &mut input {
                         state.check_cancellation(kernel)?;
-                        batches.push(item?);
+                        let mut governed = item?;
+                        if spill_capable {
+                            governed.lease = None;
+                        }
+                        batches.push(governed);
                     }
                     run_blocking(&plan, index, &state, batches)
                 });
@@ -1615,7 +1657,7 @@ fn run_streaming_chain(
         let rows_in = batch.num_rows() as u64;
         let bytes_in = bytes_at_boundary;
         let start = Instant::now();
-        batch = run_kernel(kernel, batch)
+        batch = run_kernel(kernel, batch, state)
             .map_err(|error| state.with_diagnostics(error, batch_detail.as_deref()))?;
         let elapsed = start.elapsed();
         let rows_out = batch.num_rows() as u64;
@@ -1691,11 +1733,11 @@ fn inject_test_panic(node_id: &str) {
 /// stream, quindi un eventuale stato interno del kernel lasciato incoerente
 /// dal panic non e' mai riusato. I confini `UnwindSafe` dichiarati per il
 /// DAG parallelo restano Fase 2B.
-fn run_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch> {
+fn run_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecState) -> Result<RecordBatch> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]
         inject_test_panic(&kernel.node_id);
-        dispatch_kernel(kernel, batch)
+        dispatch_kernel(kernel, batch, state)
     })) {
         Ok(result) => result,
         Err(payload) => Err(panic_step_error(kernel, &*payload)),
@@ -1703,10 +1745,19 @@ fn run_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch
 }
 
 /// Dispatch per famiglia di un kernel su un batch.
-fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch> {
+///
+/// I kernel tabellari unari ricevono la directory di spill condivisa
+/// dell'esecuzione (ADR-0002, Fase 2B M2c): `sort`/`distinct`/`aggregate`
+/// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
+/// accumulate in [`ExecState`].
+fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecState) -> Result<RecordBatch> {
     match &kernel.config {
         PreparedConfig::TableUnary(plan) => {
-            table_engine::execute_batch(batch, plan).map_err(|error| step_error(kernel, error))
+            let (output, spill_metrics) =
+                table_engine::execute_batch_with_spill(batch, plan, Some(&state.spill_directory()))
+                    .map_err(|error| step_error(kernel, error))?;
+            state.add_spill_metrics(spill_metrics);
+            Ok(output)
         }
         PreparedConfig::TableBinary(_) => Err(PlenoraError::Contract(format!(
             "nodo `{}`: kernel binario in una catena streaming (errore interno)",
@@ -2296,6 +2347,16 @@ fn geo_cluster_dbscan_batch(
     append_output_column(kernel, batch, std::sync::Arc::new(UInt64Array::from(labels)))
 }
 
+/// Il kernel di un segmento blocking unario e' spill-capable (ADR-0002,
+/// Fase 2B M2c): `table.sort`/`distinct`/`aggregate` hanno la variante
+/// `*_spilled` in kernels-table (cfr. `table_engine::unary_spill_capable`).
+fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
+    matches!(
+        &kernel.config,
+        PreparedConfig::TableUnary(table_plan) if table_engine::unary_spill_capable(table_plan)
+    )
+}
+
 /// Segmento blocking unario: input materializzato (previsto dal piano, V9),
 /// concatenato ed eseguito una sola volta.
 ///
@@ -2327,17 +2388,34 @@ fn run_blocking(
     // Il batch concatenato non ha un produttore a monte che ne abbia
     // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
     check_batch_bytes(state, &full, &kernel.node_id)?;
-    // Reservation completa dell'intermedio prima di rilasciare i lease
-    // degli input (ADR-0002: mai attesa con reservation parziale).
+    // ADR-0002 (Fase 2B M2c): se il kernel spillera' — stessa soglia
+    // deterministica valutata al dispatch tabellare (`should_spill_unary`
+    // sui byte stimati dell'input), stessi limiti — l'intermedio
+    // concatenato NON consuma quota governor: la memoria di lavoro
+    // dell'operatore e' auto-limitata dallo spill su disco e la
+    // reservation fallirebbe per costruzione (la soglia ha la stessa
+    // grandezza del budget). Altrimenti reservation completa
+    // dell'intermedio prima di rilasciare i lease degli input (ADR-0002:
+    // mai attesa con reservation parziale).
+    let spill_path = match &kernel.config {
+        PreparedConfig::TableUnary(table_plan) if table_engine::unary_spill_capable(table_plan) => {
+            plenora_kernels_table::spill::should_spill_unary(&full, table_plan.limits())
+        }
+        _ => false,
+    };
     let full_bytes = full.get_array_memory_size() as u64;
-    let full_lease = state.governor.reserve(full_bytes, &kernel.node_id)?;
+    let full_lease = if spill_path {
+        None
+    } else {
+        Some(state.governor.reserve(full_bytes, &kernel.node_id)?)
+    };
     drop(batches);
     // ADR 3, M1c: a fine drenaggio, prima del kernel monolitico
     // (`BoundaryOnly`: check tra kernel/a fine kernel; `NonInterruptible`:
     // mai).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
-    let output = run_kernel(kernel, full)?;
+    let output = run_kernel(kernel, full, state)?;
     let elapsed = start.elapsed();
     // Lease dell'output acquisito prima di rilasciare l'intermedio.
     let output_lease = state

@@ -39,10 +39,27 @@ fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String>
     Ok(key)
 }
 
-fn compare_at(batch: &RecordBatch, index: usize, left: usize, right: usize) -> Result<Ordering> {
-    let array = batch.column(index);
-    let left_null = array.is_null(left);
-    let right_null = array.is_null(right);
+/// Confronto tipizzato tra due celle, condiviso dai tre siti di confronto di
+/// `table.sort`: `compare_at` (stesso batch), `ColumnComparator` (fast path
+/// tipizzato) e il merge k-way dello spill (`spill::compare_cells`, batch
+/// diversi — da qui la forma a due array).
+///
+/// Semantica: null dopo i valori (uguaglianza tra null); confronto nativo
+/// esatto per Int64 (`i64::cmp`: la conversione a f64 collasserebbe valori
+/// distinti oltre 2^53 sullo stesso double) e per UInt64 (`u64::cmp`: il
+/// fallback testuale ordinerebbe "10" prima di "9"); `total_cmp` per
+/// Float64 (invariato); fallback `scalar_as_string` per gli altri tipi
+/// (invariato, stesso ordine storico del kernel). Le colonne confrontate
+/// appartengono allo stesso schema; se i tipi non coincidono con quello
+/// atteso si ricade comunque sul fallback testuale.
+pub(crate) fn compare_cells_typed(
+    left: &ArrayRef,
+    left_row: usize,
+    right: &ArrayRef,
+    right_row: usize,
+) -> Result<Ordering> {
+    let left_null = left.is_null(left_row);
+    let right_null = right.is_null(right_row);
     if left_null || right_null {
         return Ok(match (left_null, right_null) {
             (true, true) => Ordering::Equal,
@@ -51,12 +68,42 @@ fn compare_at(batch: &RecordBatch, index: usize, left: usize, right: usize) -> R
             _ => unreachable!(),
         });
     }
-    if matches!(array.data_type(), DataType::Int64 | DataType::Float64) {
-        return Ok(scalar_as_f64(array.as_ref(), left)?
-            .unwrap_or_default()
-            .total_cmp(&scalar_as_f64(array.as_ref(), right)?.unwrap_or_default()));
+    match left.data_type() {
+        DataType::Int64 => {
+            if let (Some(left_values), Some(right_values)) = (
+                left.as_any().downcast_ref::<Int64Array>(),
+                right.as_any().downcast_ref::<Int64Array>(),
+            ) {
+                return Ok(left_values.value(left_row).cmp(&right_values.value(right_row)));
+            }
+        }
+        DataType::UInt64 => {
+            if let (Some(left_values), Some(right_values)) = (
+                left.as_any().downcast_ref::<UInt64Array>(),
+                right.as_any().downcast_ref::<UInt64Array>(),
+            ) {
+                return Ok(left_values.value(left_row).cmp(&right_values.value(right_row)));
+            }
+        }
+        DataType::Float64 => {
+            if let (Some(left_values), Some(right_values)) = (
+                left.as_any().downcast_ref::<Float64Array>(),
+                right.as_any().downcast_ref::<Float64Array>(),
+            ) {
+                return Ok(left_values
+                    .value(left_row)
+                    .total_cmp(&right_values.value(right_row)));
+            }
+        }
+        _ => {}
     }
-    Ok(scalar_as_string(array.as_ref(), left)?.cmp(&scalar_as_string(array.as_ref(), right)?))
+    Ok(scalar_as_string(left.as_ref(), left_row)?
+        .cmp(&scalar_as_string(right.as_ref(), right_row)?))
+}
+
+fn compare_at(batch: &RecordBatch, index: usize, left: usize, right: usize) -> Result<Ordering> {
+    let array = batch.column(index);
+    compare_cells_typed(array, left, array, right)
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,15 +120,18 @@ const fn default_true() -> bool {
 // ---------------------------------------------------------------------------
 // Comparatori tipizzati di `table.sort` (ottimizzazione kernel, Fase post-2A).
 //
-// Per i tipi Arrow principali (Int64, Float64, Utf8, Boolean) il confronto
-// avviene sui valori nativi, senza conversione scalare ad ogni confronto;
-// la semantica e' IDENTICA a `compare_at` (null dopo i valori in ascendente,
-// `total_cmp` per i numerici, confronto testuale "false" < "true" per i
-// booleani). Gli altri tipi ricadono su `compare_at`, invariato.
+// Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
+// confronto avviene sui valori nativi, senza conversione scalare ad ogni
+// confronto; la semantica e' IDENTICA a `compare_at`/`compare_cells_typed`
+// (null dopo i valori in ascendente, `i64::cmp`/`u64::cmp` esatti per gli
+// interi — nessuna perdita di precisione oltre 2^53 — `total_cmp` per i
+// Float64, confronto testuale "false" < "true" per i booleani). Gli altri
+// tipi ricadono su `compare_at`, invariato.
 // ---------------------------------------------------------------------------
 
 enum ColumnComparator {
     Int64(Int64Array),
+    UInt64(UInt64Array),
     Float64(Float64Array),
     Utf8(StringArray),
     Boolean(BooleanArray),
@@ -93,6 +143,9 @@ impl ColumnComparator {
     fn new(index: usize, array: &ArrayRef) -> Self {
         if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
             return Self::Int64(values.clone());
+        }
+        if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+            return Self::UInt64(values.clone());
         }
         if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
             return Self::Float64(values.clone());
@@ -109,11 +162,10 @@ impl ColumnComparator {
     fn compare(&self, batch: &RecordBatch, left: usize, right: usize) -> Result<Ordering> {
         match self {
             Self::Int64(values) => Ok(compare_nullable(values, left, right, |values, l, r| {
-                values
-                    .value(l)
-                    .to_f64()
-                    .unwrap_or_default()
-                    .total_cmp(&values.value(r).to_f64().unwrap_or_default())
+                values.value(l).cmp(&values.value(r))
+            })),
+            Self::UInt64(values) => Ok(compare_nullable(values, left, right, |values, l, r| {
+                values.value(l).cmp(&values.value(r))
             })),
             Self::Float64(values) => Ok(compare_nullable(values, left, right, |values, l, r| {
                 values.value(l).total_cmp(&values.value(r))
@@ -475,7 +527,11 @@ pub struct Aggregate {
 
 /// Colonna di group-by con formattatore tipizzato: produce gli stessi byte
 /// di `row_key` (`{tipo}\u{1e}{1|0}{len}:{value}\u{1f}`).
-enum KeyColumn {
+///
+/// `pub(crate)` per il modulo `spill` (Fase 2B): il partizionamento hash e la
+/// ricostruzione dell'ordine canonico dei gruppi riusano gli stessi byte di
+/// chiave, cosi' i percorsi spilled hanno identita' di gruppo identica.
+pub(crate) enum KeyColumn {
     Int64 { prefix: String, values: Int64Array },
     UInt64 { prefix: String, values: UInt64Array },
     Float64 { prefix: String, values: Float64Array },
@@ -486,7 +542,7 @@ enum KeyColumn {
 }
 
 impl KeyColumn {
-    fn new(array: &ArrayRef) -> Self {
+    pub(crate) fn new(array: &ArrayRef) -> Self {
         let prefix = array.data_type().to_string();
         if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
             return Self::Int64 {
@@ -524,7 +580,7 @@ impl KeyColumn {
         }
     }
 
-    fn write_key(&self, row: usize, key: &mut String, scratch: &mut String) -> Result<()> {
+    pub(crate) fn write_key(&self, row: usize, key: &mut String, scratch: &mut String) -> Result<()> {
         match self {
             Self::Int64 { prefix, values } => {
                 key.push_str(prefix);
@@ -608,7 +664,7 @@ fn push_key_value(key: &mut String, value: &str) {
 /// prefisso comune lungo (stesso tipo, stessa lunghezza) si concentrano in
 /// pochi bucket (verificato: max 328 contro 7 con finalizer).
 #[derive(Default)]
-struct KeyHasher(u64);
+pub(crate) struct KeyHasher(u64);
 
 impl std::hash::Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -3735,5 +3791,111 @@ mod tests {
         let reference_error =
             window_function_reference(&large, &config).expect_err("riferimento errore");
         assert_eq!(fast_error.to_string(), reference_error.to_string());
+    }
+
+    #[test]
+    fn sort_orders_i64_beyond_f64_precision_exactly() {
+        // Regressione (bug 6): 2^53 e 2^53+1 collassano sullo stesso double
+        // (9007199254740992): il vecchio confronto via f64 li considerava
+        // uguali e ricadeva sull'indice di riga, ordinando silenziosamente
+        // male. Il confronto nativo `i64::cmp` li distingue.
+        let big: i64 = 1 << 53;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("v", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
+                Arc::new(Int64Array::from(vec![big + 1, big, big + 2, -big - 1, -big])),
+            ],
+        )
+        .expect("fixture");
+        let ascending = Sort {
+            columns: vec!["v".into()],
+            ascending: true,
+        };
+        assert_eq!(sorted_ids(&batch, &ascending), vec![3, 4, 1, 0, 2]);
+        let descending = Sort {
+            columns: vec!["v".into()],
+            ascending: false,
+        };
+        assert_eq!(sorted_ids(&batch, &descending), vec![2, 0, 1, 4, 3]);
+    }
+
+    #[test]
+    fn sort_and_top_n_order_u64_numerically() {
+        // Regressione (bug 7): UInt64 cadeva nel fallback testuale
+        // ("10" < "9"); il confronto nativo `u64::cmp` ordina numericamente.
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("u", DataType::UInt64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                Arc::new(UInt64Array::from(vec![9_u64, 10, 100, 99])),
+            ],
+        )
+        .expect("fixture");
+        let ascending = Sort {
+            columns: vec!["u".into()],
+            ascending: true,
+        };
+        assert_eq!(sorted_ids(&batch, &ascending), vec![0, 1, 3, 2]);
+        let descending = Sort {
+            columns: vec!["u".into()],
+            ascending: false,
+        };
+        assert_eq!(sorted_ids(&batch, &descending), vec![2, 3, 1, 0]);
+
+        let top_ascending = top_n(
+            &batch,
+            &TopN {
+                columns: vec!["u".into()],
+                n: 2,
+                descending: false,
+            },
+        )
+        .expect("top_n ascendente");
+        let top_ids = top_ascending
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("id column")
+            .values()
+            .to_vec();
+        assert_eq!(top_ids, vec![0, 1]);
+        let top_descending = top_n(
+            &batch,
+            &TopN {
+                columns: vec!["u".into()],
+                n: 2,
+                descending: true,
+            },
+        )
+        .expect("top_n discendente");
+        let top_ids = top_descending
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("id column")
+            .values()
+            .to_vec();
+        assert_eq!(top_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn compare_at_generic_path_orders_u64_numerically() {
+        // `compare_at` (percorso `ColumnComparator::Generic`) delega allo
+        // stesso comparatore tipizzato unico: UInt64 resta numerico anche
+        // fuori dal fast path tipizzato.
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, false)])),
+            vec![Arc::new(UInt64Array::from(vec![9_u64, 10]))],
+        )
+        .expect("fixture");
+        assert_eq!(compare_at(&batch, 0, 0, 1).expect("cmp"), Ordering::Less);
+        assert_eq!(compare_at(&batch, 0, 1, 0).expect("cmp"), Ordering::Greater);
     }
 }

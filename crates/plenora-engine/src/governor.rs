@@ -18,6 +18,13 @@
 //! in questa milestone l'esecuzione e' seriale e il governor emette solo
 //! `Granted` — vedi [`MemoryGovernor::try_reserve`] per la regola v1 e il
 //! perche' gli altri due esiti non sono attuabili in seriale.
+//!
+//! Spill (Fase 2B M2c): `sort`/`distinct`/`aggregate` hanno una variante
+//! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
+//! di dispatch (soglia stimata "byte input > `max_memory_bytes`", ADR-0002
+//! "attivazione prima dell'esaurimento"), NON guidata da una reservation
+//! fallita: `MustSpill` resta non emesso in v1 — il re-scheduling su
+//! reservation fallita richiede il planner che riprova (M3).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,9 +50,11 @@ pub enum ReservationResult {
     /// parallelo (M3) ma non e' MAI emesso dalla v1 seriale.
     RetryAfterProgress,
     /// Il richiedente ha una strategia di spill e deve attivarla (preferita
-    /// a nuova quota, ADR-0002). Lo spill selettivo non e' ancora
-    /// implementato (Fase 2B, milestone successive): esiste nell'API ma non
-    /// e' MAI emesso dalla v1.
+    /// a nuova quota, ADR-0002). Resta MAI emesso in v1: lo spill selettivo
+    /// esiste (Fase 2B M2c: sort/distinct/aggregate spilled) ma la sua
+    /// attivazione e' PREVENTIVA ai punti di dispatch, su soglia stimata —
+    /// non su reservation fallita. Emetterlo richiede il planner che
+    /// riprova il nodo con una strategia diversa (re-scheduling, M3).
     MustSpill,
 }
 
@@ -205,12 +214,13 @@ impl MemoryGovernor {
     /// l'ADR-0002 prescriverebbe `RetryAfterProgress` (sospensione del ramo
     /// e retry dopo un progresso globale) o `MustSpill` (strategia di spill
     /// preferita): in seriale NESSUNO dei due esiti e' attuabile — non
-    /// esiste uno scheduler che sospenda i rami (M3) ne' lo spill selettivo
-    /// (milestone successive) — quindi resta l'unico esito residuo
-    /// dell'ADR-0002, il fail-fast "nessuna strategia sicura disponibile":
-    /// errore `Contract` `max_memory_bytes`. Per questo
-    /// `RetryAfterProgress` e `MustSpill` esistono nell'API ma non sono MAI
-    /// emessi da questa implementazione.
+    /// esiste uno scheduler che sospenda i rami (M3) ne' un planner che
+    /// riprovi il nodo con lo spill (M3; lo spill M2c e' attivato
+    /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
+    /// resta l'unico esito residuo dell'ADR-0002, il fail-fast "nessuna
+    /// strategia sicura disponibile": errore `Contract` `max_memory_bytes`.
+    /// Per questo `RetryAfterProgress` e `MustSpill` esistono nell'API ma
+    /// non sono MAI emessi da questa implementazione.
     ///
     /// Costo: poche operazioni atomiche per batch, mai per riga, nessun
     /// riconteggio ricorsivo dei buffer (i byte li fissa il chiamante al

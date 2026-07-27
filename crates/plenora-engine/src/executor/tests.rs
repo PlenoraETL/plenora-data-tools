@@ -2472,3 +2472,145 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
         "mai valori: il payload della cella non compare: {on}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Spill generalizzato (ADR-0002, Fase 2B M2c): attivazione preventiva al
+// dispatch, TempStore condiviso, metriche e quota temp.
+// ---------------------------------------------------------------------------
+
+/// Piano con un `table.distinct` e limiti dati espliciti: con
+/// `max_memory_bytes` sotto i byte stimati dell'input il dispatch attiva
+/// `distinct_spilled` (soglia deterministica ADR-0002).
+fn distinct_plan(max_memory_bytes: u64, max_temp_bytes: u64) -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "limits": {"max_memory_bytes": max_memory_bytes, "max_temp_bytes": max_temp_bytes},
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "d", "op": "table.distinct", "in": ["main"],
+             "config": {"subset": ["id"], "keep": "first"}},
+        ],
+        "output": "d",
+    })
+}
+
+/// 2048 righe con sole 8 chiavi distinte, in batch da 64: ogni batch singolo
+/// entra in un budget di `2 * batch_bytes`, il totale no — lo scenario di
+/// spill (lo stream eccede cumulativamente il budget).
+fn skewed_batches() -> (Vec<RecordBatch>, u64) {
+    let ids: Vec<i64> = (0..2048).map(|i| i % 8).collect();
+    let names: Vec<String> = ids.iter().map(|id| format!("name{id}")).collect();
+    let names_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let batches: Vec<RecordBatch> = ids
+        .chunks(64)
+        .zip(names_refs.chunks(64))
+        .map(|(chunk_ids, chunk_names)| table_batch(chunk_ids, chunk_names))
+        .collect();
+    let batch_bytes = batches[0].get_array_memory_size() as u64;
+    let total_bytes: u64 = batches
+        .iter()
+        .map(|batch| batch.get_array_memory_size() as u64)
+        .sum();
+    let memory_budget = batch_bytes * 2;
+    assert!(
+        total_bytes > memory_budget,
+        "lo spill deve essere inevitabile: {total_bytes} <= {memory_budget}"
+    );
+    (batches, memory_budget)
+}
+
+/// Percorso dello store temporaneo dell'esecuzione dentro `root`.
+fn store_dir_of(root: &std::path::Path, execution_id: &str) -> Option<std::path::PathBuf> {
+    root.read_dir()
+        .expect("lettura root")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&format!("plenora-{execution_id}-")))
+        })
+}
+
+#[test]
+fn distinct_spills_end_to_end_into_shared_temp_store() {
+    let root = tempfile::tempdir().expect("root");
+    let (batches, memory_budget) = skewed_batches();
+    let graph = validate(
+        &distinct_plan(memory_budget, 1 << 30).to_string(),
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("validate");
+    let runtime = RuntimeContext {
+        temp_root: Some(root.path().to_owned()),
+        ..RuntimeContext::default()
+    };
+    let output = execute(&graph, single_input("main", batches), runtime).expect("execute");
+
+    // Mentre l'Output e' vivo lo store esiste e la sotto-directory di spill
+    // non contiene residui: i file sono ripuliti a fine operazione
+    // (cleanup/Drop del workspace di kernels-table).
+    let store_dir = store_dir_of(root.path(), output.execution_id())
+        .expect("store dell'esecuzione presente mentre l'Output e' vivo");
+    let spill_dir = store_dir.join("spill");
+    if spill_dir.exists() {
+        assert!(
+            spill_dir.read_dir().expect("read_dir spill").next().is_none(),
+            "nessun file di spill residuo durante l'esecuzione"
+        );
+    }
+
+    let (spilled, metrics) = output.collect_batches().expect("stream ok");
+    let spilled_rows: usize = spilled.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(spilled_rows, 8, "8 chiavi distinte");
+    // Metriche di spill aggregate (ADR-0002): lo spill e' avvenuto.
+    assert!(metrics.spill.bytes_written > 0, "{:?}", metrics.spill);
+    assert!(metrics.spill.bytes_read > 0, "{:?}", metrics.spill);
+    assert!(metrics.spill.files > 0, "{:?}", metrics.spill);
+    // Cleanup RAII completo: nessun residuo nella temp root iniettata.
+    assert!(
+        root.path().read_dir().expect("read_dir root").next().is_none(),
+        "TempStore rimosso al Drop: nessun residuo"
+    );
+
+    // Oracolo: stesso piano con budget ampio (percorso in memoria) — output
+    // identico e nessuna metrica di spill.
+    let (batches, _) = skewed_batches();
+    let output = run(
+        &distinct_plan(1 << 40, 1 << 30),
+        single_input("main", batches),
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("execute");
+    let (expected, oracle_metrics) = output.collect_batches().expect("stream ok");
+    assert_eq!(oracle_metrics.spill, SpillMetrics::default());
+    assert_eq!(spilled, expected, "output spilled identico al percorso in memoria");
+}
+
+#[test]
+fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
+    let root = tempfile::tempdir().expect("root");
+    let (batches, memory_budget) = skewed_batches();
+    let graph = validate(
+        &distinct_plan(memory_budget, 1).to_string(),
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("validate");
+    let runtime = RuntimeContext {
+        temp_root: Some(root.path().to_owned()),
+        ..RuntimeContext::default()
+    };
+    let error = execute(&graph, single_input("main", batches), runtime)
+        .expect("execute")
+        .collect_batches()
+        .expect_err("quota temp superata: errore dedicato");
+    assert!(
+        error.to_string().contains("max_temp_bytes"),
+        "errore dedicato max_temp_bytes: {error}"
+    );
+    // Nessun residuo anche sul percorso di errore (Drop del workspace +
+    // Drop RAII del TempStore).
+    assert!(
+        root.path().read_dir().expect("read_dir root").next().is_none(),
+        "nessun residuo nella temp root dopo l'errore"
+    );
+}
