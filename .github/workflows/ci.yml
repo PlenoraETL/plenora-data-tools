@@ -43,8 +43,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-ci-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-${{ matrix.os }}-
+          # La chiave include la toolchain: artefatti compilati da versioni
+          # diverse del compilatore non sono riusabili (ld bus error su
+          # restore incrociato, osservato 2026-07-27).
+          key: cargo-ci-1.92.0-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-1.92.0-${{ matrix.os }}-
 
       # R13.2: --locked. Un Cargo.lock modificato dalla build e' un
       # fallimento, non un aggiornamento.
