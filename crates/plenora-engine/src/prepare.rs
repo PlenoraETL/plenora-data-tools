@@ -629,28 +629,30 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
     }
 
     // Metadati di catalogo per nodo (guidano la scomposizione in segmenti).
-    let node_meta: HashMap<&str, (ExecutionClass, Arity, Family)> = plan
-        .nodes
-        .iter()
-        .map(|node| {
-            let descriptor = plenora_core::catalog::find_operation(&node.op)
-                .expect("op risolta in validazione");
+    let mut node_meta: HashMap<&str, (ExecutionClass, Arity, Family)> =
+        HashMap::with_capacity(plan.nodes.len());
+    for node in &plan.nodes {
+        let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
+            PlenoraError::Contract(format!(
+                "internal error: nodo `{}`: op risolta in validazione",
+                node.id
+            ))
+        })?;
+        node_meta.insert(
+            node.id.as_str(),
             (
-                node.id.as_str(),
-                (
-                    descriptor.execution_class,
-                    descriptor.arity,
-                    descriptor.family,
-                ),
-            )
-        })
-        .collect();
+                descriptor.execution_class,
+                descriptor.arity,
+                descriptor.family,
+            ),
+        );
+    }
 
     // Scomposizione in segmenti: catene massimali di nodi Streaming unari
     // con arco intermedio a fan-out 1; ogni nodo blocking e' un segmento.
-    let chains = build_chains(topo, &node_meta, &consumers, &fan_out);
+    let chains = build_chains(topo, &node_meta, &consumers, &fan_out)?;
     let (segments, node_segment) =
-        build_segments(graph, &nodes_by_id, &node_meta, &fan_out, chains, &mut kernels_by_id);
+        build_segments(graph, &nodes_by_id, &node_meta, &fan_out, chains, &mut kernels_by_id)?;
     let last_consumers = compute_last_consumers(plan, topo, &consumers);
 
     let input_statistics = plan
@@ -679,7 +681,7 @@ fn build_chains<'a>(
     node_meta: &HashMap<&'a str, (ExecutionClass, Arity, Family)>,
     consumers: &HashMap<&'a str, Vec<&'a str>>,
     fan_out: &HashMap<&'a str, usize>,
-) -> Vec<Vec<&'a str>> {
+) -> Result<Vec<Vec<&'a str>>> {
     let mut chains: Vec<Vec<&'a str>> = Vec::new();
     let mut assigned: HashMap<&'a str, bool> = HashMap::with_capacity(topo.len());
     for node_id in topo {
@@ -691,7 +693,11 @@ fn build_chains<'a>(
             // Estendi la catena finche' il consumatore unico e' uno
             // streaming unario.
             loop {
-                let last = *chain.last().expect("catena non vuota");
+                let Some(&last) = chain.last() else {
+                    return Err(PlenoraError::Contract(
+                        "internal error: catena non vuota".to_owned(),
+                    ));
+                };
                 if fan_out[last] != 1 {
                     break;
                 }
@@ -712,7 +718,7 @@ fn build_chains<'a>(
         }
         chains.push(chain);
     }
-    chains
+    Ok(chains)
 }
 
 /// Costruisce i [`PhysicalSegment`] dalle catene, muovendo i kernel
@@ -725,7 +731,7 @@ fn build_segments<'a>(
     fan_out: &HashMap<&'a str, usize>,
     chains: Vec<Vec<&'a str>>,
     kernels_by_id: &mut HashMap<&'a str, PreparedKernel>,
-) -> (Vec<PhysicalSegment>, HashMap<String, usize>) {
+) -> Result<(Vec<PhysicalSegment>, HashMap<String, usize>)> {
     let mut segments: Vec<PhysicalSegment> = Vec::with_capacity(chains.len());
     let mut node_segment: HashMap<String, usize> = HashMap::with_capacity(nodes_by_id.len());
     for chain in chains {
@@ -765,11 +771,13 @@ fn build_segments<'a>(
         let kernels: Vec<PreparedKernel> = chain
             .iter()
             .map(|id| {
-                kernels_by_id
-                    .remove(id)
-                    .expect("ogni nodo in esattamente un segmento")
+                kernels_by_id.remove(id).ok_or_else(|| {
+                    PlenoraError::Contract(format!(
+                        "internal error: nodo `{id}`: ogni nodo in esattamente un segmento"
+                    ))
+                })
             })
-            .collect();
+            .collect::<Result<_>>()?;
         segments.push(PhysicalSegment {
             id: format!("seg{index}"),
             kernels: kernels.into_boxed_slice(),
@@ -779,12 +787,16 @@ fn build_segments<'a>(
             output_edge: last.to_owned(),
             output_contract: graph
                 .edge_contract(last)
-                .expect("arco inferito in validazione")
+                .ok_or_else(|| {
+                    PlenoraError::Contract(format!(
+                        "internal error: arco `{last}` inferito in validazione"
+                    ))
+                })?
                 .clone(),
             materialize_output: fan_out[last] > 1,
         });
     }
-    (segments, node_segment)
+    Ok((segments, node_segment))
 }
 
 /// Last consumer per arco (V10): l'ultimo nodo consumatore in ordine
@@ -830,32 +842,52 @@ fn prepare_kernel(
     node: &NodeV4,
     limits: &Limits,
 ) -> Result<PreparedKernel> {
-    let descriptor = plenora_core::catalog::find_operation(&node.op)
-        .expect("op risolta in validazione");
+    let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
+        PlenoraError::Contract(format!(
+            "internal error: nodo `{}`: op risolta in validazione",
+            node.id
+        ))
+    })?;
     let input_contracts: Vec<DataContract> = node
         .inputs
         .iter()
         .map(|edge| {
             graph
                 .edge_contract(edge)
-                .expect("arco inferito in validazione")
-                .clone()
+                .ok_or_else(|| {
+                    PlenoraError::Contract(format!(
+                        "internal error: arco `{edge}` inferito in validazione"
+                    ))
+                })
+                .cloned()
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let output_contract = graph
         .edge_contract(&node.id)
-        .expect("arco inferito in validazione")
+        .ok_or_else(|| {
+            PlenoraError::Contract(format!(
+                "internal error: arco `{}` inferito in validazione",
+                node.id
+            ))
+        })?
         .clone();
-    let geometry_column_index = input_contracts
+    let geometry_column_index = match input_contracts
         .first()
         .and_then(|contract| contract.active_geometry_column())
-        .map(|geometry| {
+    {
+        Some(geometry) => Some(
             input_contracts[0]
                 .schema
                 .column_with_name(&geometry.name)
-                .expect("colonna geometria nel contratto")
-                .0
-        });
+                .ok_or_else(|| {
+                    PlenoraError::Contract(
+                        "internal error: colonna geometria nel contratto".to_owned(),
+                    )
+                })?
+                .0,
+        ),
+        None => None,
+    };
 
     let legacy_limits = legacy_limits(limits);
     let (config, geo_role) = match descriptor.family {
@@ -1101,7 +1133,11 @@ fn prepare_geo(
         let parsed: GeoTransformConfig = serde_json::from_value(node.config.clone())?;
         let geometry = input_contract
             .active_geometry_column()
-            .expect("geometria attiva verificata in validazione");
+            .ok_or_else(|| {
+                PlenoraError::Contract(
+                    "internal error: geometria attiva verificata in validazione".to_owned(),
+                )
+            })?;
         let params = TransformArrowSchema {
             schema_version: TransformArrowSchema::VERSION,
             operation,
@@ -1225,7 +1261,7 @@ fn prepare_geo_extension(
         "geo.geometry_accessors" => {
             let parsed: GeoAccessorsConfig = serde_json::from_value(node.config.clone())?;
             let prefix = parsed.output_prefix.as_deref().unwrap_or("");
-            let mut selected: Vec<AccessorKind> = match &parsed.fields {
+            let selected: Vec<AccessorKind> = match &parsed.fields {
                 None => AccessorKind::ALL.to_vec(),
                 Some(names) => names
                     .iter()
@@ -1239,13 +1275,14 @@ fn prepare_geo_extension(
                     })
                     .collect::<Result<_>>()?,
             };
-            selected.sort_by_key(|kind| {
-                AccessorKind::ALL
-                    .iter()
-                    .position(|canonical| canonical == kind)
-                    .expect("accessorio del canone")
-            });
-            selected.dedup();
+            // Ordine canonico e deduplicazione per costruzione: si iterano
+            // gli accessori del canone e si tengono quelli selezionati
+            // (ogni `AccessorKind` e' in `ALL`, quindi la posizione esiste
+            // sempre per costruzione).
+            let selected: Vec<AccessorKind> = AccessorKind::ALL
+                .into_iter()
+                .filter(|kind| selected.contains(kind))
+                .collect();
             // I nomi di output (prefisso applicato) devono esistere nel
             // contratto inferito dal planner (difesa in profondita').
             let mut columns: Vec<(String, AccessorKind)> = Vec::with_capacity(selected.len());

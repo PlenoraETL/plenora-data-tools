@@ -2183,7 +2183,9 @@ fn infer_expression_type(
                     }
                     Ok(StaticType::Number)
                 }
-                Function::DateTrunc | Function::In => unreachable!(),
+                Function::DateTrunc | Function::In => {
+                    contract_error(op, "internal error: date_trunc/in hanno nodi dedicati")
+                }
             }
         }
         Expression::Case {
@@ -3213,13 +3215,25 @@ fn analyze_join(
     let left_indices: Vec<usize> = config
         .left_keys
         .iter()
-        .map(|name| left.schema.index_of(name).expect("chiave verificata"))
-        .collect();
+        .map(|name| {
+            left.schema.index_of(name).map_err(|_| {
+                PlenoraError::Contract(format!(
+                    "internal error: {op}: chiave verificata assente nello schema"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let right_indices: HashSet<usize> = config
         .right_keys
         .iter()
-        .map(|name| right.schema.index_of(name).expect("chiave verificata"))
-        .collect();
+        .map(|name| {
+            right.schema.index_of(name).map_err(|_| {
+                PlenoraError::Contract(format!(
+                    "internal error: {op}: chiave verificata assente nello schema"
+                ))
+            })
+        })
+        .collect::<Result<HashSet<_>>>()?;
     let (fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
         op,
         left,
@@ -3261,7 +3275,11 @@ fn analyze_fuzzy_join(
         .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
     require_utf8(op, left, &config.left_key)?;
     require_utf8(op, right, &config.right_key)?;
-    let left_index = left.schema.index_of(&config.left_key).expect("chiave verificata");
+    let left_index = left.schema.index_of(&config.left_key).map_err(|_| {
+        PlenoraError::Contract(format!(
+            "internal error: {op}: chiave verificata assente nello schema"
+        ))
+    })?;
     let (mut fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
         op,
         left,
@@ -3390,8 +3408,14 @@ fn analyze_asof_join(
         .right_by
         .iter()
         .chain(std::iter::once(&config.right_on))
-        .map(|name| right.schema.index_of(name).expect("chiave verificata"))
-        .collect();
+        .map(|name| {
+            right.schema.index_of(name).map_err(|_| {
+                PlenoraError::Contract(format!(
+                    "internal error: {op}: chiave verificata assente nello schema"
+                ))
+            })
+        })
+        .collect::<Result<HashSet<_>>>()?;
     let (fields_out, left_geometry, right_geometry) =
         combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf)?;
     let schema = Schema::new(fields_out);

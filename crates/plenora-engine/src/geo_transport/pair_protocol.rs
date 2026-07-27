@@ -67,7 +67,8 @@ pub fn read_pairs<R: Read>(mut reader: R) -> Result<Vec<JoinPair>, PairProtocolE
     if &header[..8] != PAIR_MAGIC {
         return Err(PairProtocolError::InvalidMagic);
     }
-    let pair_count = u64::from_le_bytes(header[8..].try_into().expect("8 bytes"));
+    let [_, _, _, _, _, _, _, _, c0, c1, c2, c3, c4, c5, c6, c7] = header;
+    let pair_count = u64::from_le_bytes([c0, c1, c2, c3, c4, c5, c6, c7]);
     if pair_count > MAX_PAIRS {
         return Err(PairProtocolError::TooManyPairs(pair_count));
     }
@@ -80,9 +81,10 @@ pub fn read_pairs<R: Read>(mut reader: R) -> Result<Vec<JoinPair>, PairProtocolE
         let mut frame = [0_u8; 16];
         reader.read_exact(&mut frame)?;
         hasher.update(frame);
+        let [l0, l1, l2, l3, l4, l5, l6, l7, r0, r1, r2, r3, r4, r5, r6, r7] = frame;
         pairs.push(JoinPair {
-            left: u64::from_le_bytes(frame[..8].try_into().expect("8 bytes")),
-            right: u64::from_le_bytes(frame[8..].try_into().expect("8 bytes")),
+            left: u64::from_le_bytes([l0, l1, l2, l3, l4, l5, l6, l7]),
+            right: u64::from_le_bytes([r0, r1, r2, r3, r4, r5, r6, r7]),
         });
     }
     let mut trailer = [0_u8; 8];

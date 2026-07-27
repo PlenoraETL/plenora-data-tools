@@ -45,6 +45,11 @@ agente — segue queste regole. Non sono opzionali.
 ```sh
 # test completi (container, toolchain del progetto)
 docker run --rm -v $PWD:/work -w /work rust:1.92 cargo test --workspace --no-fail-fast
+# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nei lib
+cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
+  -p plenora-kernels-geo --lib --locked -- --cap-lints=warn -D unsafe-code \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
+  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
 scripts/fuzz-smoke.sh
 ```

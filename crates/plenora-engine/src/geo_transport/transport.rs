@@ -187,6 +187,11 @@ pub enum ArrowTransportError {
     IpcMetadataTooLarge(usize),
     #[error("stream IPC troncato o non allineato")]
     IpcTruncated,
+    /// Invariante interna violata: parametro gia' validato a monte o caso
+    /// gia' ristretto dal dispatch. Indica un difetto del trasporto, non
+    /// dell'input; il messaggio nomina solo il parametro o il caso, mai dati.
+    #[error("errore interno trasporto Arrow: {0}")]
+    Internal(&'static str),
     #[error("decodifica Arrow IPC fallita: {0}")]
     Arrow(String),
     #[error("geometria non valida: {0}")]
@@ -1081,17 +1086,20 @@ pub struct EnvelopeReader<R> {
 
 impl<R: Read> EnvelopeReader<R> {
     pub fn new(mut inner: R) -> Result<Self, ArrowTransportError> {
-        let mut header = [0_u8; 16];
-        inner.read_exact(&mut header)?;
-        if &header[..8] != ENVELOPE_MAGIC {
+        let mut magic = [0_u8; 8];
+        inner.read_exact(&mut magic)?;
+        if &magic != ENVELOPE_MAGIC {
             return Err(ArrowTransportError::InvalidMagic);
         }
-        let payload_len = u64::from_le_bytes(header[8..].try_into().expect("8 bytes"));
+        let mut payload_len_bytes = [0_u8; 8];
+        inner.read_exact(&mut payload_len_bytes)?;
+        let payload_len = u64::from_le_bytes(payload_len_bytes);
         if payload_len > MAX_STREAM_BYTES {
             return Err(ArrowTransportError::StreamTooLarge);
         }
         let mut hasher = Sha256::new();
-        hasher.update(header);
+        hasher.update(magic);
+        hasher.update(payload_len_bytes);
         Ok(Self {
             inner,
             hasher,
@@ -1204,19 +1212,22 @@ const MAX_FLATBUFFER_DEPTH: usize = 64;
 
 fn fb_u16(buf: &[u8], pos: usize) -> Result<u16, ArrowTransportError> {
     buf.get(pos..pos + 2)
-        .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("2 byte")))
+        .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+        .map(u16::from_le_bytes)
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
 fn fb_u32(buf: &[u8], pos: usize) -> Result<u32, ArrowTransportError> {
     buf.get(pos..pos + 4)
-        .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("4 byte")))
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
 fn fb_i64(buf: &[u8], pos: usize) -> Result<i64, ArrowTransportError> {
     buf.get(pos..pos + 8)
-        .map(|bytes| i64::from_le_bytes(bytes.try_into().expect("8 byte")))
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+        .map(i64::from_le_bytes)
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
@@ -1227,7 +1238,8 @@ fn fb_i64(buf: &[u8], pos: usize) -> Result<i64, ArrowTransportError> {
 fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportError> {
     let soffset = buf
         .get(pos..pos + 4)
-        .map(|bytes| i32::from_le_bytes(bytes.try_into().expect("4 byte")))
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(i32::from_le_bytes)
         .ok_or(ArrowTransportError::IpcTruncated)?;
     if soffset == 0 {
         return Err(ArrowTransportError::IpcTruncated);
@@ -1250,16 +1262,21 @@ fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportErro
 }
 
 /// Offset del campo `index` dalla vtable (0 se assente).
-fn fb_field(buf: &[u8], vtable: usize, vtable_len: usize, index: usize) -> usize {
+fn fb_field(
+    buf: &[u8],
+    vtable: usize,
+    vtable_len: usize,
+    index: usize,
+) -> Result<usize, ArrowTransportError> {
     let entry = 4 + index * 2;
     if entry + 2 > vtable_len {
-        return 0;
+        return Ok(0);
     }
-    u16::from_le_bytes(
-        buf[vtable + entry..vtable + entry + 2]
-            .try_into()
-            .expect("2 byte"),
-    ) as usize
+    let bytes: [u8; 2] = buf
+        .get(vtable + entry..vtable + entry + 2)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(ArrowTransportError::IpcTruncated)?;
+    Ok(u16::from_le_bytes(bytes) as usize)
 }
 
 /// Posizione assoluta di un campo indiretto (tabella, vettore, stringa).
@@ -1300,7 +1317,7 @@ fn fb_string(buf: &[u8], pos: usize) -> Result<(), ArrowTransportError> {
 fn fb_key_value(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
     let (vtable, vtable_len) = fb_table(buf, table)?;
     for index in [0, 1] {
-        let offset = fb_field(buf, vtable, vtable_len, index);
+        let offset = fb_field(buf, vtable, vtable_len, index)?;
         if offset != 0 {
             fb_string(buf, fb_indirect(buf, table, offset)?)?;
         }
@@ -1328,14 +1345,14 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
     }
     let (vtable, vtable_len) = fb_table(buf, table)?;
     // name: stringa.
-    let name = fb_field(buf, vtable, vtable_len, 0);
+    let name = fb_field(buf, vtable, vtable_len, 0)?;
     if name != 0 {
         fb_string(buf, fb_indirect(buf, table, name)?)?;
     }
     // type (union): la tabella e' verificata nei limiti; il solo tipo con
     // vettori (Union.typeIds) e' controllato esplicitamente.
-    let type_type_offset = fb_field(buf, vtable, vtable_len, 2);
-    let type_offset = fb_field(buf, vtable, vtable_len, 3);
+    let type_type_offset = fb_field(buf, vtable, vtable_len, 2)?;
+    let type_offset = fb_field(buf, vtable, vtable_len, 3)?;
     if type_offset != 0 {
         let type_table = fb_indirect(buf, table, type_offset)?;
         let (type_vtable, type_vtable_len) = fb_table(buf, type_table)?;
@@ -1344,7 +1361,7 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
                 .get(table + type_type_offset)
                 .ok_or(ArrowTransportError::IpcTruncated)?;
             if type_type == 14 {
-                let type_ids = fb_field(buf, type_vtable, type_vtable_len, 3);
+                let type_ids = fb_field(buf, type_vtable, type_vtable_len, 3)?;
                 if type_ids != 0 {
                     fb_vector(buf, fb_indirect(buf, type_table, type_ids)?, 4)?;
                 }
@@ -1352,17 +1369,17 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
         }
     }
     // dictionary: DictionaryEncoding (scalari + tabella Int).
-    let dictionary = fb_field(buf, vtable, vtable_len, 4);
+    let dictionary = fb_field(buf, vtable, vtable_len, 4)?;
     if dictionary != 0 {
         let dictionary_table = fb_indirect(buf, table, dictionary)?;
         let (dict_vtable, dict_vtable_len) = fb_table(buf, dictionary_table)?;
-        let index_type = fb_field(buf, dict_vtable, dict_vtable_len, 1);
+        let index_type = fb_field(buf, dict_vtable, dict_vtable_len, 1)?;
         if index_type != 0 {
             fb_table(buf, fb_indirect(buf, dictionary_table, index_type)?)?;
         }
     }
     // children: vettore di Field.
-    let children = fb_field(buf, vtable, vtable_len, 5);
+    let children = fb_field(buf, vtable, vtable_len, 5)?;
     if children != 0 {
         let vector = fb_indirect(buf, table, children)?;
         let count = fb_vector(buf, vector, 4)?;
@@ -1372,7 +1389,7 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
         }
     }
     // custom_metadata.
-    let custom = fb_field(buf, vtable, vtable_len, 6);
+    let custom = fb_field(buf, vtable, vtable_len, 6)?;
     fb_custom_metadata(buf, table, custom)?;
     Ok(())
 }
@@ -1380,11 +1397,11 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
 /// Tabella `RecordBatch`: nodi, buffer (entro il body dichiarato), variadic.
 fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), ArrowTransportError> {
     let (vtable, vtable_len) = fb_table(buf, table)?;
-    let nodes = fb_field(buf, vtable, vtable_len, 1);
+    let nodes = fb_field(buf, vtable, vtable_len, 1)?;
     if nodes != 0 {
         fb_vector(buf, fb_indirect(buf, table, nodes)?, 16)?;
     }
-    let buffers = fb_field(buf, vtable, vtable_len, 2);
+    let buffers = fb_field(buf, vtable, vtable_len, 2)?;
     if buffers != 0 {
         let vector = fb_indirect(buf, table, buffers)?;
         let count = fb_vector(buf, vector, 16)?;
@@ -1403,11 +1420,11 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
             }
         }
     }
-    let compression = fb_field(buf, vtable, vtable_len, 3);
+    let compression = fb_field(buf, vtable, vtable_len, 3)?;
     if compression != 0 {
         fb_table(buf, fb_indirect(buf, table, compression)?)?;
     }
-    let variadic = fb_field(buf, vtable, vtable_len, 4);
+    let variadic = fb_field(buf, vtable, vtable_len, 4)?;
     if variadic != 0 {
         fb_vector(buf, fb_indirect(buf, table, variadic)?, 8)?;
     }
@@ -1417,7 +1434,7 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
 /// Tabella `Schema`: fields, custom_metadata e feature.
 fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
     let (vtable, vtable_len) = fb_table(buf, table)?;
-    let fields = fb_field(buf, vtable, vtable_len, 1);
+    let fields = fb_field(buf, vtable, vtable_len, 1)?;
     if fields != 0 {
         let vector = fb_indirect(buf, table, fields)?;
         let count = fb_vector(buf, vector, 4)?;
@@ -1429,9 +1446,9 @@ fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
             fb_field_table(buf, field, 0)?;
         }
     }
-    let custom = fb_field(buf, vtable, vtable_len, 2);
+    let custom = fb_field(buf, vtable, vtable_len, 2)?;
     fb_custom_metadata(buf, table, custom)?;
-    let features = fb_field(buf, vtable, vtable_len, 3);
+    let features = fb_field(buf, vtable, vtable_len, 3)?;
     if features != 0 {
         fb_vector(buf, fb_indirect(buf, table, features)?, 8)?;
     }
@@ -1450,7 +1467,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
 
     // version (0) e header_type (1) sono scalari; header (2) e' la tabella
     // del messaggio; bodyLength (3) uno scalare i64; custom_metadata (4).
-    let header_type_offset = fb_field(metadata, vtable, vtable_len, 1);
+    let header_type_offset = fb_field(metadata, vtable, vtable_len, 1)?;
     let header_type = if header_type_offset == 0 {
         0
     } else {
@@ -1458,7 +1475,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
             .get(table + header_type_offset)
             .ok_or(ArrowTransportError::IpcTruncated)?
     };
-    let header_offset = fb_field(metadata, vtable, vtable_len, 2);
+    let header_offset = fb_field(metadata, vtable, vtable_len, 2)?;
     let header_table = if header_offset == 0 {
         None
     } else {
@@ -1470,7 +1487,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
             2 => {
                 // DictionaryBatch: data (RecordBatch) al campo 1.
                 let (dict_vtable, dict_vtable_len) = fb_table(metadata, header_table)?;
-                let data = fb_field(metadata, dict_vtable, dict_vtable_len, 1);
+                let data = fb_field(metadata, dict_vtable, dict_vtable_len, 1)?;
                 if data != 0 {
                     let batch = fb_indirect(metadata, header_table, data)?;
                     fb_record_batch(metadata, batch, metadata.len())?;
@@ -1488,7 +1505,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
         }
     }
 
-    let body_len_offset = fb_field(metadata, vtable, vtable_len, 3);
+    let body_len_offset = fb_field(metadata, vtable, vtable_len, 3)?;
     let body_len = if body_len_offset == 0 {
         0
     } else {
@@ -1504,7 +1521,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
         fb_record_batch(metadata, header_table, body_len)?;
     }
 
-    let custom = fb_field(metadata, vtable, vtable_len, 4);
+    let custom = fb_field(metadata, vtable, vtable_len, 4)?;
     fb_custom_metadata(metadata, table, custom)?;
     Ok(body_len)
 }
@@ -1518,18 +1535,17 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<usize, ArrowTranspor
 fn validate_ipc_framing(payload: &[u8]) -> Result<(), ArrowTransportError> {
     let mut offset = 0_usize;
     loop {
-        let prefix_bytes = payload
+        let prefix_bytes: [u8; 4] = payload
             .get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
             .ok_or(ArrowTransportError::IpcTruncated)?;
-        let prefix = u32::from_le_bytes(prefix_bytes.try_into().expect("4 byte"));
+        let prefix = u32::from_le_bytes(prefix_bytes);
         let (metadata_len, header) = if prefix == 0xFFFF_FFFF {
-            let length_bytes = payload
+            let length_bytes: [u8; 4] = payload
                 .get(offset + 4..offset + 8)
+                .and_then(|bytes| bytes.try_into().ok())
                 .ok_or(ArrowTransportError::IpcTruncated)?;
-            (
-                u32::from_le_bytes(length_bytes.try_into().expect("4 byte")) as usize,
-                8,
-            )
+            (u32::from_le_bytes(length_bytes) as usize, 8)
         } else {
             (prefix as usize, 4)
         };
@@ -1685,7 +1701,9 @@ fn transform_cells(
     let operation = params.operation;
     match operation {
         ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope => {
-            let kernel = operation.geometry_kernel().expect("operazione geometrica");
+            let kernel = operation
+                .geometry_kernel()
+                .ok_or(ArrowTransportError::Internal("operazione geometrica senza kernel"))?;
             Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
                 Ok(transform_wkb(kernel, payload).map(Some)?)
             })?))
@@ -1763,7 +1781,9 @@ fn transform_cells(
                                 Reprojector::new(&source, &target, MAX_CELL_COORDINATES)?,
                             ));
                         }
-                        let (_, _, reprojector) = slot.as_ref().expect("pipeline appena creata");
+                        let (_, _, reprojector) = slot
+                            .as_ref()
+                            .ok_or(ArrowTransportError::Internal("pipeline appena creata assente"))?;
                         let reprojected = reprojector.reproject(&geometry)?;
                         encode_geometry(&reprojected).map(Some)
                     })
@@ -1813,11 +1833,12 @@ fn transform_cells(
         ArrowOperation::AffineTransform => {
             let coefficients: [f64; 6] = params
                 .coefficients
-                .as_ref()
-                .expect("validato")
-                .as_slice()
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("coefficients validato assente"))?
                 .try_into()
-                .expect("validato");
+                .map_err(|_| {
+                    ArrowTransportError::Internal("coefficients validato non di 6 elementi")
+                })?;
             Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
                 let geometry = geometry_from_wkb(payload)?;
                 encode_geometry(&affine_transform(&geometry, coefficients)?).map(Some)
@@ -2032,12 +2053,12 @@ pub fn transform_batches(
         ArrowShape::Collective => match params.operation {
             ArrowOperation::Voronoi => voronoi_batches(schema, batches, params),
             ArrowOperation::CleanTopology => clean_topology_batches(schema, batches, params),
-            _ => unreachable!("shape Collective non coperta"),
+            _ => Err(ArrowTransportError::Internal("shape Collective non coperta")),
         },
         ArrowShape::WholeToMany => match params.operation {
             ArrowOperation::Polygonize => polygonize_batches(schema, batches, params),
             ArrowOperation::LineMerge => line_merge_batches(schema, batches, params),
-            _ => unreachable!("shape WholeToMany non coperta"),
+            _ => Err(ArrowTransportError::Internal("shape WholeToMany non coperta")),
         },
         ArrowShape::FromCoords => from_coords_batches(schema, batches, params),
         ArrowShape::Diagnostic => diagnostics_batches(schema, batches, params),
@@ -2094,7 +2115,11 @@ fn one_to_one_batches(
                     .collect();
                 output_fields.splice(geometry_index..geometry_index + 1, bounds_fields);
             }
-            _ => unreachable!("operazione non geometrica non coperta"),
+            _ => {
+                return Err(ArrowTransportError::Internal(
+                    "operazione non geometrica non coperta",
+                ))
+            }
         }
     }
     let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
@@ -2212,7 +2237,11 @@ fn explode_batches(
                     .into_iter()
                     .map(Geometry::Polygon)
                     .collect(),
-                _ => unreachable!("explode_batches: operazione non 1:N"),
+                _ => {
+                    return Err(ArrowTransportError::Internal(
+                        "explode_batches: operazione non 1:N",
+                    ))
+                }
             };
             let next = total_rows
                 .checked_add(parts.len() as u64)
@@ -2299,7 +2328,11 @@ fn collect_batches(
         }
         ArrowOperation::LineBuilder => line_from_ordered_points(&geometries)?,
         ArrowOperation::PolygonBuilder => polygon_from_ordered_points(&geometries)?,
-        _ => unreachable!("collect_batches: operazione non N:1"),
+        _ => {
+            return Err(ArrowTransportError::Internal(
+                "collect_batches: operazione non N:1",
+            ))
+        }
     };
     let limit = params.max_output_rows_limit();
     if limit == 0 {
@@ -2646,11 +2679,11 @@ fn geometry_rows_output(
         BinaryArray::from_iter(rows.iter().map(|row| row.0.as_deref())),
     )];
     if with_class {
-        columns.push(std::sync::Arc::new(StringArray::from(
-            rows.iter()
-                .map(|row| row.1.expect("classe"))
-                .collect::<Vec<_>>(),
-        )));
+        let classes: Vec<&'static str> = rows
+            .iter()
+            .map(|row| row.1.ok_or(ArrowTransportError::Internal("classe mancante")))
+            .collect::<Result<_, _>>()?;
+        columns.push(std::sync::Arc::new(StringArray::from(classes)));
     }
     let batch = RecordBatch::try_new(output_schema.clone(), columns)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
@@ -2759,13 +2792,13 @@ fn numeric_values(
         DataType::Float64 => Ok(column
             .as_any()
             .downcast_ref::<Float64Array>()
-            .expect("tipo verificato")
+            .ok_or(ArrowTransportError::Internal("tipo verificato Float64"))?
             .iter()
             .collect()),
         DataType::Int64 => Ok(column
             .as_any()
             .downcast_ref::<plenora_core::arrow::array::Int64Array>()
-            .expect("tipo verificato")
+            .ok_or(ArrowTransportError::Internal("tipo verificato Int64"))?
             .iter()
             .map(|value| value.map(|x| x as f64))
             .collect()),
@@ -3297,8 +3330,15 @@ fn pairs_batch(
     let mut columns: Vec<plenora_core::arrow::array::ArrayRef> =
         vec![std::sync::Arc::new(left), std::sync::Arc::new(right)];
     if schema.fields().len() == 3 {
+        let distances: Vec<f64> = pairs
+            .iter()
+            .map(|pair| {
+                pair.2
+                    .ok_or(ArrowTransportError::Internal("distance mancante"))
+            })
+            .collect::<Result<_, _>>()?;
         columns.push(std::sync::Arc::new(Float64Array::from_iter_values(
-            pairs.iter().map(|pair| pair.2.expect("distance")),
+            distances,
         )));
     }
     RecordBatch::try_new(std::sync::Arc::new(schema.clone()), columns)
@@ -3427,8 +3467,12 @@ pub fn pair_arrow(
             let pairs = spatial_join_nullable(
                 &left,
                 &right,
-                schema.predicate.expect("validato"),
-                schema.max_pairs.expect("validato"),
+                schema
+                    .predicate
+                    .ok_or(ArrowTransportError::Internal("predicate validato assente"))?,
+                schema
+                    .max_pairs
+                    .ok_or(ArrowTransportError::Internal("max_pairs validato assente"))?,
             )?;
             if pairs.len() as u64 > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
@@ -3445,8 +3489,13 @@ pub fn pair_arrow(
             (out_schema, vec![batch])
         }
         PairOperation::Distance => {
-            let distances =
-                minimum_distances(&left, &right, schema.max_comparisons.expect("validato"))?;
+            let distances = minimum_distances(
+                &left,
+                &right,
+                schema
+                    .max_comparisons
+                    .ok_or(ArrowTransportError::Internal("max_comparisons validato assente"))?,
+            )?;
             if left_rows > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
                     actual: left_rows,
@@ -3484,8 +3533,12 @@ pub fn pair_arrow(
                 &left,
                 &right,
                 schema.max_distance,
-                schema.max_comparisons.expect("validato"),
-                schema.max_results.expect("validato"),
+                schema
+                    .max_comparisons
+                    .ok_or(ArrowTransportError::Internal("max_comparisons validato assente"))?,
+                schema
+                    .max_results
+                    .ok_or(ArrowTransportError::Internal("max_results validato assente"))?,
             )?;
             if matches.len() as u64 > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
@@ -3518,7 +3571,10 @@ pub fn pair_arrow(
                     limit,
                 });
             }
-            let output_crs = schema.left_crs.as_deref().expect("validato");
+            let output_crs = schema
+                .left_crs
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("left_crs validato assente"))?;
             let mut output_fields: Vec<Field> = left_schema
                 .fields()
                 .iter()
@@ -3579,11 +3635,18 @@ pub fn pair_arrow(
             let pieces = polygon_overlay(
                 &left_values,
                 &right_values,
-                schema.overlay_mode.expect("validato"),
-                schema.max_pairs.expect("validato"),
+                schema
+                    .overlay_mode
+                    .ok_or(ArrowTransportError::Internal("overlay_mode validato assente"))?,
+                schema
+                    .max_pairs
+                    .ok_or(ArrowTransportError::Internal("max_pairs validato assente"))?,
                 limit,
             )?;
-            let output_crs = schema.left_crs.as_deref().expect("validato");
+            let output_crs = schema
+                .left_crs
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("left_crs validato assente"))?;
             let out_schema = std::sync::Arc::new(Schema::new(vec![
                 geometry_output_field(geometry_column, output_crs)?,
                 Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),
@@ -3611,7 +3674,13 @@ pub fn pair_arrow(
             (out_schema, vec![batch])
         }
         PairOperation::Within => {
-            let indexes = within_indexes(&left, &right, schema.max_pairs.expect("validato"))?;
+            let indexes = within_indexes(
+                &left,
+                &right,
+                schema
+                    .max_pairs
+                    .ok_or(ArrowTransportError::Internal("max_pairs validato assente"))?,
+            )?;
             if left_rows > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
                     actual: left_rows,
@@ -3635,8 +3704,13 @@ pub fn pair_arrow(
         }
         PairOperation::CountPointsInPolygons => {
             // Contratto: left = poligoni (output allineato), right = punti.
-            let counts =
-                count_points_in_polygons(&left, &right, schema.max_pairs.expect("validato"))?;
+            let counts = count_points_in_polygons(
+                &left,
+                &right,
+                schema
+                    .max_pairs
+                    .ok_or(ArrowTransportError::Internal("max_pairs validato assente"))?,
+            )?;
             if left_rows > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
                     actual: left_rows,
@@ -3671,7 +3745,9 @@ pub fn pair_arrow(
                     limit,
                 });
             }
-            let kernel = operation.boolean_kernel().expect("booleana pairwise");
+            let kernel = operation
+                .boolean_kernel()
+                .ok_or(ArrowTransportError::Internal("booleana pairwise senza kernel"))?;
             // righe indipendenti: parallelo con ordine deterministico.
             let values: Vec<Option<Vec<u8>>> = left
                 .par_iter()
@@ -3691,7 +3767,10 @@ pub fn pair_arrow(
                     }
                 })
                 .collect::<Result<Vec<_>, ArrowTransportError>>()?;
-            let output_crs = schema.left_crs.as_deref().expect("validato");
+            let output_crs = schema
+                .left_crs
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("left_crs validato assente"))?;
             replace_geometry_batches(
                 &left_schema,
                 &left_batches,
@@ -3713,7 +3792,9 @@ pub fn pair_arrow(
                     limit,
                 });
             }
-            let predicate = schema.spatial_predicate.expect("validato");
+            let predicate = schema
+                .spatial_predicate
+                .ok_or(ArrowTransportError::Internal("spatial_predicate validato assente"))?;
             let flags: Vec<Option<bool>> =
                 left.par_iter()
                     .zip(right.par_iter())
@@ -3747,7 +3828,9 @@ pub fn pair_arrow(
                     limit,
                 });
             }
-            let max_pairs = schema.max_coordinate_pairs.expect("validato");
+            let max_pairs = schema
+                .max_coordinate_pairs
+                .ok_or(ArrowTransportError::Internal("max_coordinate_pairs validato assente"))?;
             let values: Vec<Option<f64>> = left
                 .par_iter()
                 .zip(right.par_iter())
@@ -3829,7 +3912,10 @@ pub fn pair_arrow(
                 });
             }
             let tolerance = schema.tolerance.unwrap_or(0.0);
-            let output_crs = schema.left_crs.as_deref().expect("validato");
+            let output_crs = schema
+                .left_crs
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("left_crs validato assente"))?;
             let geometry_index = geometry_column_index(&left_schema, geometry_column)?;
             let mut encoded: Vec<Vec<u8>> = Vec::new();
             let mut take_indices: Vec<u64> = Vec::new();

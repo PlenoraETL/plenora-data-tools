@@ -386,9 +386,11 @@ pub fn fuzzy_join(
         if let Some(value) = value {
             if let Some(candidates) = blocks.get(&block_key(value)) {
                 for &right_row in candidates {
-                    let right_value = right_norm[right_row]
-                        .as_ref()
-                        .expect("righe destre nei blocchi non sono null");
+                    let right_value = right_norm[right_row].as_ref().ok_or_else(|| {
+                        PlenoraError::Contract(
+                            "internal error: righe destre nei blocchi non sono null".into(),
+                        )
+                    })?;
                     let similarity = score(config.metric, value, right_value);
                     if similarity >= config.threshold {
                         left_rows.push(Some(left_row));

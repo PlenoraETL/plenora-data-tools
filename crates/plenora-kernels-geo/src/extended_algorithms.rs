@@ -43,6 +43,9 @@ pub enum ExtendedAlgorithmError {
     InvalidGeographicCoordinate,
     #[error("conteggio non rappresentabile come uint64")]
     IndexOverflow,
+    /// Invariante interna violata (R6: errore propagato, mai panic).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
@@ -591,7 +594,12 @@ pub fn line_merge(
     let mut adjacency: HashMap<EndpointKey, Vec<usize>> = HashMap::new();
     for line in lines {
         let start = EndpointKey::new(line.0[0]);
-        let end = EndpointKey::new(*line.0.last().expect("non-empty line"));
+        let end = EndpointKey::new(
+            *line
+                .0
+                .last()
+                .ok_or(ExtendedAlgorithmError::Internal("non-empty line"))?,
+        );
         let index = edges.len();
         edges.push(MergeEdge { line, start, end });
         adjacency.entry(start).or_default().push(index);

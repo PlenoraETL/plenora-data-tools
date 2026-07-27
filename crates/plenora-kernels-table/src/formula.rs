@@ -449,7 +449,11 @@ impl<'a> FastProgram<'a> {
                         FastColumn::I64(values) => {
                             stack.push((values.value(row).to_f64().unwrap_or_default(), values.is_null(row)));
                         }
-                        FastColumn::Str(_) => unreachable!("programma numerico senza testo"),
+                        FastColumn::Str(_) => {
+                            return Err(PlenoraError::Contract(
+                                "internal error: programma numerico senza testo".into(),
+                            ));
+                        }
                     },
                     FastOp::Neg => {
                         let (value, null) = stack.pop().unwrap_or_default();
@@ -470,12 +474,19 @@ impl<'a> FastProgram<'a> {
                                 return Err(PlenoraError::Schema("divisione per zero".into()));
                             }
                             FastOp::Divide => left / right,
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(PlenoraError::Contract(
+                                    "internal error: operatore non aritmetico nel ramo aritmetico"
+                                        .into(),
+                                ));
+                            }
                         };
                         stack.push((value, false));
                     }
                     FastOp::Text(_) | FastOp::MissingColumn(_) => {
-                        unreachable!("programma numerico senza testo")
+                        return Err(PlenoraError::Contract(
+                            "internal error: programma numerico senza testo".into(),
+                        ));
                     }
                 }
             }
@@ -621,7 +632,11 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
                 return Err(PlenoraError::Schema("divisione per zero".into()));
             }
             FastOp::Divide => Slot::Number(left / right),
-            _ => unreachable!(),
+            _ => {
+                return Err(PlenoraError::Contract(
+                    "internal error: operatore non aritmetico su operandi numerici".into(),
+                ));
+            }
         },
         (left, right) if matches!(op, FastOp::Add) => Slot::Text(Cow::Owned(format!(
             "{}{}",

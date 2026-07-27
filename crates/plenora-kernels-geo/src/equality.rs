@@ -191,22 +191,20 @@ fn cmp_polygon(left: &Polygon<f64>, right: &Polygon<f64>) -> Ordering {
 /// occorrenza della coordinata minima; a parita' di vertice iniziale si
 /// sceglie la rotazione lessicograficamente minima.
 fn best_rotation(open: &[Coord<f64>]) -> Vec<Coord<f64>> {
-    let mut best: Option<Vec<Coord<f64>>> = None;
-    for start in 0..open.len() {
+    // La rotazione 0 (la sequenza stessa) e' sempre un candidato valido:
+    // l'insieme delle rotazioni non e' mai vuoto per costruzione.
+    let mut best: Vec<Coord<f64>> = open.to_vec();
+    for start in 1..open.len() {
         let candidate: Vec<Coord<f64>> = open[start..]
             .iter()
             .chain(open[..start].iter())
             .copied()
             .collect();
-        let replace = match &best {
-            None => true,
-            Some(current) => cmp_coords(&candidate, current) == Ordering::Less,
-        };
-        if replace {
-            best = Some(candidate);
+        if cmp_coords(&candidate, &best) == Ordering::Less {
+            best = candidate;
         }
     }
-    best.expect("sequenza non vuota")
+    best
 }
 
 /// Canonizzazione di un anello: punto iniziale = vertice minimo,

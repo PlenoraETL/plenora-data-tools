@@ -662,13 +662,18 @@ fn rebuild(input: &DataContract, fields: Vec<Field>, properties: ContractPropert
 
 /// Copia del campo geometria con nullability aggiornata (per gli output a
 /// sole geometrie, dove l'aggregazione puo' produrre null).
-fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nullable: bool) -> Field {
+fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nullable: bool) -> Result<Field> {
     let field = input
         .schema
         .field_with_name(&geometry.name)
-        .expect("contratto validato: il campo geometria esiste");
-    Field::new(geometry.name.clone(), DataType::Binary, nullable)
-        .with_metadata(field.metadata().clone())
+        .map_err(|_| {
+            PlenoraError::Schema(format!(
+                "colonna geometria `{}` assente dallo schema",
+                geometry.name
+            ))
+        })?;
+    Ok(Field::new(geometry.name.clone(), DataType::Binary, nullable)
+        .with_metadata(field.metadata().clone()))
 }
 
 /// Nuovo campo geometria con metadati di estensione `geoarrow.wkb` + `geo.crs`.
@@ -757,7 +762,7 @@ fn analyze_geometry_only(
     geometry: &GeometryColumnContract,
     extra: &[(String, DataType, bool)],
 ) -> Result<DataContract> {
-    let mut fields = vec![geometry_field(input, geometry, true)];
+    let mut fields = vec![geometry_field(input, geometry, true)?];
     for (name, data_type, nullable) in extra {
         fields.push(Field::new(name.clone(), data_type.clone(), *nullable));
     }
@@ -1423,7 +1428,11 @@ fn validate_transform_params(op: &str, config: &Value) -> Result<()> {
             let parsed: LineInterpolatePointConfig = parse_config(op, config)?;
             ensure_ratio(op, "ratio", parsed.ratio)?;
         }
-        _ => unreachable!("validate_transform_params: op non una trasformazione"),
+        _ => {
+            return Err(PlenoraError::Contract(
+                "internal error: validate_transform_params: op non una trasformazione".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -1729,7 +1738,9 @@ pub fn analyze_geo_contract(
     match descriptor.arity {
         Arity::Unary => analyze_unary(descriptor, &inputs[0], config, plan_crs, fields),
         Arity::BinaryOrdered => analyze_binary(descriptor, inputs, config),
-        Arity::NAry => unreachable!("arieta' N-aria gia' rifiutata"),
+        Arity::NAry => Err(PlenoraError::Unsupported(format!(
+            "{op}: arieta' N-aria non supportata in v1"
+        ))),
     }
 }
 

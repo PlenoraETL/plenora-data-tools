@@ -70,7 +70,8 @@ impl<R: Read> FrameReader<R> {
         if &header[..8] != PROTOCOL_MAGIC {
             return Err(ProtocolError::InvalidMagic);
         }
-        let stream_rows = u64::from_le_bytes(header[8..].try_into().expect("8 bytes"));
+        let [_, _, _, _, _, _, _, _, c0, c1, c2, c3, c4, c5, c6, c7] = header;
+        let stream_rows = u64::from_le_bytes([c0, c1, c2, c3, c4, c5, c6, c7]);
         if stream_rows > MAX_ROWS {
             return Err(ProtocolError::TooManyRows(stream_rows));
         }

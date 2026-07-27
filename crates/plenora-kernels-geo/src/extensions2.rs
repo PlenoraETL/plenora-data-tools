@@ -76,6 +76,9 @@ pub enum ExtensionV2Error {
     IndexOverflow,
     #[error("subdivide non converge entro {limit} livelli di ricorsione")]
     SubdivideDepth { limit: u32 },
+    /// Invariante interna violata (R6: errore propagato, mai panic).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionV2Error> {
@@ -482,7 +485,9 @@ fn subdivide_validated(
     let mut parts = Vec::new();
     match geometry {
         Geometry::Point(_) | Geometry::Line(_) => {
-            unreachable!("punto/linea hanno al piu' 2 vertici <= max_vertices")
+            return Err(ExtensionV2Error::Internal(
+                "punto/linea hanno al piu' 2 vertici <= max_vertices",
+            ));
         }
         Geometry::LineString(line) => parts = chunk_line_string(line, max_vertices),
         Geometry::MultiLineString(lines) => {

@@ -156,12 +156,11 @@ impl<'a> WkbCursor<'a> {
     }
 
     fn read_u32(&mut self, little_endian: bool) -> Result<u32, PlenoraError> {
-        let bytes: [u8; 4] = self
+        let bytes: [u8; 4] = *self
             .payload
-            .get(self.offset..self.offset + 4)
-            .ok_or_else(|| invalid_wkb_structure("uint32 troncato"))?
-            .try_into()
-            .expect("4 bytes");
+            .get(self.offset..)
+            .and_then(|tail| tail.first_chunk::<4>())
+            .ok_or_else(|| invalid_wkb_structure("uint32 troncato"))?;
         self.offset += 4;
         Ok(if little_endian {
             u32::from_le_bytes(bytes)
@@ -171,12 +170,11 @@ impl<'a> WkbCursor<'a> {
     }
 
     fn read_f64(&mut self, little_endian: bool) -> Result<f64, PlenoraError> {
-        let bytes: [u8; 8] = self
+        let bytes: [u8; 8] = *self
             .payload
-            .get(self.offset..self.offset + 8)
-            .ok_or_else(|| invalid_wkb_structure("float64 troncato"))?
-            .try_into()
-            .expect("8 bytes");
+            .get(self.offset..)
+            .and_then(|tail| tail.first_chunk::<8>())
+            .ok_or_else(|| invalid_wkb_structure("float64 troncato"))?;
         self.offset += 8;
         Ok(if little_endian {
             f64::from_le_bytes(bytes)
@@ -290,7 +288,11 @@ fn validate_wkb_geometry(
                     5 => child_type == 2,
                     6 => child_type == 3,
                     7 => true,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(invalid_wkb_structure(
+                            "tipo geometria non supportato",
+                        ));
+                    }
                 };
                 if !valid_child {
                     return Err(invalid_wkb_structure(

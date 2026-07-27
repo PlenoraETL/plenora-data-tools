@@ -91,6 +91,9 @@ pub enum ExtensionV3Error {
     IndexOverflow,
     #[error("issues di copertura oltre il limite {limit}")]
     IssueLimit { limit: u64 },
+    /// Invariante interna violata (R6: errore propagato, mai panic).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV3Error {
@@ -280,7 +283,7 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
                 .0
                 .into_iter()
                 .next()
-                .expect("una componente"),
+                .ok_or(ExtensionV3Error::Internal("una componente"))?,
         )
     } else {
         Geometry::MultiPolygon(intersection)
@@ -299,8 +302,14 @@ fn coverage_validate_elements(
 ) -> Result<Vec<CoverageIssue>, ExtensionV3Error> {
     let mut issues = Vec::new();
     for (a, b) in candidate_pairs(elements, tree) {
-        let left = &elements[a].as_ref().expect("coppia indicizzata").polygons;
-        let right = &elements[b].as_ref().expect("coppia indicizzata").polygons;
+        let left = &elements[a]
+            .as_ref()
+            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .polygons;
+        let right = &elements[b]
+            .as_ref()
+            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .polygons;
         let intersection = left.intersection(right);
         let area = intersection.unsigned_area();
         if area > tolerance {
@@ -484,8 +493,14 @@ pub fn shared_paths_nullable(
     let (elements, tree) = prepare_elements(geometries)?;
     let mut paths = Vec::new();
     for (a, b) in candidate_pairs(&elements, &tree) {
-        let left = &elements[a].as_ref().expect("coppia indicizzata").polygons;
-        let right = &elements[b].as_ref().expect("coppia indicizzata").polygons;
+        let left = &elements[a]
+            .as_ref()
+            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .polygons;
+        let right = &elements[b]
+            .as_ref()
+            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .polygons;
         let segments = shared_boundary_segments(left, right, tolerance);
         let shared_length: f64 = segments.iter().map(segment_length).sum();
         if shared_length < min_length || shared_length == 0.0 {

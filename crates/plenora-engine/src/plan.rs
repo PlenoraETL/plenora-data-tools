@@ -814,8 +814,7 @@ fn canonical_numbers(value: &Value) -> Value {
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
 // I cast sono sicuri: guardati da `trunc` (valore intero) e da |v| <= 2^53.
 fn canonical_number(number: &Number) -> Value {
-    if number.is_f64() {
-        let float = number.as_f64().expect("is_f64 implica as_f64");
+    if let Some(float) = number.as_f64() {
         if float == float.trunc() && float.abs() <= MAX_EXACT_F64_INT as f64 {
             if float >= 0.0 {
                 return Value::from(float as u64);

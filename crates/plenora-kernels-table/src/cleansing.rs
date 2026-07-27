@@ -128,7 +128,11 @@ fn fill_utf8(values: &StringArray, method: &FillMethod, value: &Value) -> ArrayR
     }
     match method {
         FillMethod::Value => {
-            let fixed = fixed.expect("il caso None esce sopra");
+            // La guardia sopra esce gia' per `Value` con fill `null`
+            // (identita'): qui `fixed` e' sempre `Some`, come impone il tipo.
+            let Some(fixed) = fixed else {
+                return Arc::new(values.clone());
+            };
             let capacity = utf8_data_len(values) + fixed.len() * values.null_count();
             let mut builder = StringBuilder::with_capacity(values.len(), capacity);
             for row in 0..values.len() {
@@ -187,7 +191,11 @@ where
     }
     match method {
         FillMethod::Value => {
-            let fixed = fixed.expect("il caso None esce sopra");
+            // La guardia sopra esce gia' per `Value` con fill `null`
+            // (identita'): qui `fixed` e' sempre `Some`, come impone il tipo.
+            let Some(fixed) = fixed else {
+                return Arc::new(values.clone());
+            };
             let mut buffer = values.values().to_vec();
             for (row, slot) in buffer.iter_mut().enumerate() {
                 if values.is_null(row) {
@@ -236,7 +244,11 @@ fn fill_boolean(values: &BooleanArray, method: &FillMethod, fixed: Option<bool>)
     }
     match method {
         FillMethod::Value => {
-            let fixed = fixed.expect("il caso None esce sopra");
+            // La guardia sopra esce gia' per `Value` con fill `null`
+            // (identita'): qui `fixed` e' sempre `Some`, come impone il tipo.
+            let Some(fixed) = fixed else {
+                return Arc::new(values.clone());
+            };
             let out: Vec<bool> = (0..values.len())
                 .map(|row| if values.is_null(row) { fixed } else { values.value(row) })
                 .collect();

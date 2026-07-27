@@ -37,6 +37,9 @@ pub enum OperationError {
     InvalidInput(String),
     #[error("serializzazione WKT fallita: {0}")]
     WktSerialization(String),
+    /// Invariante interna violata (R6: errore propagato, mai panic).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), OperationError> {
@@ -120,7 +123,7 @@ pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationErr
 pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
     ensure_valid(geometry)?;
     Ok(u64::try_from(geometry.coords_count())
-        .expect("usize always fits in u64 on supported targets"))
+        .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))?)
 }
 
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {

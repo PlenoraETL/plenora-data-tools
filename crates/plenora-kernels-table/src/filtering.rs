@@ -158,6 +158,11 @@ fn evaluate(
                     .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?
                     .partial_cmp(&bound_as_f64(bound))
             };
+            let operator = OrderedOperator::from_operator(operator).ok_or_else(|| {
+                PlenoraError::Contract(
+                    "internal error: operatore non ordinato nel ramo ordinato".into(),
+                )
+            })?;
             Ok(ordered_typed(ordering, operator))
         }
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
@@ -166,7 +171,11 @@ fn evaluate(
                 Operator::Contains => actual.to_lowercase().contains(&expected.to_lowercase()),
                 Operator::Startswith => actual.starts_with(&expected),
                 Operator::Endswith => actual.ends_with(&expected),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: operatore non testuale nel ramo testuale".into(),
+                    ));
+                }
             })
         }
         Operator::Between => {
@@ -199,7 +208,9 @@ fn evaluate(
             };
             Ok(within)
         }
-        Operator::Isnull | Operator::Notnull => unreachable!(),
+        Operator::Isnull | Operator::Notnull => Err(PlenoraError::Contract(
+            "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
+        )),
     }
 }
 
@@ -232,15 +243,39 @@ fn numeric_eq(actual: f64, expected: f64) -> bool {
     actual.total_cmp(&expected) == Ordering::Equal || (actual == 0.0 && expected == 0.0)
 }
 
+/// Sottoinsieme ordinato di `Operator` (`>`/`>=`/`<`/`<=`) codificato nel
+/// tipo: cosi' `ordered_typed` e' totale e il compilatore dimostra che i
+/// chiamanti passano solo operatori ordinati (invariante interna, R6.4).
+#[derive(Clone, Copy)]
+enum OrderedOperator {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+impl OrderedOperator {
+    /// Conversione dal generico: `None` se l'operatore non e' ordinato
+    /// (invariante violata dal chiamante, segnalata come errore Internal).
+    const fn from_operator(operator: &Operator) -> Option<Self> {
+        match operator {
+            Operator::Gt => Some(Self::Gt),
+            Operator::Ge => Some(Self::Ge),
+            Operator::Lt => Some(Self::Lt),
+            Operator::Le => Some(Self::Le),
+            _ => None,
+        }
+    }
+}
+
 /// Confronto ordinato condiviso (`>`/`>=`/`<`/`<=`): `None` (NaN) rende falso
 /// ogni confronto, come nell'IEEE 754.
-const fn ordered_typed(ordering: Option<Ordering>, operator: &Operator) -> bool {
+const fn ordered_typed(ordering: Option<Ordering>, operator: OrderedOperator) -> bool {
     match operator {
-        Operator::Gt => matches!(ordering, Some(Ordering::Greater)),
-        Operator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
-        Operator::Lt => matches!(ordering, Some(Ordering::Less)),
-        Operator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
-        _ => unreachable!(),
+        OrderedOperator::Gt => matches!(ordering, Some(Ordering::Greater)),
+        OrderedOperator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+        OrderedOperator::Lt => matches!(ordering, Some(Ordering::Less)),
+        OrderedOperator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
     }
 }
 
@@ -314,6 +349,11 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             let bound = NumericBound::parse(&json_text(value))?;
+            let Some(operator) = OrderedOperator::from_operator(operator) else {
+                return Some(Err(PlenoraError::Contract(
+                    "internal error: operatore non ordinato nel ramo ordinato".into(),
+                )));
+            };
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 rows_where(values, |row| {
                     ordered_typed(compare_i64(values.value(row), bound), operator)
@@ -376,7 +416,11 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
                 Operator::Endswith => {
                     rows_where(values, |row| values.value(row).ends_with(&expected))
                 }
-                _ => unreachable!("solo operatori testuali"),
+                _ => {
+                    return Some(Err(PlenoraError::Contract(
+                        "internal error: solo operatori testuali".into(),
+                    )));
+                }
             }
         }
     };

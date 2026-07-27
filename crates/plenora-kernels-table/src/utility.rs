@@ -224,7 +224,11 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                 (None, Some((datetime_items, date_items))) => {
                     parse_datetime_default(value, datetime_items, date_items)
                 }
-                _ => unreachable!("un solo parser compilato"),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: un solo parser compilato".into(),
+                    ));
+                }
             };
             match parsed_value {
                 Some(value) => parsed.push(Some(value)),

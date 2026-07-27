@@ -362,8 +362,9 @@ fn literal_unit(expression: &Expression) -> Result<TruncUnit> {
     }
 }
 
-fn date32_epoch() -> NaiveDate {
-    NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoca Date32 valida")
+fn date32_epoch() -> Result<NaiveDate> {
+    NaiveDate::from_ymd_opt(1970, 1, 1)
+        .ok_or_else(|| PlenoraError::Contract("internal error: epoca Date32 valida".into()))
 }
 
 /// Unita' sub-day non ammesse su Date32 (una data non ha componente oraria).
@@ -379,15 +380,19 @@ fn check_date32_unit(unit: TruncUnit) -> Result<()> {
 /// Troncamento Date32 (giorni dall'epoca) a year/month/day.
 fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
     check_date32_unit(unit)?;
-    let date = date32_epoch() + TimeDelta::days(i64::from(days));
+    let date = date32_epoch()? + TimeDelta::days(i64::from(days));
     let truncated = match unit {
         TruncUnit::Year => NaiveDate::from_ymd_opt(date.year(), 1, 1),
         TruncUnit::Month => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
         TruncUnit::Day => Some(date),
-        TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second => unreachable!(),
+        TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second => {
+            return Err(PlenoraError::Contract(
+                "internal error: unita' sub-day gia' rifiutata da check_date32_unit".into(),
+            ));
+        }
     }
     .ok_or_else(|| PlenoraError::Schema("date_trunc: data fuori range".into()))?;
-    i32::try_from((truncated - date32_epoch()).num_days())
+    i32::try_from((truncated - date32_epoch()?).num_days())
         .map_err(|_| PlenoraError::Schema("date_trunc: data fuori range Date32".into()))
 }
 
@@ -431,7 +436,9 @@ fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> R
         Scalar::Null => Ok(Scalar::Null),
         Scalar::Date32(days) => Ok(Scalar::Date32(trunc_date32_days(days, unit)?)),
         Scalar::TimestampMs(ms) => Ok(Scalar::TimestampMs(trunc_timestamp_ms_value(ms, unit)?)),
-        _ => unreachable!("eval_temporal produce solo valori temporali"),
+        _ => Err(PlenoraError::Contract(
+            "internal error: eval_temporal produce solo valori temporali".into(),
+        )),
     }
 }
 
@@ -652,7 +659,12 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                             .map_err(|_| PlenoraError::Schema("year: data non valida".into()))?;
                     Scalar::Number(f64::from(date.year()))
                 }
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
+                            .into(),
+                    ));
+                }
             })
         }
         Function::Concat => {
@@ -680,7 +692,12 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Contains => value.contains(&pattern),
                 Function::StartsWith => value.starts_with(&pattern),
                 Function::EndsWith => value.ends_with(&pattern),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
+                            .into(),
+                    ));
+                }
             }))
         }
         Function::Abs | Function::Round => {
@@ -691,7 +708,11 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             Ok(Scalar::Number(match name {
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo numerico ammette solo abs/round".into(),
+                    ));
+                }
             }))
         }
         Function::Floor | Function::Ceil => {
@@ -702,7 +723,11 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             Ok(Scalar::Number(match name {
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo numerico ammette solo floor/ceil".into(),
+                    ));
+                }
             }))
         }
         Function::Power => {
@@ -806,9 +831,10 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             }
             Ok(best)
         }
-        Function::DateTrunc | Function::In => unreachable!(
-            "date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
-        ),
+        Function::DateTrunc | Function::In => Err(PlenoraError::Contract(
+            "internal error: date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
+                .into(),
+        )),
     }
 }
 
@@ -1034,7 +1060,9 @@ fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> Resu
         }
     }
     match resolved {
-        OutputType::Auto => unreachable!(),
+        OutputType::Auto => Err(PlenoraError::Contract(
+            "internal error: output_type Auto non risolto".into(),
+        )),
         OutputType::Number => replace_or_append(
             batch,
             &config.output_column,
@@ -1529,7 +1557,12 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
                             .map_err(|_| PlenoraError::Schema("year: data non valida".into()))?;
                     FastValue::Number(f64::from(date.year()))
                 }
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
+                            .into(),
+                    ));
+                }
             })
         }
         Function::Concat => {
@@ -1557,7 +1590,12 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
                 Function::Contains => value.contains(pattern),
                 Function::StartsWith => value.starts_with(pattern),
                 Function::EndsWith => value.ends_with(pattern),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
+                            .into(),
+                    ));
+                }
             }))
         }
         Function::Abs | Function::Round => {
@@ -1568,7 +1606,11 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
             Ok(FastValue::Number(match name {
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo numerico ammette solo abs/round".into(),
+                    ));
+                }
             }))
         }
         Function::Floor | Function::Ceil => {
@@ -1579,7 +1621,11 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
             Ok(FastValue::Number(match name {
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: il ramo numerico ammette solo floor/ceil".into(),
+                    ));
+                }
             }))
         }
         Function::Power => {
@@ -1668,9 +1714,10 @@ fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastVal
             }
             Ok(best)
         }
-        Function::RegexReplace | Function::DateTrunc | Function::In => unreachable!(
-            "regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
-        ),
+        Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::Contract(
+            "internal error: regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
+                .into(),
+        )),
     }
 }
 
@@ -2005,7 +2052,9 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 FastValue::TimestampMs(ms) => {
                     Ok(FastValue::TimestampMs(trunc_timestamp_ms_value(ms, *unit)?))
                 }
-                _ => unreachable!("la sorgente temporale produce solo valori temporali"),
+                _ => Err(PlenoraError::Contract(
+                    "internal error: la sorgente temporale produce solo valori temporali".into(),
+                )),
             }
         }
         FastNode::In { value, list } => {
@@ -2037,7 +2086,11 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
             let pattern_text = match (pattern, &dynamic) {
                 (RegexSource::Compiled(_, text), None) => Some(*text),
                 (RegexSource::Dynamic(_), Some(value)) => fast_text(value, "regex_replace")?,
-                _ => unreachable!(),
+                _ => {
+                    return Err(PlenoraError::Contract(
+                        "internal error: sorgente regex e valore dinamico incoerenti".into(),
+                    ));
+                }
             };
             let replacement = fast_text(&replacement, "regex_replace")?;
             let (Some(value), Some(pattern_text), Some(replacement)) =
@@ -2142,7 +2195,9 @@ impl<'a> FastProgram<'a> {
             }
         }
         match resolved {
-            OutputType::Auto => unreachable!(),
+            OutputType::Auto => Err(PlenoraError::Contract(
+            "internal error: output_type Auto non risolto".into(),
+        )),
             OutputType::Number => replace_or_append(
                 batch,
                 &config.output_column,

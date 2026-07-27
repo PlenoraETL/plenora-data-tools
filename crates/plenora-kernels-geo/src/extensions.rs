@@ -30,6 +30,9 @@ pub enum ExtensionError {
     InvalidOutput(String),
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
+    /// Invariante interna violata (R6: errore propagato, mai panic).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
@@ -224,30 +227,30 @@ pub fn collect_geometries(
                     present
                         .iter()
                         .map(|geometry| match geometry {
-                            Geometry::Point(point) => *point,
-                            _ => unreachable!("all_points verificato"),
+                            Geometry::Point(point) => Ok(*point),
+                            _ => Err(ExtensionError::Internal("all_points verificato")),
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, ExtensionError>>()?,
                 ))
             } else if all_lines {
                 Geometry::MultiLineString(MultiLineString::new(
                     present
                         .iter()
                         .map(|geometry| match geometry {
-                            Geometry::LineString(line) => line.clone(),
-                            _ => unreachable!("all_lines verificato"),
+                            Geometry::LineString(line) => Ok(line.clone()),
+                            _ => Err(ExtensionError::Internal("all_lines verificato")),
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, ExtensionError>>()?,
                 ))
             } else if all_polygons {
                 Geometry::MultiPolygon(MultiPolygon::new(
                     present
                         .iter()
                         .map(|geometry| match geometry {
-                            Geometry::Polygon(polygon) => polygon.clone(),
-                            _ => unreachable!("all_polygons verificato"),
+                            Geometry::Polygon(polygon) => Ok(polygon.clone()),
+                            _ => Err(ExtensionError::Internal("all_polygons verificato")),
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, ExtensionError>>()?,
                 ))
             } else {
                 Geometry::GeometryCollection(

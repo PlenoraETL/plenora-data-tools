@@ -160,7 +160,11 @@ impl Hasher for KeyHasher {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
-            let value = u64::from_le_bytes(chunk.try_into().expect("blocco di 8 byte"));
+            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
+            // la copia e' totale per costruzione, nessun caso fallibile.
+            let mut block = [0_u8; 8];
+            block.copy_from_slice(chunk);
+            let value = u64::from_le_bytes(block);
             self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
         }
         let remainder = chunks.remainder();

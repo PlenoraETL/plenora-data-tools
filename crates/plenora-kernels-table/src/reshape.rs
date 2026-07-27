@@ -105,25 +105,37 @@ impl<'a> TextColumn<'a> {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(out, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(out, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(out, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(out, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(out, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(out, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(out, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(out, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -211,7 +223,10 @@ impl<'a> PivotKeyColumn<'a> {
         value.clear();
         if self.source.write_value(row, value)? {
             key.push('1');
-            write!(key, "{}", value.len()).expect("fmt su String");
+            // `fmt::Write` su `String` e' infallibile; l'errore e'
+            // comunque propagato come Internal, mai ignorato (R6.5).
+            write!(key, "{}", value.len())
+                .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             key.push(':');
             key.push_str(value);
         } else {
@@ -485,7 +500,12 @@ fn pivot_column(
                             PlenoraError::Contract("gruppo pivot non rappresentabile".into())
                         })?,
                         PivotAgg::Min | PivotAgg::Max => extremum,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(PlenoraError::Contract(
+                                "internal error: funzione pivot non numerica nel ramo numerico"
+                                    .into(),
+                            ));
+                        }
                     }))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -926,7 +946,11 @@ impl Hasher for KeyHasher {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
-            let value = u64::from_le_bytes(chunk.try_into().expect("blocco di 8 byte"));
+            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
+            // la copia e' totale per costruzione, nessun caso fallibile.
+            let mut block = [0_u8; 8];
+            block.copy_from_slice(chunk);
+            let value = u64::from_le_bytes(block);
             self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
         }
         let remainder = chunks.remainder();

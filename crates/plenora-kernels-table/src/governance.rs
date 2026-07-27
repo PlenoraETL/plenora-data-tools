@@ -173,25 +173,37 @@ impl<'a> KeyValueColumn<'a> {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(text, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(text, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(text, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(text, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(text, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(text, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
                     return Ok(false);
                 }
-                write!(text, "{}", values.value(row)).expect("fmt su String");
+                // `fmt::Write` su `String` e' infallibile; l'errore e'
+                // comunque propagato come Internal, mai ignorato (R6.5).
+                write!(text, "{}", values.value(row))
+                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -232,7 +244,11 @@ impl Hasher for KeyHasher {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
-            let value = u64::from_le_bytes(chunk.try_into().expect("blocco di 8 byte"));
+            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
+            // la copia e' totale per costruzione, nessun caso fallibile.
+            let mut block = [0_u8; 8];
+            block.copy_from_slice(chunk);
+            let value = u64::from_le_bytes(block);
             self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
         }
         let remainder = chunks.remainder();
@@ -733,33 +749,36 @@ const fn within_rule_range(low: Option<Ordering>, high: Option<Ordering>) -> boo
 }
 
 /// Confronto ordinato di regola da un `Ordering` tipizzato (`None` = NaN:
-/// ogni confronto falso, come IEEE).
-const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> bool {
+/// ogni confronto falso, come IEEE). Restituisce `None` se l'operatore non e'
+/// ordinato: invariante interna violata dal chiamante (`rule_passes` invoca
+/// solo con Gt/Ge/Lt/Le), segnalata come errore Internal, non panic.
+const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Option<bool> {
     match operator {
-        RuleOperator::Gt => matches!(ordering, Some(Ordering::Greater)),
-        RuleOperator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
-        RuleOperator::Lt => matches!(ordering, Some(Ordering::Less)),
-        RuleOperator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
-        _ => unreachable!(),
+        RuleOperator::Gt => Some(matches!(ordering, Some(Ordering::Greater))),
+        RuleOperator::Ge => Some(matches!(ordering, Some(Ordering::Greater | Ordering::Equal))),
+        RuleOperator::Lt => Some(matches!(ordering, Some(Ordering::Less))),
+        RuleOperator::Le => Some(matches!(ordering, Some(Ordering::Less | Ordering::Equal))),
+        _ => None,
     }
 }
 
 /// Valuta una regola su una riga. MAI un errore sui dati: qualunque valore
 /// non interpretabile (incluso null per gli operatori a valore) e' un
-/// fallimento della regola, non un errore del kernel.
+/// fallimento della regola, non un errore del kernel. Il `Result` copre solo
+/// invarianti interne violate (errore Internal), mai i dati.
 ///
 /// Confronti numerici: Int64/UInt64 nativi esatti e Float64 in misto esatto
 /// contro i letterali interi (`NumericBound` — nessun collasso oltre 2^53);
 /// Date32/Timestamp(ms)/Decimal128 restano sul profilo f64 storico.
-fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
+fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<bool> {
     let array = batch.column(rule.column_index).as_ref();
     match rule.operator {
-        RuleOperator::Isnull => return array.is_null(row),
-        RuleOperator::Notnull => return !array.is_null(row),
-        _ if array.is_null(row) => return false,
+        RuleOperator::Isnull => return Ok(array.is_null(row)),
+        RuleOperator::Notnull => return Ok(!array.is_null(row)),
+        _ if array.is_null(row) => return Ok(false),
         _ => {}
     }
-    match rule.operator {
+    Ok(match rule.operator {
         RuleOperator::Eq | RuleOperator::Ne => {
             let equal = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 rule.expected_bound.is_some_and(|bound| {
@@ -807,7 +826,9 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
                     .flatten()
                     .and_then(|actual| actual.partial_cmp(&rule.expected_number))
             };
-            rule_ordered(ordering, rule.operator)
+            rule_ordered(ordering, rule.operator).ok_or_else(|| {
+                PlenoraError::Contract("internal error: operatore di regola non ordinato".into())
+            })?
         }
         RuleOperator::Range => {
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
@@ -847,8 +868,12 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
                 .flatten()
                 .is_some_and(|actual| regex.is_match(&actual))
         }),
-        RuleOperator::Isnull | RuleOperator::Notnull => unreachable!(),
-    }
+        RuleOperator::Isnull | RuleOperator::Notnull => {
+            return Err(PlenoraError::Contract(
+                "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
+            ));
+        }
+    })
 }
 
 /// Valuta tutte le regole su tutte le righe; restituisce per riga gli
@@ -856,7 +881,7 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
 fn evaluate_rules(
     batch: &RecordBatch,
     rules: &[CompiledRule],
-) -> (Vec<bool>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
+) -> Result<(Vec<bool>, Vec<Vec<usize>>, Vec<Vec<usize>>)> {
     let mut valid = Vec::with_capacity(batch.num_rows());
     let mut errors: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());
     let mut warnings: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());
@@ -864,7 +889,7 @@ fn evaluate_rules(
         let mut row_errors = Vec::new();
         let mut row_warnings = Vec::new();
         for (index, rule) in rules.iter().enumerate() {
-            if !rule_passes(batch, rule, row) {
+            if !rule_passes(batch, rule, row)? {
                 match rule.severity {
                     RuleSeverity::Error => row_errors.push(index),
                     RuleSeverity::Warning => row_warnings.push(index),
@@ -875,7 +900,7 @@ fn evaluate_rules(
         errors.push(row_errors);
         warnings.push(row_warnings);
     }
-    (valid, errors, warnings)
+    Ok((valid, errors, warnings))
 }
 
 /// Valida le righe contro un set di regole dichiarative (estensione v1.2).
@@ -886,7 +911,7 @@ fn evaluate_rules(
 /// conteggi delle righe fallite per gravita').
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
     let rules = compile_rules(batch, config)?;
-    let (valid, errors, warnings) = evaluate_rules(batch, &rules);
+    let (valid, errors, warnings) = evaluate_rules(batch, &rules)?;
     let join_names = |indices: &[usize]| {
         indices
             .iter()
