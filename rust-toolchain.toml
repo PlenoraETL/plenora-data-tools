@@ -1,0 +1,6 @@
+# Baseline toolchain (ICD R13.1): versione esatta del compilatore,
+# uguale per tutti i componenti Plenora. Ogni variazione richiede
+# change impact analysis (R13.5).
+[toolchain]
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]

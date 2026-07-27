@@ -28,8 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installa toolchain stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Installa toolchain (baseline ICD R13.1)
+        # Versione esatta fissata anche in rust-toolchain.toml per lo
+        # sviluppo locale; qui la ripetiamo esplicitamente perche' la CI
+        # non deve dipendere dal canale "stable" mobile.
+        uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: clippy
 
@@ -43,12 +46,14 @@ jobs:
           key: cargo-ci-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-ci-${{ matrix.os }}-
 
+      # R13.2: --locked. Un Cargo.lock modificato dalla build e' un
+      # fallimento, non un aggiornamento.
       - name: Test workspace
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
 
       # Clippy in modalita' advisory: il codice esistente non e' mai stato
       # sottoposto a clippy in CI; -D warnings richiede prima un giro di
       # pulizia dedicato.
       - name: Clippy (advisory)
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --locked
         continue-on-error: true
