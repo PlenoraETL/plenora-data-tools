@@ -50,24 +50,45 @@ mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 
 echo "== campagna fuzz: ${#TARGETS[@]} target x ${HOURS}h (image ${IMAGE}, cpus=${CPUS}, mem=${MEMORY})"
 
+# Corpus e artifact vivono in /dev/shm (tmpfs, RAM della VM) dentro il
+# container del run: gli hang kernel ripetuti (fuzzer in stato D,
+# __vma_start_write <- do_mmap) sono stati ricondotti via sysrq a stalli di
+# I/O del disco virtuale WSL2 (kjournald2 bloccato in jbd2, vhdx su Windows):
+# qualunque file su ext4 della VM puo' piantare il page-fault path del fuzzer.
+# Soluzione: nessun file del fuzzer tocca ext4 durante il run. Il corpus
+# viene seminato dall'host a inizio target e risincronizzato a fine target
+# dentro lo stesso container (un crash della VM perde solo il target in corso).
+# Anche il binario viene pre-caricato in page cache (e' sul bind mount 9p).
+SHM_SIZE="${FUZZ_SHM_SIZE:-4g}"
+
 for target in "${TARGETS[@]}"; do
     mkdir -p "$PROJECT_ROOT/fuzz/artifacts/$target" "$PROJECT_ROOT/fuzz/corpus/$target"
     log="$PROJECT_ROOT/fuzz/campaign-logs/$target.log"
     echo "== $(date -Is) start $target (max_total_time=${SECONDS_PER_TARGET}s)"
-    # NB: nessun --rm se si vogliono ispezionare i container falliti; qui
-    # --rm perche' corpus/artifact/log sono tutti sul volume host.
     MSYS_NO_PATHCONV=1 docker run --rm \
-        --cpus="$CPUS" --memory="$MEMORY" \
+        --cpus="$CPUS" --memory="$MEMORY" --shm-size="$SHM_SIZE" \
         -v "$PROJECT_ROOT:/work" \
         -v "$FUZZBIN_HOST:/fuzzbin:ro" \
         -w /work/fuzz \
         -e CARGO_TERM_COLOR=never \
-        "$IMAGE" \
-        "$CARGO_FUZZ" fuzz run "$target" -- \
-            -max_total_time="$SECONDS_PER_TARGET" \
-            -artifact_prefix="/work/fuzz/artifacts/$target/" \
-            -jobs="$JOBS" -workers="$WORKERS" \
-            -timeout=60 -rss_limit_mb=8192 \
+        -e GLIBC_TUNABLES="glibc.malloc.mmap_threshold=16777216:glibc.malloc.arena_max=2" \
+        "$IMAGE" sh -c "
+            set -u
+            shm=/dev/shm/fuzzdata
+            mkdir -p \$shm/corpus/$target \$shm/artifacts/$target
+            cp -a /work/fuzz/corpus/$target/. \$shm/corpus/$target/ 2>/dev/null || true
+            # pre-warm: binario e dipendenze in page cache, poi nessun I/O
+            cat target/x86_64-unknown-linux-gnu/release/$target > /dev/null 2>/dev/null || true
+            $CARGO_FUZZ fuzz run $target -- \
+                -max_total_time=$SECONDS_PER_TARGET \
+                -artifact_prefix=\$shm/artifacts/$target/ \
+                -jobs=$JOBS -workers=$WORKERS \
+                -timeout=60 -rss_limit_mb=8192 \
+                \$shm/corpus/$target
+            rc=\$?
+            cp -a \$shm/corpus/$target/. /work/fuzz/corpus/$target/
+            cp -a \$shm/artifacts/$target/. /work/fuzz/artifacts/$target/
+            exit \$rc" \
         2>&1 | tee "$log" || true
     crashes=$(find "$PROJECT_ROOT/fuzz/artifacts/$target" -type f ! -name '.*' | wc -l)
     echo "== $(date -Is) end   $target (crash artifact: $crashes)"
