@@ -1,0 +1,98 @@
+# Campagna fuzz in CI (Linux nativo).
+#
+# Motivazione: su Windows/Docker Desktop la campagna locale subisce hang
+# kernel WSL2 ripetuti (deadlock in __vma_start_write, per-vma-lock del
+# kernel 6.18, riproducibile con qualunque configurazione di I/O: bind
+# mount 9p, volume ext4, tmpfs). Evidenze in fuzz/campaign-logs/hang-dmesg-*.log.
+# Su runner Linux nativo libFuzzer non ha questi problemi e gira 2-5x piu'
+# veloce.
+#
+# Ogni target e' un job della matrice (runner separato, fail-fast disattivo).
+# Il corpus e' persistito via actions/cache per target e riusato tra i run;
+# i crash artifact sono caricati come workflow artifact e fanno fallire il job.
+name: fuzz
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes_per_target:
+        description: 'Minuti di fuzzing per target'
+        default: '30'
+        required: false
+  schedule:
+    # ogni notte alle 03:17 UTC
+    - cron: '17 3 * * *'
+
+concurrency:
+  group: fuzz-campaign
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - plan_contract
+          - string_chain
+          - candidate_chain
+          - binary_ops
+          - reshape_policies
+          - extended_ops
+          - advanced_ops
+          - wkb_contract
+          - wkt_operations
+          - arrow_envelope
+          - arrow_ipc_decode
+          - arrow_transform
+          - plan_v4_parse
+          - analyze_table
+          - analyze_geo
+          - diff_kernels
+          - executor_dag
+    env:
+      MINUTES: ${{ github.event.inputs.minutes_per_target || '30' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa toolchain nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: cargo-fuzz-build-${{ matrix.target }}-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: cargo-fuzz-build-${{ matrix.target }}-
+
+      - name: Cache corpus (${{ matrix.target }})
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Installa cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz ${{ matrix.target }} (${{ env.MINUTES }} min)
+        working-directory: fuzz
+        run: |
+          SECONDS=$(( MINUTES * 60 ))
+          cargo fuzz run "${{ matrix.target }}" -- \
+            -max_total_time="$SECONDS" \
+            -artifact_prefix="artifacts/${{ matrix.target }}/" \
+            -timeout=60 -rss_limit_mb=8192
+
+      - name: Carica crash artifact (se presenti)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
