@@ -808,7 +808,7 @@ fn contract_canonical(contract: &DataContract) -> Value {
         .geometries
         .iter()
         .map(|geometry| {
-            json!({
+            let mut canonical = json!({
                 "name": geometry.name,
                 "crs": {
                     "definition": geometry.crs.definition(),
@@ -821,11 +821,21 @@ fn contract_canonical(contract: &DataContract) -> Value {
                         .horizontal_unit_to_metre()
                         .map(f64::to_bits),
                 },
-                "dimensions": match geometry.dimensions {
-                    plenora_core::contract::GeometryDimensions::Xy => "xy",
-                },
+                "dimensions": geometry.dimensions.as_str(),
                 "nullable": geometry.nullable,
-            })
+            });
+            // B1.3: `encoding` entra nel fingerprint SOLO quando dichiarato —
+            // un contratto senza encoding produce lo stesso JSON di prima
+            // (stabilita' dei fingerprint esistenti).
+            if let Some(encoding) = geometry.encoding {
+                if let Value::Object(map) = &mut canonical {
+                    map.insert(
+                        "encoding".to_owned(),
+                        Value::String(encoding.as_str().to_owned()),
+                    );
+                }
+            }
+            canonical
         })
         .collect();
     json!({

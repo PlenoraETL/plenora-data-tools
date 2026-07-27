@@ -11,13 +11,16 @@ use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch,
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
     ContractProperties, DataContract, FieldId, GeometryColumnContract, GeometryDimensions,
+    GeometryEncoding,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
 
 use geo::{polygon, Geometry, Point};
 use geozero::{CoordDimensions, ToWkb};
-use plenora_kernels_geo::arrow_adapter::geometry_output_field;
+use plenora_kernels_geo::arrow_adapter::{
+    geometry_dimensions_from_metadata, geometry_output_field, geometry_output_field_with_dimensions,
+};
 
 use super::*;
 use crate::planner::validate;
@@ -57,6 +60,7 @@ fn geo_contract() -> DataContract {
                 Some(1.0),
             ),
             dimensions: GeometryDimensions::Xy,
+            encoding: None,
             nullable: true,
         }],
         None,
@@ -431,6 +435,189 @@ fn invalid_wkb_cell_fails_at_read_before_any_output() {
         error.to_string().contains("WKB"),
         "validazione dinamica in lettura (D8): {error}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Dimensionalita' (B1.3): gate stride-aware e passthrough tabellare
+// ---------------------------------------------------------------------------
+
+/// Schema geo con dimensionalita' XYZ dichiarata nei metadati `geo`.
+fn geo_schema_xyz() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        geometry_output_field_with_dimensions("geom", "EPSG:32632", GeometryDimensions::Xyz)
+            .expect("campo geometria xyz"),
+    ]))
+}
+
+/// Come `geo_contract`, con contratto e metadati XYZ.
+fn geo_contract_xyz() -> DataContract {
+    let mut contract = geo_contract();
+    contract.schema = geo_schema_xyz();
+    contract.geometries[0].dimensions = GeometryDimensions::Xyz;
+    contract
+}
+
+/// WKB ISO little-endian di un Point Z (type code 1001).
+fn xyz_point_wkb(x: f64, y: f64, z: f64) -> Vec<u8> {
+    let mut payload = vec![1_u8];
+    payload.extend_from_slice(&1001_u32.to_le_bytes());
+    for value in [x, y, z] {
+        payload.extend_from_slice(&value.to_le_bytes());
+    }
+    payload
+}
+
+fn geo_batch_xyz(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|c| c.as_deref()).collect();
+    RecordBatch::try_new(
+        geo_schema_xyz(),
+        vec![
+            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch geo xyz fixture valido")
+}
+
+#[test]
+fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
+    // (c) B1.3: il gate in lettura valida con la dimensionalita' del
+    // contratto dell'arco — una cella XY su un contratto XYZ e' l'errore
+    // dedicato di mismatch, prima di qualunque output.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input(
+        "main",
+        vec![geo_batch_xyz(&[1], &[Some(point_wkb(1.0, 2.0))])],
+    );
+    let output =
+        run(&plan, inputs, &[("main".to_owned(), geo_contract_xyz())]).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("type code incoerente col contratto");
+    assert!(
+        error.to_string().contains("incoerente"),
+        "errore dedicato di mismatch dimensionale: {error}"
+    );
+}
+
+#[test]
+fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
+    // (e) B1.3: batch xyz -> filtro tabellare (passthrough) -> celle xyz
+    // intatte byte-per-byte; i metadati di output dichiarano ancora xyz.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 1}},
+        ],
+        "output": "f",
+    });
+    let kept_a = xyz_point_wkb(1.0, 2.0, 3.0);
+    let kept_b = xyz_point_wkb(4.0, 5.0, 6.0);
+    let dropped = xyz_point_wkb(7.0, 8.0, 9.0);
+    let inputs = single_input(
+        "main",
+        vec![geo_batch_xyz(
+            &[2, 1, 3],
+            &[Some(kept_a.clone()), Some(dropped), Some(kept_b.clone())],
+        )],
+    );
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), geo_contract_xyz())]).expect("execute"),
+    )
+    .expect("collect");
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 2, "il filtro scarta solo la riga con id 1");
+    let cells = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("colonna geometria binaria");
+    assert_eq!(cells.value(0), kept_a.as_slice(), "cella 0 byte-per-byte");
+    assert_eq!(cells.value(1), kept_b.as_slice(), "cella 1 byte-per-byte");
+    // I metadati di output dichiarano ancora xyz: mai un xy silenzioso.
+    assert_eq!(
+        geometry_dimensions_from_metadata(batch.schema().field(1)),
+        GeometryDimensions::Xyz
+    );
+}
+
+/// Punto EWKB little-endian con flag SRID (0x2000_0000) + valore SRID.
+fn ewkb_srid_point_wkb(srid: u32, x: f64, y: f64) -> Vec<u8> {
+    let mut payload = vec![1_u8];
+    payload.extend_from_slice(&0x2000_0001_u32.to_le_bytes());
+    payload.extend_from_slice(&srid.to_le_bytes());
+    payload.extend_from_slice(&x.to_le_bytes());
+    payload.extend_from_slice(&y.to_le_bytes());
+    payload
+}
+
+/// Come `geo_contract`, con encoding EWKB dichiarato (fixture B1.4).
+fn geo_contract_ewkb() -> DataContract {
+    let mut contract = geo_contract();
+    contract.geometries[0].encoding = Some(GeometryEncoding::Ewkb);
+    contract
+}
+
+#[test]
+fn ewkb_srid_cell_fails_at_the_gate_even_with_declared_ewkb_encoding() {
+    // (f) B1.4: il flag SRID EWKB non e' preservabile — rifiutato dal
+    // validatore celle al gate di lettura per qualunque dimensionalita'
+    // dichiarata, anche con `encoding: ewkb` nel contratto. L'input fallisce
+    // prima di qualunque output.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(&[1], &[Some(ewkb_srid_point_wkb(4326, 1.0, 2.0))])],
+    );
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("flag SRID EWKB rifiutato al gate");
+    assert!(
+        error.to_string().contains("SRID"),
+        "errore esplicito sullo SRID non preservabile: {error}"
+    );
+}
+
+#[test]
+fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
+    // (f) B1.4, comportamento dichiarato: un payload EWKB senza flag Z/M e
+    // senza SRID ha type code identici a WKB ISO — indistinguibile sul filo.
+    // Con `encoding: ewkb` dichiarato e dimensionalita' `xy` il gate lo
+    // accetta e i byte passano invariati (la validazione resta sui type
+    // code, mai sulla chiave `encoding` del metadato).
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let cell = point_wkb(1.0, 2.0); // ISO XY == EWKB puro-XY (stessi byte)
+    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(cell.clone())])]);
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute"),
+    )
+    .expect("EWKB puro-XY passa il gate xy");
+    let cells = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("colonna geometria binaria");
+    assert_eq!(cells.value(0), cell.as_slice(), "cella byte-per-byte");
 }
 
 #[test]

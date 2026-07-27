@@ -2,11 +2,18 @@
 //!
 //! Port Fase 1 da `arrow_transport.rs` di plenora-geo-tools-arrow, limitato
 //! alle parti di rappresentazione: metadati di estensione GeoArrow
-//! (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON con la
-//! chiave `crs`, decode/encode delle celle WKB con limiti per cella e helper
+//! (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON con le
+//! chiavi `crs`, (dalla milestone B1.1, ICD §3.3) `dimensions` e (dalla
+//! milestone B1.4) `encoding` — scritta solo quando il contratto la
+//! dichiara, mai come default — decode/encode delle celle WKB con limiti
+//! per cella e helper
 //! sui `RecordBatch`. L'envelope `PLNGEO3`, i checksum, la CLI e gli schemi
 //! `TransformArrowSchema`/`PairArrowSchema` non fanno parte di questo modulo
 //! (andranno in `plenora-engine`).
+//!
+//! Unificazione B1.1: questo modulo e' la casa unica dei metadati GeoArrow;
+//! il trasporto Arrow v3 di `plenora-engine::geo_transport` delega qui
+//! (stesso JSON in uscita byte-per-byte).
 //!
 //! Le geometrie viaggiano in una colonna `Binary`; ogni cella non-null e'
 //! validata dal validatore WKB del kernel e i null sono preservati.
@@ -21,6 +28,7 @@ use geo::Geometry;
 use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema};
+use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 use plenora_core::PlenoraError;
 use rayon::prelude::*;
@@ -35,6 +43,12 @@ pub const DEFAULT_GEOMETRY_COLUMN: &str = "geometry";
 pub const MAX_CELL_BYTES: u64 = 64 * 1024 * 1024;
 /// Coordinate massime per cella: una cella da 64 MiB contiene al piu' 16 byte
 /// per coordinata XY.
+///
+/// Scelta B1.3 (documentata): il bound NON e' reso stride-aware. Con Z/M lo
+/// stride reale e' 24/32 byte e il conteggio massimo reale scende, quindi il
+/// bound su 16 byte resta permissivo ma sempre sicuro (mai sotto il reale);
+/// irrigidirlo richiederebbe la dimensionalita' risolta, che per `Unknown`
+/// (R3.4) non esiste. Si mantiene il bound conservativo unico.
 pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
 
 fn missing_geometry_column(name: &str) -> PlenoraError {
@@ -77,7 +91,52 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
 
 /// Metadato GeoArrow `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
+///
+/// Casa unica del formato (unificazione B1.1): anche il trasporto Arrow v3 di
+/// `plenora-engine` delega qui, quindi il JSON in uscita e' identico
+/// byte-per-byte nei due percorsi.
 pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
+    let metadata = geo_metadata_map(crs)?;
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
+}
+
+/// Come [`geo_metadata_json`], con in piu' la chiave `dimensions` in forma
+/// ICD ([`GeometryDimensions::as_str`]). La propagazione reale della
+/// dimensionalita' e' milestone B1.3: qui la scriviamo solo per dichiararla.
+pub fn geo_metadata_json_with_dimensions(
+    crs: &str,
+    dimensions: GeometryDimensions,
+) -> Result<String, PlenoraError> {
+    geo_metadata_json_with_encoding(crs, dimensions, None)
+}
+
+/// Come [`geo_metadata_json_with_dimensions`], con in piu' la chiave
+/// `encoding` in forma ICD ([`GeometryEncoding::as_str`]) quando il contratto
+/// la dichiara (`Some`). Con `None` la chiave e' omessa e il JSON e'
+/// identico byte-per-byte a [`geo_metadata_json_with_dimensions`]
+/// (fingerprint e retrocompatibilita' invariati — B1.4).
+pub fn geo_metadata_json_with_encoding(
+    crs: &str,
+    dimensions: GeometryDimensions,
+    encoding: Option<GeometryEncoding>,
+) -> Result<String, PlenoraError> {
+    let mut metadata = geo_metadata_map(crs)?;
+    metadata.insert(
+        "dimensions".to_owned(),
+        serde_json::Value::String(dimensions.as_str().to_owned()),
+    );
+    if let Some(encoding) = encoding {
+        metadata.insert(
+            "encoding".to_owned(),
+            serde_json::Value::String(encoding.as_str().to_owned()),
+        );
+    }
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
+}
+
+/// Mappa `geo` validata con la sola chiave `crs` (corpo condiviso delle due
+/// serializzazioni pubbliche).
+fn geo_metadata_map(crs: &str) -> Result<serde_json::Map<String, serde_json::Value>, PlenoraError> {
     if crs.trim().is_empty() {
         return Err(PlenoraError::Crs(
             "crs obbligatorio per il trasporto Arrow v3".to_owned(),
@@ -94,18 +153,121 @@ pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
     };
     let mut metadata = serde_json::Map::new();
     metadata.insert("crs".to_owned(), crs_value);
-    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
+    Ok(metadata)
 }
 
-/// Campo `Binary` di output con metadati `geoarrow.wkb` e `geo.crs`.
+/// Campo `Binary` di output con metadati `geoarrow.wkb` e `geo.crs` +
+/// `geo.dimensions`.
+///
+/// B1.1: la dimensionalita' scritta e' sempre `Xy` (i costruttori attuali
+/// producono WKB 2D); la propagazione della dimensionalita' reale e'
+/// milestone B1.3.
 pub fn geometry_output_field(name: &str, crs: &str) -> Result<Field, PlenoraError> {
+    geometry_output_field_with_dimensions(name, crs, GeometryDimensions::Xy)
+}
+
+/// Come [`geometry_output_field`], con la dimensionalita' dichiarata
+/// esplicitamente (pronto per la propagazione di B1.3).
+pub fn geometry_output_field_with_dimensions(
+    name: &str,
+    crs: &str,
+    dimensions: GeometryDimensions,
+) -> Result<Field, PlenoraError> {
+    geometry_output_field_with_encoding(name, crs, dimensions, None)
+}
+
+/// Come [`geometry_output_field_with_dimensions`], con in piu' la chiave
+/// `geo.encoding` quando il contratto la dichiara (`Some`) — B1.4: un
+/// contratto con encoding dichiarato che attraversa un kernel che riscrive
+/// il campo (es. `reproject`) conserva la chiave nel metadato riscritto,
+/// coerente col contratto. Con `None` la chiave e' omessa e il metadato e'
+/// identico byte-per-byte alla forma senza encoding (fingerprint e
+/// retrocompatibilita' invariati).
+pub fn geometry_output_field_with_encoding(
+    name: &str,
+    crs: &str,
+    dimensions: GeometryDimensions,
+    encoding: Option<GeometryEncoding>,
+) -> Result<Field, PlenoraError> {
     let mut metadata = HashMap::new();
     metadata.insert(
         GEOARROW_EXTENSION_KEY.to_owned(),
         GEOARROW_WKB_EXTENSION.to_owned(),
     );
-    metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(crs)?);
+    metadata.insert(
+        GEO_METADATA_KEY.to_owned(),
+        geo_metadata_json_with_encoding(crs, dimensions, encoding)?,
+    );
     Ok(Field::new(name, DataType::Binary, true).with_metadata(metadata))
+}
+
+/// Dimensionalita' dichiarata nel metadato `geo` di un campo geometria.
+///
+/// Lettura opzionale pronta per B1.3: chiave assente, JSON non valido o
+/// valore non riconosciuto → [`GeometryDimensions::Unknown`] (R3.4: MAI un
+/// default silenzioso `Xy`). La discovery di B1.3 potra' rendere il valore
+/// non riconosciuto un errore esplicito; questa lettura non decide.
+#[must_use]
+pub fn geometry_dimensions_from_metadata(field: &Field) -> GeometryDimensions {
+    geo_metadata_value(field)
+        .and_then(|value| {
+            value
+                .get("dimensions")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|dimensions| dimensions.parse().ok())
+        .unwrap_or(GeometryDimensions::Unknown)
+}
+
+/// Encoding dichiarato nel metadato `geo` di un campo geometria.
+///
+/// Lettura opzionale pronta per B1.3: chiave assente, JSON non valido o
+/// valore non riconosciuto → `None` (R3.4/R3.5: MAI un default silenzioso;
+/// R3.5: valori fuori dall'enum chiuso non sono rappresentabili).
+#[must_use]
+pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding> {
+    geo_metadata_value(field).and_then(|value| {
+        value
+            .get("encoding")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|encoding| encoding.parse().ok())
+    })
+}
+
+/// Variante STRICT di [`geometry_encoding_from_metadata`] per la discovery
+/// (B1.3): la chiave `encoding` presente ma fuori dall'enum chiuso (R3.5:
+/// header GeoPackage, TWKB, valori non testuali) e' un framing non
+/// rappresentabile e va rifiutato con errore esplicito — mai mappata a un
+/// encoding noto o ignorata. Chiave assente o metadato `geo` non valido →
+/// `Ok(None)` (la dimensionalita'/il framing non dichiarati restano non
+/// risolti, R3.4; il messaggio non riporta il valore, «errori senza dati»).
+pub fn geometry_encoding_from_metadata_strict(
+    field: &Field,
+) -> Result<Option<GeometryEncoding>, PlenoraError> {
+    let Some(value) = geo_metadata_value(field) else {
+        return Ok(None);
+    };
+    let Some(raw) = value.get("encoding") else {
+        return Ok(None);
+    };
+    let parsed = raw.as_str().and_then(|text| text.parse().ok());
+    parsed.map_or_else(
+        || {
+            Err(PlenoraError::Unsupported(
+                "metadato `geo`: encoding geometria non rappresentabile \
+                 (R3.5: ammessi solo `wkb` ed `ewkb`)"
+                    .to_owned(),
+            ))
+        },
+        |encoding| Ok(Some(encoding)),
+    )
+}
+
+/// Il metadato `geo` di un campo come valore JSON, se presente e valido.
+fn geo_metadata_value(field: &Field) -> Option<serde_json::Value> {
+    let raw = field.metadata().get(GEO_METADATA_KEY)?;
+    serde_json::from_str::<serde_json::Value>(raw).ok()
 }
 
 /// Colonna geometria di un batch, gia' indicizzata da
@@ -278,6 +440,185 @@ mod tests {
         )
         .expect("geo JSON");
         assert_eq!(geo.get("crs").and_then(serde_json::Value::as_str), Some(CRS));
+        // B1.1: la scrittura dichiara sempre la dimensionalita' (Xy dai
+        // costruttori attuali; la propagazione reale e' B1.3).
+        assert_eq!(
+            geo.get("dimensions").and_then(serde_json::Value::as_str),
+            Some("xy")
+        );
+    }
+
+    #[test]
+    fn geo_metadata_with_dimensions_embeds_icd_string() {
+        for (dimensions, text) in [
+            (GeometryDimensions::Xy, "xy"),
+            (GeometryDimensions::Xyz, "xyz"),
+            (GeometryDimensions::Xym, "xym"),
+            (GeometryDimensions::Xyzm, "xyzm"),
+            (GeometryDimensions::Unknown, "unknown"),
+        ] {
+            let json = geo_metadata_json_with_dimensions(CRS, dimensions).expect("metadata");
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                parsed.get("dimensions").and_then(serde_json::Value::as_str),
+                Some(text)
+            );
+            assert_eq!(
+                parsed.get("crs").and_then(serde_json::Value::as_str),
+                Some(CRS)
+            );
+        }
+        // Le validazioni CRS restano quelle di `geo_metadata_json`.
+        assert!(matches!(
+            geo_metadata_json_with_dimensions("  ", GeometryDimensions::Xy),
+            Err(PlenoraError::Crs(_))
+        ));
+    }
+
+    #[test]
+    fn geo_metadata_with_encoding_writes_the_key_only_when_declared() {
+        // B1.4: `Some` -> chiave `encoding` in forma ICD; `None` -> chiave
+        // omessa e JSON identico byte-per-byte alla forma senza encoding
+        // (fingerprint e retrocompatibilita' invariati).
+        for encoding in [GeometryEncoding::Wkb, GeometryEncoding::Ewkb] {
+            let json = geo_metadata_json_with_encoding(CRS, GeometryDimensions::Xy, Some(encoding))
+                .expect("metadata");
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                parsed.get("encoding").and_then(serde_json::Value::as_str),
+                Some(encoding.as_str())
+            );
+            assert_eq!(
+                parsed.get("dimensions").and_then(serde_json::Value::as_str),
+                Some("xy")
+            );
+        }
+        let without = geo_metadata_json_with_encoding(CRS, GeometryDimensions::Xyz, None)
+            .expect("metadata senza encoding");
+        assert_eq!(
+            without,
+            geo_metadata_json_with_dimensions(CRS, GeometryDimensions::Xyz).expect("dimensions"),
+            "None: byte-per-byte identico alla forma pre-B1.4"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&without).unwrap();
+        assert!(parsed.get("encoding").is_none(), "chiave omessa con None");
+
+        // Il campo di output rilegge l'encoding dichiarato (round-trip con
+        // il reader della discovery); con None il reader ottiene None.
+        let field = geometry_output_field_with_encoding(
+            DEFAULT_GEOMETRY_COLUMN,
+            CRS,
+            GeometryDimensions::Xy,
+            Some(GeometryEncoding::Ewkb),
+        )
+        .expect("field");
+        assert_eq!(
+            geometry_encoding_from_metadata(&field),
+            Some(GeometryEncoding::Ewkb)
+        );
+        assert_eq!(
+            geometry_dimensions_from_metadata(&field),
+            GeometryDimensions::Xy
+        );
+        let field_none =
+            geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("field senza encoding");
+        assert_eq!(geometry_encoding_from_metadata(&field_none), None);
+    }
+
+    #[test]
+    fn dimensions_and_encoding_readers_never_default_to_xy() {
+        // Campo senza metadato `geo`: Unknown/None, mai default xy (R3.4).
+        let bare = Field::new("geom", DataType::Binary, true);
+        assert_eq!(
+            geometry_dimensions_from_metadata(&bare),
+            GeometryDimensions::Unknown
+        );
+        assert_eq!(geometry_encoding_from_metadata(&bare), None);
+
+        // Metadato `geo` con la sola chiave `crs` (formato pre-B1.1):
+        // dimensionalita' non risolta -> Unknown.
+        let mut metadata = HashMap::new();
+        metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(CRS).unwrap());
+        let crs_only = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+        assert_eq!(
+            geometry_dimensions_from_metadata(&crs_only),
+            GeometryDimensions::Unknown
+        );
+        assert_eq!(geometry_encoding_from_metadata(&crs_only), None);
+
+        // Round-trip: scrittura con dimensions + encoding -> lettura.
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            GEO_METADATA_KEY.to_owned(),
+            r#"{"crs":"EPSG:3857","dimensions":"xyz","encoding":"ewkb"}"#.to_owned(),
+        );
+        let declared = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+        assert_eq!(
+            geometry_dimensions_from_metadata(&declared),
+            GeometryDimensions::Xyz
+        );
+        assert_eq!(
+            geometry_encoding_from_metadata(&declared),
+            Some(GeometryEncoding::Ewkb)
+        );
+
+        // Valori non riconosciuti o JSON rotto: Unknown/None, mai default.
+        for raw in [
+            r#"{"crs":"EPSG:3857","dimensions":"2d","encoding":"twkb"}"#,
+            "non json",
+            r#"{"dimensions":42}"#,
+        ] {
+            let mut metadata = HashMap::new();
+            metadata.insert(GEO_METADATA_KEY.to_owned(), raw.to_owned());
+            let field = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+            assert_eq!(
+                geometry_dimensions_from_metadata(&field),
+                GeometryDimensions::Unknown
+            );
+            assert_eq!(geometry_encoding_from_metadata(&field), None);
+        }
+    }
+
+    #[test]
+    fn strict_encoding_reader_rejects_unrepresentable_framing() {
+        // Discovery (B1.3): encoding fuori dall'enum chiuso -> errore
+        // esplicito (R3.5), mai mappato o ignorato.
+        for raw in [
+            r#"{"crs":"EPSG:3857","encoding":"gpkg"}"#,
+            r#"{"crs":"EPSG:3857","encoding":"twkb"}"#,
+            r#"{"crs":"EPSG:3857","encoding":42}"#,
+            r#"{"crs":"EPSG:3857","encoding":"WKB"}"#,
+        ] {
+            let mut metadata = HashMap::new();
+            metadata.insert(GEO_METADATA_KEY.to_owned(), raw.to_owned());
+            let field = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+            assert!(matches!(
+                geometry_encoding_from_metadata_strict(&field),
+                Err(PlenoraError::Unsupported(_))
+            ));
+        }
+
+        // Encoding rappresentabili -> Ok(Some); assente o metadato rotto ->
+        // Ok(None) (come il reader leniente).
+        for (raw, expected) in [
+            (r#"{"crs":"EPSG:3857","encoding":"wkb"}"#, Some(GeometryEncoding::Wkb)),
+            (r#"{"crs":"EPSG:3857","encoding":"ewkb"}"#, Some(GeometryEncoding::Ewkb)),
+        ] {
+            let mut metadata = HashMap::new();
+            metadata.insert(GEO_METADATA_KEY.to_owned(), raw.to_owned());
+            let field = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+            assert_eq!(geometry_encoding_from_metadata_strict(&field).unwrap(), expected);
+        }
+        let bare = Field::new("geom", DataType::Binary, true);
+        assert_eq!(geometry_encoding_from_metadata_strict(&bare).unwrap(), None);
+        let mut metadata = HashMap::new();
+        metadata.insert(GEO_METADATA_KEY.to_owned(), "non json".to_owned());
+        let broken = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+        assert_eq!(geometry_encoding_from_metadata_strict(&broken).unwrap(), None);
+        let mut metadata = HashMap::new();
+        metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(CRS).unwrap());
+        let crs_only = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
+        assert_eq!(geometry_encoding_from_metadata_strict(&crs_only).unwrap(), None);
     }
 
     #[test]

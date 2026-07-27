@@ -370,6 +370,7 @@ fn propagate_geometry(
         name: name.to_owned(),
         crs: geometry.crs.clone(),
         dimensions: geometry.dimensions,
+        encoding: geometry.encoding,
         nullable: field.is_nullable(),
     })
 }
@@ -3745,6 +3746,7 @@ mod tests {
             name: name.to_owned(),
             crs: projected_crs(),
             dimensions: plenora_core::contract::GeometryDimensions::Xy,
+            encoding: None,
             nullable,
         }
     }
@@ -3866,6 +3868,56 @@ mod tests {
     }
 
     // -- Completezza del dispatch -------------------------------------------
+
+    #[test]
+    fn passthrough_preserves_geometry_dimensions_and_encoding() {
+        use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
+
+        // B1.3: le op tabellari sono passthrough byte-preserving — la
+        // dimensionalita' (anche `Unknown`, R3.4) e l'encoding del contratto
+        // di input attraversano invariati filtri e rinomine; MAI un xy
+        // silenzioso.
+        for dimensions in [
+            GeometryDimensions::Xyz,
+            GeometryDimensions::Xyzm,
+            GeometryDimensions::Unknown,
+        ] {
+            let mut contract = geo_contract();
+            contract.geometries[0].dimensions = dimensions;
+            contract.geometries[0].encoding = Some(GeometryEncoding::Ewkb);
+
+            let filtered = ok(
+                "table.filter",
+                &[contract.clone()],
+                json!({"column": "id", "operator": ">", "value": 0}),
+            );
+            let geometry = filtered
+                .active_geometry_column()
+                .expect("geometria preservata da filter");
+            assert_eq!(geometry.dimensions, dimensions, "filter: dimensions");
+            assert_eq!(
+                geometry.encoding,
+                Some(GeometryEncoding::Ewkb),
+                "filter: encoding"
+            );
+
+            let renamed = ok(
+                "table.rename",
+                &[contract],
+                json!({"renames": [{"old_name": "geom", "new_name": "geometry"}]}),
+            );
+            let geometry = renamed
+                .active_geometry_column()
+                .expect("geometria preservata da rename");
+            assert_eq!(geometry.name, "geometry");
+            assert_eq!(geometry.dimensions, dimensions, "rename: dimensions");
+            assert_eq!(
+                geometry.encoding,
+                Some(GeometryEncoding::Ewkb),
+                "rename: encoding"
+            );
+        }
+    }
 
     #[test]
     fn every_table_op_has_an_analysis_arm() {

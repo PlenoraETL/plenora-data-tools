@@ -55,6 +55,7 @@ use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
 use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};
+use plenora_core::contract::GeometryDimensions;
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
 
@@ -104,6 +105,15 @@ fn unsupported_wkb_dimension() -> PlenoraError {
     )
 }
 
+/// Errore dedicato di coerenza (B1.2): il type code dichiara una
+/// dimensionalita' diversa da quella attesa dal contratto. Mai un
+/// passthrough silenzioso: la divergenza e' sempre un errore esplicito.
+fn wkb_dimension_mismatch() -> PlenoraError {
+    PlenoraError::Contract(
+        "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto".to_owned(),
+    )
+}
+
 fn non_finite_coordinate() -> PlenoraError {
     PlenoraError::Contract("WKB contiene coordinate NaN o infinite".to_owned())
 }
@@ -120,6 +130,19 @@ pub const MAX_WKB_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_WKB_COMPONENTS: u64 = 100_000;
 /// Profondita' massima di annidamento (multi-geometrie) di default.
 pub const MAX_WKB_DEPTH: usize = 64;
+
+/// Flag EWKB (estensione PostGIS): ordinata Z presente.
+const EWKB_Z_FLAG: u32 = 0x8000_0000;
+/// Flag EWKB (estensione PostGIS): ordinata M presente.
+const EWKB_M_FLAG: u32 = 0x4000_0000;
+/// Flag EWKB (estensione PostGIS): SRID presente. Mai ammesso: lo SRID non
+/// e' preservabile dal validatore strutturale.
+const EWKB_SRID_FLAG: u32 = 0x2000_0000;
+/// Maschera del tipo base nella forma EWKB (16 bit bassi).
+const EWKB_TYPE_MASK: u32 = 0x0000_FFFF;
+/// Bit alti riservati nella forma EWKB: se attivi, il type code non e' ne'
+/// ISO ne' EWKB valido e va rifiutato.
+const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     validate_wkb_contract(payload)?;
@@ -183,12 +206,31 @@ impl<'a> WkbCursor<'a> {
         })
     }
 
-    fn read_xy(&mut self, little_endian: bool) -> Result<(f64, f64), PlenoraError> {
+    /// Salta `bytes` byte senza leggerli: usato per le ordinate extra (Z/M),
+    /// che il validatore stride-aware non decodifica ne' reinterpreta.
+    fn skip(&mut self, bytes: usize) -> Result<(), PlenoraError> {
+        if self.remaining() < bytes {
+            return Err(invalid_wkb_structure("coordinata troncata"));
+        }
+        self.offset += bytes;
+        Ok(())
+    }
+
+    /// Legge una coordinata con lo `stride` dichiarato (byte per coordinata
+    /// interleaved, vedi [`GeometryDimensions::coordinate_stride`]): X e Y
+    /// sono decodificate e validate (NaN/inf vietati, ADR-0001), le ordinate
+    /// extra (Z/M) sono saltate via stride e mai lette.
+    fn read_coordinate(
+        &mut self,
+        little_endian: bool,
+        stride: usize,
+    ) -> Result<(f64, f64), PlenoraError> {
         let x = self.read_f64(little_endian)?;
         let y = self.read_f64(little_endian)?;
         if !x.is_finite() || !y.is_finite() {
             return Err(non_finite_coordinate());
         }
+        self.skip(stride - 16)?;
         Ok((x, y))
     }
 }
@@ -207,11 +249,116 @@ fn checked_count(
     Ok(count)
 }
 
+/// Interpreta il type code WKB e ne deriva tipo base e stride coordinata,
+/// verificando la coerenza con la dimensionalita' attesa (milestone B1.2).
+///
+/// Forme ammesse:
+/// - ISO: `tipo + 1000 * dimensione` con dimensione 0..=3 (XY, Z, M, ZM);
+/// - EWKB: flag Z ([`EWKB_Z_FLAG`]) e/o M ([`EWKB_M_FLAG`]) e tipo base nei
+///   16 bit bassi, senza altri bit alti attivi.
+///
+/// Il flag SRID EWKB e' sempre rifiutato, per qualunque dimensionalita'
+/// attesa: lo SRID non e' preservabile. I codici dimensione ISO oltre 3
+/// mantengono l'errore storico pre-B1.2 ([`unsupported_wkb_dimension`]),
+/// cosi' i chiamanti esistenti non osservano alcun cambio di variante
+/// d'errore su input malformati.
+///
+/// Nota B1.4 (comportamento dichiarato): un payload EWKB SENZA flag Z/M e
+/// senza SRID ha type code byte-identici a WKB ISO — le due forme sono
+/// indistinguibili sul filo e un input dichiarato `encoding: ewkb` puro-XY
+/// passa i gate come `xy`. L'encoding dichiarato nei metadati non cambia la
+/// validazione strutturale: il gate resta sui type code, non sulla chiave
+/// `encoding` del metadato `geo`.
+///
+/// Coerenza con la dimensionalita' attesa:
+/// - `Xy`: ogni marcatore dimensionale resta rifiutato con l'errore storico
+///   (comportamento pre-B1.2 invariato);
+/// - `Unknown` (R3.4: byte preservati, dimensionalita' dal type code):
+///   qualunque forma valida e' accettata e lo stride e' derivato dal type
+///   code stesso, geometria per geometria;
+/// - `Xyz`/`Xym`/`Xyzm`: la divergenza dal type code produce l'errore
+///   dedicato [`wkb_dimension_mismatch`], mai un passthrough.
+fn parse_wkb_type_code(
+    raw_type: u32,
+    expected: GeometryDimensions,
+) -> Result<(u32, usize), PlenoraError> {
+    if raw_type & EWKB_SRID_FLAG != 0 {
+        return Err(unsupported_wkb_dimension());
+    }
+    let (geometry_type, actual) = if raw_type & (EWKB_Z_FLAG | EWKB_M_FLAG) != 0 {
+        if raw_type & EWKB_RESERVED_MASK != 0 {
+            return Err(invalid_wkb_structure("tipo geometria non supportato"));
+        }
+        let has_z = raw_type & EWKB_Z_FLAG != 0;
+        let has_m = raw_type & EWKB_M_FLAG != 0;
+        // Almeno uno dei due flag e' attivo (guardia sopra): XY non occorre.
+        let dimensions = match (has_z, has_m) {
+            (true, false) => GeometryDimensions::Xyz,
+            (false, true) => GeometryDimensions::Xym,
+            (true, true) => GeometryDimensions::Xyzm,
+            (false, false) => GeometryDimensions::Xy,
+        };
+        (raw_type & EWKB_TYPE_MASK, dimensions)
+    } else {
+        let dimensions = match raw_type / 1000 {
+            0 => GeometryDimensions::Xy,
+            1 => GeometryDimensions::Xyz,
+            2 => GeometryDimensions::Xym,
+            3 => GeometryDimensions::Xyzm,
+            _ => return Err(unsupported_wkb_dimension()),
+        };
+        (raw_type % 1000, dimensions)
+    };
+    let coherent = match expected {
+        GeometryDimensions::Unknown => actual,
+        GeometryDimensions::Xy if actual != GeometryDimensions::Xy => {
+            return Err(unsupported_wkb_dimension());
+        }
+        expected if expected == actual => actual,
+        _ => return Err(wkb_dimension_mismatch()),
+    };
+    // `coherent` non e' mai `Unknown` (o e' `actual`, o e' `expected`
+    // uguale ad `actual`): lo stride garantito esiste sempre.
+    let stride = coherent
+        .coordinate_stride()
+        .ok_or_else(|| invalid_wkb_structure("tipo geometria non supportato"))?;
+    Ok((geometry_type, stride))
+}
+
+/// Wrapper pre-B1.2: valida una geometria con dimensionalita' attesa `Xy`
+/// (comportamento identico al validatore storico: serie ISO 1000+ e flag
+/// EWKB Z/M/SRID rifiutati). Usato dal percorso pubblico storico; la
+/// variante stride-aware e' [`validate_wkb_geometry_with_dimensions`].
 fn validate_wkb_geometry(
     cursor: &mut WkbCursor<'_>,
     depth: usize,
     max_depth: usize,
     components: &mut u64,
+) -> Result<u32, PlenoraError> {
+    validate_wkb_geometry_with_dimensions(
+        cursor,
+        depth,
+        max_depth,
+        components,
+        GeometryDimensions::Xy,
+    )
+}
+
+/// Validatore strutturale stride-aware (B1.2): annidamento, conteggi, bound
+/// sui byte e finitezza di X/Y sono verificati con lo stride della
+/// dimensionalita' attesa (o derivato dal type code, se `Unknown`).
+///
+/// Le ordinate extra (Z/M) sono saltate via stride: mai lette, mai
+/// reinterpretate, mai validate. In particolare la finitezza di Z/M NON e'
+/// controllata — scelta deliberata: B1.2 preserva i byte senza elaborare le
+/// ordinate extra, quindi un NaN in Z/M non e' un dato elaborato dal kernel
+/// — e la chiusura degli anelli e' valutata sulle sole X/Y.
+fn validate_wkb_geometry_with_dimensions(
+    cursor: &mut WkbCursor<'_>,
+    depth: usize,
+    max_depth: usize,
+    components: &mut u64,
+    expected: GeometryDimensions,
 ) -> Result<u32, PlenoraError> {
     if depth > max_depth {
         return Err(invalid_wkb_structure(
@@ -233,28 +380,21 @@ fn validate_wkb_geometry(
         _ => return Err(invalid_wkb_structure("byte order non valido")),
     };
     let raw_type = cursor.read_u32(little_endian)?;
-    if raw_type & 0xE000_0000 != 0 {
-        return Err(unsupported_wkb_dimension());
-    }
-    let dimension_code = raw_type / 1000;
-    if dimension_code != 0 {
-        return Err(unsupported_wkb_dimension());
-    }
-    let geometry_type = raw_type % 1000;
+    let (geometry_type, stride) = parse_wkb_type_code(raw_type, expected)?;
     match geometry_type {
         1 => {
-            cursor.read_xy(little_endian)?;
+            cursor.read_coordinate(little_endian, stride)?;
         }
         2 => {
             let count = cursor.read_u32(little_endian)?;
-            let count = checked_count(count, cursor.remaining(), 16)?;
+            let count = checked_count(count, cursor.remaining(), stride)?;
             if count == 1 {
                 return Err(invalid_wkb_structure(
                     "LineString deve essere vuota o avere almeno due coordinate",
                 ));
             }
             for _ in 0..count {
-                cursor.read_xy(little_endian)?;
+                cursor.read_coordinate(little_endian, stride)?;
             }
         }
         3 => {
@@ -262,16 +402,16 @@ fn validate_wkb_geometry(
             let rings = checked_count(rings, cursor.remaining(), 4)?;
             for _ in 0..rings {
                 let count = cursor.read_u32(little_endian)?;
-                let count = checked_count(count, cursor.remaining(), 16)?;
+                let count = checked_count(count, cursor.remaining(), stride)?;
                 if count < 4 {
                     return Err(invalid_wkb_structure(
                         "anello poligonale con meno di quattro coordinate",
                     ));
                 }
-                let first = cursor.read_xy(little_endian)?;
+                let first = cursor.read_coordinate(little_endian, stride)?;
                 let mut last = first;
                 for _ in 1..count {
-                    last = cursor.read_xy(little_endian)?;
+                    last = cursor.read_coordinate(little_endian, stride)?;
                 }
                 if first != last {
                     return Err(invalid_wkb_structure("anello poligonale non chiuso"));
@@ -282,7 +422,13 @@ fn validate_wkb_geometry(
             let children = cursor.read_u32(little_endian)?;
             let children = checked_count(children, cursor.remaining(), 5)?;
             for _ in 0..children {
-                let child_type = validate_wkb_geometry(cursor, depth + 1, max_depth, components)?;
+                let child_type = validate_wkb_geometry_with_dimensions(
+                    cursor,
+                    depth + 1,
+                    max_depth,
+                    components,
+                    expected,
+                )?;
                 let valid_child = match geometry_type {
                     4 => child_type == 1,
                     5 => child_type == 2,
@@ -322,6 +468,44 @@ pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Res
     let mut cursor = WkbCursor::new(payload);
     let mut components = 0_u64;
     validate_wkb_geometry(&mut cursor, 0, max_depth, &mut components)?;
+    if cursor.remaining() != 0 {
+        return Err(invalid_wkb_structure("byte residui dopo la geometria"));
+    }
+    Ok(())
+}
+
+/// Variante stride-aware (B1.2) con dimensionalita' attesa esplicita:
+/// la validazione strutturale usa lo stride della dimensionalita'
+/// dichiarata e rifiuta ogni type code incoerente con essa
+/// ([`wkb_dimension_mismatch`]). Con [`GeometryDimensions::Unknown`] i byte
+/// sono preservati e la dimensionalita' e' derivata dal type code di ogni
+/// geometria (R3.4); il flag SRID EWKB resta rifiutato in ogni caso. Le
+/// ordinate extra (Z/M) non sono lette: vedi
+/// [`validate_wkb_geometry_with_dimensions`].
+///
+/// Il cablaggio della dimensionalita' dal contratto di colonna ai chiamanti
+/// e' milestone B1.3: i chiamanti attuali continuano a usare
+/// [`validate_wkb_contract`] (dimensionalita' `Xy`).
+pub fn validate_wkb_contract_for_dimensions(
+    payload: &[u8],
+    dimensions: GeometryDimensions,
+) -> Result<(), PlenoraError> {
+    validate_wkb_contract_for_dimensions_with_depth(payload, dimensions, MAX_WKB_DEPTH)
+}
+
+/// Come [`validate_wkb_contract_for_dimensions`], con profondita' di
+/// annidamento configurabile (come [`validate_wkb_contract_with_depth`]).
+pub fn validate_wkb_contract_for_dimensions_with_depth(
+    payload: &[u8],
+    dimensions: GeometryDimensions,
+    max_depth: usize,
+) -> Result<(), PlenoraError> {
+    if payload.len() > MAX_WKB_BYTES {
+        return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
+    }
+    let mut cursor = WkbCursor::new(payload);
+    let mut components = 0_u64;
+    validate_wkb_geometry_with_dimensions(&mut cursor, 0, max_depth, &mut components, dimensions)?;
     if cursor.remaining() != 0 {
         return Err(invalid_wkb_structure("byte residui dopo la geometria"));
     }
@@ -632,6 +816,343 @@ mod tests {
         ));
         // Il default resta 64 (comportamento invariato di validate_wkb_contract).
         assert!(validate_wkb_contract(&payload).is_ok());
+    }
+
+    // ---- Fixture e test stride-aware (milestone B1.2) ----
+
+    /// Header little-endian di una geometria con il type code dato.
+    fn push_header(payload: &mut Vec<u8>, raw_type: u32) {
+        payload.push(1_u8);
+        payload.extend_from_slice(&raw_type.to_le_bytes());
+    }
+
+    /// Coordinata con X, Y e le ordinate extra (Z e/o M, nell'ordine del
+    /// type code): lo stride e' 16 + 8 * extra.len().
+    fn push_coordinate(payload: &mut Vec<u8>, x: f64, y: f64, extra: &[f64]) {
+        payload.extend_from_slice(&x.to_le_bytes());
+        payload.extend_from_slice(&y.to_le_bytes());
+        for value in extra {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn dimensional_wkb_validates_with_matching_expected_dimensions() {
+        // Punto ISO ed EWKB nelle tre dimensionalita' estese.
+        for (iso_type, ewkb_type, expected, extra) in [
+            (1001_u32, 0x8000_0001, GeometryDimensions::Xyz, &[7.0_f64][..]),
+            (2001, 0x4000_0001, GeometryDimensions::Xym, &[8.0][..]),
+            (3001, 0xC000_0001, GeometryDimensions::Xyzm, &[7.0, 8.0][..]),
+        ] {
+            for raw_type in [iso_type, ewkb_type] {
+                let mut payload = Vec::new();
+                push_header(&mut payload, raw_type);
+                push_coordinate(&mut payload, 1.0, 2.0, extra);
+                assert!(
+                    validate_wkb_contract_for_dimensions(&payload, expected).is_ok(),
+                    "type code {raw_type:#x} con {expected}"
+                );
+                // Unknown: byte preservati, dimensionalita' dal type code.
+                assert!(validate_wkb_contract_for_dimensions(
+                    &payload,
+                    GeometryDimensions::Unknown
+                )
+                .is_ok());
+            }
+        }
+        // Big-endian ZM: lo stride non dipende dall'endianness.
+        let mut big_endian = vec![0_u8];
+        big_endian.extend_from_slice(&3001_u32.to_be_bytes());
+        for value in [1.0_f64, 2.0, 3.0, 4.0] {
+            big_endian.extend_from_slice(&value.to_be_bytes());
+        }
+        assert!(
+            validate_wkb_contract_for_dimensions(&big_endian, GeometryDimensions::Xyzm).is_ok()
+        );
+    }
+
+    #[test]
+    fn dimensional_linestring_polygon_and_nested_collection_validate_with_stride() {
+        // LineString ZM con due coordinate.
+        let mut line = Vec::new();
+        push_header(&mut line, 3002);
+        line.extend_from_slice(&2_u32.to_le_bytes());
+        push_coordinate(&mut line, 0.0, 0.0, &[5.0, 9.0]);
+        push_coordinate(&mut line, 1.0, 1.0, &[6.0, 10.0]);
+        assert!(validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyzm).is_ok());
+
+        // Poligono Z con anello esterno e un buco.
+        let mut polygon = Vec::new();
+        push_header(&mut polygon, 1003);
+        polygon.extend_from_slice(&2_u32.to_le_bytes());
+        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        for (x, y) in [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)] {
+            push_coordinate(&mut polygon, x, y, &[1.0]);
+        }
+        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        for (x, y) in [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (1.0, 1.0)] {
+            push_coordinate(&mut polygon, x, y, &[2.0]);
+        }
+        assert!(validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz).is_ok());
+
+        // Collection annidata ZM: GC(MultiPoint ZM, Point ZM).
+        let mut collection = Vec::new();
+        push_header(&mut collection, 3007);
+        collection.extend_from_slice(&2_u32.to_le_bytes());
+        push_header(&mut collection, 3004);
+        collection.extend_from_slice(&1_u32.to_le_bytes());
+        push_header(&mut collection, 3001);
+        push_coordinate(&mut collection, 3.0, 4.0, &[5.0, 6.0]);
+        push_header(&mut collection, 3001);
+        push_coordinate(&mut collection, 7.0, 8.0, &[9.0, 10.0]);
+        assert!(
+            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Xyzm).is_ok()
+        );
+    }
+
+    #[test]
+    fn truncation_inside_extra_ordinates_is_rejected() {
+        let mut point = Vec::new();
+        push_header(&mut point, 3001);
+        push_coordinate(&mut point, 1.0, 2.0, &[3.0, 4.0]);
+        assert!(validate_wkb_contract_for_dimensions(&point, GeometryDimensions::Xyzm).is_ok());
+        // Troncato a meta' dell'ordinata M (ultimi 4 byte).
+        assert!(validate_wkb_contract_for_dimensions(
+            &point[..point.len() - 4],
+            GeometryDimensions::Xyzm
+        )
+        .is_err());
+        // Troncato a meta' dell'ordinata Z.
+        assert!(validate_wkb_contract_for_dimensions(
+            &point[..point.len() - 12],
+            GeometryDimensions::Xyzm
+        )
+        .is_err());
+        // Troncato esattamente dopo Y: le ordinate extra mancano del tutto.
+        assert!(validate_wkb_contract_for_dimensions(
+            &point[..point.len() - 16],
+            GeometryDimensions::Xyzm
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn type_code_incoherent_with_expected_dimensions_gets_dedicated_error() {
+        // Dichiara Xy ma il type code e' Z (ISO): rifiuto storico del wrapper.
+        let mut z_point = Vec::new();
+        push_header(&mut z_point, 1001);
+        push_coordinate(&mut z_point, 1.0, 2.0, &[3.0]);
+        assert!(matches!(
+            validate_wkb_contract(&z_point),
+            Err(PlenoraError::Unsupported(message))
+                if message == "WKB contiene dimensioni Z/M o SRID non preservabili nel protocollo 2D"
+        ));
+        // Dichiara Xyz/Xym/Xyzm ma il type code e' XY: errore dedicato.
+        let mut xy_point = Vec::new();
+        push_header(&mut xy_point, 1);
+        push_coordinate(&mut xy_point, 1.0, 2.0, &[]);
+        for expected in [
+            GeometryDimensions::Xyz,
+            GeometryDimensions::Xym,
+            GeometryDimensions::Xyzm,
+        ] {
+            assert!(matches!(
+                validate_wkb_contract_for_dimensions(&xy_point, expected),
+                Err(PlenoraError::Contract(message))
+                    if message == "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto"
+            ));
+        }
+        // Dichiara Xym ma il type code porta Z (ISO 1001): stesso errore.
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&z_point, GeometryDimensions::Xym),
+            Err(PlenoraError::Contract(message))
+                if message == "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto"
+        ));
+    }
+
+    #[test]
+    fn point_count_is_checked_against_the_real_stride() {
+        // LineString Z che dichiara 3 coordinate ma ne contiene 2 (48 byte):
+        // con stride 16 basterebbero, con lo stride reale 24 no. Il
+        // validatore non deve desincronizzarsi: rifiuta.
+        let mut line = Vec::new();
+        push_header(&mut line, 1002);
+        line.extend_from_slice(&3_u32.to_le_bytes());
+        push_coordinate(&mut line, 0.0, 0.0, &[1.0]);
+        push_coordinate(&mut line, 1.0, 1.0, &[2.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyz),
+            Err(PlenoraError::Contract(message))
+                if message == "struttura WKB non valida: conteggio elementi oltre i byte disponibili"
+        ));
+        // Conteggio ostile con stride ZM: sempre rifiutato, mai desync.
+        let mut hostile = Vec::new();
+        push_header(&mut hostile, 3002);
+        hostile.extend_from_slice(&u32::MAX.to_le_bytes());
+        push_coordinate(&mut hostile, 0.0, 0.0, &[1.0, 2.0]);
+        assert!(validate_wkb_contract_for_dimensions(&hostile, GeometryDimensions::Xyzm).is_err());
+    }
+
+    #[test]
+    fn ewkb_srid_flag_is_rejected_for_every_expected_dimension() {
+        // Punto EWKB con SRID (flag 0x2000_0000) + valore SRID + XY.
+        let mut payload = Vec::new();
+        push_header(&mut payload, 0x2000_0001);
+        payload.extend_from_slice(&4326_u32.to_le_bytes());
+        push_coordinate(&mut payload, 1.0, 2.0, &[]);
+        for expected in [
+            GeometryDimensions::Xy,
+            GeometryDimensions::Xyz,
+            GeometryDimensions::Xym,
+            GeometryDimensions::Xyzm,
+            GeometryDimensions::Unknown,
+        ] {
+            assert!(matches!(
+                validate_wkb_contract_for_dimensions(&payload, expected),
+                Err(PlenoraError::Unsupported(_))
+            ));
+        }
+        // SRID combinato con Z: sempre rifiutato.
+        let mut payload_z = Vec::new();
+        push_header(&mut payload_z, 0xA000_0001);
+        payload_z.extend_from_slice(&4326_u32.to_le_bytes());
+        push_coordinate(&mut payload_z, 1.0, 2.0, &[3.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&payload_z, GeometryDimensions::Unknown),
+            Err(PlenoraError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn non_finite_xy_is_rejected_with_z_present_but_z_is_never_read() {
+        // NaN in X con Z presente: rifiutato (ADR-0001).
+        let mut payload = Vec::new();
+        push_header(&mut payload, 1001);
+        push_coordinate(&mut payload, f64::NAN, 2.0, &[3.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz),
+            Err(PlenoraError::Contract(message))
+                if message == "WKB contiene coordinate NaN o infinite"
+        ));
+        // Inf in Y con Z presente: rifiutato.
+        let mut payload = Vec::new();
+        push_header(&mut payload, 1001);
+        push_coordinate(&mut payload, 1.0, f64::INFINITY, &[3.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz),
+            Err(PlenoraError::Contract(message))
+                if message == "WKB contiene coordinate NaN o infinite"
+        ));
+        // NaN nell'ordinata Z: accettato, perche' Z non e' mai letta ne'
+        // reinterpretata (B1.2 preserva i byte senza elaborare le ordinate
+        // extra; vedi il doc-comment di validate_wkb_geometry_with_dimensions).
+        let mut payload = Vec::new();
+        push_header(&mut payload, 1001);
+        push_coordinate(&mut payload, 1.0, 2.0, &[f64::NAN]);
+        assert!(validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz).is_ok());
+    }
+
+    #[test]
+    fn depth_limit_applies_to_dimensional_collections() {
+        // GC(GC(Point ZM)): il punto e' a profondita' 2.
+        let mut outer = Vec::new();
+        push_header(&mut outer, 3007);
+        outer.extend_from_slice(&1_u32.to_le_bytes());
+        push_header(&mut outer, 3007);
+        outer.extend_from_slice(&1_u32.to_le_bytes());
+        push_header(&mut outer, 3001);
+        push_coordinate(&mut outer, 1.0, 2.0, &[3.0, 4.0]);
+        assert!(validate_wkb_contract_for_dimensions_with_depth(
+            &outer,
+            GeometryDimensions::Xyzm,
+            2
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions_with_depth(&outer, GeometryDimensions::Xyzm, 1),
+            Err(PlenoraError::Contract(message))
+                if message == "struttura WKB non valida: annidamento geometrie oltre il limite"
+        ));
+        // Il default resta 64 anche per la variante stride-aware.
+        assert!(validate_wkb_contract_for_dimensions(&outer, GeometryDimensions::Xyzm).is_ok());
+    }
+
+    #[test]
+    fn unknown_dimensions_preserve_bytes_and_derive_stride_per_geometry() {
+        // Unknown (R3.4): byte preservati, dimensionalita' dal type code di
+        // ogni geometria; una collection puo' mescolare dimensionalita'.
+        let mut collection = Vec::new();
+        push_header(&mut collection, 7);
+        collection.extend_from_slice(&3_u32.to_le_bytes());
+        push_header(&mut collection, 1);
+        push_coordinate(&mut collection, 1.0, 2.0, &[]);
+        push_header(&mut collection, 1001);
+        push_coordinate(&mut collection, 3.0, 4.0, &[5.0]);
+        push_header(&mut collection, 0xC000_0001);
+        push_coordinate(&mut collection, 6.0, 7.0, &[8.0, 9.0]);
+        assert!(
+            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Unknown).is_ok()
+        );
+        // Unknown non accetta strutture sbagliate: troncamento rifiutato.
+        assert!(validate_wkb_contract_for_dimensions(
+            &collection[..collection.len() - 8],
+            GeometryDimensions::Unknown
+        )
+        .is_err());
+        // Type code con bit alti riservati (non ISO, non EWKB): rifiutato.
+        let mut garbage = Vec::new();
+        push_header(&mut garbage, 0x8001_0001);
+        push_coordinate(&mut garbage, 1.0, 2.0, &[3.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&garbage, GeometryDimensions::Unknown),
+            Err(PlenoraError::Contract(message))
+                if message == "struttura WKB non valida: tipo geometria non supportato"
+        ));
+    }
+
+    #[test]
+    fn ring_closure_is_checked_on_xy_only() {
+        // Anello chiuso in X/Y con Z diverse agli estremi: accettato, perche'
+        // Z non e' letta (B1.2 non elabora le ordinate extra).
+        let mut polygon = Vec::new();
+        push_header(&mut polygon, 1003);
+        polygon.extend_from_slice(&1_u32.to_le_bytes());
+        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        push_coordinate(&mut polygon, 0.0, 0.0, &[1.0]);
+        push_coordinate(&mut polygon, 4.0, 0.0, &[2.0]);
+        push_coordinate(&mut polygon, 4.0, 4.0, &[3.0]);
+        push_coordinate(&mut polygon, 0.0, 0.0, &[99.0]);
+        assert!(validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz).is_ok());
+        // Anello non chiuso in X/Y: rifiutato anche con Z coerenti.
+        let mut open = Vec::new();
+        push_header(&mut open, 1003);
+        open.extend_from_slice(&1_u32.to_le_bytes());
+        open.extend_from_slice(&4_u32.to_le_bytes());
+        push_coordinate(&mut open, 0.0, 0.0, &[1.0]);
+        push_coordinate(&mut open, 4.0, 0.0, &[1.0]);
+        push_coordinate(&mut open, 4.0, 4.0, &[1.0]);
+        push_coordinate(&mut open, 0.0, 4.0, &[1.0]);
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&open, GeometryDimensions::Xyz),
+            Err(PlenoraError::Contract(message))
+                if message == "struttura WKB non valida: anello poligonale non chiuso"
+        ));
+    }
+
+    #[test]
+    fn xy_wrapper_still_rejects_ewkb_flags_like_before() {
+        // Il wrapper storico (Xy) rifiuta i flag EWKB con l'errore pre-B1.2.
+        for raw_type in [0x8000_0001_u32, 0x4000_0001, 0xC000_0001, 0x2000_0001] {
+            let mut payload = Vec::new();
+            push_header(&mut payload, raw_type);
+            payload.extend_from_slice(&0_u32.to_le_bytes()); // eventuale SRID
+            push_coordinate(&mut payload, 1.0, 2.0, &[3.0, 4.0]);
+            assert!(matches!(
+                validate_wkb_contract(&payload),
+                Err(PlenoraError::Unsupported(message))
+                    if message == "WKB contiene dimensioni Z/M o SRID non preservabili nel protocollo 2D"
+            ));
+        }
     }
 
     proptest! {

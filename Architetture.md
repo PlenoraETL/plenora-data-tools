@@ -269,7 +269,7 @@ struct GeometryColumnContract {
     field_id: FieldId,          // identità logica stabile nel grafo
     name: String,               // proprietà visibile: le rinomine cambiano name, non field_id
     crs: ResolvedCrs,
-    dimensions: GeometryDimensions, // XY nella v1
+    dimensions: GeometryDimensions, // 5 varianti (xy..xyzm, unknown), ADR 8
     nullable: bool,
 }
 ```

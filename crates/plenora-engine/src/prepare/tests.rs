@@ -46,6 +46,7 @@ fn geo_contract() -> DataContract {
             name: "geom".to_owned(),
             crs: projected_crs(),
             dimensions: GeometryDimensions::Xy,
+            encoding: None,
             nullable: true,
         }],
         None,

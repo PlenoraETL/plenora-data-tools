@@ -39,7 +39,7 @@ use plenora_core::arrow::schema::{DataType, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, Family, OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldId, GeometryColumnContract, GeometryDimensions,
+    ContractProperties, DataContract, FieldId, GeometryColumnContract,
 };
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::PlenoraError;
@@ -61,6 +61,7 @@ use plenora_engine::{
     RuntimeContext,
 };
 use plenora_kernels_geo::arrow_adapter::{
+    geometry_dimensions_from_metadata, geometry_encoding_from_metadata_strict,
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
 };
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
@@ -852,6 +853,11 @@ fn crs_definition_from_metadata(
 /// e colonna geometria se presente (metadati `geoarrow.wkb` + `geo.crs`, CRS
 /// risolto). Fail-closed su metadati incoerenti. Il `FieldId` e' provvisorio:
 /// il planner lo rimappa nel namespace globale del grafo (D16).
+///
+/// B1.3: la dimensionalita' arriva dal metadato `geo.dimensions` — chiave
+/// assente o non leggibile -> `Unknown` (R3.4, MAI default `Xy`); l'encoding
+/// dal metadato `geo.encoding` — valore fuori dall'enum chiuso -> rifiuto
+/// esplicito (R3.5, framing non rappresentabile).
 fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
     let schema = ipc_header_schema(path)?;
     let mut geometries = Vec::new();
@@ -884,13 +890,7 @@ fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
         }
         let definition = crs_definition_from_metadata(field.name(), geo_metadata)?;
         let crs = resolve_crs(&definition, "crs")?;
-        geometries.push(GeometryColumnContract {
-            field_id: FieldId(0),
-            name: field.name().clone(),
-            crs,
-            dimensions: GeometryDimensions::Xy,
-            nullable: field.is_nullable(),
-        });
+        geometries.push(geometry_contract_from_field(field, crs)?);
     }
     let active_geometry = if geometries.is_empty() {
         None
@@ -910,6 +910,29 @@ fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
         PlenoraError::Crs(message) => PlenoraError::Crs(prefix(&message)),
         other => other,
     }
+}
+
+/// Contratto della colonna geometria dai metadati del campo (B1.3).
+///
+/// Dimensionalita' ed encoding arrivano dai reader di `arrow_adapter`:
+/// chiave assente o non leggibile -> `Unknown` / `None` (R3.4: MAI un
+/// default silenzioso `Xy`); encoding fuori dall'enum chiuso -> rifiuto
+/// esplicito (R3.5: framing non rappresentabile). Il `FieldId` e'
+/// provvisorio (rimappato dal planner, D16).
+fn geometry_contract_from_field(
+    field: &plenora_core::arrow::schema::Field,
+    crs: plenora_core::crs::ResolvedCrs,
+) -> Result<GeometryColumnContract, PlenoraError> {
+    let dimensions = geometry_dimensions_from_metadata(field);
+    let encoding = geometry_encoding_from_metadata_strict(field)?;
+    Ok(GeometryColumnContract {
+        field_id: FieldId(0),
+        name: field.name().clone(),
+        crs,
+        dimensions,
+        encoding,
+        nullable: field.is_nullable(),
+    })
 }
 
 /// Accoppia i percorsi CLI agli input dichiarati dal piano v4, in ordine di
@@ -1321,5 +1344,108 @@ fn main() {
         }
         eprintln!("plenora-data-tools: {error}");
         std::process::exit(2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::arrow::schema::Field;
+    use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
+    use plenora_core::crs::{CrsKind, ResolvedCrs};
+
+    use super::*;
+
+    fn projected_crs() -> ResolvedCrs {
+        ResolvedCrs::from_resolved_parts(
+            "EPSG:32632".to_owned(),
+            serde_json::json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
+            CrsKind::Projected,
+            Some(1.0),
+        )
+    }
+
+    /// Campo geometria GeoArrow-WKB con il metadato `geo` dato (o senza).
+    fn geometry_field(geo_json: Option<&str>) -> Field {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            GEOARROW_EXTENSION_KEY.to_owned(),
+            GEOARROW_WKB_EXTENSION.to_owned(),
+        );
+        if let Some(geo) = geo_json {
+            metadata.insert(GEO_METADATA_KEY.to_owned(), geo.to_owned());
+        }
+        Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
+    }
+
+    #[test]
+    fn discovery_reads_dimensions_and_encoding_from_metadata() {
+        let contract = geometry_contract_from_field(
+            &geometry_field(Some(r#"{"crs":"EPSG:32632","dimensions":"xyz","encoding":"ewkb"}"#)),
+            projected_crs(),
+        )
+        .expect("discovery");
+        assert_eq!(contract.dimensions, GeometryDimensions::Xyz);
+        assert_eq!(contract.encoding, Some(GeometryEncoding::Ewkb));
+
+        // Forma scritta dai writer correnti (dimensions xy, niente encoding).
+        let written = plenora_kernels_geo::arrow_adapter::geometry_output_field(
+            "geometry",
+            "EPSG:32632",
+        )
+        .expect("field");
+        let contract = geometry_contract_from_field(&written, projected_crs()).expect("discovery");
+        assert_eq!(contract.dimensions, GeometryDimensions::Xy);
+        assert_eq!(contract.encoding, None);
+    }
+
+    #[test]
+    fn discovery_without_dimensions_metadata_propagates_unknown_never_xy() {
+        // (b) R3.4: chiave `dimensions` assente o valore non riconosciuto ->
+        // Unknown propagato nel contratto, MAI un default silenzioso Xy.
+        for geo_json in [
+            r#"{"crs":"EPSG:32632"}"#,
+            r#"{"crs":"EPSG:32632","dimensions":"2d"}"#,
+            r#"{"crs":"EPSG:32632","dimensions":42}"#,
+        ] {
+            let contract =
+                geometry_contract_from_field(&geometry_field(Some(geo_json)), projected_crs())
+                    .expect("discovery");
+            assert_eq!(
+                contract.dimensions,
+                GeometryDimensions::Unknown,
+                "geo: {geo_json}"
+            );
+            assert_eq!(contract.encoding, None);
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_unrepresentable_encoding() {
+        // (d) R3.5: framing fuori dall'enum chiuso -> rifiuto esplicito
+        // (Unsupported), mai mappato a un encoding noto.
+        for geo_json in [
+            r#"{"crs":"EPSG:32632","encoding":"gpkg"}"#,
+            r#"{"crs":"EPSG:32632","encoding":"twkb"}"#,
+            r#"{"crs":"EPSG:32632","encoding":42}"#,
+        ] {
+            let result =
+                geometry_contract_from_field(&geometry_field(Some(geo_json)), projected_crs());
+            assert!(
+                matches!(result, Err(PlenoraError::Unsupported(_))),
+                "geo: {geo_json}"
+            );
+        }
+
+        // Encoding rappresentabile -> propagato nel contratto.
+        let contract = geometry_contract_from_field(
+            &geometry_field(Some(r#"{"crs":"EPSG:32632","encoding":"wkb"}"#)),
+            projected_crs(),
+        )
+        .expect("discovery");
+        assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
     }
 }

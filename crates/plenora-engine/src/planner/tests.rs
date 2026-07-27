@@ -8,7 +8,7 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions, PropertyConfidence, PropertyScope,
+    GeometryDimensions, GeometryEncoding, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -65,6 +65,7 @@ fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
             name: "geom".to_owned(),
             crs,
             dimensions: GeometryDimensions::Xy,
+            encoding: None,
             nullable: true,
         }],
         None,
@@ -75,6 +76,68 @@ fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
 
 fn input(contract: DataContract) -> Vec<(String, DataContract)> {
     vec![("main".to_owned(), contract)]
+}
+
+#[test]
+fn contract_canonical_serializes_dimensions_as_icd_strings() {
+    // B1.1: il fingerprint dei contratti Xy non cambia — "dimensions" resta
+    // la stringa "xy" prodotta anche dalla serializzazione precedente.
+    let canonical = contract_canonical(&geo_contract(0));
+    assert_eq!(canonical["geometries"][0]["dimensions"], json!("xy"));
+
+    // Tutte le 5 varianti entrano nel fingerprint in forma ICD minuscola.
+    for (dimensions, text) in [
+        (GeometryDimensions::Xy, "xy"),
+        (GeometryDimensions::Xyz, "xyz"),
+        (GeometryDimensions::Xym, "xym"),
+        (GeometryDimensions::Xyzm, "xyzm"),
+        (GeometryDimensions::Unknown, "unknown"),
+    ] {
+        let mut contract = geo_contract(0);
+        contract.geometries[0].dimensions = dimensions;
+        let canonical = contract_canonical(&contract);
+        assert_eq!(canonical["geometries"][0]["dimensions"], json!(text));
+    }
+}
+
+#[test]
+fn contract_canonical_omits_encoding_unless_declared() {
+    // B1.3: un contratto Xy senza encoding produce ESATTAMENTE lo stesso
+    // JSON di prima (chiave assente, non null) — fingerprint invariato.
+    let without = contract_canonical(&geo_contract(0));
+    let geometry = &without["geometries"][0];
+    assert!(geometry.get("encoding").is_none());
+    assert_eq!(
+        geometry,
+        &json!({
+            "name": "geom",
+            "crs": {
+                "definition": "EPSG:32632",
+                "kind": "projected",
+                "horizontal_unit_to_metre": 1.0_f64.to_bits(),
+            },
+            "dimensions": "xy",
+            "nullable": true,
+        })
+    );
+
+    // Encoding dichiarato: entra nel fingerprint in forma ICD minuscola.
+    for (encoding, text) in [
+        (GeometryEncoding::Wkb, "wkb"),
+        (GeometryEncoding::Ewkb, "ewkb"),
+    ] {
+        let mut contract = geo_contract(0);
+        contract.geometries[0].encoding = Some(encoding);
+        let canonical = contract_canonical(&contract);
+        assert_eq!(canonical["geometries"][0]["encoding"], json!(text));
+    }
+    // E cambia il fingerprint rispetto al contratto senza encoding.
+    let mut contract = geo_contract(0);
+    contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
+    assert_ne!(
+        contract_fingerprint(&contract),
+        contract_fingerprint(&geo_contract(0))
+    );
 }
 
 /// Pipeline mista table+geo: filter -> buffer -> aggregate.

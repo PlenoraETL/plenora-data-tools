@@ -26,7 +26,6 @@
 //! Float64, `vertex_count` UInt64, `bounds` quattro colonne Float64
 //! `<geometry_column>_minx/miny/maxx/maxy`, `to_wkt` Utf8.
 
-use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use plenora_core::arrow::array::{
@@ -50,6 +49,7 @@ use plenora_kernels_geo::construction::{
     line_from_ordered_points, point_from_lon_lat, polygon_from_ordered_points, ConstructionError,
 };
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
+use plenora_core::contract::GeometryDimensions;
 use plenora_kernels_geo::extended::{
     affine_transform, concave_hull, geodesic_distance_m, geodesic_line_length_m,
     hausdorff_distance, haversine_distance_m, rotate_about, scale_about, translate, ExtendedError,
@@ -84,10 +84,11 @@ use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 
 pub const ENVELOPE_MAGIC: &[u8; 8] = b"PLNGEO3\0";
 pub const ENVELOPE_TRAILER_MAGIC: &[u8; 8] = b"GEOEND3\0";
-pub const GEOARROW_EXTENSION_KEY: &str = "ARROW:extension:name";
-pub const GEOARROW_WKB_EXTENSION: &str = "geoarrow.wkb";
-pub const GEO_METADATA_KEY: &str = "geo";
-pub const DEFAULT_GEOMETRY_COLUMN: &str = "geometry";
+// Costanti dei metadati GeoArrow: casa unica in `arrow_adapter`
+// (unificazione B1.1), qui ri-esportate per compatibilita' di percorso.
+pub use plenora_kernels_geo::arrow_adapter::{
+    DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+};
 pub const DEFAULT_X_COLUMN: &str = "x";
 pub const DEFAULT_Y_COLUMN: &str = "y";
 pub const PARENT_INDEX_COLUMN: &str = "__parent_index";
@@ -121,6 +122,10 @@ pub const MAX_BATCHES: usize = 65_536;
 pub const MAX_CELL_BYTES: u64 = 64 * 1024 * 1024;
 /// Coordinate massime per cella: una cella da 64 MiB contiene al piu' 16 byte
 /// per coordinata XY.
+///
+/// Scelta B1.3 (come in `arrow_adapter::MAX_CELL_COORDINATES`): bound
+/// conservativo non stride-aware — con Z/M il reale e' minore, quindi il
+/// bound e' permissivo ma sicuro; `Unknown` (R3.4) non ha stride garantito.
 pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
 const PAYLOAD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -1621,6 +1626,11 @@ fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, ArrowTran
 
 /// Metadato GeoArrow `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
+///
+/// Unificazione B1.1: l'assemblaggio JSON e' unico in
+/// [`plenora_kernels_geo::arrow_adapter::geo_metadata_json`] (stesso output
+/// byte-per-byte); qui restano solo le validazioni con le varianti
+/// d'errore strutturate del trasporto.
 fn geo_metadata_json(crs: &str) -> Result<String, ArrowTransportError> {
     if crs.trim().is_empty() {
         return Err(ArrowTransportError::CrsRequired);
@@ -1628,24 +1638,30 @@ fn geo_metadata_json(crs: &str) -> Result<String, ArrowTransportError> {
     if crs.len() > MAX_CRS_DEFINITION_BYTES {
         return Err(ArrowTransportError::CrsTooLarge);
     }
-    let crs_value = match serde_json::from_str::<serde_json::Value>(crs) {
-        Ok(value @ serde_json::Value::Object(_)) => value,
-        _ => serde_json::Value::String(crs.to_owned()),
-    };
-    let mut metadata = serde_json::Map::new();
-    metadata.insert("crs".to_owned(), crs_value);
-    serde_json::to_string(&serde_json::Value::Object(metadata))
+    plenora_kernels_geo::arrow_adapter::geo_metadata_json(crs)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
 }
 
 fn geometry_output_field(name: &str, crs: &str) -> Result<Field, ArrowTransportError> {
-    let mut metadata = HashMap::new();
-    metadata.insert(
-        GEOARROW_EXTENSION_KEY.to_owned(),
-        GEOARROW_WKB_EXTENSION.to_owned(),
-    );
-    metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(crs)?);
-    Ok(Field::new(name, DataType::Binary, true).with_metadata(metadata))
+    // Validazione CRS con le varianti strutturate del trasporto; la
+    // costruzione del campo (metadati geoarrow.wkb + geo.crs +
+    // geo.dimensions) e' unica in `arrow_adapter` (unificazione B1.1).
+    geo_metadata_json(crs)?;
+    // B1.3: la dimensionalita' dichiarata e' Xy ESPLICITO, non un default
+    // silenzioso — ogni output di questo trasporto e' prodotto decodificando
+    // in `Geometry<f64>` e ricodificando `to_wkb(CoordDimensions::xy())`,
+    // quindi le celle sono sempre WKB 2D; gli input Z/M sono rifiutati a
+    // compile-plan (`analyze_geo_contract`) prima di arrivare qui.
+    // B1.4: per lo stesso motivo l'encoding e' `None` — le celle ricodificate
+    // sono WKB ISO XY e la chiave `encoding` e' omessa (mai ereditata
+    // dall'input, fingerprint invariato).
+    plenora_kernels_geo::arrow_adapter::geometry_output_field_with_encoding(
+        name,
+        crs,
+        GeometryDimensions::Xy,
+        None,
+    )
+    .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
 }
 
 /// Risultato per cella di una trasformazione 1:1.
@@ -4042,6 +4058,7 @@ mod tests {
     use super::*;
     use plenora_core::arrow::array::Int64Array;
     use geo::{line_string, polygon, Area, CoordsIter, Geometry, Point};
+    use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::Arc;
 
@@ -4953,6 +4970,39 @@ mod tests {
             geo_metadata_json(&oversized),
             Err(ArrowTransportError::CrsTooLarge)
         ));
+    }
+
+    #[test]
+    fn geo_metadata_json_is_byte_identical_to_arrow_adapter() {
+        // Unificazione B1.1: il trasporto delega l'assemblaggio JSON ad
+        // `arrow_adapter`; l'output deve essere identico byte-per-byte.
+        for crs in [CRS, r#"{"type":"ProjectedCRS","name":"demo"}"#] {
+            assert_eq!(
+                geo_metadata_json(crs).expect("transport"),
+                plenora_kernels_geo::arrow_adapter::geo_metadata_json(crs).expect("adapter")
+            );
+        }
+        // Il campo di output dichiara anche la dimensionalita' (B1.1).
+        let field = geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("field");
+        let geo: serde_json::Value = serde_json::from_str(
+            field.metadata().get(GEO_METADATA_KEY).expect("geo metadata"),
+        )
+        .expect("geo JSON");
+        assert_eq!(
+            geo.get("dimensions").and_then(serde_json::Value::as_str),
+            Some("xy")
+        );
+        assert_eq!(
+            field.metadata().get(GEO_METADATA_KEY).map(String::as_str),
+            plenora_kernels_geo::arrow_adapter::geometry_output_field(
+                DEFAULT_GEOMETRY_COLUMN,
+                CRS
+            )
+            .expect("adapter field")
+            .metadata()
+            .get(GEO_METADATA_KEY)
+            .map(String::as_str)
+        );
     }
 
     #[test]

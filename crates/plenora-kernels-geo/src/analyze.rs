@@ -126,6 +126,33 @@
 //! senza feature `proj-backend` fallisce chiuso (`CRS_BACKEND_UNAVAILABLE`),
 //! come nel sorgente.
 //!
+//! # Dimensionalita' (B1.3)
+//!
+//! Ogni kernel geo che consuma una geometria la decodifica in
+//! `geo::Geometry<f64>` (XY): l'analisi rifiuta a compile-plan
+//! ([`PlenoraError::Unsupported`], mai a meta' esecuzione) ogni contratto di
+//! input con `dimensions != Xy` — Z/M dichiarate o `Unknown` (R3.4). I
+//! produttori (`from_coords`, `from_wkt`, `generate_grid`) e gli output
+//! ricodificati (`coverage_validate`, `shared_paths`) dichiarano `Xy`; i
+//! metadati `geo` dei campi prodotti scrivono sempre la dimensionalita' del
+//! contratto di output. Il trasporto byte-preserving delle dimensionalita'
+//! estese resta affidato alle op tabellari (passthrough).
+//!
+//! # Encoding (B1.4)
+//!
+//! I writer dei metadati `geo` di output scrivono la chiave `encoding` solo
+//! quando il contratto la dichiara (`Some`) e la omettono con `None`
+//! (fingerprint e retrocompatibilita' invariati): un contratto con encoding
+//! dichiarato che attraversa un kernel che riscrive il campo (`reproject`)
+//! conserva la chiave nel metadato — coerenza contratto↔metadato. I
+//! produttori e gli output ricodificati (WKB ISO XY) non dichiarano alcun
+//! encoding. Nota sui type code: EWKB senza flag Z/M e senza SRID e'
+//! byte-identico a WKB ISO, quindi un input `encoding: ewkb` puro-XY e'
+//! indistinguibile da ISO e passa i gate come `xy` (comportamento
+//! dichiarato); il flag SRID EWKB e' invece sempre rifiutato dal validatore
+//! celle al gate di lettura dell'esecutore, per qualunque dimensionalita'
+//! dichiarata.
+//!
 //! # Proprieta' del contratto
 //!
 //! Le op 1:1 allineate alle righe preservano `sorted_by`/`row_count`;
@@ -140,7 +167,7 @@ use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, CrsRequirement, Family, OperationDescriptor};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, FieldAllocator, GeometryColumnContract,
-    GeometryDimensions, PropertyConfidence, PropertyScope,
+    GeometryDimensions, GeometryEncoding, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -148,8 +175,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::arrow_adapter::{
-    geo_metadata_json, DEFAULT_GEOMETRY_COLUMN, GEO_METADATA_KEY, GEOARROW_EXTENSION_KEY,
-    GEOARROW_WKB_EXTENSION,
+    geo_metadata_json_with_encoding, DEFAULT_GEOMETRY_COLUMN, GEO_METADATA_KEY,
+    GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
 };
 use crate::spatial_join::JoinPredicate;
 use crate::topology::OverlayMode;
@@ -676,23 +703,46 @@ fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nulla
         .with_metadata(field.metadata().clone()))
 }
 
-/// Nuovo campo geometria con metadati di estensione `geoarrow.wkb` + `geo.crs`.
-fn new_geometry_field(name: &str, crs: &ResolvedCrs, nullable: bool) -> Result<Field> {
+/// Nuovo campo geometria con metadati di estensione `geoarrow.wkb` +
+/// `geo.crs` + `geo.dimensions` (B1.3: la dimensionalita' scritta e' quella
+/// del contratto di output, mai un `xy` silenzioso) + `geo.encoding` (B1.4:
+/// la chiave e' scritta solo quando il contratto la dichiara — `Some` — e
+/// omessa con `None`: fingerprint e retrocompatibilita' invariati).
+fn new_geometry_field(
+    name: &str,
+    crs: &ResolvedCrs,
+    dimensions: GeometryDimensions,
+    encoding: Option<GeometryEncoding>,
+    nullable: bool,
+) -> Result<Field> {
     let mut metadata = HashMap::new();
     metadata.insert(
         GEOARROW_EXTENSION_KEY.to_owned(),
         GEOARROW_WKB_EXTENSION.to_owned(),
     );
-    metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(crs.definition())?);
+    metadata.insert(
+        GEO_METADATA_KEY.to_owned(),
+        geo_metadata_json_with_encoding(crs.definition(), dimensions, encoding)?,
+    );
     Ok(Field::new(name, DataType::Binary, nullable).with_metadata(metadata))
 }
 
-/// Aggiorna il metadato `geo.crs` del campo geometria (solo `reproject`).
+/// Aggiorna il metadato `geo.crs` del campo geometria (solo `reproject`),
+/// preservando dimensionalita' ed encoding dichiarati dal contratto (B1.3 /
+/// B1.4: il metadato riscritto resta coerente col contratto — un encoding
+/// dichiarato non si perde attraversando il kernel).
 fn set_geometry_crs(fields: &mut [Field], geometry: &GeometryColumnContract, crs: &ResolvedCrs) -> Result<()> {
     for field in fields.iter_mut() {
         if field.name() == &geometry.name {
             let mut metadata = field.metadata().clone();
-            metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(crs.definition())?);
+            metadata.insert(
+                GEO_METADATA_KEY.to_owned(),
+                geo_metadata_json_with_encoding(
+                    crs.definition(),
+                    geometry.dimensions,
+                    geometry.encoding,
+                )?,
+            );
             *field = field.clone().with_metadata(metadata);
             return Ok(());
         }
@@ -700,6 +750,23 @@ fn set_geometry_crs(fields: &mut [Field], geometry: &GeometryColumnContract, crs
     Err(PlenoraError::Schema(format!(
         "colonna geometria `{}` assente dallo schema",
         geometry.name
+    )))
+}
+
+/// Rifiuto a compile-plan (B1.3) per i kernel geo che ELABORANO la geometria
+/// decodificandola in `geo::Geometry<f64>` (XY): ogni dimensionalita' diversa
+/// da `Xy` — Z/M dichiarate oppure `Unknown` (R3.4: mai mappata a Xy) — e'
+/// rifiutata qui, in validazione del piano, mai scoperta a meta' esecuzione
+/// (il decode fallirebbe a runtime sulla prima cella Z/M). Il trasporto dei
+/// byte Z/M resta possibile con le op tabellari, che li propagano invariati.
+fn require_xy_dimensions(op: &str, geometry: &GeometryColumnContract) -> Result<()> {
+    if geometry.dimensions == GeometryDimensions::Xy {
+        return Ok(());
+    }
+    Err(PlenoraError::Unsupported(format!(
+        "{op}: dimensionalita' geometria `{}` non supportata: il kernel decodifica \
+         in XY e accetta solo `xy` (le op tabellari propagano i byte invariati)",
+        geometry.dimensions
     )))
 }
 
@@ -918,13 +985,15 @@ fn analyze_from_coords(
     validate_requirement(requirement, &[&crs])?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
-    fields.push(new_geometry_field(name, &crs, false)?);
+    fields.push(new_geometry_field(name, &crs, GeometryDimensions::Xy, None, false)?);
     let field_id = fields_allocator.alloc();
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
         crs,
+        // Produttore (B1.3): `from_coords` costruisce punti XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
+        encoding: None,
         nullable: false,
     };
     DataContract::new(
@@ -992,13 +1061,16 @@ fn analyze_from_wkt(
     validate_requirement(requirement, &[&crs])?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
-    fields.push(new_geometry_field(name, &crs, true)?);
+    fields.push(new_geometry_field(name, &crs, GeometryDimensions::Xy, None, true)?);
     let field_id = fields_allocator.alloc();
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
         crs,
+        // Produttore (B1.3): il parser WKT decodifica in `Geometry<f64>` —
+        // dichiara Xy.
         dimensions: GeometryDimensions::Xy,
+        encoding: None,
         nullable: true,
     };
     DataContract::new(
@@ -1143,7 +1215,13 @@ fn analyze_generate_grid(
         })?,
     };
     validate_requirement(requirement, &[&crs])?;
-    let mut fields = vec![new_geometry_field(DEFAULT_GEOMETRY_COLUMN, &crs, false)?];
+    let mut fields = vec![new_geometry_field(
+        DEFAULT_GEOMETRY_COLUMN,
+        &crs,
+        GeometryDimensions::Xy,
+        None,
+        false,
+    )?];
     fields.push(Field::new(CELL_I_COLUMN, DataType::UInt64, false));
     fields.push(Field::new(CELL_J_COLUMN, DataType::UInt64, false));
     if parsed.include_centroid.unwrap_or(false) {
@@ -1155,7 +1233,9 @@ fn analyze_generate_grid(
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
         crs,
+        // Produttore (B1.3): le celle griglia sono poligoni XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
+        encoding: None,
         nullable: false,
     };
     let mut properties = ContractProperties::default();
@@ -1252,6 +1332,10 @@ fn analyze_coverage_rows(
     fields.push(new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
         &geometry.crs,
+        GeometryDimensions::Xy,
+        // Kernel elaborante: l'output e' ricodificato WKB ISO XY — nessun
+        // encoding dichiarato (chiave omessa, mai ereditata dall'input).
+        None,
         false,
     )?);
     let field_id = fields_allocator.alloc();
@@ -1259,7 +1343,11 @@ fn analyze_coverage_rows(
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
         crs: geometry.crs.clone(),
+        // Kernel elaborante (B1.3): l'input e' gated a `Xy` in analisi
+        // (`require_xy_dimensions`) e l'output e' ricodificato XY — dichiara
+        // Xy, mai la dimensionalita' dell'input copiata silenziosamente.
         dimensions: GeometryDimensions::Xy,
+        encoding: None,
         nullable: false,
     };
     DataContract::new(
@@ -1464,6 +1552,9 @@ fn analyze_unary(
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let geometry = single_geometry(op, input)?;
+    // B1.3: ogni op unaria che consuma una geometria la decodifica in XY —
+    // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
+    require_xy_dimensions(op, geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
         PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
@@ -1606,6 +1697,9 @@ fn analyze_binary(
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
+    // B1.3: come per le unarie — entrambi gli operandi devono essere XY.
+    require_xy_dimensions(op, left_geometry)?;
+    require_xy_dimensions(op, right_geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
         PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
@@ -1681,7 +1775,8 @@ fn analyze_binary(
 ///
 /// Fallisce (fail-closed, in validazione) se: l'op non e' nel catalogo o non
 /// e' geo; l'arieta' non e' rispettata; un input non ha esattamente una
-/// colonna geometria attiva (v1); il `crs_requirement` non e' soddisfatto;
+/// colonna geometria attiva (v1); la geometria di input non e' `Xy` per un
+/// kernel che la elabora (B1.3); il `crs_requirement` non e' soddisfatto;
 /// la config non supera deserializzazione stretta o domini dei parametri;
 /// una colonna prodotta collide con una esistente; il CRS di output non e'
 /// risolvibile.
@@ -1756,6 +1851,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+    use crate::arrow_adapter::geo_metadata_json_with_dimensions;
 
     fn projected_crs() -> ResolvedCrs {
         ResolvedCrs::from_resolved_parts(
@@ -1792,7 +1888,8 @@ mod tests {
         );
         metadata.insert(
             GEO_METADATA_KEY.to_owned(),
-            geo_metadata_json("EPSG:32632").expect("geo metadata"),
+            geo_metadata_json_with_dimensions("EPSG:32632", GeometryDimensions::Xy)
+                .expect("geo metadata"),
         );
         Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(metadata)
     }
@@ -1809,6 +1906,7 @@ mod tests {
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
                 crs,
                 dimensions: GeometryDimensions::Xy,
+                encoding: None,
                 nullable: true,
             }],
             Some(FieldId(2)),
@@ -2253,6 +2351,101 @@ mod tests {
         assert_eq!(catalog_ops, case_ops);
     }
 
+    /// Come `geo_contract`, con la dimensionalita' dichiarata (fixture B1.3).
+    fn geo_contract_with_dimensions(
+        crs: ResolvedCrs,
+        dimensions: GeometryDimensions,
+    ) -> DataContract {
+        let mut contract = geo_contract(crs);
+        contract.geometries[0].dimensions = dimensions;
+        contract
+    }
+
+    #[test]
+    fn dimensions_propagation_table_for_all_catalog_geo_ops() {
+        // (a) B1.3: per OGNI op geo del catalogo, un input con dimensionalita'
+        // estesa o non risolta -> rifiuto esplicito a compile-plan (kernel
+        // elaboranti) oppure Xy dichiarato dal produttore; MAI un xy
+        // silenzioso. La tabella `cases()` copre tutte e sole le 75 op.
+        const PRODUCERS: [&str; 3] = ["geo.from_coords", "geo.from_wkt", "geo.generate_grid"];
+        for case in cases() {
+            if PRODUCERS.contains(&case.op) {
+                // Produttori: input non geometrico -> il contratto dichiara
+                // Xy e il metadato del campo scrive la stessa dimensionalita'.
+                let (output, _, _) = run_case(&case);
+                let geometry = output
+                    .active_geometry_column()
+                    .unwrap_or_else(|| panic!("{}: geometria prodotta", case.op));
+                assert_eq!(
+                    geometry.dimensions,
+                    GeometryDimensions::Xy,
+                    "{}: il produttore dichiara Xy",
+                    case.op
+                );
+                let field = output
+                    .schema
+                    .field_with_name(&geometry.name)
+                    .unwrap_or_else(|_| panic!("{}: campo geometria", case.op));
+                assert_eq!(
+                    crate::arrow_adapter::geometry_dimensions_from_metadata(field),
+                    GeometryDimensions::Xy,
+                    "{}: metadato output coerente col contratto",
+                    case.op
+                );
+                // B1.4: il produttore ricodifica WKB ISO XY — nessun encoding
+                // dichiarato, chiave omessa dal metadato.
+                assert_eq!(
+                    crate::arrow_adapter::geometry_encoding_from_metadata(field),
+                    None,
+                    "{}: nessun encoding dichiarato dal produttore",
+                    case.op
+                );
+                continue;
+            }
+            for dimensions in [
+                GeometryDimensions::Xyz,
+                GeometryDimensions::Xym,
+                GeometryDimensions::Xyzm,
+                GeometryDimensions::Unknown,
+            ] {
+                let mut inputs =
+                    vec![geo_contract_with_dimensions(input_crs_for(case.op), dimensions)];
+                if case.binary {
+                    inputs.push(geo_contract_with_dimensions(projected_crs(), dimensions));
+                }
+                let mut allocator = FieldAllocator::new(100);
+                let result = analyze_geo_contract(
+                    case.op,
+                    &inputs,
+                    &case.config,
+                    Some(&projected_crs()),
+                    &mut allocator,
+                );
+                match result {
+                    Err(PlenoraError::Unsupported(message)) => {
+                        assert!(
+                            message.contains(case.op),
+                            "{}: l'errore cita l'operazione: {message}",
+                            case.op
+                        );
+                        assert!(
+                            message.contains(dimensions.as_str()),
+                            "{}: l'errore cita la dimensionalita': {message}",
+                            case.op
+                        );
+                    }
+                    Err(other) => {
+                        panic!("{}: atteso Unsupported con {dimensions}, trovato {other:?}", case.op)
+                    }
+                    Ok(_) => panic!(
+                        "{}: input {dimensions} accettato: xy silenzioso (B1.3 violata)",
+                        case.op
+                    ),
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_geo_op_produces_the_expected_contract() {
         for case in cases() {
@@ -2589,6 +2782,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reprojection_preserves_a_declared_encoding_in_the_rewritten_metadata() {
+        // B1.4: un contratto con encoding dichiarato (EWKB puro-XY: type
+        // code byte-identici a ISO, quindi ammesso dal gate `xy`) che
+        // attraversa `reproject` conserva la chiave `encoding` nel metadato
+        // riscritto — coerenza contratto↔metadato. Prima di B1.4 il writer
+        // riscriveva solo `dimensions` e la chiave andava persa.
+        let mut input = geo_contract(geographic_crs());
+        input.geometries[0].encoding = Some(GeometryEncoding::Ewkb);
+        let plan = projected_crs();
+        let output = analyze_one(
+            "geo.reproject",
+            &[input],
+            &json!({"target_crs": "EPSG:32632"}),
+            Some(&plan),
+        )
+        .expect("reproject con encoding dichiarato");
+        let geometry = output.active_geometry_column().expect("geometria");
+        assert_eq!(geometry.encoding, Some(GeometryEncoding::Ewkb));
+        assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
+        let field = output
+            .schema
+            .field_with_name(&geometry.name)
+            .expect("campo geometria");
+        assert_eq!(
+            crate::arrow_adapter::geometry_encoding_from_metadata(field),
+            Some(GeometryEncoding::Ewkb),
+            "metadato riscritto coerente col contratto (B1.4)"
+        );
+        assert_eq!(
+            crate::arrow_adapter::geometry_dimensions_from_metadata(field),
+            GeometryDimensions::Xy
+        );
+
+        // Senza encoding dichiarato il metadato riscritto non ha la chiave
+        // (fingerprint invariato, retrocompatibilita').
+        let output = analyze_one(
+            "geo.reproject",
+            &[geo_contract(geographic_crs())],
+            &json!({"target_crs": "EPSG:32632"}),
+            Some(&plan),
+        )
+        .expect("reproject senza encoding");
+        let geometry = output.active_geometry_column().expect("geometria");
+        let field = output
+            .schema
+            .field_with_name(&geometry.name)
+            .expect("campo geometria");
+        assert_eq!(geometry.encoding, None);
+        assert_eq!(
+            crate::arrow_adapter::geometry_encoding_from_metadata(field),
+            None,
+            "None: chiave omessa dal metadato riscritto"
+        );
+    }
+
     #[cfg(not(feature = "proj-backend"))]
     #[test]
     fn reprojection_without_backend_fails_closed_on_new_definitions() {
@@ -2863,6 +3112,7 @@ mod tests {
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
                 crs: projected_crs(),
                 dimensions: GeometryDimensions::Xy,
+                encoding: None,
                 nullable: true,
             }],
             Some(FieldId(2)),
@@ -3146,6 +3396,7 @@ mod tests {
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
                 crs: projected_crs(),
                 dimensions: GeometryDimensions::Xy,
+                encoding: None,
                 nullable: true,
             }],
             Some(FieldId(2)),

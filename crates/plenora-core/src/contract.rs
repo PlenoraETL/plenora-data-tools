@@ -42,13 +42,156 @@ impl fmt::Display for FieldId {
     }
 }
 
-/// Dimensionalità delle geometrie di una colonna.
+/// Dimensionalità delle geometrie di una colonna (ICD §3.3, milestone B1.1).
 ///
-/// v1: solo `XY` (decisione D16). Il modello è aperto a future varianti
-/// (XYZ/XYM/XYZM) senza cambiare la forma del contratto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Il contratto rappresenta e propaga la dimensionalità, NON la elabora.
+/// Serializzazione ICD: `"xy"`, `"xyz"`, `"xym"`, `"xyzm"`, `"unknown"`
+/// (minuscola).
+///
+/// `Unknown` significa «byte preservati, dimensionalità non risolta» e NON
+/// deve mai essere mappato a [`GeometryDimensions::Xy`] (regola R3.4): chi
+/// legge metadati privi di dimensionalità ottiene `Unknown`, mai un default
+/// silenzioso. Trattare `Unknown` come `Xy` nasconderebbe geometrie Z/M
+/// dietro un contratto 2D: errore di semantica, non semplificazione.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum GeometryDimensions {
     Xy,
+    Xyz,
+    Xym,
+    Xyzm,
+    /// Byte preservati, dimensionalità non risolta: mai mappare a `Xy` (R3.4).
+    Unknown,
+}
+
+impl GeometryDimensions {
+    /// Forma testuale ICD (minuscola): `"xy"`, `"xyz"`, `"xym"`, `"xyzm"`,
+    /// `"unknown"`. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Xy => "xy",
+            Self::Xyz => "xyz",
+            Self::Xym => "xym",
+            Self::Xyzm => "xyzm",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Byte per coordinata interleaved (`f64`), se garantiti: `Xy` = 16,
+    /// `Xyz`/`Xym` = 24, `Xyzm` = 32.
+    ///
+    /// `Unknown` non garantisce alcuno stride (R3.4: i byte sono preservati
+    /// ma la dimensionalità non è risolta) e restituisce `None`: nessun
+    /// consumatore può assumere un layout di coordinate per `Unknown`.
+    #[must_use]
+    pub const fn coordinate_stride(self) -> Option<usize> {
+        match self {
+            Self::Xy => Some(16),
+            Self::Xyz | Self::Xym => Some(24),
+            Self::Xyzm => Some(32),
+            Self::Unknown => None,
+        }
+    }
+}
+
+impl fmt::Display for GeometryDimensions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`GeometryDimensions`]: valore non riconosciuto.
+///
+/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
+/// «errori senza dati» di `plenora-core`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownGeometryDimensions;
+
+impl fmt::Display for UnknownGeometryDimensions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "dimensionalita' geometria non riconosciuta (ammesse: xy, xyz, xym, xyzm, unknown)",
+        )
+    }
+}
+
+impl std::error::Error for UnknownGeometryDimensions {}
+
+impl std::str::FromStr for GeometryDimensions {
+    type Err = UnknownGeometryDimensions;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "xy" => Ok(Self::Xy),
+            "xyz" => Ok(Self::Xyz),
+            "xym" => Ok(Self::Xym),
+            "xyzm" => Ok(Self::Xyzm),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(UnknownGeometryDimensions),
+        }
+    }
+}
+
+/// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
+/// chiuso).
+///
+/// Solo WKB ISO ed EWKB (estensione PostGIS con SRID/flag Z/M) sono
+/// rappresentabili. Altri framing — header GeoPackage, TWKB, … — NON sono
+/// rappresentabili: la discovery (milestone B1.3) deve rifiutarli con
+/// errore esplicito, mai mapparli a un encoding noto.
+///
+/// Serializzazione ICD: `"wkb"`, `"ewkb"` (minuscola).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GeometryEncoding {
+    Wkb,
+    Ewkb,
+}
+
+impl GeometryEncoding {
+    /// Forma testuale ICD (minuscola): `"wkb"`, `"ewkb"`. Coincide con la
+    /// serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wkb => "wkb",
+            Self::Ewkb => "ewkb",
+        }
+    }
+}
+
+impl fmt::Display for GeometryEncoding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`GeometryEncoding`]: valore non riconosciuto.
+///
+/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
+/// «errori senza dati» di `plenora-core`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownGeometryEncoding;
+
+impl fmt::Display for UnknownGeometryEncoding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("encoding geometria non riconosciuto (ammessi: wkb, ewkb)")
+    }
+}
+
+impl std::error::Error for UnknownGeometryEncoding {}
+
+impl std::str::FromStr for GeometryEncoding {
+    type Err = UnknownGeometryEncoding;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "wkb" => Ok(Self::Wkb),
+            "ewkb" => Ok(Self::Ewkb),
+            _ => Err(UnknownGeometryEncoding),
+        }
+    }
 }
 
 /// Contratto di una colonna geometrica (Architetture.md par. 4.3).
@@ -63,6 +206,12 @@ pub struct GeometryColumnContract {
     /// preserva).
     pub crs: ResolvedCrs,
     pub dimensions: GeometryDimensions,
+    /// Framing binario delle celle (ICD §3.3, regola R3.5), se dichiarato
+    /// dai metadati: `None` quando la sorgente non dichiara un `encoding`
+    /// (input pre-B1.3) — mai un default silenzioso. I framing fuori
+    /// dall'enum chiuso non sono rappresentabili: la discovery li rifiuta
+    /// con errore esplicito prima di costruire il contratto.
+    pub encoding: Option<GeometryEncoding>,
     pub nullable: bool,
 }
 
@@ -435,6 +584,7 @@ mod tests {
             name: name.to_owned(),
             crs: projected_crs(),
             dimensions: GeometryDimensions::Xy,
+            encoding: None,
             nullable,
         }
     }
@@ -604,6 +754,72 @@ mod tests {
         assert_eq!(estimated.known_value(), None);
         assert_eq!(unknown.value(), None);
         assert_eq!(RuntimeStatistic::<u64>::default(), RuntimeStatistic::Unknown);
+    }
+
+    #[test]
+    fn geometry_dimensions_serde_roundtrip_icd_lowercase() {
+        let cases = [
+            (GeometryDimensions::Xy, "xy"),
+            (GeometryDimensions::Xyz, "xyz"),
+            (GeometryDimensions::Xym, "xym"),
+            (GeometryDimensions::Xyzm, "xyzm"),
+            (GeometryDimensions::Unknown, "unknown"),
+        ];
+        for (dimensions, text) in cases {
+            assert_eq!(dimensions.as_str(), text);
+            assert_eq!(dimensions.to_string(), text);
+            let serialized = serde_json::to_string(&dimensions).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: GeometryDimensions = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, dimensions);
+            assert_eq!(text.parse::<GeometryDimensions>(), Ok(dimensions));
+        }
+    }
+
+    #[test]
+    fn geometry_dimensions_from_str_rejects_unrecognized_values() {
+        // Mai default silenziosi: neppure maiuscole o vuoto (R3.4).
+        for value in ["XY", "XYZ ", "", "2d", "xyzm "] {
+            assert_eq!(
+                value.parse::<GeometryDimensions>(),
+                Err(UnknownGeometryDimensions)
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_dimensions_stride_only_when_resolved() {
+        assert_eq!(GeometryDimensions::Xy.coordinate_stride(), Some(16));
+        assert_eq!(GeometryDimensions::Xyz.coordinate_stride(), Some(24));
+        assert_eq!(GeometryDimensions::Xym.coordinate_stride(), Some(24));
+        assert_eq!(GeometryDimensions::Xyzm.coordinate_stride(), Some(32));
+        // Unknown: nessuno stride garantito (R3.4).
+        assert_eq!(GeometryDimensions::Unknown.coordinate_stride(), None);
+    }
+
+    #[test]
+    fn geometry_encoding_serde_roundtrip_icd_lowercase() {
+        let cases = [(GeometryEncoding::Wkb, "wkb"), (GeometryEncoding::Ewkb, "ewkb")];
+        for (encoding, text) in cases {
+            assert_eq!(encoding.as_str(), text);
+            assert_eq!(encoding.to_string(), text);
+            let serialized = serde_json::to_string(&encoding).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: GeometryEncoding = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, encoding);
+            assert_eq!(text.parse::<GeometryEncoding>(), Ok(encoding));
+        }
+    }
+
+    #[test]
+    fn geometry_encoding_from_str_rejects_unrecognized_values() {
+        // R3.5: enum chiuso — altri framing (GeoPackage, TWKB) sono rifiutati.
+        for value in ["WKB", "gpkg", "twkb", "", "iso-wkb"] {
+            assert_eq!(
+                value.parse::<GeometryEncoding>(),
+                Err(UnknownGeometryEncoding)
+            );
+        }
     }
 
     #[test]

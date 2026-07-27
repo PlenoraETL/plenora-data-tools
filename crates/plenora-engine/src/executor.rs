@@ -149,10 +149,10 @@ use plenora_core::arrow::select::take::take;
 use plenora_core::catalog::{
     find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion, CATALOG,
 };
-use plenora_core::contract::{BatchSequence, DataContract};
+use plenora_core::contract::{BatchSequence, DataContract, GeometryDimensions};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
-use plenora_kernels_geo::{operations, validate_wkb_contract_with_depth};
+use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_depth};
 use plenora_kernels_table::spill::SpillMetrics;
 
 use crate::cancellation::CancellationToken;
@@ -1162,15 +1162,20 @@ impl Network {
         let state = Rc::clone(&self.state);
         let edge_name = edge.to_owned();
         let expected_schema = contract.schema.clone();
-        let geometry_index = contract
-            .active_geometry_column()
-            .map(|geometry| {
-                contract
-                    .schema
-                    .column_with_name(&geometry.name)
-                    .expect("colonna geometria nel contratto")
-                    .0
-            });
+        let geometry_column = contract.active_geometry_column();
+        let geometry_index = geometry_column.map(|geometry| {
+            contract
+                .schema
+                .column_with_name(&geometry.name)
+                .expect("colonna geometria nel contratto")
+                .0
+        });
+        // B1.3: la dimensionalita' attesa dal gate WKB e' quella del
+        // contratto risolto dell'input (stessa fonte di `geometry_index`):
+        // type code incoerente col contratto -> errore dedicato; `Unknown`
+        // (R3.4) accetta e deriva lo stride dal type code di ogni cella.
+        let geometry_dimensions =
+            geometry_column.map_or(GeometryDimensions::Xy, |geometry| geometry.dimensions);
         let mut sequence_number = 0_u64;
         Box::new(raw.map(move |item| {
             let batch = item?.batch;
@@ -1181,7 +1186,7 @@ impl Network {
             }
             check_batch_bytes(&state, &batch, &edge_name)?;
             if let Some(index) = geometry_index {
-                validate_wkb_cells(&state, &batch, index, &edge_name)?;
+                validate_wkb_cells(&state, &batch, index, &edge_name, geometry_dimensions)?;
             }
             let bytes = batch.get_array_memory_size() as u64;
             {
@@ -1331,11 +1336,18 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
 /// null, con i limiti effettivi del piano applicati prima del validatore
 /// strutturale (`max_wkb_cell_bytes` per cella, `max_geometry_depth` per
 /// l'annidamento; il tetto componenti resta quello del validatore).
+///
+/// B1.3: il validatore e' stride-aware — la dimensionalita' attesa
+/// (`dimensions`, dal contratto risolto dell'arco) fissa lo stride delle
+/// coordinate e ogni type code incoerente col contratto e' un errore
+/// dedicato; con `Unknown` (R3.4) lo stride e' derivato dal type code di
+/// ogni geometria.
 fn validate_wkb_cells(
     state: &ExecState,
     batch: &RecordBatch,
     geometry_index: usize,
     edge: &str,
+    dimensions: GeometryDimensions,
 ) -> Result<()> {
     let cells = batch_geometry_cells(batch, geometry_index, "geometry")?;
     let limits = state.plan.limits();
@@ -1357,7 +1369,7 @@ fn validate_wkb_cells(
                 Some(&format!("colonna `{column}`")),
             ));
         }
-        validate_wkb_contract_with_depth(payload, max_depth)
+        validate_wkb_contract_for_dimensions_with_depth(payload, dimensions, max_depth)
             .map_err(|error| {
                 PlenoraError::Contract(format!(
                     "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
