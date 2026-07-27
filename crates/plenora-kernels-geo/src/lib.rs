@@ -3,9 +3,9 @@
 //!
 //! Port Fase 1 ("coesistenza") da plenora-geo-tools-arrow: validatore WKB
 //! strutturale, kernel puri (`operations`, `analysis`, `topology`,
-//! `predicates`, `construction`, `extended`, `extended_algorithms`,
-//! `advanced`, `spatial_join`, `extensions`, `extensions2`, `extensions3`,
-//! `cluster`),
+//! `predicates`, `construction`, `equality`, `extended`,
+//! `extended_algorithms`, `advanced`, `spatial_join`, `extensions`,
+//! `extensions2`, `extensions3`, `cluster`),
 //! backend opzionali (`geos_backend`,
 //! `proj_backend`) e l'adapter Arrow di rappresentazione (`arrow_adapter`).
 //!
@@ -31,6 +31,7 @@ pub mod arrow_adapter;
 pub mod cluster;
 pub mod construction;
 pub mod crs;
+pub mod equality;
 pub mod extended;
 pub mod extended_algorithms;
 pub mod extensions;
