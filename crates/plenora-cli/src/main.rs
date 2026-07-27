@@ -1017,6 +1017,7 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
         "plan_hash": graph.plan_hash().to_hex(),
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,
+        "total_rows_processed": metrics.total_rows_processed,
         "nodes": nodes,
         "segments": segments,
     })

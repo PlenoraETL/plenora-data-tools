@@ -84,6 +84,80 @@ pub enum DeterminismPolicy {
     CanonicalOrder,
 }
 
+/// Vincolo di espansione vincolante per un'operazione binaria (ADR 6).
+///
+/// Per le operazioni binarie nessuna base singola e' adeguata: il runtime
+/// calcola tutte le metriche di [`JoinExpansion`] e il catalogo dichiara
+/// quale e' vincolante per `max_expansion_factor`. La variante `Custom`
+/// prevista da ADR 6 (stima a priori da statistiche, ADR 5) e' fuori scope
+/// v1 e non e' implementata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExpansionConstraint {
+    /// `output / (left + right)`: default, retrocompatibile con la base
+    /// fissa left+right della prima implementazione.
+    SumRelative,
+    /// `output / left`: operazioni lookup-style (output <= left).
+    LeftRelative,
+    /// `output / right`.
+    RightRelative,
+    /// `max(output / left, output / right)`: join molti-a-molti.
+    MaxRelative,
+}
+
+/// Metriche di espansione di un'operazione binaria (ADR 6).
+///
+/// Il runtime le calcola tutte e tre; il vincolo dichiarato in catalogo
+/// ([`ExpansionConstraint`]) seleziona quella vincolante.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JoinExpansion {
+    /// Righe output / (righe left + righe right).
+    pub output_over_sum_inputs: f64,
+    /// Righe output / righe left.
+    pub output_over_left: f64,
+    /// Righe output / righe right.
+    pub output_over_right: f64,
+}
+
+impl JoinExpansion {
+    /// Calcola le tre metriche dalle righe output/left/right.
+    ///
+    /// Denominatore nullo: la metrica e' infinita se l'output e' non nullo
+    /// (espansione da input vuoto), zero altrimenti.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto (ADR 6); sotto 2^53 righe il confronto e' esatto.
+    pub fn compute(output_rows: u64, left_rows: u64, right_rows: u64) -> Self {
+        fn ratio(numerator: u64, denominator: u64) -> f64 {
+            if denominator == 0 {
+                if numerator == 0 { 0.0 } else { f64::INFINITY }
+            } else {
+                numerator as f64 / denominator as f64
+            }
+        }
+        Self {
+            output_over_sum_inputs: ratio(output_rows, left_rows + right_rows),
+            output_over_left: ratio(output_rows, left_rows),
+            output_over_right: ratio(output_rows, right_rows),
+        }
+    }
+
+    /// Restituisce la metrica vincolante per il vincolo dichiarato in
+    /// catalogo. `MaxRelative` e' il massimo delle tre (la metrica sulla
+    /// somma e' sempre dominata dalle altre due, quindi includerla non
+    /// cambia il risultato).
+    #[must_use]
+    pub fn binding_metric(&self, constraint: ExpansionConstraint) -> f64 {
+        match constraint {
+            ExpansionConstraint::SumRelative => self.output_over_sum_inputs,
+            ExpansionConstraint::LeftRelative => self.output_over_left,
+            ExpansionConstraint::RightRelative => self.output_over_right,
+            ExpansionConstraint::MaxRelative => self
+                .output_over_sum_inputs
+                .max(self.output_over_left)
+                .max(self.output_over_right),
+        }
+    }
+}
+
 /// Livello di maturità (pipeline di promozione).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Maturity {
@@ -113,6 +187,16 @@ pub struct OperationDescriptor {
     /// Backend/feature richiesti (es. `geos`, `proj`).
     pub required_capabilities: &'static [&'static str],
     pub determinism: DeterminismPolicy,
+    /// Vincolo di espansione vincolante per le operazioni binarie (ADR 6);
+    /// irrilevante per unarie/N-arie, che restano sulla base input
+    /// (default `SumRelative`, retrocompatibile).
+    pub expansion_constraint: ExpansionConstraint,
+    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6):
+    /// le op che espandono per contratto ogni elemento di input in molti
+    /// output (`WholeToMany`: generative/diagnostiche) non sono soggette al
+    /// fattore; restano vincolate da `max_rows_per_edge` e dagli altri
+    /// limiti di righe.
+    pub expansion_factor_exempt: bool,
     pub maturity: Maturity,
     // Versioni esplicite per-componente (ADR 4): disciplina di incremento in CI.
     pub semantic_version: u32,
@@ -159,61 +243,82 @@ pub struct OperationDescriptor {
 // ---------------------------------------------------------------------------
 
 macro_rules! op {
-    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (ADR 4).
+    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (ADR 4),
+    // vincolo di espansione `SumRelative` e nessuna esenzione (ADR 6).
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident) => {
         op!($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat,
             kernel_version = 1)
     };
-    // Variante con versioni esplicite: `semantic_version`,
-    // `config_schema_version`, `contract_analysis_version` e `kernel_version`
-    // sono tutte opzionali (default 1) e ammesse in qualsiasi combinazione e
-    // ordine; chiave duplicata o sconosciuta -> errore di compilazione.
+    // Variante con chiavi opzionali: `semantic_version`,
+    // `config_schema_version`, `contract_analysis_version`, `kernel_version`
+    // (default 1), `expansion_constraint` (default `SumRelative`) ed
+    // `expansion_factor_exempt` (default `false`) sono ammesse in qualsiasi
+    // combinazione e ordine; chiave duplicata o sconosciuta -> errore di
+    // compilazione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
      $($versions:tt)+) => {
         op!(@munch
             ($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat)
-            (1, 1, 1, 1)
+            (1, 1, 1, 1, SumRelative, false)
             $($versions)+)
     };
     // Muncher: consuma una chiave per passo aggiornando l'accumulatore
-    // (semantic, config_schema, contract_analysis, kernel).
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    // (semantic, config_schema, contract_analysis, kernel,
+    // expansion_constraint, expansion_factor_exempt).
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         semantic_version = $v:expr) => {
-        op!(@build ($($base)*) ($v, $c, $a, $k))
+        op!(@build ($($base)*) ($v, $c, $a, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         semantic_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($v, $c, $a, $k) $($rest)+)
+        op!(@munch ($($base)*) ($v, $c, $a, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         config_schema_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $v, $a, $k))
+        op!(@build ($($base)*) ($s, $v, $a, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         config_schema_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $v, $a, $k) $($rest)+)
+        op!(@munch ($($base)*) ($s, $v, $a, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         contract_analysis_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $v, $k))
+        op!(@build ($($base)*) ($s, $c, $v, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         contract_analysis_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $v, $k) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $v, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         kernel_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $a, $v))
+        op!(@build ($($base)*) ($s, $c, $a, $v, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
         kernel_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $v) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+        expansion_constraint = $v:ident) => {
+        op!(@build ($($base)*) ($s, $c, $a, $k, $v, $e))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+        expansion_constraint = $v:ident, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $a, $k, $v, $e) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+        expansion_factor_exempt = $v:expr) => {
+        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $v))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+        expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v) $($rest)+)
     };
     (@build ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident)
-     ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr)) => {
+     ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr,
+      $constraint:ident, $exempt:expr)) => {
         OperationDescriptor {
             id: $id,
             family: Family::$family,
@@ -225,6 +330,8 @@ macro_rules! op {
             crs_requirement: $crs,
             required_capabilities: $caps,
             determinism: DeterminismPolicy::$det,
+            expansion_constraint: ExpansionConstraint::$constraint,
+            expansion_factor_exempt: $exempt,
             maturity: Maturity::$mat,
             semantic_version: $semantic,
             config_schema_version: $config_schema,
@@ -243,7 +350,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.concat", Table, ManipolaCompat, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, PublicProtocol),
     op!("table.concat_columns", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.conditional", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.cross_join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
+    op!("table.cross_join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, expansion_constraint = MaxRelative),
     op!("table.date_extract", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.dedup_advanced", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
     op!("table.distinct", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
@@ -252,7 +359,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.filter", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.flatten_json", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.formula", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    // join generico: molti-a-molti possibile -> MaxRelative (ADR 6).
+    op!("table.join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = MaxRelative),
     op!("table.lookup", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.melt", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.pivot", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
@@ -266,7 +374,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.string_extract", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.string_length", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.string_pad", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.table_diff", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    // diff: l'output (added/removed/changed) e' proporzionale a entrambi gli
+    // input -> SumRelative (ADR 6).
+    op!("table.table_diff", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = SumRelative),
     op!("table.text_normalize", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.transpose", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.type_cast", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
@@ -275,8 +385,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.mask_data", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.md5_hash", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     // --- Tabellari estensioni (25) -----------------------------------------
-    op!("table.anti_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.asof_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
+    // anti_join: output <= left -> LeftRelative.
+    op!("table.anti_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
+    // asof_join: una corrispondenza per riga left (lookup-style) -> LeftRelative.
+    op!("table.asof_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, expansion_constraint = LeftRelative),
     op!("table.assert_not_null", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_range", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_regex", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
@@ -286,14 +398,18 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("table.date_add", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.date_diff", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     op!("table.date_format", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.except", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
+    // except: output <= left -> LeftRelative.
+    op!("table.except", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
     op!("table.explode", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.intersect", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
+    // intersect: output <= left (e <= right) -> LeftRelative.
+    op!("table.intersect", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
     op!("table.rolling_window", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.semi_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    // semi_join: output <= left -> LeftRelative.
+    op!("table.semi_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
     op!("table.sha256_hash", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.timezone_convert", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.union_distinct", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
+    // union_distinct: output <= left + right -> SumRelative (esplicito).
+    op!("table.union_distinct", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = SumRelative),
     op!("table.unnest", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     // expression v2 (Fase estensione funzioni/temporali): nuove funzioni
     // (substring, regex_replace, between, in, greatest, least, floor, ceil,
@@ -303,40 +419,52 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2, config_schema_version = 2, contract_analysis_version = 2, kernel_version = 3),
     op!("table.assert_cardinality", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
     op!("table.assert_metadata", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_foreign_key", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    // assert_foreign_key: validazione, output = left -> LeftRelative.
+    op!("table.assert_foreign_key", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
+    // reconcile: semantica di output non caratterizzata con certezza ->
+    // SumRelative di default (da rivedere se emerge un vincolo piu' preciso).
     op!("table.reconcile", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     // --- Geografiche Manipola-compat (33) -----------------------------------
     op!("geo.centroid", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
     op!("geo.convex_hull", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
     op!("geo.envelope", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
-    op!("geo.sjoin", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, PublicProtocol),
+    // sjoin: una geometria left puo' intersecare molte right (molti-a-molti)
+    // -> MaxRelative (ADR 6).
+    op!("geo.sjoin", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, PublicProtocol, expansion_constraint = MaxRelative),
     op!("geo.area", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.boundary", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.bounds_extractor", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.buffer", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.clean_topology", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.clip", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.count_points_in_polygons", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // clip/difference: il taglio puo' spezzare una geometria left in piu'
+    // pezzi (OneToMany) -> MaxRelative.
+    op!("geo.clip", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
+    op!("geo.count_points_in_polygons", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
+    op!("geo.difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
     op!("geo.dissolve", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], CanonicalOrder, KernelValidated),
     op!("geo.distance", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     op!("geo.explode", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     op!("geo.from_coords", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::FromCoords), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.intersection", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!("geo.intersection", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
     op!("geo.length", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.line_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.nearest", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.overlay", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // nearest: una corrispondenza per riga left (lookup-style) -> LeftRelative.
+    op!("geo.nearest", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
+    // overlay: un left puo' produrre piu' pezzi (OneToMany) -> MaxRelative.
+    op!("geo.overlay", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
     op!("geo.perimeter", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.point_on_surface", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.polygon_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.simplify", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.symmetric_difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!("geo.symmetric_difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
     op!("geo.to_wkt", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    // union: semantica di output non caratterizzata con certezza (unione
+    // dissolta dei due input) -> SumRelative di default (da rivedere).
     op!("geo.union", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     op!("geo.vertex_count", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     op!("geo.voronoi", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.within", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // within: filtro del left sul right -> output <= left -> LeftRelative.
+    op!("geo.within", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
     op!("geo.make_valid", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &["geos"], DefinedOrder, BackendPending),
     op!("geo.reproject", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Reprojection), &["proj"], DefinedOrder, BackendPending),
     // --- Predicati DE-9IM, estensioni geo (11) ------------------------------
@@ -379,7 +507,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.collect", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Known), &[], CanonicalOrder, KernelValidated),
     op!("geo.line_locate_point", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     // --- Estensioni geo v1.2 (3) ---------------------------------------------
-    op!("geo.generate_grid", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!("geo.generate_grid", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
     op!("geo.subdivide", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     // `snap`: il riferimento da config (`reference_wkb`) e' assunto nello
     // stesso CRS dell'input (convenzione D16): requisito SameProjected per
@@ -389,9 +517,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
     // input (Blocking) e producono una riga per issue/tratto condiviso
     // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
-    // quindi SameProjected.
-    op!("geo.coverage_validate", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.shared_paths", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    // quindi SameProjected. Esenti da `max_expansion_factor` (ADR 6:
+    // esenzione dichiarata in catalogo).
+    op!("geo.coverage_validate", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
+    op!("geo.shared_paths", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
     // `cluster_dbscan`: clustering globale per densita' (vicinati R-tree
     // sull'intero input) ma output allineato alle righe (un'etichetta UInt64
     // nullable per riga, noise -> null): Blocking con shape OneToOne; eps in
@@ -411,7 +540,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
     // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
     // output definito (scansione sinistra, indice destro).
-    op!("table.fuzzy_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
+    // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
+    // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
+    // output definito (scansione sinistra, indice destro). Piu' candidati
+    // per riga left possibili -> MaxRelative.
+    op!("table.fuzzy_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
 ];
 
 /// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
@@ -695,5 +828,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn expansion_constraint_defaults_to_sum_relative() {
+        // Retrocompatibilita' comportamentale (ADR 6): le op senza
+        // dichiarazione esplicita restano sulla base left+right e non sono
+        // esenti.
+        let filter = find_operation("table.filter").expect("table.filter");
+        assert_eq!(filter.expansion_constraint, ExpansionConstraint::SumRelative);
+        assert!(!filter.expansion_factor_exempt);
+        let reconcile = find_operation("table.reconcile").expect("table.reconcile");
+        assert_eq!(reconcile.expansion_constraint, ExpansionConstraint::SumRelative);
+    }
+
+    #[test]
+    fn binary_ops_declare_the_binding_constraint() {
+        let expected: &[(&str, ExpansionConstraint)] = &[
+            ("table.join", ExpansionConstraint::MaxRelative),
+            ("table.cross_join", ExpansionConstraint::MaxRelative),
+            ("table.fuzzy_join", ExpansionConstraint::MaxRelative),
+            ("table.table_diff", ExpansionConstraint::SumRelative),
+            ("table.union_distinct", ExpansionConstraint::SumRelative),
+            ("table.semi_join", ExpansionConstraint::LeftRelative),
+            ("table.anti_join", ExpansionConstraint::LeftRelative),
+            ("table.asof_join", ExpansionConstraint::LeftRelative),
+            ("table.except", ExpansionConstraint::LeftRelative),
+            ("table.intersect", ExpansionConstraint::LeftRelative),
+            ("table.assert_foreign_key", ExpansionConstraint::LeftRelative),
+            ("geo.sjoin", ExpansionConstraint::MaxRelative),
+            ("geo.clip", ExpansionConstraint::MaxRelative),
+            ("geo.difference", ExpansionConstraint::MaxRelative),
+            ("geo.intersection", ExpansionConstraint::MaxRelative),
+            ("geo.overlay", ExpansionConstraint::MaxRelative),
+            ("geo.symmetric_difference", ExpansionConstraint::MaxRelative),
+            ("geo.nearest", ExpansionConstraint::LeftRelative),
+            ("geo.within", ExpansionConstraint::LeftRelative),
+            ("geo.count_points_in_polygons", ExpansionConstraint::LeftRelative),
+            ("geo.union", ExpansionConstraint::SumRelative),
+        ];
+        for (id, constraint) in expected {
+            let op = find_operation(id).expect(id);
+            assert_eq!(
+                op.arity,
+                Arity::BinaryOrdered,
+                "{id}: vincolo dichiarato su op non binaria"
+            );
+            assert_eq!(op.expansion_constraint, *constraint, "{id}");
+        }
+    }
+
+    #[test]
+    fn whole_to_many_exemption_is_declared_in_catalog() {
+        // ADR 6: la classe di esenzione e' dichiarata in catalogo, non
+        // riconosciuta a posteriori — esattamente le op WholeToMany
+        // generative/diagnostiche.
+        let exempt: HashSet<_> = CATALOG
+            .iter()
+            .filter(|op| op.expansion_factor_exempt)
+            .map(|op| op.id)
+            .collect();
+        assert_eq!(
+            exempt,
+            HashSet::from([
+                "geo.generate_grid",
+                "geo.coverage_validate",
+                "geo.shared_paths"
+            ])
+        );
+        for op in CATALOG {
+            assert_eq!(
+                op.expansion_factor_exempt,
+                op.result_shape == Some(ResultShape::WholeToMany),
+                "{}: esenzione non allineata alla shape WholeToMany",
+                op.id
+            );
+        }
+    }
+
+    #[test]
+    fn join_expansion_binding_metric_selects_the_declared_constraint() {
+        let expansion = JoinExpansion::compute(6, 3, 2);
+        assert_eq!(expansion.output_over_sum_inputs, 1.2);
+        assert_eq!(expansion.output_over_left, 2.0);
+        assert_eq!(expansion.output_over_right, 3.0);
+        assert_eq!(
+            expansion.binding_metric(ExpansionConstraint::SumRelative),
+            1.2
+        );
+        assert_eq!(
+            expansion.binding_metric(ExpansionConstraint::LeftRelative),
+            2.0
+        );
+        assert_eq!(
+            expansion.binding_metric(ExpansionConstraint::RightRelative),
+            3.0
+        );
+        assert_eq!(
+            expansion.binding_metric(ExpansionConstraint::MaxRelative),
+            3.0
+        );
+        // Denominatore nullo: infinito se l'output e' non nullo, zero se
+        // anche l'output e' nullo.
+        let from_empty = JoinExpansion::compute(1, 0, 0);
+        assert!(from_empty.output_over_left.is_infinite());
+        assert!(from_empty.output_over_sum_inputs.is_infinite());
+        let all_empty = JoinExpansion::compute(0, 0, 0);
+        assert_eq!(
+            all_empty.binding_metric(ExpansionConstraint::MaxRelative),
+            0.0
+        );
     }
 }

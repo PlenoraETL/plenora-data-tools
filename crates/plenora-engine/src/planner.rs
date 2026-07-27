@@ -69,7 +69,7 @@ use sha2::{Digest, Sha256};
 
 use plenora_core::catalog::{
     find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
-    Family, Maturity, OperationDescriptor, Origin, ResultShape,
+    ExpansionConstraint, Family, Maturity, OperationDescriptor, Origin, ResultShape,
 };
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{CrsKind, ResolvedCrs};
@@ -690,6 +690,13 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
             DeterminismPolicy::StableKeyOrder => "stable_key_order",
             DeterminismPolicy::CanonicalOrder => "canonical_order",
         },
+        "expansion_constraint": match descriptor.expansion_constraint {
+            ExpansionConstraint::SumRelative => "sum_relative",
+            ExpansionConstraint::LeftRelative => "left_relative",
+            ExpansionConstraint::RightRelative => "right_relative",
+            ExpansionConstraint::MaxRelative => "max_relative",
+        },
+        "expansion_factor_exempt": descriptor.expansion_factor_exempt,
         "maturity": match descriptor.maturity {
             Maturity::Planned => "planned",
             Maturity::BackendPending => "backend_pending",

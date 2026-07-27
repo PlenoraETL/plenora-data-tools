@@ -545,6 +545,163 @@ fn expansion_factor_triggers_on_join() {
 }
 
 #[test]
+fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
+    // Stesso join del test precedente ma fattore 1.5: con la base left+right
+    // (SumRelative, 6/5 = 1.2) NON scatterebbe; table.join dichiara
+    // MaxRelative (max(6/3, 6/2) = 3.0 > 1.5) -> scatta (ADR 6).
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_expansion_factor": 1.5},
+        "inputs": ["left_in", "right_in"],
+        "nodes": [
+            {"id": "j", "op": "table.join", "in": ["left_in", "right_in"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
+        ],
+        "output": "j",
+    });
+    let inputs = Inputs::new()
+        .with("left_in", Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"))
+        .and_then(|inputs| {
+            inputs.with(
+                "right_in",
+                Input::from_batches(vec![table_batch(&[1, 1], &["d", "e"])]).expect("input"),
+            )
+        })
+        .expect("inputs");
+    let output = run(
+        &plan,
+        inputs,
+        &[
+            ("left_in".to_owned(), table_contract()),
+            ("right_in".to_owned(), table_contract()),
+        ],
+    )
+    .expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("MaxRelative oltre il fattore 1.5");
+    let message = error.to_string();
+    assert!(message.contains("max_expansion_factor"), "{message}");
+    // Il messaggio riporta vincolo e metriche (ADR 6).
+    assert!(message.contains("MaxRelative"), "{message}");
+    assert!(message.contains("output/left"), "{message}");
+    assert!(message.contains("output/right"), "{message}");
+}
+
+#[test]
+fn expansion_constraint_left_relative_allows_lookup_style_join() {
+    // semi_join (lookup-style, output <= left) dichiara LeftRelative: 2
+    // righe in uscita su 3 left -> metrica 0.67, sotto il fattore 1.0.
+    // Nota: SumRelative e' sempre piu' debole di LeftRelative (left+right >=
+    // left), quindi un caso in cui SumRelative scatta e LeftRelative no non
+    // esiste; questo test blocca il requisito che un lookup legittimo non
+    // venga rifiutato dal vincolo dichiarato in catalogo.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_expansion_factor": 1.0},
+        "inputs": ["left_in", "right_in"],
+        "nodes": [
+            {"id": "s", "op": "table.semi_join", "in": ["left_in", "right_in"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
+        ],
+        "output": "s",
+    });
+    let inputs = Inputs::new()
+        .with(
+            "left_in",
+            Input::from_batches(vec![table_batch(&[1, 2, 3], &["a", "b", "c"])]).expect("input"),
+        )
+        .and_then(|inputs| {
+            inputs.with(
+                "right_in",
+                Input::from_batches(vec![table_batch(&[1, 2], &["d", "e"])]).expect("input"),
+            )
+        })
+        .expect("inputs");
+    let (batches, _) = output_rows(
+        run(
+            &plan,
+            inputs,
+            &[
+                ("left_in".to_owned(), table_contract()),
+                ("right_in".to_owned(), table_contract()),
+            ],
+        )
+        .expect("execute"),
+    )
+    .expect("lookup join entro LeftRelative");
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 2);
+}
+
+#[test]
+fn expansion_constraint_sum_relative_on_union_distinct() {
+    // union_distinct dichiara SumRelative: output 3 righe su base left+right
+    // = 4 -> metrica 0.75, sotto il fattore 1.0. Con LeftRelative (3/2 =
+    // 1.5) scatterebbe: il vincolo dichiarato in catalogo e' quello
+    // applicato (ADR 6).
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_expansion_factor": 1.0},
+        "inputs": ["left_in", "right_in"],
+        "nodes": [
+            {"id": "u", "op": "table.union_distinct", "in": ["left_in", "right_in"],
+             "config": {}},
+        ],
+        "output": "u",
+    });
+    let inputs = Inputs::new()
+        .with("left_in", Input::from_batches(vec![table_batch(&[1, 2], &["a", "b"])]).expect("input"))
+        .and_then(|inputs| {
+            inputs.with(
+                "right_in",
+                Input::from_batches(vec![table_batch(&[2, 3], &["b", "c"])]).expect("input"),
+            )
+        })
+        .expect("inputs");
+    let (batches, _) = output_rows(
+        run(
+            &plan,
+            inputs,
+            &[
+                ("left_in".to_owned(), table_contract()),
+                ("right_in".to_owned(), table_contract()),
+            ],
+        )
+        .expect("execute"),
+    )
+    .expect("union entro SumRelative");
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 3);
+}
+
+#[test]
+fn total_rows_processed_counts_rows_through_all_nodes() {
+    // Metrica obbligatoria ADR 6 (non limite v1): somma delle righe in
+    // ingresso a ogni nodo. 3 righe attraversano filter e rename ->
+    // 3 + 3 = 6.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">=", "value": 0}},
+            {"id": "r", "op": "table.rename", "in": ["f"],
+             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
+        ],
+        "output": "r",
+    });
+    let inputs = single_input("main", vec![table_batch(&[1, 2, 3], &["a", "b", "c"])]);
+    let (batches, metrics) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
+    )
+    .expect("stream ok");
+    let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(total_rows, 3);
+    assert_eq!(metrics.total_rows_processed, 6);
+}
+
+#[test]
 fn input_schema_mismatch_is_rejected_before_execution() {
     let plan = json!({
         "schema_version": 4,

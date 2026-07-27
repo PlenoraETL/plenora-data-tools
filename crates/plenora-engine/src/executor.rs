@@ -48,9 +48,11 @@
 //!   raggiungano il primo nodo;
 //! - limiti effettivi del piano: `max_input_rows` per input,
 //!   `max_rows_per_edge` per arco intermedio, `max_output_rows`,
-//!   `max_expansion_factor` per nodo (base: input per gli unari,
-//!   left+right per i binari; le op `WholeToMany` generative/diagnostiche
-//!   sono esenti — la base input e' un trigger, insensata come denominatore),
+//!   `max_expansion_factor` per nodo (base: input per gli unari; per i
+//!   binari calcolate tutte le metriche [`JoinExpansion`] e applicato il
+//!   vincolo vincolante dichiarato in catalogo, ADR 6; le op `WholeToMany`
+//!   generative/diagnostiche sono esenti — esenzione dichiarata in
+//!   catalogo, la base input e' un trigger, insensata come denominatore),
 //!   `max_batches` per arco, `max_wkb_cell_bytes` per cella,
 //!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
 //!   annidamento WKB, `max_batch_bytes` per batch (V7, tetto duro, applicato
@@ -80,7 +82,7 @@ use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
-use plenora_core::catalog::{find_operation, ResultShape};
+use plenora_core::catalog::{find_operation, ExpansionConstraint, JoinExpansion};
 use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
@@ -286,6 +288,10 @@ pub struct ExecutionMetrics {
     pub output_rows: u64,
     /// Batch pubblicati sull'output del piano.
     pub output_batches: u64,
+    /// Righe processate complessivamente: somma delle righe in ingresso a
+    /// ogni nodo del piano (ADR 6: metrica obbligatoria, **non** limite v1 —
+    /// dipende dal piano fisico, es. segmenti fusi).
+    pub total_rows_processed: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -927,22 +933,25 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
     Ok(())
 }
 
-/// Fattore di espansione per nodo (ADR 6: base input per gli unari,
-/// left+right per i binari).
+/// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6):
+/// le op `WholeToMany` (`geo.generate_grid`, `geo.coverage_validate`,
+/// `geo.shared_paths`) sono generative/diagnostiche — l'input funge da
+/// trigger o da insieme da analizzare, non da base proporzionale
+/// dell'output.
+fn expansion_exempt(kernel: &PreparedKernel) -> bool {
+    find_operation(kernel.operation)
+        .is_some_and(|descriptor| descriptor.expansion_factor_exempt)
+}
+
+/// Fattore di espansione per nodo unario (ADR 6: base = righe di input;
+/// per i binari si veda [`check_join_expansion`]).
 ///
-/// Esenzione documentata: le op con `result_shape` `WholeToMany`
-/// (`geo.generate_grid`, `geo.coverage_validate`, `geo.shared_paths`) sono
-/// generative/diagnostiche — l'input funge da trigger o da insieme da
-/// analizzare, non da base proporzionale dell'output. Per queste il
+/// Per le op esenti (dichiarato in catalogo, [`expansion_exempt`]) il
 /// controllo sul fattore output/input non si applica: la produzione resta
-/// limitata da `max_rows_per_edge` / `max_output_rows` / `max_batches`
-/// (l'aggiornamento di ADR 6 che recepisce la scelta e' tracciato a parte).
+/// limitata da `max_rows_per_edge` / `max_output_rows` / `max_batches`.
 #[allow(clippy::cast_precision_loss)] // Il fattore e' f64 per contratto (ADR 6); sotto 2^53 righe il confronto e' esatto.
 fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -> Result<()> {
-    let whole_to_many = find_operation(kernel.operation)
-        .and_then(|descriptor| descriptor.result_shape)
-        == Some(ResultShape::WholeToMany);
-    if whole_to_many {
+    if expansion_exempt(kernel) {
         return Ok(());
     }
     let mut rows = state.node_rows.borrow_mut();
@@ -953,6 +962,40 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
         return Err(PlenoraError::Contract(format!(
             "max_expansion_factor superato al nodo `{}`: {} righe output > {} x {} righe input",
             kernel.node_id, entry.1, factor, entry.0
+        )));
+    }
+    Ok(())
+}
+
+/// Fattore di espansione per nodo binario (ADR 6): calcola tutte le
+/// metriche [`JoinExpansion`] e applica il vincolo vincolante dichiarato in
+/// catalogo per l'operazione (default `SumRelative` se l'op non e' in
+/// catalogo — non dovrebbe accadere: il piano e' validato sul catalogo).
+fn check_join_expansion(
+    state: &ExecState,
+    kernel: &PreparedKernel,
+    left_rows: u64,
+    right_rows: u64,
+    output_rows: u64,
+) -> Result<()> {
+    let descriptor = find_operation(kernel.operation);
+    if descriptor.is_some_and(|d| d.expansion_factor_exempt) {
+        return Ok(());
+    }
+    let constraint = descriptor.map_or(ExpansionConstraint::SumRelative, |d| d.expansion_constraint);
+    let expansion = JoinExpansion::compute(output_rows, left_rows, right_rows);
+    let binding = expansion.binding_metric(constraint);
+    let factor = state.plan.limits().rows.max_expansion_factor;
+    if binding > factor {
+        return Err(PlenoraError::Contract(format!(
+            "max_expansion_factor superato al nodo `{}` (vincolo {constraint:?}): \
+             metrica vincolante {binding} > {factor}; \
+             output/(left+right)={}, output/left={}, output/right={} \
+             (output={output_rows}, left={left_rows}, right={right_rows})",
+            kernel.node_id,
+            expansion.output_over_sum_inputs,
+            expansion.output_over_left,
+            expansion.output_over_right,
         )));
     }
     Ok(())
@@ -988,6 +1031,9 @@ fn record_kernel_metrics(
 ) {
     let config = state.plan.metrics_config();
     let mut metrics = state.metrics.borrow_mut();
+    // Metrica obbligatoria ADR 6: sempre aggiornata, indipendente dalla
+    // configurazione per-nodo/per-segmento.
+    metrics.total_rows_processed += rows_in;
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
             node.rows_in += rows_in;
@@ -1736,8 +1782,9 @@ fn run_binary_blocking(
         let mut rows = state.node_rows.borrow_mut();
         rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
     }
-    // ADR 6: per le operazioni binarie la base dell'espansione e' left+right.
-    check_expansion(state, kernel, left_rows + right_rows)?;
+    // ADR 6: per le operazioni binarie il runtime calcola tutte le metriche
+    // di espansione e applica il vincolo vincolante dichiarato in catalogo.
+    check_join_expansion(state, kernel, left_rows, right_rows, rows_out)?;
     if segment.output_edge != plan.output_edge() {
         check_edge_batch(state, &kernel.node_id, &output)?;
     }
@@ -1745,6 +1792,8 @@ fn run_binary_blocking(
     // drenati dai due rami.
     let config = state.plan.metrics_config();
     let mut metrics = state.metrics.borrow_mut();
+    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`).
+    metrics.total_rows_processed += left_rows + right_rows;
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
             node.rows_in += left_rows + right_rows;
