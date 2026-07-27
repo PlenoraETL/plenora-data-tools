@@ -35,6 +35,7 @@
 //! di due input sono rifiutate con `PlenoraError::Unsupported`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use geo::{Geometry, Point};
 use serde::Deserialize;
@@ -47,6 +48,7 @@ use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::extensions::OnWktError;
 use plenora_kernels_geo::extensions2::{GridExtent, GridShape};
 
+use crate::cancellation::CancellationToken;
 use crate::geo_transport::transport::{
     ArrowOperation, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
 };
@@ -89,7 +91,9 @@ pub struct InputStatistics {
 ///
 /// Non contiene nulla di semantico: uno stesso `ValidatedGraph` con due
 /// `RuntimeContext` diversi produce due `ExecutionPlan` diversi, ed e' il
-/// comportamento voluto (ADR 5).
+/// comportamento voluto (ADR 5). Fanno eccezione `cancellation`,
+/// `diagnostics` e `temp_root` (ADR 3, M1c/M1d): non sono decisioni fisiche
+/// e NON entrano nell'`ExecutionPlan` — li consuma direttamente `execute`.
 #[derive(Clone, Debug)]
 pub struct RuntimeContext {
     /// Statistiche per nome di input; gli input assenti valgono
@@ -103,6 +107,20 @@ pub struct RuntimeContext {
     pub batch_target: BatchTarget,
     /// Metriche da raccogliere (E3).
     pub metrics: MetricsConfig,
+    /// Token di cancellazione cooperativa (ADR 3, M1c): il default non e'
+    /// mai cancellato. Il chiamante (es. l'handler Ctrl-C della CLI) trattiene
+    /// un clone del token e lo cancella dall'esterno; l'executor lo osserva
+    /// ai confini cooperativi onorando il `CancellationBehavior` di catalogo.
+    pub cancellation: CancellationToken,
+    /// Modalita' diagnostica opt-in (ADR 3, M1d), solo per input fidati:
+    /// gli errori includono contesto strutturale aggiuntivo (indice di
+    /// batch, riga, colonna dove disponibile) — MAI valori. Default `false`:
+    /// messaggi invariati (retrocompatibile).
+    pub diagnostics: bool,
+    /// Radice del `TempStore` dell'esecuzione e dello scavenging all'avvio
+    /// (ADR 3): `None` = temp di sistema. Configurabile per i test e per
+    /// ambienti con una temp dedicata.
+    pub temp_root: Option<PathBuf>,
 }
 
 impl Default for RuntimeContext {
@@ -112,6 +130,9 @@ impl Default for RuntimeContext {
             max_parallelism: 1,
             batch_target: BatchTarget::default(),
             metrics: MetricsConfig::default(),
+            cancellation: CancellationToken::new(),
+            diagnostics: false,
+            temp_root: None,
         }
     }
 }

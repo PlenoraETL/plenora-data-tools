@@ -20,7 +20,11 @@
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili.
+//! senza dati sensibili. Fase 2B M1c (ADR 3): `run` installa un handler
+//! Ctrl-C che cancella cooperativamente l'esecuzione DAG v4 tramite
+//! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
+//! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
+//! l'uscita immediata.
 
 use std::env;
 use std::error::Error;
@@ -53,7 +57,8 @@ use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
 use plenora_engine::planner::{self, ValidatedGraph};
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
 use plenora_engine::{
-    execute, explain, ExecutionMetrics, ExecutionPlan, Input, Inputs, RuntimeContext,
+    execute, explain, CancellationToken, ExecutionMetrics, ExecutionPlan, Input, Inputs,
+    RuntimeContext,
 };
 use plenora_kernels_geo::arrow_adapter::{
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
@@ -74,6 +79,34 @@ use plenora_kernels_geo::crs::resolve_crs;
 
 fn contract(message: impl Into<String>) -> PlenoraError {
     PlenoraError::Contract(message.into())
+}
+
+/// Exit code dedicato alla cancellazione (ADR 3, M1c): 128 + SIGINT,
+/// convenzione POSIX — distinto dal 2 generico degli errori.
+const EXIT_CANCELLED: i32 = 130;
+
+/// Handler Ctrl-C (ADR 3, M1c): il primo Ctrl-C cancella il token —
+/// l'executor si ferma al prossimo confine cooperativo con
+/// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
+/// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
+/// accettato e documentato in ADR 3: un kernel `NonInterruptible` in corso
+/// non offre altri punti di interruzione).
+///
+/// `ctrlc::set_handler` e' installabile una sola volta per processo: la CLI
+/// esegue un comando per processo, quindi un fallimento e' un errore vero
+/// (fail-closed).
+fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> {
+    let token = token.clone();
+    let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    ctrlc::set_handler(move || {
+        if requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("plenora-data-tools: secondo ctrl-c: uscita forzata");
+            std::process::exit(EXIT_CANCELLED);
+        }
+        eprintln!("plenora-data-tools: ctrl-c: annullamento in corso (un secondo ctrl-c forza l'uscita)...");
+        token.cancel();
+    })
+    .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
 /// Presenta l'esito tipizzato del publish (ADR 7): se il file e' stato
@@ -996,8 +1029,9 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
     })
 }
 
-/// Metriche JSON di un `run` v4: per nodo logico e per segmento (righe e
-/// batch in/out, wall time in millisecondi), piu' i totali di pubblicazione.
+/// Metriche JSON di un `run` v4: per nodo logico e per segmento (righe,
+/// batch e byte in/out, wall time in millisecondi), i totali di
+/// pubblicazione e l'osservabilita' dei lease di memoria (ADR-0002).
 fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
@@ -1011,6 +1045,8 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
                     "rows_out": node.rows_out,
                     "batches_in": node.batches_in,
                     "batches_out": node.batches_out,
+                    "bytes_in": node.bytes_in,
+                    "bytes_out": node.bytes_out,
                     "wall_time_ms": node.wall_time.as_secs_f64() * 1000.0,
                 }),
             )
@@ -1040,6 +1076,16 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,
         "total_rows_processed": metrics.total_rows_processed,
+        "memory": {
+            "budget_bytes": metrics.memory.budget_bytes,
+            "reserved_bytes": metrics.memory.reserved_bytes,
+            "peak_reserved_bytes": metrics.memory.peak_reserved_bytes,
+            "live_leases": metrics.memory.live_leases,
+            "oldest_lease_age_ms": metrics
+                .memory
+                .oldest_lease_age
+                .map(|age| age.as_secs_f64() * 1000.0),
+        },
         "nodes": nodes,
         "segments": segments,
     })
@@ -1060,7 +1106,9 @@ fn validate_dag_v4(plan_text: &str, paths: &[PathBuf]) -> Result<(), Box<dyn Err
 }
 
 /// `run` di un piano v4: esecuzione DAG e pubblicazione atomica dell'output,
-/// con metriche JSON su stdout.
+/// con metriche JSON su stdout. Installa l'handler Ctrl-C: al cancel
+/// l'executor propaga `PlenoraError::Cancelled`, il publish atomico non e'
+/// mai raggiunto e `main` esce con [`EXIT_CANCELLED`].
 fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<(), Box<dyn Error>> {
     if output_path.exists() {
         return Err(contract(format!(
@@ -1076,7 +1124,13 @@ fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<
     for (name, path) in &pairs {
         inputs.add(name.clone(), open_input(path)?)?;
     }
-    let output = execute(&graph, inputs, RuntimeContext::default())?;
+    let token = CancellationToken::new();
+    install_ctrlc_handler(&token)?;
+    let runtime = RuntimeContext {
+        cancellation: token,
+        ..RuntimeContext::default()
+    };
+    let output = execute(&graph, inputs, runtime)?;
     let (metrics, outcome) =
         output.write_ipc_file_with_profile(output_path, PublishProfile::Atomic)?;
     report_publish_outcome(outcome, output_path);
@@ -1252,6 +1306,13 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if let Err(error) = run_with_args(&args) {
+        // Cancellazione cooperativa (ADR 3, M1c): messaggio pulito ed exit
+        // code dedicato; il publish atomico garantisce che nessun output
+        // parziale sia stato pubblicato.
+        if let Some(PlenoraError::Cancelled { .. }) = error.downcast_ref::<PlenoraError>() {
+            eprintln!("plenora-data-tools: esecuzione annullata: {error}");
+            std::process::exit(EXIT_CANCELLED);
+        }
         eprintln!("plenora-data-tools: {error}");
         std::process::exit(2);
     }

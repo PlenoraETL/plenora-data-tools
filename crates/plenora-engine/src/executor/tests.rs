@@ -1642,10 +1642,11 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
 fn edge_stream_delivers_upstream_error_once_per_reader() {
     let upstream: BatchStream = Box::new(
         vec![
-            Ok(table_batch(&[1], &["a"])),
+            Ok(GovernedBatch::new(table_batch(&[1], &["a"]), None, None)),
             Err(PlenoraError::Step {
                 node: "n1".to_owned(),
                 operation: "table.filter".to_owned(),
+                execution_id: "exec-test".to_owned(),
                 reason: "boom".to_owned(),
             }),
         ]
@@ -1666,16 +1667,19 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     assert!(first.next().is_none(), "lo stream resta chiuso");
 
     // Secondo consumatore: batch bufferizzato, errore UNA volta con
-    // l'attribuzione Step{node, operation} preservata, poi chiusura.
+    // l'attribuzione Step{node, operation, execution_id} preservata, poi
+    // chiusura.
     assert!(matches!(second.next(), Some(Ok(_))));
     match second.next() {
         Some(Err(PlenoraError::Step {
             node,
             operation,
+            execution_id,
             reason,
         })) => {
             assert_eq!(node, "n1");
             assert_eq!(operation, "table.filter");
+            assert_eq!(execution_id, "exec-test");
             assert_eq!(reason, "boom");
         }
         other => panic!("atteso Step preservato, non Contract declassato: {other:?}"),
@@ -1732,7 +1736,15 @@ fn blocking_concat_error_is_attributed_to_the_node() {
     let graph =
         validate(&plan.to_string(), &[("main".to_owned(), table_contract())]).expect("validate");
     let physical = Rc::new(prepare(&graph, &RuntimeContext::default()).expect("prepare"));
-    let state = ExecState::new(&physical);
+    let temp_root = tempfile::tempdir().expect("tempdir");
+    let store = TempStore::with_root("exec-test", temp_root.path()).expect("temp store");
+    let state = ExecState::new(
+        &physical,
+        "exec-test".to_owned(),
+        CancellationToken::new(),
+        false,
+        store,
+    );
     let segment_index = physical
         .segments()
         .iter()
@@ -1752,13 +1764,19 @@ fn blocking_concat_error_is_attributed_to_the_node() {
         ],
     )
     .expect("batch fixture");
-    let error = run_blocking(&physical, segment_index, &state, &[wrong])
-        .expect_err("concat con schema incoerente");
+    let error = run_blocking(
+        &physical,
+        segment_index,
+        &state,
+        vec![GovernedBatch::new(wrong, None, None)],
+    )
+    .expect_err("concat con schema incoerente");
     match error {
         PlenoraError::Step {
             node,
             operation,
             reason,
+            ..
         } => {
             assert_eq!(node, "g");
             assert_eq!(operation, "table.aggregate");
@@ -1905,6 +1923,7 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
             node,
             operation,
             reason,
+            ..
         } => {
             assert_eq!(node, "boom_stream", "attribuzione al nodo che e' andato in panic");
             assert_eq!(operation, "table.filter");
@@ -1937,6 +1956,7 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
             node,
             operation,
             reason,
+            ..
         } => {
             assert_eq!(node, "boom_block");
             assert_eq!(operation, "table.aggregate");
@@ -1977,6 +1997,7 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
             node,
             operation,
             reason,
+            ..
         } => {
             assert_eq!(node, "boom_join", "attribuzione anche per i segmenti BinaryBlocking");
             assert_eq!(operation, "table.join");
@@ -2004,5 +2025,450 @@ fn kernel_panic_publishes_nothing() {
     assert!(
         !destination.exists(),
         "nessun publish dopo panic (ADR 3): il tempfile e' eliminato"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cancellazione cooperativa (ADR 3, M1c), errori arricchiti (M1d), TempStore
+// ---------------------------------------------------------------------------
+
+/// Input lazy che cancella il token dopo `cancel_after` batch emessi: simula
+/// un Ctrl-C che arriva mentre lo stream scorre (esecuzione seriale: il
+/// cancel e' osservato al confine dell'executor successivo alla pull che lo
+/// ha prodotto).
+struct CancellingInput {
+    schema: SchemaRef,
+    total: usize,
+    emitted: usize,
+    cancel_after: usize,
+    token: CancellationToken,
+}
+
+impl Iterator for CancellingInput {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.emitted == self.total {
+            return None;
+        }
+        self.emitted += 1;
+        if self.emitted > self.cancel_after {
+            self.token.cancel();
+        }
+        let offset = i64::try_from(self.emitted).expect("pochi batch") * 100;
+        Some(Ok(
+            RecordBatch::try_new(
+                self.schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![offset, offset + 1])) as ArrayRef,
+                    Arc::new(StringArray::from(vec![Some("x"), Some("y")])) as ArrayRef,
+                ],
+            )
+            .expect("batch valido"),
+        ))
+    }
+}
+
+/// Guard dell'hook di override del `CancellationBehavior` (stesso pattern di
+/// `PanicHookGuard`): registra alla creazione, deregistra al Drop. Gli id
+/// nodo registrati devono essere UNIVOCI per test: l'hook e' globale al
+/// processo e i test girano in parallelo.
+struct CancelBehaviorGuard {
+    node: String,
+}
+
+impl CancelBehaviorGuard {
+    fn set(node: &str, behavior: CancellationBehavior) -> Self {
+        super::CANCEL_BEHAVIOR_OVERRIDES
+            .lock()
+            .expect("hook behavior")
+            .push((node.to_owned(), behavior));
+        Self {
+            node: node.to_owned(),
+        }
+    }
+}
+
+impl Drop for CancelBehaviorGuard {
+    fn drop(&mut self) {
+        if let Ok(mut hook) = super::CANCEL_BEHAVIOR_OVERRIDES.lock() {
+            hook.retain(|(node, _)| node != &self.node);
+        }
+    }
+}
+
+/// Catena streaming di due op `Cooperative` (`table.filter`, `table.rename`).
+fn streaming_plan() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">=", "value": 0}},
+            {"id": "r", "op": "table.rename", "in": ["f"],
+             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
+        ],
+        "output": "r",
+    })
+}
+
+fn cancelling_input(total: usize, cancel_after: usize, token: &CancellationToken) -> Input {
+    Input::from_iter(
+        table_schema(),
+        CancellingInput {
+            schema: table_schema(),
+            total,
+            emitted: 0,
+            cancel_after,
+            token: token.clone(),
+        },
+    )
+}
+
+fn execute_with_token(
+    plan: &serde_json::Value,
+    input: Input,
+    token: CancellationToken,
+) -> Result<Output> {
+    let graph = validate(&plan.to_string(), &[("main".to_owned(), table_contract())])?;
+    let inputs = Inputs::new().with("main", input).expect("input");
+    let runtime = RuntimeContext {
+        cancellation: token,
+        ..RuntimeContext::default()
+    };
+    execute(&graph, inputs, runtime)
+}
+
+#[test]
+fn cancel_between_batches_in_streaming_chain() {
+    let token = CancellationToken::new();
+    let mut output = execute_with_token(&streaming_plan(), cancelling_input(5, 1, &token), token)
+        .expect("execute");
+
+    // Primo batch: consegnato. Il cancel scatta alla produzione del secondo.
+    output.next().expect("primo batch").expect("batch ok");
+    match output.next() {
+        Some(Err(PlenoraError::Cancelled {
+            node,
+            operation,
+            execution_id,
+            ..
+        })) => {
+            assert_eq!(
+                node, "f",
+                "attribuzione al primo kernel della catena (Cooperative: check a ogni batch)"
+            );
+            assert_eq!(operation, "table.filter");
+            assert_eq!(execution_id, output.execution_id());
+        }
+        other => panic!("atteso Cancelled: {other:?}"),
+    }
+    // Metriche parziali osservabili al punto di cancel (ADR 3): solo il
+    // primo batch e' entrato nella catena.
+    let metrics = output.metrics();
+    assert_eq!(metrics.nodes["f"].batches_in, 1);
+    assert_eq!(metrics.output_batches, 1);
+}
+
+#[test]
+fn cancel_during_blocking_drain() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "g", "op": "table.aggregate", "in": ["main"],
+             "config": {"group_by": ["id"], "aggregations": []}},
+        ],
+        "output": "g",
+    });
+    let token = CancellationToken::new();
+    let mut output =
+        execute_with_token(&plan, cancelling_input(5, 1, &token), token).expect("execute");
+
+    // La prima pull guida il drenaggio: il secondo batch cancella il token
+    // e il check tra batch (BoundaryOnly: durante il drenaggio) ferma il
+    // segmento prima del kernel monolitico.
+    match output.next() {
+        Some(Err(PlenoraError::Cancelled { node, operation, .. })) => {
+            assert_eq!(node, "g");
+            assert_eq!(operation, "table.aggregate");
+        }
+        other => panic!("atteso Cancelled durante il drenaggio: {other:?}"),
+    }
+    // Il kernel non e' mai partito.
+    assert_eq!(output.metrics().nodes["g"].rows_in, 0);
+}
+
+#[test]
+fn non_interruptible_op_is_never_interrupted() {
+    // Le sole op `NonInterruptible` del catalogo v1 richiedono i backend
+    // opzionali (geos/proj): l'hook marca i kernel del piano con il behavior
+    // da verificare (il gating e' quello di catalogo, l'op e' irrilevante).
+    // Id nodo UNIVOCI: l'hook e' globale al processo e i test girano in
+    // parallelo (stessa disciplina dei nomi di `PanicHookGuard`).
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "ni_f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">=", "value": 0}},
+            {"id": "ni_r", "op": "table.rename", "in": ["ni_f"],
+             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
+        ],
+        "output": "ni_r",
+    });
+    let _guard_f = CancelBehaviorGuard::set("ni_f", CancellationBehavior::NonInterruptible);
+    let _guard_r = CancelBehaviorGuard::set("ni_r", CancellationBehavior::NonInterruptible);
+    let token = CancellationToken::new();
+    let mut output = execute_with_token(&plan, cancelling_input(5, 1, &token), token)
+        .expect("execute");
+
+    output.next().expect("primo batch").expect("batch ok");
+    // Il secondo batch attraversa comunque entrambi i kernel
+    // (`NonInterruptible`: nessun check); il cancel e' osservato al confine
+    // di piano, prima della consegna (ADR 3: nessuna nuova attivita' dopo
+    // la cancellazione).
+    match output.next() {
+        Some(Err(PlenoraError::Cancelled { node, operation, .. })) => {
+            assert_eq!(node, "ni_r", "confine di output del piano");
+            assert_eq!(operation, "output");
+        }
+        other => panic!("atteso Cancelled al confine di piano: {other:?}"),
+    }
+    // L'op non e' stata interrotta: ha processato anche il batch successivo
+    // alla cancellazione (latenza osservabile nelle metriche, ADR 3).
+    assert_eq!(output.metrics().nodes["ni_f"].batches_in, 2);
+}
+
+#[test]
+fn cancelled_run_publishes_nothing_and_reports_execution_id() {
+    let token = CancellationToken::new();
+    let output = execute_with_token(&panic_plan("f"), cancelling_input(5, 1, &token), token)
+        .expect("execute");
+    // Formato documentato: prefisso leggibile + UUID v4 semplice (32 hex) —
+    // charset compatibile con la validazione del TempStore.
+    let execution_id = output.execution_id().to_owned();
+    assert!(execution_id.starts_with("exec-"), "{execution_id}");
+    assert_eq!(execution_id.len(), 5 + 32, "{execution_id}");
+    assert!(
+        execution_id[5..].chars().all(|c| c.is_ascii_hexdigit()),
+        "{execution_id}"
+    );
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    match output.write_ipc_file(&destination) {
+        Err(PlenoraError::Cancelled { .. }) => {}
+        other => panic!("atteso Cancelled: {other:?}"),
+    }
+    assert!(
+        !destination.exists(),
+        "nessun publish dopo cancel (invariante I8)"
+    );
+    assert!(
+        std::fs::read_dir(directory.path())
+            .expect("lettura directory")
+            .next()
+            .is_none(),
+        "nessun tempfile parziale residuo"
+    );
+}
+
+#[test]
+fn execution_ids_are_unique_per_execute() {
+    let contracts = [("main".to_owned(), table_contract())];
+    let first = run(
+        &panic_plan("f"),
+        single_input("main", vec![table_batch(&[1], &["a"])]),
+        &contracts,
+    )
+    .expect("execute");
+    let second = run(
+        &panic_plan("f"),
+        single_input("main", vec![table_batch(&[1], &["a"])]),
+        &contracts,
+    )
+    .expect("execute");
+    assert_ne!(first.execution_id(), second.execution_id());
+}
+
+#[test]
+fn execute_creates_temp_store_and_cleans_it_up() {
+    let root = tempfile::tempdir().expect("root");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let graph =
+        validate(&plan.to_string(), &[("main".to_owned(), table_contract())]).expect("validate");
+    let runtime = RuntimeContext {
+        temp_root: Some(root.path().to_owned()),
+        ..RuntimeContext::default()
+    };
+    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
+        .expect("execute");
+    let store_dir = root
+        .path()
+        .read_dir()
+        .expect("lettura root")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&format!("plenora-{}-", output.execution_id()))
+                })
+        })
+        .expect("store dell'esecuzione presente mentre l'Output e' vivo");
+    assert!(store_dir.join("lock.json").is_file(), "lock ADR 3 scritto");
+
+    let (batches, _) = output.collect_batches().expect("stream ok");
+    assert_eq!(batches.len(), 1);
+    assert!(
+        !store_dir.exists(),
+        "cleanup RAII: il Drop dello stato rimuove directory e lock"
+    );
+}
+
+#[test]
+fn execute_scavenges_stale_temp_dirs_at_startup() {
+    let root = tempfile::tempdir().expect("root");
+    // Directory orfana: lock con PID vivo ma heartbeat antico (TTL scaduto).
+    let stale = root.path().join("plenora-exec-stale-xyz");
+    std::fs::create_dir(&stale).expect("mkdir stale");
+    std::fs::write(
+        stale.join("lock.json"),
+        serde_json::json!({
+            "execution_id": "exec-stale",
+            "pid": std::process::id(),
+            "hostname": "test-host",
+            "created_unix_secs": 1,
+            "heartbeat_unix_secs": 1,
+        })
+        .to_string(),
+    )
+    .expect("lock stale");
+    // Voce fuori pattern `plenora-*`: mai toccata.
+    let other = root.path().join("altro");
+    std::fs::create_dir(&other).expect("mkdir other");
+
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let graph =
+        validate(&plan.to_string(), &[("main".to_owned(), table_contract())]).expect("validate");
+    let runtime = RuntimeContext {
+        temp_root: Some(root.path().to_owned()),
+        ..RuntimeContext::default()
+    };
+    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
+        .expect("execute");
+    assert!(!stale.exists(), "scavenging all'avvio: orfana rimossa");
+    assert!(other.exists(), "fuori pattern: mai toccata");
+    drop(output.collect_batches().expect("stream ok"));
+}
+
+#[test]
+fn diagnostics_off_leaves_step_error_unchanged() {
+    let _guard = PanicHookGuard::set("diag_off");
+    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
+    let output = run(
+        &panic_plan("diag_off"),
+        inputs,
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("execute");
+    let error = output.collect_batches().expect_err("panic convertito");
+    match error {
+        PlenoraError::Step {
+            reason,
+            execution_id,
+            ..
+        } => {
+            assert_eq!(
+                reason,
+                "contract violation: panic nel kernel: panic di test iniettato al nodo `diag_off`",
+                "diagnostics spento: motivo invariato (retrocompatibile)"
+            );
+            assert!(
+                !execution_id.is_empty(),
+                "execution_id sempre presente negli errori DAG (M1d)"
+            );
+        }
+        other => panic!("atteso Step: {other:?}"),
+    }
+}
+
+#[test]
+fn diagnostics_on_enriches_step_error_with_batch_index() {
+    let _guard = PanicHookGuard::set("diag_on");
+    let graph = validate(
+        &panic_plan("diag_on").to_string(),
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("validate");
+    let runtime = RuntimeContext {
+        diagnostics: true,
+        ..RuntimeContext::default()
+    };
+    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
+        .expect("execute");
+    let error = output.collect_batches().expect_err("panic convertito");
+    match error {
+        PlenoraError::Step { reason, .. } => {
+            assert!(reason.contains("panic di test iniettato"), "{reason}");
+            assert!(
+                reason.contains("[batch_seq=0]"),
+                "contesto strutturale aggiunto (indice di batch, mai valori): {reason}"
+            );
+        }
+        other => panic!("atteso Step: {other:?}"),
+    }
+}
+
+#[test]
+fn diagnostics_on_wkb_error_adds_column_context_without_values() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let run_with = |diagnostics: bool| {
+        let graph =
+            validate(&plan.to_string(), &[("main".to_owned(), geo_contract())]).expect("validate");
+        let runtime = RuntimeContext {
+            diagnostics,
+            ..RuntimeContext::default()
+        };
+        execute(
+            &graph,
+            single_input("main", vec![geo_batch(&[1], &[Some(b"non-e-wkb".to_vec())])]),
+            runtime,
+        )
+        .expect("execute")
+        .collect_batches()
+        .expect_err("WKB invalido")
+        .to_string()
+    };
+    let off = run_with(false);
+    assert!(off.contains("(riga 0)"), "{off}");
+    assert!(
+        !off.contains("colonna"),
+        "diagnostics spento: messaggio invariato: {off}"
+    );
+    let on = run_with(true);
+    assert!(
+        on.contains("colonna `geom`"),
+        "contesto colonna a flag attivo: {on}"
+    );
+    assert!(
+        !on.contains("non-e-wkb"),
+        "mai valori: il payload della cella non compare: {on}"
     );
 }

@@ -18,7 +18,7 @@ pub mod crs;
 pub mod error;
 pub mod limits;
 
-pub use error::{PlenoraError, Result};
+pub use error::{ErrorCategory, PlenoraError, Result};
 
 /// Re-export unico di Arrow: tutti i crate del workspace dipendono da Arrow
 /// solo tramite questo modulo.

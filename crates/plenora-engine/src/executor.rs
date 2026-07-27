@@ -8,10 +8,60 @@
 //! batch-per-batch man mano che il chiamante tira l'output (V3: una
 //! pipeline streaming non materializza l'intera tabella).
 //!
-//! Esecuzione v1: **seriale** ovunque (`SerialFused`, V8 — parallelismo,
-//! governor, spill e cancellazione sono Fase 2B). Per questo lo stream usa
-//! `Rc`/`RefCell` e [`Output`] non e' `Send`: e' una scelta documentata,
-//! non un limite nascosto.
+//! Esecuzione v1: **seriale** ovunque (`SerialFused`, V8 — parallelismo e
+//! spill restano Fase 2B: M2/M3; il governor della memoria e' entrato con
+//! M1a/M1b, la cancellazione cooperativa e gli errori arricchiti con
+//! M1c/M1d, vedi sotto). Per questo lo stream usa `Rc`/`RefCell` e
+//! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
+//! nascosto.
+//!
+//! Fase 2B M1c — cancellazione cooperativa (ADR 3): il chiamante passa un
+//! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
+//! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
+//! ai confini dell'executor — tra batch nelle catene streaming, tra kernel,
+//! durante il drenaggio dei segmenti blocking e sull'output del piano — e
+//! onorano il `CancellationBehavior` dichiarato in catalogo: `Cooperative`
+//! (check a ogni batch), `BoundaryOnly` (check tra kernel/a fine kernel e
+//! durante il drenaggio), `NonInterruptible` (mai: l'op completa; i confini
+//! di piano a valle restano attivi — nessuna nuova attivita' dopo la
+//! cancellazione, publish compreso). I kernel NON vedono il token in M1 (il
+//! passaggio e' M3). Al cancel l'errore e' `PlenoraError::Cancelled` con
+//! `node`/`operation`/`execution_id`; nessun output e' pubblicato (publish
+//! atomico) e le metriche parziali restano osservabili iterando [`Output`]
+//! manualmente e chiamando [`Output::metrics`] dopo l'errore (i metodi di
+//! comodo `collect_batches`/`write_ipc_file*` consumano l'`Output`: con
+//! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
+//!
+//! Fase 2B M1d — errori arricchiti (ADR 3): ogni `execute` genera un
+//! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
+//! nessuna versione nuova) riportato negli errori `Step`/`Cancelled` e nel
+//! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
+//! `category()` e `retryable()`. La modalita' diagnostica opt-in
+//! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
+//! motivazione contesto strutturale — indice di batch, riga, colonna dove
+//! disponibile — MAI valori; a flag spento i messaggi sono invariati.
+//!
+//! Fase 2B — `TempStore` (ADR 3): `execute` esegue lo scavenging
+//! best-effort delle directory orfane all'avvio (sulla radice configurata,
+//! default temp di sistema) e crea lo store dell'esecuzione **fail-closed**
+//! (decisione documentata: niente degrado a tempdir semplice — lo store e'
+//! la difesa strutturale contro i crash non intercettabili e lo spill di M2
+//! ci scrivera'; se non e' creabile l'esecuzione fallisce prima di toccare
+//! i dati). L'heartbeat e' scritto al punto centrale (ogni batch processato
+//! passa dal conteggio metriche) con throttle di
+//! [`HEARTBEAT_MIN_INTERVAL`]; il cleanup e' RAII al `Drop` dello stato.
+//!
+//! Fase 2B M1a/M1b — resource accounting (ADR-0002) e sequenza logica
+//! (ADR-0001): i batch attraversano gli archi come [`GovernedBatch`]
+//! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_memory_bytes`
+//! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
+//! reference-counted al fan-out; i kernel restano su `RecordBatch` puro — il
+//! wrapper si spacca in ingresso al segmento e si ricompone in uscita. La
+//! sequenza e' assegnata sugli input (partizione 0, contatore per input),
+//! propagata 1:1 negli streaming e riassegnata deterministicamente nei
+//! blocking (regola in [`run_blocking`]). In seriale la reservation e'
+//! immediata: quota disponibile o errore `Contract` fail-fast (regola v1 in
+//! [`crate::governor::MemoryGovernor::try_reserve`]).
 //!
 //! Struttura fisica:
 //!
@@ -19,7 +69,10 @@
 //!   consumatore = pass-through puro; piu' consumatori (fan-out, D9/V9) =
 //!   tee che condivide i `RecordBatch` immutabili senza copie di buffer e
 //!   rilascia ciascun batch quando tutti i consumatori lo hanno letto
-//!   (V10). In esecuzione seriale i consumatori drenano in sequenza, quindi
+//!   (V10). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
+//!   `Arc`) tra i consumatori, la quota resta contata una sola volta e torna
+//!   al governor con `release_consumed` + `Drop` dell'ultimo riferimento.
+//!   In esecuzione seriale i consumatori drenano in sequenza, quindi
 //!   il tee coincide con la materializzazione conservativa di D9;
 //! - `LinearStreaming`/`GeoFused`: il batch attraversa la catena di kernel
 //!   senza code ne' materializzazioni (V4). `GeoFused` nella v1 esegue le
@@ -93,14 +146,18 @@ use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
-use plenora_core::catalog::{find_operation, ExpansionConstraint, JoinExpansion, CATALOG};
-use plenora_core::contract::DataContract;
+use plenora_core::catalog::{
+    find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion, CATALOG,
+};
+use plenora_core::contract::{BatchSequence, DataContract};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
 use plenora_kernels_geo::{operations, validate_wkb_contract_with_depth};
 
+use crate::cancellation::CancellationToken;
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
 use crate::geo_transport::transport::{transform_batches, TransformArrowSchema};
+use crate::governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics};
 use crate::planner::{
     check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
 };
@@ -109,9 +166,12 @@ use crate::prepare::{
     PreparedKernel, RuntimeContext, SegmentMode,
 };
 use crate::table_engine;
+use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
 
-/// Stream di batch del grafo (seriale, thread-locale nella v1).
-type BatchStream = Box<dyn Iterator<Item = Result<RecordBatch>>>;
+/// Stream di batch del grafo (seriale, thread-locale nella v1): i batch
+/// viaggiano governati — quota di memoria (ADR-0002) e sequenza logica
+/// (ADR-0001) — e sono spaccati/ricomposti solo ai confini dei kernel.
+type BatchStream = Box<dyn Iterator<Item = Result<GovernedBatch>>>;
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -156,6 +216,10 @@ impl Input {
     }
 
     /// Input da un iteratore di batch con schema dichiarato.
+    ///
+    /// I batch entrano nel perimetro nudi (API pubblica su `RecordBatch`) e
+    /// sono avvolti in [`GovernedBatch`] senza lease: quota e sequenza sono
+    /// assegnate all'ingresso dell'arco di input (ADR-0002/ADR-0001).
     #[must_use]
     pub fn from_iter<I>(schema: SchemaRef, iter: I) -> Self
     where
@@ -163,7 +227,9 @@ impl Input {
     {
         Self::Stream {
             schema,
-            iter: Box::new(iter),
+            iter: Box::new(
+                iter.map(|item| item.map(|batch| GovernedBatch::new(batch, None, None))),
+            ),
         }
     }
 
@@ -180,7 +246,11 @@ impl Input {
         let schema = reader.schema();
         Ok(Self::Stream {
             schema,
-            iter: Box::new(reader.map(|batch| batch.map_err(PlenoraError::from))),
+            iter: Box::new(reader.map(|batch| {
+                batch
+                    .map_err(PlenoraError::from)
+                    .map(|batch| GovernedBatch::new(batch, None, None))
+            })),
         })
     }
 
@@ -195,7 +265,11 @@ impl Input {
         let schema = reader.schema();
         Ok(Self::Stream {
             schema,
-            iter: Box::new(reader.map(|batch| batch.map_err(PlenoraError::from))),
+            iter: Box::new(reader.map(|batch| {
+                batch
+                    .map_err(PlenoraError::from)
+                    .map(|batch| GovernedBatch::new(batch, None, None))
+            })),
         })
     }
 
@@ -264,6 +338,10 @@ pub struct NodeMetrics {
     pub batches_in: u64,
     /// Batch prodotti dal nodo.
     pub batches_out: u64,
+    /// Byte Arrow in ingresso al nodo (metadati dei buffer, E3/ADR-0002).
+    pub bytes_in: u64,
+    /// Byte Arrow prodotti dal nodo (metadati dei buffer, E3/ADR-0002).
+    pub bytes_out: u64,
     /// Wall time cumulato del kernel.
     pub wall_time: Duration,
 }
@@ -305,6 +383,10 @@ pub struct ExecutionMetrics {
     /// ogni nodo del piano (ADR 6: metrica obbligatoria, **non** limite v1 —
     /// dipende dal piano fisico, es. segmenti fusi).
     pub total_rows_processed: u64,
+    /// Osservabilita' dei lease (ADR-0002): snapshot del governor al momento
+    /// della lettura delle metriche — lease vivi, byte trattenuti attuali e
+    /// di picco, eta' del lease piu' vecchio.
+    pub memory: MemoryMetrics,
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +398,22 @@ pub struct ExecutionMetrics {
 struct ExecState {
     plan: Rc<ExecutionPlan>,
     metrics: RefCell<ExecutionMetrics>,
+    /// Governor del budget memoria globale di piano (ADR-0002, M1a).
+    governor: MemoryGovernor,
+    /// Identita' dell'esecuzione (ADR 3, M1d): riportata negli errori
+    /// `Step`/`Cancelled` e nel lock del `TempStore`.
+    execution_id: String,
+    /// Token di cancellazione cooperativa (ADR 3, M1c): osservato solo ai
+    /// confini dell'executor, mai dentro ai kernel (M3).
+    cancellation: CancellationToken,
+    /// Diagnostica opt-in (ADR 3, M1d): arricchisce le motivazioni degli
+    /// errori con contesto strutturale, mai valori.
+    diagnostics: bool,
+    /// Store temporaneo dell'esecuzione (ADR 3): heartbeat al punto
+    /// centrale, cleanup RAII al `Drop`.
+    temp_store: RefCell<TempStore>,
+    /// Istante dell'ultimo heartbeat scritto (throttle).
+    last_heartbeat: Cell<Instant>,
     /// Righe/batch/byte cumulati per input (`max_input_rows`, `max_batches`,
     /// `max_payload_bytes`).
     input_counts: RefCell<HashMap<String, (u64, u64, u64)>>,
@@ -325,8 +423,20 @@ struct ExecState {
     node_rows: RefCell<HashMap<String, (u64, u64)>>,
 }
 
+/// Intervallo minimo tra due heartbeat del `TempStore` (ADR 3): il punto
+/// naturale e' "ogni batch processato", ma la scrittura del lock file ha un
+/// costo — un heartbeat al secondo e' di gran lunga piu' frequente del TTL
+/// di scavenging (24 ore di default) anche con batch piccolissimi.
+const HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
 impl ExecState {
-    fn new(plan: &Rc<ExecutionPlan>) -> Rc<Self> {
+    fn new(
+        plan: &Rc<ExecutionPlan>,
+        execution_id: String,
+        cancellation: CancellationToken,
+        diagnostics: bool,
+        temp_store: TempStore,
+    ) -> Rc<Self> {
         let mut metrics = ExecutionMetrics::default();
         for segment in plan.segments() {
             metrics.segments.insert(
@@ -353,15 +463,125 @@ impl ExecState {
         Rc::new(Self {
             plan: Rc::clone(plan),
             metrics: RefCell::new(metrics),
+            governor: MemoryGovernor::new(plan.limits().max_memory_bytes),
+            execution_id,
+            cancellation,
+            diagnostics,
+            temp_store: RefCell::new(temp_store),
+            last_heartbeat: Cell::new(Instant::now()),
             input_counts: RefCell::new(HashMap::new()),
             edge_counts: RefCell::new(HashMap::new()),
             node_rows: RefCell::new(HashMap::new()),
         })
     }
 
-    /// Snapshot delle metriche correnti.
+    /// Snapshot delle metriche correnti (con l'osservabilita' dei lease
+    /// letta dal governor al momento della chiamata, ADR-0002).
     fn metrics(&self) -> ExecutionMetrics {
-        self.metrics.borrow().clone()
+        let mut metrics = self.metrics.borrow().clone();
+        metrics.memory = self.governor.snapshot();
+        metrics
+    }
+
+    /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
+    /// passa dal conteggio delle metriche), con throttle di
+    /// [`HEARTBEAT_MIN_INTERVAL`]. Best-effort: un heartbeat fallito degrada
+    /// un segnale diagnostico (ADR 3: mai una prova), non deve fermare
+    /// l'esecuzione — il cleanup RAII resta la pulizia principale.
+    fn heartbeat(&self) {
+        if self.last_heartbeat.get().elapsed() < HEARTBEAT_MIN_INTERVAL {
+            return;
+        }
+        self.last_heartbeat.set(Instant::now());
+        let _ = self.temp_store.borrow_mut().heartbeat();
+    }
+
+    /// Errore di cancellazione attribuito a un punto del DAG (ADR 3):
+    /// contesto (nodo, operazione, `execution_id`), mai dati.
+    fn cancelled(&self, node: &str, operation: &str) -> PlenoraError {
+        PlenoraError::Cancelled {
+            node: node.to_owned(),
+            operation: operation.to_owned(),
+            execution_id: self.execution_id.clone(),
+            reason: "cancellazione richiesta dal chiamante".to_owned(),
+        }
+    }
+
+    /// Check di cancellazione al confine di un kernel (ADR 3, M1c): onora il
+    /// `CancellationBehavior` dichiarato in catalogo — `NonInterruptible`
+    /// non offre punti di interruzione (mai check).
+    fn check_cancellation(&self, kernel: &PreparedKernel) -> Result<()> {
+        if cancellation_behavior(kernel) == CancellationBehavior::NonInterruptible {
+            return Ok(());
+        }
+        self.check_cancellation_point(&kernel.node_id, kernel.operation)
+    }
+
+    /// Check di cancellazione a un confine di piano (output) o di batch in
+    /// ingresso a un segmento: e' lavoro dell'executor, non del kernel —
+    /// sempre attivo, anche a valle di op `NonInterruptible` (ADR 3: nessuna
+    /// nuova attivita' dopo la cancellazione, publish compreso).
+    fn check_cancellation_point(&self, node: &str, operation: &str) -> Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(self.cancelled(node, operation));
+        }
+        Ok(())
+    }
+
+    /// Tag M1d al confine di uscita: ogni errore `Step` che lascia il DAG
+    /// porta l'`execution_id` (riempito qui se il punto di origine, in
+    /// profondita' nel dispatch, non lo aveva a disposizione).
+    fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
+        match error {
+            PlenoraError::Step {
+                node,
+                operation,
+                mut execution_id,
+                reason,
+            } => {
+                if execution_id.is_empty() {
+                    execution_id.clone_from(&self.execution_id);
+                }
+                PlenoraError::Step {
+                    node,
+                    operation,
+                    execution_id,
+                    reason,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Arricchimento diagnostico opt-in (ADR 3, M1d): con `diagnostics`
+    /// attivo aggiunge alla motivazione contesto strutturale — indice di
+    /// batch, riga, colonna dove disponibile, MAI valori. A flag spento (o
+    /// dettaglio assente) l'errore passa invariato: messaggi retrocompatibili.
+    fn with_diagnostics(&self, error: PlenoraError, detail: Option<&str>) -> PlenoraError {
+        if !self.diagnostics {
+            return error;
+        }
+        let Some(detail) = detail else {
+            return error;
+        };
+        let suffix = format!(" [{detail}]");
+        match error {
+            PlenoraError::Step {
+                node,
+                operation,
+                execution_id,
+                reason,
+            } => PlenoraError::Step {
+                node,
+                operation,
+                execution_id,
+                reason: format!("{reason}{suffix}"),
+            },
+            PlenoraError::Contract(reason) => {
+                PlenoraError::Contract(format!("{reason}{suffix}"))
+            }
+            other => other,
+        }
     }
 }
 
@@ -371,11 +591,13 @@ impl ExecState {
 
 /// Errore di un arco conservato in forma scomposta per la riproduzione ai
 /// consumatori successivi (`PlenoraError` non e' `Clone`): l'attribuzione
-/// `Step{nodo, operazione}` originale e' preservata, non declassata a
-/// `Contract`.
+/// originale (`Step`/`Cancelled` con nodo, operazione ed `execution_id`) e'
+/// preservata, non declassata a `Contract`.
 struct StoredEdgeError {
     node: Option<String>,
     operation: Option<String>,
+    execution_id: Option<String>,
+    cancelled: bool,
     reason: String,
 }
 
@@ -385,15 +607,32 @@ impl StoredEdgeError {
             PlenoraError::Step {
                 node,
                 operation,
+                execution_id,
                 reason,
             } => Self {
                 node: Some(node.clone()),
                 operation: Some(operation.clone()),
+                execution_id: Some(execution_id.clone()),
+                cancelled: false,
+                reason: reason.clone(),
+            },
+            PlenoraError::Cancelled {
+                node,
+                operation,
+                execution_id,
+                reason,
+            } => Self {
+                node: Some(node.clone()),
+                operation: Some(operation.clone()),
+                execution_id: Some(execution_id.clone()),
+                cancelled: true,
                 reason: reason.clone(),
             },
             other => Self {
                 node: None,
                 operation: None,
+                execution_id: None,
+                cancelled: false,
                 reason: other.to_string(),
             },
         }
@@ -401,9 +640,16 @@ impl StoredEdgeError {
 
     fn to_error(&self) -> PlenoraError {
         match (&self.node, &self.operation) {
+            (Some(node), Some(operation)) if self.cancelled => PlenoraError::Cancelled {
+                node: node.clone(),
+                operation: operation.clone(),
+                execution_id: self.execution_id.clone().unwrap_or_default(),
+                reason: self.reason.clone(),
+            },
             (Some(node), Some(operation)) => PlenoraError::Step {
                 node: node.clone(),
                 operation: operation.clone(),
+                execution_id: self.execution_id.clone().unwrap_or_default(),
                 reason: self.reason.clone(),
             },
             _ => PlenoraError::Contract(format!("arco interrotto: {}", self.reason)),
@@ -412,10 +658,13 @@ impl StoredEdgeError {
 }
 
 /// Stato di un arco: upstream lazy, buffer condiviso tra i consumatori e
-/// cursore di lettura per ciascuno.
+/// cursore di lettura per ciascuno. Il buffer trattiene [`GovernedBatch`]:
+/// il lease e' condiviso (clone `Arc`) tra i consumatori — la quota del
+/// batch e' contata UNA volta all'ingresso dell'arco e torna al governor al
+/// `Drop` dell'ultimo riferimento (ADR-0002).
 struct EdgeShared {
     upstream: RefCell<Option<BatchStream>>,
-    buffer: RefCell<Vec<RecordBatch>>,
+    buffer: RefCell<Vec<GovernedBatch>>,
     reads: RefCell<Vec<usize>>,
     done: Cell<bool>,
     /// Errore upstream, riprodotto una sola volta a ciascun consumatore.
@@ -477,7 +726,7 @@ impl EdgeStream {
 }
 
 impl Iterator for EdgeStream {
-    type Item = Result<RecordBatch>;
+    type Item = Result<GovernedBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // 1. Batch gia' bufferizzato per questo consumatore.
@@ -561,6 +810,13 @@ impl Output {
         &self.contract
     }
 
+    /// Identita' dell'esecuzione (ADR 3, M1d): la stessa riportata negli
+    /// errori `Step`/`Cancelled` e nel lock del `TempStore`.
+    #[must_use]
+    pub fn execution_id(&self) -> &str {
+        &self.state.execution_id
+    }
+
     /// Snapshot delle metriche correnti (parziali finche' lo stream non e'
     /// esaurito).
     #[must_use]
@@ -570,11 +826,27 @@ impl Output {
 
     /// Drena lo stream raccogliendo tutti i batch finali.
     ///
+    /// Il wrapper governato si spacca al confine pubblico: il lease di ogni
+    /// batch e' rilasciato alla consegna (la memoria passa al chiamante).
+    ///
     /// # Errors
     ///
     /// Propaga il primo errore dello stream (nessun output parziale viene
     /// restituito).
     pub fn collect_batches(self) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
+        let batches = self
+            .stream
+            .map(|item| item.map(GovernedBatch::into_batch))
+            .collect::<Result<Vec<_>>>()?;
+        Ok((batches, self.state.metrics()))
+    }
+
+    /// Drena lo stream conservando i wrapper governati (lease + sequenza).
+    ///
+    /// Seam interno per i test M1a/M1b (ADR-0001/ADR-0002): in questa
+    /// milestone nessun consumatore pubblico riordina per `BatchSequence`.
+    #[cfg(test)]
+    pub(crate) fn collect_governed(self) -> Result<(Vec<GovernedBatch>, ExecutionMetrics)> {
         let batches = self.stream.collect::<Result<Vec<_>>>()?;
         Ok((batches, self.state.metrics()))
     }
@@ -616,7 +888,7 @@ impl Output {
         let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
             for item in &mut stream {
-                ipc.write(&item?)?;
+                ipc.write(&item?.into_batch())?;
             }
             ipc.finish()?;
             Ok(())
@@ -629,7 +901,9 @@ impl Iterator for Output {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stream.next()
+        self.stream
+            .next()
+            .map(|item| item.map(GovernedBatch::into_batch))
     }
 }
 
@@ -661,7 +935,9 @@ impl Iterator for Output {
 /// - `PlenoraError::Contract`: `GRAPH_MISMATCH` sull'identita' del grafo,
 ///   input mancanti/extra/duplicati, op fuori dal dispatch v1 (da `prepare`);
 /// - `PlenoraError::Schema`: schema di un input diverso dal contratto
-///   validato.
+///   validato;
+/// - `PlenoraError::Io`/`PlenoraError::Contract`: `TempStore` non creabile
+///   (fail-closed ADR 3, vedi l'header del modulo).
 #[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da ADR 5.
 pub fn execute(
     graph: &ValidatedGraph,
@@ -670,7 +946,7 @@ pub fn execute(
 ) -> Result<Output> {
     check_compatibility(graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())?;
     let plan = Rc::new(prepare(graph, &runtime)?);
-    execute_physical(&plan, graph, inputs)
+    execute_physical(&plan, graph, inputs, &runtime)
 }
 
 /// `execute_physical` (ADR 5, interno): verifica degli input contro i
@@ -679,6 +955,7 @@ fn execute_physical(
     plan: &Rc<ExecutionPlan>,
     graph: &ValidatedGraph,
     inputs: Inputs,
+    runtime: &RuntimeContext,
 ) -> Result<Output> {
     let declared: Vec<&String> = graph.plan().plan().inputs.iter().collect();
     for name in declared.iter().map(|s| (*s).as_str()) {
@@ -712,7 +989,32 @@ fn execute_physical(
         }
     }
 
-    let state = ExecState::new(plan);
+    // ADR 3, M1d: identita' dell'esecuzione — UUID v4 (dipendenza `uuid`
+    // gia' pinnata nel workspace, nessuna versione nuova) con prefisso
+    // leggibile; il charset rispetta la validazione restrittiva del
+    // `TempStore` ([A-Za-z0-9._-]).
+    let execution_id = format!("exec-{}", uuid::Uuid::new_v4().simple());
+    // ADR 3: scavenging all'avvio delle directory temporanee orfane, sulla
+    // radice dello store (default: temp di sistema; configurabile via
+    // `RuntimeContext::temp_root`). Best-effort: un fallimento dello
+    // scavenging non deve mai impedire un'esecuzione valida — le directory
+    // orfane restano e saranno raccolte al giro successivo.
+    let temp_root = runtime.temp_root.clone().unwrap_or_else(std::env::temp_dir);
+    let _ = scavenge_stale_temp_dirs(&temp_root, DEFAULT_SCAVENGE_TTL);
+    // Fail-closed, decisione documentata: niente degrado a tempdir semplice.
+    // Il `TempStore` e' la difesa strutturale ADR 3 contro i crash non
+    // intercettabili (lo spill di M2 ci scrivera'): eseguire senza
+    // nasconderebbe la perdita di protezione. Se non e' creabile,
+    // l'esecuzione fallisce qui, prima di toccare i dati.
+    let temp_store = TempStore::with_root(&execution_id, &temp_root)?;
+
+    let state = ExecState::new(
+        plan,
+        execution_id,
+        runtime.cancellation.clone(),
+        runtime.diagnostics,
+        temp_store,
+    );
     let mut input_contracts = BTreeMap::new();
     for name in &graph.plan().plan().inputs {
         input_contracts.insert(
@@ -730,12 +1032,21 @@ fn execute_physical(
     let stream = network.edge_stream(plan.output_edge())?;
 
     // Wrapper dell'output: max_output_rows, max_batches, byte per batch e
-    // metriche di pubblicazione.
+    // metriche di pubblicazione. Il batch resta governato fino alla consegna
+    // al chiamante (il lease e' rilasciato dallo spacchettamento in
+    // `Output`), cosi' la coda d'uscita resta dentro il perimetro ADR-0002.
     let output_state = Rc::clone(&state);
+    let output_edge = plan.output_edge().to_owned();
     let mut output_counts = (0_u64, 0_u64);
     let stream = Box::new(stream.map(move |item| {
-        let batch = item?;
-        check_batch_bytes(&output_state, &batch, "output")?;
+        // Tag M1d: ogni errore `Step` che esce dal DAG porta l'execution_id.
+        let governed = item.map_err(|error| output_state.tag_execution(error))?;
+        // ADR 3, M1c: confine di piano — sempre attivo, anche a valle di op
+        // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
+        // consegnare/pubblicare e' nuova attivita').
+        output_state.check_cancellation_point(&output_edge, "output")?;
+        let batch = &governed.batch;
+        check_batch_bytes(&output_state, batch, "output")?;
         let limits = &output_state.plan.limits();
         output_counts.0 += batch.num_rows() as u64;
         output_counts.1 += 1;
@@ -754,7 +1065,7 @@ fn execute_physical(
         let mut metrics = output_state.metrics.borrow_mut();
         metrics.output_rows = output_counts.0;
         metrics.output_batches = output_counts.1;
-        Ok(batch)
+        Ok(governed)
     })) as BatchStream;
 
     let contract = graph.output_contract().clone();
@@ -796,6 +1107,12 @@ impl Network {
 
     /// Stream di un input del piano: limiti per input, byte per batch e
     /// validazione dinamica WKB per cella (D8) prima del primo nodo.
+    ///
+    /// Punto di ingresso nel perimetro governato: qui ogni batch riceve il
+    /// lease di memoria (ADR-0002, quota contata UNA volta per arco) e la
+    /// sequenza logica (ADR-0001: `source_node` = nome dell'input,
+    /// `input_partition` = 0 — nessun ramo parallelo della sorgente in v1 —
+    /// `sequence_number` = contatore seriale per input).
     fn input_stream(&mut self, edge: &str) -> BatchStream {
         let input = self
             .inputs
@@ -807,7 +1124,11 @@ impl Network {
             .expect("contratto dell'input")
             .clone();
         let raw: BatchStream = match input {
-            Input::Batches(batches) => Box::new(batches.into_iter().map(Ok)),
+            Input::Batches(batches) => Box::new(
+                batches
+                    .into_iter()
+                    .map(|batch| Ok(GovernedBatch::new(batch, None, None))),
+            ),
             Input::Stream { iter, .. } => iter,
         };
 
@@ -823,8 +1144,9 @@ impl Network {
                     .expect("colonna geometria nel contratto")
                     .0
             });
+        let mut sequence_number = 0_u64;
         Box::new(raw.map(move |item| {
-            let batch = item?;
+            let batch = item?.batch;
             if batch.schema().as_ref() != expected_schema.as_ref() {
                 return Err(PlenoraError::Schema(format!(
                     "batch dell'input `{edge_name}` con schema diverso dal contratto"
@@ -834,31 +1156,46 @@ impl Network {
             if let Some(index) = geometry_index {
                 validate_wkb_cells(&state, &batch, index, &edge_name)?;
             }
-            let mut counts = state.input_counts.borrow_mut();
-            let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
-            entry.0 += batch.num_rows() as u64;
-            entry.1 += 1;
-            entry.2 += batch.get_array_memory_size() as u64;
-            let limits = &state.plan.limits();
-            if entry.0 > limits.rows.max_input_rows {
-                return Err(PlenoraError::Contract(format!(
-                    "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
-                    entry.0, limits.rows.max_input_rows
-                )));
+            let bytes = batch.get_array_memory_size() as u64;
+            {
+                let mut counts = state.input_counts.borrow_mut();
+                let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
+                entry.0 += batch.num_rows() as u64;
+                entry.1 += 1;
+                entry.2 += bytes;
+                let limits = &state.plan.limits();
+                if entry.0 > limits.rows.max_input_rows {
+                    return Err(PlenoraError::Contract(format!(
+                        "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
+                        entry.0, limits.rows.max_input_rows
+                    )));
+                }
+                if entry.1 > limits.max_batches {
+                    return Err(PlenoraError::Contract(format!(
+                        "max_batches superato sull'input `{edge_name}`: {} batch > {}",
+                        entry.1, limits.max_batches
+                    )));
+                }
+                if entry.2 > limits.max_payload_bytes {
+                    return Err(PlenoraError::Contract(format!(
+                        "max_payload_bytes superato sull'input `{edge_name}`: {} byte > {}",
+                        entry.2, limits.max_payload_bytes
+                    )));
+                }
             }
-            if entry.1 > limits.max_batches {
-                return Err(PlenoraError::Contract(format!(
-                    "max_batches superato sull'input `{edge_name}`: {} batch > {}",
-                    entry.1, limits.max_batches
-                )));
-            }
-            if entry.2 > limits.max_payload_bytes {
-                return Err(PlenoraError::Contract(format!(
-                    "max_payload_bytes superato sull'input `{edge_name}`: {} byte > {}",
-                    entry.2, limits.max_payload_bytes
-                )));
-            }
-            Ok(batch)
+            // ADR-0002: reservation immediata (v1 seriale — regola in
+            // `MemoryGovernor::try_reserve`); i limiti per input sopra sono
+            // gia' passati, quindi qui il fallimento e' solo per budget
+            // globale esaurito.
+            let lease = state.governor.reserve(bytes, &edge_name)?;
+            // ADR-0001: sequenza logica d'ingresso (contatore seriale).
+            let seq = BatchSequence {
+                source_node: edge_name.clone(),
+                input_partition: 0,
+                sequence_number,
+            };
+            sequence_number += 1;
+            Ok(GovernedBatch::new(batch, Some(lease), Some(seq)))
         }))
     }
 
@@ -874,7 +1211,7 @@ impl Network {
                 let plan = Rc::clone(&self.plan);
                 let state = Rc::clone(&self.state);
                 Ok(Box::new(input.map(move |item| {
-                    item.and_then(|batch| run_streaming_chain(&plan, index, &state, batch))
+                    item.and_then(|governed| run_streaming_chain(&plan, index, &state, governed))
                 })))
             }
             SegmentMode::Blocking => {
@@ -882,8 +1219,19 @@ impl Network {
                 let plan = Rc::clone(&self.plan);
                 let state = Rc::clone(&self.state);
                 let mut once = Some(move || {
-                    let batches = (&mut input).collect::<Result<Vec<_>>>()?;
-                    run_blocking(&plan, index, &state, &batches)
+                    let kernel = plan.segments()[index]
+                        .kernels
+                        .first()
+                        .expect("segmento blocking: 1 kernel");
+                    // ADR 3, M1c: drenaggio dell'input — check a ogni
+                    // confine di batch, onorando il behavior del kernel che
+                    // ricevera' i dati (`NonInterruptible`: mai).
+                    let mut batches = Vec::new();
+                    for item in &mut input {
+                        state.check_cancellation(kernel)?;
+                        batches.push(item?);
+                    }
+                    run_blocking(&plan, index, &state, batches)
                 });
                 Ok(Box::new(std::iter::from_fn(move || {
                     once.take().map(|mut run| run())
@@ -895,9 +1243,23 @@ impl Network {
                 let plan = Rc::clone(&self.plan);
                 let state = Rc::clone(&self.state);
                 let mut once = Some(move || {
-                    let left_batches = (&mut left).collect::<Result<Vec<_>>>()?;
-                    let right_batches = (&mut right).collect::<Result<Vec<_>>>()?;
-                    run_binary_blocking(&plan, index, &state, &left_batches, &right_batches)
+                    let kernel = plan.segments()[index]
+                        .kernels
+                        .first()
+                        .expect("segmento binario: 1 kernel");
+                    // ADR 3, M1c: come per il blocking unario — check a ogni
+                    // confine di batch durante il drenaggio dei due rami.
+                    let mut left_batches = Vec::new();
+                    for item in &mut left {
+                        state.check_cancellation(kernel)?;
+                        left_batches.push(item?);
+                    }
+                    let mut right_batches = Vec::new();
+                    for item in &mut right {
+                        state.check_cancellation(kernel)?;
+                        right_batches.push(item?);
+                    }
+                    run_binary_blocking(&plan, index, &state, left_batches, right_batches)
                 });
                 Ok(Box::new(std::iter::from_fn(move || {
                     once.take().map(|mut run| run())
@@ -937,21 +1299,31 @@ fn validate_wkb_cells(
     let limits = state.plan.limits();
     let max_cell = limits.max_wkb_cell_bytes;
     let max_depth = limits.max_geometry_depth as usize;
+    // Diagnostica opt-in (M1d): il nome della colonna e' contesto
+    // strutturale, non un valore — aggiunto solo a flag attivo.
+    let column = batch.schema().field(geometry_index).name().clone();
     for row in 0..batch.num_rows() {
         if cells.is_null(row) {
             continue;
         }
         let payload = cells.value(row);
         if payload.len() as u64 > max_cell {
-            return Err(PlenoraError::Contract(format!(
-                "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
-            )));
+            return Err(state.with_diagnostics(
+                PlenoraError::Contract(format!(
+                    "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
+                )),
+                Some(&format!("colonna `{column}`")),
+            ));
         }
-        validate_wkb_contract_with_depth(payload, max_depth).map_err(|error| {
-            PlenoraError::Contract(format!(
-                "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
-            ))
-        })?;
+        validate_wkb_contract_with_depth(payload, max_depth)
+            .map_err(|error| {
+                PlenoraError::Contract(format!(
+                    "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
+                ))
+            })
+            .map_err(|error| {
+                state.with_diagnostics(error, Some(&format!("colonna `{column}`")))
+            })?;
     }
     Ok(())
 }
@@ -988,6 +1360,42 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
 fn expansion_exempt(kernel: &PreparedKernel) -> bool {
     find_operation(kernel.operation)
         .is_some_and(|descriptor| descriptor.expansion_factor_exempt)
+}
+
+/// Comportamento alla cancellazione del kernel (ADR 3, M1c): dichiarato in
+/// catalogo dal descriptor dell'operazione. Default `Cooperative` se l'op
+/// non fosse trovata (non dovrebbe accadere: il piano e' validato sul
+/// catalogo — conservativo: piu' punti di check, mai meno).
+fn cancellation_behavior(kernel: &PreparedKernel) -> CancellationBehavior {
+    #[cfg(test)]
+    if let Some(behavior) = test_behavior_override(&kernel.node_id) {
+        return behavior;
+    }
+    find_operation(kernel.operation)
+        .map_or(CancellationBehavior::Cooperative, |descriptor| {
+            descriptor.cancellation_behavior
+        })
+}
+
+/// Hook di test (ADR 3): override del `CancellationBehavior` di catalogo
+/// per id nodo. Serve a verificare il rispetto dei behavior senza i backend
+/// opzionali: le sole op `NonInterruptible` del catalogo v1
+/// (`geo.make_valid`, `geo.reproject`, `geo.polygonize`, `geo.split`)
+/// richiedono le capability `geos`/`proj`. Stesso pattern di
+/// [`PANIC_AT_NODES`]: insieme, registrazione/deregistrazione per test.
+#[cfg(test)]
+static CANCEL_BEHAVIOR_OVERRIDES: std::sync::Mutex<Vec<(String, CancellationBehavior)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Lettura dell'override di behavior di test (scatta solo ai nodi
+/// registrati nell'hook).
+#[cfg(test)]
+fn test_behavior_override(node_id: &str) -> Option<CancellationBehavior> {
+    CANCEL_BEHAVIOR_OVERRIDES
+        .lock()
+        .expect("hook behavior non avvelenato")
+        .iter()
+        .find_map(|(node, behavior)| (node == node_id).then_some(*behavior))
 }
 
 /// Fattore di espansione per nodo unario (ADR 6: base = righe di input;
@@ -1052,7 +1460,9 @@ fn check_join_expansion(
 }
 
 /// Errore di un kernel attribuito al nodo logico (E3), preservando la
-/// diagnosi senza dati sensibili.
+/// diagnosi senza dati sensibili. L'`execution_id` e' vuoto qui (il dispatch
+/// in profondita' non lo ha a disposizione): lo riempie il tag M1d al
+/// confine di uscita (`ExecState::tag_execution`).
 fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     let reason = match error {
         PlenoraError::Step { reason, .. } => reason,
@@ -1061,6 +1471,7 @@ fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     PlenoraError::Step {
         node: kernel.node_id.clone(),
         operation: kernel.operation.to_owned(),
+        execution_id: String::new(),
         reason,
     }
 }
@@ -1083,6 +1494,9 @@ fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send
 /// Metriche di un'esecuzione di kernel (per nodo e per segmento, E3).
 /// `first`/`last` indicano la posizione del kernel nel segmento (righe e
 /// batch di ingresso contati solo sul primo, di uscita solo sull'ultimo).
+/// I byte sono i metadati dei buffer Arrow ai confini del kernel
+/// (E3/ADR-0002: il governor non riconta — questi conteggi sono metriche,
+/// non reservation).
 #[allow(clippy::too_many_arguments)]
 fn record_kernel_metrics(
     state: &ExecState,
@@ -1090,10 +1504,15 @@ fn record_kernel_metrics(
     kernel: &PreparedKernel,
     rows_in: u64,
     rows_out: u64,
+    bytes_in: u64,
+    bytes_out: u64,
     elapsed: Duration,
     first: bool,
     last: bool,
 ) {
+    // ADR 3: heartbeat del TempStore al punto centrale — ogni batch
+    // processato passa di qui (throttled, vedi `ExecState::heartbeat`).
+    state.heartbeat();
     let config = state.plan.metrics_config();
     let mut metrics = state.metrics.borrow_mut();
     // Metrica obbligatoria ADR 6: sempre aggiornata, indipendente dalla
@@ -1105,6 +1524,8 @@ fn record_kernel_metrics(
             node.rows_out += rows_out;
             node.batches_in += 1;
             node.batches_out += 1;
+            node.bytes_in += bytes_in;
+            node.bytes_out += bytes_out;
             node.wall_time += elapsed;
         }
     }
@@ -1127,24 +1548,83 @@ fn record_kernel_metrics(
 // Esecuzione dei kernel
 // ---------------------------------------------------------------------------
 
+/// Sequenza logica riassegnata all'output di un segmento blocking
+/// (ADR-0001): la cardinalita' cambia (concatenazione + kernel una tantum),
+/// quindi la sequenza degli input non e' propagabile 1:1.
+///
+/// Regola v1 — deterministica, per ordine di scansione seriale: il segmento
+/// blocking emette UN batch per esecuzione (per i binari il contenuto
+/// dipende dalla scansione left-then-right, anch'essa seriale), quindi la
+/// sequenza e' sempre `source_node` = nodo del kernel, `input_partition` =
+/// 0, `sequence_number` = 0. In M1 nessun consumatore riordina: la sequenza
+/// e' osservabilita' e predisposizione per il collect indicizzato di M3.
+fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
+    BatchSequence {
+        source_node: kernel.node_id.clone(),
+        input_partition: 0,
+        sequence_number: 0,
+    }
+}
+
 /// Catena streaming (V4): il batch attraversa i kernel in sequenza senza
 /// materializzazione; limiti per arco ed espansione dopo ogni kernel.
+///
+/// Confine ADR-0002/ADR-0001: il wrapper si spacca in ingresso (i kernel
+/// restano su `RecordBatch` puro) e si ricompone in uscita — lease NUOVO
+/// sui byte dell'output, acquisito PRIMA di rilasciare quello di input (mai
+/// sotto-conteggio al confine: il picco reale del kernel e' input+output),
+/// e sequenza propagata 1:1. Ogni kernel streaming della v1 e'
+/// batch-in/batch-out — anche le espansioni 1:N per batch come
+/// `geo.subdivide` — quindi la propagazione 1:1 e' esatta a granularita' di
+/// batch.
 fn run_streaming_chain(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
     state: &ExecState,
-    batch: RecordBatch,
-) -> Result<RecordBatch> {
+    governed: GovernedBatch,
+) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
     let output_is_plan_output = segment.output_edge == plan.output_edge();
-    let mut batch = batch;
+    let (mut batch, input_lease, seq) = governed.into_parts();
+    let per_node = state.plan.metrics_config().per_node;
+    // Byte al confine di kernel: il lease di ingresso li fornisce gratis
+    // (nessun riconteggio); i confini interni sono stimati sui metadati dei
+    // buffer solo se le metriche per nodo sono attive — piu' il confine
+    // finale, che serve comunque al lease dell'output.
+    let mut bytes_at_boundary = input_lease.as_ref().map_or_else(
+        || {
+            if per_node {
+                batch.get_array_memory_size() as u64
+            } else {
+                0
+            }
+        },
+        MemoryLease::bytes,
+    );
     let kernels = &segment.kernels;
+    // Diagnostica opt-in (M1d): la sequenza logica e' contesto strutturale
+    // (indice di batch), mai un valore.
+    let batch_detail = seq
+        .as_ref()
+        .map(|seq| format!("batch_seq={}", seq.sequence_number));
     for (position, kernel) in kernels.iter().enumerate() {
+        // ADR 3, M1c: check cooperativo al confine di kernel — per il primo
+        // kernel della catena e' anche il check "tra batch"; onora il
+        // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
+        state.check_cancellation(kernel)?;
         let rows_in = batch.num_rows() as u64;
+        let bytes_in = bytes_at_boundary;
         let start = Instant::now();
-        batch = run_kernel(kernel, batch)?;
+        batch = run_kernel(kernel, batch)
+            .map_err(|error| state.with_diagnostics(error, batch_detail.as_deref()))?;
         let elapsed = start.elapsed();
         let rows_out = batch.num_rows() as u64;
+        let is_last = position + 1 == kernels.len();
+        bytes_at_boundary = if per_node || is_last {
+            batch.get_array_memory_size() as u64
+        } else {
+            0
+        };
         {
             let mut rows = state.node_rows.borrow_mut();
             rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
@@ -1153,7 +1633,6 @@ fn run_streaming_chain(
         // Limiti d'arco sugli archi interni e sull'arco di uscita del
         // segmento, a meno che non sia l'output del piano (li valgono
         // max_output_rows e il wrapper di output).
-        let is_last = position + 1 == kernels.len();
         if !(is_last && output_is_plan_output) {
             check_edge_batch(state, &kernel.node_id, &batch)?;
         }
@@ -1163,12 +1642,20 @@ fn run_streaming_chain(
             kernel,
             rows_in,
             rows_out,
+            bytes_in,
+            bytes_at_boundary,
             elapsed,
             position == 0,
             is_last,
         );
     }
-    Ok(batch)
+    // Ricomposizione: quota dell'output acquisita prima di rilasciare
+    // l'input (mai sotto-conteggio al confine, ADR-0002).
+    let output_lease = state
+        .governor
+        .reserve(bytes_at_boundary, &segment.output_edge)?;
+    drop(input_lease);
+    Ok(GovernedBatch::new(batch, Some(output_lease), seq))
 }
 
 /// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per
@@ -1794,7 +2281,7 @@ fn geo_shared_paths_batch(
 }
 
 /// `geo.cluster_dbscan` (blocking, output allineato alle righe): etichetta
-/// UInt64 nullable per riga (noise → null).
+/// `UInt64` nullable per riga (noise → null).
 fn geo_cluster_dbscan_batch(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
@@ -1811,27 +2298,52 @@ fn geo_cluster_dbscan_batch(
 
 /// Segmento blocking unario: input materializzato (previsto dal piano, V9),
 /// concatenato ed eseguito una sola volta.
+///
+/// Confine ADR-0002: i lease degli input sono trattenuti durante la
+/// concatenazione (i buffer sorgente sono vivi), poi la materializzazione
+/// concatenata riceve il suo lease — reservation completa prima di iniziare
+/// (categoria "memoria stimabile"), acquisita PRIMA di rilasciare gli input
+/// (mai sotto-conteggio al confine) — e l'output riceve a sua volta un
+/// lease nuovo. Sequenza riassegnata con la regola documentata in
+/// [`blocking_output_sequence`].
 fn run_blocking(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
     state: &ExecState,
-    batches: &[RecordBatch],
-) -> Result<RecordBatch> {
+    batches: Vec<GovernedBatch>,
+) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().expect("segmento blocking: 1 kernel");
-    let rows_in = batches.iter().map(RecordBatch::num_rows).sum::<usize>() as u64;
+    let rows_in = batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
+    let bytes_in = batches.iter().map(GovernedBatch::accounted_bytes).sum::<u64>();
     let schema = kernel.input_contracts[0].schema.clone();
     let full = if batches.is_empty() {
         RecordBatch::new_empty(schema)
     } else {
-        concat_batches(&schema, batches).map_err(|error| step_error(kernel, PlenoraError::from(error)))?
+        let unwrapped: Vec<RecordBatch> = batches.iter().map(|g| g.batch.clone()).collect();
+        concat_batches(&schema, &unwrapped)
+            .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     // Il batch concatenato non ha un produttore a monte che ne abbia
     // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
     check_batch_bytes(state, &full, &kernel.node_id)?;
+    // Reservation completa dell'intermedio prima di rilasciare i lease
+    // degli input (ADR-0002: mai attesa con reservation parziale).
+    let full_bytes = full.get_array_memory_size() as u64;
+    let full_lease = state.governor.reserve(full_bytes, &kernel.node_id)?;
+    drop(batches);
+    // ADR 3, M1c: a fine drenaggio, prima del kernel monolitico
+    // (`BoundaryOnly`: check tra kernel/a fine kernel; `NonInterruptible`:
+    // mai).
+    state.check_cancellation(kernel)?;
     let start = Instant::now();
     let output = run_kernel(kernel, full)?;
     let elapsed = start.elapsed();
+    // Lease dell'output acquisito prima di rilasciare l'intermedio.
+    let output_lease = state
+        .governor
+        .reserve(output.get_array_memory_size() as u64, &kernel.node_id)?;
+    drop(full_lease);
     let rows_out = output.num_rows() as u64;
     {
         let mut rows = state.node_rows.borrow_mut();
@@ -1841,19 +2353,31 @@ fn run_blocking(
     if segment.output_edge != plan.output_edge() {
         check_edge_batch(state, &kernel.node_id, &output)?;
     }
-    record_kernel_metrics(state, segment, kernel, rows_in, rows_out, elapsed, true, true);
-    Ok(output)
+    let bytes_out = output_lease.bytes();
+    record_kernel_metrics(state, segment, kernel, rows_in, rows_out, bytes_in, bytes_out, elapsed, true, true);
+    Ok(GovernedBatch::new(
+        output,
+        Some(output_lease),
+        Some(blocking_output_sequence(kernel)),
+    ))
 }
 
 /// Segmento blocking binario: left e right materializzati, concatenati ed
 /// eseguiti una sola volta via `execute_binary`.
+///
+/// Confine ADR-0002 come [`run_blocking`], con reservation multiple in
+/// ORDINE GLOBALE FISSO — left prima di right — completa prima di iniziare
+/// (mai attesa con reservation parziale; in v1 fail-fast non c'e' attesa,
+/// ma l'ordine e' gia' quello richiesto al runtime parallelo M3 per evitare
+/// deadlock). Sequenza riassegnata con la regola documentata in
+/// [`blocking_output_sequence`] (scansione seriale left-then-right).
 fn run_binary_blocking(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
     state: &ExecState,
-    left_batches: &[RecordBatch],
-    right_batches: &[RecordBatch],
-) -> Result<RecordBatch> {
+    left_batches: Vec<GovernedBatch>,
+    right_batches: Vec<GovernedBatch>,
+) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().expect("segmento binario: 1 kernel");
     let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
@@ -1862,26 +2386,46 @@ fn run_binary_blocking(
             kernel.node_id
         )));
     };
-    let left_rows = left_batches.iter().map(RecordBatch::num_rows).sum::<usize>() as u64;
-    let right_rows = right_batches.iter().map(RecordBatch::num_rows).sum::<usize>() as u64;
+    let left_rows = left_batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
+    let right_rows = right_batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
+    let bytes_in = left_batches
+        .iter()
+        .chain(right_batches.iter())
+        .map(GovernedBatch::accounted_bytes)
+        .sum::<u64>();
     let batches_in = (left_batches.len() + right_batches.len()) as u64;
     let left_schema = kernel.input_contracts[0].schema.clone();
     let right_schema = kernel.input_contracts[1].schema.clone();
     let left = if left_batches.is_empty() {
         RecordBatch::new_empty(left_schema)
     } else {
-        concat_batches(&left_schema, left_batches)
+        let unwrapped: Vec<RecordBatch> = left_batches.iter().map(|g| g.batch.clone()).collect();
+        concat_batches(&left_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     let right = if right_batches.is_empty() {
         RecordBatch::new_empty(right_schema)
     } else {
-        concat_batches(&right_schema, right_batches)
+        let unwrapped: Vec<RecordBatch> = right_batches.iter().map(|g| g.batch.clone()).collect();
+        concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     // Come per il blocking unario: tetto duro V7 sui batch concatenati.
     check_batch_bytes(state, &left, &kernel.node_id)?;
     check_batch_bytes(state, &right, &kernel.node_id)?;
+    // Reservation complete degli intermedi in ordine globale fisso (left,
+    // poi right), poi rilascio dei lease degli input.
+    let left_lease = state
+        .governor
+        .reserve(left.get_array_memory_size() as u64, &kernel.node_id)?;
+    let right_lease = state
+        .governor
+        .reserve(right.get_array_memory_size() as u64, &kernel.node_id)?;
+    drop(left_batches);
+    drop(right_batches);
+    // ADR 3, M1c: a fine drenaggio, prima del kernel binario monolitico
+    // (come `run_blocking`).
+    state.check_cancellation(kernel)?;
     let start = Instant::now();
     // Confine ADR 3 come `run_kernel`: panic del kernel binario convertito
     // in errore `Step` attribuito al nodo, mai publish dopo panic.
@@ -1893,6 +2437,11 @@ fn run_binary_blocking(
     .unwrap_or_else(|payload| Err(panic_step_error(kernel, &*payload)))
     .map_err(|error| step_error(kernel, error))?;
     let elapsed = start.elapsed();
+    let output_lease = state
+        .governor
+        .reserve(output.get_array_memory_size() as u64, &kernel.node_id)?;
+    drop(left_lease);
+    drop(right_lease);
     let rows_out = output.num_rows() as u64;
     {
         let mut rows = state.node_rows.borrow_mut();
@@ -1906,6 +2455,9 @@ fn run_binary_blocking(
     }
     // Metriche per nodo: righe in = left + right, batch in = quelli reali
     // drenati dai due rami.
+    // ADR 3: heartbeat del TempStore al punto centrale (come
+    // `record_kernel_metrics`, non riusata qui per i conteggi doppi input).
+    state.heartbeat();
     let config = state.plan.metrics_config();
     let mut metrics = state.metrics.borrow_mut();
     // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`).
@@ -1916,6 +2468,8 @@ fn run_binary_blocking(
             node.rows_out += rows_out;
             node.batches_in += batches_in;
             node.batches_out += 1;
+            node.bytes_in += bytes_in;
+            node.bytes_out += output_lease.bytes();
             node.wall_time += elapsed;
         }
     }
@@ -1928,8 +2482,14 @@ fn run_binary_blocking(
             seg.wall_time += elapsed;
         }
     }
-    Ok(output)
+    Ok(GovernedBatch::new(
+        output,
+        Some(output_lease),
+        Some(blocking_output_sequence(kernel)),
+    ))
 }
 
+#[cfg(test)]
+mod governor_tests;
 #[cfg(test)]
 mod tests;

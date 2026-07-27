@@ -1341,11 +1341,14 @@ pub fn execute_batch(mut batch: RecordBatch, plan: &ValidatedPlan) -> Result<Rec
         batch = execute_step(&batch, prepared, plan.limits()).map_err(|error| PlenoraError::Step {
             node: index.to_string(),
             operation: step.operation.clone(),
+            // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
+            execution_id: String::new(),
             reason: error.to_string(),
         })?;
         validate_batch(&batch, plan.limits()).map_err(|error| PlenoraError::Step {
             node: index.to_string(),
             operation: step.operation.clone(),
+            execution_id: String::new(),
             reason: error.to_string(),
         })?;
     }

@@ -29,6 +29,8 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+# Handler Ctrl-C per la cancellazione cooperativa (ADR 3, M1c).
+ctrlc.workspace = true
 
 [dev-dependencies]
 # Usato dai test di integrazione portati (WKB di fixture in geo_adversarial.rs).

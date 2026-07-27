@@ -310,6 +310,14 @@ fn sync_directory_outcome(_parent: &Path) -> PublishOutcome {
     PublishOutcome::PublishedButDurabilityUnconfirmed
 }
 
+// Hook di iniezione dei fallimenti (solo test, ADR 7): simula un crash
+// dopo scrittura + sync del tempfile e prima del persist. Thread-local per
+// non interferire con i test paralleli.
+#[cfg(test)]
+thread_local! {
+    static FAIL_BEFORE_PERSIST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Pubblicazione atomica dell'output con profilo selezionabile (ADR 7).
 ///
 /// Rifiuta un output esistente, verifica il filesystem di destinazione
@@ -355,6 +363,15 @@ pub fn publish_with_profile<T>(
         result
     };
     temporary.as_file().sync_all()?;
+    // Hook di iniezione (solo test, ADR 7): fallimento tra scrittura e
+    // persist — il tempfile deve essere ripulito dal Drop, nessun output
+    // parziale visibile.
+    #[cfg(test)]
+    if FAIL_BEFORE_PERSIST.with(|flag| flag.replace(false)) {
+        return Err(PlenoraError::Io(io::Error::other(
+            "fallimento iniettato dal test prima del persist",
+        )));
+    }
     let mut temporary = Some(temporary);
     persist_with_retry(|| {
         let file = temporary
@@ -569,5 +586,28 @@ mod tests {
         });
         assert!(matches!(result, Err(PlenoraError::Contract(_))));
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
+    }
+
+    // -- Crash simulato tra scrittura e persist (ADR 7) ----------------------
+
+    #[test]
+    fn crash_between_write_and_persist_leaves_nothing_visible() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("output.bin");
+        FAIL_BEFORE_PERSIST.with(|flag| flag.set(true));
+        let result = publish_with_profile(&destination, PublishProfile::Atomic, |writer| {
+            writer.write_all(b"dati mai pubblicati")?;
+            Ok(())
+        });
+        assert!(matches!(result, Err(PlenoraError::Io(_))));
+        assert!(
+            !destination.exists(),
+            "nessun file visibile alla destinazione"
+        );
+        // Il tempfile `.partial` e' ripulito dal Drop: directory vuota.
+        let leftovers = std::fs::read_dir(directory.path())
+            .expect("read_dir")
+            .count();
+        assert_eq!(leftovers, 0, "il tempfile e' ripulito");
     }
 }

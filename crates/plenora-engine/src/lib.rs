@@ -30,15 +30,39 @@
 //! [`execute`]; `prepare` e' interna al crate (la strategia fisica e' un
 //! dettaglio di `execute`). L'unica vista pubblica sul piano fisico e'
 //! [`explain`], a secco, per l'ispezione (dry-run della CLI).
+//!
+//! Fase 2B aggiunge [`temp_store`] (ADR 3): store temporaneo isolato per
+//! `execution_id` con lock file e heartbeat, piu' scavenging all'avvio delle
+//! directory orfane — difesa strutturale contro i crash non intercettabili.
+//!
+//! Fase 2B M1a/M1b aggiunge [`governor`] (ADR-0002/ADR-0001): budget
+//! memoria globale di piano `max_memory_bytes`, [`MemoryLease`] RAII
+//! reference-counted con reservation a tre vie, e [`GovernedBatch`] con la
+//! sequenza logica ai confini degli archi — i kernel restano su
+//! `RecordBatch` puro.
+//!
+//! Fase 2B M1c/M1d aggiunge [`cancellation`] e gli errori arricchiti
+//! (ADR 3): [`CancellationToken`] cooperativo osservato ai confini
+//! dell'executor (mai dentro ai kernel in M1 — il passaggio e' M3) con
+//! errore dedicato `PlenoraError::Cancelled`; `execution_id` per esecuzione
+//! negli errori `Step`/`Cancelled` e nel lock del `TempStore`;
+//! `PlenoraError::category()`/`retryable()`; modalita' diagnostica opt-in
+//! (`RuntimeContext::diagnostics`, contesto strutturale, mai valori).
 
+pub mod cancellation;
 pub mod executor;
 pub mod geo_transport;
+pub mod governor;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
 pub mod table_engine;
+pub mod temp_store;
 
+pub use cancellation::CancellationToken;
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
+pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
+pub use temp_store::{scavenge_stale_temp_dirs, ScavengeReport, TempStore, DEFAULT_SCAVENGE_TTL};
 pub use prepare::{
     explain, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
     MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
