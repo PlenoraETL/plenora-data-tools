@@ -82,15 +82,17 @@ use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
-use plenora_core::catalog::{find_operation, ExpansionConstraint, JoinExpansion};
+use plenora_core::catalog::{find_operation, ExpansionConstraint, JoinExpansion, CATALOG};
 use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
 use plenora_kernels_geo::{operations, validate_wkb_contract_with_depth};
 
-use crate::geo_transport::publish::publish_atomic;
+use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
 use crate::geo_transport::transport::{transform_batches, TransformArrowSchema};
-use crate::planner::ValidatedGraph;
+use crate::planner::{
+    check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
+};
 use crate::prepare::{
     prepare, AccessorKind, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
@@ -569,16 +571,38 @@ impl Output {
     /// Scrive l'output in Arrow IPC file format con publish atomico
     /// (decisione D22/ADR 7): tempfile nella directory di destinazione,
     /// persist no-clobber solo a stream completato con successo — nessun
-    /// output parziale e' mai visibile.
+    /// output parziale e' mai visibile. Profilo [`PublishProfile::Atomic`]:
+    /// wrapper su [`Output::write_ipc_file_with_profile`], l'esito tipizzato
+    /// (sempre `Published` a publish riuscito) e' scartato.
     ///
     /// # Errors
     ///
     /// Propaga errori di stream e di I/O; `PlenoraError::Contract` se la
-    /// destinazione esiste gia' o la directory non esiste.
+    /// destinazione esiste gia' o la directory non esiste;
+    /// `PlenoraError::UnsupportedPublishTarget` se il filesystem di
+    /// destinazione e' di rete o non identificabile (ADR 7).
     pub fn write_ipc_file(self, path: &Path) -> Result<ExecutionMetrics> {
+        let (metrics, _outcome) = self.write_ipc_file_with_profile(path, PublishProfile::Atomic)?;
+        Ok(metrics)
+    }
+
+    /// Come [`Output::write_ipc_file`], ma con profilo di publish
+    /// selezionabile (ADR 7) ed esito tipizzato restituito al chiamante:
+    /// [`PublishOutcome::PublishedButDurabilityUnconfirmed`] se il publish e'
+    /// riuscito ma la durabilita' non e' confermata (es. `fsync` di directory
+    /// non supportato dalla piattaforma).
+    ///
+    /// # Errors
+    ///
+    /// Come [`Output::write_ipc_file`].
+    pub fn write_ipc_file_with_profile(
+        self,
+        path: &Path,
+        profile: PublishProfile,
+    ) -> Result<(ExecutionMetrics, PublishOutcome)> {
         let schema = self.contract.schema.clone();
         let mut stream = self.stream;
-        publish_atomic(path, move |writer| {
+        let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
             for item in &mut stream {
                 ipc.write(&item?)?;
@@ -586,7 +610,7 @@ impl Output {
             ipc.finish()?;
             Ok(())
         })?;
-        Ok(self.state.metrics())
+        Ok((self.state.metrics(), outcome))
     }
 }
 
@@ -606,14 +630,25 @@ impl Iterator for Output {
 /// prodotto di [`crate::planner::validate`] (type-state), esegue
 /// internamente `prepare` + `execute_physical`.
 ///
+/// All'ingresso l'identita' ADR 4 del grafo e' riverificata contro l'ambiente
+/// corrente ([`check_compatibility`]: catalogo, versioni engine/Arrow,
+/// capability): l'executor rifiuta su qualunque mismatch, mai procedere alla
+/// cieca. Nella v1 il grafo e' validato e usato nello stesso processo, quindi
+/// il check e' parzialmente ridondante, ma il costo e' irrilevante (grafo in
+/// memoria) e la porta resta chiusa per il riuso futuro.
+///
 /// I nomi e gli schemi degli input sono verificati contro i contratti
 /// validati prima di costruire lo stream (fail-closed); l'esecuzione vera e
-/// propria resta lazy: parte alla prima pull dell'[`Output`].
+/// propria resta lazy: parte alla prima pull dell'[`Output`]. Il fingerprint
+/// completo dei contratti di input ([`crate::planner::check_input_compatibility`],
+/// che copre geometria e CRS) resta al chiamante, che dispone dei
+/// `DataContract` letti dagli header IPC: qui gli input arrivano come soli
+/// schemi Arrow.
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Contract`: input mancanti/extra/duplicati, op fuori dal
-///   dispatch v1 (da `prepare`);
+/// - `PlenoraError::Contract`: `GRAPH_MISMATCH` sull'identita' del grafo,
+///   input mancanti/extra/duplicati, op fuori dal dispatch v1 (da `prepare`);
 /// - `PlenoraError::Schema`: schema di un input diverso dal contratto
 ///   validato.
 #[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da ADR 5.
@@ -622,6 +657,7 @@ pub fn execute(
     inputs: Inputs,
     runtime: RuntimeContext,
 ) -> Result<Output> {
+    check_compatibility(graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())?;
     let plan = Rc::new(prepare(graph, &runtime)?);
     execute_physical(&plan, graph, inputs)
 }
@@ -971,6 +1007,9 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
 /// metriche [`JoinExpansion`] e applica il vincolo vincolante dichiarato in
 /// catalogo per l'operazione (default `SumRelative` se l'op non e' in
 /// catalogo — non dovrebbe accadere: il piano e' validato sul catalogo).
+/// La soglia e' `max_expansion_factor` dei limiti effettivi, tranne per il
+/// vincolo `Custom(fattore)`: il fattore dichiarato in catalogo la
+/// sovrascrive per la singola operazione (stima a priori, ADR 5/6).
 fn check_join_expansion(
     state: &ExecState,
     kernel: &PreparedKernel,
@@ -985,7 +1024,7 @@ fn check_join_expansion(
     let constraint = descriptor.map_or(ExpansionConstraint::SumRelative, |d| d.expansion_constraint);
     let expansion = JoinExpansion::compute(output_rows, left_rows, right_rows);
     let binding = expansion.binding_metric(constraint);
-    let factor = state.plan.limits().rows.max_expansion_factor;
+    let factor = constraint.binding_threshold(state.plan.limits().rows.max_expansion_factor);
     if binding > factor {
         return Err(PlenoraError::Contract(format!(
             "max_expansion_factor superato al nodo `{}` (vincolo {constraint:?}): \

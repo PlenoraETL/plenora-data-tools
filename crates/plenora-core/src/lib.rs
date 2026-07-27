@@ -30,4 +30,28 @@ pub mod arrow {
 
     pub use arrow_array::RecordBatch;
     pub use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+
+    /// Versione dei crate Arrow in uso (`arrow-schema` & co., unica per
+    /// decisione D0). I crate Arrow non espongono la propria versione a
+    /// runtime: la costante e' tenuta allineata al pin del workspace
+    /// (`arrow-schema = "=…"` nel `Cargo.toml` di root) da un test dedicato.
+    /// Entra nell'identita' dei grafi validati (ADR 4).
+    pub const VERSION: &str = "59.1.0";
+}
+
+#[cfg(test)]
+mod tests {
+    /// `arrow::VERSION` deve restare allineata al pin del workspace: un bump
+    /// di Arrow senza aggiornarla renderebbe silenziosamente falso il check
+    /// di versione nell'identita' dei grafi (ADR 4).
+    #[test]
+    fn arrow_version_matches_the_workspace_pin() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
+            .expect("Cargo.toml del workspace leggibile");
+        let pin = format!("arrow-schema = \"={}\"", super::arrow::VERSION);
+        assert!(
+            manifest.contains(&pin),
+            "pin di arrow-schema non allineato ad arrow::VERSION: atteso `{pin}`"
+        );
+    }
 }

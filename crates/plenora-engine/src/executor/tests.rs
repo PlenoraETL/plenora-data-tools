@@ -1809,3 +1809,38 @@ fn binary_blocking_metrics_count_real_input_batches() {
     let segment = metrics.segments.values().next().expect("segmento binario");
     assert_eq!(segment.batches_in, 4);
 }
+
+// ---------------------------------------------------------------------------
+// Identita' ADR 4: l'executor rifiuta i grafi incompatibili
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_rejects_a_graph_incompatible_with_the_environment() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    });
+    let contracts = vec![("main".to_owned(), table_contract())];
+    let mut graph = validate(&plan.to_string(), &contracts).expect("validate");
+    // Grafo la cui identita' non combacia con l'ambiente corrente (es. riuso
+    // di un grafo validato da un'altra build): l'executor rifiuta (ADR 4).
+    graph.set_engine_version_for_test("0.0.0-altra");
+    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
+    match execute(&graph, inputs, RuntimeContext::default()) {
+        Err(PlenoraError::Contract(message)) => {
+            assert!(message.contains("GRAPH_MISMATCH"), "{message}");
+        }
+        Err(other) => panic!("atteso Contract GRAPH_MISMATCH, ottenuto {other}"),
+        Ok(_) => panic!("atteso il rifiuto del grafo incompatibile"),
+    }
+
+    // Controllo positivo: a identita' coerente lo stesso piano esegue.
+    let graph = validate(&plan.to_string(), &contracts).expect("validate");
+    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
+    execute(&graph, inputs, RuntimeContext::default()).expect("grafo compatibile accettato");
+}

@@ -13,10 +13,11 @@
 //! - [`PlanV4::from_legacy`]: migrazione del piano lineare legacy
 //!   (`Plan{steps}`, schema_version <= 3) nel caso degenerato del DAG —
 //!   deterministica e idempotente (decisione D20, ADR 4);
-//! - [`canonical_json`]: serializzazione canonica ai fini del futuro
-//!   `plan_hash` (ADR 4): chiavi ordinate, nodi in ordine topologico
-//!   deterministico, alias sostituiti dagli id canonici, default noti
-//!   materializzati (limiti effettivi, config omessa ≡ `{}`).
+//! - [`canonical_json`]: serializzazione canonica ai fini del `plan_hash`
+//!   (ADR 4): chiavi ordinate, nodi in ordine topologico deterministico,
+//!   alias sostituiti dagli id canonici, numeri della config normalizzati
+//!   (`100` ≡ `100.0`), default noti materializzati (limiti effettivi,
+//!   config omessa ≡ `{}`).
 //!
 //! Scelte v1 documentate:
 //!
@@ -30,14 +31,16 @@
 //!   deve essere antenato dell'output (niente nodi morti) e ogni input
 //!   dichiarato deve essere referenziato da almeno un nodo (niente input
 //!   morti), a meno che non sia l'output stesso;
-//! - la materializzazione dei default PER OPERAZIONE dentro `config` richiede
-//!   gli schemi di config deserializzati: è Fase 2A-2, qui la config resta
-//!   `serde_json::Value` (l'equivalenza null ≡ `{}` è già applicata).
+//! - la materializzazione dei default PER OPERAZIONE dentro `config` è
+//!   rimandata: richiede schemi di config tipizzati per operazione, che la v1
+//!   non ha (fuori scope) — qui la config resta `serde_json::Value`
+//!   (l'equivalenza null ≡ `{}` e la normalizzazione dei numeri sono già
+//!   applicate).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map, Number, Value};
 
 use plenora_core::catalog::{find_operation, Arity, Family, Maturity};
 use plenora_core::limits::{Limits, PlanLimits};
@@ -695,13 +698,19 @@ fn ancestors_of_output(plan: &PlanV4) -> HashSet<&str> {
     reachable
 }
 
-/// Serializzazione canonica del piano ai fini del futuro `plan_hash` (ADR 4).
+/// Serializzazione canonica del piano ai fini del `plan_hash` (ADR 4).
 ///
 /// Regole applicate: chiavi ordinate (garantito da `serde_json::Map`), nodi
 /// in ordine topologico deterministico (tie-break lessicografico), alias
-/// sostituiti dagli id canonici, default noti materializzati: limiti
-/// effettivi completi e config omessa ≡ `{}`. La materializzazione dei
-/// default dentro le config richiede gli schemi per operazione (Fase 2A-2).
+/// sostituiti dagli id canonici, numeri della config normalizzati (`100` ≡
+/// `100.0`, vedi [`canonical_numbers`]), default noti materializzati: limiti
+/// effettivi completi e config omessa ≡ `{}`.
+///
+/// NON applicata (scelta v1): la materializzazione dei default DENTRO le
+/// config per operazione — richiede schemi di config tipizzati per operazione,
+/// che la v1 non ha (la config resta `serde_json::Value`, fuori scope). Una
+/// config omessa e una con i default resi espliciti producono quindi piani
+/// canonici diversi finche' gli schemi tipizzati non saranno introdotti.
 ///
 /// Il piano si assume strutturalmente valido (prodotto da [`PlanV4::parse`] o
 /// [`PlanV4::from_legacy`]); su un piano non valido l'ordinamento ricade su
@@ -723,7 +732,7 @@ pub fn canonical_json(plan: &PlanV4) -> Value {
             let config = if node.config.is_null() {
                 json!({})
             } else {
-                node.config.clone()
+                canonical_numbers(&node.config)
             };
             json!({
                 "id": node.id,
@@ -774,6 +783,47 @@ fn canonical_limits(limits: &Limits) -> Value {
         "max_string_bytes": limits.max_string_bytes,
         "max_regex_bytes": limits.max_regex_bytes,
     })
+}
+
+/// Massimo intero esattamente rappresentabile in `f64` (2^53): oltre questa
+/// soglia un intero JSON puo' non avere un `f64` esatto e le forme intera e
+/// in virgola mobile NON vanno unificate.
+const MAX_EXACT_F64_INT: u64 = 1 << 53;
+
+/// Normalizzazione ricorsiva dei numeri nella config (ADR 4): `100` e
+/// `100.0` denotano lo stesso valore e devono produrre lo stesso piano
+/// canonico. Ogni float a valore intero entro 2^53 (rappresentazione esatta
+/// garantita) e' convertito all'intero corrispondente; i float con frazione
+/// e i numeri oltre 2^53 mantengono la forma originale, cosi' valori
+/// distinti non collassano mai (fail-closed).
+fn canonical_numbers(value: &Value) -> Value {
+    match value {
+        Value::Number(number) => canonical_number(number),
+        Value::Array(items) => Value::Array(items.iter().map(canonical_numbers).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), canonical_numbers(item)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Forma canonica di un numero: float a valore intero esattamente
+/// rappresentabile (|v| <= 2^53) diventa intero; tutto il resto e' invariato.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+// I cast sono sicuri: guardati da `trunc` (valore intero) e da |v| <= 2^53.
+fn canonical_number(number: &Number) -> Value {
+    if number.is_f64() {
+        let float = number.as_f64().expect("is_f64 implica as_f64");
+        if float == float.trunc() && float.abs() <= MAX_EXACT_F64_INT as f64 {
+            if float >= 0.0 {
+                return Value::from(float as u64);
+            }
+            return Value::from(float as i64);
+        }
+    }
+    Value::Number(number.clone())
 }
 
 /// Ordine topologico deterministico; su grafo invalido ricade

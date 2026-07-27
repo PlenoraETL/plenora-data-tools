@@ -88,10 +88,14 @@ pub enum DeterminismPolicy {
 ///
 /// Per le operazioni binarie nessuna base singola e' adeguata: il runtime
 /// calcola tutte le metriche di [`JoinExpansion`] e il catalogo dichiara
-/// quale e' vincolante per `max_expansion_factor`. La variante `Custom`
-/// prevista da ADR 6 (stima a priori da statistiche, ADR 5) e' fuori scope
-/// v1 e non e' implementata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// quale e' vincolante. La soglia di confronto e' `max_expansion_factor`
+/// dei limiti effettivi, tranne per [`ExpansionConstraint::Custom`] che la
+/// sovrascrive per la singola operazione.
+///
+/// `PartialEq`/`Eq`/`Hash` sono implementati a mano: il fattore di `Custom`
+/// e' confrontato e hashato per bit (`f64::to_bits`), mai per valore —
+/// nessuna ambiguita' su NaN/-0.0 nel fingerprint del catalogo (ADR 4).
+#[derive(Debug, Clone, Copy)]
 pub enum ExpansionConstraint {
     /// `output / (left + right)`: default, retrocompatibile con la base
     /// fissa left+right della prima implementazione.
@@ -102,6 +106,62 @@ pub enum ExpansionConstraint {
     RightRelative,
     /// `max(output / left, output / right)`: join molti-a-molti.
     MaxRelative,
+    /// Stima a priori da statistiche (ADR 6/ADR 5), per operazioni la cui
+    /// semantica di output non e' caratterizzabile con una base fissa.
+    ///
+    /// Semantica scelta: la **metrica** vincolante resta
+    /// `output_over_sum_inputs` (la base piu' conservativa e stabile), ma la
+    /// **soglia** effettiva e' il fattore dichiarato, che sovrascrive
+    /// `max_expansion_factor` per la sola operazione — vedi
+    /// [`ExpansionConstraint::binding_threshold`]. Il fattore deve essere
+    /// finito e positivo (costante di catalogo, verificata in review; non
+    /// e' un input esterno). Nessuna op v1 lo usa: e' riservato a op
+    /// future guidate da stime.
+    Custom(f64),
+}
+
+impl PartialEq for ExpansionConstraint {
+    fn eq(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Self::SumRelative, Self::SumRelative)
+            | (Self::LeftRelative, Self::LeftRelative)
+            | (Self::RightRelative, Self::RightRelative)
+            | (Self::MaxRelative, Self::MaxRelative) => true,
+            (Self::Custom(a), Self::Custom(b)) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ExpansionConstraint {}
+
+impl std::hash::Hash for ExpansionConstraint {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::SumRelative => state.write_u8(0),
+            Self::LeftRelative => state.write_u8(1),
+            Self::RightRelative => state.write_u8(2),
+            Self::MaxRelative => state.write_u8(3),
+            Self::Custom(factor) => {
+                state.write_u8(4);
+                state.write_u64(factor.to_bits());
+            }
+        }
+    }
+}
+
+impl ExpansionConstraint {
+    /// Soglia effettiva del fattore di espansione per questo vincolo (ADR 6):
+    /// il fattore custom per [`ExpansionConstraint::Custom`] (override di
+    /// `max_expansion_factor` per la singola operazione), altrimenti il
+    /// `max_expansion_factor` dei limiti effettivi passato dal chiamante.
+    #[must_use]
+    pub fn binding_threshold(self, max_expansion_factor: f64) -> f64 {
+        match self {
+            Self::Custom(factor) => factor,
+            _ => max_expansion_factor,
+        }
+    }
 }
 
 /// Metriche di espansione di un'operazione binaria (ADR 6).
@@ -143,11 +203,15 @@ impl JoinExpansion {
     /// Restituisce la metrica vincolante per il vincolo dichiarato in
     /// catalogo. `MaxRelative` e' il massimo delle tre (la metrica sulla
     /// somma e' sempre dominata dalle altre due, quindi includerla non
-    /// cambia il risultato).
+    /// cambia il risultato). `Custom` usa la metrica sulla somma degli
+    /// input: la specificita' del vincolo e' nella soglia
+    /// ([`ExpansionConstraint::binding_threshold`]), non nella base.
     #[must_use]
     pub fn binding_metric(&self, constraint: ExpansionConstraint) -> f64 {
         match constraint {
-            ExpansionConstraint::SumRelative => self.output_over_sum_inputs,
+            ExpansionConstraint::SumRelative | ExpansionConstraint::Custom(_) => {
+                self.output_over_sum_inputs
+            }
             ExpansionConstraint::LeftRelative => self.output_over_left,
             ExpansionConstraint::RightRelative => self.output_over_right,
             ExpansionConstraint::MaxRelative => self
@@ -252,73 +316,84 @@ macro_rules! op {
     };
     // Variante con chiavi opzionali: `semantic_version`,
     // `config_schema_version`, `contract_analysis_version`, `kernel_version`
-    // (default 1), `expansion_constraint` (default `SumRelative`) ed
-    // `expansion_factor_exempt` (default `false`) sono ammesse in qualsiasi
-    // combinazione e ordine; chiave duplicata o sconosciuta -> errore di
-    // compilazione.
+    // (default 1), `expansion_constraint` (default `SumRelative`; accetta un
+    // ident di variante oppure `Custom(fattore)` con il fattore f64, ADR 6)
+    // ed `expansion_factor_exempt` (default `false`) sono ammesse in
+    // qualsiasi combinazione e ordine; chiave duplicata o sconosciuta ->
+    // errore di compilazione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
      $($versions:tt)+) => {
         op!(@munch
             ($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat)
-            (1, 1, 1, 1, SumRelative, false)
+            (1, 1, 1, 1, ExpansionConstraint::SumRelative, false)
             $($versions)+)
     };
     // Muncher: consuma una chiave per passo aggiornando l'accumulatore
     // (semantic, config_schema, contract_analysis, kernel,
     // expansion_constraint, expansion_factor_exempt).
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         semantic_version = $v:expr) => {
         op!(@build ($($base)*) ($v, $c, $a, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         semantic_version = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($v, $c, $a, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         config_schema_version = $v:expr) => {
         op!(@build ($($base)*) ($s, $v, $a, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         config_schema_version = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $v, $a, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         contract_analysis_version = $v:expr) => {
         op!(@build ($($base)*) ($s, $c, $v, $k, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         contract_analysis_version = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $c, $v, $k, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         kernel_version = $v:expr) => {
         op!(@build ($($base)*) ($s, $c, $a, $v, $x, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         kernel_version = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    // `expansion_constraint`: variante senza payload (ident) oppure
+    // `Custom(fattore)` con fattore f64 esplicito (ADR 6).
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+        expansion_constraint = Custom($v:expr)) => {
+        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+        expansion_constraint = Custom($v:expr), $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e) $($rest)+)
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         expansion_constraint = $v:ident) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, $v, $e))
+        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         expansion_constraint = $v:ident, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, $v, $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         expansion_factor_exempt = $v:expr) => {
         op!(@build ($($base)*) ($s, $c, $a, $k, $x, $v))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:ident, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
         expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v) $($rest)+)
     };
     (@build ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident)
      ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr,
-      $constraint:ident, $exempt:expr)) => {
+      $constraint:expr, $exempt:expr)) => {
         OperationDescriptor {
             id: $id,
             family: Family::$family,
@@ -330,7 +405,7 @@ macro_rules! op {
             crs_requirement: $crs,
             required_capabilities: $caps,
             determinism: DeterminismPolicy::$det,
-            expansion_constraint: ExpansionConstraint::$constraint,
+            expansion_constraint: $constraint,
             expansion_factor_exempt: $exempt,
             maturity: Maturity::$mat,
             semantic_version: $semantic,
@@ -938,5 +1013,53 @@ mod tests {
             all_empty.binding_metric(ExpansionConstraint::MaxRelative),
             0.0
         );
+    }
+
+    #[test]
+    fn custom_constraint_overrides_the_threshold_not_the_metric() {
+        // ADR 6: `Custom(fattore)` e' la stima a priori per op la cui
+        // semantica di output non ha una base fissa. La metrica vincolante
+        // resta `output_over_sum_inputs`; il fattore sovrascrive
+        // `max_expansion_factor` come soglia per la singola operazione.
+        let expansion = JoinExpansion::compute(6, 3, 2);
+        assert_eq!(
+            expansion.binding_metric(ExpansionConstraint::Custom(2.5)),
+            expansion.output_over_sum_inputs
+        );
+        assert_eq!(
+            ExpansionConstraint::Custom(2.5).binding_threshold(4.0),
+            2.5
+        );
+        assert_eq!(
+            ExpansionConstraint::MaxRelative.binding_threshold(4.0),
+            4.0
+        );
+        // Uguaglianza per bit: nessuna ambiguita' float nel fingerprint.
+        assert_eq!(
+            ExpansionConstraint::Custom(2.5),
+            ExpansionConstraint::Custom(2.5)
+        );
+        assert_ne!(
+            ExpansionConstraint::Custom(2.5),
+            ExpansionConstraint::Custom(2.6)
+        );
+        assert_ne!(
+            ExpansionConstraint::Custom(1.2),
+            ExpansionConstraint::SumRelative
+        );
+
+        // Sintassi della macro `op!`: `expansion_constraint = Custom(f)`
+        // coesiste con le altre chiavi in qualunque ordine. Nessuna op del
+        // catalogo v1 la usa (riservata a op future guidate da stime).
+        let descriptor = op!(
+            "table.__custom_test", Table, Extension, BinaryOrdered, BinaryBlocking,
+            BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated,
+            expansion_constraint = Custom(2.5), kernel_version = 2
+        );
+        assert_eq!(
+            descriptor.expansion_constraint,
+            ExpansionConstraint::Custom(2.5)
+        );
+        assert_eq!(descriptor.kernel_version, 2);
     }
 }

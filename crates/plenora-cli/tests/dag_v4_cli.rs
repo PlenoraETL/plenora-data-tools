@@ -131,8 +131,8 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
 
     assert_eq!(
         summary["required_capabilities"],
-        json!([]),
-        "nessuna capability per un piano solo tabellare"
+        json!(["atomic_publish"]),
+        "piano solo tabellare: solo il profilo di publish di default (ADR 7)"
     );
     assert_eq!(
         summary["input_contract_fingerprints"].as_array().map(Vec::len),

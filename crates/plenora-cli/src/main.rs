@@ -11,7 +11,7 @@
 //!   (framing WKB v2 `PLNGEO2`), `spatial-join` (v2), `transform-arrow`
 //!   (envelope v3 `PLNGEO3`), `pair-arrow` (v3), `self-test --output`;
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
-//!   `plenora-core`, 142 operazioni) e `validate --plan --inputs ...`;
+//!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
 //! - Fase 2A: collegamento al DAG v4. Se il piano dichiara `schema_version: 4`,
 //!   `validate` e `run` usano il planner/executor del DAG
 //!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani
@@ -42,7 +42,8 @@ use plenora_core::PlenoraError;
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
 use plenora_engine::geo_transport::publish::{
-    publish_atomic, validate_pair_arrow_crs, validate_transform_arrow_crs,
+    publish_with_profile, validate_pair_arrow_crs, validate_transform_arrow_crs, PublishOutcome,
+    PublishProfile,
 };
 use plenora_engine::geo_transport::transport::{
     pair_arrow, transform_arrow, PairArrowSchema, PairArrowSummary, TransformArrowSchema,
@@ -52,7 +53,7 @@ use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
 use plenora_engine::planner::{self, ValidatedGraph};
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
 use plenora_engine::{
-    execute, prepare, ExecutionMetrics, ExecutionPlan, Input, Inputs, RuntimeContext,
+    execute, explain, ExecutionMetrics, ExecutionPlan, Input, Inputs, RuntimeContext,
 };
 use plenora_kernels_geo::arrow_adapter::{
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
@@ -73,6 +74,20 @@ use plenora_kernels_geo::crs::resolve_crs;
 
 fn contract(message: impl Into<String>) -> PlenoraError {
     PlenoraError::Contract(message.into())
+}
+
+/// Presenta l'esito tipizzato del publish (ADR 7): se il file e' stato
+/// pubblicato ma la durabilita' non e' confermata, avvisa su stderr. Con il
+/// profilo `Atomic` l'esito e' sempre `Published`; il ramo warning serve ai
+/// chiamanti che useranno il profilo `DurableAtomic`.
+fn report_publish_outcome(outcome: PublishOutcome, output_path: &Path) {
+    if outcome == PublishOutcome::PublishedButDurabilityUnconfirmed {
+        eprintln!(
+            "avviso: {} pubblicato, ma la durabilita' non e' confermata \
+             (fsync della directory non supportato o fallito)",
+            output_path.display()
+        );
+    }
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {
@@ -401,10 +416,12 @@ fn execute_transform(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    Ok(publish_atomic(output_path, |output_writer| {
+    let (result, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
         transform_stream(&mut input_reader, output_writer, &schema)
             .map_err(|error| contract(error.to_string()))
-    })?)
+    })?;
+    report_publish_outcome(outcome, output_path);
+    Ok(result)
 }
 
 fn execute_transform_arrow(
@@ -438,10 +455,12 @@ fn execute_transform_arrow(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    Ok(publish_atomic(output_path, |output_writer| {
+    let (summary, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
         transform_arrow(&mut input_reader, output_writer, &schema)
             .map_err(|error| contract(error.to_string()))
-    })?)
+    })?;
+    report_publish_outcome(outcome, output_path);
+    Ok(summary)
 }
 
 fn execute_pair_arrow(
@@ -466,7 +485,7 @@ fn execute_pair_arrow(
 
     let mut left_reader = BufReader::with_capacity(1024 * 1024, File::open(left_path)?);
     let mut right_reader = BufReader::with_capacity(1024 * 1024, File::open(right_path)?);
-    Ok(publish_atomic(output_path, |output_writer| {
+    let (summary, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
         pair_arrow(
             &mut left_reader,
             &mut right_reader,
@@ -474,7 +493,9 @@ fn execute_pair_arrow(
             &schema,
         )
         .map_err(|error| contract(error.to_string()))
-    })?)
+    })?;
+    report_publish_outcome(outcome, output_path);
+    Ok(summary)
 }
 
 fn read_geometry_stream(
@@ -553,11 +574,12 @@ fn execute_spatial_join(
     let pairs = spatial_join_nullable(&left, &right, schema.predicate, schema.max_pairs)?;
     let pair_count = u64::try_from(pairs.len())
         .map_err(|_| contract("pair_count non rappresentabile"))?;
-    let checksum = publish_atomic(output_path, |writer| {
+    let (checksum, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
         let (_, checksum) =
             write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
         Ok(checksum)
     })?;
+    report_publish_outcome(outcome, output_path);
     Ok(SpatialJoinSummary {
         pairs: pair_count,
         checksum,
@@ -701,7 +723,7 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (fase 1, ADR 4/5) e poi `prepare` con
+// - **validate**: `planner::validate` (fase 1, ADR 4/5) e poi `explain` con
 //   il `RuntimeContext` di default per il riepilogo della strategia fisica —
 //   un piano valido semanticamente ma fuori dal dispatch v1 fallisce qui,
 //   non a meta' esecuzione. Il riepilogo JSON su stdout riporta: nodi, archi
@@ -1023,13 +1045,13 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
     })
 }
 
-/// `validate` di un piano v4: planner DAG + `prepare` per la strategia, con
-/// riepilogo JSON su stdout.
+/// `validate` di un piano v4: planner DAG + `explain` per la strategia, con
+/// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
 fn validate_dag_v4(plan_text: &str, paths: &[PathBuf]) -> Result<(), Box<dyn Error>> {
     let pairs = pair_v4_inputs(plan_text, paths)?;
     let contracts = discover_contracts(&pairs)?;
     let graph = planner::validate(plan_text, &contracts)?;
-    let execution = prepare(&graph, &RuntimeContext::default())?;
+    let execution = explain(&graph, &RuntimeContext::default())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&graph_summary_json(&graph, &execution))?
@@ -1055,7 +1077,9 @@ fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<
         inputs.add(name.clone(), open_input(path)?)?;
     }
     let output = execute(&graph, inputs, RuntimeContext::default())?;
-    let metrics = output.write_ipc_file(output_path)?;
+    let (metrics, outcome) =
+        output.write_ipc_file_with_profile(output_path, PublishProfile::Atomic)?;
+    report_publish_outcome(outcome, output_path);
     println!(
         "{}",
         serde_json::to_string_pretty(&metrics_json(&graph, &metrics))?

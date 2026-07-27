@@ -26,8 +26,9 @@
 //! 5. costruzione dell'identita' (ADR 4): `plan_hash` (SHA-256 del piano
 //!    canonico serializzato stabile), `catalog_fingerprint` (hash dei
 //!    descrittori delle op usate, in ordine stabile, con le quattro versioni
-//!    per-componente), `engine_version`, `required_capabilities`,
-//!    `input_contract_fingerprints`, `plan_format_version`.
+//!    per-componente), `engine_version`, `arrow_version`,
+//!    `required_capabilities`, `input_contract_fingerprints`,
+//!    `plan_format_version`.
 //!
 //! Scelte v1 documentate:
 //!
@@ -45,10 +46,10 @@
 //!   lineare — due definizioni testualmente diverse dello stesso CRS producono
 //!   fingerprint diversi (conservativo, fail-closed);
 //! - **profilo di publish**: il formato piano v4 non dichiara ancora un
-//!   profilo (`AtomicPublish`/`DurableAtomicPublish`, ADR 7); quando lo fara',
-//!   entrera' nelle `required_capabilities` qui raccolte e sara' verificato da
-//!   [`check_compatibility`] contro le capability dell'ambiente, senza cambi
-//!   di API;
+//!   profilo (`AtomicPublish`/`DurableAtomicPublish`, ADR 7); finche' non lo
+//!   fara', il default `AtomicPublish` entra nelle `required_capabilities`
+//!   qui raccolte ed e' verificato da [`check_compatibility`] contro le
+//!   capability dell'ambiente, come i backend — senza cambi di API;
 //! - fingerprint e hash usano serializzazioni JSON stabili (chiavi ordinate);
 //!   i tipi Arrow entrano con la loro forma `Debug`: i fingerprint vivono solo
 //!   in memoria nella v1 (ADR 4, serializzazione persistente rimandata), la
@@ -85,6 +86,7 @@ use plenora_kernels_geo::crs::resolve_crs;
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
 
+use crate::geo_transport::publish::PublishProfile;
 use crate::plan::{PlanV4, ValidatedPlanV4, PLAN_SCHEMA_VERSION_V4};
 
 #[cfg(test)]
@@ -93,11 +95,17 @@ mod tests;
 /// Versione dell'engine che ha prodotto il grafo validato (ADR 4).
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Versione dei crate Arrow in questa build (ADR 4: entra nell'identita' del
+/// grafo — un grafo validato con una versione Arrow diversa non e' riusabile).
+pub const ARROW_VERSION: &str = plenora_core::arrow::VERSION;
+
 /// Capability disponibili in questa build (backend compilati).
 ///
-/// Il profilo di publish non dipende dalle feature di compilazione ma
-/// dall'ambiente di esecuzione (ADR 7): sara' il chiamante di
-/// [`check_compatibility`] a dichiararlo tra le capability correnti.
+/// I profili di publish non dipendono dalle feature di compilazione (ADR 7):
+/// NON sono inclusi qui — per l'ambiente locale completo (backend + profili
+/// di publish implementati dall'engine) si usi [`local_capabilities`]; un
+/// ambiente diverso dichiara le proprie capability al chiamante di
+/// [`check_compatibility`].
 #[must_use]
 pub fn compiled_capabilities() -> CapabilitySet {
     let mut set = CapabilitySet::default();
@@ -107,6 +115,20 @@ pub fn compiled_capabilities() -> CapabilitySet {
     if cfg!(feature = "proj-backend") {
         set.insert("proj");
     }
+    set
+}
+
+/// Capability dell'ambiente locale: backend compilati piu' i profili di
+/// publish implementati dall'engine (ADR 7 — entrambi; il riconoscimento
+/// fail-closed del filesystem di destinazione resta al momento del publish,
+/// non e' una capability statica).
+///
+/// E' l'insieme contro cui `execute` riverifica l'identita' del grafo.
+#[must_use]
+pub fn local_capabilities() -> CapabilitySet {
+    let mut set = compiled_capabilities();
+    set.insert(PublishProfile::Atomic.capability_name());
+    set.insert(PublishProfile::DurableAtomic.capability_name());
     set
 }
 
@@ -214,6 +236,16 @@ impl fmt::Display for EngineVersion {
     }
 }
 
+/// Versione dei crate Arrow della build che ha validato il grafo (ADR 4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArrowVersion(pub String);
+
+impl fmt::Display for ArrowVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// Grafo validato: il solo ingresso ammesso alla futura `execute` (ADR 5).
 ///
 /// Contiene esclusivamente decisioni semantiche stabili (struttura, tipi,
@@ -226,6 +258,7 @@ pub struct ValidatedGraph {
     plan_hash: PlanHash,
     catalog_fingerprint: CatalogFingerprint,
     engine_version: EngineVersion,
+    arrow_version: ArrowVersion,
     required_capabilities: CapabilitySet,
     /// Allineati per posizione a `plan.inputs`.
     input_contract_fingerprints: Vec<ContractFingerprint>,
@@ -261,8 +294,15 @@ impl ValidatedGraph {
         &self.engine_version
     }
 
-    /// Capability richieste dal grafo (backend delle op usate; in futuro il
-    /// profilo di publish dichiarato dal piano, ADR 7).
+    /// Versione Arrow della build che ha validato il grafo.
+    #[must_use]
+    pub const fn arrow_version(&self) -> &ArrowVersion {
+        &self.arrow_version
+    }
+
+    /// Capability richieste dal grafo: backend delle op usate e profilo di
+    /// publish (ADR 7 — default `AtomicPublish` finche' il formato piano non
+    /// dichiara un profilo).
     #[must_use]
     pub const fn required_capabilities(&self) -> &CapabilitySet {
         &self.required_capabilities
@@ -327,6 +367,14 @@ impl ValidatedGraph {
     #[must_use]
     pub fn used_operations(&self) -> &[String] {
         &self.used_operations
+    }
+
+    /// Solo test: sovrascrive la versione engine registrata nell'identita',
+    /// per verificare che l'executor rifiuti un grafo la cui identita' non
+    /// combacia con l'ambiente corrente (ADR 4: mai procedere alla cieca).
+    #[cfg(test)]
+    pub fn set_engine_version_for_test(&mut self, version: &str) {
+        self.engine_version = EngineVersion(version.to_owned());
     }
 }
 
@@ -413,8 +461,13 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         .transpose()?;
 
     // Passo 4: required_capabilities di ogni op contro i backend compilati.
+    // Piu' il profilo di publish (ADR 7): il formato piano v4 non dichiara
+    // ancora un profilo, quindi si registra il default `AtomicPublish`;
+    // quando il piano lo dichiarera' entrera' qui il profilo scelto, senza
+    // cambi di API (la verifica resta in `check_compatibility`).
     let available = compiled_capabilities();
     let mut required = CapabilitySet::default();
+    required.insert(PublishProfile::Atomic.capability_name());
     let mut used_operations: BTreeSet<String> = BTreeSet::new();
     for node in &plan_ref.nodes {
         let descriptor = find_operation(&node.op).expect("parse ha risolto l'op");
@@ -498,6 +551,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         plan_hash,
         catalog_fingerprint,
         engine_version: EngineVersion(ENGINE_VERSION.to_owned()),
+        arrow_version: ArrowVersion(ARROW_VERSION.to_owned()),
         required_capabilities: required,
         input_contract_fingerprints: input_fingerprints,
         plan_format_version: PLAN_SCHEMA_VERSION_V4,
@@ -513,13 +567,14 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
 /// (ADR 4): qualunque mismatch rifiuta il grafo, mai procedere alla cieca.
 ///
 /// I mismatch rilevati: catalogo cambiato (o op usata rimossa), versione
-/// engine diversa, capability non piu' disponibili (backend o profilo di
-/// publish, ADR 7).
+/// engine diversa, versione Arrow diversa, capability non piu' disponibili
+/// (backend o profilo di publish, ADR 7).
 ///
 /// `current_catalog` e' il catalogo contro cui riverificare (in produzione
-/// `plenora_core::catalog::CATALOG`); `capabilities` sono quelle offerte
-/// dall'ambiente corrente (backend compilati + profili di publish
-/// supportati, ADR 7).
+/// `plenora_core::catalog::CATALOG`); `engine_version` e `arrow_version`
+/// sono quelli dell'ambiente corrente (in produzione [`ENGINE_VERSION`] e
+/// [`ARROW_VERSION`]); `capabilities` sono quelle offerte dall'ambiente
+/// corrente (backend compilati + profili di publish supportati, ADR 7).
 ///
 /// # Errors
 ///
@@ -528,6 +583,7 @@ pub fn check_compatibility(
     graph: &ValidatedGraph,
     current_catalog: &[OperationDescriptor],
     engine_version: &str,
+    arrow_version: &str,
     capabilities: &CapabilitySet,
 ) -> Result<()> {
     let mismatch = |reason: String| PlenoraError::Contract(format!("GRAPH_MISMATCH: {reason}"));
@@ -536,6 +592,13 @@ pub fn check_compatibility(
         return Err(mismatch(format!(
             "engine_version {} del grafo diversa da {engine_version}",
             graph.engine_version
+        )));
+    }
+
+    if graph.arrow_version.0 != arrow_version {
+        return Err(mismatch(format!(
+            "arrow_version {} del grafo diversa da {arrow_version}",
+            graph.arrow_version
         )));
     }
 
@@ -691,10 +754,13 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
             DeterminismPolicy::CanonicalOrder => "canonical_order",
         },
         "expansion_constraint": match descriptor.expansion_constraint {
-            ExpansionConstraint::SumRelative => "sum_relative",
-            ExpansionConstraint::LeftRelative => "left_relative",
-            ExpansionConstraint::RightRelative => "right_relative",
-            ExpansionConstraint::MaxRelative => "max_relative",
+            ExpansionConstraint::SumRelative => json!("sum_relative"),
+            ExpansionConstraint::LeftRelative => json!("left_relative"),
+            ExpansionConstraint::RightRelative => json!("right_relative"),
+            ExpansionConstraint::MaxRelative => json!("max_relative"),
+            // Fattore in forma stabile per bit (mai `Debug` di float): due
+            // build concordano sul fingerprint a parita' di costante (ADR 4).
+            ExpansionConstraint::Custom(factor) => json!({ "custom": factor.to_bits() }),
         },
         "expansion_factor_exempt": descriptor.expansion_factor_exempt,
         "maturity": match descriptor.maturity {

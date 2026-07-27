@@ -113,7 +113,12 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
         graph.used_operations(),
         &["geo.buffer", "table.aggregate", "table.filter"]
     );
-    assert!(graph.required_capabilities().is_empty());
+    // ADR 7: il profilo di publish di default (`AtomicPublish`) e' sempre
+    // richiesto, finche' il formato piano non dichiara un profilo.
+    assert_eq!(
+        graph.required_capabilities().names().collect::<Vec<_>>(),
+        vec![PublishProfile::Atomic.capability_name()]
+    );
     assert_eq!(graph.input_contract_fingerprints().len(), 1);
 
     // La geometria segue la colonna attraverso table.filter e geo.buffer con
@@ -304,10 +309,10 @@ fn compiled_capability_validates_and_is_required_by_graph() {
     .to_string();
     let graph = validate(&plan, &input(geo_contract(1))).expect("geos compilato");
     assert!(graph.required_capabilities().contains("geos"));
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, &compiled_capabilities())
+    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
         .expect("ambiente coerente");
     // Un ambiente senza geos rifiuta il grafo (ADR 4).
-    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, &CapabilitySet::default());
+    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &CapabilitySet::default());
     assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
 }
 
@@ -463,19 +468,42 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
 #[test]
 fn check_compatibility_accepts_the_current_environment() {
     let graph = validate_mixed();
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, &compiled_capabilities())
+    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
         .expect("grafo compatibile con l'ambiente corrente");
-    // Un superset di capability (es. con profili di publish) resta compatibile.
-    let mut superset = compiled_capabilities();
-    superset.insert("atomic_publish");
-    superset.insert("durable_atomic_publish");
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, &superset).expect("superset compatibile");
+    // Un superset di capability resta compatibile.
+    let mut superset = local_capabilities();
+    superset.insert("capability_futura");
+    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &superset).expect("superset compatibile");
+}
+
+#[test]
+fn publish_profile_is_required_and_checked() {
+    // ADR 7: il profilo di publish e' una capability del grafo.
+    let graph = validate_mixed();
+    // Default `AtomicPublish` finche' il formato piano non dichiara un profilo.
+    assert!(
+        graph
+            .required_capabilities()
+            .contains(PublishProfile::Atomic.capability_name())
+    );
+    // Un ambiente senza il profilo di publish richiesto rifiuta il grafo.
+    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &compiled_capabilities());
+    match result {
+        Err(PlenoraError::Contract(message)) => {
+            assert!(message.contains("GRAPH_MISMATCH"), "{message}");
+            assert!(message.contains("atomic_publish"), "{message}");
+        }
+        other => panic!("atteso mismatch capability publish, ottenuto {other:?}"),
+    }
+    // L'ambiente locale dichiara entrambi i profili implementati (ADR 7).
+    assert!(local_capabilities().contains(PublishProfile::Atomic.capability_name()));
+    assert!(local_capabilities().contains(PublishProfile::DurableAtomic.capability_name()));
 }
 
 #[test]
 fn engine_version_mismatch_is_rejected() {
     let graph = validate_mixed();
-    let result = check_compatibility(&graph, CATALOG, "0.0.0-altra", &compiled_capabilities());
+    let result = check_compatibility(&graph, CATALOG, "0.0.0-altra", ARROW_VERSION, &local_capabilities());
     match result {
         Err(PlenoraError::Contract(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
@@ -483,6 +511,51 @@ fn engine_version_mismatch_is_rejected() {
         }
         other => panic!("atteso mismatch engine_version, ottenuto {other:?}"),
     }
+}
+
+#[test]
+fn arrow_version_mismatch_is_rejected() {
+    let graph = validate_mixed();
+    // Identita' coerente: la versione Arrow registrata e' quella della build.
+    assert_eq!(graph.arrow_version().0, ARROW_VERSION);
+    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, "0.0.0-altra", &local_capabilities());
+    match result {
+        Err(PlenoraError::Contract(message)) => {
+            assert!(message.contains("GRAPH_MISMATCH"), "{message}");
+            assert!(message.contains("arrow_version"), "{message}");
+        }
+        other => panic!("atteso mismatch arrow_version, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn plan_hash_normalizes_integer_and_float_forms() {
+    // `100` e `100.0` denotano lo stesso valore: la canonicalizzazione
+    // normalizza i numeri (ADR 4) e i due piani producono lo stesso hash.
+    let plan_with = |value: serde_json::Value| {
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "f", "op": "table.filter", "in": ["main"],
+                 "config": {"column": "id", "operator": ">", "value": value}},
+            ],
+            "output": "f",
+        })
+        .to_string()
+    };
+    let int_graph = validate(&plan_with(json!(100)), &input(table_contract())).expect("config intera");
+    let float_graph =
+        validate(&plan_with(json!(100.0)), &input(table_contract())).expect("config float");
+    assert_eq!(int_graph.plan_hash(), float_graph.plan_hash());
+
+    // Oltre 2^53 un intero puo' non avere un f64 esatto: le forme NON sono
+    // unificate e gli hash restano distinti (fail-closed, nessun collasso).
+    let big_int =
+        validate(&plan_with(json!(9_007_199_254_740_994_u64)), &input(table_contract())).expect("int oltre 2^53");
+    let big_float =
+        validate(&plan_with(json!(9_007_199_254_740_994.0)), &input(table_contract())).expect("float oltre 2^53");
+    assert_ne!(big_int.plan_hash(), big_float.plan_hash());
 }
 
 #[test]
@@ -500,7 +573,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
             clone
         })
         .collect();
-    let result = check_compatibility(&graph, &bumped, ENGINE_VERSION, &compiled_capabilities());
+    let result = check_compatibility(&graph, &bumped, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
     match result {
         Err(PlenoraError::Contract(message)) => {
             assert!(message.contains("catalog_fingerprint"), "{message}");
@@ -514,7 +587,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
         .filter(|descriptor| descriptor.id != "geo.buffer")
         .cloned()
         .collect();
-    let result = check_compatibility(&graph, &without_buffer, ENGINE_VERSION, &compiled_capabilities());
+    let result = check_compatibility(&graph, &without_buffer, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
     assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
 
     // Un'op NON usata che cambia non invalida il grafo.
@@ -528,7 +601,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
             clone
         })
         .collect();
-    check_compatibility(&graph, &untouched, ENGINE_VERSION, &compiled_capabilities())
+    check_compatibility(&graph, &untouched, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
         .expect("op non usata fuori dal fingerprint");
 }
 

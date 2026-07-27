@@ -79,6 +79,7 @@ struct ValidatedGraph {
     plan_hash: PlanHash,
     catalog_fingerprint: CatalogFingerprint,
     engine_version: EngineVersion,
+    arrow_version: ArrowVersion,
     required_capabilities: CapabilitySet,   // include backend GEOS/PROJ
                                             // e il profilo di publish richiesto
     input_contract_fingerprints: Vec<ContractFingerprint>,

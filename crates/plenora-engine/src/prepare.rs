@@ -525,8 +525,30 @@ impl ExecutionPlan {
     }
 }
 
+/// Vista pubblica di sola lettura sulla strategia fisica (dry-run, ADR 5):
+/// restituisce l'[`ExecutionPlan`] che `execute` produrrebbe per questo
+/// grafo e contesto, **senza eseguire nulla**.
+///
+/// L'API operativa resta a due passi (`validate` -> `execute`); `explain`
+/// esiste per l'ispezione (es. `validate` della CLI, che mostra segmenti e
+/// strategia prima di correre) e condivide con `execute` lo stesso esito di
+/// fattibilita': un piano fuori dal dispatch v1 fallisce qui come là.
+///
+/// # Errors
+///
+/// Come la `prepare` interna: `PlenoraError::Unsupported` per operazioni
+/// fuori dal dispatch v1 (fail-closed a secco, non a meta' esecuzione).
+pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
+    prepare(graph, runtime)
+}
+
 /// `prepare` (Architetture.md par. 6.3, ADR 5): decisioni fisiche per questa
 /// esecuzione a partire dal grafo validato e dal contesto runtime.
+///
+/// **Interna al crate** (ADR 5): l'API pubblica del motore e' a due passi
+/// (`validate` -> `execute`); la strategia fisica e' un dettaglio di
+/// implementazione di `execute`. L'unica vista pubblica e' [`explain`],
+/// per l'ispezione a secco (dry-run della CLI).
 ///
 /// Funzione pura e a secco: nessuna lettura di dati. Produce sempre un piano
 /// valido con statistiche assenti (`Unknown` → conservativo, ADR 5).
@@ -544,7 +566,7 @@ impl ExecutionPlan {
 /// Solo su invarianti interne gia' garantite dalla fase 1 `validate` (op
 /// risolta, arco inferito, ogni nodo in esattamente un segmento): mai su
 /// input esterno.
-pub fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
+pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
     let plan = graph.plan().plan();
     let topo = graph.topological_order();
     let limits = graph.effective_limits().clone();

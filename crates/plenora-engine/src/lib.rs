@@ -25,6 +25,11 @@
 //! percorsi esistenti (`table_engine`, `geo_transport`), limiti effettivi,
 //! validazione dinamica WKB in lettura (D8), metriche per nodo e per
 //! segmento (E3) e scrittura IPC con publish atomico.
+//!
+//! ADR 5: l'API pubblica del DAG e' a due passi — [`planner::validate`] e
+//! [`execute`]; `prepare` e' interna al crate (la strategia fisica e' un
+//! dettaglio di `execute`). L'unica vista pubblica sul piano fisico e'
+//! [`explain`], a secco, per l'ispezione (dry-run della CLI).
 
 pub mod executor;
 pub mod geo_transport;
@@ -35,7 +40,7 @@ pub mod table_engine;
 
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use prepare::{
-    prepare, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
+    explain, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
     MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
 };

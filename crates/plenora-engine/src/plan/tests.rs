@@ -507,6 +507,44 @@ fn canonical_json_materializes_limits_and_differs_on_real_differences() {
 }
 
 #[test]
+fn canonical_json_normalizes_numbers() {
+    // `100` e `100.0` denotano lo stesso valore: stessa forma canonica
+    // (ADR 4), anche annidati in array e oggetti dentro la config.
+    let plan_with = |value: serde_json::Value| {
+        json!({
+            "schema_version": 4, "inputs": ["main"], "output": "a",
+            "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
+                       "config": {"column": "id", "operator": ">",
+                                  "value": value.clone(), "nested": [{"n": value}, [-2.0]]}}]
+        })
+        .to_string()
+    };
+    let int_plan = PlanV4::parse_default(&plan_with(json!(100))).unwrap().canonical_json();
+    let float_plan = PlanV4::parse_default(&plan_with(json!(100.0))).unwrap().canonical_json();
+    assert_eq!(int_plan, float_plan);
+    // La forma canonica e' l'intero (float a valore intero entro 2^53).
+    assert_eq!(int_plan["nodes"][0]["config"]["value"], json!(100));
+    assert_eq!(int_plan["nodes"][0]["config"]["nested"][1][0], json!(-2));
+
+    // I float con frazione restano float.
+    let frac = PlanV4::parse_default(&plan_with(json!(2.5))).unwrap().canonical_json();
+    assert_eq!(frac["nodes"][0]["config"]["value"], json!(2.5));
+
+    // Oltre 2^53 un intero puo' non avere un f64 esatto: le forme non sono
+    // unificate (fail-closed, valori distinti non collassano mai).
+    let big_int = PlanV4::parse_default(&plan_with(json!(9_007_199_254_740_994_u64)))
+        .unwrap()
+        .canonical_json();
+    let big_float = PlanV4::parse_default(&plan_with(json!(9_007_199_254_740_994.0)))
+        .unwrap()
+        .canonical_json();
+    assert_ne!(
+        big_int["nodes"][0]["config"]["value"],
+        big_float["nodes"][0]["config"]["value"]
+    );
+}
+
+#[test]
 fn effective_limits_combine_plan_overrides_and_defaults() {
     let overrides = LimitsOverride {
         max_output_rows: Some(42),
