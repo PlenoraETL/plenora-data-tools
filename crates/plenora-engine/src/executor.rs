@@ -67,6 +67,17 @@
 //! output; niente viene pubblicato (il tempfile e' eliminato da
 //! `publish_atomic`) e le metriche restano consultabili fino al punto di
 //! fallimento.
+//!
+//! Panic dei kernel (ADR 3): intercettati con `catch_unwind` al punto di
+//! dispatch — [`run_kernel`] per i kernel unari (streaming e blocking) e la
+//! chiamata `execute_binary` per i segmenti binari, il livello piu' interno
+//! che conserva l'attribuzione di nodo — e convertiti in
+//! `PlenoraError::Step { node, operation, .. }` con il solo messaggio del
+//! panic, mai dati dei batch (regola di error.rs). L'errore propaga come
+//! qualunque altro: il publish atomico non e' raggiunto (nessun publish
+//! dopo panic) e il cleanup (tempfile, buffer degli archi) avviene comunque
+//! via `Drop`. I confini `UnwindSafe` dichiarati per il DAG parallelo
+//! (worker, cancellazione globale, spill) restano Fase 2B.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
@@ -1054,6 +1065,21 @@ fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     }
 }
 
+/// Conversione di un panic di kernel in errore di nodo (ADR 3): il payload
+/// testuale (`&str`/`String`) diventa il motivo, mai dati dei batch (regola
+/// di error.rs: contesto, non valori). Payload non testuale: motivo generico.
+fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send)) -> PlenoraError {
+    let message = payload
+        .downcast_ref::<&'static str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "payload non testuale".to_owned());
+    step_error(
+        kernel,
+        PlenoraError::Contract(format!("panic nel kernel: {message}")),
+    )
+}
+
 /// Metriche di un'esecuzione di kernel (per nodo e per segmento, E3).
 /// `first`/`last` indicano la posizione del kernel nel segmento (righe e
 /// batch di ingresso contati solo sul primo, di uscita solo sull'ultimo).
@@ -1145,8 +1171,52 @@ fn run_streaming_chain(
     Ok(batch)
 }
 
-/// Un kernel streaming su un batch (dispatch per famiglia).
+/// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per
+/// verificare la conversione panic → errore `Step` al confine dell'executor.
+/// Solo `cfg(test)`: i kernel non usano panic per errori attesi. Insieme
+/// (non singolo id): i test girano in parallelo nello stesso processo e
+/// ciascuno registra/deregistra il proprio nodo senza interferire.
+#[cfg(test)]
+static PANIC_AT_NODES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Iniezione del panic di test: scatta solo ai nodi registrati nell'hook.
+#[cfg(test)]
+fn inject_test_panic(node_id: &str) {
+    if PANIC_AT_NODES
+        .lock()
+        .expect("hook panic non avvelenato")
+        .iter()
+        .any(|node| node == node_id)
+    {
+        panic!("panic di test iniettato al nodo `{node_id}`");
+    }
+}
+
+/// Un kernel su un batch: confine ADR 3 dell'executor. Un panic del kernel
+/// e' intercettato qui — il livello piu' interno che conserva l'attribuzione
+/// di nodo — e convertito in errore `Step` con il solo messaggio del panic
+/// ([`panic_step_error`]); l'errore propaga nello stream, quindi il publish
+/// atomico non e' mai raggiunto dopo un panic.
+///
+/// `AssertUnwindSafe` e' legittimo in questo punto: l'esecuzione v1 e'
+/// seriale, batch e config sono proprieta' esclusiva della chiamata (nessuno
+/// stato condiviso mutabile attraversa il confine) e l'errore ferma lo
+/// stream, quindi un eventuale stato interno del kernel lasciato incoerente
+/// dal panic non e' mai riusato. I confini `UnwindSafe` dichiarati per il
+/// DAG parallelo restano Fase 2B.
 fn run_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_test_panic(&kernel.node_id);
+        dispatch_kernel(kernel, batch)
+    })) {
+        Ok(result) => result,
+        Err(payload) => Err(panic_step_error(kernel, &*payload)),
+    }
+}
+
+/// Dispatch per famiglia di un kernel su un batch.
+fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch) -> Result<RecordBatch> {
     match &kernel.config {
         PreparedConfig::TableUnary(plan) => {
             table_engine::execute_batch(batch, plan).map_err(|error| step_error(kernel, error))
@@ -1813,8 +1883,15 @@ fn run_binary_blocking(
     check_batch_bytes(state, &left, &kernel.node_id)?;
     check_batch_bytes(state, &right, &kernel.node_id)?;
     let start = Instant::now();
-    let output = table_engine::execute_binary(&left, &right, binary_plan)
-        .map_err(|error| step_error(kernel, error))?;
+    // Confine ADR 3 come `run_kernel`: panic del kernel binario convertito
+    // in errore `Step` attribuito al nodo, mai publish dopo panic.
+    let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_test_panic(&kernel.node_id);
+        table_engine::execute_binary(&left, &right, binary_plan)
+    }))
+    .unwrap_or_else(|payload| Err(panic_step_error(kernel, &*payload)))
+    .map_err(|error| step_error(kernel, error))?;
     let elapsed = start.elapsed();
     let rows_out = output.num_rows() as u64;
     {

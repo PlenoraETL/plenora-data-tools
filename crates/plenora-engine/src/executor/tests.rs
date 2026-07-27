@@ -1844,3 +1844,165 @@ fn execute_rejects_a_graph_incompatible_with_the_environment() {
     let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
     execute(&graph, inputs, RuntimeContext::default()).expect("grafo compatibile accettato");
 }
+
+// ---------------------------------------------------------------------------
+// Panic dei kernel al confine dell'executor (ADR 3)
+// ---------------------------------------------------------------------------
+
+/// Guard che deregistra il proprio nodo dall'hook di iniezione panic anche
+/// se il test fallisce. Ogni test usa un id di nodo distinto: i test girano
+/// in parallelo nello stesso processo e l'hook e' globale.
+struct PanicHookGuard {
+    node: String,
+}
+
+impl PanicHookGuard {
+    fn set(node: &str) -> Self {
+        super::PANIC_AT_NODES
+            .lock()
+            .expect("hook panic")
+            .push(node.to_owned());
+        Self {
+            node: node.to_owned(),
+        }
+    }
+}
+
+impl Drop for PanicHookGuard {
+    fn drop(&mut self) {
+        if let Ok(mut hook) = super::PANIC_AT_NODES.lock() {
+            hook.retain(|node| node != &self.node);
+        }
+    }
+}
+
+/// Piano con un nodo `table.filter` (streaming) con id dato.
+fn panic_plan(node: &str) -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": node, "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">=", "value": 0}},
+        ],
+        "output": node,
+    })
+}
+
+#[test]
+fn kernel_panic_becomes_step_error_attributed_to_node() {
+    let _guard = PanicHookGuard::set("boom_stream");
+    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
+    let output = run(
+        &panic_plan("boom_stream"),
+        inputs,
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("execute");
+    let error = output.collect_batches().expect_err("panic convertito in errore");
+    match error {
+        PlenoraError::Step {
+            node,
+            operation,
+            reason,
+        } => {
+            assert_eq!(node, "boom_stream", "attribuzione al nodo che e' andato in panic");
+            assert_eq!(operation, "table.filter");
+            assert!(
+                reason.contains("panic di test iniettato"),
+                "il motivo riporta il messaggio del panic: {reason}"
+            );
+        }
+        other => panic!("atteso Step, ottenuto {other}"),
+    }
+}
+
+#[test]
+fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
+    let _guard = PanicHookGuard::set("boom_block");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "boom_block", "op": "table.aggregate", "in": ["main"],
+             "config": {"group_by": ["id"], "aggregations": []}},
+        ],
+        "output": "boom_block",
+    });
+    let inputs = single_input("main", vec![table_batch(&[1, 2], &["a", "b"])]);
+    let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let error = output.collect_batches().expect_err("panic convertito in errore");
+    match error {
+        PlenoraError::Step {
+            node,
+            operation,
+            reason,
+        } => {
+            assert_eq!(node, "boom_block");
+            assert_eq!(operation, "table.aggregate");
+            assert!(reason.contains("panic di test iniettato"), "{reason}");
+        }
+        other => panic!("atteso Step, ottenuto {other}"),
+    }
+}
+
+#[test]
+fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
+    let _guard = PanicHookGuard::set("boom_join");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["left", "right"],
+        "nodes": [
+            {"id": "boom_join", "op": "table.join", "in": ["left", "right"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
+        ],
+        "output": "boom_join",
+    });
+    let inputs = Inputs::new()
+        .with("left", Input::from_batches(vec![table_batch(&[1], &["a"])]).expect("left"))
+        .expect("inputs")
+        .with(
+            "right",
+            Input::from_batches(vec![table_batch(&[1], &["b"])]).expect("right"),
+        )
+        .expect("inputs");
+    let contracts = vec![
+        ("left".to_owned(), table_contract()),
+        ("right".to_owned(), table_contract()),
+    ];
+    let output = run(&plan, inputs, &contracts).expect("execute");
+    let error = output.collect_batches().expect_err("panic convertito in errore");
+    match error {
+        PlenoraError::Step {
+            node,
+            operation,
+            reason,
+        } => {
+            assert_eq!(node, "boom_join", "attribuzione anche per i segmenti BinaryBlocking");
+            assert_eq!(operation, "table.join");
+            assert!(reason.contains("panic di test iniettato"), "{reason}");
+        }
+        other => panic!("atteso Step, ottenuto {other}"),
+    }
+}
+
+#[test]
+fn kernel_panic_publishes_nothing() {
+    let _guard = PanicHookGuard::set("boom_pub");
+    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
+    let output = run(
+        &panic_plan("boom_pub"),
+        inputs,
+        &[("main".to_owned(), table_contract())],
+    )
+    .expect("execute");
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    let result = output.write_ipc_file(&destination);
+    assert!(result.is_err());
+    assert!(
+        !destination.exists(),
+        "nessun publish dopo panic (ADR 3): il tempfile e' eliminato"
+    );
+}

@@ -733,3 +733,64 @@ fn input_geometry_names_are_not_bound_in_the_field_allocator() {
         "la chiave interned non collide coi FieldId delle geometrie di input"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Snapshot canonico del catalogo (disciplina ADR 4)
+// ---------------------------------------------------------------------------
+
+/// Percorso dello snapshot committato (`tests/catalog_snapshot.snap`).
+const CATALOG_SNAPSHOT_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/catalog_snapshot.snap");
+
+/// Contenuto canonico dello snapshot: i descrittori di TUTTE le op del
+/// catalogo in ordine stabile (per id, lo stesso ordine che
+/// [`catalog_fingerprint`] richiede al chiamante), nella stessa forma
+/// canonica del fingerprint ([`descriptor_canonical`]), JSON pretty-printed
+/// a chiavi ordinate per un diff leggibile in review.
+fn catalog_snapshot_content() -> String {
+    let mut descriptors: Vec<&OperationDescriptor> = CATALOG.iter().collect();
+    descriptors.sort_by(|left, right| left.id.cmp(right.id));
+    let canonical: Vec<Value> = descriptors
+        .iter()
+        .map(|descriptor| descriptor_canonical(descriptor))
+        .collect();
+    let mut content =
+        serde_json::to_string_pretty(&canonical).expect("la serializzazione non fallisce");
+    content.push('\n');
+    content
+}
+
+/// Snapshot test del catalogo (ADR 4): il catalogo reale deve coincidere
+/// con lo snapshot committato `crates/plenora-engine/tests/catalog_snapshot.snap`.
+///
+/// Qualunque PR che cambi un descrittore (campi, versioni per-componente,
+/// vincoli di espansione, maturity, ...) mostra il diff dello snapshot in
+/// review; un cambiamento NON intenzionale fallisce qui.
+///
+/// Rigenerazione dopo un cambiamento intenzionale del catalogo:
+///
+/// ```sh
+/// PLENORA_UPDATE_SNAPSHOT=1 cargo test -p plenora-engine catalog_matches_committed_snapshot
+/// ```
+///
+/// e commit dello snapshot aggiornato insieme alla modifica del catalogo.
+#[test]
+fn catalog_matches_committed_snapshot() {
+    let actual = catalog_snapshot_content();
+    let path = std::path::Path::new(CATALOG_SNAPSHOT_PATH);
+    if std::env::var_os("PLENORA_UPDATE_SNAPSHOT").is_some() {
+        std::fs::write(path, &actual).expect("rigenerazione dello snapshot del catalogo");
+        eprintln!("snapshot del catalogo rigenerato in {CATALOG_SNAPSHOT_PATH}");
+        return;
+    }
+    let expected = std::fs::read_to_string(path).unwrap_or_else(|error| {
+        panic!("snapshot del catalogo non leggibile ({error}): generarlo con PLENORA_UPDATE_SNAPSHOT=1")
+    });
+    assert!(
+        actual == expected,
+        "il catalogo diverge dallo snapshot committato {CATALOG_SNAPSHOT_PATH}: \
+         se il cambiamento e' intenzionale, rigenerare con \
+         `PLENORA_UPDATE_SNAPSHOT=1 cargo test -p plenora-engine catalog_matches_committed_snapshot` \
+         e committare lo snapshot aggiornato"
+    );
+}
