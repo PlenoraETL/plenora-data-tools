@@ -31,6 +31,11 @@ chrono-tz.workspace = true
 geo.workspace = true
 geozero.workspace = true
 
+# statfs per il riconoscimento fail-closed del filesystem di publish
+# (ADR 7, geo_transport::publish); solo Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 # Usato dalle property suite portate (extended_properties.rs).

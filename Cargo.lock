@@ -905,6 +905,7 @@ dependencies = [
  "proptest",
  "rayon",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

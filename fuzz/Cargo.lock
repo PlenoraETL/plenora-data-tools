@@ -802,6 +802,7 @@ dependencies = [
  "plenora-kernels-table",
  "rayon",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

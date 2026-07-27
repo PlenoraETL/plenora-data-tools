@@ -35,6 +35,11 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
+    /// Destinazione di publish non supportata (ADR 7): filesystem di rete o
+    /// non identificabile — riconoscimento fail-closed del filesystem.
+    #[error("unsupported publish target: {0}")]
+    UnsupportedPublishTarget(String),
+
     /// Errore Arrow.
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),

@@ -43,6 +43,10 @@ md-5 = "=0.10.6"
 sha2 = "=0.10.9"
 uuid = { version = "=1.18.1", features = ["v4"] }
 tempfile = "=3.27.0"
+# statfs per il riconoscimento fail-closed del filesystem (ADR 7, solo
+# Linux): stessa versione gia' presente nel lockfile come dipendenza di
+# tempfile; API safe (unsafe_code e' proibito nel workspace).
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs"] }
 # Dev
 proptest = "=1.10.0"
 
