@@ -1,6 +1,7 @@
 # ADR 2 — Resource accounting e reservation protocol
 
-- **Stato**: accettato (design)
+- **Stato**: attuato parzialmente (Fase 2B-M1, executor seriale) — vedi
+  "Stato di attuazione" in coda
 - **Decisioni collegate**: D11, D18, D26
 - **Riferimenti**: `Architetture.md` §6.4; `Prestazioni.md` §3 (M1–M5)
 
@@ -112,3 +113,33 @@ benchmark dedicati (invariante P10 di `Prestazioni.md`).
   euristiche.
 - Chi implementa un nuovo kernel blocking deve dichiarare la categoria
   (stimabile/adattivo) e seguire il protocollo corrispondente.
+
+## Stato di attuazione (Fase 2B-M1, executor seriale)
+
+Implementato in `plenora-engine/src/governor.rs` e nell'executor:
+
+- `MemoryGovernor` con budget globale di piano (`max_memory_bytes`),
+  `MemoryLease` RAII reference-counted (quota restituita al Drop dell'ultimo
+  clone), `GovernedBatch` che trasporta batch+lease+`BatchSequence` nello
+  stream; i kernel restano su `RecordBatch` puro, il wrapper si spacca e si
+  ricompone ai confini di segmento.
+- Fan-out tee: quota contata una sola volta, lease condiviso fino all'ultimo
+  consumatore (test dedicato).
+- Osservabilità: `bytes_in`/`bytes_out` per nodo; `ExecutionMetrics.memory`
+  con budget, riservato, picco, lease vivi, età del lease più vecchio.
+- Acquisizione a ogni confine batch (mai per riga), reservation multiple in
+  ordine globale fisso per i binari (left→right, già pronto per
+  l'anti-deadlock parallelo).
+
+**Deviazioni/rinvii rispetto al design** (documentati nel codice):
+
+- In v1 seriale `try_reserve` emette **solo** `Granted`; se la quota manca,
+  esito fail-fast `Contract`. `RetryAfterProgress`/`MustSpill` esistono
+  nell'API ma non sono mai emessi: non c'è scheduler che sospenda rami né
+  spill collegato. Il protocollo anti-deadlock completo (attese, sospensioni,
+  protocollo chunked) è M3 insieme al DAG parallelo.
+- Spill: presente solo per le set operations (preesistente); la
+  generalizzazione a sort/aggregate/join/distinct e il collegamento con
+  `MustSpill` sono M2.
+- Memoria nativa GEOS: non ancora stimata (M2).
+- Margine di sicurezza configurabile e benchmark di overhead (P10): rimandati.

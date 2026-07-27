@@ -1,6 +1,7 @@
 # ADR 3 — Failure propagation, cancellazione e crash
 
-- **Stato**: accettato (design)
+- **Stato**: attuato parzialmente (Fase 2B-M1, executor seriale) — vedi
+  "Stato di attuazione" in coda
 - **Decisioni collegate**: D12, D14, D21, D23, D24
 - **Riferimenti**: `Architetture.md` §6.4
 
@@ -89,3 +90,33 @@ esterni osservabili (invariante I2): solo il sink finale pubblica.
   scavenging dopo riavvio simulato.
 - La CLI resta potenzialmente in attesa di un kernel `NonInterruptible` dopo
   una cancellazione: comportamento accettato, documentato e osservabile.
+
+## Stato di attuazione (Fase 2B-M1, executor seriale)
+
+Implementato:
+
+- **Panic**: `catch_unwind` ai due punti di dispatch dei kernel (streaming/
+  blocking e binario), conversione in `PlenoraError::Step` con attribuzione di
+  nodo, solo il messaggio del panic; publish mai raggiunto (test dedicato).
+- **Cancellazione**: `CancellationToken` (`Arc<AtomicBool>` dietro tipo
+  dedicato) in `RuntimeContext`; check ai confini executor (tra batch, tra
+  kernel, durante il drain dei blocking, al confine di output) con onore del
+  `cancellation_behavior` di catalogo (`Cooperative` per batch, `BoundaryOnly`
+  tra kernel, `NonInterruptible` solo confini di piano); errore dedicato
+  `PlenoraError::Cancelled`; CLI con handler Ctrl-C (1° pressione = cancel
+  cooperativo, 2° = exit forzato), exit code 130, nessun publish al cancel.
+- **Errori arricchiti**: `execution_id` (`exec-<uuid v4>`) in `Step` e
+  `Cancelled`; `ErrorCategory` con `category()` (mapping dichiarato per
+  variante) e `retryable()` (true solo per `Io`); **modalità diagnostica
+  opt-in** (`RuntimeContext::diagnostics`): reason arricchita con
+  nodo/batch/riga/colonna, mai valori.
+- **Crash defense**: `TempStore` per `execution_id` con `lock.json`
+  (execution_id, PID, host, heartbeat), scavenging all'avvio fail-safe
+  (PID morto o heartbeat oltre TTL 24h; lock corrotto conservativo con TTL×2;
+  solo directory `plenora-*`), test di riavvio simulato; test crash tra
+  scrittura e persist del publish.
+
+**Rinvii a M3 (DAG parallelo)**: selezione deterministica dell'errore primario
+multi-ramo, errori secondari come telemetria, cancellazione di rami concorrenti,
+confini `UnwindSafe` ridisegnati per il parallelo, token passato ai kernel,
+isolamento in processo per backend instabili.

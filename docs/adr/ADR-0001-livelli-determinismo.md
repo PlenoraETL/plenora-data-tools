@@ -83,6 +83,16 @@ struct BatchSequence {
 La politica `InputOrder` significa "ordine logico delle `BatchSequence` in
 ingresso", non "chi ha finito prima".
 
+**Attuazione (2B-M1)**: la `BatchSequence` è assegnata agli input
+(`source_node` = nome input, `sequence_number` = contatore per input,
+`input_partition` = 0) e trasportata nel `GovernedBatch` attraverso lo stream;
+propagata 1:1 nei segmenti streaming e riassegnata deterministicamente nei
+blocking (ordine di scansione seriale, regola in `blocking_output_sequence`).
+Il consumatore che riordina l'output dei rami paralleli arriverà con lo
+scheduler (M3): fino ad allora la sequenza è assegnata, propagata e testata,
+ma non usata per riordinare — in esecuzione seriale l'ordine logico coincide
+con quello di scansione.
+
 ## Conseguenze
 
 - I test di determinismo confrontano semanticamente (confronto geometrico per
