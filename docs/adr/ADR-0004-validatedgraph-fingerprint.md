@@ -36,6 +36,13 @@ stabile**, incluse le versioni, le capability, la classe di esecuzione e le
 regole di determinismo. Due cataloghi con gli stessi nomi ma semantica diversa
 producono fingerprint diversi.
 
+**Perimetro del fingerprint (v1)**: l'hash è calcolato sui **soli descrittori
+delle operazioni usate dal piano** (`planner.rs`), non sull'intero catalogo.
+Scelta consapevole: un grafo validato non dipende da operazioni che non usa,
+quindi un bump di versione su un'operazione estranea non deve invalidarlo. La
+proprietà "stessi nomi, semantica diversa → fingerprint diverso" vale per
+ogni operazione effettivamente referenziata dal piano.
+
 Significato esatto delle quattro versioni:
 
 - `semantic_version`: cambia il **comportamento osservabile** dell'operazione;

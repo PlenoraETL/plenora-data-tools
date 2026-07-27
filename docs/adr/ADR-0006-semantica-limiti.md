@@ -48,6 +48,13 @@ struct JoinExpansion {
   molti-a-molti va vincolato con `MaxRelative` o una stima `Custom`.
   La stima a priori usa le statistiche disponibili (ADR 5); il rispetto
   effettivo è verificato a runtime dall'executor.
+- **Esenzione `WholeToMany`** (aggiunta a recepimento dell'implementazione in
+  `executor.rs`): le operazioni che espandono **per contratto** ogni elemento
+  di input in molti output (es. `explode`, unnest) non sono soggette a
+  `max_expansion_factor`, perché l'espansione è la loro semantica e non un
+  segnale di anomalia; restano vincolate da `max_rows_per_edge` e dagli altri
+  limiti di righe. La classe di esenzione è dichiarata in catalogo, non
+  riconosciuta a posteriori.
 - **`max_total_rows_processed`**: **non** è un limite della v1 — è una metrica
   obbligatoria e può diventare limite avanzato. Il suo valore dipende dal piano
   fisico (due `ExecutionPlan` semanticamente equivalenti possono conteggiarlo
