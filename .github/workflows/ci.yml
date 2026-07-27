@@ -1,0 +1,54 @@
+# CI base: build e test su ogni push/PR.
+#
+# Fino al 2026-07-27 il progetto non aveva CI di test: un test rosso
+# (conteggio catalogo) e' sopravvissuto per giorni su main. Questo
+# workflow e' il minimo sindacale per impedirlo di nuovo.
+#
+# Matrice Linux/Windows: il publish atomico (ADR-0007) ha rami per
+# piattaforma (cfg) che un test solo-Linux non eserciterebbe.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa toolchain stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-ci-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-${{ matrix.os }}-
+
+      - name: Test workspace
+        run: cargo test --workspace --no-fail-fast
+
+      # Clippy in modalita' advisory: il codice esistente non e' mai stato
+      # sottoposto a clippy in CI; -D warnings richiede prima un giro di
+      # pulizia dedicato.
+      - name: Clippy (advisory)
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
