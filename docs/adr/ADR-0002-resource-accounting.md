@@ -138,8 +138,24 @@ Implementato in `plenora-engine/src/governor.rs` e nell'executor:
   nell'API ma non sono mai emessi: non c'è scheduler che sospenda rami né
   spill collegato. Il protocollo anti-deadlock completo (attese, sospensioni,
   protocollo chunked) è M3 insieme al DAG parallelo.
-- Spill: presente solo per le set operations (preesistente); la
-  generalizzazione a sort/aggregate/join/distinct e il collegamento con
-  `MustSpill` sono M2.
-- Memoria nativa GEOS: non ancora stimata (M2).
+- Spill (M2): implementato per **sort** (external merge sort), **distinct** e
+  **hash aggregation** (oracoli memoria-vs-spill con output identico), con
+  selezione preventiva al dispatch su soglia stimata (`should_spill_unary`),
+  formato Arrow IPC partizionato, `SpillMetrics` (byte scritti/letti, file) in
+  `ExecutionMetrics` e nel JSON CLI, directory condivisa del `TempStore`
+  per-esecuzione. **Grace hash join: non implementata** (richiede tracciamento
+  degli ordinali attraverso il join per preservare l'ordine esatto
+  dell'output). Set operations: spill preesistente, non ancora instradato
+  sulla directory condivisa né coperto da metriche (follow-up).
+- **Limite noto della v1 (dichiarato)**: per i kernel spill-capable l'input
+  del segmento blocking è materializzato in RAM **senza contabilità governor**
+  (lease rilasciati al drenaggio, reservation dell'intermedio saltata quando
+  `should_spill_unary` scatta): in quel transitorio `max_memory_bytes` non è
+  un tetto duro. Il tetto resta pienamente garantito per i kernel non
+  spill-capable e dal `check_batch_bytes` sull'intermedio. La soluzione
+  strutturale (spill in streaming durante il drenaggio, senza
+  materializzazione) è M3.
+- Memoria nativa GEOS/geometrie decodificate: **stimata** (M2b,
+  `kernels-geo::memory_estimate`, formula dichiarata), mai presentata come
+  conteggio preciso; non ancora alimentata al governor.
 - Margine di sicurezza configurabile e benchmark di overhead (P10): rimandati.
