@@ -15,6 +15,9 @@
 //! - [`arrow_adapter`](crate::arrow_adapter) per la rappresentazione
 //!   GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti
 //!   (`analyze_contract` del catalogo, Fase 2A-2b).
+//! - [`memory_estimate`](crate::memory_estimate) per la STIMA dichiarata
+//!   della memoria nativa delle geometrie decodificate (ADR-0002, Fase
+//!   2B-M2b): mai un conteggio preciso.
 //!
 //! Errori: il sorgente usava `GeoEngineError`; qui le stesse condizioni sono
 //! mappate su [`plenora_core::PlenoraError`] preservando i messaggi:
@@ -39,6 +42,7 @@ pub mod extensions2;
 pub mod extensions3;
 #[cfg(feature = "geos-backend")]
 pub mod geos_backend;
+pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
 #[cfg(feature = "proj-backend")]

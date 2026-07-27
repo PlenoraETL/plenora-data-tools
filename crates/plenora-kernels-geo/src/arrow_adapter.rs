@@ -26,6 +26,7 @@ use plenora_core::PlenoraError;
 use rayon::prelude::*;
 
 use crate::geometry_from_wkb;
+use crate::memory_estimate::{estimate_geometry_native_bytes, DecodedNativeBytesEstimate};
 
 pub const GEOARROW_EXTENSION_KEY: &str = "ARROW:extension:name";
 pub const GEOARROW_WKB_EXTENSION: &str = "geoarrow.wkb";
@@ -170,6 +171,39 @@ pub fn map_nullable<T: Send>(
         .collect()
 }
 
+/// STIMA dei byte nativi delle geometrie decodificate di una colonna
+/// geometria (ADR-0002, Fase 2B-M2b): decodifica ogni cella non-null e
+/// somma le stime per cella. Il valore e' una STIMA dichiarata (formula in
+/// [`crate::memory_estimate`]), da riportare nelle metriche come "memoria
+/// nativa stimata", mai come conteggio preciso. I null contribuiscono zero.
+pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, PlenoraError> {
+    let estimates = map_nullable(cells, |payload| {
+        decode_geometry_cell(payload).map(|geometry| Some(estimate_geometry_native_bytes(&geometry)))
+    })?;
+    Ok(estimates
+        .iter()
+        .flatten()
+        .fold(0_u64, |total, estimate| total.saturating_add(*estimate)))
+}
+
+/// Come [`estimate_decoded_cells_native_bytes`], ma accumula ogni STIMA di
+/// cella decodificata in `accumulator` (punto naturale di raccolta della
+/// metrica "stimata" per il governor; l'integrazione con `plenora-engine`
+/// e' volutamente rimandata). Restituisce il totale corrente
+/// dell'accumulatore, non il solo contributo di questa colonna.
+pub fn accumulate_decoded_cells_native_bytes(
+    cells: &BinaryArray,
+    accumulator: &DecodedNativeBytesEstimate,
+) -> Result<u64, PlenoraError> {
+    map_nullable(cells, |payload| {
+        decode_geometry_cell(payload).map(|geometry| {
+            accumulator.record(&geometry);
+            Some(())
+        })
+    })?;
+    Ok(accumulator.total())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +344,45 @@ mod tests {
             batch_geometry_cells(&batch, 0, "id"),
             Err(PlenoraError::Schema(_))
         ));
+    }
+
+    /// STIMA per colonna geometria (ADR-0002): somma delle stime delle celle
+    /// non-null; i null contribuiscono zero; l'accumulatore riporta lo
+    /// stesso totale come metrica "stimata".
+    #[test]
+    fn decoded_cells_estimate_sums_non_null_cells_and_feeds_the_accumulator() {
+        use crate::memory_estimate::{estimate_geometry_native_bytes, DecodedNativeBytesEstimate};
+
+        let square = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
+            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let point = Geometry::Point(geo::Point::new(1.0, 2.0));
+        let cells_payload = [
+            Some(encode_geometry(&square).expect("square")),
+            None,
+            Some(encode_geometry(&point).expect("point")),
+        ];
+        let cells = BinaryArray::from_iter(
+            cells_payload.iter().map(|cell| cell.as_deref()),
+        );
+
+        let expected = estimate_geometry_native_bytes(&square)
+            + estimate_geometry_native_bytes(&point);
+        assert_eq!(
+            estimate_decoded_cells_native_bytes(&cells).expect("estimate"),
+            expected
+        );
+
+        let accumulator = DecodedNativeBytesEstimate::new();
+        let total =
+            accumulate_decoded_cells_native_bytes(&cells, &accumulator).expect("accumulate");
+        assert_eq!(total, expected);
+        assert_eq!(accumulator.total(), expected);
+        // Secondo passaggio: l'accumulatore continua a crescere (metrica
+        // cumulativa), la stima per colonna resta puntuale.
+        accumulate_decoded_cells_native_bytes(&cells, &accumulator).expect("accumulate");
+        assert_eq!(accumulator.total(), 2 * expected);
     }
 }
