@@ -1,0 +1,5 @@
+# Il progetto e' sviluppato e testato in container Linux: i file di testo
+# restano LF anche al checkout su Windows, cosi' test che leggono file
+# committati (snapshot del catalogo) e script bash non dipendono da
+# core.autocrlf della macchina.
+* text=auto eol=lf

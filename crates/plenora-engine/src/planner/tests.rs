@@ -786,6 +786,9 @@ fn catalog_matches_committed_snapshot() {
     let expected = std::fs::read_to_string(path).unwrap_or_else(|error| {
         panic!("snapshot del catalogo non leggibile ({error}): generarlo con PLENORA_UPDATE_SNAPSHOT=1")
     });
+    // Il confronto e' insensibile agli a-capo: su Windows il checkout puo'
+    // produrre CRLF (nessun .gitattributes imponeva LF fino al 2026-07-27).
+    let expected = expected.replace("\r\n", "\n");
     assert!(
         actual == expected,
         "il catalogo diverge dallo snapshot committato {CATALOG_SNAPSHOT_PATH}: \
