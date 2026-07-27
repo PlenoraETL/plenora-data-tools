@@ -69,6 +69,7 @@ pub mod spill;
 pub mod strings;
 pub mod utility;
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -285,6 +286,159 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     )))
 }
 
+// ---------------------------------------------------------------------------
+// Confronti scalari tipizzati (filtri, regole di governance, assert_range).
+//
+// Classe di bug chiusa (review 2026-07-27, stessa classe dei comparatori di
+// `table.sort`): i confronti fatti via `scalar_as_f64` collassano interi
+// distinti oltre 2^53 sullo stesso double (9007199254740992 e
+// 9007199254740993 risultavano uguali) e il confronto testuale disordinava
+// gli UInt64 ("10" < "9"). Il predicato condiviso qui sotto e' esatto per
+// costruzione: nessuna conversione a f64 quando un lato e' un intero.
+//
+// Regola mista interi <-> float (decisione documentata): il valore di
+// configurazione e' un letterale JSON reso testo; un letterale INTERO resta
+// un intero esatto (`I64`, poi `U64`), ogni altra forma numerica
+// (frazionaria, esponenziale, inf, NaN) e' `F64`. Il confronto intero <-> F64
+// e' esatto: un double frazionario non e' mai uguale a un intero e ordina
+// per floor; un double intero fuori gamma ordina per segno (2^63 > ogni
+// i64); NaN rende falso ogni confronto (`None`), come in IEEE 754. Quindi
+// 9007199254740993 (intero) > 9007199254740992.0 (double), mentre un
+// letterale frazionario JSON (es. 9007199254740993.0) e' un double gia'
+// arrotondato in deserializzazione e vale come tale.
+// ---------------------------------------------------------------------------
+
+/// Estremo di un confronto scalare, parsato dal valore di configurazione.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NumericBound {
+    /// Letterale intero in gamma i64: confronto nativo esatto.
+    I64(i64),
+    /// Letterale intero oltre i64::MAX (gamma u64): confronto nativo esatto.
+    U64(u64),
+    /// Qualunque altra forma numerica (frazionaria, esponenziale, inf, NaN).
+    F64(f64),
+}
+
+impl NumericBound {
+    /// Parse del valore atteso: intero esatto se il testo e' un letterale
+    /// intero, altrimenti f64. `None` se il testo non e' numerico: il
+    /// chiamante lo traduce nello stesso errore di contratto del percorso
+    /// storico (che parsava solo f64, un sottoinsieme stretto di questi casi).
+    pub fn parse(text: &str) -> Option<Self> {
+        if let Ok(value) = text.parse::<i64>() {
+            return Some(Self::I64(value));
+        }
+        if let Ok(value) = text.parse::<u64>() {
+            return Some(Self::U64(value));
+        }
+        text.parse::<f64>().ok().map(Self::F64)
+    }
+}
+
+/// Confronto esatto i64 <-> bound. `None` solo con bound NaN (ogni confronto
+/// falso, come IEEE): i chiamanti lo trattano come "confronto non soddisfatto".
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+// I cast intero<->intero sono guardati dai rami precedenti (gamma verificata).
+pub fn compare_i64(actual: i64, bound: NumericBound) -> Option<Ordering> {
+    match bound {
+        NumericBound::I64(expected) => Some(actual.cmp(&expected)),
+        NumericBound::U64(expected) => Some(if expected > i64::MAX as u64 {
+            Ordering::Less // ogni i64 e' minore di un u64 oltre i64::MAX
+        } else {
+            actual.cmp(&(expected as i64))
+        }),
+        NumericBound::F64(expected) => compare_i64_f64(actual, expected),
+    }
+}
+
+/// Confronto esatto u64 <-> bound. `None` solo con bound NaN.
+#[allow(clippy::cast_sign_loss)] // cast i64->u64 guardato dal ramo `expected < 0`
+pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
+    match bound {
+        NumericBound::U64(expected) => Some(actual.cmp(&expected)),
+        NumericBound::I64(expected) => Some(if expected < 0 {
+            Ordering::Greater // ogni u64 e' maggiore di un intero negativo
+        } else {
+            actual.cmp(&(expected as u64))
+        }),
+        NumericBound::F64(expected) => compare_u64_f64(actual, expected),
+    }
+}
+
+/// Confronto esatto f64 <-> bound, duale di `compare_i64`/`compare_u64`
+/// (usato per colonne Float64 contro letterali interi di configurazione:
+/// entro 2^53 coincide col confronto IEEE storico, oltre resta esatto).
+/// Con bound `F64` vale la semantica IEEE (`partial_cmp`: NaN -> `None`).
+pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
+    match bound {
+        NumericBound::I64(expected) => compare_i64_f64(expected, actual).map(Ordering::reverse),
+        NumericBound::U64(expected) => compare_u64_f64(expected, actual).map(Ordering::reverse),
+        NumericBound::F64(expected) => actual.partial_cmp(&expected),
+    }
+}
+
+#[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
+// I confronti con inf e i cast f64->i64 sono esatti per costruzione: i rami
+// sopra garantiscono finitezza, gamma e (dove richiesto) integrita'.
+fn compare_i64_f64(actual: i64, expected: f64) -> Option<Ordering> {
+    if expected.is_nan() {
+        return None;
+    }
+    if expected == f64::INFINITY {
+        return Some(Ordering::Less);
+    }
+    if expected == f64::NEG_INFINITY {
+        return Some(Ordering::Greater);
+    }
+    // Oltre 2^63 (in valore assoluto) il double e' certamente intero (non
+    // esistono doppi frazionari oltre 2^52) e fuori gamma i64: ordina per segno.
+    if expected >= 9_223_372_036_854_775_808.0 {
+        return Some(Ordering::Less);
+    }
+    if expected < -9_223_372_036_854_775_808.0 {
+        return Some(Ordering::Greater);
+    }
+    if expected.fract() == 0.0 {
+        // Double intero in gamma i64 (2^63 negativo incluso): cast esatto.
+        return Some(actual.cmp(&(expected as i64)));
+    }
+    // Double frazionario (qui |expected| < 2^52, floor esatto in i64): mai
+    // uguale a un intero, ordina per floor.
+    let floor = expected.floor() as i64;
+    Some(if actual <= floor {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    })
+}
+
+#[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
+// Come `compare_i64_f64`: guardie di finitezza, segno, gamma e integrita'.
+fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
+    if expected.is_nan() {
+        return None;
+    }
+    if expected == f64::INFINITY {
+        return Some(Ordering::Less);
+    }
+    if expected == f64::NEG_INFINITY || expected < 0.0 {
+        return Some(Ordering::Greater);
+    }
+    if expected >= 18_446_744_073_709_551_616.0 {
+        return Some(Ordering::Less);
+    }
+    if expected.fract() == 0.0 {
+        // Double intero in [0, 2^64): cast esatto.
+        return Some(actual.cmp(&(expected as u64)));
+    }
+    let floor = expected.floor() as u64;
+    Some(if actual <= floor {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    })
+}
+
 pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows
         .iter()
@@ -339,5 +493,105 @@ mod tests {
         )
         .expect("integers");
         assert!(utf8_column(&integers, "n").is_err());
+    }
+
+    #[test]
+    fn numeric_bound_parse_prefers_exact_integers() {
+        assert_eq!(NumericBound::parse("42"), Some(NumericBound::I64(42)));
+        assert_eq!(NumericBound::parse("-7"), Some(NumericBound::I64(-7)));
+        assert_eq!(
+            NumericBound::parse("9007199254740993"),
+            Some(NumericBound::I64(9_007_199_254_740_993))
+        );
+        assert_eq!(
+            NumericBound::parse("18446744073709551615"),
+            Some(NumericBound::U64(u64::MAX))
+        );
+        assert_eq!(
+            NumericBound::parse("9223372036854775808"),
+            Some(NumericBound::U64(9_223_372_036_854_775_808))
+        );
+        assert_eq!(NumericBound::parse("1.5"), Some(NumericBound::F64(1.5)));
+        assert_eq!(NumericBound::parse("1e3"), Some(NumericBound::F64(1_000.0)));
+        assert_eq!(NumericBound::parse("64.0"), Some(NumericBound::F64(64.0)));
+        assert!(NumericBound::parse("x").is_none());
+        assert!(NumericBound::parse("").is_none());
+    }
+
+    #[test]
+    fn compare_i64_is_exact_beyond_2_pow_53() {
+        let lo = 9_007_199_254_740_992_i64; // 2^53
+        let hi = 9_007_199_254_740_993_i64; // 2^53 + 1: stesso double di lo
+        assert_eq!(compare_i64(hi, NumericBound::I64(lo)), Some(Ordering::Greater));
+        assert_eq!(compare_i64(lo, NumericBound::I64(hi)), Some(Ordering::Less));
+        assert_eq!(compare_i64(hi, NumericBound::I64(hi)), Some(Ordering::Equal));
+        // Bound f64: lo e hi collassano sullo stesso double, il confronto
+        // resta esatto.
+        let collapsed = NumericBound::F64(9_007_199_254_740_992.0);
+        assert_eq!(compare_i64(lo, collapsed), Some(Ordering::Equal));
+        assert_eq!(compare_i64(hi, collapsed), Some(Ordering::Greater));
+        assert_eq!(compare_i64(-hi, collapsed), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn compare_i64_mixed_covers_fraction_inf_nan_and_ranges() {
+        assert_eq!(compare_i64(5, NumericBound::F64(5.5)), Some(Ordering::Less));
+        assert_eq!(compare_i64(5, NumericBound::F64(4.5)), Some(Ordering::Greater));
+        assert_eq!(compare_i64(-5, NumericBound::F64(-5.5)), Some(Ordering::Greater));
+        assert_eq!(compare_i64(-6, NumericBound::F64(-5.5)), Some(Ordering::Less));
+        assert_eq!(compare_i64(0, NumericBound::F64(-0.0)), Some(Ordering::Equal));
+        assert_eq!(compare_i64(i64::MAX, NumericBound::F64(f64::INFINITY)), Some(Ordering::Less));
+        assert_eq!(compare_i64(i64::MIN, NumericBound::F64(f64::NEG_INFINITY)), Some(Ordering::Greater));
+        assert_eq!(compare_i64(0, NumericBound::F64(f64::NAN)), None);
+        assert_eq!(compare_i64(i64::MAX, NumericBound::F64(1e30)), Some(Ordering::Less));
+        assert_eq!(compare_i64(i64::MIN, NumericBound::F64(-1e30)), Some(Ordering::Greater));
+        // -2^63 e' un double intero esatto in gamma i64.
+        assert_eq!(
+            compare_i64(i64::MIN, NumericBound::F64(-9_223_372_036_854_775_808.0)),
+            Some(Ordering::Equal)
+        );
+        // Bound u64 oltre i64::MAX: maggiore di ogni i64.
+        assert_eq!(
+            compare_i64(i64::MAX, NumericBound::U64(9_223_372_036_854_775_808)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_i64(-1, NumericBound::U64(u64::MAX)),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn compare_u64_orders_natively_not_textually() {
+        assert_eq!(compare_u64(10, NumericBound::U64(9)), Some(Ordering::Greater));
+        assert_eq!(compare_u64(9, NumericBound::U64(10)), Some(Ordering::Less));
+        assert_eq!(compare_u64(u64::MAX, NumericBound::U64(u64::MAX)), Some(Ordering::Equal));
+        assert_eq!(compare_u64(0, NumericBound::I64(-1)), Some(Ordering::Greater));
+        assert_eq!(compare_u64(10, NumericBound::I64(9)), Some(Ordering::Greater));
+        // Bound f64 oltre 2^53: 2^64 e' maggiore di ogni u64.
+        let top = NumericBound::F64(18_446_744_073_709_551_616.0); // 2^64
+        assert_eq!(compare_u64(u64::MAX, top), Some(Ordering::Less));
+        assert_eq!(compare_u64(0, NumericBound::F64(0.5)), Some(Ordering::Less));
+        assert_eq!(compare_u64(1, NumericBound::F64(0.5)), Some(Ordering::Greater));
+        assert_eq!(compare_u64(0, NumericBound::F64(f64::NAN)), None);
+    }
+
+    #[test]
+    fn compare_f64_is_the_exact_dual_for_float_columns() {
+        // Letterale intero oltre 2^53 contro colonna Float64: il double
+        // 9007199254740992.0 e' minore dell'intero 9007199254740993.
+        assert_eq!(
+            compare_f64(9_007_199_254_740_992.0, NumericBound::I64(9_007_199_254_740_993)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_f64(9_007_199_254_740_992.0, NumericBound::I64(9_007_199_254_740_992)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(compare_f64(f64::NAN, NumericBound::I64(1)), None);
+        assert_eq!(
+            compare_f64(1.5, NumericBound::F64(1.5)),
+            Some(Ordering::Equal)
+        );
     }
 }

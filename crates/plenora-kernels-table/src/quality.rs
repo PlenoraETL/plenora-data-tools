@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -11,7 +12,8 @@ use serde::Deserialize;
 
 use plenora_core::{PlenoraError, Result};
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, validate_output_name,
+    column_index, compare_i64, compare_u64, replace_or_append, scalar_as_f64, scalar_as_string,
+    validate_output_name, NumericBound,
 };
 use crate::governance::RowKeyEncoder;
 use crate::joins::FastHasher;
@@ -329,11 +331,67 @@ pub struct AssertRange {
     pub allow_null: bool,
 }
 
+/// true se il valore viola i limiti configurati; `compare` confronta il
+/// valore con un estremo (`None` = confronto con NaN: nessuna violazione,
+/// come i confronti IEEE storici).
+fn range_outside(
+    config: &AssertRange,
+    compare: &mut dyn FnMut(f64) -> Option<Ordering>,
+) -> bool {
+    let below = config.min.is_some_and(|min| {
+        if config.inclusive_min {
+            compare(min) == Some(Ordering::Less)
+        } else {
+            matches!(compare(min), Some(Ordering::Less | Ordering::Equal))
+        }
+    });
+    let above = config.max.is_some_and(|max| {
+        if config.inclusive_max {
+            compare(max) == Some(Ordering::Greater)
+        } else {
+            matches!(compare(max), Some(Ordering::Greater | Ordering::Equal))
+        }
+    });
+    below || above
+}
+
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
+    let array = batch.column(index).as_ref();
+    // Confronti esatti sulle colonne intere (classe "confronti via f64",
+    // review 2026-07-27): i limiti restano f64 di configurazione, ma il
+    // misto intero<->double e' esatto — un intero oltre 2^53 non collassa
+    // piu' sull'estremo. Gli altri tipi restano sul profilo f64 storico.
+    let int64 = array.as_any().downcast_ref::<Int64Array>();
+    let uint64 = array.as_any().downcast_ref::<UInt64Array>();
     for row in 0..batch.num_rows() {
-        let value = scalar_as_f64(batch.column(index).as_ref(), row)?;
-        let Some(value) = value else {
+        // `None` = riga null (gestita sotto); `Some(true)` = fuori intervallo.
+        let outside = if let Some(values) = int64 {
+            if values.is_null(row) {
+                None
+            } else {
+                Some(range_outside(config, &mut |bound| {
+                    compare_i64(values.value(row), NumericBound::F64(bound))
+                }))
+            }
+        } else if let Some(values) = uint64 {
+            if values.is_null(row) {
+                None
+            } else {
+                Some(range_outside(config, &mut |bound| {
+                    compare_u64(values.value(row), NumericBound::F64(bound))
+                }))
+            }
+        } else {
+            match scalar_as_f64(array, row)? {
+                None => None,
+                Some(value) => Some(
+                    !value.is_finite()
+                        || range_outside(config, &mut |bound| value.partial_cmp(&bound)),
+                ),
+            }
+        };
+        let Some(outside) = outside else {
             if config.allow_null {
                 continue;
             }
@@ -341,21 +399,7 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
                 "assert_range: null alla riga {row}"
             )));
         };
-        let below = config.min.is_some_and(|min| {
-            if config.inclusive_min {
-                value < min
-            } else {
-                value <= min
-            }
-        });
-        let above = config.max.is_some_and(|max| {
-            if config.inclusive_max {
-                value > max
-            } else {
-                value >= max
-            }
-        });
-        if !value.is_finite() || below || above {
+        if outside {
             return Err(PlenoraError::Contract(format!(
                 "assert_range: valore fuori intervallo alla riga {row}"
             )));
@@ -484,6 +528,78 @@ mod tests {
             ],
         )
         .expect("quality fixture")
+    }
+
+    #[test]
+    fn assert_range_integer_bounds_are_exact_beyond_2_pow_53() {
+        // Classe "confronti via f64": 2^53+1 collassa sul double 2^53; un
+        // estremo max = 2^53 (esatto in f64) deve comunque escluderlo.
+        let ints = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![
+                Some(9_007_199_254_740_992), // 2^53
+                Some(9_007_199_254_740_993), // 2^53 + 1
+                None,
+            ]))],
+        )
+        .expect("fixture i64");
+        let config = AssertRange {
+            column: "i".into(),
+            min: Some(9_007_199_254_740_992.0),
+            max: Some(9_007_199_254_740_992.0),
+            inclusive_min: true,
+            inclusive_max: true,
+            allow_null: true,
+        };
+        // La riga con 2^53+1 viola il massimo (il null e' ammesso).
+        assert!(assert_range(&ints, &config).is_err());
+        // Senza la riga oltre 2^53 il vincolo passa.
+        let ok = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_992), None]))],
+        )
+        .expect("fixture ok");
+        assert!(assert_range(&ok, &config).is_ok());
+
+        let uints = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, true)])),
+            vec![Arc::new(UInt64Array::from(vec![
+                Some(9_007_199_254_740_993_u64), // 2^53 + 1
+                Some(9),
+            ]))],
+        )
+        .expect("fixture u64");
+        // u64 oltre 2^53 contro max = 2^53: violazione esatta (9 < 10 anche
+        // in ordinato, mai confronto testuale).
+        assert!(assert_range(&uints, &config_u64()).is_err());
+        let uints_ok = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, true)])),
+            vec![Arc::new(UInt64Array::from(vec![Some(9), Some(10)]))],
+        )
+        .expect("fixture u64 ok");
+        assert!(assert_range(&uints_ok, &config_u64_min()).is_ok());
+    }
+
+    fn config_u64() -> AssertRange {
+        AssertRange {
+            column: "u".into(),
+            min: None,
+            max: Some(9_007_199_254_740_992.0),
+            inclusive_min: true,
+            inclusive_max: true,
+            allow_null: false,
+        }
+    }
+
+    fn config_u64_min() -> AssertRange {
+        AssertRange {
+            column: "u".into(),
+            min: Some(9.0),
+            max: None,
+            inclusive_min: true,
+            inclusive_max: true,
+            allow_null: false,
+        }
     }
 
     #[test]

@@ -11,11 +11,15 @@
 //! - `table.filter`: il kernel pubblico `filtering::filter` usa `fast_rows`
 //!   sui tipi coperti (Int64, UInt64, Float64, Utf8, Boolean) e ricade sul
 //!   generico altrove; l'oracolo qui sotto replica `evaluate` riga per riga
-//!   (stessa semantica: null, NaN, -0.0 vs 0.0, confronto testuale). Gli
-//!   output devono essere fisicamente identici (stesse righe via `take`).
+//!   (stessa semantica: null, NaN, -0.0 vs 0.0, confronti interi ESATTI
+//!   nativi — i generatori coprono valori oltre 2^53 e u64 grandi, dove la
+//!   conversione a f64 collasserebbe valori distinti — confronto testuale
+//!   per i tipi non numerici). Gli output devono essere fisicamente
+//!   identici (stesse righe via `take`).
 //! - `coalesce`: `cleansing::coalesce_fast` (pubblico) contro l'oracolo
 //!   `arrow_select::coalesce::coalesce` (stessa semantica "primo non-null").
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow_array::{
@@ -26,7 +30,10 @@ use libfuzzer_sys::fuzz_target;
 use plenora_core::PlenoraError;
 use plenora_kernels_table::cleansing::coalesce_fast;
 use plenora_kernels_table::filtering::{filter, Filter, Operator};
-use plenora_kernels_table::{scalar_as_f64, scalar_as_string, select_rows};
+use plenora_kernels_table::{
+    compare_f64, compare_i64, compare_u64, scalar_as_f64, scalar_as_string, select_rows,
+    NumericBound,
+};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -34,7 +41,7 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 fn edge_float(byte: u8) -> f64 {
-    match byte % 8 {
+    match byte % 10 {
         0 => 0.0,
         1 => -0.0,
         2 => f64::NAN,
@@ -42,7 +49,33 @@ fn edge_float(byte: u8) -> f64 {
         4 => f64::NEG_INFINITY,
         5 => f64::from(byte) * 0.5,
         6 => -f64::from(byte),
-        _ => f64::from(byte),
+        7 => f64::from(byte),
+        8 => 9_007_199_254_740_992.0,   // 2^53: ultimo intero esatto in f64
+        _ => -9_007_199_254_740_992.0,
+    }
+}
+
+/// Interi guidati dal byte: piccoli, oltre 2^53 (dove due interi distinti
+/// collassano sullo stesso double) ed estremi di gamma i64.
+fn edge_int(byte: u8) -> i64 {
+    match byte % 6 {
+        0 => i64::from(byte) - 128,
+        1 => 9_007_199_254_740_992 + i64::from(byte % 4),  // 2^53 + k
+        2 => -9_007_199_254_740_992 - i64::from(byte % 4), // -(2^53) - k
+        3 => i64::MAX - i64::from(byte % 8),
+        4 => i64::MIN + i64::from(byte % 8),
+        _ => i64::from(byte) * 1_000_000 - 128_000_000,
+    }
+}
+
+/// u64 guidati dal byte: piccoli, oltre 2^53 e vicini a u64::MAX.
+fn edge_uint(byte: u8) -> u64 {
+    match byte % 5 {
+        0 => u64::from(byte),
+        1 => 9_007_199_254_740_992 + u64::from(byte % 4), // 2^53 + k
+        2 => u64::MAX - u64::from(byte % 8),
+        3 => u64::from(byte) * 1_000_000,
+        _ => 18_446_744_073_709_551_610 + u64::from(byte % 6), // u64::MAX - k
     }
 }
 
@@ -66,12 +99,12 @@ fn typed_column(kind: u8, payload: &[u8], variant: usize) -> ArrayRef {
     match kind % 5 {
         0 => Arc::new(Int64Array::from(
             (0..rows)
-                .map(|row| (row % null_period != 0).then(|| i64::from(payload[row]) - 128))
+                .map(|row| (row % null_period != 0).then(|| edge_int(payload[row].wrapping_add(variant as u8))))
                 .collect::<Vec<_>>(),
         )) as ArrayRef,
         1 => Arc::new(UInt64Array::from(
             (0..rows)
-                .map(|row| (row % null_period != 0).then(|| u64::from(payload[row])))
+                .map(|row| (row % null_period != 0).then(|| edge_uint(payload[row].wrapping_add(variant as u8))))
                 .collect::<Vec<_>>(),
         )) as ArrayRef,
         2 => Arc::new(Float64Array::from(
@@ -120,6 +153,9 @@ fn filter_value(op: &Operator, payload: &[u8]) -> Value {
     let numeric = [
         "0", "-0.0", "0.0", "NaN", "nan", "inf", "-inf", "1e3", "3.", ".5", "+3", "",
         "18446744073709551615", "9223372036854775807", "-9223372036854775808",
+        // Oltre 2^53: interi che collassano sullo stesso double.
+        "9007199254740992", "9007199254740993", "-9007199254740993",
+        "18446744073709551614",
     ];
     let pick = payload.first().copied().unwrap_or_default() as usize;
     match op {
@@ -133,8 +169,8 @@ fn filter_value(op: &Operator, payload: &[u8]) -> Value {
         | Operator::Ne => match pick % 4 {
             // Forme testuali (incluse non canoniche) e numeri JSON.
             0 => Value::String(numeric[(pick / 4) % numeric.len()].to_owned()),
-            1 => Value::from(i64::from(payload.get(1).copied().unwrap_or_default()) - 128),
-            2 => Value::from(f64::from(payload.get(1).copied().unwrap_or_default()) / 2.0),
+            1 => Value::from(edge_int(payload.get(1).copied().unwrap_or_default())),
+            2 => Value::from(edge_float(payload.get(1).copied().unwrap_or_default())),
             _ => Value::String(String::from_utf8_lossy(payload).into_owned()),
         },
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
@@ -145,8 +181,41 @@ fn filter_value(op: &Operator, payload: &[u8]) -> Value {
 
 // ---------------------------------------------------------------------------
 // Oracolo: replica letterale del percorso generico di `filtering::evaluate`
-// (riga per riga, scalari convertiti) — e' il riferimento dei fast path.
+// (riga per riga, confronti tipizzati esatti via `NumericBound`) — e' il
+// riferimento dei fast path.
 // ---------------------------------------------------------------------------
+
+/// Replica di `filtering::numeric_eq` (uguaglianza sui double: total_cmp,
+/// 0.0 == -0.0, NaN uguale a NaN).
+fn numeric_eq(actual: f64, expected: f64) -> bool {
+    actual.total_cmp(&expected) == Ordering::Equal || (actual == 0.0 && expected == 0.0)
+}
+
+/// Replica di `filtering::ordered_typed`.
+fn ordered_typed(ordering: Option<Ordering>, operator: &Operator) -> bool {
+    match operator {
+        Operator::Gt => ordering == Some(Ordering::Greater),
+        Operator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+        Operator::Lt => ordering == Some(Ordering::Less),
+        Operator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
+        _ => unreachable!("solo operatori ordinati"),
+    }
+}
+
+/// Replica di `filtering::within_bounds`.
+fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
+    !matches!(low, None | Some(Ordering::Less))
+        && !matches!(high, None | Some(Ordering::Greater))
+}
+
+/// Replica di `filtering::bound_as_f64`.
+fn bound_as_f64(bound: NumericBound) -> f64 {
+    match bound {
+        NumericBound::I64(value) => value as f64,
+        NumericBound::U64(value) => value as f64,
+        NumericBound::F64(value) => value,
+    }
+}
 
 fn json_text(value: &Value) -> String {
     match value {
@@ -171,15 +240,28 @@ fn oracle_evaluate(
     let expected = json_text(value);
     match operator {
         Operator::Eq | Operator::Ne => {
-            let equal = if matches!(array.data_type(), DataType::Int64 | DataType::Float64) {
-                let number = expected.parse::<f64>().map_err(|_| {
+            let equal = if array.data_type() == &DataType::Int64 {
+                let bound = NumericBound::parse(&expected).ok_or_else(|| {
                     PlenoraError::Contract("confronto numerico con valore non numerico".into())
                 })?;
-                scalar_as_f64(array, row)?.is_some_and(|actual| {
-                    actual.total_cmp(&number) == std::cmp::Ordering::Equal
-                        || (actual.abs().total_cmp(&0.0) == std::cmp::Ordering::Equal
-                            && number.abs().total_cmp(&0.0) == std::cmp::Ordering::Equal)
-                })
+                let values = array
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| PlenoraError::Schema("array Int64 incoerente".into()))?;
+                compare_i64(values.value(row), bound) == Some(Ordering::Equal)
+            } else if array.data_type() == &DataType::Float64 {
+                let bound = NumericBound::parse(&expected).ok_or_else(|| {
+                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
+                })?;
+                let values = array
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| PlenoraError::Schema("array Float64 incoerente".into()))?;
+                let actual = values.value(row);
+                match bound {
+                    NumericBound::F64(number) => numeric_eq(actual, number),
+                    bound => compare_f64(actual, bound) == Some(Ordering::Equal),
+                }
             } else {
                 scalar_as_string(array, row)?.is_some_and(|actual| actual == expected)
             };
@@ -190,18 +272,21 @@ fn oracle_evaluate(
             })
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
-            let expected = expected.parse::<f64>().map_err(|_| {
+            let bound = NumericBound::parse(&expected).ok_or_else(|| {
                 PlenoraError::Contract("confronto ordinato richiede un valore numerico".into())
             })?;
-            let actual = scalar_as_f64(array, row)?
-                .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-            Ok(match operator {
-                Operator::Gt => actual > expected,
-                Operator::Ge => actual >= expected,
-                Operator::Lt => actual < expected,
-                Operator::Le => actual <= expected,
-                _ => unreachable!(),
-            })
+            let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                compare_i64(values.value(row), bound)
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                compare_u64(values.value(row), bound)
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                compare_f64(values.value(row), bound)
+            } else {
+                scalar_as_f64(array, row)?
+                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?
+                    .partial_cmp(&bound_as_f64(bound))
+            };
+            Ok(ordered_typed(ordering, operator))
         }
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
             let actual = scalar_as_string(array, row)?.unwrap_or_default();
@@ -216,17 +301,31 @@ fn oracle_evaluate(
             let (low, high) = expected
                 .split_once(',')
                 .ok_or_else(|| PlenoraError::Contract("between richiede min,max".into()))?;
-            let low: f64 = low
-                .trim()
-                .parse()
-                .map_err(|_| PlenoraError::Contract("min between non valido".into()))?;
-            let high: f64 = high
-                .trim()
-                .parse()
-                .map_err(|_| PlenoraError::Contract("max between non valido".into()))?;
-            let actual = scalar_as_f64(array, row)?
-                .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-            Ok(actual >= low && actual <= high)
+            let low = NumericBound::parse(low.trim())
+                .ok_or_else(|| PlenoraError::Contract("min between non valido".into()))?;
+            let high = NumericBound::parse(high.trim())
+                .ok_or_else(|| PlenoraError::Contract("max between non valido".into()))?;
+            let within = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                within_bounds(
+                    compare_i64(values.value(row), low),
+                    compare_i64(values.value(row), high),
+                )
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                within_bounds(
+                    compare_u64(values.value(row), low),
+                    compare_u64(values.value(row), high),
+                )
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                within_bounds(
+                    compare_f64(values.value(row), low),
+                    compare_f64(values.value(row), high),
+                )
+            } else {
+                let actual = scalar_as_f64(array, row)?
+                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
+                actual >= bound_as_f64(low) && actual <= bound_as_f64(high)
+            };
+            Ok(within)
         }
         Operator::Isnull | Operator::Notnull => unreachable!(),
     }

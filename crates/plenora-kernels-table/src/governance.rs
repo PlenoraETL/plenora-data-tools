@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -11,7 +12,10 @@ use serde::Deserialize;
 
 use crate::Limits;
 use plenora_core::{PlenoraError, Result};
-use crate::{column_index, replace_or_append, scalar_as_f64, scalar_as_string};
+use crate::{
+    column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_f64,
+    scalar_as_string, NumericBound,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -534,6 +538,11 @@ struct CompiledRule {
     expected: String,
     expected_number: f64,
     expected_high: f64,
+    /// Estremi in forma esatta (letterale intero preservato): usati dai
+    /// confronti tipizzati su Int64/UInt64/Float64, dove la forma f64
+    /// (`expected_number`) collasserebbe gli interi oltre 2^53.
+    expected_bound: Option<NumericBound>,
+    expected_high_bound: Option<NumericBound>,
     regex: Option<regex::Regex>,
 }
 
@@ -615,6 +624,8 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
         let expected = rule.value.as_ref().map_or_else(String::new, rule_json_text);
         let mut expected_number = 0.0;
         let mut expected_high = 0.0;
+        let mut expected_bound = None;
+        let mut expected_high_bound = None;
         let mut regex = None;
         let numeric_column = is_rule_numeric(&data_type);
         match rule.operator {
@@ -633,6 +644,8 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                             rule.name
                         ))
                     })?;
+                    // Il parse f64 e' riuscito: il bound esatto esiste sempre.
+                    expected_bound = NumericBound::parse(&expected);
                 }
             }
             RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
@@ -648,6 +661,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     ))
                 })?;
+                expected_bound = NumericBound::parse(&expected);
             }
             RuleOperator::Range => {
                 if !numeric_column {
@@ -662,6 +676,8 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     )));
                 };
+                expected_bound = NumericBound::parse(low.trim());
+                expected_high_bound = NumericBound::parse(high.trim());
                 let low = low.trim().parse::<f64>().map_err(|_| {
                     PlenoraError::Contract(format!(
                         "validate_rules: regola {}: estremi range non numerici",
@@ -701,15 +717,40 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             expected,
             expected_number,
             expected_high,
+            expected_bound,
+            expected_high_bound,
             regex,
         });
     }
     Ok(compiled)
 }
 
+/// `range`: il valore non e' sotto il minimo ne' sopra il massimo; `None`
+/// (estremo NaN) esclude la riga, come i confronti IEEE storici.
+const fn within_rule_range(low: Option<Ordering>, high: Option<Ordering>) -> bool {
+    !matches!(low, None | Some(Ordering::Less))
+        && !matches!(high, None | Some(Ordering::Greater))
+}
+
+/// Confronto ordinato di regola da un `Ordering` tipizzato (`None` = NaN:
+/// ogni confronto falso, come IEEE).
+const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> bool {
+    match operator {
+        RuleOperator::Gt => matches!(ordering, Some(Ordering::Greater)),
+        RuleOperator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+        RuleOperator::Lt => matches!(ordering, Some(Ordering::Less)),
+        RuleOperator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
+        _ => unreachable!(),
+    }
+}
+
 /// Valuta una regola su una riga. MAI un errore sui dati: qualunque valore
 /// non interpretabile (incluso null per gli operatori a valore) e' un
 /// fallimento della regola, non un errore del kernel.
+///
+/// Confronti numerici: Int64/UInt64 nativi esatti e Float64 in misto esatto
+/// contro i letterali interi (`NumericBound` — nessun collasso oltre 2^53);
+/// Date32/Timestamp(ms)/Decimal128 restano sul profilo f64 storico.
 fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
     let array = batch.column(rule.column_index).as_ref();
     match rule.operator {
@@ -720,7 +761,25 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
     }
     match rule.operator {
         RuleOperator::Eq | RuleOperator::Ne => {
-            let equal = if rule.numeric_column {
+            let equal = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                rule.expected_bound.is_some_and(|bound| {
+                    compare_i64(values.value(row), bound) == Some(Ordering::Equal)
+                })
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                rule.expected_bound.is_some_and(|bound| {
+                    compare_u64(values.value(row), bound) == Some(Ordering::Equal)
+                })
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                let actual = values.value(row);
+                match rule.expected_bound {
+                    // Semantica IEEE storica sui double (NaN uguale a NaN).
+                    Some(NumericBound::F64(number)) => {
+                        actual == number || (actual.is_nan() && number.is_nan())
+                    }
+                    Some(bound) => compare_f64(actual, bound) == Some(Ordering::Equal),
+                    None => false,
+                }
+            } else if rule.numeric_column {
                 scalar_as_f64(array, row).ok().flatten().is_some_and(|actual| {
                     actual == rule.expected_number || (actual.is_nan() && rule.expected_number.is_nan())
                 })
@@ -733,20 +792,55 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> bool {
             matches!(rule.operator, RuleOperator::Ne) != equal
         }
         RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
-            scalar_as_f64(array, row).ok().flatten().is_some_and(|actual| {
-                match rule.operator {
-                    RuleOperator::Gt => actual > rule.expected_number,
-                    RuleOperator::Ge => actual >= rule.expected_number,
-                    RuleOperator::Lt => actual < rule.expected_number,
-                    RuleOperator::Le => actual <= rule.expected_number,
-                    _ => unreachable!(),
-                }
-            })
+            let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                rule.expected_bound
+                    .and_then(|bound| compare_i64(values.value(row), bound))
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                rule.expected_bound
+                    .and_then(|bound| compare_u64(values.value(row), bound))
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                rule.expected_bound
+                    .and_then(|bound| compare_f64(values.value(row), bound))
+            } else {
+                scalar_as_f64(array, row)
+                    .ok()
+                    .flatten()
+                    .and_then(|actual| actual.partial_cmp(&rule.expected_number))
+            };
+            rule_ordered(ordering, rule.operator)
         }
-        RuleOperator::Range => scalar_as_f64(array, row)
-            .ok()
-            .flatten()
-            .is_some_and(|actual| actual >= rule.expected_number && actual <= rule.expected_high),
+        RuleOperator::Range => {
+            if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                match (rule.expected_bound, rule.expected_high_bound) {
+                    (Some(low), Some(high)) => within_rule_range(
+                        compare_i64(values.value(row), low),
+                        compare_i64(values.value(row), high),
+                    ),
+                    _ => false,
+                }
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                match (rule.expected_bound, rule.expected_high_bound) {
+                    (Some(low), Some(high)) => within_rule_range(
+                        compare_u64(values.value(row), low),
+                        compare_u64(values.value(row), high),
+                    ),
+                    _ => false,
+                }
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                match (rule.expected_bound, rule.expected_high_bound) {
+                    (Some(low), Some(high)) => within_rule_range(
+                        compare_f64(values.value(row), low),
+                        compare_f64(values.value(row), high),
+                    ),
+                    _ => false,
+                }
+            } else {
+                scalar_as_f64(array, row)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|actual| actual >= rule.expected_number && actual <= rule.expected_high)
+            }
+        }
         RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {
             scalar_as_string(array, row)
                 .ok()
@@ -1535,5 +1629,68 @@ mod tests {
         )
         .expect("empty summary");
         assert_eq!(summary.num_rows(), 1);
+    }
+
+    #[test]
+    fn validate_rules_integer_comparisons_are_exact_beyond_2_pow_53() {
+        // Classe "confronti via f64": u64::MAX-1 e u64::MAX (come 2^53 e
+        // 2^53+1) collassano sullo stesso double; eq/ordinati/range devono
+        // restare esatti.
+        let uints = batch_of(
+            vec![Field::new("u", DataType::UInt64, true)],
+            vec![Arc::new(UInt64Array::from(vec![
+                Some(u64::MAX - 1),
+                Some(u64::MAX),
+                Some(9),
+                None,
+            ]))],
+        );
+        let output = validate_rules(
+            &uints,
+            &rules(serde_json::json!({
+                "rules": [
+                    {"name": "is_max", "operator": "eq", "column": "u", "value": "18446744073709551615"},
+                    {"name": "top_range", "operator": "range", "column": "u", "value": "18446744073709551615,18446744073709551615"},
+                    {"name": "gt_max_minus_one", "operator": "gt", "column": "u", "value": "18446744073709551614"}
+                ]
+            })),
+        )
+        .expect("u64 esatti");
+        // riga 0 (MAX-1): tutte falliscono; riga 1 (MAX): tutte passano;
+        // riga 2 (9): tutte falliscono; riga 3 (null): tutte falliscono.
+        assert_eq!(
+            annotated_strings(&output, "_errors"),
+            [
+                "is_max;top_range;gt_max_minus_one",
+                "",
+                "is_max;top_range;gt_max_minus_one",
+                "is_max;top_range;gt_max_minus_one"
+            ]
+        );
+
+        let ints = batch_of(
+            vec![Field::new("i", DataType::Int64, true)],
+            vec![Arc::new(Int64Array::from(vec![
+                Some(9_007_199_254_740_992), // 2^53
+                Some(9_007_199_254_740_993), // 2^53 + 1
+            ]))],
+        );
+        let output = validate_rules(
+            &ints,
+            &rules(serde_json::json!({
+                "rules": [
+                    {"name": "is_hi", "operator": "eq", "column": "i", "value": 9_007_199_254_740_993_i64},
+                    {"name": "hi_range", "operator": "range", "column": "i", "value": "9007199254740993,9007199254740993"},
+                    {"name": "ge_lo_double", "operator": "ge", "column": "i", "value": 9_007_199_254_740_992.0_f64}
+                ]
+            })),
+        )
+        .expect("i64 esatti");
+        // riga 0 (2^53): eq/range falliscono, ge passa (uguale al double);
+        // riga 1 (2^53+1): tutte passano (maggiore del double 2^53).
+        assert_eq!(
+            annotated_strings(&output, "_errors"),
+            ["is_hi;hi_range", ""]
+        );
     }
 }

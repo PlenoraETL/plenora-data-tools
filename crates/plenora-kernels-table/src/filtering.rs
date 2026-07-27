@@ -5,12 +5,12 @@ use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
-use num_traits::ToPrimitive;
 use serde::Deserialize;
 
 use plenora_core::{PlenoraError, Result};
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
+    column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_f64,
+    scalar_as_string, select_rows, NumericBound,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +83,7 @@ fn json_text(value: &serde_json::Value) -> String {
     }
 }
 
+#[allow(clippy::too_many_lines)] // dispatcher esaustivo per operatore: un solo corpo tiene allineati generico e fast path
 fn evaluate(
     array: &dyn Array,
     row: usize,
@@ -98,15 +99,38 @@ fn evaluate(
     let expected = json_text(value);
     match operator {
         Operator::Eq | Operator::Ne => {
-            let equal = if matches!(array.data_type(), DataType::Int64 | DataType::Float64) {
-                let number = expected.parse::<f64>().map_err(|_| {
+            let equal = if array.data_type() == &DataType::Int64 {
+                // Confronto esatto nativo: il letterale intero resta intero
+                // (nessun collasso oltre 2^53); il misto intero<->double e'
+                // esatto (vedi `NumericBound` in lib.rs).
+                let bound = NumericBound::parse(&expected).ok_or_else(|| {
                     PlenoraError::Contract("confronto numerico con valore non numerico".into())
                 })?;
-                scalar_as_f64(array, row)?.is_some_and(|actual| {
-                    actual.total_cmp(&number) == std::cmp::Ordering::Equal
-                        || (actual.abs().total_cmp(&0.0) == std::cmp::Ordering::Equal
-                            && number.abs().total_cmp(&0.0) == std::cmp::Ordering::Equal)
-                })
+                let values = array
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| PlenoraError::Schema("array Int64 incoerente".into()))?;
+                compare_i64(values.value(row), bound) == Some(Ordering::Equal)
+            } else if array.data_type() == &DataType::Float64 {
+                // Semantica storica sui double (`total_cmp`, 0.0 == -0.0,
+                // NaN uguale a NaN); un letterale intero oltre 2^53 usa il
+                // confronto misto esatto invece dell'arrotondamento a f64.
+                let bound = NumericBound::parse(&expected).ok_or_else(|| {
+                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
+                })?;
+                let values = array
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| PlenoraError::Schema("array Float64 incoerente".into()))?;
+                let actual = values.value(row);
+                match bound {
+                    NumericBound::F64(number) => {
+                        actual.total_cmp(&number) == Ordering::Equal
+                            || (actual.abs().total_cmp(&0.0) == Ordering::Equal
+                                && number.abs().total_cmp(&0.0) == Ordering::Equal)
+                    }
+                    bound => compare_f64(actual, bound) == Some(Ordering::Equal),
+                }
             } else {
                 scalar_as_string(array, row)?.is_some_and(|actual| actual == expected)
             };
@@ -117,18 +141,24 @@ fn evaluate(
             })
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
-            let expected = expected.parse::<f64>().map_err(|_| {
+            let bound = NumericBound::parse(&expected).ok_or_else(|| {
                 PlenoraError::Contract("confronto ordinato richiede un valore numerico".into())
             })?;
-            let actual = scalar_as_f64(array, row)?
-                .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-            Ok(match operator {
-                Operator::Gt => actual > expected,
-                Operator::Ge => actual >= expected,
-                Operator::Lt => actual < expected,
-                Operator::Le => actual <= expected,
-                _ => unreachable!(),
-            })
+            // Int64/UInt64 nativi esatti; Float64 in misto esatto contro i
+            // letterali interi; gli altri tipi numerici (Decimal128, Date32,
+            // Timestamp(ms), Utf8 numerico) restano sul profilo f64 storico.
+            let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                compare_i64(values.value(row), bound)
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                compare_u64(values.value(row), bound)
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                compare_f64(values.value(row), bound)
+            } else {
+                scalar_as_f64(array, row)?
+                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?
+                    .partial_cmp(&bound_as_f64(bound))
+            };
+            Ok(ordered_typed(ordering, operator))
         }
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
             let actual = scalar_as_string(array, row)?.unwrap_or_default();
@@ -143,17 +173,31 @@ fn evaluate(
             let (low, high) = expected
                 .split_once(',')
                 .ok_or_else(|| PlenoraError::Contract("between richiede min,max".into()))?;
-            let low: f64 = low
-                .trim()
-                .parse()
-                .map_err(|_| PlenoraError::Contract("min between non valido".into()))?;
-            let high: f64 = high
-                .trim()
-                .parse()
-                .map_err(|_| PlenoraError::Contract("max between non valido".into()))?;
-            let actual = scalar_as_f64(array, row)?
-                .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-            Ok(actual >= low && actual <= high)
+            let low = NumericBound::parse(low.trim())
+                .ok_or_else(|| PlenoraError::Contract("min between non valido".into()))?;
+            let high = NumericBound::parse(high.trim())
+                .ok_or_else(|| PlenoraError::Contract("max between non valido".into()))?;
+            let within = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+                within_bounds(
+                    compare_i64(values.value(row), low),
+                    compare_i64(values.value(row), high),
+                )
+            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+                within_bounds(
+                    compare_u64(values.value(row), low),
+                    compare_u64(values.value(row), high),
+                )
+            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+                within_bounds(
+                    compare_f64(values.value(row), low),
+                    compare_f64(values.value(row), high),
+                )
+            } else {
+                let actual = scalar_as_f64(array, row)?
+                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
+                actual >= bound_as_f64(low) && actual <= bound_as_f64(high)
+            };
+            Ok(within)
         }
         Operator::Isnull | Operator::Notnull => unreachable!(),
     }
@@ -165,11 +209,13 @@ fn evaluate(
 // Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
 // confronto avviene sui valori nativi, senza conversione scalare per riga ne'
 // allocazioni; la semantica e' IDENTICA a `evaluate` (null handling, NaN,
-// -0.0 vs 0.0, confronto testuale per UInt64/Boolean in `==`/`!=`, ordine
-// righe). `fast_rows` restituisce `None` quando tipo/operatore non sono
-// coperti o quando il valore di confronto non e' canonico: il chiamante
-// ricade sul percorso generico riga-per-riga, che riproduce esattamente il
-// comportamento originale (errori di contratto inclusi).
+// -0.0 vs 0.0, confronto esatto nativo per Int64/UInt64 — nessun collasso
+// oltre 2^53 — confronto misto intero<->double via `NumericBound`, confronto
+// testuale per UInt64/Boolean in `==`/`!=`, ordine righe). `fast_rows`
+// restituisce `None` quando tipo/operatore non sono coperti o quando il
+// valore di confronto non e' canonico: il chiamante ricade sul percorso
+// generico riga-per-riga, che riproduce esattamente lo stesso comportamento
+// (errori di contratto inclusi).
 // ---------------------------------------------------------------------------
 
 /// Righe non nulle di `array` per cui `pred` e' vera, in ordine crescente.
@@ -179,46 +225,45 @@ fn rows_where<A: Array>(array: &A, mut pred: impl FnMut(usize) -> bool) -> Vec<u
         .collect()
 }
 
-/// Uguaglianza numerica di `evaluate`: `total_cmp`, con `0.0 == -0.0`
-/// (i valori assoluti nulli sono considerati uguali) e NaN uguale a NaN.
+/// Uguaglianza numerica di `evaluate` sui double: `total_cmp`, con
+/// `0.0 == -0.0` (i valori assoluti nulli sono considerati uguali) e NaN
+/// uguale a NaN.
 fn numeric_eq(actual: f64, expected: f64) -> bool {
     actual.total_cmp(&expected) == Ordering::Equal || (actual == 0.0 && expected == 0.0)
 }
 
-/// Confronto ordinato IEEE di `evaluate` (`>`/`>=`/`<`/`<=`).
-fn ordered(actual: f64, expected: f64, operator: &Operator) -> bool {
+/// Confronto ordinato condiviso (`>`/`>=`/`<`/`<=`): `None` (NaN) rende falso
+/// ogni confronto, come nell'IEEE 754.
+const fn ordered_typed(ordering: Option<Ordering>, operator: &Operator) -> bool {
     match operator {
-        Operator::Gt => actual > expected,
-        Operator::Ge => actual >= expected,
-        Operator::Lt => actual < expected,
-        Operator::Le => actual <= expected,
-        _ => unreachable!("solo operatori ordinati"),
+        Operator::Gt => matches!(ordering, Some(Ordering::Greater)),
+        Operator::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+        Operator::Lt => matches!(ordering, Some(Ordering::Less)),
+        Operator::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
+        _ => unreachable!(),
     }
 }
 
-/// `==`/`!=` su array numerici nativi (ramo numerico di `evaluate`).
-fn numeric_eq_rows<A, F>(array: &A, expected: f64, negate: bool, actual: F) -> Vec<usize>
-where
-    A: Array,
-    F: Fn(usize) -> f64,
-{
-    rows_where(array, |row| numeric_eq(actual(row), expected) != negate)
+/// `between`: il valore non e' sotto il minimo ne' sopra il massimo; `None`
+/// (estremo o valore NaN) esclude la riga, come `>=`/`<=` IEEE.
+const fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
+    !matches!(low, None | Some(Ordering::Less))
+        && !matches!(high, None | Some(Ordering::Greater))
 }
 
-/// `>`/`>=`/`<`/`<=` su array numerici nativi (ramo ordinato di `evaluate`).
-fn numeric_ordered_rows<A, F>(
-    array: &A,
-    expected: f64,
-    operator: &Operator,
-    actual: F,
-) -> Vec<usize>
-where
-    A: Array,
-    F: Fn(usize) -> f64,
-{
-    rows_where(array, |row| ordered(actual(row), expected, operator))
+/// Forma f64 di un bound, per i tipi rimasti sul profilo f64 storico
+/// (Decimal128, Date32, Timestamp(ms), Utf8 numerico): stesso valore del
+/// parse f64 diretto del percorso originale.
+#[allow(clippy::cast_precision_loss)] // qui la conversione a f64 e' voluta: profilo storico
+const fn bound_as_f64(bound: NumericBound) -> f64 {
+    match bound {
+        NumericBound::I64(value) => value as f64,
+        NumericBound::U64(value) => value as f64,
+        NumericBound::F64(value) => value,
+    }
 }
 
+#[allow(clippy::too_many_lines)] // specchio di `evaluate`: la simmetria riga a riga e' la garanzia di parita'
 fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -> Option<Result<Vec<usize>>> {
     let rows = match operator {
         Operator::Isnull => return Some(Ok((0..array.len()).filter(|r| array.is_null(*r)).collect())),
@@ -229,13 +274,19 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
                 // Il ramo numerico del generico fallisce il parse solo su
                 // righe non nulle: in caso di valore non numerico si ricade
                 // sul generico, che riproduce errore o selezione vuota.
-                let expected = json_text(value).parse::<f64>().ok()?;
-                numeric_eq_rows(values, expected, negate, |row| {
-                    values.value(row).to_f64().unwrap_or(f64::NAN)
+                let bound = NumericBound::parse(&json_text(value))?;
+                rows_where(values, |row| {
+                    (compare_i64(values.value(row), bound) == Some(Ordering::Equal)) != negate
                 })
             } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                let expected = json_text(value).parse::<f64>().ok()?;
-                numeric_eq_rows(values, expected, negate, |row| values.value(row))
+                let bound = NumericBound::parse(&json_text(value))?;
+                rows_where(values, |row| {
+                    let equal = match bound {
+                        NumericBound::F64(number) => numeric_eq(values.value(row), number),
+                        bound => compare_f64(values.value(row), bound) == Some(Ordering::Equal),
+                    };
+                    equal != negate
+                })
             } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
                 // Il generico confronta UInt64 come stringa (`to_string`):
                 // il fast path vale solo per la forma decimale canonica.
@@ -262,17 +313,19 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
             }
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
-            let expected = json_text(value).parse::<f64>().ok()?;
+            let bound = NumericBound::parse(&json_text(value))?;
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                numeric_ordered_rows(values, expected, operator, |row| {
-                    values.value(row).to_f64().unwrap_or(f64::NAN)
+                rows_where(values, |row| {
+                    ordered_typed(compare_i64(values.value(row), bound), operator)
                 })
             } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                numeric_ordered_rows(values, expected, operator, |row| {
-                    values.value(row).to_f64().unwrap_or(f64::NAN)
+                rows_where(values, |row| {
+                    ordered_typed(compare_u64(values.value(row), bound), operator)
                 })
             } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                numeric_ordered_rows(values, expected, operator, |row| values.value(row))
+                rows_where(values, |row| {
+                    ordered_typed(compare_f64(values.value(row), bound), operator)
+                })
             } else {
                 return None;
             }
@@ -280,19 +333,29 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
         Operator::Between => {
             let expected = json_text(value);
             let (low, high) = expected.split_once(',')?;
-            let low = low.trim().parse::<f64>().ok()?;
-            let high = high.trim().parse::<f64>().ok()?;
-            let between = |actual: f64| actual >= low && actual <= high;
+            let low = NumericBound::parse(low.trim())?;
+            let high = NumericBound::parse(high.trim())?;
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 rows_where(values, |row| {
-                    between(values.value(row).to_f64().unwrap_or(f64::NAN))
+                    within_bounds(
+                        compare_i64(values.value(row), low),
+                        compare_i64(values.value(row), high),
+                    )
                 })
             } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
                 rows_where(values, |row| {
-                    between(values.value(row).to_f64().unwrap_or(f64::NAN))
+                    within_bounds(
+                        compare_u64(values.value(row), low),
+                        compare_u64(values.value(row), high),
+                    )
                 })
             } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                rows_where(values, |row| between(values.value(row)))
+                rows_where(values, |row| {
+                    within_bounds(
+                        compare_f64(values.value(row), low),
+                        compare_f64(values.value(row), high),
+                    )
+                })
             } else {
                 return None;
             }
@@ -503,7 +566,7 @@ mod tests {
                 Some(-1),
                 Some(0),
                 None,
-                Some(9_007_199_254_740_993), // oltre 2^53: stesso rounding del generico
+                Some(9_007_199_254_740_993), // oltre 2^53: confronto esatto, nessun rounding
                 Some(i64::MAX),
             ])),
             DataType::Int64,
@@ -635,6 +698,124 @@ mod tests {
                 .num_rows(),
             1
         );
+    }
+
+    #[test]
+    fn int64_comparisons_are_exact_beyond_2_pow_53() {
+        // Classe "confronti via f64": 2^53 e 2^53+1 collassano sullo stesso
+        // double; eq/ordine/between devono restare esatti (fast e generico).
+        let batch = single_column_batch(
+            Arc::new(Int64Array::from(vec![
+                Some(9_007_199_254_740_992), // 2^53
+                Some(9_007_199_254_740_993), // 2^53 + 1
+                None,
+            ])),
+            DataType::Int64,
+            true,
+        );
+        let eq_hi = filter(&batch, &config(Operator::Eq, json!(9_007_199_254_740_993_i64)))
+            .expect("eq 2^53+1");
+        assert_eq!(eq_hi.num_rows(), 1);
+        let eq_lo = filter(&batch, &config(Operator::Eq, json!("9007199254740992")))
+            .expect("eq 2^53");
+        assert_eq!(eq_lo.num_rows(), 1);
+        // Il bound double 9007199254740992.0 e' minore dell'intero 2^53+1.
+        let gt = filter(&batch, &config(Operator::Gt, json!(9_007_199_254_740_992.0)))
+            .expect("gt 2^53.0");
+        assert_eq!(gt.num_rows(), 1);
+        let lt = filter(&batch, &config(Operator::Lt, json!(9_007_199_254_740_993_i64)))
+            .expect("lt 2^53+1");
+        assert_eq!(lt.num_rows(), 1);
+        let between = filter(&batch, &config(Operator::Between, json!("9007199254740993, 9007199254740993")))
+            .expect("between esatto");
+        assert_eq!(between.num_rows(), 1);
+        // Parita' fast/generico su tutta la matrice di questi valori.
+        for value in [
+            json!(9_007_199_254_740_992_i64),
+            json!(9_007_199_254_740_993_i64),
+            json!("9007199254740993"),
+            json!(9_007_199_254_740_992.0),
+        ] {
+            assert_equivalent(&batch, Operator::Eq, value.clone());
+            assert_equivalent(&batch, Operator::Ne, value.clone());
+            assert_equivalent(&batch, Operator::Gt, value.clone());
+            assert_equivalent(&batch, Operator::Ge, value.clone());
+            assert_equivalent(&batch, Operator::Lt, value.clone());
+            assert_equivalent(&batch, Operator::Le, value);
+        }
+        assert_equivalent(&batch, Operator::Between, json!("9007199254740992,9007199254740993"));
+    }
+
+    #[test]
+    fn uint64_ordered_comparisons_are_native_not_textual() {
+        // Ordine numerico (9 < 10), non testuale ("10" < "9"), e nessun
+        // collasso oltre 2^53: u64::MAX-1 e u64::MAX sono lo stesso double.
+        let batch = single_column_batch(
+            Arc::new(UInt64Array::from(vec![
+                Some(10),
+                Some(9),
+                Some(u64::MAX - 1),
+                Some(u64::MAX),
+                None,
+            ])),
+            DataType::UInt64,
+            true,
+        );
+        let gt = filter(&batch, &config(Operator::Gt, json!(9))).expect("gt 9");
+        assert_eq!(gt.num_rows(), 3);
+        let le = filter(&batch, &config(Operator::Le, json!(10))).expect("le 10");
+        assert_eq!(le.num_rows(), 2);
+        let top = filter(
+            &batch,
+            &config(Operator::Eq, json!("18446744073709551615")),
+        )
+        .expect("eq u64::MAX");
+        assert_eq!(top.num_rows(), 1);
+        let gt_max_minus_one = filter(
+            &batch,
+            &config(Operator::Gt, json!("18446744073709551614")),
+        )
+        .expect("gt u64::MAX-1");
+        assert_eq!(gt_max_minus_one.num_rows(), 1);
+        let between = filter(
+            &batch,
+            &config(Operator::Between, json!("18446744073709551614,18446744073709551615")),
+        )
+        .expect("between u64 top");
+        assert_eq!(between.num_rows(), 2);
+        for value in [json!(9), json!(10), json!("18446744073709551614")] {
+            assert_equivalent(&batch, Operator::Gt, value.clone());
+            assert_equivalent(&batch, Operator::Ge, value.clone());
+            assert_equivalent(&batch, Operator::Lt, value.clone());
+            assert_equivalent(&batch, Operator::Le, value);
+        }
+        assert_equivalent(&batch, Operator::Between, json!("9,10"));
+        assert_equivalent(
+            &batch,
+            Operator::Between,
+            json!("18446744073709551614,18446744073709551615"),
+        );
+    }
+
+    #[test]
+    fn float64_column_compares_exactly_against_integer_literals() {
+        // Letterale intero oltre 2^53 contro colonna Float64: il double
+        // 9007199254740992.0 NON e' uguale all'intero 9007199254740993.
+        let batch = single_column_batch(
+            Arc::new(Float64Array::from(vec![Some(9_007_199_254_740_992.0), None])),
+            DataType::Float64,
+            true,
+        );
+        let eq = filter(&batch, &config(Operator::Eq, json!(9_007_199_254_740_993_i64)))
+            .expect("eq intero oltre 2^53");
+        assert_eq!(eq.num_rows(), 0);
+        let lt = filter(&batch, &config(Operator::Lt, json!(9_007_199_254_740_993_i64)))
+            .expect("lt intero oltre 2^53");
+        assert_eq!(lt.num_rows(), 1);
+        assert_equivalent(&batch, Operator::Eq, json!(9_007_199_254_740_993_i64));
+        assert_equivalent(&batch, Operator::Ne, json!(9_007_199_254_740_993_i64));
+        assert_equivalent(&batch, Operator::Le, json!(9_007_199_254_740_993_i64));
+        assert_equivalent(&batch, Operator::Gt, json!(9_007_199_254_740_993_i64));
     }
 
     #[test]
