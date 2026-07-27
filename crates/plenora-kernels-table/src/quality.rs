@@ -383,13 +383,9 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
                 }))
             }
         } else {
-            match scalar_as_f64(array, row)? {
-                None => None,
-                Some(value) => Some(
-                    !value.is_finite()
-                        || range_outside(config, &mut |bound| value.partial_cmp(&bound)),
-                ),
-            }
+            scalar_as_f64(array, row)?.map(|value| {
+                !value.is_finite() || range_outside(config, &mut |bound| value.partial_cmp(&bound))
+            })
         };
         let Some(outside) = outside else {
             if config.allow_null {

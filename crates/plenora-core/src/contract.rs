@@ -496,13 +496,14 @@ impl DataContract {
 /// completamente assenti (`Unknown` → scelta conservativa); le statistiche
 /// `Known`/`Estimated` possono solo migliorare scelte fisiche correggibili;
 /// nessuna scelta semantica può dipendere da una statistica.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RuntimeStatistic<T> {
     /// Misurata (es. numero di righe da header Arrow IPC file format).
     Known(T),
     /// Stimata: solo scelte migliorative.
     Estimated(T),
     /// Assente: scelta conservativa obbligatoria.
+    #[default]
     Unknown,
 }
 
@@ -526,12 +527,6 @@ impl<T> RuntimeStatistic<T> {
     /// `true` solo per `Known`.
     pub fn is_known(&self) -> bool {
         matches!(self, Self::Known(_))
-    }
-}
-
-impl<T> Default for RuntimeStatistic<T> {
-    fn default() -> Self {
-        Self::Unknown
     }
 }
 

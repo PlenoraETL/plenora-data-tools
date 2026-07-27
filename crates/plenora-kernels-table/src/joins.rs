@@ -344,6 +344,9 @@ fn join_impl(
     Ok(output)
 }
 
+/// Coppie di indici di riga (sinistri, destri) prodotte dai percorsi join.
+type JoinRowPairs = (Vec<Option<usize>>, Vec<Option<usize>>);
+
 /// Coppie di righe del percorso generico (chiavi stringa di `key`).
 fn join_rows_generic(
     left: &RecordBatch,
@@ -352,7 +355,7 @@ fn join_rows_generic(
     limits: &Limits,
     left_keys: &[usize],
     right_keys: &[usize],
-) -> Result<(Vec<Option<usize>>, Vec<Option<usize>>)> {
+) -> Result<JoinRowPairs> {
     let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
     for row in 0..right.num_rows() {
         if let Some(key) = key(right, right_keys, row)? {
@@ -402,7 +405,7 @@ fn join_rows_fast(
     limits: &Limits,
     left_keys: &[usize],
     right_keys: &[usize],
-) -> Option<Result<(Vec<Option<usize>>, Vec<Option<usize>>)>> {
+) -> Option<Result<JoinRowPairs>> {
     let right_keys_typed = FastKeys::new(right, right_keys)?;
     let left_keys_typed = FastKeys::new(left, left_keys)?;
     Some(join_rows_fast_inner(
@@ -418,7 +421,7 @@ fn join_rows_fast_inner<'a>(
     limits: &Limits,
     left_keys: &FastKeys<'a>,
     right_keys: &FastKeys<'a>,
-) -> Result<(Vec<Option<usize>>, Vec<Option<usize>>)> {
+) -> Result<JoinRowPairs> {
     let right_map = RightMap::build(right_keys);
     let (mut left_rows, mut right_rows) = if left_keys.rows >= MIN_RIGHE_PROBE_PARALLELO {
         // Probe in parallelo per chunk di righe sinistre: ogni chunk produce le

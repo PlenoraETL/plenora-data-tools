@@ -401,9 +401,7 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
             }
         }
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
-            let Some(values) = array.as_any().downcast_ref::<StringArray>() else {
-                return None;
-            };
+            let values = array.as_any().downcast_ref::<StringArray>()?;
             let expected = json_text(value);
             match operator {
                 Operator::Contains => {

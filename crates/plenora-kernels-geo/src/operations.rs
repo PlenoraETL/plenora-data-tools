@@ -122,8 +122,8 @@ pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationErr
 
 pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
     ensure_valid(geometry)?;
-    Ok(u64::try_from(geometry.coords_count())
-        .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))?)
+    u64::try_from(geometry.coords_count())
+        .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))
 }
 
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {

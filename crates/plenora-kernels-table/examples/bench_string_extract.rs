@@ -48,10 +48,10 @@ fn fixture(rows: usize) -> RecordBatch {
     let codes = (0..rows)
         .map(|_| {
             let roll = rng.next();
-            if roll % 97 == 0 {
+            if roll.is_multiple_of(97) {
                 return None;
             }
-            let code = if roll % 89 == 0 {
+            let code = if roll.is_multiple_of(89) {
                 // Riga senza match: nessun gruppo numerico finale.
                 format!("LO{:04}_FVXX_IIYY_GEOZZZ", roll % 10_000)
             } else {

@@ -3,8 +3,8 @@
 //! 10 estensioni v1.1-v1.3), su fixture realistiche deterministiche (seed
 //! logico 42 via xorshift, stesso schema di `bench_sweep` tabellare).
 //!
-//! Pipeline misurata per le op per-cella: decode WKB (`decode_geometry_cell`)
-//! + kernel + encode WKB (`encode_geometry`) quando l'output e' una
+//! Pipeline misurata per le op per-cella: decode WKB (`decode_geometry_cell`),
+//! kernel ed encode WKB (`encode_geometry`) quando l'output e' una
 //! geometria — lo stesso percorso dell'adapter Arrow del trasporto. Per le
 //! op blocking/collettive (join, dissolve, overlay, coverage, dbscan, ...)
 //! la misura include il decode dell'intera tabella e l'encode degli output.
@@ -694,6 +694,9 @@ fn record(
 /// Misura un'op per-cella (parallela rayon, come `map_nullable`): calibra su
 /// `CALIBRATION_CELLS`, sceglie la scala (1M/100k/10k/1k, limitata alla
 /// fixture) entro `TARGET_REP_SECONDS` e prende la mediana di 3 run.
+// I 9 parametri sono il contesto di misura: raggrupparli in una struct
+// aggiungerebbe solo rumore in un binario di bench.
+#[allow(clippy::too_many_arguments)]
 fn sweep_cells<T: Sync>(
     results: &mut Vec<Measurement>,
     op: &'static str,
@@ -794,8 +797,7 @@ fn sweep_collective(
     let chosen = sizes
         .iter()
         .copied()
-        .filter(|&n| base_seconds * (n as f64 / base as f64).powf(exponent) <= TARGET_REP_SECONDS)
-        .last()
+        .rfind(|&n| base_seconds * (n as f64 / base as f64).powf(exponent) <= TARGET_REP_SECONDS)
         .unwrap_or(base);
     let mut note = extra_note.to_owned();
     if chosen < *sizes.last().unwrap_or(&base) {

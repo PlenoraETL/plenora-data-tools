@@ -67,9 +67,9 @@ jobs:
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 
-      # Clippy in modalita' advisory: il codice esistente non e' mai stato
-      # sottoposto a clippy in CI; -D warnings richiede prima un giro di
-      # pulizia dedicato.
-      - name: Clippy (advisory)
+      # Clippy bloccante (dopo la passata di pulizia 2026-07-27):
+      # la configurazione workspace e' onesta (all=deny, pedantic/nursery
+      # a warn) e il codebase passa con zero errori. Da qui in poi il
+      # debito lint non puo' piu' accumularsi.
+      - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
-        continue-on-error: true

@@ -792,7 +792,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             exact_args(&args, 3, "between")?;
             // Inclusivo su entrambi gli estremi; null in qualsiasi posizione
             // -> Null (stessa tri-state dei confronti binari).
-            if args.iter().any(|arg| *arg == Scalar::Null) {
+            if args.contains(&Scalar::Null) {
                 return Ok(Scalar::Null);
             }
             let low = compare(args[0].clone(), args[1].clone())?;

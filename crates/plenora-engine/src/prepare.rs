@@ -1491,7 +1491,7 @@ fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>>
             "nodo `{node_id}`: {name} non e' WKB esadecimale valido"
         ))
     };
-    if hex.len() % 2 != 0 || hex.is_empty() {
+    if !hex.len().is_multiple_of(2) || hex.is_empty() {
         return Err(invalid());
     }
     let bytes: std::result::Result<Vec<u8>, _> = (0..hex.len())

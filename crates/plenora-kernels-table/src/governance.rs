@@ -876,12 +876,13 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
     })
 }
 
+/// Esito della valutazione delle regole: validita' per riga e indici delle
+/// regole fallite per gravita' (errori, warning).
+type RuleEvaluation = (Vec<bool>, Vec<Vec<usize>>, Vec<Vec<usize>>);
+
 /// Valuta tutte le regole su tutte le righe; restituisce per riga gli
 /// INDICI delle regole fallite per gravita' (nomi risolti dal chiamante).
-fn evaluate_rules(
-    batch: &RecordBatch,
-    rules: &[CompiledRule],
-) -> Result<(Vec<bool>, Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEvaluation> {
     let mut valid = Vec::with_capacity(batch.num_rows());
     let mut errors: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());
     let mut warnings: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());

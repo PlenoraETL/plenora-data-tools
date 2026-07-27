@@ -625,7 +625,7 @@ fn short_id(op: &str) -> &str {
 
 /// Decodifica e valida strutturalmente un WKB esadecimale da config.
 fn validate_wkb_hex(op: &str, name: &'static str, hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 || hex.is_empty() {
+    if !hex.len().is_multiple_of(2) || hex.is_empty() {
         return Err(invalid_param(op, name, "WKB esadecimale non valido"));
     }
     let bytes: std::result::Result<Vec<u8>, _> = (0..hex.len())
@@ -1238,11 +1238,13 @@ fn analyze_generate_grid(
         encoding: None,
         nullable: false,
     };
-    let mut properties = ContractProperties::default();
-    properties.row_count = Some(ContractProperty::new(
-        PropertyConfidence::Estimated(cells),
-        PropertyScope::Dataset,
-    ));
+    let properties = ContractProperties {
+        row_count: Some(ContractProperty::new(
+            PropertyConfidence::Estimated(cells),
+            PropertyScope::Dataset,
+        )),
+        ..ContractProperties::default()
+    };
     DataContract::new(
         Arc::new(Schema::new(fields)),
         vec![geometry],

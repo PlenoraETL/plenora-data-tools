@@ -946,6 +946,10 @@ where
     }
 }
 
+/// Partizioni di `build_partitions`: chiave testuale della colonna di
+/// partizione e indici di riga della partizione.
+type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
+
 /// Partizioni di `window_function`/`rolling_window` (ottimizzazione kernel,
 /// batch 4): righe raggruppate per la chiave testuale della colonna di
 /// partizione (`TextSource`: Utf8 preso in prestito, nessuna `String` per
@@ -954,10 +958,7 @@ where
 /// restituite nello STESSO ordine di iterazione del `BTreeMap` originale
 /// (chiave `Option<String>` crescente): gli errori per partizione emergono
 /// nello stesso ordine e il comportamento resta deterministico.
-fn build_partitions(
-    batch: &RecordBatch,
-    group: Option<usize>,
-) -> Result<Vec<(Option<Cow<'_, str>>, Vec<usize>)>> {
+fn build_partitions(batch: &RecordBatch, group: Option<usize>) -> Result<KeyPartitions<'_>> {
     let source = group.map(|index| TextSource::new(batch.column(index)));
     let mut lookup: HashMap<Option<Cow<'_, str>>, usize, std::hash::BuildHasherDefault<KeyHasher>> =
         HashMap::default();

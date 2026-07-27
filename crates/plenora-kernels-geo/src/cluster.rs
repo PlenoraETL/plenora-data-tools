@@ -199,11 +199,15 @@ fn dbscan_core(points: &[[f64; 2]], eps: f64, min_points: usize) -> Result<Vec<O
     Ok(labels)
 }
 
+/// Punti preparati per il clustering: riga di origine per punto e
+/// coordinate `[x, y]` dei punti validi.
+type PreparedPoints = (Vec<Option<usize>>, Vec<[f64; 2]>);
+
 /// Estrae e valida i punti dalle geometrie nullable: solo Point con
 /// coordinate finite e geometria valida; i `None` non partecipano.
 fn prepare_points(
     geometries: &[Option<Geometry<f64>>],
-) -> Result<(Vec<Option<usize>>, Vec<[f64; 2]>), ClusterError> {
+) -> Result<PreparedPoints, ClusterError> {
     let mut row_of_point = Vec::with_capacity(geometries.len());
     let mut points = Vec::with_capacity(geometries.len());
     for (index, geometry) in geometries.iter().enumerate() {

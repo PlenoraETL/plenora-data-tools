@@ -517,7 +517,7 @@ mod tests {
         let martha = jaro_winkler("MARTHA", "MARHTA");
         assert!((martha - 0.9611).abs() < 1e-3, "jaro_winkler(MARTHA, MARHTA) = {martha}");
         assert!((jaro_winkler("abc", "abc") - 1.0).abs() < f64::EPSILON);
-        assert!((jaro_winkler("", "")).abs() - 1.0 < f64::EPSILON);
+        assert!((jaro_winkler("", "") - 1.0).abs() < f64::EPSILON);
         assert!((jaro_winkler("abc", "xyz")).abs() < f64::EPSILON);
         assert!((jaro_winkler("", "abc")).abs() < f64::EPSILON);
         // Simmetrica.
@@ -748,8 +748,10 @@ mod tests {
     fn limits_and_collisions_are_fail_closed() {
         let (left, right) = people();
         let cfg = config(base_config());
-        let mut limits = Limits::default();
-        limits.max_rows = 1;
+        let limits = Limits {
+            max_rows: 1,
+            ..Limits::default()
+        };
         // how=left produrrebbe 3 righe: scatta max_rows.
         let mut json = base_config();
         json["how"] = serde_json::json!("left");

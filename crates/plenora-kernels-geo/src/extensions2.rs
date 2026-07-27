@@ -719,7 +719,7 @@ mod tests {
         assert_eq!((first.cell_i, first.cell_j), (0, 0));
         assert_close(first.centroid_x, 1.0);
         assert_close(first.centroid_y, half_height);
-        let expected = vec![
+        let expected = [
             (2.0, half_height),
             (1.5, 2.0 * half_height),
             (0.5, 2.0 * half_height),

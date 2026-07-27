@@ -859,7 +859,7 @@ impl TransformArrowSchema {
                 unexpected("y_column", self.y_column.is_some())?;
                 reject_clean_params(self)?;
                 if let Some(max_points) = self.max_points {
-                    if max_points < 2 || max_points > MAX_ROWS {
+                    if !(2..=MAX_ROWS).contains(&max_points) {
                         return Err(ArrowTransportError::InvalidParameter {
                             operation,
                             name: "max_points",
@@ -1200,7 +1200,7 @@ impl<W: Write> EnvelopeWriter<W> {
 }
 
 fn align8(value: usize) -> usize {
-    value.checked_add(7).unwrap_or(usize::MAX) & !7
+    value.saturating_add(7) & !7
 }
 
 // --- Validazione strutturale dei metadati flatbuffer `Message` -------------
@@ -1257,7 +1257,7 @@ fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportErro
     let vtable_len = fb_u16(buf, vtable)? as usize;
     let table_len = fb_u16(buf, vtable + 2)? as usize;
     if vtable_len < 4
-        || vtable_len % 2 != 0
+        || !vtable_len.is_multiple_of(2)
         || vtable + vtable_len > buf.len()
         || pos + table_len > buf.len()
     {
@@ -2512,7 +2512,7 @@ fn clean_topology_batches(
         encoded.push(
             geometry
                 .as_ref()
-                .map(|value| encode_geometry(value))
+                .map(encode_geometry)
                 .transpose()?,
         );
     }
@@ -3284,6 +3284,9 @@ pub struct PairArrowSummary {
     pub checksum: [u8; 32],
 }
 
+/// Lato di una coppia decodificato: schema, batch IPC e geometrie validate.
+type DecodedSide = (SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>);
+
 /// Decodifica un lato (envelope + IPC + colonna geometria) e materializza le
 /// geometrie validate: entrambi i lati sono verificati prima del calcolo.
 fn decode_geometry_side(
@@ -3291,7 +3294,7 @@ fn decode_geometry_side(
     expected_rows: u64,
     geometry_column: &str,
     side: &'static str,
-) -> Result<(SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>), ArrowTransportError> {
+) -> Result<DecodedSide, ArrowTransportError> {
     if expected_rows > MAX_ROWS {
         return Err(ArrowTransportError::TooManyRows(expected_rows));
     }
@@ -3607,7 +3610,7 @@ pub fn pair_arrow(
                 encoded.push(
                     geometry
                         .as_ref()
-                        .map(|value| encode_geometry(value))
+                        .map(encode_geometry)
                         .transpose()?,
                 );
             }
@@ -4511,7 +4514,8 @@ mod tests {
             (ArrowOperation::Length, 7.0),
             (ArrowOperation::Perimeter, 7.0),
         ] {
-            let output = run(&arrow_schema(2, operation), &input).expect(operation.name());
+            let output =
+                run(&arrow_schema(2, operation), &input).unwrap_or_else(|_| panic!("{}", operation.name()));
             let (_, batch, index) = single_cell_output(&output, operation.name());
             let values = batch
                 .column(index)
@@ -5956,7 +5960,8 @@ mod tests {
 
         let run_op = |operation: PairOperation| {
             let schema = pair_schema(operation, 4, 4);
-            let output = run_pair(&schema, &left, &right).expect(operation.name());
+            let output = run_pair(&schema, &left, &right)
+                .unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
             let cells = batches[0]
                 .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
@@ -6688,7 +6693,8 @@ mod tests {
             (PairOperation::Bearing, "bearing", 332.2, 0.05),
         ] {
             let schema = pair_schema(operation, 2, 2);
-            let output = run_pair(&schema, &left, &right).expect(operation.name());
+            let output = run_pair(&schema, &left, &right)
+                .unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
             let values = batches[0]
                 .column(out_schema.index_of(column).unwrap())

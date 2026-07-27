@@ -2203,11 +2203,9 @@ mod tests {
     fn pivot_un_pivot_solo_oracle() {
         // Estremo opposto: un solo valore pivot distinto su molte chiavi.
         let rows = 1_000;
-        let keys = (0..rows)
-            .map(|row| i64::try_from(row).expect("fixture"))
-            .collect::<Vec<_>>();
+        let keys = (0..rows).map(i64::from).collect::<Vec<_>>();
         let pivots = (0..rows).map(|_| "solo").collect::<Vec<_>>();
-        let values = (0..rows).map(|row| i64::try_from(row % 50).ok()).collect::<Vec<_>>();
+        let values = (0..rows).map(|row| Some(i64::from(row % 50))).collect::<Vec<_>>();
         let batch = batch_of(
             vec![
                 Field::new("k", DataType::Int64, false),
