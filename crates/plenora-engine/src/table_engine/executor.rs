@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
-use plenora_core::arrow::schema::{DataType, Schema};
+use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
 use plenora_core::{PlenoraError, Result};
 use serde::de::DeserializeOwned;
 
@@ -874,7 +874,17 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
     }
 }
 
-fn validate_batch(batch: &RecordBatch, limits: &Limits) -> Result<()> {
+/// Validazione di un batch contro i limiti del piano.
+///
+/// I nomi duplicati sono proprieta' dello SCHEMA, non del batch: il
+/// chiamante passa una cache (`names_validated`) con l'`Arc` dell'ultimo
+/// schema verificato — uno stesso puntatore di schema non e' riesaminato
+/// (V2: niente `HashSet` ricostruito a ogni batch sullo stesso schema).
+fn validate_batch(
+    batch: &RecordBatch,
+    limits: &Limits,
+    names_validated: &mut Option<SchemaRef>,
+) -> Result<()> {
     if batch.num_rows() > limits.max_rows {
         return Err(PlenoraError::Contract(format!(
             "batch con {} righe oltre il limite {}",
@@ -889,6 +899,12 @@ fn validate_batch(batch: &RecordBatch, limits: &Limits) -> Result<()> {
             limits.max_columns
         )));
     }
+    if names_validated
+        .as_ref()
+        .is_some_and(|schema| Arc::ptr_eq(schema, &batch.schema()))
+    {
+        return Ok(());
+    }
     let mut names = HashSet::new();
     for field in batch.schema().fields() {
         if !names.insert(field.name()) {
@@ -898,6 +914,7 @@ fn validate_batch(batch: &RecordBatch, limits: &Limits) -> Result<()> {
             )));
         }
     }
+    *names_validated = Some(batch.schema());
     Ok(())
 }
 
@@ -907,15 +924,18 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
         .fields()
         .iter()
         .any(|field| field.data_type() == &DataType::LargeUtf8);
+    // Test prima del clone della mappa (V2): la copia dei metadata serve
+    // solo se c'e' davvero una voce da rimuovere.
+    let has_pandas_metadata = batch.schema().metadata().contains_key("pandas");
+    if !has_large_utf8 && !has_pandas_metadata {
+        return Ok(batch.clone());
+    }
     let mut metadata = batch.schema().metadata().clone();
     // Pandas stores a second, independent dtype/name schema in this opaque
     // entry. Any transform can make it stale, causing PyArrow to reinterpret
     // correct physical Arrow columns on read. Physical Arrow fields are the
     // engine contract; retain application metadata but drop this cache.
-    let removed_pandas_metadata = metadata.remove("pandas").is_some();
-    if !has_large_utf8 && !removed_pandas_metadata {
-        return Ok(batch.clone());
-    }
+    let _ = metadata.remove("pandas");
     let mut fields = Vec::with_capacity(batch.num_columns());
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
     for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
@@ -1475,7 +1495,10 @@ pub fn execute_batch_with_spill(
         ));
     }
     batch = normalize_large_utf8(&batch)?;
-    validate_batch(&batch, plan.limits())?;
+    // Cache dello schema gia' validato (V2): i passi che conservano lo
+    // schema (stesso `Arc`) non riesaminano i nomi duplicati.
+    let mut names_validated: Option<SchemaRef> = None;
+    validate_batch(&batch, plan.limits(), &mut names_validated)?;
     let mut spill_metrics = spill::SpillMetrics::default();
     for (index, (step, prepared)) in plan
         .steps()
@@ -1490,7 +1513,7 @@ pub fn execute_batch_with_spill(
             execution_id: String::new(),
             reason: error.to_string(),
         })?;
-        validate_batch(&batch, plan.limits()).map_err(|error| PlenoraError::Step {
+        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| PlenoraError::Step {
             node: index.to_string(),
             operation: step.operation.clone(),
             execution_id: String::new(),
@@ -1514,8 +1537,10 @@ pub fn execute_binary(
     }
     let left = normalize_large_utf8(left)?;
     let right = normalize_large_utf8(right)?;
-    validate_batch(&left, plan.limits())?;
-    validate_batch(&right, plan.limits())?;
+    // Cache dello schema gia' validato (V2), come `execute_batch_with_spill`.
+    let mut names_validated: Option<SchemaRef> = None;
+    validate_batch(&left, plan.limits(), &mut names_validated)?;
+    validate_batch(&right, plan.limits(), &mut names_validated)?;
     let prepared = &plan.prepared_steps()[0];
     if matches!(
         prepared,
@@ -1534,7 +1559,7 @@ pub fn execute_binary(
             &right,
             plan.limits(),
         )?;
-        validate_batch(&output, plan.limits())?;
+        validate_batch(&output, plan.limits(), &mut names_validated)?;
         return Ok(output);
     }
     let output = match prepared {
@@ -1562,7 +1587,7 @@ pub fn execute_binary(
         }
         unary => Err(PlenoraError::Unsupported(unary.name().into())),
     }?;
-    validate_batch(&output, plan.limits())?;
+    validate_batch(&output, plan.limits(), &mut names_validated)?;
     Ok(output)
 }
 

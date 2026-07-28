@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::hash::BuildHasherDefault;
 use std::hash::Hasher as _;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -171,7 +172,8 @@ fn read_u64(reader: &mut BufReader<File>) -> Result<Option<u64>> {
 fn read_record(
     reader: &mut BufReader<File>,
     max_record_bytes: usize,
-) -> Result<Option<(usize, Vec<u8>)>> {
+    key: &mut Vec<u8>,
+) -> Result<Option<usize>> {
     let Some(ordinal) = read_u64(reader)? else {
         return Ok(None);
     };
@@ -184,27 +186,37 @@ fn read_record(
             "record spill oltre il limite di sicurezza".into(),
         ));
     }
-    let mut key = vec![0_u8; length];
-    reader.read_exact(&mut key).map_err(|error| {
+    // Buffer del chiamante riusato fra i record (V2): cresce solo se il
+    // record corrente supera la capacita' gia' allocata.
+    key.clear();
+    key.resize(length, 0);
+    reader.read_exact(key.as_mut_slice()).map_err(|error| {
         if error.kind() == ErrorKind::UnexpectedEof {
             PlenoraError::Contract("chiave spill troncata".into())
         } else {
             PlenoraError::Io(error)
         }
     })?;
-    Ok(Some((
+    Ok(Some(
         usize::try_from(ordinal)
             .map_err(|_| PlenoraError::Contract("ordinal spill non rappresentabile".into()))?,
-        key,
-    )))
+    ))
 }
 
-fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<HashSet<Box<[u8]>>> {
+/// Insieme di chiavi lette da spill con l'hash dedicato `KeyHasher`
+/// (FxHash+splitmix64, deterministico) al posto di `SipHash` (V2): stesso
+/// hasher di `partition` e delle mappe di aggregazione spilled.
+type SpillKeySet = HashSet<Box<[u8]>, BuildHasherDefault<KeyHasher>>;
+
+fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
-    let mut keys = HashSet::new();
+    let mut keys = SpillKeySet::default();
     let mut estimated = 0_usize;
-    while let Some((_, key)) = read_record(&mut reader, max_record_bytes(limits))? {
-        if !keys.contains(key.as_slice()) {
+    let mut key = Vec::new();
+    while read_record(&mut reader, max_record_bytes(limits), &mut key)?.is_some() {
+        // Una sola hash per chiave (V2): accounting e inserimento nel ramo
+        // "chiave nuova", stessa semantica del contains + insert originale.
+        if keys.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                 .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
@@ -214,7 +226,6 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<HashSet<Box<[u8]>>> {
                     limits.max_memory_bytes
                 )));
             }
-            keys.insert(key.into_boxed_slice());
         }
     }
     Ok(keys)
@@ -222,10 +233,11 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<HashSet<Box<[u8]>>> {
 
 fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) -> Result<()> {
     let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
-    let mut emitted: HashSet<Box<[u8]>> = HashSet::new();
+    let mut emitted = SpillKeySet::default();
     let mut estimated = 0_usize;
-    while let Some((ordinal, key)) = read_record(&mut reader, max_record_bytes(limits))? {
-        if !emitted.contains(key.as_slice()) {
+    let mut key = Vec::new();
+    while let Some(ordinal) = read_record(&mut reader, max_record_bytes(limits), &mut key)? {
+        if emitted.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                 .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
@@ -234,7 +246,6 @@ fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) ->
                     "partizione union spill oltre max_memory_bytes".into(),
                 ));
             }
-            emitted.insert(key.into_boxed_slice());
             output.push(ordinal);
         }
     }
@@ -249,15 +260,16 @@ fn collect_membership(
     output: &mut Vec<usize>,
 ) -> Result<()> {
     let mut right = load_key_set(right_path, limits)?;
-    let mut emitted = HashSet::<Box<[u8]>>::new();
+    let mut emitted = SpillKeySet::default();
     let mut emitted_bytes = 0_usize;
     let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(left_path)?);
-    while let Some((ordinal, key)) = read_record(&mut reader, max_record_bytes(limits))? {
+    let mut key = Vec::new();
+    while let Some(ordinal) = read_record(&mut reader, max_record_bytes(limits), &mut key)? {
         if intersect {
             if right.remove(key.as_slice()) {
                 output.push(ordinal);
             }
-        } else if !right.contains(key.as_slice()) && !emitted.contains(key.as_slice()) {
+        } else if !right.contains(key.as_slice()) && emitted.insert(key.as_slice().into()) {
             emitted_bytes = emitted_bytes
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                 .ok_or_else(|| PlenoraError::Contract("overflow memoria except spill".into()))?;
@@ -266,7 +278,6 @@ fn collect_membership(
                     "partizione except spill oltre max_memory_bytes".into(),
                 ));
             }
-            emitted.insert(key.into_boxed_slice());
             output.push(ordinal);
         }
     }
@@ -1192,27 +1203,30 @@ mod tests {
     #[test]
     fn malformed_spill_records_and_zero_partitions_fail_closed() {
         assert!(partition(b"key", 0).is_err());
+        let mut key = Vec::new();
         let (_, mut empty) = reader_with(&[]);
-        assert!(read_record(&mut empty, 16).expect("empty").is_none());
+        assert!(read_record(&mut empty, 16, &mut key)
+            .expect("empty")
+            .is_none());
 
         let (_, mut partial_header) = reader_with(&[1]);
         assert!(read_u64(&mut partial_header).is_err());
 
         let (_, mut missing_length) = reader_with(&1_u64.to_be_bytes());
-        assert!(read_record(&mut missing_length, 16).is_err());
+        assert!(read_record(&mut missing_length, 16, &mut key).is_err());
 
         let mut oversized = Vec::new();
         oversized.extend_from_slice(&1_u64.to_be_bytes());
         oversized.extend_from_slice(&32_u64.to_be_bytes());
         let (_, mut oversized) = reader_with(&oversized);
-        assert!(read_record(&mut oversized, 16).is_err());
+        assert!(read_record(&mut oversized, 16, &mut key).is_err());
 
         let mut truncated = Vec::new();
         truncated.extend_from_slice(&1_u64.to_be_bytes());
         truncated.extend_from_slice(&3_u64.to_be_bytes());
         truncated.push(7);
         let (_, mut truncated) = reader_with(&truncated);
-        assert!(read_record(&mut truncated, 16).is_err());
+        assert!(read_record(&mut truncated, 16, &mut key).is_err());
     }
 
     #[test]

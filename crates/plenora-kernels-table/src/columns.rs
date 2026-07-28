@@ -535,27 +535,33 @@ pub fn concat_columns(
         .map(|name| utf8_column(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let mut output = Vec::with_capacity(batch.num_rows());
+    // String di lavoro riusata fra le righe (V2): stessi byte di
+    // `parts.join(separator)` — separatore solo FRA le parti incluse —
+    // senza il `Vec` di parti e il join allocati a ogni riga.
+    let mut joined = String::new();
     for row in 0..batch.num_rows() {
-        let mut parts = Vec::with_capacity(arrays.len());
+        joined.clear();
+        let mut included = 0_usize;
         for array in &arrays {
-            if array.is_null(row) {
-                if !config.skip_null {
-                    parts.push("");
-                }
-            } else {
-                parts.push(array.value(row));
+            if array.is_null(row) && config.skip_null {
+                continue;
             }
+            if included > 0 {
+                joined.push_str(&config.separator);
+            }
+            if !array.is_null(row) {
+                joined.push_str(array.value(row));
+            }
+            included += 1;
         }
-        if config.skip_null && parts.is_empty() {
+        if config.skip_null && included == 0 {
             output.push(None);
+        } else if joined.len() > limits.max_string_bytes {
+            return Err(PlenoraError::Contract(
+                "concat_columns supera max_string_bytes".into(),
+            ));
         } else {
-            let value = parts.join(&config.separator);
-            if value.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract(
-                    "concat_columns supera max_string_bytes".into(),
-                ));
-            }
-            output.push(Some(value));
+            output.push(Some(joined.clone()));
         }
     }
     replace_or_append(

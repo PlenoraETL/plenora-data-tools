@@ -451,3 +451,208 @@ fn dag_v4_misto_geo_end_to_end() {
     );
     assert!(areas.is_null(1), "null in -> null out");
 }
+
+// ---------------------------------------------------------------------------
+// Test di catena completa (plenora-contracts v2.0-rc4, Appendice A "cosa
+// manca alla catena"): un dataset con coordinate Z, CRS risolto e
+// axis_order dichiarato entra da un bordo, attraversa il centro (DAG v4) ed
+// esce — le chiavi canoniche sopravvivono e i byte Z passano invariati.
+// ---------------------------------------------------------------------------
+
+/// Fixture di catena: colonna geometria con chiavi legacy `geo` (crs +
+/// dimensions xyz) E chiavi canoniche coerenti (R2.6); versione di
+/// protocollo R2.5 nei metadati di schema.
+#[cfg(feature = "proj-backend")]
+fn chain_schema() -> SchemaRef {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let legacy = adapter::geometry_output_field("geometry", "EPSG:32632")
+        .expect("campo geometria legacy");
+    let mut metadata = legacy.metadata().clone();
+    // Legacy: dimensions dichiarate xyz nel metadato `geo`.
+    metadata.insert(
+        adapter::GEO_METADATA_KEY.to_owned(),
+        r#"{"crs":"EPSG:32632","dimensions":"xyz"}"#.to_owned(),
+    );
+    // Chiavi canoniche R2.2 coerenti con il legacy (R2.6).
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+        "wkb".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+        "xyz".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+        "exact".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_TYPES_KEY.to_owned(),
+        "point".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+        "resolved".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+        "EPSG:32632".to_owned(),
+    );
+    metadata.insert(
+        adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+        "lat_lon".to_owned(),
+    );
+    let schema_metadata = std::collections::HashMap::from([(
+        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+        "1".to_owned(),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+        ],
+        schema_metadata,
+    ))
+}
+
+/// Punto 3D in WKB ISO little-endian (type code 1001): i byte Z
+/// attraversano il centro invariati su operazioni tabellari (passthrough,
+/// nessun decode).
+#[cfg(feature = "proj-backend")]
+fn point_z_wkb(x: f64, y: f64, z: f64) -> Vec<u8> {
+    let mut payload = vec![1_u8];
+    payload.extend_from_slice(&1001_u32.to_le_bytes());
+    for value in [x, y, z] {
+        payload.extend_from_slice(&value.to_le_bytes());
+    }
+    payload
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    let input = directory.path().join("input.arrow");
+    let output_path = directory.path().join("output.arrow");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "f", "op": "table.filter", "in": ["main"],
+                 "config": {"column": "id", "operator": ">", "value": 0}},
+            ],
+            "output": "f",
+        }))
+        .expect("json"),
+    )
+    .expect("plan");
+
+    let cells = vec![
+        Some(point_z_wkb(1.0, 2.0, 3.0)),
+        Some(point_z_wkb(4.0, 5.0, 6.0)),
+        Some(point_z_wkb(7.0, 8.0, 9.0)),
+    ];
+    let schema = chain_schema();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![0, 1, 2])) as ArrayRef,
+            Arc::new(BinaryArray::from(
+                cells.iter().map(|cell| cell.as_deref()).collect::<Vec<_>>(),
+            )) as ArrayRef,
+        ],
+    )
+    .expect("batch catena");
+    write_ipc(&input, &schema, &[batch]);
+
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run catena");
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
+        .expect("reader");
+    let out_schema = reader.schema();
+    // R2.5: la versione di protocollo sopravvive (o e' riemessa) sullo
+    // schema di output.
+    assert_eq!(
+        out_schema.metadata().get(adapter::PLENORA_CONTRACT_VERSION_KEY),
+        Some(&"1".to_owned()),
+        "plenora.contract.version sullo schema di output"
+    );
+    let (_, geometry_field) = out_schema
+        .column_with_name("geometry")
+        .expect("colonna geometria");
+    let metadata = geometry_field.metadata();
+    // Le chiavi canoniche attraversano il centro: dimensions xyz MAI
+    // degradate a xy (i byte Z passano, il contratto resta onesto);
+    // tipi dichiarati exact/point propagati; encoding e CRS coerenti.
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY),
+        Some(&"xyz".to_owned()),
+        "dimensions xyz preservate"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+        Some(&"exact".to_owned()),
+        "types_declaration propagata"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_TYPES_KEY),
+        Some(&"point".to_owned()),
+        "types propagati"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_ENCODING_KEY),
+        Some(&"wkb".to_owned()),
+        "encoding propagato"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY),
+        Some(&"EPSG:32632".to_owned()),
+        "crs_id propagato"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
+        Some(&"resolved".to_owned()),
+        "crs_resolution propagata"
+    );
+    // axis_order: la lineage (R2.4) preserva il valore dichiarato in
+    // ingresso — `unknown` dell'emissione non e' una dichiarazione ma
+    // l'assenza di una (il DataContract non lo modella, ADR-0009) e non
+    // puo' sovrascrivere una chiave presente (R2.7). lat_lon attraversa
+    // il centro.
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY),
+        Some(&"lat_lon".to_owned()),
+        "axis_order lat_lon preservato dalla lineage"
+    );
+
+    // I byte Z delle righe sopravvissute (id 1 e 2) sono BIT-IDENTICI
+    // all'ingresso: passthrough tabellare, nessun decode/encode.
+    let batches: Vec<RecordBatch> = reader.map(|batch| batch.expect("batch")).collect();
+    assert_eq!(batches.len(), 1);
+    let out_cells = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("geometry Binary");
+    assert_eq!(out_cells.len(), 2);
+    assert_eq!(out_cells.value(0), cells[1].as_deref().expect("cella 1"));
+    assert_eq!(out_cells.value(1), cells[2].as_deref().expect("cella 2"));
+}

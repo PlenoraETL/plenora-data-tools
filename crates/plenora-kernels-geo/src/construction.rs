@@ -72,13 +72,31 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
             "testo oltre il limite di 64 MiB".to_owned(),
         ));
     }
-    let uppercase = value.trim_start().to_ascii_uppercase();
-    let prefix = uppercase.split('(').next().unwrap_or(&uppercase);
+    // Riconoscimento del tipo senza allocare: si ispeziona solo la porzione
+    // di testo prima del primo `(`, dove vivono il type name OGC (tutti
+    // entro una ventina di caratteri ASCII: POINT, LINESTRING, POLYGON,
+    // MULTIPOINT, ...) e l'eventuale suffisso dimensionale. Il confronto
+    // ASCII case-insensitive e' equivalente per costruzione alla precedente
+    // copia `to_ascii_uppercase` dell'intera cella: i token cercati
+    // ("SRID=", "Z", "M", "ZM") sono puramente ASCII e
+    // `to_ascii_uppercase` non altera ne' i byte non ASCII ne' lo
+    // whitespace, quindi tokenizzazione ed esito sono identici su ogni
+    // input, inclusi prefissi malformati o arbitrariamente lunghi.
+    let head = value.trim_start();
+    let prefix_end = head.find('(').unwrap_or(head.len());
+    let prefix = &head[..prefix_end];
+    let srid = head
+        .get(..5)
+        .is_some_and(|start| start.eq_ignore_ascii_case("SRID="));
     let dimensional = prefix
         .split_whitespace()
         .skip(1)
-        .any(|token| matches!(token, "Z" | "M" | "ZM"));
-    if uppercase.starts_with("SRID=") || dimensional {
+        .any(|token| {
+            ["Z", "M", "ZM"]
+                .iter()
+                .any(|suffix| token.eq_ignore_ascii_case(suffix))
+        });
+    if srid || dimensional {
         return Err(ConstructionError::UnsupportedWktDimension);
     }
     let geometry = Geometry::<f64>::try_from_wkt_str(value)

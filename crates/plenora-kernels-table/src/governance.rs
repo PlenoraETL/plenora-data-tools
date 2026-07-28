@@ -347,7 +347,7 @@ pub fn assert_foreign_key(
         if !has_null(right, &right_indices, row) {
             right_encoder.encode_into(row, &mut key)?;
             let key_bytes = key.len();
-            if referenced.insert(key.clone()) {
+            if referenced.insert(std::mem::take(&mut key)) {
                 memory_used = memory_used
                     .checked_add(key_bytes.saturating_add(64))
                     .ok_or_else(|| PlenoraError::Contract("overflow memoria foreign key".into()))?;
@@ -420,7 +420,7 @@ fn frequencies(
                     "reconcile oltre max_memory_bytes".into(),
                 ));
             }
-            output.insert(key.clone(), 1);
+            output.insert(std::mem::take(&mut key), 1);
             if output.len() > limits.max_rows {
                 return Err(PlenoraError::Contract(
                     "reconcile supera max_rows chiavi distinte".into(),
@@ -962,11 +962,20 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                 },
             )
         }
+        // La colonna di una regola regex e' garantita Utf8 da
+        // `compile_rules` (V2): prestito diretto sulla `StringArray`,
+        // senza l'allocazione per riga di `scalar_as_string`. Tipi diversi
+        // (mai raggiunti per contratto) restano sul percorso scalare.
         RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {
-            scalar_as_string(array, row)
-                .ok()
-                .flatten()
-                .is_some_and(|actual| regex.is_match(&actual))
+            any.downcast_ref::<StringArray>().map_or_else(
+                || {
+                    scalar_as_string(array, row)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|actual| regex.is_match(&actual))
+                },
+                |values| !values.is_null(row) && regex.is_match(values.value(row)),
+            )
         }),
         RuleOperator::Isnull | RuleOperator::Notnull => {
             return Err(PlenoraError::Contract(

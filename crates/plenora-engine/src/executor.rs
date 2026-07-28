@@ -154,7 +154,7 @@ use plenora_core::contract::{BatchSequence, DataContract, GeometryDimensions};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{
     batch_geometry_cells, canonical_geometry_metadata, canonical_schema_version_metadata,
-    decode_geometry_cell, GeometryMetadataDetails,
+    decode_geometry_cell, GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
 };
 use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_depth};
 use plenora_kernels_table::spill::SpillMetrics;
@@ -424,6 +424,10 @@ struct ExecState {
     /// Store temporaneo dell'esecuzione (ADR 3): heartbeat al punto
     /// centrale, cleanup RAII al `Drop`.
     temp_store: RefCell<TempStore>,
+    /// Directory di spill condivisa (ADR-0002, Fase 2B M2c): `spill/`
+    /// sotto il `TempStore`, risolta UNA volta alla costruzione (V2) —
+    /// il path e' fisso per tutta l'esecuzione.
+    spill_directory: PathBuf,
     /// Metriche di spill aggregate (ADR-0002, Fase 2B M2c): alimentate dai
     /// percorsi `*_spilled` attivati nei nodi tabellari.
     spill_metrics: RefCell<SpillMetrics>,
@@ -479,6 +483,7 @@ impl ExecState {
                 );
             }
         }
+        let spill_directory = temp_store.path().join("spill");
         Rc::new(Self {
             plan: Rc::clone(plan),
             metrics: RefCell::new(metrics),
@@ -487,6 +492,7 @@ impl ExecState {
             cancellation,
             diagnostics,
             temp_store: RefCell::new(temp_store),
+            spill_directory,
             spill_metrics: RefCell::new(SpillMetrics::default()),
             last_heartbeat: Cell::new(Instant::now()),
             input_counts: RefCell::new(HashMap::new()),
@@ -531,9 +537,9 @@ impl ExecState {
     /// Directory di spill condivisa dell'esecuzione (ADR-0002, Fase 2B M2c):
     /// sotto-directory `spill/` del `TempStore` — creata dal workspace di
     /// spill al primo uso, ripulita dei file a fine operazione e rimossa
-    /// interamente dal `Drop` RAII dello store.
-    fn spill_directory(&self) -> PathBuf {
-        self.temp_store.borrow().path().join("spill")
+    /// interamente dal `Drop` RAII dello store. Risolta in `new` (V2).
+    fn spill_directory(&self) -> &Path {
+        &self.spill_directory
     }
 
     /// Accumula le metriche di uno spill attivato in un nodo tabellare.
@@ -868,7 +874,10 @@ impl Iterator for EdgeStream {
 /// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
 ///   schema) con valore DIVERSO da quello imposto dal contratto e' un
 ///   errore, mai una sovrascrittura silenziosa; valore uguale e'
-///   idempotente;
+///   idempotente. Eccezione dichiarata: `axis_order = unknown` non e' una
+///   dichiarazione ma l'assenza di una (il `DataContract` non modella
+///   l'ordine degli assi, ADR-0009) — una chiave `axis_order` gia'
+///   presente e' informazione della lineage (R2.4/R2.7) e resta;
 /// - R2.5: `plenora.contract.version` e' aggiunta ai metadati dello schema
 ///   SOLO se almeno un campo porta chiavi canoniche (sempre vero quando il
 ///   contratto dichiara geometrie: [`canonical_geometry_metadata`] emette
@@ -902,6 +911,15 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
         for (key, value) in &canonical {
             match metadata.get(key) {
                 Some(existing) if existing != value => {
+                    // `axis_order = unknown` non e' una dichiarazione ma
+                    // l'ASSENZA di una (il DataContract non modella
+                    // l'ordine degli assi, ADR-0009): una chiave gia'
+                    // presente e' informazione della lineage (R2.4), non
+                    // una divergenza — R2.7 completa solo l'assente, mai
+                    // arbitra. Resta il valore dichiarato dall'ingresso.
+                    if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY && value == "unknown" {
+                        continue;
+                    }
                     return Err(PlenoraError::Contract(format!(
                         "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
                          diverso da quello del contratto (R2.6: il componente fallisce, \
@@ -1245,7 +1263,7 @@ fn execute_physical(
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
         let batch = &governed.batch;
-        check_batch_bytes(&output_state, batch, "output")?;
+        let _ = check_batch_bytes(&output_state, batch, "output")?;
         let limits = &output_state.plan.limits();
         output_counts.0 += batch.num_rows() as u64;
         output_counts.1 += 1;
@@ -1361,17 +1379,25 @@ impl Network {
                     "batch dell'input `{edge_name}` con schema diverso dal contratto"
                 )));
             }
-            check_batch_bytes(&state, &batch, &edge_name)?;
+            let bytes = check_batch_bytes(&state, &batch, &edge_name)?;
             if let Some(index) = geometry_index {
                 validate_wkb_cells(&state, &batch, index, &edge_name, geometry_dimensions)?;
             }
-            let bytes = batch.get_array_memory_size() as u64;
             {
                 let mut counts = state.input_counts.borrow_mut();
-                let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
-                entry.0 += batch.num_rows() as u64;
-                entry.1 += 1;
-                entry.2 += bytes;
+                // Chiave clonata solo al primo batch dell'input (V2): i
+                // batch successivi entrano dal `get_mut` sul nome esistente.
+                if let Some(entry) = counts.get_mut(&edge_name) {
+                    entry.0 += batch.num_rows() as u64;
+                    entry.1 += 1;
+                    entry.2 += bytes;
+                } else {
+                    let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
+                    entry.0 += batch.num_rows() as u64;
+                    entry.1 += 1;
+                    entry.2 += bytes;
+                }
+                let entry = &counts[&edge_name];
                 let limits = &state.plan.limits();
                 if entry.0 > limits.rows.max_input_rows {
                     return Err(PlenoraError::Contract(format!(
@@ -1497,8 +1523,9 @@ impl Network {
 // Limiti e validazione dinamica
 // ---------------------------------------------------------------------------
 
-/// Tetto duro sui byte di un batch (V7: `max_batch_bytes`).
-fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Result<()> {
+/// Tetto duro sui byte di un batch (V7: `max_batch_bytes`). Restituisce i
+/// byte del batch (V2: un solo conteggio, riusato da lease e contatori).
+fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Result<u64> {
     let bytes = batch.get_array_memory_size();
     let max = state.plan.batch_target().max_batch_bytes;
     if bytes > max {
@@ -1506,7 +1533,7 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
             "max_batch_bytes superato su `{where_}`: {bytes} byte > {max}"
         )));
     }
-    Ok(())
+    Ok(bytes as u64)
 }
 
 /// Validazione dinamica in lettura (D8): struttura WKB di ogni cella non
@@ -1531,8 +1558,14 @@ fn validate_wkb_cells(
     let max_cell = limits.max_wkb_cell_bytes;
     let max_depth = limits.max_geometry_depth as usize;
     // Diagnostica opt-in (M1d): il nome della colonna e' contesto
-    // strutturale, non un valore — aggiunto solo a flag attivo.
-    let column = batch.schema().field(geometry_index).name().clone();
+    // strutturale, non un valore — risolto solo nel ramo d'errore (V2),
+    // mai allocato sul percorso felice.
+    let column_detail = || {
+        format!(
+            "colonna `{}`",
+            batch.schema().field(geometry_index).name()
+        )
+    };
     for row in 0..batch.num_rows() {
         if cells.is_null(row) {
             continue;
@@ -1543,7 +1576,7 @@ fn validate_wkb_cells(
                 PlenoraError::Contract(format!(
                     "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
                 )),
-                Some(&format!("colonna `{column}`")),
+                Some(&column_detail()),
             ));
         }
         validate_wkb_contract_for_dimensions_with_depth(payload, dimensions, max_depth)
@@ -1552,9 +1585,7 @@ fn validate_wkb_cells(
                     "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
                 ))
             })
-            .map_err(|error| {
-                state.with_diagnostics(error, Some(&format!("colonna `{column}`")))
-            })?;
+            .map_err(|error| state.with_diagnostics(error, Some(&column_detail())))?;
     }
     Ok(())
 }
@@ -1562,11 +1593,19 @@ fn validate_wkb_cells(
 /// Contatori e limiti dell'arco intermedio prodotto da un kernel
 /// (`max_rows_per_edge`, `max_batches`, byte per batch).
 fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Result<()> {
-    check_batch_bytes(state, batch, edge)?;
+    let _ = check_batch_bytes(state, batch, edge)?;
     let mut counts = state.edge_counts.borrow_mut();
-    let entry = counts.entry(edge.to_owned()).or_insert((0, 0));
-    entry.0 += batch.num_rows() as u64;
-    entry.1 += 1;
+    // Chiave clonata solo al primo batch dell'arco (V2): i batch successivi
+    // entrano dal `get_mut` sul nome esistente.
+    if let Some(entry) = counts.get_mut(edge) {
+        entry.0 += batch.num_rows() as u64;
+        entry.1 += 1;
+    } else {
+        let entry = counts.entry(edge.to_owned()).or_insert((0, 0));
+        entry.0 += batch.num_rows() as u64;
+        entry.1 += 1;
+    }
+    let entry = &counts[edge];
     let limits = &state.plan.limits();
     if entry.0 > limits.rows.max_rows_per_edge {
         return Err(PlenoraError::Contract(format!(
@@ -1640,8 +1679,14 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
         return Ok(());
     }
     let mut rows = state.node_rows.borrow_mut();
-    let entry = rows.entry(kernel.node_id.clone()).or_insert((0, 0));
-    entry.0 += base_rows;
+    // Chiave clonata solo al primo batch del nodo (V2): i batch successivi
+    // entrano dal `get_mut` sull'id esistente.
+    if let Some(entry) = rows.get_mut(&kernel.node_id) {
+        entry.0 += base_rows;
+    } else {
+        rows.entry(kernel.node_id.clone()).or_insert((0, 0)).0 += base_rows;
+    }
+    let entry = &rows[&kernel.node_id];
     let factor = state.plan.limits().rows.max_expansion_factor;
     if (entry.1 as f64) > (entry.0 as f64) * factor {
         return Err(PlenoraError::Contract(format!(
@@ -1833,10 +1878,14 @@ fn run_streaming_chain(
     );
     let kernels = &segment.kernels;
     // Diagnostica opt-in (M1d): la sequenza logica e' contesto strutturale
-    // (indice di batch), mai un valore.
-    let batch_detail = seq
-        .as_ref()
-        .map(|seq| format!("batch_seq={}", seq.sequence_number));
+    // (indice di batch), mai un valore. Formattata solo a flag attivo (V2):
+    // `with_diagnostics` la ignorerebbe comunque a diagnostica spenta.
+    let batch_detail = if state.diagnostics {
+        seq.as_ref()
+            .map(|seq| format!("batch_seq={}", seq.sequence_number))
+    } else {
+        None
+    };
     for (position, kernel) in kernels.iter().enumerate() {
         // ADR 3, M1c: check cooperativo al confine di kernel — per il primo
         // kernel della catena e' anche il check "tra batch"; onora il
@@ -1857,7 +1906,11 @@ fn run_streaming_chain(
         };
         {
             let mut rows = state.node_rows.borrow_mut();
-            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+            if let Some(entry) = rows.get_mut(&kernel.node_id) {
+                entry.1 += rows_out;
+            } else {
+                rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+            }
         }
         check_expansion(state, kernel, rows_in)?;
         // Limiti d'arco sugli archi interni e sull'arco di uscita del
@@ -1942,7 +1995,7 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
     match &kernel.config {
         PreparedConfig::TableUnary(plan) => {
             let (output, spill_metrics) =
-                table_engine::execute_batch_with_spill(batch, plan, Some(&state.spill_directory()))
+                table_engine::execute_batch_with_spill(batch, plan, Some(state.spill_directory()))
                     .map_err(|error| step_error(kernel, error))?;
             state.add_spill_metrics(spill_metrics);
             Ok(output)
@@ -2556,7 +2609,8 @@ fn run_blocking(
     };
     // Il batch concatenato non ha un produttore a monte che ne abbia
     // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
-    check_batch_bytes(state, &full, &kernel.node_id)?;
+    // I byte restituiti alimentano la reservation (V2: un solo conteggio).
+    let full_bytes = check_batch_bytes(state, &full, &kernel.node_id)?;
     // ADR-0002 (Fase 2B M2c): se il kernel spillera' — stessa soglia
     // deterministica valutata al dispatch tabellare (`should_spill_unary`
     // sui byte stimati dell'input), stessi limiti — l'intermedio
@@ -2572,7 +2626,6 @@ fn run_blocking(
         }
         _ => false,
     };
-    let full_bytes = full.get_array_memory_size() as u64;
     let full_lease = if spill_path {
         None
     } else {
@@ -2594,7 +2647,11 @@ fn run_blocking(
     let rows_out = output.num_rows() as u64;
     {
         let mut rows = state.node_rows.borrow_mut();
-        rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+        if let Some(entry) = rows.get_mut(&kernel.node_id) {
+            entry.1 += rows_out;
+        } else {
+            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+        }
     }
     check_expansion(state, kernel, rows_in)?;
     if segment.output_edge != plan.output_edge() {
@@ -2657,17 +2714,14 @@ fn run_binary_blocking(
         concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
-    // Come per il blocking unario: tetto duro V7 sui batch concatenati.
-    check_batch_bytes(state, &left, &kernel.node_id)?;
-    check_batch_bytes(state, &right, &kernel.node_id)?;
+    // Come per il blocking unario: tetto duro V7 sui batch concatenati; i
+    // byte restituiti alimentano le reservation (V2: un solo conteggio).
+    let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
+    let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
     // Reservation complete degli intermedi in ordine globale fisso (left,
     // poi right), poi rilascio dei lease degli input.
-    let left_lease = state
-        .governor
-        .reserve(left.get_array_memory_size() as u64, &kernel.node_id)?;
-    let right_lease = state
-        .governor
-        .reserve(right.get_array_memory_size() as u64, &kernel.node_id)?;
+    let left_lease = state.governor.reserve(left_bytes, &kernel.node_id)?;
+    let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
     drop(left_batches);
     drop(right_batches);
     // ADR 3, M1c: a fine drenaggio, prima del kernel binario monolitico
@@ -2692,7 +2746,11 @@ fn run_binary_blocking(
     let rows_out = output.num_rows() as u64;
     {
         let mut rows = state.node_rows.borrow_mut();
-        rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+        if let Some(entry) = rows.get_mut(&kernel.node_id) {
+            entry.1 += rows_out;
+        } else {
+            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+        }
     }
     // ADR 6: per le operazioni binarie il runtime calcola tutte le metriche
     // di espansione e applica il vincolo vincolante dichiarato in catalogo.

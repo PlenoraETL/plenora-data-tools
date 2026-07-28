@@ -1,7 +1,7 @@
 //! Advanced pure-Rust kernels whose output cardinality differs from the input.
 
 use geo::algorithm::validation::Validation;
-use geo::{Geometry, Intersects, MultiPoint, Point, Voronoi};
+use geo::{BoundingRect, Geometry, Intersects, MultiPoint, Point, Rect, Voronoi};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -103,14 +103,30 @@ pub fn voronoi_cells(
             .map_err(|error| AdvancedError::InvalidOutput(error.to_string()))?;
     }
 
+    // Pre-filtro per bounding rect: il bounding rect di una cella copre per
+    // costruzione (min/max esatti delle coordinate, bordo incluso) ogni
+    // punto della cella, quindi un punto che interseca la cella interseca
+    // sempre anche il suo bounding rect. Scartare le celle il cui rect non
+    // interseca il punto non puo' cambiare l'esito di `Intersects`, ma
+    // evita il predicato geometrico costoso sulle celle lontane. Il rect
+    // e' calcolato una sola volta per cella, fuori dal loop sui punti.
+    // `bounding_rect` e' `Option` (None per cella vuota, che non puo'
+    // intersecare alcun punto: esito coerente col predicato geometrico).
+    let cell_bounds: Vec<Option<Rect<f64>>> =
+        cells.iter().map(BoundingRect::bounding_rect).collect();
+
     points
         .iter()
         .enumerate()
         .map(|(index, point)| {
             cells
                 .iter()
-                .find(|cell| cell.intersects(point))
-                .cloned()
+                .zip(&cell_bounds)
+                .find(|(cell, bounds)| {
+                    bounds.as_ref().is_some_and(|bounds| bounds.intersects(point))
+                        && cell.intersects(point)
+                })
+                .map(|(cell, _)| cell.clone())
                 .map(Geometry::Polygon)
                 .ok_or(AdvancedError::UnmatchedPoint(index))
         })
