@@ -854,7 +854,11 @@ fn point_ratio_on_segment(
 ) -> Option<f64> {
     let dx = segment.line.end.x - segment.line.start.x;
     let dy = segment.line.end.y - segment.line.start.y;
-    let length_squared = dx.mul_add(dx, dy * dy);
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
+    let length_squared = dx * dx + dy * dy;
     if length_squared == 0.0 {
         return None;
     }

@@ -1275,7 +1275,13 @@ mod tests {
         let floats: Vec<Option<f64>> = (0..48)
             .map(|i| match i % 4 {
                 0 => None,
-                r => Some(f64::from(r).mul_add(0.5, f64::from(i % 3))),
+                r => {
+                    // Fixture: forma non fusa come il contratto numerico
+                    // (niente mul_add/FMA, determinismo bit-esatto).
+                    #[allow(clippy::suboptimal_flops)]
+                    let value = f64::from(r) * 0.5 + f64::from(i % 3);
+                    Some(value)
+                }
             })
             .collect();
         RecordBatch::try_new(

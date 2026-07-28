@@ -1127,7 +1127,13 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 PlenoraError::Contract("indice quantile non valido".into())
             })?;
             let weight = position - position.floor();
-            (values[upper] - values[lower]).mul_add(weight, values[lower])
+            // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+            // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+            // fusa e' il contratto numerico. Produzione e oracolo usano la
+            // STESSA forma: l'equivalenza bit-a-bit resta per costruzione.
+            #[allow(clippy::suboptimal_flops)]
+            let interpolated = (values[upper] - values[lower]) * weight + values[lower];
+            interpolated
         }
         _ => unreachable!(),
     }))
@@ -2393,7 +2399,14 @@ mod tests {
                                         PlenoraError::Contract("indice quantile non valido".into())
                                     })?;
                                     let weight = position - position.floor();
-                                    (values[upper] - values[lower]).mul_add(weight, values[lower])
+                                    // Niente mul_add/FMA: forma non fusa
+                                    // (contratto numerico, ADR-0001) — la
+                                    // STESSA della produzione, equivalenza
+                                    // bit-a-bit per costruzione.
+                                    #[allow(clippy::suboptimal_flops)]
+                                    let interpolated = (values[upper] - values[lower]) * weight
+                                        + values[lower];
+                                    interpolated
                                 }
                                 _ => unreachable!(),
                             }))

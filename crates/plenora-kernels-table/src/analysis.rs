@@ -118,12 +118,21 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         // (or by 0.001 around zero) before computing equal-width bins.
         let adjustment = if min == 0.0 { 0.001 } else { min.abs() * 0.001 };
         let lower = min - adjustment;
-        let width = adjustment.mul_add(2.0, 0.0) / count_f64;
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // fusa e' il contratto numerico.
+        #[allow(clippy::suboptimal_flops)]
+        let width = (adjustment * 2.0 + 0.0) / count_f64;
         return (0..=count)
             .map(|index| {
                 index
                     .to_f64()
-                    .map(|position| width.mul_add(position, lower))
+                    .map(|position| {
+                        // Come sopra: forma non fusa (niente mul_add/FMA).
+                        #[allow(clippy::suboptimal_flops)]
+                        let edge = width * position + lower;
+                        edge
+                    })
                     .ok_or_else(|| PlenoraError::Contract("indice bin non rappresentabile".into()))
             })
             .collect();
@@ -137,7 +146,10 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
                     if index == count {
                         max
                     } else {
-                        width.mul_add(position, min)
+                        // Come sopra: forma non fusa (niente mul_add/FMA).
+                        #[allow(clippy::suboptimal_flops)]
+                        let edge = width * position + min;
+                        edge
                     }
                 })
                 .ok_or_else(|| PlenoraError::Contract("indice bin non rappresentabile".into()))
@@ -720,7 +732,12 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
     Some(if low == high {
         sorted[low]
     } else {
-        (sorted[high] - sorted[low]).mul_add(position - low.to_f64()?, sorted[low])
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // fusa e' il contratto numerico.
+        #[allow(clippy::suboptimal_flops)]
+        let interpolated = (sorted[high] - sorted[low]) * (position - low.to_f64()?) + sorted[low];
+        interpolated
     })
 }
 
