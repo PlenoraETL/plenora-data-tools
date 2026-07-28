@@ -161,7 +161,9 @@ use plenora_kernels_table::spill::SpillMetrics;
 
 use crate::cancellation::CancellationToken;
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
-use crate::geo_transport::transport::{transform_batches, TransformArrowSchema};
+use crate::geo_transport::transport::{
+    one_to_one_batch_prepared, prepare_one_to_one, OneToOnePrepared, TransformArrowSchema,
+};
 use crate::governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics};
 use crate::planner::{
     check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
@@ -434,6 +436,10 @@ struct ExecState {
     edge_counts: RefCell<HashMap<String, (u64, u64)>>,
     /// Righe in/out cumulate per nodo (`max_expansion_factor`).
     node_rows: RefCell<HashMap<String, (u64, u64)>>,
+    /// Handle prepared delle operazioni geo 1:1, costruito una volta per
+    /// nodo (V2): indice di colonna e schema di output non sono piu'
+    /// risolti a ogni batch.
+    prepared_one_to_one: RefCell<HashMap<String, Rc<OneToOnePrepared>>>,
 }
 
 /// Intervallo minimo tra due heartbeat del `TempStore` (ADR 3): il punto
@@ -486,7 +492,31 @@ impl ExecState {
             input_counts: RefCell::new(HashMap::new()),
             edge_counts: RefCell::new(HashMap::new()),
             node_rows: RefCell::new(HashMap::new()),
+            prepared_one_to_one: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// Handle prepared dell'operazione geo 1:1 del nodo, costruito alla
+    /// prima occorrenza (V2): indice di colonna e schema di output sono
+    /// risolti UNA volta per kernel, non per batch. La chiave e' l'id del
+    /// nodo: lo schema di input di un arco e' fisso per contratto.
+    fn one_to_one_prepared(
+        &self,
+        kernel: &PreparedKernel,
+        schema: &SchemaRef,
+        params: &TransformArrowSchema,
+    ) -> Result<Rc<OneToOnePrepared>> {
+        if let Some(prepared) = self.prepared_one_to_one.borrow().get(&kernel.node_id) {
+            return Ok(prepared.clone());
+        }
+        let prepared = Rc::new(
+            prepare_one_to_one(schema, params)
+                .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?,
+        );
+        self.prepared_one_to_one
+            .borrow_mut()
+            .insert(kernel.node_id.clone(), prepared.clone());
+        Ok(prepared)
     }
 
     /// Snapshot delle metriche correnti (con l'osservabilita' dei lease
@@ -1921,7 +1951,7 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
             "nodo `{}`: kernel binario in una catena streaming (errore interno)",
             kernel.node_id
         ))),
-        PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params),
+        PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params, state),
         PreparedConfig::GeoMeasure { measure, .. } => geo_measure_batch(kernel, &batch, *measure),
         PreparedConfig::GeoFromWkt {
             wkt_column_index,
@@ -1964,25 +1994,18 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
 }
 
 /// Trasformazione geo 1:1 in place via `geo_transport` (per batch, senza
-/// envelope): i parametri sono tipizzati e risolti da `prepare` (E1).
+/// envelope): i parametri sono tipizzati e risolti da `prepare` (E1);
+/// indice di colonna e schema di output arrivano dall'handle prepared del
+/// nodo, costruito una volta per esecuzione (V2).
 fn geo_transform_batch(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
     params: &TransformArrowSchema,
+    state: &ExecState,
 ) -> Result<RecordBatch> {
-    let schema = batch.schema();
-    let (_, mut out) = transform_batches(&schema, std::slice::from_ref(batch), params)
-        .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
-    if out.len() != 1 {
-        return Err(step_error(
-            kernel,
-            PlenoraError::Contract(format!(
-                "trasformazione 1:1 ha prodotto {} batch (errore interno)",
-                out.len()
-            )),
-        ));
-    }
-    Ok(out.remove(0))
+    let prepared = state.one_to_one_prepared(kernel, &batch.schema(), params)?;
+    one_to_one_batch_prepared(batch, params, &prepared)
+        .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))
 }
 
 /// Misura geo "add column" (semantica v4): decodifica le celle WKB non null,

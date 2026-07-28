@@ -1744,7 +1744,11 @@ fn map_nullable<T: Send>(
     f: impl Fn(&[u8]) -> Result<Option<T>, ArrowTransportError> + Sync,
 ) -> Result<Vec<Option<T>>, ArrowTransportError> {
     let cell_values: Vec<Option<&[u8]>> = cells.iter().collect();
-    cell_values
+    // ADR-0001: come la primitiva omonima in arrow_adapter — i `Result`
+    // per riga prima (ordine preservato dal collect indicizzato), il primo
+    // errore IN ORDINE DI RIGA poi, dal collect sequenziale; mai la
+    // selezione non deterministica di rayon.
+    let results: Vec<Result<Option<T>, ArrowTransportError>> = cell_values
         .into_par_iter()
         .map(|cell| match cell {
             None => Ok(None),
@@ -1755,7 +1759,8 @@ fn map_nullable<T: Send>(
                 f(payload)
             }
         })
-        .collect()
+        .collect();
+    results.into_iter().collect()
 }
 
 // Dispatch per operazione intenzionalmente monolitico: ogni braccio e' un
@@ -2139,14 +2144,27 @@ pub fn transform_batches(
     }
 }
 
-/// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
-/// GeoArrow-WKB, Float64, `UInt64`, Utf8 oppure quattro colonne Float64 per
-/// `bounds`); tutte le altre colonne passano invariate; i null sono preservati.
-fn one_to_one_batches(
+/// Handle prepared delle operazioni 1:1 (V2).
+///
+/// Indice di colonna e schema di output sono risolti UNA volta per kernel,
+/// non per batch — il lavoro che `one_to_one_batches` rifaceva a ogni
+/// chiamata (clone dei `Field` con le mappe metadata, serializzazione JSON
+/// del metadato `geo`, ricerca per nome).
+pub struct OneToOnePrepared {
+    geometry_index: usize,
+    output_schema: SchemaRef,
+}
+
+/// Risolve l'handle prepared di un'operazione 1:1 (V2).
+///
+/// # Errors
+///
+/// Come `one_to_one_batches` per la parte di risoluzione (colonna
+/// geometria assente, CRS richiesto assente, operazione non coperta).
+pub fn prepare_one_to_one(
     schema: &SchemaRef,
-    batches: &[RecordBatch],
     params: &TransformArrowSchema,
-) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
+) -> Result<OneToOnePrepared, ArrowTransportError> {
     let operation = params.operation;
     let geometry_column = params.geometry_column();
     let output_crs = match operation {
@@ -2196,55 +2214,86 @@ fn one_to_one_batches(
             }
         }
     }
-    let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
+    let output_schema = std::sync::Arc::new(Schema::new_with_metadata(
+        output_fields,
+        schema.metadata().clone(),
+    ));
+    Ok(OneToOnePrepared {
+        geometry_index,
+        output_schema,
+    })
+}
 
+/// Batch trasformato con l'handle prepared: nessuna ricostruzione di
+/// schema per batch (`try_new` rivalida le colonne — fail-closed).
+///
+/// # Errors
+///
+/// Come `one_to_one_batches` per la parte dati (colonna non Binary,
+/// errori del kernel di cella, schema incoerente con le colonne).
+pub fn one_to_one_batch_prepared(
+    batch: &RecordBatch,
+    params: &TransformArrowSchema,
+    prepared: &OneToOnePrepared,
+) -> Result<RecordBatch, ArrowTransportError> {
+    let geometry_index = prepared.geometry_index;
+    let cells = batch
+        .column(geometry_index)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| ArrowTransportError::GeometryColumnNotBinary {
+            name: params.geometry_column().to_owned(),
+            actual: batch.column(geometry_index).data_type().to_string(),
+        })?;
+    let transformed = transform_cells(params, cells)?;
+    let mut columns = batch.columns().to_vec();
+    match transformed {
+        TransformedColumn::Binary(values) => {
+            columns[geometry_index] = std::sync::Arc::new(
+                values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
+            );
+        }
+        TransformedColumn::Float64(values) => {
+            columns[geometry_index] = std::sync::Arc::new(Float64Array::from(values));
+        }
+        TransformedColumn::UInt64(values) => {
+            columns[geometry_index] = std::sync::Arc::new(UInt64Array::from(values));
+        }
+        TransformedColumn::Utf8(values) => {
+            columns[geometry_index] = std::sync::Arc::new(StringArray::from(values));
+        }
+        TransformedColumn::Bounds(values) => {
+            let arrays: Vec<plenora_core::arrow::array::ArrayRef> = (0..4)
+                .map(|axis| {
+                    std::sync::Arc::new(Float64Array::from(
+                        values
+                            .iter()
+                            .map(|value| value.map(|bounds| bounds[axis]))
+                            .collect::<Vec<Option<f64>>>(),
+                    )) as plenora_core::arrow::array::ArrayRef
+                })
+                .collect();
+            columns.splice(geometry_index..=geometry_index, arrays);
+        }
+    }
+    RecordBatch::try_new(prepared.output_schema.clone(), columns)
+        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+}
+
+/// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
+/// GeoArrow-WKB, Float64, `UInt64`, Utf8 oppure quattro colonne Float64 per
+/// `bounds`); tutte le altre colonne passano invariate; i null sono preservati.
+fn one_to_one_batches(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    params: &TransformArrowSchema,
+) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
+    let prepared = prepare_one_to_one(schema, params)?;
     let mut output_batches = Vec::with_capacity(batches.len());
     for batch in batches {
-        let cells = batch
-            .column(geometry_index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| ArrowTransportError::GeometryColumnNotBinary {
-                name: geometry_column.to_owned(),
-                actual: batch.column(geometry_index).data_type().to_string(),
-            })?;
-        let transformed = transform_cells(params, cells)?;
-        let mut columns = batch.columns().to_vec();
-        match transformed {
-            TransformedColumn::Binary(values) => {
-                columns[geometry_index] = std::sync::Arc::new(
-                    values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
-                );
-            }
-            TransformedColumn::Float64(values) => {
-                columns[geometry_index] = std::sync::Arc::new(Float64Array::from(values));
-            }
-            TransformedColumn::UInt64(values) => {
-                columns[geometry_index] = std::sync::Arc::new(UInt64Array::from(values));
-            }
-            TransformedColumn::Utf8(values) => {
-                columns[geometry_index] = std::sync::Arc::new(StringArray::from(values));
-            }
-            TransformedColumn::Bounds(values) => {
-                let arrays: Vec<plenora_core::arrow::array::ArrayRef> = (0..4)
-                    .map(|axis| {
-                        std::sync::Arc::new(Float64Array::from(
-                            values
-                                .iter()
-                                .map(|value| value.map(|bounds| bounds[axis]))
-                                .collect::<Vec<Option<f64>>>(),
-                        )) as plenora_core::arrow::array::ArrayRef
-                    })
-                    .collect();
-                columns.splice(geometry_index..=geometry_index, arrays);
-            }
-        }
-        output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
-        );
+        output_batches.push(one_to_one_batch_prepared(batch, params, &prepared)?);
     }
-    Ok((std::sync::Arc::new(output_schema), output_batches))
+    Ok((prepared.output_schema, output_batches))
 }
 
 fn batch_geometry_cells<'a>(
@@ -3921,7 +3970,10 @@ pub fn pair_arrow(
                 .boolean_kernel()
                 .ok_or(ArrowTransportError::Internal("booleana pairwise senza kernel"))?;
             // righe indipendenti: parallelo con ordine deterministico.
-            let values: Vec<Option<Vec<u8>>> = left
+            // ADR-0001: primo errore in ordine di riga (collect
+            // sequenziale dopo quello parallelo indicizzato), mai la
+            // selezione non deterministica di rayon.
+            let results: Vec<Result<Option<Vec<u8>>, ArrowTransportError>> = left
                 .par_iter()
                 .zip(right.par_iter())
                 .map(|(left_geometry, right_geometry)| {
@@ -3938,7 +3990,9 @@ pub fn pair_arrow(
                         _ => Ok(None),
                     }
                 })
-                .collect::<Result<Vec<_>, ArrowTransportError>>()?;
+                .collect();
+            let values: Vec<Option<Vec<u8>>> =
+                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
             let output_crs = schema
                 .left_crs
                 .as_deref()
@@ -3967,18 +4021,22 @@ pub fn pair_arrow(
             let predicate = schema
                 .spatial_predicate
                 .ok_or(ArrowTransportError::Internal("spatial_predicate validato assente"))?;
-            let flags: Vec<Option<bool>> =
-                left.par_iter()
-                    .zip(right.par_iter())
-                    .map(|(left_geometry, right_geometry)| {
-                        Ok(match (left_geometry, right_geometry) {
-                            (Some(left_geometry), Some(right_geometry)) => Some(
-                                evaluate_predicate(left_geometry, right_geometry, predicate)?,
-                            ),
-                            _ => None,
-                        })
+            // ADR-0001: primo errore in ordine di riga (collect
+            // sequenziale dopo quello parallelo indicizzato).
+            let results: Vec<Result<Option<bool>, ArrowTransportError>> = left
+                .par_iter()
+                .zip(right.par_iter())
+                .map(|(left_geometry, right_geometry)| {
+                    Ok(match (left_geometry, right_geometry) {
+                        (Some(left_geometry), Some(right_geometry)) => Some(
+                            evaluate_predicate(left_geometry, right_geometry, predicate)?,
+                        ),
+                        _ => None,
                     })
-                    .collect::<Result<Vec<_>, ArrowTransportError>>()?;
+                })
+                .collect();
+            let flags: Vec<Option<bool>> =
+                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
             let column_name = format!("predicate_{}", spatial_predicate_name(predicate));
             append_column_batches(
                 &left_schema,
@@ -4003,7 +4061,9 @@ pub fn pair_arrow(
             let max_pairs = schema
                 .max_coordinate_pairs
                 .ok_or(ArrowTransportError::Internal("max_coordinate_pairs validato assente"))?;
-            let values: Vec<Option<f64>> = left
+            // ADR-0001: primo errore in ordine di riga (collect
+            // sequenziale dopo quello parallelo indicizzato).
+            let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
                 .par_iter()
                 .zip(right.par_iter())
                 .map(|(left_geometry, right_geometry)| {
@@ -4022,7 +4082,9 @@ pub fn pair_arrow(
                         _ => None,
                     })
                 })
-                .collect::<Result<Vec<_>, ArrowTransportError>>()?;
+                .collect();
+            let values: Vec<Option<f64>> =
+                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
             append_column_batches(
                 &left_schema,
                 &left_batches,
@@ -4045,7 +4107,9 @@ pub fn pair_arrow(
                     limit,
                 });
             }
-            let values: Vec<Option<f64>> = left
+            // ADR-0001: primo errore in ordine di riga (collect
+            // sequenziale dopo quello parallelo indicizzato).
+            let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
                 .par_iter()
                 .zip(right.par_iter())
                 .map(|(left_geometry, right_geometry)| {
@@ -4067,7 +4131,9 @@ pub fn pair_arrow(
                         _ => None,
                     })
                 })
-                .collect::<Result<Vec<_>, ArrowTransportError>>()?;
+                .collect();
+            let values: Vec<Option<f64>> =
+                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
             append_column_batches(
                 &left_schema,
                 &left_batches,
