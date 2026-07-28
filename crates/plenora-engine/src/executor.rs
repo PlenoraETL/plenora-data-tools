@@ -144,7 +144,7 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
 use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{Field, Schema, SchemaRef};
+use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
 use plenora_core::catalog::{
@@ -1028,6 +1028,14 @@ impl Output {
         let mut stream = self.stream;
         let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
+            // Cache della decisione di rivestimento per Arc di schema: i
+            // batch di uno stream condividono lo stesso Arc (lo schema del
+            // contratto del kernel), quindi il confronto profondo di
+            // `Schema` (campi + mappe metadata) si esegue solo al primo
+            // batch di ogni schema distinto (V2: lavoro hoistable fuori
+            // dal loop). Il rivestimento resta fail-closed: `try_new`
+            // rivalida ogni batch rivestito.
+            let mut schema_decision: Option<(SchemaRef, bool)> = None;
             for item in &mut stream {
                 let batch = item?.into_batch();
                 // Lo schema emesso (blocco canonico R2.2/R2.5 fuso dal
@@ -1035,10 +1043,19 @@ impl Output {
                 // metadati: rivestimento a costo zero sui buffer (colonne
                 // condivise via Arc), fail-closed su qualunque altra
                 // divergenza (tipo, numero di colonne).
-                let batch = if batch.schema() == schema {
-                    batch
-                } else {
+                let batch_schema = batch.schema();
+                let rewrap = match &schema_decision {
+                    Some((seen, decision)) if Arc::ptr_eq(seen, &batch_schema) => *decision,
+                    _ => {
+                        let decision = batch_schema != schema;
+                        schema_decision = Some((batch_schema, decision));
+                        decision
+                    }
+                };
+                let batch = if rewrap {
                     RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?
+                } else {
+                    batch
                 };
                 ipc.write(&batch)?;
             }
@@ -1540,25 +1557,24 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
 /// le op `WholeToMany` (`geo.generate_grid`, `geo.coverage_validate`,
 /// `geo.shared_paths`) sono generative/diagnostiche — l'input funge da
 /// trigger o da insieme da analizzare, non da base proporzionale
-/// dell'output.
-fn expansion_exempt(kernel: &PreparedKernel) -> bool {
-    find_operation(kernel.operation)
-        .is_some_and(|descriptor| descriptor.expansion_factor_exempt)
+/// dell'output. Risolta in `prepare` (V2: nessuno scan del catalogo nel
+/// loop per batch).
+const fn expansion_exempt(kernel: &PreparedKernel) -> bool {
+    kernel.expansion_factor_exempt
 }
 
 /// Comportamento alla cancellazione del kernel (ADR 3, M1c): dichiarato in
-/// catalogo dal descriptor dell'operazione. Default `Cooperative` se l'op
-/// non fosse trovata (non dovrebbe accadere: il piano e' validato sul
-/// catalogo — conservativo: piu' punti di check, mai meno).
+/// catalogo dal descriptor dell'operazione e risolto in `prepare` (V2:
+/// nessuno scan del catalogo nel loop per batch).
+// Non const fn: sotto cfg(test) chiama l'hook `test_behavior_override`
+// (non const) — nel build normale il corpo e' la sola lettura di campo.
+#[allow(clippy::missing_const_for_fn)]
 fn cancellation_behavior(kernel: &PreparedKernel) -> CancellationBehavior {
     #[cfg(test)]
     if let Some(behavior) = test_behavior_override(&kernel.node_id) {
         return behavior;
     }
-    find_operation(kernel.operation)
-        .map_or(CancellationBehavior::Cooperative, |descriptor| {
-            descriptor.cancellation_behavior
-        })
+    kernel.cancellation_behavior
 }
 
 /// Hook di test (ADR 3): override del `CancellationBehavior` di catalogo
@@ -1906,10 +1922,7 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
             kernel.node_id
         ))),
         PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params),
-        PreparedConfig::GeoMeasure {
-            measure,
-            output_column,
-        } => geo_measure_batch(kernel, &batch, *measure, output_column),
+        PreparedConfig::GeoMeasure { measure, .. } => geo_measure_batch(kernel, &batch, *measure),
         PreparedConfig::GeoFromWkt {
             wkt_column_index,
             on_error,
@@ -1979,7 +1992,6 @@ fn geo_measure_batch(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
     measure: MeasureKind,
-    output_column: &str,
 ) -> Result<RecordBatch> {
     let geometry_index = kernel.geometry_column_index.ok_or_else(|| {
         step_error(
@@ -2031,18 +2043,10 @@ fn geo_measure_batch(
             std::sync::Arc::new(StringArray::from(values))
         }
     };
-    let mut fields: Vec<Field> = batch
-        .schema()
-        .fields()
-        .iter()
-        .map(|field| field.as_ref().clone())
-        .collect();
-    fields.push(Field::new(output_column, measure.data_type(), true));
-    let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
-    let mut columns = batch.columns().to_vec();
-    columns.push(column);
-    RecordBatch::try_new(std::sync::Arc::new(schema), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    // Lo schema di output e' quello del contratto (input + colonna misura),
+    // un clone di Arc condiviso: nessuna ricostruzione per batch (V1),
+    // stesso percorso degli altri kernel add-column.
+    append_output_column(kernel, batch, column)
 }
 
 /// Misura scalare su una cella (null-in → null-out).

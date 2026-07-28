@@ -440,6 +440,12 @@ pub struct PreparedKernel {
     pub input_contracts: Vec<DataContract>,
     /// Contratto dell'arco di output del nodo.
     pub output_contract: DataContract,
+    /// Comportamento alla cancellazione dichiarato in catalogo (ADR 3),
+    /// risolto in `prepare` (V2: nessuno scan del catalogo a runtime).
+    pub cancellation_behavior: plenora_core::catalog::CancellationBehavior,
+    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6),
+    /// risolta in `prepare` (V2: nessuno scan del catalogo a runtime).
+    pub expansion_factor_exempt: bool,
 }
 
 /// Segmento fisico dell'`ExecutionPlan` (E2).
@@ -907,6 +913,8 @@ fn prepare_kernel(
         config,
         input_contracts,
         output_contract,
+        cancellation_behavior: descriptor.cancellation_behavior,
+        expansion_factor_exempt: descriptor.expansion_factor_exempt,
     })
 }
 

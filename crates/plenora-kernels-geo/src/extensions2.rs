@@ -661,19 +661,11 @@ pub fn subdivide_wkb(payload: &[u8], max_vertices: usize) -> Result<Vec<Vec<u8>>
 // geo.snap
 // ---------------------------------------------------------------------------
 
-fn snap_validated(
+fn snap_with_tree(
     geometry: &Geometry<f64>,
-    reference: &Geometry<f64>,
+    tree: &RTree<[f64; 2]>,
     tolerance: f64,
 ) -> Result<Geometry<f64>, ExtensionV2Error> {
-    let reference_vertices: Vec<[f64; 2]> = reference
-        .coords_iter()
-        .map(|coordinate| [coordinate.x, coordinate.y])
-        .collect();
-    if reference_vertices.is_empty() {
-        return Ok(geometry.clone());
-    }
-    let tree = RTree::bulk_load(reference_vertices);
     // Rect/Triangle non esistono nel trasporto WKB; snappati come poligoni
     // per non violare l'invariante min <= max di Rect.
     let working = match geometry {
@@ -690,6 +682,22 @@ fn snap_validated(
         }
     });
     validate_output(snapped)
+}
+
+fn snap_validated(
+    geometry: &Geometry<f64>,
+    reference: &Geometry<f64>,
+    tolerance: f64,
+) -> Result<Geometry<f64>, ExtensionV2Error> {
+    let reference_vertices: Vec<[f64; 2]> = reference
+        .coords_iter()
+        .map(|coordinate| [coordinate.x, coordinate.y])
+        .collect();
+    if reference_vertices.is_empty() {
+        return Ok(geometry.clone());
+    }
+    let tree = RTree::bulk_load(reference_vertices);
+    snap_with_tree(geometry, &tree, tolerance)
 }
 
 /// Aggancia ogni vertice della geometria al vertice del riferimento piu'
@@ -752,10 +760,26 @@ pub fn snap_column(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     ensure_valid(reference).map_err(|error| snap_error(&error))?;
     check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
+    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (V2: il
+    // riferimento non cambia mai tra le righe), non per cella — il costo
+    // O(V log V) e' condiviso da tutte le query delle N righe.
+    let reference_vertices: Vec<[f64; 2]> = reference
+        .coords_iter()
+        .map(|coordinate| [coordinate.x, coordinate.y])
+        .collect();
+    if reference_vertices.is_empty() {
+        // Come `snap_validated` con riferimento vuoto: geometria invariata
+        // (decode + encode, nessuna validazione OGC aggiuntiva).
+        return map_nullable(cells, |payload| {
+            let geometry = decode_geometry_cell(payload)?;
+            encode_geometry(&geometry).map(Some)
+        });
+    }
+    let tree = RTree::bulk_load(reference_vertices);
     map_nullable(cells, |payload| {
         let geometry = decode_geometry_cell(payload)?;
         let snapped =
-            snap_validated(&geometry, reference, tolerance).map_err(|error| snap_error(&error))?;
+            snap_with_tree(&geometry, &tree, tolerance).map_err(|error| snap_error(&error))?;
         encode_geometry(&snapped).map(Some)
     })
 }
