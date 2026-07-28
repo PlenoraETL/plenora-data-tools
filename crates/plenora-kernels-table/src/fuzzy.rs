@@ -210,7 +210,21 @@ pub(crate) fn soundex(text: &str) -> String {
     out
 }
 
+#[cfg(test)]
 fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
+    let mut left_matched = vec![false; left.len()];
+    let mut right_matched = vec![false; right.len()];
+    jaro_similarity_scratch(left, right, &mut left_matched, &mut right_matched)
+}
+
+/// Jaro con flag di match forniti dal chiamante (riuso buffer nel probe di
+/// `fuzzy_join`, V2): stessa sequenza di confronti, risultato bit-identico.
+fn jaro_similarity_scratch(
+    left: &[char],
+    right: &[char],
+    left_matched: &mut [bool],
+    right_matched: &mut [bool],
+) -> f64 {
     if left.is_empty() && right.is_empty() {
         return 1.0;
     }
@@ -218,8 +232,6 @@ fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
         return 0.0;
     }
     let window = (left.len().max(right.len()) / 2).saturating_sub(1);
-    let mut left_matched = vec![false; left.len()];
-    let mut right_matched = vec![false; right.len()];
     let mut matches = 0_usize;
     for (index, &letter) in left.iter().enumerate() {
         let start = index.saturating_sub(window);
@@ -261,6 +273,7 @@ fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
 
 /// Jaro-Winkler: Jaro + boost di prefisso comune (p = 0.1, massimo 4
 /// caratteri). Nessuna soglia minima di attivazione del boost.
+#[cfg(test)]
 pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
     let right: Vec<char> = right.chars().collect();
@@ -277,27 +290,44 @@ pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
 }
 
 /// Distanza di Levenshtein su caratteri Unicode (DP a due righe).
+#[cfg(test)]
 fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
+    let mut previous: Vec<usize> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    levenshtein_distance_scratch(left, right, &mut previous, &mut current)
+}
+
+/// DP di Levenshtein con righe fornite dal chiamante (riuso buffer nel
+/// probe di `fuzzy_join`, V2): stesso ordine di calcolo, risultato identico.
+fn levenshtein_distance_scratch(
+    left: &[char],
+    right: &[char],
+    previous: &mut Vec<usize>,
+    current: &mut Vec<usize>,
+) -> usize {
     if left.is_empty() {
         return right.len();
     }
     if right.is_empty() {
         return left.len();
     }
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    let mut current = vec![0_usize; right.len() + 1];
+    previous.clear();
+    previous.extend(0..=right.len());
+    current.clear();
+    current.resize(right.len() + 1, 0);
     for (row, &a) in left.iter().enumerate() {
         current[0] = row + 1;
         for (col, &b) in right.iter().enumerate() {
             let substitution = previous[col] + usize::from(a != b);
             current[col + 1] = (previous[col + 1] + 1).min(current[col] + 1).min(substitution);
         }
-        std::mem::swap(&mut previous, &mut current);
+        std::mem::swap(previous, current);
     }
     previous[right.len()]
 }
 
 /// Levenshtein normalizzato: `1 - dist/max_len`; due stringhe vuote -> 1.0.
+#[cfg(test)]
 pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
     let right: Vec<char> = right.chars().collect();
@@ -312,6 +342,7 @@ pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
 
 /// Jaccard sui token (split whitespace, insiemi); due stringhe senza token
 /// -> 1.0.
+#[cfg(test)]
 pub(crate) fn jaccard_tokens(left: &str, right: &str) -> f64 {
     let left_tokens: std::collections::HashSet<&str> = left.split_whitespace().collect();
     let right_tokens: std::collections::HashSet<&str> = right.split_whitespace().collect();
@@ -325,12 +356,84 @@ pub(crate) fn jaccard_tokens(left: &str, right: &str) -> f64 {
     score
 }
 
-fn score(metric: FuzzyMetric, left: &str, right: &str) -> f64 {
-    match metric {
-        FuzzyMetric::JaroWinkler => jaro_winkler(left, right),
-        FuzzyMetric::Levenshtein => levenshtein_normalized(left, right),
-        FuzzyMetric::Jaccard => jaccard_tokens(left, right),
+/// Buffer riusati per le metriche di coppia nel probe di `fuzzy_join`
+/// (V2: nessuna allocazione per coppia candidata). I risultati sono
+/// bit-identici alle versioni allocanti: stesse operazioni f64 nello
+/// stesso ordine.
+#[derive(Default)]
+struct FuzzyScratch {
+    left_matched: Vec<bool>,
+    right_matched: Vec<bool>,
+    previous: Vec<usize>,
+    current: Vec<usize>,
+}
+
+/// Jaro-Winkler su caratteri pre-decodificati con flag riusati.
+fn jaro_winkler_chars(left: &[char], right: &[char], scratch: &mut FuzzyScratch) -> f64 {
+    scratch.left_matched.clear();
+    scratch.left_matched.resize(left.len(), false);
+    scratch.right_matched.clear();
+    scratch.right_matched.resize(right.len(), false);
+    let jaro = jaro_similarity_scratch(
+        left,
+        right,
+        &mut scratch.left_matched,
+        &mut scratch.right_matched,
+    );
+    let prefix = left
+        .iter()
+        .zip(right)
+        .take(4)
+        .take_while(|(a, b)| a == b)
+        .count();
+    #[allow(clippy::cast_precision_loss)]
+    let boost = prefix as f64 * 0.1 * (1.0 - jaro);
+    jaro + boost
+}
+
+/// Levenshtein normalizzato su caratteri pre-decodificati con righe DP
+/// riusate.
+fn levenshtein_normalized_chars(left: &[char], right: &[char], scratch: &mut FuzzyScratch) -> f64 {
+    let max_len = left.len().max(right.len());
+    if max_len == 0 {
+        return 1.0;
     }
+    #[allow(clippy::cast_precision_loss)]
+    let score = 1.0
+        - levenshtein_distance_scratch(left, right, &mut scratch.previous, &mut scratch.current)
+            as f64
+            / max_len as f64;
+    score
+}
+
+/// Jaccard su insiemi di token pre-costruiti (nessuna allocazione per
+/// coppia).
+fn jaccard_sets(
+    left: &std::collections::HashSet<&str>,
+    right: &std::collections::HashSet<&str>,
+) -> f64 {
+    if left.is_empty() && right.is_empty() {
+        return 1.0;
+    }
+    let intersection = left.intersection(right).count();
+    let union = left.len() + right.len() - intersection;
+    #[allow(clippy::cast_precision_loss)]
+    let score = intersection as f64 / union as f64;
+    score
+}
+
+/// Forma decodificata del lato destro, costruita una tantum per la metrica
+/// scelta (V2): nessuna decodifica per coppia candidata nel probe.
+enum FuzzyForm<'a> {
+    Chars(Vec<Option<Vec<char>>>),
+    Tokens(Vec<Option<std::collections::HashSet<&'a str>>>),
+}
+
+/// Forma decodificata della riga sinistra corrente (una per riga, non per
+/// coppia).
+enum FuzzyRowForm<'a> {
+    Chars(Vec<char>),
+    Tokens(std::collections::HashSet<&'a str>),
 }
 
 /// Join per similarita' testuale (estensione v1.3): vedi la documentazione di
@@ -398,7 +501,25 @@ pub fn fuzzy_join(
         }
     }
     // Probe: scansione sinistra in ordine, candidate destre in ordine di
-    // indice (i `Vec` dei blocchi preservano l'ordine di inserzione).
+    // indice (i `Vec` dei blocchi preservano l'ordine di inserzione). Le
+    // forme decodificate per la metrica sono costruite una tantum (lato
+    // destro) e una per riga (lato sinistro): nessuna allocazione per
+    // coppia candidata (V2).
+    let right_decoded = match config.metric {
+        FuzzyMetric::JaroWinkler | FuzzyMetric::Levenshtein => FuzzyForm::Chars(
+            right_norm
+                .iter()
+                .map(|value| value.as_ref().map(|text| text.chars().collect()))
+                .collect(),
+        ),
+        FuzzyMetric::Jaccard => FuzzyForm::Tokens(
+            right_norm
+                .iter()
+                .map(|value| value.as_ref().map(|text| text.split_whitespace().collect()))
+                .collect(),
+        ),
+    };
+    let mut scratch = FuzzyScratch::default();
     let mut left_rows: Vec<Option<usize>> = Vec::new();
     let mut right_rows: Vec<Option<usize>> = Vec::new();
     let mut scores: Vec<Option<f64>> = Vec::new();
@@ -406,13 +527,55 @@ pub fn fuzzy_join(
         let mut matched = false;
         if let Some(value) = value {
             if let Some(candidates) = blocks.get(&block_key(value)) {
+                let left_decoded = match config.metric {
+                    FuzzyMetric::JaroWinkler | FuzzyMetric::Levenshtein => {
+                        FuzzyRowForm::Chars(value.chars().collect())
+                    }
+                    FuzzyMetric::Jaccard => {
+                        FuzzyRowForm::Tokens(value.split_whitespace().collect())
+                    }
+                };
                 for &right_row in candidates {
-                    let right_value = right_norm[right_row].as_ref().ok_or_else(|| {
+                    let null_block_error = || {
                         PlenoraError::Contract(
                             "internal error: righe destre nei blocchi non sono null".into(),
                         )
-                    })?;
-                    let similarity = score(config.metric, value, right_value);
+                    };
+                    let similarity = match (config.metric, &left_decoded, &right_decoded) {
+                        (
+                            FuzzyMetric::JaroWinkler,
+                            FuzzyRowForm::Chars(left_chars),
+                            FuzzyForm::Chars(right_chars),
+                        ) => {
+                            let right_chars =
+                                right_chars[right_row].as_ref().ok_or_else(null_block_error)?;
+                            jaro_winkler_chars(left_chars, right_chars, &mut scratch)
+                        }
+                        (
+                            FuzzyMetric::Levenshtein,
+                            FuzzyRowForm::Chars(left_chars),
+                            FuzzyForm::Chars(right_chars),
+                        ) => {
+                            let right_chars =
+                                right_chars[right_row].as_ref().ok_or_else(null_block_error)?;
+                            levenshtein_normalized_chars(left_chars, right_chars, &mut scratch)
+                        }
+                        (
+                            FuzzyMetric::Jaccard,
+                            FuzzyRowForm::Tokens(left_tokens),
+                            FuzzyForm::Tokens(right_tokens),
+                        ) => {
+                            let right_tokens =
+                                right_tokens[right_row].as_ref().ok_or_else(null_block_error)?;
+                            jaccard_sets(left_tokens, right_tokens)
+                        }
+                        _ => {
+                            return Err(PlenoraError::Contract(
+                                "internal error: forma decodificata incoerente con la metrica"
+                                    .into(),
+                            ));
+                        }
+                    };
                     if similarity >= config.threshold {
                         left_rows.push(Some(left_row));
                         right_rows.push(Some(right_row));

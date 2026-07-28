@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::hash::Hasher as _;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -12,7 +13,6 @@ use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::StreamWriter;
 use plenora_core::arrow::schema::DataType;
 use plenora_core::arrow::select::concat::concat_batches;
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, KeyHasher, Sort};
@@ -72,12 +72,15 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
             "spill richiede almeno una partizione".into(),
         ));
     }
-    let digest = Sha256::digest(key);
-    let mut prefix = [0_u8; 8];
-    prefix.copy_from_slice(&digest[..8]);
-    let hash = u64::from_be_bytes(prefix);
+    // `KeyHasher` (FxHash+splitmix64, deterministico per costruzione) al
+    // posto di SHA-256: la scelta della partizione non e' osservabile —
+    // la correttezza richiede solo "stessa chiave -> stessa partizione"
+    // (il riordino canonico usa i byte di chiave, mai la partizione) e un
+    // hash crittografico per riga era il costo dominante dello spill.
+    let mut hasher = KeyHasher::default();
+    hasher.write(key);
     let divisor = partitions as u64;
-    usize::try_from(hash % divisor)
+    usize::try_from(hasher.finish() % divisor)
         .map_err(|_| PlenoraError::Contract("indice partizione non rappresentabile".into()))
 }
 
@@ -377,7 +380,7 @@ pub fn execute_set_operation(
 // e' irrilevante a queste dimensioni di chunk: nessuna controindicazione
 // forte, si usa IPC.
 //
-// Il partizionamento hash riusa `partition` (Sha256 sui byte di chiave di
+// Il partizionamento hash riusa `partition` (`KeyHasher` sui byte di chiave di
 // `KeyColumn`, gli stessi di `row_key`): chiavi uguali finiscono sempre nella
 // stessa partizione, quindi gruppi e duplicati non attraversano mai le
 // partizioni e l'aggregazione/distinct per partizione e' esatta.

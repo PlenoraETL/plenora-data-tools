@@ -83,29 +83,96 @@ fn json_text(value: &serde_json::Value) -> String {
     }
 }
 
+/// Condizione di filtro con il valore atteso risolto UNA volta per batch
+/// (V2: nessun parse del letterale per riga nel percorso generico).
+///
+/// Il parse avviene alla PRIMA valutazione di riga e il risultato
+/// (successo o messaggio d'errore) e' riusato per tutte le righe
+/// successive: il punto di errore e' identico al parse per riga (la prima
+/// riga valutata), il costo e' pagato una volta. `PlenoraError` non e'
+/// `Clone`: la cella conserva il messaggio e ricostruisce la variante
+/// (`Contract`, testo identico).
+struct PreparedCondition {
+    operator: Operator,
+    /// `json_text` del valore di configurazione, calcolato al costruttore.
+    expected: String,
+    /// Letterale numerico parsato (rami Eq/Ne e ordinati), alla prima riga.
+    bound: std::cell::OnceCell<std::result::Result<NumericBound, String>>,
+    /// Estremi di `between` parsati, alla prima riga del ramo.
+    between: std::cell::OnceCell<std::result::Result<(NumericBound, NumericBound), String>>,
+    /// Forma minuscola per `contains`, alla prima riga del ramo.
+    expected_lowercase: std::cell::OnceCell<String>,
+    /// `json_text` del risultato (solo `conditional`): calcolato al
+    /// costruttore, clonato per riga invece che ri-serializzato.
+    result: String,
+}
+
+impl PreparedCondition {
+    fn new(operator: &Operator, value: &serde_json::Value, result: &serde_json::Value) -> Self {
+        Self {
+            operator: operator.clone(),
+            expected: json_text(value),
+            bound: std::cell::OnceCell::new(),
+            between: std::cell::OnceCell::new(),
+            expected_lowercase: std::cell::OnceCell::new(),
+            result: json_text(result),
+        }
+    }
+
+    /// Il letterale numerico condiviso (parse alla prima riga, errore con
+    /// testo identico al percorso per riga).
+    fn numeric_bound(&self, message: &str) -> Result<NumericBound> {
+        match self.bound.get_or_init(|| {
+            NumericBound::parse(&self.expected).ok_or_else(|| message.to_owned())
+        }) {
+            Ok(bound) => Ok(*bound),
+            Err(stored) => Err(PlenoraError::Contract(stored.clone())),
+        }
+    }
+
+    /// Gli estremi di `between` condivisi (stessi tre errori del percorso
+    /// per riga, nello stesso ordine di valutazione).
+    fn between_bounds(&self) -> Result<(NumericBound, NumericBound)> {
+        match self.between.get_or_init(|| {
+            let expected = &self.expected;
+            let Some((low, high)) = expected.split_once(',') else {
+                return Err("between richiede min,max".to_owned());
+            };
+            let low = NumericBound::parse(low.trim())
+                .ok_or_else(|| "min between non valido".to_owned())?;
+            let high = NumericBound::parse(high.trim())
+                .ok_or_else(|| "max between non valido".to_owned())?;
+            Ok((low, high))
+        }) {
+            Ok(bounds) => Ok(*bounds),
+            Err(stored) => Err(PlenoraError::Contract(stored.clone())),
+        }
+    }
+
+    /// La forma minuscola del valore atteso per `contains`.
+    fn expected_lowercase(&self) -> &str {
+        self.expected_lowercase
+            .get_or_init(|| self.expected.to_lowercase())
+    }
+}
+
 #[allow(clippy::too_many_lines)] // dispatcher esaustivo per operatore: un solo corpo tiene allineati generico e fast path
-fn evaluate(
-    array: &dyn Array,
-    row: usize,
-    operator: &Operator,
-    value: &serde_json::Value,
-) -> Result<bool> {
+fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Result<bool> {
+    let operator = &condition.operator;
     match operator {
         Operator::Isnull => return Ok(array.is_null(row)),
         Operator::Notnull => return Ok(!array.is_null(row)),
         _ if array.is_null(row) => return Ok(false),
         _ => {}
     }
-    let expected = json_text(value);
+    let expected = condition.expected.as_str();
     match operator {
         Operator::Eq | Operator::Ne => {
             let equal = if array.data_type() == &DataType::Int64 {
                 // Confronto esatto nativo: il letterale intero resta intero
                 // (nessun collasso oltre 2^53); il misto intero<->double e'
                 // esatto (vedi `NumericBound` in lib.rs).
-                let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
-                })?;
+                let bound = condition.numeric_bound("confronto numerico con valore non numerico")?;
                 let values = array
                     .as_any()
                     .downcast_ref::<Int64Array>()
@@ -115,9 +182,7 @@ fn evaluate(
                 // Semantica storica sui double (`total_cmp`, 0.0 == -0.0,
                 // NaN uguale a NaN); un letterale intero oltre 2^53 usa il
                 // confronto misto esatto invece dell'arrotondamento a f64.
-                let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
-                })?;
+                let bound = condition.numeric_bound("confronto numerico con valore non numerico")?;
                 let values = array
                     .as_any()
                     .downcast_ref::<Float64Array>()
@@ -141,9 +206,7 @@ fn evaluate(
             })
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
-            let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                PlenoraError::Contract("confronto ordinato richiede un valore numerico".into())
-            })?;
+            let bound = condition.numeric_bound("confronto ordinato richiede un valore numerico")?;
             // Int64/UInt64 nativi esatti; Float64 in misto esatto contro i
             // letterali interi; gli altri tipi numerici (Decimal128, Date32,
             // Timestamp(ms), Utf8 numerico) restano sul profilo f64 storico.
@@ -168,9 +231,11 @@ fn evaluate(
         Operator::Contains | Operator::Startswith | Operator::Endswith => {
             let actual = scalar_as_string(array, row)?.unwrap_or_default();
             Ok(match operator {
-                Operator::Contains => actual.to_lowercase().contains(&expected.to_lowercase()),
-                Operator::Startswith => actual.starts_with(&expected),
-                Operator::Endswith => actual.ends_with(&expected),
+                Operator::Contains => actual
+                    .to_lowercase()
+                    .contains(condition.expected_lowercase()),
+                Operator::Startswith => actual.starts_with(expected),
+                Operator::Endswith => actual.ends_with(expected),
                 _ => {
                     return Err(PlenoraError::Contract(
                         "internal error: operatore non testuale nel ramo testuale".into(),
@@ -179,13 +244,7 @@ fn evaluate(
             })
         }
         Operator::Between => {
-            let (low, high) = expected
-                .split_once(',')
-                .ok_or_else(|| PlenoraError::Contract("between richiede min,max".into()))?;
-            let low = NumericBound::parse(low.trim())
-                .ok_or_else(|| PlenoraError::Contract("min between non valido".into()))?;
-            let high = NumericBound::parse(high.trim())
-                .ok_or_else(|| PlenoraError::Contract("max between non valido".into()))?;
+            let (low, high) = condition.between_bounds()?;
             let within = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 within_bounds(
                     compare_i64(values.value(row), low),
@@ -441,17 +500,20 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index);
-    let rows = match fast_rows(array, &config.operator, &config.value) {
-        Some(result) => result?,
-        None => (0..batch.num_rows())
-            .filter_map(
-                |row| match evaluate(array.as_ref(), row, &config.operator, &config.value) {
-                    Ok(true) => Some(Ok(row)),
-                    Ok(false) => None,
-                    Err(error) => Some(Err(error)),
-                },
-            )
-            .collect::<Result<Vec<_>>>()?,
+    let rows = if let Some(result) = fast_rows(array, &config.operator, &config.value) {
+        result?
+    } else {
+        // Il valore atteso e' risolto una volta per batch (V2): il
+        // primo errore di parse scatta alla prima riga valutata, come
+        // nel percorso per riga.
+        let condition = PreparedCondition::new(&config.operator, &config.value, &config.value);
+        (0..batch.num_rows())
+            .filter_map(|row| match evaluate(array.as_ref(), row, &condition) {
+                Ok(true) => Some(Ok(row)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?
     };
     select_rows(batch, &rows)
 }
@@ -469,21 +531,28 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    let values = (0..batch.num_rows())
-        .map(|row| {
-            for condition in &config.conditions {
-                if evaluate(source.as_ref(), row, &condition.operator, &condition.value)? {
-                    return Ok(json_text(&condition.result));
-                }
-            }
-            Ok(json_text(&config.default_value))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let numeric = config
+    // Valori attesi e testi di risultato risolti una volta per batch (V2):
+    // per riga restano solo valutazione e clone della stringa di output.
+    let conditions: Vec<PreparedCondition> = config
         .conditions
         .iter()
-        .map(|c| json_text(&c.result))
-        .chain(std::iter::once(json_text(&config.default_value)))
+        .map(|condition| PreparedCondition::new(&condition.operator, &condition.value, &condition.result))
+        .collect();
+    let default_text = json_text(&config.default_value);
+    let values = (0..batch.num_rows())
+        .map(|row| {
+            for condition in &conditions {
+                if evaluate(source.as_ref(), row, condition)? {
+                    return Ok(condition.result.clone());
+                }
+            }
+            Ok(default_text.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let numeric = conditions
+        .iter()
+        .map(|condition| condition.result.clone())
+        .chain(std::iter::once(default_text))
         .all(|v| v.is_empty() || v.replace(',', ".").parse::<f64>().is_ok());
     if numeric {
         let out = values
@@ -529,14 +598,13 @@ mod tests {
     fn generic_filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
         let array = batch.column(index);
+        let condition = PreparedCondition::new(&config.operator, &config.value, &config.value);
         let rows = (0..batch.num_rows())
-            .filter_map(
-                |row| match evaluate(array.as_ref(), row, &config.operator, &config.value) {
-                    Ok(true) => Some(Ok(row)),
-                    Ok(false) => None,
-                    Err(error) => Some(Err(error)),
-                },
-            )
+            .filter_map(|row| match evaluate(array.as_ref(), row, &condition) {
+                Ok(true) => Some(Ok(row)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect::<Result<Vec<_>>>()?;
         select_rows(batch, &rows)
     }
