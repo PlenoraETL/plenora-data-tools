@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
     UInt64Array,
@@ -1183,6 +1184,136 @@ pub struct AsOfJoin {
     pub allow_exact: bool,
 }
 
+/// Valore `on` della riga da array tipizzato (fast path di `asof_join`).
+///
+/// Stessa conversione di `scalar_as_f64`: Int64 oltre 2^53 e' un errore
+/// `Schema` (mai arrotondato), null in ingresso -> null in uscita.
+fn asof_on_value(array: &dyn Array, row: usize) -> Result<Option<f64>> {
+    if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+        return values
+            .is_valid(row)
+            .then(|| {
+                values
+                    .value(row)
+                    .to_f64()
+                    .ok_or_else(|| PlenoraError::Schema("intero non rappresentabile come f64".into()))
+            })
+            .transpose();
+    }
+    let values = array
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| PlenoraError::Schema("asof_join richiede chiavi Int64 o Float64".into()))?;
+    Ok(values.is_valid(row).then(|| values.value(row)))
+}
+
+/// Righe destre del fast path di `asof_join`: build con chiavi native
+/// (`FastKeys`, nessuna stringa per riga) e probe con buffer riusato.
+#[allow(clippy::too_many_arguments)] // Parametri gia' risolti dal chiamante (V2): nessun ricalcolo.
+fn asof_right_rows_fast(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    config: &AsOfJoin,
+    left_on: usize,
+    right_on: usize,
+    left_keys: &FastKeys,
+    right_keys: &FastKeys,
+) -> Result<Vec<Option<usize>>> {
+    // Build sul lato destro: la chiave e' clonata solo al primo inserimento
+    // del gruppo (pattern gia' usato nei contatori dei limiti).
+    let mut groups: HashMap<Vec<KeyVal>, Vec<(f64, usize)>, FastHasher> = HashMap::default();
+    let mut buffer: Vec<KeyVal> = Vec::new();
+    for row in 0..right.num_rows() {
+        let Some(group) = right_keys.get(row, &mut buffer) else {
+            continue;
+        };
+        let Some(value) = asof_on_value(right.column(right_on).as_ref(), row)? else {
+            continue;
+        };
+        if value.is_finite() {
+            if let Some(rows) = groups.get_mut(group) {
+                rows.push((value, row));
+            } else {
+                groups.insert(group.to_vec(), vec![(value, row)]);
+            }
+        }
+    }
+    for rows in groups.values_mut() {
+        rows.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+    }
+    let mut right_rows = Vec::with_capacity(left.num_rows());
+    for row in 0..left.num_rows() {
+        let matched = match (
+            left_keys.get(row, &mut buffer),
+            asof_on_value(left.column(left_on).as_ref(), row)?,
+        ) {
+            (Some(group), Some(value)) if value.is_finite() => groups
+                .get(group)
+                .and_then(|rows| choose_asof(rows, value, &config.direction, config.allow_exact))
+                .filter(|(candidate, _)| {
+                    config
+                        .tolerance
+                        .is_none_or(|limit| (candidate - value).abs() <= limit)
+                })
+                .map(|(_, row)| row),
+            _ => None,
+        };
+        right_rows.push(matched);
+    }
+    Ok(right_rows)
+}
+
+/// Righe destre del percorso generico di `asof_join` (chiave testuale
+/// `group_key` + `scalar_as_f64`): riferimento di parita' del fast path
+/// tipizzato — stesso risultato per costruzione, usato come fallback per i
+/// tipi `by` fuori dal set nativo.
+#[allow(clippy::too_many_arguments)] // Parametri gia' risolti dal chiamante: nessun ricalcolo.
+fn asof_right_rows_generic(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    config: &AsOfJoin,
+    left_by: &[usize],
+    right_by: &[usize],
+    left_on: usize,
+    right_on: usize,
+) -> Result<Vec<Option<usize>>> {
+    let mut groups: HashMap<String, Vec<(f64, usize)>> = HashMap::new();
+    for row in 0..right.num_rows() {
+        let Some(group) = group_key(right, right_by, row)? else {
+            continue;
+        };
+        let Some(value) = scalar_as_f64(right.column(right_on).as_ref(), row)? else {
+            continue;
+        };
+        if value.is_finite() {
+            groups.entry(group).or_default().push((value, row));
+        }
+    }
+    for rows in groups.values_mut() {
+        rows.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+    }
+    let mut right_rows = Vec::with_capacity(left.num_rows());
+    for row in 0..left.num_rows() {
+        let matched = match (
+            group_key(left, left_by, row)?,
+            scalar_as_f64(left.column(left_on).as_ref(), row)?,
+        ) {
+            (Some(group), Some(value)) if value.is_finite() => groups
+                .get(&group)
+                .and_then(|rows| choose_asof(rows, value, &config.direction, config.allow_exact))
+                .filter(|(candidate, _)| {
+                    config
+                        .tolerance
+                        .is_none_or(|limit| (candidate - value).abs() <= limit)
+                })
+                .map(|(_, row)| row),
+            _ => None,
+        };
+        right_rows.push(matched);
+    }
+    Ok(right_rows)
+}
+
 fn group_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<String>> {
     if indices.is_empty() {
         Ok(Some(String::new()))
@@ -1295,40 +1426,32 @@ pub fn asof_join(
             ));
         }
     }
-    let mut groups: HashMap<String, Vec<(f64, usize)>> = HashMap::new();
-    for row in 0..right.num_rows() {
-        let Some(group) = group_key(right, &right_by, row)? else {
-            continue;
-        };
-        let Some(value) = scalar_as_f64(right.column(right_on).as_ref(), row)? else {
-            continue;
-        };
-        if value.is_finite() {
-            groups.entry(group).or_default().push((value, row));
-        }
+    // Fast path tipizzato (V2): chiavi `by` native (uguaglianza identica
+    // alla chiave stringa — invariante documentata di `KeyVal`) e `on` da
+    // array tipizzati; se un tipo `by` non e' coperto, il percorso
+    // generico per chiave testuale (stesso risultato, per costruzione).
+    if let (Some(left_keys), Some(right_keys)) =
+        (FastKeys::new(left, &left_by), FastKeys::new(right, &right_by))
+    {
+        let right_rows = asof_right_rows_fast(
+            left, right, config, left_on, right_on, &left_keys, &right_keys,
+        )?;
+        let left_rows = (0..left.num_rows()).map(Some).collect::<Vec<_>>();
+        let mut omitted = vec![right_on];
+        omitted.extend(right_by);
+        return combine_horizontal(
+            left,
+            right,
+            &left_rows,
+            &right_rows,
+            &omitted,
+            HorizontalNames::AsOf,
+            limits,
+        );
     }
-    for rows in groups.values_mut() {
-        rows.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
-    }
-    let mut right_rows = Vec::with_capacity(left.num_rows());
-    for row in 0..left.num_rows() {
-        let matched = match (
-            group_key(left, &left_by, row)?,
-            scalar_as_f64(left.column(left_on).as_ref(), row)?,
-        ) {
-            (Some(group), Some(value)) if value.is_finite() => groups
-                .get(&group)
-                .and_then(|rows| choose_asof(rows, value, &config.direction, config.allow_exact))
-                .filter(|(candidate, _)| {
-                    config
-                        .tolerance
-                        .is_none_or(|limit| (candidate - value).abs() <= limit)
-                })
-                .map(|(_, row)| row),
-            _ => None,
-        };
-        right_rows.push(matched);
-    }
+    let right_rows = asof_right_rows_generic(
+        left, right, config, &left_by, &right_by, left_on, right_on,
+    )?;
     let left_rows = (0..left.num_rows()).map(Some).collect::<Vec<_>>();
     let mut omitted = vec![right_on];
     omitted.extend(right_by);
@@ -1371,6 +1494,127 @@ mod tests {
 
     fn utf8_column(values: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(values.to_vec()))
+    }
+
+    fn f64_column(values: &[Option<f64>]) -> ArrayRef {
+        Arc::new(Float64Array::from(values.to_vec()))
+    }
+
+    /// Parita' fast/generico di `asof_join`: stesse righe destre, stessi
+    /// indici, su tutte le direzioni, `allow_exact` e tolleranze.
+    fn assert_asof_parity(on_is_float: bool) {
+        let right = batch(vec![
+            (
+                "on",
+                if on_is_float {
+                    f64_column(&[
+                        Some(10.0),
+                        Some(4.0),
+                        Some(7.0),
+                        Some(f64::NAN),
+                        Some(-0.0),
+                        Some(3.0),
+                        None,
+                    ])
+                } else {
+                    i64_column(&[Some(10), Some(4), Some(7), Some(0), Some(0), Some(3), None])
+                },
+            ),
+            (
+                "by",
+                utf8_column(&[Some("a"), Some("a"), Some("b"), Some("b"), Some("b"), None, Some("a")]),
+            ),
+            (
+                "by2",
+                i64_column(&[Some(1), Some(1), Some(2), Some(2), Some(2), Some(9), Some(1)]),
+            ),
+        ]);
+        let left = batch(vec![
+            (
+                "on",
+                if on_is_float {
+                    f64_column(&[Some(5.0), Some(8.0), Some(-0.0), Some(1.0), Some(6.0)])
+                } else {
+                    i64_column(&[Some(5), Some(8), Some(0), Some(1), Some(6)])
+                },
+            ),
+            (
+                "by",
+                utf8_column(&[Some("a"), Some("b"), Some("b"), None, Some("a")]),
+            ),
+            (
+                "by2",
+                i64_column(&[Some(1), Some(2), Some(2), Some(9), Some(1)]),
+            ),
+        ]);
+        let left_by = [1, 2];
+        let right_by = [1, 2];
+        let left_keys = FastKeys::new(&left, &left_by).expect("fast keys left");
+        let right_keys = FastKeys::new(&right, &right_by).expect("fast keys right");
+        for (direction, allow_exact, tolerance) in [
+            (AsOfDirection::Backward, true, None),
+            (AsOfDirection::Backward, false, None),
+            (AsOfDirection::Forward, true, None),
+            (AsOfDirection::Forward, false, Some(1.5)),
+            (AsOfDirection::Nearest, true, Some(1.5)),
+            (AsOfDirection::Nearest, false, None),
+        ] {
+            let config = AsOfJoin {
+                left_on: "on".into(),
+                right_on: "on".into(),
+                left_by: vec!["by".into(), "by2".into()],
+                right_by: vec!["by".into(), "by2".into()],
+                direction,
+                tolerance,
+                allow_exact,
+            };
+            let fast = asof_right_rows_fast(&left, &right, &config, 0, 0, &left_keys, &right_keys)
+                .expect("fast");
+            let reference =
+                asof_right_rows_generic(&left, &right, &config, &left_by, &right_by, 0, 0)
+                    .expect("generic");
+            assert_eq!(
+                fast, reference,
+                "parita' fast/generico (on_is_float={on_is_float}): {config:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn asof_fast_matches_generic_on_composite_keys_float_and_int() {
+        assert_asof_parity(true);
+        assert_asof_parity(false);
+    }
+
+    #[test]
+    fn asof_falls_back_to_generic_for_unsupported_by_types() {
+        // Una colonna `by` Date32 non e' nel set nativo di `FastKeys`: il
+        // join usa il percorso generico (fallback), senza errori.
+        let right = batch(vec![
+            ("on", f64_column(&[Some(1.0), Some(5.0), Some(9.0)])),
+            (
+                "by",
+                Arc::new(Date32Array::from(vec![Some(10), Some(10), Some(20)])) as ArrayRef,
+            ),
+        ]);
+        let left = batch(vec![
+            ("on", f64_column(&[Some(4.0), Some(8.0)])),
+            (
+                "by",
+                Arc::new(Date32Array::from(vec![Some(10), Some(20)])) as ArrayRef,
+            ),
+        ]);
+        let config = AsOfJoin {
+            left_on: "on".into(),
+            right_on: "on".into(),
+            left_by: vec!["by".into()],
+            right_by: vec!["by".into()],
+            direction: AsOfDirection::Backward,
+            tolerance: None,
+            allow_exact: true,
+        };
+        let output = asof_join(&left, &right, &config, &Limits::default()).expect("fallback");
+        assert_eq!(output.num_rows(), 2);
     }
 
     fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
