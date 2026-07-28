@@ -1819,6 +1819,15 @@ fn analyze_aggregate(
                 if aggregation.quantile.is_none() {
                     return contract_error(op, "quantile richiede il parametro quantile");
                 }
+                // Come il kernel (`aggregate`): il range e' parte del
+                // contratto; fuori [0, 1] l'indice nel gruppo ordinato
+                // uscirebbe dai limiti — rifiuto a compile-plan.
+                if aggregation
+                    .quantile
+                    .is_some_and(|quantile| !(0.0..=1.0).contains(&quantile))
+                {
+                    return contract_error(op, "quantile fuori dall'intervallo 0..=1");
+                }
                 require_numeric(op, input, &aggregation.column)?;
             }
             _ => require_numeric(op, input, &aggregation.column)?,

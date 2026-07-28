@@ -1140,7 +1140,8 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// # Errors
 ///
 /// - `Contract`: `group_by` vuoto; funzione `quantile` senza il parametro
-///   `quantile`; conteggi, dimensioni o indici non rappresentabili
+///   `quantile` o con valore fuori `[0, 1]`; conteggi, dimensioni o indici
+///   non rappresentabili
 ///   (`i64`/`f64`/`usize`); nome di output non valido (come
 ///   `validate_output_name`);
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
@@ -1155,6 +1156,20 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         .collect::<Result<Vec<_>>>()?;
     if group_indices.is_empty() {
         return Err(PlenoraError::Contract("aggregate richiede group_by".into()));
+    }
+    // Fail-closed prima dei dati (regola 1): un quantile fuori [0, 1]
+    // produrrebbe indici oltre il gruppo ordinato — errore esplicito, mai
+    // indexing out-of-bounds a meta' esecuzione.
+    for aggregation in &config.aggregations {
+        if matches!(aggregation.function, AggFunction::Quantile)
+            && aggregation
+                .quantile
+                .is_some_and(|quantile| !(0.0..=1.0).contains(&quantile))
+        {
+            return Err(PlenoraError::Contract(
+                "quantile fuori dall'intervallo 0..=1".into(),
+            ));
+        }
     }
     // Raggruppamento: fast path nativo per colonna singola
     // Int64/UInt64/Utf8 (nessuna stringa di chiave), percorso testuale
@@ -2509,6 +2524,45 @@ mod tests {
             quantile: None,
             ddof: 1,
         }
+    }
+
+    #[test]
+    fn quantile_fuori_range_rifiutato_prima_dei_dati() {
+        // Regressione (analisi 2026-07-28): quantile > 1.0 produceva un
+        // indice oltre il gruppo ordinato — panic out-of-bounds nel
+        // percorso lib, invisibile al gate R6 (indicizzazione, non
+        // primitiva esplicita) e mascherato dall'oracolo a specchio. Ora
+        // il range e' validato fail-closed prima di toccare i dati.
+        let batch = numeric_batch(&[Some(1.0), Some(2.0), Some(3.0)]);
+        for quantile in [-0.5, 1.5, f64::NAN, f64::INFINITY] {
+            let config = Aggregate {
+                group_by: vec!["id".into()],
+                aggregations: vec![Aggregation {
+                    quantile: Some(quantile),
+                    ..agg("num", AggFunction::Quantile)
+                }],
+            };
+            let result = aggregate(&batch, &config);
+            let Err(PlenoraError::Contract(message)) = &result else {
+                panic!("quantile {quantile}: atteso rifiuto fuori range, ottenuto {result:?}");
+            };
+            assert!(
+                message.contains("0..=1"),
+                "quantile {quantile}: messaggio inatteso: {message}"
+            );
+        }
+        // I bordi 0.0 e 1.0 restano validi.
+        let config = Aggregate {
+            group_by: vec!["id".into()],
+            aggregations: [0.0, 1.0]
+                .iter()
+                .map(|quantile| Aggregation {
+                    quantile: Some(*quantile),
+                    ..agg("num", AggFunction::Quantile)
+                })
+                .collect(),
+        };
+        aggregate(&batch, &config).expect("bordi 0 e 1 validi");
     }
 
     /// Batteria completa di aggregazioni su `num`/`val`/`txt`, con duplicati
