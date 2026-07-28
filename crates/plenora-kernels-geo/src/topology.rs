@@ -53,7 +53,7 @@ pub enum TopologyError {
     IndexOverflow,
 }
 
-fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -86,6 +86,13 @@ fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyEr
     Ok(Geometry::MultiPolygon(result))
 }
 
+/// Applies a polygonal boolean operation to two inputs.
+///
+/// # Errors
+///
+/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
+/// - `InvalidGeometry`: an input fails OGC validation, or the result is not
+///   valid.
 pub fn boolean_operation(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -104,6 +111,12 @@ pub fn boolean_operation(
 
 /// Efficient polygonal dissolve/unary union. Grouping and attribute
 /// aggregation remain a transport/adapter concern.
+///
+/// # Errors
+///
+/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
+/// - `InvalidGeometry`: an input fails OGC validation, or the dissolved
+///   result is not valid.
 pub fn dissolve(geometries: &[Geometry<f64>]) -> Result<Geometry<f64>, TopologyError> {
     let polygons: Vec<MultiPolygon<f64>> = geometries
         .iter()
@@ -118,6 +131,11 @@ fn is_empty(geometry: &Geometry<f64>) -> bool {
 
 /// Clips each polygonal input row to the dissolved polygonal mask. Empty
 /// results become `None`, preserving the input row position for the adapter.
+///
+/// # Errors
+///
+/// Propagates the errors of [`dissolve`] (mask) and [`boolean_operation`]
+/// (per-row intersection): non-polygonal or invalid inputs, invalid results.
 pub fn clip_to_mask(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
@@ -168,9 +186,20 @@ fn push_piece(
     Ok(())
 }
 
-/// Polygonal overlay with explicit attribute lineage. Boundary-only line/point
-/// intersections are intentionally excluded; enabling `keep_geom_type=false`
-/// requires the GEOS backend and must not silently use this kernel.
+/// Polygonal overlay with explicit attribute lineage.
+///
+/// Boundary-only line/point intersections are intentionally excluded;
+/// enabling `keep_geom_type=false` requires the GEOS backend and must not
+/// silently use this kernel.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `max_candidate_pairs` or `max_results` is zero.
+/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
+/// - `InvalidGeometry`: an input fails OGC validation, the candidate-pair
+///   join fails, or a produced piece is not valid.
+/// - `ResourceLimit`: the pieces exceed `max_results`.
+/// - `IndexOverflow`: an index is not representable as `u64`/`usize`.
 pub fn polygon_overlay(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
@@ -247,9 +276,20 @@ pub fn polygon_overlay(
     Ok(pieces)
 }
 
-/// Ordered topology cleanup for inputs that are already valid polygons. It
-/// applies the same gap-closing morphology and first-row-wins overlap policy
-/// as Manipola. Invalid inputs are rejected; repair belongs to GEOS make-valid.
+/// Ordered topology cleanup for inputs that are already valid polygons.
+///
+/// Applies the same gap-closing morphology and first-row-wins overlap
+/// policy as Manipola. Invalid inputs are rejected; repair belongs to GEOS
+/// make-valid.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `snap_tolerance` is not finite or is negative.
+/// - `ResourceLimit`: the input exceeds `max_geometries` or `max_vertices`.
+/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
+/// - `InvalidGeometry`: an input fails OGC validation, or a morphology or
+///   overlap-removal step produces an invalid geometry.
+/// - `IndexOverflow`: a count is not representable as `u64`.
 pub fn clean_valid_polygon_topology(
     geometries: &[Geometry<f64>],
     snap_tolerance: f64,
@@ -326,6 +366,10 @@ pub fn clean_valid_polygon_topology(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{

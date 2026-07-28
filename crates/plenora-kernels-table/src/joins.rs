@@ -141,8 +141,9 @@ impl<'a> FastKeys<'a> {
     }
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64,
-/// come nel fast path di `aggregate`: `SipHash` (default std) dominerebbe il
+/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
+///
+/// Come nel fast path di `aggregate`: `SipHash` (default std) dominerebbe il
 /// costo di build/probe su milioni di righe; qui il throughput conta piu'
 /// della resistenza a input avversari.
 #[derive(Default)]
@@ -279,6 +280,20 @@ pub struct Join {
     pub how: JoinHow,
 }
 
+/// Join relazionale tra due batch sulle chiavi configurate (`how`: inner,
+/// left, right, outer).
+///
+/// Le colonne sinistre non chiave prendono suffisso `_L`, le destre non
+/// chiave `_R`; con `right`/`outer` le colonne chiave di output sono il
+/// coalesce dei due lati.
+///
+/// # Errors
+///
+/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati, oppure
+///   righe/colonne di output oltre i limiti `max_rows`/`max_columns`;
+/// - `Schema`: colonna chiave assente, tipi Arrow delle chiavi non identici
+///   tra i due lati, collisione di nomi in output o, per `right`/`outer`,
+///   tipo chiave non supportato dal coalesce.
 pub fn join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -396,8 +411,10 @@ fn join_rows_generic(
 }
 
 /// Coppie di righe del fast path: `None` se un tipo chiave non e' supportato
-/// (il chiamante ricade sul generico). Il lato di build resta il destro:
-/// costruire sul lato piccolo cambierebbe l'ordine di output.
+/// (il chiamante ricade sul generico).
+///
+/// Il lato di build resta il destro: costruire sul lato piccolo cambierebbe
+/// l'ordine di output.
 fn join_rows_fast(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -698,6 +715,16 @@ const fn default_true() -> bool {
     true
 }
 
+/// Concatenazione verticale di due batch con schema identico (safe profile).
+///
+/// Nomi e tipi delle colonne devono coincidere posizione per posizione; la
+/// nullabilita' risultante e' l'OR dei due input.
+///
+/// # Errors
+///
+/// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch;
+/// - `Contract`: overflow nel conteggio delle righe o righe totali oltre
+///   `max_rows`; propaga inoltre gli errori Arrow di concatenazione.
 pub fn concat(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -763,11 +790,12 @@ pub struct ConcatByName {
     pub strict: bool,
 }
 
-/// Schema unione per `concat_by_name`: colonne nell'ordine di prima apparizione
-/// sugli input, in ordine di input. Per nome: stesso `DataType` ovunque
-/// (altrimenti errore, nessun cast); nullable se almeno un input non ha la
-/// colonna o ce l'ha nullable. In strict mode gli schemi devono essere
-/// identici per sequenza (nome + tipo).
+/// Schema unione per `concat_by_name`: colonne nell'ordine di prima
+/// apparizione sugli input, in ordine di input.
+///
+/// Per nome: stesso `DataType` ovunque (altrimenti errore, nessun cast);
+/// nullable se almeno un input non ha la colonna o ce l'ha nullable. In
+/// strict mode gli schemi devono essere identici per sequenza (nome + tipo).
 fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Field>> {
     let first = inputs[0];
     if strict {
@@ -835,9 +863,19 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 }
 
 /// Concatenazione N-aria per NOME colonna, non per posizione (estensione
-/// v1.2): per ogni colonna dello schema unione tutte le righe di tutti gli
-/// input, nell'ordine degli input; gli input senza quella colonna
-/// contribuiscono con null. Con `strict` gli schemi devono essere identici.
+/// v1.2).
+///
+/// Per ogni colonna dello schema unione tutte le righe di tutti gli input,
+/// nell'ordine degli input; gli input senza quella colonna contribuiscono
+/// con null. Con `strict` gli schemi devono essere identici.
+///
+/// # Errors
+///
+/// - `Contract`: nessun input, overflow nel conteggio delle righe o righe
+///   totali oltre `max_rows`;
+/// - `Schema`: con `strict` schemi non identici, o tipi incompatibili per
+///   una stessa colonna (nessun cast); propaga inoltre gli errori Arrow di
+///   concatenazione.
 pub fn concat_by_name(
     inputs: &[&RecordBatch],
     config: &ConcatByName,
@@ -866,14 +904,16 @@ pub fn concat_by_name(
         .map(|field| {
             let parts: Vec<ArrayRef> = inputs
                 .iter()
-                .map(|input| match input.schema().index_of(field.name()) {
-                    Ok(index) => Arc::clone(input.column(index)),
-                    Err(_) => {
-                        plenora_core::arrow::array::new_null_array(
-                            field.data_type(),
-                            input.num_rows(),
-                        )
-                    }
+                .map(|input| {
+                    input.schema().index_of(field.name()).map_or_else(
+                        |_| {
+                            plenora_core::arrow::array::new_null_array(
+                                field.data_type(),
+                                input.num_rows(),
+                            )
+                        },
+                        |index| Arc::clone(input.column(index)),
+                    )
                 })
                 .collect();
             let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
@@ -888,6 +928,16 @@ pub fn concat_by_name(
 #[serde(deny_unknown_fields)]
 pub struct CrossJoin {}
 
+/// Prodotto cartesiano tra due batch (ogni riga sinistra x ogni destra).
+///
+/// Nomi in output secondo la convenzione pandas: suffissi `_x`/`_y` sulle
+/// colonne omonime.
+///
+/// # Errors
+///
+/// - `Contract`: overflow nel prodotto delle righe, righe oltre `max_rows`
+///   o colonne oltre `max_columns`;
+/// - `Schema`: collisione di nomi nelle colonne di output.
 pub fn cross_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1075,6 +1125,14 @@ fn membership_range(
         .collect()
 }
 
+/// Righe di `left` la cui chiave ha almeno un match in `right` (ordine
+/// sinistro conservato).
+///
+/// # Errors
+///
+/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati;
+/// - `Schema`: colonna chiave assente o tipi Arrow delle chiavi non
+///   identici; inoltre gli errori di `select_rows` sull'output.
 pub fn semi_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1083,6 +1141,12 @@ pub fn semi_join(
     membership_join(left, right, config, true)
 }
 
+/// Righe di `left` la cui chiave NON ha match in `right` (ordine sinistro
+/// conservato).
+///
+/// # Errors
+///
+/// Come `semi_join`.
 pub fn anti_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1168,6 +1232,21 @@ fn choose_asof(
     }
 }
 
+/// Join asof: ogni riga sinistra e' associata alla riga destra piu' vicina
+/// sulla chiave ordinata, per gruppo `by`.
+///
+/// Chiavi `on` numeriche (Int64/Float64) con lo stesso tipo Arrow sui due
+/// lati; il match rispetta `direction`, `tolerance` e `allow_exact`. Le
+/// colonne destre `on`/`by` sono omesse dall'output, le altre omonime
+/// prendono suffisso `_R`.
+///
+/// # Errors
+///
+/// - `Contract`: cardinalita' diversa tra `left_by` e `right_by`, oppure
+///   `tolerance` non finita o negativa;
+/// - `Schema`: colonna assente, chiavi `on` non numeriche o di tipo diverso
+///   tra i lati, tipi `by` incompatibili, collisione di nomi in output;
+/// - inoltre gli errori di limite di `combine_horizontal` (`max_columns`).
 pub fn asof_join(
     left: &RecordBatch,
     right: &RecordBatch,

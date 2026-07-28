@@ -202,8 +202,10 @@ impl<'a> NumericColumn<'a> {
 }
 
 /// Colonna di chiave composta (usata da `pivot` e `table_diff`): tag di
-/// tipo precomputato una sola volta + valore tipizzato. Scrive gli STESSI
-/// byte di `composite_key` (mantenuta come oracolo dei test).
+/// tipo precomputato una sola volta + valore tipizzato.
+///
+/// Scrive gli STESSI byte di `composite_key` (mantenuta come oracolo dei
+/// test).
 struct PivotKeyColumn<'a> {
     tag: String,
     source: TextColumn<'a>,
@@ -237,6 +239,23 @@ impl<'a> PivotKeyColumn<'a> {
     }
 }
 
+/// Trasforma le `value_columns` da wide a long: per ogni riga, una riga per
+/// colonna valore.
+///
+/// Con `value_columns` vuoto si usano tutte le colonne non id. Tipi omogenei:
+/// concatenazione nativa; tipi eterogenei solo con `type_policy='string'`.
+///
+/// # Errors
+///
+/// - `Schema`: colonna id/value assente;
+/// - `Contract`: nessuna colonna valore, overflow o righe di output oltre
+///   `max_rows`, valore testuale oltre `max_string_bytes`, colonne valore
+///   eterogenee senza `type_policy='string'`, nome di output non valido o
+///   collisione di naming non risolvibile.
+// Pipeline lineare wide->long (indici, take sulle colonne id, costruzione
+// delle colonne variable/value con fast path per tipo): lunga per
+// costruzione, uno spezzone artificiale peggiorerebbe la leggibilita'.
+#[allow(clippy::too_many_lines)]
 pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
     let id_indices = config
         .id_columns
@@ -393,6 +412,9 @@ pub struct Pivot {
     pub mapping: BTreeMap<String, String>,
 }
 
+// Dispatcher esaustivo per funzione di aggregazione: ogni braccio tiene
+// insieme riduzione e costruzione della colonna di output.
+#[allow(clippy::too_many_lines)]
 fn pivot_column(
     source: &ArrayRef,
     groups: &[Option<&Vec<usize>>],
@@ -514,6 +536,24 @@ fn pivot_column(
     })
 }
 
+/// Pivot delle righe in colonne: una riga per chiave indice, una colonna per
+/// valore pivot, celle aggregate con `aggr_func`.
+///
+/// `index_col` accetta piu' colonne separate da virgola; `mapping` rinomina
+/// (e filtra) i valori pivot nelle colonne di output.
+///
+/// # Errors
+///
+/// - `Schema`: colonna indice/pivot/valore assente;
+/// - `Contract`: chiavi o colonne di output oltre i limiti `max_rows`/
+///   `max_columns`, nome di colonna di output non valido, oppure gli errori
+///   di conversione/indice di `pivot_column` (es. intero non rappresentabile
+///   come f64 nelle aggregazioni numeriche).
+// Pipeline lineare (una passata di raggruppamento, ordinamento di chiavi e
+// pivot, take sulle colonne indice, materializzazione delle colonne pivot):
+// lunga per costruzione, uno spezzone artificiale peggiorerebbe la
+// leggibilita'.
+#[allow(clippy::too_many_lines)]
 pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<RecordBatch> {
     let index_names = config
         .index_col
@@ -551,22 +591,26 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         for column in &key_columns {
             column.write_key(row, &mut key, &mut scratch)?;
         }
-        let key_id = if let Some(id) = key_ids.get(key.as_str()) { *id } else {
+        // `copied()` chiude subito il prestito di `key_ids`: la closure di
+        // default deve poterlo mutare (insert) — `unwrap_or_else` diretto su
+        // `get` non passerebbe il borrow check.
+        let key_id = key_ids.get(key.as_str()).copied().unwrap_or_else(|| {
             let id = representatives.len();
             key_ids.insert(key.clone(), id);
             representatives.push(row);
             id
-        };
+        });
         scratch.clear();
         if !pivot_source.write_value(row, &mut scratch)? {
             continue;
         }
         if config.mapping.is_empty() || config.mapping.contains_key(scratch.as_str()) {
-            let pivot_id = if let Some(id) = pivot_ids.get(scratch.as_str()) { *id } else {
+            // Come sopra: `copied()` chiude il prestito prima dell'insert.
+            let pivot_id = pivot_ids.get(scratch.as_str()).copied().unwrap_or_else(|| {
                 let id = pivot_ids.len();
                 pivot_ids.insert(scratch.clone(), id);
                 id
-            };
+            });
             cells.entry((key_id, pivot_id)).or_default().push(row);
         }
     }
@@ -639,6 +683,23 @@ pub struct Transpose {
     pub type_policy: HeterogeneousTypePolicy,
 }
 
+/// Traspone il batch: le colonne dati diventano righe, le righe colonne.
+///
+/// La prima colonna elenca i nomi delle colonne dati; con `id_column` i nomi
+/// delle colonne di output arrivano dai suoi valori. Tipi eterogenei solo
+/// con `type_policy='string'`; batch senza righe restituito invariato.
+///
+/// # Errors
+///
+/// - `Schema`: colonna `id_column` assente;
+/// - `Contract`: righe/colonne di output oltre i limiti, colonne dati
+///   eterogenee senza `type_policy='string'`, valore testuale oltre
+///   `max_string_bytes`, indice oltre u64, nome di colonna di output non
+///   valido.
+// Pipeline lineare (schema di output, fast path omogeneo via concat+take o
+// ripiego testuale, una colonna per riga): lunga per costruzione, uno
+// spezzone artificiale peggiorerebbe la leggibilita'.
+#[allow(clippy::too_many_lines)]
 pub fn transpose(
     batch: &RecordBatch,
     config: &Transpose,
@@ -763,6 +824,19 @@ pub struct Explode {
     pub empty_policy: EmptyListPolicy,
 }
 
+/// Espande una colonna `List` in una riga per elemento (stile pandas
+/// explode).
+///
+/// Liste null o vuote: riga con valore null se `empty_policy` e' `Null`,
+/// scartate se `Drop`. Il nome di output e' `output_column` o la colonna
+/// stessa.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente o non di tipo List, offset List negativo;
+/// - `Contract`: righe di output oltre `max_rows`, indice elemento oltre
+///   u32, nome di output non valido; inoltre gli errori di
+///   `replace_or_append`.
 pub fn explode(
     batch: &RecordBatch,
     config: &Explode,
@@ -821,6 +895,17 @@ const fn default_true() -> bool {
     true
 }
 
+/// Espande una colonna `Struct` in colonne figlie (con prefisso `prefix`).
+///
+/// Con `drop_source` la colonna sorgente e' rimossa; le colonne figlie sono
+/// nullable e replicate sugli indici delle righe in cui lo struct e' valido.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente o non di tipo Struct, collisione tra il nome
+///   di una colonna figlia e una colonna esistente;
+/// - `Contract`: colonne di output oltre `max_columns`, nome di colonna
+///   figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let structure = batch
@@ -921,8 +1006,9 @@ fn encode_diff_key(
     Ok(())
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64,
-/// come nei fast path di `aggregate` e `join`: `SipHash` (default std)
+/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
+///
+/// Come nei fast path di `aggregate` e `join`: `SipHash` (default std)
 /// dominerebbe il costo di build/probe su milioni di righe. Le mappe di
 /// `table_diff` non sono mai iterate: semantica invariata.
 #[derive(Default)]
@@ -1012,6 +1098,19 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
     )?)
 }
 
+/// Confronto riga per riga tra due batch allineati sulle chiavi: stati
+/// ADDED/DELETED/MODIFIED/UNCHANGED.
+///
+/// Le colonne confrontate sono `compare_columns` o, se vuota, le colonne
+/// sinistre non chiave presenti anche a destra. Output: colonne chiave e
+/// confrontate, piu' `_diff_status`, `_diff_columns`, `_diff_old_values`.
+///
+/// # Errors
+///
+/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati, chiavi
+///   duplicate in uno dei due input, righe/colonne di output oltre i limiti;
+/// - `Schema`: colonna chiave o di confronto assente, tipi Arrow non
+///   identici tra i due lati su una stessa colonna.
 #[allow(clippy::too_many_lines)] // Diff phases remain adjacent to preserve auditability.
 pub fn table_diff(
     left: &RecordBatch,
@@ -1344,6 +1443,9 @@ mod tests {
     }
 
     /// Copia verbatim di `pivot_column` pre-ottimizzazione.
+    // Oracolo: dispatcher esaustivo per funzione di aggregazione, specchio del
+    // percorso veloce; la lunghezza e' nei casi, non nella logica.
+    #[allow(clippy::too_many_lines)]
     fn pivot_column_reference(
         batch: &RecordBatch,
         index: usize,
@@ -1528,6 +1630,9 @@ mod tests {
 
     /// Confronto rigoroso: schema (nomi, tipi, nullabilita'), numero righe,
     /// maschera null e valori (bit a bit per i Float64, NaN incluso).
+    // Asserzioni esplicite colonna per colonna e valore per valore: test di
+    // parita', lungo per costruzione (niente logica da fattorizzare).
+    #[allow(clippy::too_many_lines)]
     fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
         assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
         assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
@@ -2506,6 +2611,9 @@ mod tests {
     /// colonne confrontate `num` float64 (con NaN, -0.0 e null) e `txt`.
     /// Stati coperti: UNCHANGED (anche NaN==NaN), MODIFIED (valore, null e
     /// -0.0 vs 0.0), DELETED, ADDED.
+    // Fixture con molti stati espliciti riga per riga su due batch: lunga per
+    // costruzione (dati di test, niente logica).
+    #[allow(clippy::too_many_lines)]
     fn diff_fixtures() -> (RecordBatch, RecordBatch) {
         let left = batch_of(
             vec![
@@ -2638,12 +2746,12 @@ mod tests {
         // id 5 DELETED, id 6 DELETED, id 7 ADDED, chiave null ADDED.
         let config = diff_config("no");
         let fast = table_diff(&left, &right, &config, &Limits::default()).expect("fast");
-        let status = fast
+        let status_column = fast
             .column(fast.schema().index_of("_diff_status").expect("status"))
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("status utf8");
-        let states: Vec<&str> = (0..status.len()).map(|row| status.value(row)).collect();
+        let states: Vec<&str> = (0..status_column.len()).map(|row| status_column.value(row)).collect();
         assert_eq!(
             states,
             vec!["MODIFIED", "MODIFIED", "DELETED", "DELETED", "ADDED", "ADDED"]

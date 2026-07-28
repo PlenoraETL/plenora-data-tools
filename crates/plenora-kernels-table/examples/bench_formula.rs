@@ -122,7 +122,7 @@ fn run_formula(input: &RecordBatch, text: &str) -> RecordBatch {
     formula::formula(input, &config).expect("formula")
 }
 
-fn run_expression(input: &RecordBatch, expression: serde_json::Value) -> RecordBatch {
+fn run_expression(input: &RecordBatch, expression: &serde_json::Value) -> RecordBatch {
     let config: ExpressionTransform = serde_json::from_value(json!({
         "output_column": "out",
         "expression": expression,
@@ -168,7 +168,7 @@ fn main() {
         }
     });
     run_scenario("expression_arith", rows, repetitions, &input, &|batch| {
-        run_expression(batch, arith.clone())
+        run_expression(batch, &arith)
     });
 
     // 4) expression mista con stringhe: case su contains + upper/concat.
@@ -197,6 +197,6 @@ fn main() {
         }
     });
     run_scenario("expression_mixed_strings", rows, repetitions, &input, &|batch| {
-        run_expression(batch, mixed.clone())
+        run_expression(batch, &mixed)
     });
 }

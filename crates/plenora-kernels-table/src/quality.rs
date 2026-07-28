@@ -85,6 +85,18 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
     }
 }
 
+/// Verifica che lo schema del batch (nomi, tipi, nullability) corrisponda
+/// alle attese di configurazione; restituisce il batch invariato.
+///
+/// Con `ordered=true` i campi sono confrontati in posizione, altrimenti per
+/// nome; con `allow_extra=false` anche il numero di colonne deve coincidere.
+///
+/// # Errors
+///
+/// - `Schema`: numero di colonne diverso con `allow_extra=false`, colonna
+///   assente, nome diverso in posizione (`ordered=true`), tipo o nullability
+///   diversi dall'atteso;
+/// - `Contract`: tipo atteso non supportato da `assert_schema`.
 pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<RecordBatch> {
     if !config.allow_extra && batch.num_columns() != config.fields.len() {
         return Err(PlenoraError::Schema(format!(
@@ -140,6 +152,13 @@ pub struct AssertNotNull {
     pub columns: Vec<String>,
 }
 
+/// Verifica che le colonne configurate non contengano null; restituisce il
+/// batch invariato.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente dallo schema (come `column_index`);
+/// - `Contract`: una colonna contiene un null.
 pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<RecordBatch> {
     for name in &config.columns {
         let index = column_index(batch, name)?;
@@ -152,6 +171,16 @@ pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<Re
     Ok(batch.clone())
 }
 
+/// Chiave binaria della riga `row` sulle colonne `indices`: prefisso di
+/// tipo piu' marcatore di null e valore testuale con lunghezza.
+///
+/// La codifica e' iniettiva per colonna: chiavi uguali equivalgono a valori
+/// uguali secondo il profilo scalare testuale di `scalar_as_string`.
+///
+/// # Errors
+///
+/// Come `scalar_as_string`: guardia interna date32 (`Contract`) oppure
+/// valore o tipo non codificabile (`Schema`).
 pub fn key_for_row(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Vec<u8>> {
     let mut key = Vec::new();
     for index in indices {
@@ -181,6 +210,18 @@ pub struct AssertUnique {
     pub nulls_equal: bool,
 }
 
+/// Verifica che la chiave composta dalle colonne configurate sia unica;
+/// restituisce il batch invariato.
+///
+/// Con `nulls_equal=true` i null contano come chiave (un solo null ammesso),
+/// con `false` le righe con null nella chiave sono saltate. Errore sul primo
+/// duplicato in ordine di scansione.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
+///   non codificabile nella chiave (come `key_for_row`);
+/// - `Contract`: chiave duplicata.
 pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
     let indices = config
         .columns
@@ -355,6 +396,19 @@ fn range_outside(
     below || above
 }
 
+/// Verifica che i valori della colonna rientrino nei limiti configurati;
+/// restituisce il batch invariato.
+///
+/// I confronti sulle colonne intere (Int64/UInt64) sono esatti anche oltre
+/// 2^53; gli altri tipi seguono il profilo f64 storico. I valori non finiti
+/// (inf/NaN) violano sempre l'intervallo; i null sono ammessi solo con
+/// `allow_null=true`.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
+///   non convertibile in numero (come `scalar_as_f64`);
+/// - `Contract`: null non ammesso o valore fuori intervallo.
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
@@ -413,6 +467,15 @@ pub struct AssertRegex {
     pub allow_null: bool,
 }
 
+/// Verifica che i valori della colonna Utf8 corrispondano alla regex
+/// configurata; restituisce il batch invariato.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente dallo schema (come `column_index`) o non di
+///   tipo Utf8;
+/// - `Contract`: pattern non una regex valida, oppure valore non conforme
+///   (incluso un null con `allow_null=false`).
 pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     if batch.column(index).data_type() != &DataType::Utf8 {
@@ -443,6 +506,22 @@ pub struct Coalesce {
     pub output_column: String,
 }
 
+/// Prima colonna non-null fra quelle configurate, riga per riga; il
+/// risultato sostituisce (o aggiunge) `output_column`.
+///
+/// Tutte le colonne devono avere lo stesso tipo Arrow; il fast path
+/// tipizzato di `cleansing::coalesce_fast` ha semantica identica al percorso
+/// generico (`coalesce_generic`).
+///
+/// # Errors
+///
+/// - `Contract`: nome di output non valido (come `validate_output_name`),
+///   lista di colonne vuota o overflow degli indici interni del percorso
+///   generico;
+/// - `Schema`: colonna assente dallo schema (come `column_index`), tipi
+///   Arrow non identici fra le colonne, errore Arrow nella concat/take del
+///   percorso generico o batch risultante incoerente (come
+///   `replace_or_append`).
 pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {

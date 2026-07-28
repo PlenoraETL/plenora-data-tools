@@ -61,6 +61,17 @@ pub struct FrameReader<R> {
 }
 
 impl<R: Read> FrameReader<R> {
+    /// Costruisce il lettore: legge l'header, verifica magic e limiti e
+    /// controlla che il `row_count` dello stream coincida con quello atteso.
+    ///
+    /// # Errors
+    ///
+    /// - `ProtocolError::TooManyRows`: `schema_rows` o il `row_count` dello
+    ///   stream oltre `MAX_ROWS`;
+    /// - `ProtocolError::InvalidMagic`: magic dell'header non corrispondente;
+    /// - `ProtocolError::RowCountMismatch`: `row_count` di schema e stream
+    ///   diversi;
+    /// - `ProtocolError::Io`: stream troncato o errore di lettura.
     pub fn new(mut inner: R, schema_rows: u64) -> Result<Self, ProtocolError> {
         if schema_rows > MAX_ROWS {
             return Err(ProtocolError::TooManyRows(schema_rows));
@@ -93,6 +104,17 @@ impl<R: Read> FrameReader<R> {
         })
     }
 
+    /// Legge il frame successivo; esaurite le righe attese verifica trailer
+    /// e checksum una sola volta, poi restituisce `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// - `ProtocolError::GeometryTooLarge`: frame oltre `MAX_GEOMETRY_BYTES`;
+    /// - `ProtocolError::StreamTooLarge`: totale dello stream oltre
+    ///   `MAX_STREAM_BYTES`;
+    /// - `ProtocolError::InvalidTrailer` / `ChecksumMismatch` /
+    ///   `TrailingBytes`: chiusura dello stream non valida;
+    /// - `ProtocolError::Io`: stream troncato o errore di lettura.
     pub fn next_frame(&mut self) -> Result<Option<Frame>, ProtocolError> {
         if self.rows_read == self.expected_rows {
             if !self.verified {
@@ -155,6 +177,12 @@ pub struct FrameWriter<W> {
 }
 
 impl<W: Write> FrameWriter<W> {
+    /// Costruisce lo scrittore e scrive l'header con il `row_count` atteso.
+    ///
+    /// # Errors
+    ///
+    /// - `ProtocolError::TooManyRows`: `expected_rows` oltre `MAX_ROWS`;
+    /// - `ProtocolError::Io`: errore di scrittura dell'header.
     pub fn new(mut inner: W, expected_rows: u64) -> Result<Self, ProtocolError> {
         if expected_rows > MAX_ROWS {
             return Err(ProtocolError::TooManyRows(expected_rows));
@@ -172,6 +200,17 @@ impl<W: Write> FrameWriter<W> {
         })
     }
 
+    /// Scrive un frame (`None` per null) aggiornando il checksum
+    /// incrementale e i contatori dei limiti.
+    ///
+    /// # Errors
+    ///
+    /// - `ProtocolError::TooManyFrames`: frame oltre il `row_count` dichiarato;
+    /// - `ProtocolError::GeometryTooLarge`: payload oltre
+    ///   `MAX_GEOMETRY_BYTES`;
+    /// - `ProtocolError::StreamTooLarge`: totale dello stream oltre
+    ///   `MAX_STREAM_BYTES`;
+    /// - `ProtocolError::Io`: errore di scrittura.
     pub fn write_frame(&mut self, frame: Option<&[u8]>) -> Result<(), ProtocolError> {
         if self.rows_written >= self.expected_rows {
             return Err(ProtocolError::TooManyFrames);
@@ -206,6 +245,14 @@ impl<W: Write> FrameWriter<W> {
         Ok(())
     }
 
+    /// Chiude lo stream scrivendo trailer e digest; restituisce il writer
+    /// sottostante e il checksum.
+    ///
+    /// # Errors
+    ///
+    /// - `ProtocolError::MissingFrames`: frame scritti diversi dal `row_count`
+    ///   dichiarato;
+    /// - `ProtocolError::Io`: errore di scrittura o flush.
     pub fn finish(mut self) -> Result<(W, [u8; 32]), ProtocolError> {
         if self.rows_written != self.expected_rows {
             return Err(ProtocolError::MissingFrames {

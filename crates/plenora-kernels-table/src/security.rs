@@ -51,6 +51,18 @@ const fn default_true() -> bool {
     true
 }
 
+/// Colonna con l'hash MD5 (esadecimale) delle colonne di `config.columns`.
+///
+/// I nomi sono ordinati e deduplicati; i valori sono concatenati con
+/// separatore U+001F e, con `normalize`, trimmati e portati in minuscolo.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, `columns` vuoto,
+///   null con `null_policy = error`, valore non rappresentabile come testo
+///   (come `scalar_as_string`);
+/// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
+///   scalare.
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
@@ -126,6 +138,19 @@ fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Colonna con l'hash SHA-256 (esadecimale) delle colonne configurate.
+///
+/// Ogni parte e' framed (lunghezza u64 big-endian + valore) dopo il
+/// separatore di dominio `plenora-sha256-v1`, con byte di presenza per i
+/// null: nessuna collisione per concatenazione.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, null con
+///   `null_policy = error`, valore oltre `u64` nel framing, valore non
+///   rappresentabile come testo (come `scalar_as_string`);
+/// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
+///   scalare.
 pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let mut names = config.columns.clone();
@@ -212,8 +237,9 @@ fn default_fingerprint_name() -> String {
     "fingerprint".into()
 }
 
-/// Frame lunghezza+valore (u64 big-endian) accumulato in un buffer di byte:
-/// nessuna ambiguita' di concatenazione tra parti adiacenti. Usato per i
+/// Frame lunghezza+valore (u64 big-endian) accumulato in un buffer di byte.
+///
+/// Nessuna ambiguita' di concatenazione tra parti adiacenti. Usato per i
 /// frame costanti per colonna (precomputati una volta per batch) e per i
 /// messaggi per riga di `stable_fingerprint`.
 fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
@@ -224,9 +250,11 @@ fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
     Ok(())
 }
 
-/// Esadecimale minuscolo in coda a `hex`, byte per byte: identico al
-/// formato `{:x}` dei digest md5/sha2 e al `write!(hex, "{byte:02x}")`
-/// originale, senza passare per il machinery di formattazione a ogni byte.
+/// Esadecimale minuscolo in coda a `hex`, byte per byte.
+///
+/// Identico al formato `{:x}` dei digest md5/sha2 e al
+/// `write!(hex, "{byte:02x}")` originale, senza passare per il machinery di
+/// formattazione a ogni byte.
 fn push_hex(hex: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     hex.reserve(bytes.len() * 2);
@@ -236,8 +264,9 @@ fn push_hex(hex: &mut String, bytes: &[u8]) {
     }
 }
 
-/// Accesso tipizzato a una colonna, risolto una sola volta per batch: evita
-/// la catena di downcast di `scalar_as_string` a ogni cella e le sue
+/// Accesso tipizzato a una colonna, risolto una sola volta per batch.
+///
+/// Evita la catena di downcast di `scalar_as_string` a ogni cella e le sue
 /// allocazioni sui tipi piu' comuni (Utf8 in prestito, numerici formattati
 /// in un buffer riusato). Gli altri tipi ricadono su `scalar_as_string`,
 /// invariato. I byte prodotti sono identici in tutti i percorsi.
@@ -270,8 +299,10 @@ fn column_access(array: &dyn Array) -> ColumnAccess<'_> {
 }
 
 /// Valore testuale canonico della cella, passato in prestito a `consume`
-/// (dall'array o dal buffer `scratch` riusato): stessi byte e stessi null
-/// di `scalar_as_string` (`write!` usa lo stesso `Display` di `to_string`).
+/// (dall'array o dal buffer `scratch` riusato).
+///
+/// Stessi byte e stessi null di `scalar_as_string` (`write!` usa lo stesso
+/// `Display` di `to_string`).
 fn with_cell_value<R>(
     access: &ColumnAccess<'_>,
     row: usize,
@@ -394,6 +425,19 @@ fn fingerprint_rows<D: Digest>(
     Ok(builder.finish())
 }
 
+/// Colonna con il fingerprint stabile per riga (sha256 o md5).
+///
+/// L'encoding canonico per riga e' documentato in `fingerprint_rows`;
+/// `columns` vuoto usa tutte le colonne dello schema, nell'ordine dello
+/// schema.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, colonna ripetuta
+///   in `columns`, nessuna colonna disponibile (config vuota su schema senza
+///   colonne), valore oltre `u64` nel framing, valore non rappresentabile
+///   come testo (come `scalar_as_string`);
+/// - `Schema`: colonna assente dal batch.
 pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let names: Vec<String> = if config.columns.is_empty() {
@@ -440,9 +484,11 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
 // table.hmac_sha256 (estensione v1.2)
 // ---------------------------------------------------------------------------
 
-/// Politica sui null per `hmac_sha256`: `empty` = il null contribuisce come
-/// stringa vuota (indistinguibile da ""), `null` = la riga produce un hmac
-/// null, `skip` = la colonna null e' omessa dal framing della riga.
+/// Politica sui null per `hmac_sha256`.
+///
+/// `empty` = il null contribuisce come stringa vuota (indistinguibile da
+/// ""), `null` = la riga produce un hmac null, `skip` = la colonna null e'
+/// omessa dal framing della riga.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HmacNullPolicy {
@@ -531,11 +577,20 @@ fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// HMAC-SHA256 per riga della concatenazione canonica dei valori (stesso
-/// framing di `stable_fingerprint`: separatore di dominio, `framed(nome)`,
-/// `framed(tipo)`, byte di presenza, `framed(valore)`), con separatore
-/// `b"plenora-hmac-sha256-v1\0"`. La chiave arriva SOLO dalla variabile
-/// d'ambiente il cui nome e' `key_env`.
+/// HMAC-SHA256 per riga della concatenazione canonica dei valori.
+///
+/// Stesso framing di `stable_fingerprint` (separatore di dominio,
+/// `framed(nome)`, `framed(tipo)`, byte di presenza, `framed(valore)`), con
+/// separatore `b"plenora-hmac-sha256-v1\0"`. La chiave arriva SOLO dalla
+/// variabile d'ambiente il cui nome e' `key_env`.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, `key_env` vuoto,
+///   `columns` vuoto, colonna ripetuta, chiave HMAC non disponibile
+///   (variabile d'ambiente assente o vuota), valore oltre `u64` nel framing,
+///   valore non rappresentabile come testo (come `scalar_as_string`);
+/// - `Schema`: colonna assente dal batch.
 pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
@@ -672,9 +727,11 @@ pub struct MaskData {
 }
 
 /// Maschera i caratteri centrali di `value` mantenendo `start` caratteri
-/// iniziali ed `end` finali. Lavora su indici di byte (via `char_indices`)
-/// senza materializzare un `Vec<char>`: stessi byte in output della versione
-/// originale (Unicode incluso), stessa condizione di ritorno anticipato.
+/// iniziali ed `end` finali.
+///
+/// Lavora su indici di byte (via `char_indices`) senza materializzare un
+/// `Vec<char>`: stessi byte in output della versione originale (Unicode
+/// incluso), stessa condizione di ritorno anticipato.
 fn mask_middle(value: &str, start: usize, end: usize, mask: char) -> String {
     let char_count = value.chars().count();
     if char_count <= start.saturating_add(end) {
@@ -750,6 +807,17 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
     })
 }
 
+/// Colonne mascherate secondo le configurazioni di `config.maskings`.
+///
+/// Con `overwrite` la colonna originale e' sostituita, altrimenti il
+/// risultato va in `<colonna>_masked`. I null restano null.
+///
+/// # Errors
+///
+/// - `Contract`: `maskings` vuoto, nome della colonna di output non valido,
+///   `mask_char` vuoto o piu' di un carattere (tipo `custom`), valore non
+///   rappresentabile come testo (come `scalar_as_string`);
+/// - `Schema`: colonna assente dal batch.
 pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
     if config.maskings.is_empty() {
         return Err(PlenoraError::Contract(

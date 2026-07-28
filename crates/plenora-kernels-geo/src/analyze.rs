@@ -46,7 +46,7 @@
 //!   schema left invariato, geometria sostituita in place (allineate alle
 //!   righe left nel protocollo legacy);
 //! - `within`/`count_points_in_polygons`: schema left + colonna scalare
-//!   (`within` Boolean, `count` UInt64), allineate alle righe left;
+//!   (`within` Boolean, `count` `UInt64`), allineate alle righe left;
 //! - `reproject`: schema invariato, `GeometryColumnContract.crs` e metadato
 //!   `geo.crs` aggiornati al target (unico step che modifica il CRS);
 //! - `from_coords`: aggiunge la colonna geometria (nuovo `FieldId`,
@@ -57,7 +57,7 @@
 //!   `on_error: null` producono geometria null); CRS da config `crs` o di
 //!   piano, requisito `Known`;
 //! - `geometry_accessors`: aggiunge fino a 6 colonne per riga
-//!   (`geometry_type` Utf8, `num_geometries`/`num_interior_rings` UInt64,
+//!   (`geometry_type` Utf8, `num_geometries`/`num_interior_rings` `UInt64`,
 //!   `start_point`/`end_point` Utf8, `is_closed` Boolean, tutte nullable),
 //!   filtrabili con `fields` e prefissabili con `output_prefix`;
 //! - `collect`: aggregazione a sole geometrie come `dissolve`, piu' le
@@ -68,7 +68,7 @@
 //! - `generate_grid` (v1.2, generativa): come `from_coords` richiede un input
 //!   senza geometrie (l'input funge da trigger, le sue colonne non sono
 //!   propagate: l'output e' una riga per cella). Schema nuovo: `geometry`
-//!   (nuovo `FieldId`, non null), `cell_i`/`cell_j` UInt64 non null, piu'
+//!   (nuovo `FieldId`, non null), `cell_i`/`cell_j` `UInt64` non null, piu'
 //!   `centroid_x`/`centroid_y` Float64 non null se `include_centroid`. CRS da
 //!   config `crs` o di piano. Extent finito e non degenere, `cell_size > 0`,
 //!   numero celle entro [`crate::extensions2::MAX_GRID_CELLS`]; il conteggio
@@ -91,7 +91,7 @@
 //!   (`SameProjected`: aree/lunghezze in unita' di mappa); le colonne
 //!   attributo dell'input non sono propagate e le proprieta' sono azzerate.
 //! - `cluster_dbscan` (v1.3): calcolo globale (Blocking) ma output allineato
-//!   alle righe (OneToOne): aggiunge la colonna `cluster_id` UInt64
+//!   alle righe (OneToOne): aggiunge la colonna `cluster_id` `UInt64`
 //!   **nullable** (noise → null), nome da `output_column`; `eps` finito e
 //!   `> 0`, `min_points >= 1`; `Projected` (eps in unita' di mappa).
 //!
@@ -453,14 +453,14 @@ enum AccessorFieldParam {
 
 impl AccessorFieldParam {
     /// Indice in [`ACCESSOR_COLUMNS`] (ordine canonico di output).
-    fn column_index(self) -> usize {
+    const fn column_index(self) -> usize {
         match self {
-            AccessorFieldParam::GeometryType => 0,
-            AccessorFieldParam::NumGeometries => 1,
-            AccessorFieldParam::NumInteriorRings => 2,
-            AccessorFieldParam::StartPoint => 3,
-            AccessorFieldParam::EndPoint => 4,
-            AccessorFieldParam::IsClosed => 5,
+            Self::GeometryType => 0,
+            Self::NumGeometries => 1,
+            Self::NumInteriorRings => 2,
+            Self::StartPoint => 3,
+            Self::EndPoint => 4,
+            Self::IsClosed => 5,
         }
     }
 }
@@ -892,7 +892,7 @@ fn analyze_diagnostics(
         .map(|(name, data_type)| Field::new(*name, data_type.clone(), true))
         .collect();
     fields
-        .splice(position..position + 1, diagnostic_fields)
+        .splice(position..=position, diagnostic_fields)
         .for_each(drop);
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
@@ -1290,7 +1290,7 @@ fn analyze_subdivide(
             let field = &fields[position];
             fields[position] = Field::new(name, field.data_type().clone(), field.is_nullable())
                 .with_metadata(field.metadata().clone());
-            output_geometry.name = name.to_owned();
+            name.clone_into(&mut output_geometry.name);
         }
     }
     ensure_name_free(op, &fields, PARENT_INDEX_COLUMN)?;
@@ -1319,7 +1319,7 @@ fn analyze_snap(op: &str, input: &DataContract, config: &Value) -> Result<DataCo
     Ok(input.clone())
 }
 
-/// Costruisce il contratto WholeToMany delle op di copertura v1.3: schema
+/// Costruisce il contratto `WholeToMany` delle op di copertura v1.3: schema
 /// nuovo con le colonne diagnostiche non-null elencate piu' la geometria WKB
 /// non-null (nuovo `FieldId`, CRS dell'input); proprieta' azzerate.
 fn analyze_coverage_rows(
@@ -1416,7 +1416,7 @@ fn analyze_shared_paths(
 }
 
 /// `cluster_dbscan` (v1.3): `eps` finito e maggiore di zero, `min_points >=
-/// 1`; aggiunge la colonna etichetta UInt64 nullable (noise → null). Output
+/// 1`; aggiunge la colonna etichetta `UInt64` nullable (noise → null). Output
 /// allineato alle righe: le proprieta' dell'input sono preservate.
 fn analyze_cluster_dbscan(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
     let parsed: ClusterDbscanConfig = parse_config(op, config)?;
@@ -1545,6 +1545,9 @@ fn analyze_unary_pair(op: &str, input: &DataContract, config: &Value, data_type:
 /// Inferenza per le operazioni unarie (tutto tranne `from_coords` e le
 /// binarie, gestite altrove). `fields` alloca i `FieldId` delle op v1.3 che
 /// creano una nuova colonna geometria.
+// Dispatcher esaustivo sulle op unarie del catalogo: la lunghezza e' la
+// sequenza lineare dei casi sul contratto, non complessita' logica.
+#[allow(clippy::too_many_lines)]
 fn analyze_unary(
     descriptor: &OperationDescriptor,
     input: &DataContract,
@@ -1844,6 +1847,7 @@ pub fn analyze_geo_contract(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fmt::Write as _;
 
     use geo::{Geometry, Point};
     use geozero::{CoordDimensions, ToWkb};
@@ -1936,7 +1940,11 @@ mod tests {
         let wkb = Geometry::Point(Point::new(1.0, 2.0))
             .to_wkb(CoordDimensions::xy())
             .expect("encode punto");
-        wkb.iter().map(|byte| format!("{byte:02x}")).collect()
+        // `write!` su `String` e' infallibile: l'`fmt::Result` non puo' essere Err.
+        wkb.iter().fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
     }
 
     fn other_wkb_config() -> Value {
@@ -1949,7 +1957,7 @@ mod tests {
 
     #[derive(Clone)]
     enum Expect {
-        /// Schema identico all'input (geometria in place, stesso FieldId).
+        /// Schema identico all'input (geometria in place, stesso `FieldId`).
         Unchanged,
         /// Colonne dell'input piu' queste in coda (nome, tipo, nullable).
         Appended(Vec<(&'static str, DataType, bool)>),
@@ -1957,15 +1965,15 @@ mod tests {
         GeometryOnly(Vec<(&'static str, DataType, bool)>),
         /// Le 10 colonne diagnostiche al posto della geometria.
         Diagnostics,
-        /// Input tabellare + colonna geometria non-null con nuovo FieldId.
+        /// Input tabellare + colonna geometria non-null con nuovo `FieldId`.
         FromCoords,
-        /// Input tabellare WKT + colonna geometria nullable con nuovo FieldId.
+        /// Input tabellare WKT + colonna geometria nullable con nuovo `FieldId`.
         FromWkt,
-        /// Griglia generativa: schema nuovo (geometria non null nuovo FieldId,
-        /// cell_i/cell_j, centroidi opzionali) + row_count esatto.
+        /// Griglia generativa: schema nuovo (geometria non null nuovo `FieldId`,
+        /// `cell_i/cell_j`, centroidi opzionali) + `row_count` esatto.
         Grid { centroid: bool },
         /// Op di copertura v1.3 (WholeToMany): schema nuovo completo (tutto
-        /// non null), geometria con nuovo FieldId e CRS dell'input.
+        /// non null), geometria con nuovo `FieldId` e CRS dell'input.
         CoverageRows(Vec<(&'static str, DataType, bool)>),
         /// Schema invariato, CRS del contratto aggiornato al target.
         Reprojected,
@@ -1982,6 +1990,9 @@ mod tests {
         (name, DataType::Float64, true)
     }
 
+    // Tabella di fixture: la lunghezza e' data dall'elenco dei 69 casi
+    // (config + contratto atteso per op), non da logica da spezzare.
+    #[allow(clippy::too_many_lines)]
     fn cases() -> Vec<Case> {
         let unary = |op: &'static str, config: Value, expected: Expect| Case {
             op,
@@ -2449,6 +2460,9 @@ mod tests {
     }
 
     #[test]
+    // Verifica sequenziale per variante di `Expect` su tutti i casi: la
+    // lunghezza e' intrinseca alla tabella dei contratti attesi.
+    #[allow(clippy::too_many_lines)]
     fn every_geo_op_produces_the_expected_contract() {
         for case in cases() {
             let (output, input, allocator) = run_case(&case);
@@ -3172,7 +3186,11 @@ mod tests {
         ]))
         .to_wkb(CoordDimensions::xy())
         .expect("encode linea");
-        let line_hex: String = line.iter().map(|byte| format!("{byte:02x}")).collect();
+        // `write!` su `String` e' infallibile: l'`fmt::Result` non puo' essere Err.
+        let line_hex = line.iter().fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
         let result = analyze_one(
             "geo.line_locate_point",
             &inputs,
@@ -3208,7 +3226,7 @@ mod tests {
         assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS mancante accettato");
 
         // include_centroid: due colonne Float64 non null in coda; shape hex.
-        let mut config = extent.clone();
+        let mut config = extent;
         config["include_centroid"] = json!(true);
         config["shape"] = json!("hex");
         config["crs"] = json!("EPSG:32632");

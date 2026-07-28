@@ -141,9 +141,11 @@ const EWKB_TYPE_MASK: u32 = 0x0000_FFFF;
 /// ISO ne' EWKB valido e va rifiutato.
 const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
-/// Decodifica una geometria dal canone GeoArrow-WKB: prima la validazione
-/// strutturale del contratto ([`validate_wkb_contract`]), poi il decode e la
-/// validazione OGC della geometria risultante.
+/// Decodifica una geometria dal canone GeoArrow-WKB.
+///
+/// Prima la validazione strutturale del contratto
+/// ([`validate_wkb_contract`]), poi il decode e la validazione OGC della
+/// geometria risultante.
 ///
 /// # Errors
 ///
@@ -461,9 +463,11 @@ fn validate_wkb_geometry_with_dimensions(
     Ok(geometry_type)
 }
 
-/// Valida un payload WKB contro il contratto strutturale (limiti di byte,
-/// annidamento, conteggi, finitezza delle coordinate), con dimensionalita'
-/// attesa `Xy` e profondita' massima [`MAX_WKB_DEPTH`].
+/// Valida un payload WKB contro il contratto strutturale.
+///
+/// Verifica limiti di byte, annidamento, conteggi e finitezza delle
+/// coordinate, con dimensionalita' attesa `Xy` e profondita' massima
+/// [`MAX_WKB_DEPTH`].
 ///
 /// # Errors
 ///
@@ -475,9 +479,11 @@ pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
     validate_wkb_contract_with_depth(payload, MAX_WKB_DEPTH)
 }
 
-/// Variante con profondita' di annidamento configurabile (il limite arriva
-/// dai `Limits` effettivi del piano, `max_geometry_depth`; il default di
-/// [`validate_wkb_contract`] resta [`MAX_WKB_DEPTH`]).
+/// Variante con profondita' di annidamento configurabile.
+///
+/// Il limite arriva dai `Limits` effettivi del piano
+/// (`max_geometry_depth`); il default di [`validate_wkb_contract`] resta
+/// [`MAX_WKB_DEPTH`].
 ///
 /// # Errors
 ///
@@ -625,9 +631,11 @@ fn transform_geometry_validated(
     Ok(output)
 }
 
-/// Applica l'operazione direttamente su un payload WKB: decode, trasforma
-/// ([`transform_geometry`]), ri-encode nel canone XY e ri-validazione del
-/// risultato contro il contratto ([`validate_wkb_contract`]).
+/// Applica l'operazione direttamente su un payload WKB.
+///
+/// Decode, trasforma ([`transform_geometry`]), ri-encode nel canone XY e
+/// ri-validazione del risultato contro il contratto
+/// ([`validate_wkb_contract`]).
 ///
 /// # Errors
 ///
@@ -651,7 +659,7 @@ mod tests {
     use geo::{line_string, polygon, Area};
     use proptest::prelude::*;
 
-    fn round_trip(operation: Operation, geometry: Geometry<f64>) -> Geometry<f64> {
+    fn round_trip(operation: Operation, geometry: &Geometry<f64>) -> Geometry<f64> {
         let payload = geometry
             .to_wkb(CoordDimensions::xy())
             .expect("encode fixture");
@@ -674,17 +682,17 @@ mod tests {
             (x: 0.0, y: 2.0),
             (x: 0.0, y: 0.0),
         ]);
-        let result = round_trip(Operation::Centroid, input);
+        let result = round_trip(Operation::Centroid, &input);
         assert_eq!(result, Geometry::Point(Point::new(2.0, 1.0)));
     }
 
     #[test]
     fn envelope_preserves_degenerate_dimension() {
         let point = Geometry::Point(Point::new(2.0, 3.0));
-        assert_eq!(round_trip(Operation::Envelope, point.clone()), point);
+        assert_eq!(round_trip(Operation::Envelope, &point), point);
 
         let line = Geometry::LineString(line_string![(x: 1.0, y: 4.0), (x: 5.0, y: 4.0)]);
-        assert_eq!(round_trip(Operation::Envelope, line.clone()), line);
+        assert_eq!(round_trip(Operation::Envelope, &line), line);
     }
 
     #[test]
@@ -695,18 +703,18 @@ mod tests {
             (x: 2.0, y: 3.0),
             (x: 2.0, y: 1.0),
         ]);
-        let result = round_trip(Operation::ConvexHull, input);
+        let result = round_trip(Operation::ConvexHull, &input);
         assert!(result.unsigned_area() > 0.0);
     }
 
     #[test]
     fn convex_hull_normalizes_extreme_finite_coordinates_without_panicking() {
         let input = Geometry::LineString(LineString::from(vec![
-            (-3.477300121932381e-164, 2.781342323781663e-309),
-            (1.344974619049452e-284, 6.3542808404505305e-183),
-            (2.639614224254873e-309, 3.236069361538085e-111),
-            (-5.48880284031224e303, -6.971241357778827e182),
-            (-5.486124068793689e303, 7.064166183585296e-304),
+            (-3.477_300_121_932_381e-164, 2.781_342_323_781_663e-309),
+            (1.344_974_619_049_452e-284, 6.354_280_840_450_530_5e-183),
+            (2.639_614_224_254_873e-309, 3.236_069_361_538_085e-111),
+            (-5.488_802_840_312_24e303, -6.971_241_357_778_827e182),
+            (-5.486_124_068_793_689e303, 7.064_166_183_585_296e-304),
         ]));
         let hull = transform_geometry(Operation::ConvexHull, &input).unwrap();
         assert!(hull.check_validation().is_ok());
@@ -886,7 +894,7 @@ mod tests {
     }
 
     /// Coordinata con X, Y e le ordinate extra (Z e/o M, nell'ordine del
-    /// type code): lo stride e' 16 + 8 * extra.len().
+    /// type code): lo stride e' 16 + 8 * `extra.len()`.
     fn push_coordinate(payload: &mut Vec<u8>, x: f64, y: f64, extra: &[f64]) {
         payload.extend_from_slice(&x.to_le_bytes());
         payload.extend_from_slice(&y.to_le_bytes());

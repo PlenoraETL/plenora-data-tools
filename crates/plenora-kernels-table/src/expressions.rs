@@ -442,11 +442,13 @@ fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> R
     }
 }
 
-/// Sorgente temporale di `date_trunc`: colonna Date32 o Timestamp(ms) letta
-/// nativamente, `date_trunc` annidato, letterale null. Nessun parsing
-/// implicito di stringhe; timestamp timezone-aware rifiutati (decisione
-/// documentata: la semantica tz del troncamento non e' definibile in modo
-/// sicuro, quindi l'output Timestamp e' sempre senza timezone).
+/// Sorgente temporale di `date_trunc`.
+///
+/// Colonna Date32 o Timestamp(ms) letta nativamente, `date_trunc` annidato,
+/// letterale null. Nessun parsing implicito di stringhe; timestamp
+/// timezone-aware rifiutati (decisione documentata: la semantica tz del
+/// troncamento non e' definibile in modo sicuro, quindi l'output Timestamp
+/// e' sempre senza timezone).
 fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
     match expression {
         Expression::Column { name } => {
@@ -500,9 +502,11 @@ fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Re
     }
 }
 
-/// Valutazione di `in(value, [letterali])`: null propagato; confronti con la
-/// stessa semantica dei `BinaryOperator` (tipi incompatibili -> errore,
-/// elementi null mai uguali). Lista vuota ammessa: sempre `false`.
+/// Valutazione di `in(value, [letterali])`.
+///
+/// Null propagato; confronti con la stessa semantica dei `BinaryOperator`
+/// (tipi incompatibili -> errore, elementi null mai uguali). Lista vuota
+/// ammessa: sempre `false`.
 fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
     if args.len() != 2 {
         return Err(PlenoraError::Contract("in richiede 2 argomenti".into()));
@@ -527,8 +531,9 @@ fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Sc
     Ok(Scalar::Boolean(false))
 }
 
-/// Tipo temporale della radice `date_trunc` ricavato dallo schema del batch:
-/// con `output_type=auto` un input tutto null (o un batch vuoto) deve
+/// Tipo temporale della radice `date_trunc` ricavato dallo schema del batch.
+///
+/// Con `output_type=auto` un input tutto null (o un batch vuoto) deve
 /// produrre comunque Date32/TimestampMs dal tipo della colonna, MAI Utf8.
 /// Gli errori (unita' non valida, colonna non temporale, timezone-aware)
 /// sono gli stessi del percorso di valutazione.
@@ -980,6 +985,16 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
     }
 }
 
+/// Validazione statica della config: nome di output e forma dell'AST, senza
+/// toccare i dati.
+///
+/// # Errors
+///
+/// - `Contract`: nome colonna di output vuoto o oltre 1024 byte (come
+///   `validate_output_name`); AST oltre la profondita' massima o oltre
+///   `max_nodes`; nome colonna vuoto; letterale non scalare o non finito;
+///   troppi argomenti o rami `case`; unita' di `date_trunc` non letterale o
+///   fuori dal set chiuso; `in` senza lista di letterali scalari.
 pub fn validate(config: &ExpressionTransform, max_nodes: usize) -> Result<()> {
     crate::validate_output_name(&config.output_column)?;
     audit(&config.expression, 1, &mut 0, max_nodes)
@@ -1033,6 +1048,24 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
     }
 }
 
+/// Valuta l'espressione su ogni riga e appende/sostituisce la colonna di
+/// output.
+///
+/// Su batch con righe usa il fast path compilato (stessa semantica del
+/// generico, oracolo dei test); su batch vuoti valuta il percorso generico,
+/// che non risolve mai le colonne.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente; argomento di tipo errato per operatore o
+///   funzione; confronto fra tipi incompatibili; divisione per zero; numero
+///   non finito in colonna o risultato non finito; `date_trunc` su colonna
+///   non temporale o timestamp timezone-aware; tipi eterogenei con
+///   `output_type = auto`; errore Arrow nella sostituzione;
+/// - `Contract`: letterale non scalare o non finito; numero di argomenti
+///   errato; regex non valida in `regex_replace`; indice di `substring`
+///   negativo; unita' di `date_trunc` non valida; invarianti interne
+///   violate (errore Internal).
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
     // Batch vuoto: il generico non valuta mai i nodi (colonne non risolte,
     // letterali non convertiti); si mantiene quel comportamento saltando la
@@ -1346,15 +1379,13 @@ fn other_column(array: &ArrayRef, row: usize) -> Result<FastValue<'static>> {
             | DataType::Date32
             | DataType::Timestamp(_, _)
     ) {
-        return match scalar_as_f64(array.as_ref(), row)? {
-            None => Ok(FastValue::Null),
-            Some(value) => finite_number(value),
-        };
+        return scalar_as_f64(array.as_ref(), row)?
+            .map_or_else(|| Ok(FastValue::Null), finite_number);
     }
-    Ok(match scalar_as_string(array.as_ref(), row)? {
-        None => FastValue::Null,
-        Some(value) => FastValue::Text(Cow::Owned(value)),
-    })
+    Ok(scalar_as_string(array.as_ref(), row)?.map_or_else(
+        || FastValue::Null,
+        |value| FastValue::Text(Cow::Owned(value)),
+    ))
 }
 
 /// Equivalente di `boolean` su `FastValue`.
@@ -1461,42 +1492,42 @@ fn fast_logical<'a>(
 /// Equivalente di `binary` su `FastValue`.
 fn fast_binary<'a>(
     op: BinaryOperator,
-    left: FastValue<'a>,
-    right: FastValue<'a>,
+    left: &FastValue<'a>,
+    right: &FastValue<'a>,
 ) -> Result<FastValue<'a>> {
     match op {
         BinaryOperator::Add
         | BinaryOperator::Subtract
         | BinaryOperator::Multiply
-        | BinaryOperator::Divide => fast_arithmetic(op, &left, &right),
-        BinaryOperator::And | BinaryOperator::Or => fast_logical(op, &left, &right),
+        | BinaryOperator::Divide => fast_arithmetic(op, left, right),
+        BinaryOperator::And | BinaryOperator::Or => fast_logical(op, left, right),
         BinaryOperator::Equal => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value == Ordering::Equal)
             }))
         }
         BinaryOperator::NotEqual => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Equal)
             }))
         }
         BinaryOperator::Greater => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value == Ordering::Greater)
             }))
         }
         BinaryOperator::GreaterEqual => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Less)
             }))
         }
         BinaryOperator::Less => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value == Ordering::Less)
             }))
         }
         BinaryOperator::LessEqual => {
-            Ok(fast_compare(&left, &right)?.map_or(FastValue::Null, |value| {
+            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Greater)
             }))
         }
@@ -1767,8 +1798,10 @@ enum FastNode<'a> {
         list: Vec<Self>,
     },
     /// `regex_replace`: il pattern letterale e' compilato UNA VOLTA in
-    /// compilazione; l'errore di una regex non valida e' rilasciato in
-    /// valutazione, nella stessa posizione del generico (dopo i null check).
+    /// compilazione.
+    ///
+    /// L'errore di una regex non valida e' rilasciato in valutazione, nella
+    /// stessa posizione del generico (dopo i null check).
     RegexReplace {
         value: Box<Self>,
         pattern: RegexSource<'a>,
@@ -1988,6 +2021,10 @@ fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> 
     }
 }
 
+// Dispatcher esaustivo su `FastNode`: la lunghezza e' data dalla sequenza
+// lineare dei casi del contratto (uno per variante), non da complessita'
+// logica; spezzarla peggiorerebbe solo la leggibilita'.
+#[allow(clippy::too_many_lines)]
 fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastValue<'e>> {
     match node {
         FastNode::Literal(literal) => Ok(literal.value()),
@@ -2004,11 +2041,11 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                     .map_or(FastValue::Null, |value| FastValue::Number(-value)),
             })
         }
-        FastNode::Binary { op, left, right } => fast_binary(
-            *op,
-            evaluate_fast(left, row)?,
-            evaluate_fast(right, row)?,
-        ),
+        FastNode::Binary { op, left, right } => {
+            let left = evaluate_fast(left, row)?;
+            let right = evaluate_fast(right, row)?;
+            fast_binary(*op, &left, &right)
+        }
         FastNode::Function { name, args } => fast_function(
             *name,
             args.iter()
@@ -2278,6 +2315,7 @@ mod tests {
     use super::*;
 
     /// Fixture con null, -0.0, zeri, testi (anche data-like) e booleani.
+    ///
     /// La colonna `nan` contiene NaN: la lettura deve fallire in entrambi i
     /// percorsi ("expression non accetta numeri non finiti"). `ts` e `tstz`
     /// coprono i timestamp nativi (naive e timezone-aware) di `date_trunc`.
@@ -2388,22 +2426,31 @@ mod tests {
         json!({"kind": "column", "name": name})
     }
 
+    // Builder di fixture per i test: il passaggio per valore dei `Value`
+    // JSON (piccoli, costruiti al volo) e' l'ergonomia voluta dei casi di
+    // test; il borrow suggerito dal lint complicherebbe ~180 call site
+    // senza alcun beneficio di correttezza.
+    #[allow(clippy::needless_pass_by_value)]
     fn lit(value: Value) -> Value {
         json!({"kind": "literal", "value": value})
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn bin(op: &str, left: Value, right: Value) -> Value {
         json!({"kind": "binary", "op": op, "left": left, "right": right})
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn un(op: &str, value: Value) -> Value {
         json!({"kind": "unary", "op": op, "value": value})
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn func(name: &str, args: Vec<Value>) -> Value {
         json!({"kind": "function", "name": name, "args": args})
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn case(branches: Vec<(Value, Value)>, else_value: Value) -> Value {
         json!({
             "kind": "case",
@@ -2415,6 +2462,7 @@ mod tests {
         })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn config(expression: Value, output_type: Option<&str>) -> ExpressionTransform {
         let mut value = json!({"output_column": "out", "expression": expression});
         if let Some(output_type) = output_type {

@@ -64,13 +64,13 @@ pub const STRUCT_OVERHEAD_BYTES: u64 = 32;
 pub const VEC_OVERHEAD_BYTES: u64 = 24;
 
 /// Stima (saturating) di `N` coordinate XY.
-fn coords_bytes(count: usize) -> u64 {
+const fn coords_bytes(count: usize) -> u64 {
     (count as u64).saturating_mul(COORD_XY_BYTES)
 }
 
-/// Stima di una sequenza di coordinate allocata in un `Vec` (LineString o
+/// Stima di una sequenza di coordinate allocata in un `Vec` (`LineString` o
 /// anello poligonale), con l'overhead di nodo del contenitore.
-fn coord_vec_bytes(container_overhead: u64, count: usize) -> u64 {
+const fn coord_vec_bytes(container_overhead: u64, count: usize) -> u64 {
     container_overhead
         .saturating_add(VEC_OVERHEAD_BYTES)
         .saturating_add(coords_bytes(count))
@@ -93,6 +93,7 @@ fn polygon_body_bytes(polygon: &geo::Polygon<f64>) -> u64 {
 /// per la memoria nativa delle geometrie (formula nel doc-comment di
 /// modulo). Va esposta nelle metriche come "stimata", separata da memoria
 /// riservata e osservata.
+#[must_use] 
 pub fn estimate_geometry_native_bytes(geometry: &Geometry<f64>) -> u64 {
     let node = STRUCT_OVERHEAD_BYTES;
     match geometry {
@@ -191,7 +192,7 @@ mod tests {
         );
     }
 
-    /// STIMA nota di una LineString: STRUCT + VEC + N coordinate.
+    /// STIMA nota di una `LineString`: STRUCT + VEC + N coordinate.
     #[test]
     fn linestring_estimate_matches_the_declared_formula() {
         let line = Geometry::LineString(line_string![

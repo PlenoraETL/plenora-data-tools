@@ -21,6 +21,16 @@ pub struct DropColumns {
     pub columns: Vec<String>,
 }
 
+/// Batch senza le colonne elencate in `config`.
+///
+/// I nomi assenti nello schema sono ignorati (no-op); metadati di schema
+/// e numero di righe sono preservati. Zero-copy: gli array Arrow sono
+/// riusati (Arc clone).
+///
+/// # Errors
+///
+/// - `Arrow`: lo schema risultante non e' coerente con le colonne
+///   (guardia Arrow in costruzione del batch).
 pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordBatch> {
     let removed: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let mut fields = Vec::new();
@@ -48,8 +58,17 @@ pub struct SelectColumns {
 }
 
 /// Proiezione positiva (estensione v1.1): output = le colonne elencate,
-/// nell'ordine dato. Zero-copy: gli array Arrow sono riusati (Arc clone),
-/// nessuna copia dei dati. Errore se una colonna manca o e' ripetuta.
+/// nell'ordine dato.
+///
+/// Zero-copy: gli array Arrow sono riusati (Arc clone), nessuna copia
+/// dei dati.
+///
+/// # Errors
+///
+/// - `Contract`: elenco `columns` vuoto o colonna ripetuta nella
+///   proiezione;
+/// - `Schema`: colonna non trovata nello schema;
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
     if config.columns.is_empty() {
         return Err(PlenoraError::Contract(
@@ -273,16 +292,33 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
 
 /// Valida il `default` di una colonna dichiarata senza materializzarlo
 /// (per l'analisi a secco del contratto).
+///
+/// # Errors
+///
+/// - `Contract`: `default` non convertibile in `align_type` (stessa
+///   conversione di `align_default_column`, guardia epoch date32
+///   inclusa);
+/// - `Arrow`: errore Arrow sulla precisione/scala `Decimal128`.
 pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
     align_default_column(value, align_type, 1).map(|_| ())
 }
 
-/// Allinea lo schema dell'input all'elenco dichiarato (estensione v1.2):
-/// riordina/proietta secondo `columns`; una colonna assente e' aggiunta come
-/// colonna di null (o riempita col `default` scalare, non nullable); una
-/// colonna presente con tipo diverso dal dichiarato e' un errore di
+/// Allinea lo schema dell'input all'elenco dichiarato (estensione v1.2).
+///
+/// Riordina/proietta secondo `columns`; una colonna assente e' aggiunta
+/// come colonna di null (o riempita col `default` scalare, non nullable);
+/// una colonna presente con tipo diverso dal dichiarato e' un errore di
 /// contratto (mai cast implicito). Le colonne non elencate sono scartate,
 /// salvo `keep_extra` (appendono in coda nell'ordine originale).
+///
+/// # Errors
+///
+/// - `Contract`: elenco `columns` vuoto, colonna ripetuta, nome di
+///   output non valido (come `validate_output_name`), tipo presente
+///   diverso dal dichiarato (nessun cast implicito) o `default` non
+///   convertibile (come `check_align_default`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna)
+///   o sulla precisione/scala `Decimal128`.
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
     if config.columns.is_empty() {
         return Err(PlenoraError::Contract(
@@ -353,6 +389,15 @@ pub struct Rename {
     pub renames: Vec<RenamePair>,
 }
 
+/// Rinomina le colonne secondo `renames` (i nomi non mappati restano
+/// invariati), preservando metadati di schema e array: zero-copy.
+///
+/// # Errors
+///
+/// - `Contract`: nome di output non valido (come
+///   `validate_output_name`);
+/// - `Schema`: la rinomina produce un nome duplicato;
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
 pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
     let mapping: HashMap<&str, &str> = config
         .renames
@@ -390,6 +435,17 @@ pub struct ReorderColumns {
     pub alphabetical: bool,
 }
 
+/// Riordina le colonne del batch.
+///
+/// Prima quelle elencate in `columns` (nell'ordine dato), poi le restanti
+/// nell'ordine originale (alfabetico, case-insensitive, con
+/// `alphabetical`). Zero-copy: gli array Arrow sono riusati (Arc clone).
+///
+/// # Errors
+///
+/// - `Contract`: colonna ripetuta nell'elenco;
+/// - `Schema`: colonna non trovata nello schema;
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
     let schema = batch.schema();
     let mut selected = Vec::with_capacity(batch.num_columns());
@@ -448,6 +504,20 @@ const fn default_true() -> bool {
     true
 }
 
+/// Concatena le colonne Utf8 elencate nella colonna `output_column`.
+///
+/// Le parti sono unite con `separator`; con `skip_null` i null sono
+/// saltati (riga di soli null -> null), altrimenti contano come stringa
+/// vuota. Se `output_column` esiste gia' e' sostituita.
+///
+/// # Errors
+///
+/// - `Contract`: elenco `columns` vuoto, nome di output non valido
+///   (come `validate_output_name`) o valore concatenato oltre
+///   `limits.max_string_bytes`;
+/// - `Schema`: colonna assente o non Utf8 (come `utf8_column`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn concat_columns(
     batch: &RecordBatch,
     config: &ConcatColumns,
@@ -515,6 +585,21 @@ const fn default_max_splits() -> i64 {
     -1
 }
 
+/// Divide la colonna Utf8 `column` sul `delimiter` nelle `new_columns`.
+///
+/// Al piu' `max_splits` parti se positivo: le parti mancanti sono null,
+/// quelle in eccesso restano nell'ultima parte. Una colonna di output
+/// gia' esistente e' sostituita.
+///
+/// # Errors
+///
+/// - `Contract`: `delimiter` vuoto, `new_columns` vuoto o oltre
+///   `limits.max_split_columns`, nome di output non valido (come
+///   `validate_output_name`);
+/// - `Schema`: nomi di output duplicati, oppure colonna assente o non
+///   Utf8 (come `utf8_column`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn split_column(
     batch: &RecordBatch,
     config: &SplitColumn,
@@ -582,6 +667,10 @@ pub fn split_column(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use serde_json::json;
 

@@ -42,6 +42,16 @@ fn default_fill() -> String {
     "0".into()
 }
 
+/// Colonna con i valori paddati a `width` caratteri usando `fill_char`.
+///
+/// Valori gia' lunghi almeno `width` restano invariati; i null restano null.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, `fill_char` vuoto
+///   o piu' di un carattere Unicode, risultato oltre
+///   `limits.max_string_bytes`;
+/// - `Schema`: colonna assente o non Utf8.
 pub fn string_pad(
     batch: &RecordBatch,
     config: &StringPad,
@@ -106,6 +116,13 @@ pub struct StringLength {
     pub output_column: Option<String>,
 }
 
+/// Colonna Int64 con la lunghezza in caratteri dei valori (null -> null).
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, conteggio caratteri
+///   non rappresentabile come i64;
+/// - `Schema`: colonna assente o non Utf8.
 pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<RecordBatch> {
     let output_name = config
         .output_column
@@ -163,6 +180,20 @@ fn utf8_data_len(values: &StringArray) -> usize {
     usize::try_from(offsets[values.len()] - offsets[0]).unwrap_or(0)
 }
 
+/// Estrazione regex dalla colonna: gruppi nominati -> una colonna per
+/// gruppo, altrimenti una colonna con il primo gruppo (o il match intero).
+///
+/// Con `extract_all` i match multipli sono concatenati con virgola; nessun
+/// match e null producono null.
+///
+/// # Errors
+///
+/// - `Contract`: pattern oltre `limits.max_regex_bytes`, regex non valida,
+///   nome di colonna di output (esplicito o da gruppo nominato) non valido;
+/// - `Schema`: colonna assente o non Utf8.
+// Tre forme di output (gruppi nominati, gruppo singolo, extract_all) su una
+// sola passata di righe: sequenza lineare di casi, lunga per costruzione.
+#[allow(clippy::too_many_lines)]
 pub fn string_extract(
     batch: &RecordBatch,
     config: &StringExtract,
@@ -374,6 +405,16 @@ fn normalize_into(value: &str, operation: &NormalizeOperation, out: &mut String)
     }
 }
 
+/// Normalizza le colonne di testo secondo `config.operations`.
+///
+/// Con `overwrite` le colonne sono sostituite, altrimenti il risultato va in
+/// `<colonna>_norm`. I null restano null.
+///
+/// # Errors
+///
+/// - `Contract`: `columns` vuoto, nome della colonna di output non valido,
+///   risultato oltre `limits.max_string_bytes`;
+/// - `Schema`: colonna assente o non Utf8.
 pub fn text_normalize(
     batch: &RecordBatch,
     config: &TextNormalize,

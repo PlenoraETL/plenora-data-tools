@@ -330,6 +330,14 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
     )))
 }
 
+/// Sostituisce i null (valore fisso, ffill o bfill) nelle colonne indicate
+/// (o in tutte, se `column` e' assente).
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente; tipo di colonna non supportato (coperti
+///   Utf8, Int64, Float64, Boolean); errore Arrow nella sostituzione;
+/// - `Contract`: valore di fill non convertibile al tipo della colonna.
 pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
     let targets: Vec<usize> = if let Some(name) = &config.column {
         vec![column_index(batch, name)?]
@@ -421,6 +429,13 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
     }
 }
 
+/// Sostituisce `old_value` con `new_value` in una colonna Utf8 (confronto
+/// letterale, oppure regex con `regex = true`).
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente o non Utf8; errore Arrow nella sostituzione;
+/// - `Contract`: `old_value` non e' una regex valida (con `regex = true`).
 pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let values = batch
@@ -457,7 +472,7 @@ pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
     replace_or_append(batch, &config.column, DataType::Utf8, true, Arc::new(out))
 }
 
-fn cast_failure<T>(errors: &CastErrors, message: &str) -> Result<Option<T>> {
+fn cast_failure<T>(errors: CastErrors, message: &str) -> Result<Option<T>> {
     match errors {
         CastErrors::Coerce => Ok(None),
         CastErrors::Raise => Err(PlenoraError::Schema(message.into())),
@@ -592,13 +607,17 @@ fn source_strings(source: &ArrayRef) -> Result<Vec<Option<String>>> {
 // notazione esponenziale).
 // ---------------------------------------------------------------------------
 
-/// `to_string(value).trim().parse::<i64>()` del generico su valori nativi:
-/// riesce per i finiti interi. Sotto 2^53 il Display e' esatto e il parse e'
+/// `to_string(value).trim().parse::<i64>()` del generico su valori nativi.
+///
+/// Riesce per i finiti interi. Sotto 2^53 il Display e' esatto e il parse e'
 /// sempre in range; sopra 2^53 il Display stampa la rappresentazione decimale
 /// piu' corta (es. -2^63 -> "-9223372036854776000", che NON parsa come i64),
 /// quindi si riproduce il parse testuale. "-0" (da -0.0) parse a 0.
 fn cast_f64_i64(value: f64) -> Option<i64> {
     const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    // Confronto esatto voluto: riproduce il parse testuale del generico
+    // (finito e intero per bit), come documentato sopra la funzione.
+    #[allow(clippy::float_cmp)]
     if !value.is_finite() || value != value.trunc() {
         return None;
     }
@@ -612,6 +631,9 @@ fn cast_f64_i64(value: f64) -> Option<i64> {
 /// segno: i negativi falliscono sempre, -0.0 fallisce ("-0").
 fn cast_f64_u64(value: f64) -> Option<u64> {
     const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    // Come `cast_f64_i64`: confronti esatti voluti, riproducono il parse
+    // testuale del generico incluso il rifiuto di "-0".
+    #[allow(clippy::float_cmp)]
     if !value.is_finite()
         || value != value.trunc()
         || value < 0.0
@@ -625,14 +647,16 @@ fn cast_f64_u64(value: f64) -> Option<u64> {
     value.to_string().parse::<u64>().ok()
 }
 
-fn cast_or_failure<T>(parsed: Option<T>, errors: &CastErrors, message: &str) -> Result<Option<T>> {
+fn cast_or_failure<T>(parsed: Option<T>, errors: CastErrors, message: &str) -> Result<Option<T>> {
     parsed.map_or_else(|| cast_failure(errors, message), |value| Ok(Some(value)))
 }
 
-/// `parse_date32` senza doppio parse chrono per il formato ISO canonico
-/// "YYYY-MM-DD" (il primo provato da `parse_date` a formato vuoto): il parse
-/// manuale usa la stessa validazione di `NaiveDate` (`from_ymd_opt`), quindi
-/// produce lo stesso risultato; ogni altra stringa ricade su `parse_date32`.
+/// `parse_date32` veloce per il formato ISO canonico "YYYY-MM-DD".
+///
+/// Il formato ISO e' il primo provato da `parse_date` a formato vuoto: il
+/// parse manuale usa la stessa validazione di `NaiveDate` (`from_ymd_opt`),
+/// quindi produce lo stesso risultato senza doppio parse chrono; ogni altra
+/// stringa ricade su `parse_date32`.
 fn parse_date32_fast(value: &str, format: &str) -> Option<i32> {
     if format.is_empty() {
         let bytes = value.as_bytes();
@@ -707,7 +731,7 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
 }
 
 /// Target `int` (Int64).
-fn cast_to_int(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef>> {
+fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione int fallita";
     if let Some(values) = source.as_any().downcast_ref::<Int64Array>() {
         // to_string + parse e' sempre l'identita' su Int64.
@@ -763,7 +787,7 @@ fn cast_to_int(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef
 }
 
 /// Target `float` (Float64).
-fn cast_to_float(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef>> {
+fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione float fallita";
     if let Some(values) = source.as_any().downcast_ref::<Float64Array>() {
         return Ok(Some(Arc::new(values.clone())));
@@ -823,7 +847,7 @@ fn cast_to_float(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayR
 }
 
 /// Target `bool` (Boolean).
-fn cast_to_bool(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef>> {
+fn cast_to_bool(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione bool fallita";
     if let Some(values) = source.as_any().downcast_ref::<BooleanArray>() {
         return Ok(Some(Arc::new(values.clone())));
@@ -866,6 +890,9 @@ fn cast_to_bool(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRe
                     Ok(None)
                 } else {
                     let value = values.value(row);
+                    // Uguaglianze esatte volute: riproducono il parse di
+                    // "1"/"0" ("-0" fallisce), vedi commento sopra il ciclo.
+                    #[allow(clippy::float_cmp)]
                     if value == 1.0 {
                         Ok(Some(true))
                     } else if value == 0.0 && value.is_sign_positive() {
@@ -899,7 +926,7 @@ fn cast_to_bool(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRe
 }
 
 /// Target `uint64` (`UInt64`).
-fn cast_to_uint64(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef>> {
+fn cast_to_uint64(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione uint64 fallita";
     if let Some(values) = source.as_any().downcast_ref::<UInt64Array>() {
         return Ok(Some(Arc::new(values.clone())));
@@ -953,25 +980,29 @@ fn cast_to_uint64(source: &ArrayRef, errors: &CastErrors) -> Result<Option<Array
 
 /// Fast path: `Ok(None)` se la combinazione sorgente/target non e' coperta
 /// (il chiamante ricade sul generico).
+// Dispatcher esaustivo su tutti i TargetType del contratto: un blocco unico
+// tiene le politiche di cast revisionabili insieme, come `type_cast_generic`;
+// la lunghezza e' la sequenza lineare dei casi (niente refactor in pulizia).
+#[allow(clippy::too_many_lines)]
 fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRef>> {
     let array: ArrayRef = match config.target_type {
         TargetType::Str => match cast_to_str(source) {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Int => match cast_to_int(source, &config.errors)? {
+        TargetType::Int => match cast_to_int(source, config.errors)? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Float => match cast_to_float(source, &config.errors)? {
+        TargetType::Float => match cast_to_float(source, config.errors)? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Bool => match cast_to_bool(source, &config.errors)? {
+        TargetType::Bool => match cast_to_bool(source, config.errors)? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Uint64 => match cast_to_uint64(source, &config.errors)? {
+        TargetType::Uint64 => match cast_to_uint64(source, config.errors)? {
             Some(array) => array,
             None => return Ok(None),
         },
@@ -987,7 +1018,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                         value.map_or(Ok(None), |value| {
                             cast_or_failure(
                                 parse_date(value, &config.date_format, datetime),
-                                &config.errors,
+                                config.errors,
                                 "conversione data fallita",
                             )
                         })
@@ -1006,7 +1037,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                         value.map_or(Ok(None), |value| {
                             cast_or_failure(
                                 parse_date32_fast(value, &config.date_format),
-                                &config.errors,
+                                config.errors,
                                 "conversione date32 fallita",
                             )
                         })
@@ -1028,7 +1059,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                                 &config.date_format,
                                 config.timezone.as_deref(),
                             ),
-                            &config.errors,
+                            config.errors,
                             "conversione timestamp fallita",
                         )
                     })
@@ -1052,7 +1083,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                     value.map_or(Ok(None), |value| {
                         cast_or_failure(
                             parse_decimal128(value, precision, scale),
-                            &config.errors,
+                            config.errors,
                             "conversione decimal128 fallita",
                         )
                     })
@@ -1092,6 +1123,17 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
     Ok(Some(array))
 }
 
+/// Converte la colonna al tipo `target_type` secondo la politica `errors`
+/// (`coerce` -> null, `raise` -> errore sulla prima riga fallita).
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente; conversione fallita con `errors = raise`;
+///   tipo sorgente fuori dal profilo scalare (percorso generico, via
+///   `scalar_as_string`); errore Arrow nella costruzione (es. precision/
+///   scale decimal128, builder dictionary);
+/// - `Contract`: `errors = ignore` (nessun tipo Arrow omogeneo garantibile);
+///   `decimal128` senza `precision`/`scale`.
 pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -1127,7 +1169,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                         || Ok(None),
                         |value| {
                             value.trim().parse::<i64>().map_or_else(
-                                |_| cast_failure(&config.errors, "conversione int fallita"),
+                                |_| cast_failure(config.errors, "conversione int fallita"),
                                 |value| Ok(Some(value)),
                             )
                         },
@@ -1142,7 +1184,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                         || Ok(None),
                         |value| {
                             value.trim().replace(',', ".").parse::<f64>().map_or_else(
-                                |_| cast_failure(&config.errors, "conversione float fallita"),
+                                |_| cast_failure(config.errors, "conversione float fallita"),
                                 |value| Ok(Some(value)),
                             )
                         },
@@ -1162,7 +1204,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                                     Ok(Some(true))
                                 }
                                 "false" | "0" | "no" | "falso" | "f" | "n" => Ok(Some(false)),
-                                _ => cast_failure(&config.errors, "conversione bool fallita"),
+                                _ => cast_failure(config.errors, "conversione bool fallita"),
                             }
                         },
                     )
@@ -1178,7 +1220,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                             || Ok(None),
                             |value| {
                                 parse_date(&value, &config.date_format, datetime).map_or_else(
-                                    || cast_failure(&config.errors, "conversione data fallita"),
+                                    || cast_failure(config.errors, "conversione data fallita"),
                                     |value| Ok(Some(value)),
                                 )
                             },
@@ -1193,7 +1235,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         parse_date32(&value, &config.date_format).map_or_else(
-                            || cast_failure(&config.errors, "conversione date32 fallita"),
+                            || cast_failure(config.errors, "conversione date32 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1211,7 +1253,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                             config.timezone.as_deref(),
                         )
                         .map_or_else(
-                            || cast_failure(&config.errors, "conversione timestamp fallita"),
+                            || cast_failure(config.errors, "conversione timestamp fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1233,7 +1275,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         parse_decimal128(&value, precision, scale).map_or_else(
-                            || cast_failure(&config.errors, "conversione decimal128 fallita"),
+                            || cast_failure(config.errors, "conversione decimal128 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1258,7 +1300,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         value.trim().parse::<u64>().map_or_else(
-                            |_| cast_failure(&config.errors, "conversione uint64 fallita"),
+                            |_| cast_failure(config.errors, "conversione uint64 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })

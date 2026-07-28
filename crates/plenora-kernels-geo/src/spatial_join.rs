@@ -105,6 +105,20 @@ fn exact_match(left: &Geometry<f64>, right: &Geometry<f64>, predicate: JoinPredi
 ///
 /// Empty geometries produce no pairs. Bounding boxes only select candidates;
 /// every result is confirmed by the requested exact geometry predicate.
+///
+/// # Errors
+///
+/// - `SpatialJoinError::InvalidPairLimit`: `max_pairs` e' zero;
+/// - `SpatialJoinError::IndexOverflow`: il numero di geometrie non e'
+///   rappresentabile in `u64`;
+/// - `SpatialJoinError::NonFiniteCoordinate`: una geometria contiene
+///   coordinate NaN o infinite (coordinate o bounding box);
+/// - `SpatialJoinError::InvalidGeometry`: una geometria non supera la
+///   validazione OGC;
+/// - `SpatialJoinError::PairLimitExceeded`: le coppie confermate superano
+///   `max_pairs`;
+/// - `SpatialJoinError::Internal`: invariante interna violata (mai attesa:
+///   l'R-tree contiene solo geometrie non nulle).
 pub fn spatial_join(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
@@ -118,6 +132,10 @@ pub fn spatial_join(
 
 /// Nullable variant used by framed transports. `None` rows never match, but
 /// retain their original positional index in every emitted pair.
+///
+/// # Errors
+///
+/// Come [`spatial_join`]; le righe `None` non producono errori ne' coppie.
 pub fn spatial_join_nullable(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],

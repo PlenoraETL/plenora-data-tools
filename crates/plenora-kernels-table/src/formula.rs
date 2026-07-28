@@ -357,8 +357,9 @@ impl<'a> FastProgram<'a> {
         self.ops.push(op);
     }
 
-    /// Emette gli op in postfix (ordine di valutazione del generico);
-    /// restituisce `None` per il fallback, `Some(pure)` con `pure` vero se il
+    /// Emette gli op in postfix (ordine di valutazione del generico).
+    ///
+    /// Restituisce `None` per il fallback, `Some(pure)` con `pure` vero se il
     /// sotto-albero produce certamente solo Number|Null.
     fn emit(
         &mut self,
@@ -651,6 +652,16 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
     })
 }
 
+/// Validazione statica della config: nome della nuova colonna e sintassi
+/// della formula, senza toccare i dati.
+///
+/// # Errors
+///
+/// - `Contract`: nome colonna vuoto o oltre 1024 byte (come
+///   `validate_output_name`); formula vuota o oltre `max_bytes`; errori di
+///   sintassi (formula incompleta, parentesi non bilanciate, stringa non
+///   terminata o con escape, numero o esponente non valido, carattere non
+///   ammesso, token extra, testo non UTF-8).
 pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
     validate_output_name(&config.new_column)?;
     if config.formula.is_empty() || config.formula.len() > max_bytes {
@@ -661,6 +672,20 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
     parse(&config.formula).map(|_| ())
 }
 
+/// Valuta la formula su ogni riga e appende/sostituisce `new_column`
+/// (Float64 se tutti i valori sono numerici, Utf8 altrimenti).
+///
+/// Su batch con righe e colonne Int64/Float64/Utf8 usa il fast path
+/// compilato (stessa semantica del generico, oracolo dei test); negli altri
+/// casi valuta il percorso generico.
+///
+/// # Errors
+///
+/// - `Contract`: errori di sintassi della formula (come `validate`);
+///   invarianti interne violate (errore Internal);
+/// - `Schema`: colonna assente; divisione per zero; negazione di testo;
+///   operatore aritmetico su testo; valore non convertibile (via
+///   `scalar_as_f64`/`scalar_as_string`); errore Arrow nella sostituzione.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
     let expression = parse(&config.formula)?;
     // Batch vuoto: il generico non risolve mai le colonne (zero valutazioni),

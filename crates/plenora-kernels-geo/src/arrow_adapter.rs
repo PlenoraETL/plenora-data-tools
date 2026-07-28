@@ -1,7 +1,7 @@
 //! Adapter Arrow per il canone GeoArrow-WKB (rappresentazione).
 //!
 //! Port Fase 1 da `arrow_transport.rs` di plenora-geo-tools-arrow, limitato
-//! alle parti di rappresentazione: metadati di estensione GeoArrow
+//! alle parti di rappresentazione: metadati di estensione `GeoArrow`
 //! (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON con le
 //! chiavi `crs`, (dalla milestone B1.1, ICD §3.3) `dimensions` e (dalla
 //! milestone B1.4) `encoding` — scritta solo quando il contratto la
@@ -11,7 +11,7 @@
 //! `TransformArrowSchema`/`PairArrowSchema` non fanno parte di questo modulo
 //! (andranno in `plenora-engine`).
 //!
-//! Unificazione B1.1: questo modulo e' la casa unica dei metadati GeoArrow;
+//! Unificazione B1.1: questo modulo e' la casa unica dei metadati `GeoArrow`;
 //! il trasporto Arrow v3 di `plenora-engine::geo_transport` delega qui
 //! (stesso JSON in uscita byte-per-byte).
 //!
@@ -75,6 +75,11 @@ fn cell_too_large(bytes: u64) -> PlenoraError {
 
 /// Indice della colonna geometria: deve esistere, essere `Binary` e portare
 /// i metadati di estensione `geoarrow.wkb`.
+///
+/// # Errors
+///
+/// `PlenoraError::Schema` se la colonna `name` e' assente, non e' di tipo
+/// `Binary` o non porta i metadati di estensione `geoarrow.wkb`.
 pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, PlenoraError> {
     let (index, field) = schema
         .column_with_name(name)
@@ -89,20 +94,32 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
     Ok(index)
 }
 
-/// Metadato GeoArrow `geo` con la chiave `crs`: PROJJSON se la definizione e'
+/// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
 /// Casa unica del formato (unificazione B1.1): anche il trasporto Arrow v3 di
 /// `plenora-engine` delega qui, quindi il JSON in uscita e' identico
 /// byte-per-byte nei due percorsi.
+///
+/// # Errors
+///
+/// `PlenoraError::Crs` se `crs` e' vuota (o solo spazi) o supera
+/// [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::Json` se la serializzazione
+/// del metadato fallisce.
 pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
     let metadata = geo_metadata_map(crs)?;
     serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
 }
 
 /// Come [`geo_metadata_json`], con in piu' la chiave `dimensions` in forma
-/// ICD ([`GeometryDimensions::as_str`]). La propagazione reale della
-/// dimensionalita' e' milestone B1.3: qui la scriviamo solo per dichiararla.
+/// ICD ([`GeometryDimensions::as_str`]).
+///
+/// La propagazione reale della dimensionalita' e' milestone B1.3: qui la
+/// scriviamo solo per dichiararla.
+///
+/// # Errors
+///
+/// Come [`geo_metadata_json_with_encoding`].
 pub fn geo_metadata_json_with_dimensions(
     crs: &str,
     dimensions: GeometryDimensions,
@@ -112,9 +129,17 @@ pub fn geo_metadata_json_with_dimensions(
 
 /// Come [`geo_metadata_json_with_dimensions`], con in piu' la chiave
 /// `encoding` in forma ICD ([`GeometryEncoding::as_str`]) quando il contratto
-/// la dichiara (`Some`). Con `None` la chiave e' omessa e il JSON e'
-/// identico byte-per-byte a [`geo_metadata_json_with_dimensions`]
-/// (fingerprint e retrocompatibilita' invariati — B1.4).
+/// la dichiara (`Some`).
+///
+/// Con `None` la chiave e' omessa e il JSON e' identico byte-per-byte a
+/// [`geo_metadata_json_with_dimensions`] (fingerprint e retrocompatibilita'
+/// invariati — B1.4).
+///
+/// # Errors
+///
+/// Come [`geo_metadata_json`]: `PlenoraError::Crs` se `crs` e' vuota (o solo
+/// spazi) o supera [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::Json` se la
+/// serializzazione del metadato fallisce.
 pub fn geo_metadata_json_with_encoding(
     crs: &str,
     dimensions: GeometryDimensions,
@@ -162,12 +187,20 @@ fn geo_metadata_map(crs: &str) -> Result<serde_json::Map<String, serde_json::Val
 /// B1.1: la dimensionalita' scritta e' sempre `Xy` (i costruttori attuali
 /// producono WKB 2D); la propagazione della dimensionalita' reale e'
 /// milestone B1.3.
+///
+/// # Errors
+///
+/// Come [`geometry_output_field_with_encoding`].
 pub fn geometry_output_field(name: &str, crs: &str) -> Result<Field, PlenoraError> {
     geometry_output_field_with_dimensions(name, crs, GeometryDimensions::Xy)
 }
 
 /// Come [`geometry_output_field`], con la dimensionalita' dichiarata
 /// esplicitamente (pronto per la propagazione di B1.3).
+///
+/// # Errors
+///
+/// Come [`geometry_output_field_with_encoding`].
 pub fn geometry_output_field_with_dimensions(
     name: &str,
     crs: &str,
@@ -177,12 +210,18 @@ pub fn geometry_output_field_with_dimensions(
 }
 
 /// Come [`geometry_output_field_with_dimensions`], con in piu' la chiave
-/// `geo.encoding` quando il contratto la dichiara (`Some`) — B1.4: un
-/// contratto con encoding dichiarato che attraversa un kernel che riscrive
-/// il campo (es. `reproject`) conserva la chiave nel metadato riscritto,
-/// coerente col contratto. Con `None` la chiave e' omessa e il metadato e'
-/// identico byte-per-byte alla forma senza encoding (fingerprint e
-/// retrocompatibilita' invariati).
+/// `geo.encoding` quando il contratto la dichiara (`Some`).
+///
+/// B1.4: un contratto con encoding dichiarato che attraversa un kernel che
+/// riscrive il campo (es. `reproject`) conserva la chiave nel metadato
+/// riscritto, coerente col contratto. Con `None` la chiave e' omessa e il
+/// metadato e' identico byte-per-byte alla forma senza encoding (fingerprint
+/// e retrocompatibilita' invariati).
+///
+/// # Errors
+///
+/// Come [`geo_metadata_json_with_encoding`] (validazioni `crs` e
+/// serializzazione JSON del metadato `geo`).
 pub fn geometry_output_field_with_encoding(
     name: &str,
     crs: &str,
@@ -236,12 +275,20 @@ pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding
 }
 
 /// Variante STRICT di [`geometry_encoding_from_metadata`] per la discovery
-/// (B1.3): la chiave `encoding` presente ma fuori dall'enum chiuso (R3.5:
-/// header GeoPackage, TWKB, valori non testuali) e' un framing non
-/// rappresentabile e va rifiutato con errore esplicito — mai mappata a un
-/// encoding noto o ignorata. Chiave assente o metadato `geo` non valido →
-/// `Ok(None)` (la dimensionalita'/il framing non dichiarati restano non
-/// risolti, R3.4; il messaggio non riporta il valore, «errori senza dati»).
+/// (B1.3).
+///
+/// La chiave `encoding` presente ma fuori dall'enum chiuso (R3.5: header
+/// `GeoPackage`, TWKB, valori non testuali) e' un framing non rappresentabile
+/// e va rifiutato con errore esplicito — mai mappata a un encoding noto o
+/// ignorata. Chiave assente o metadato `geo` non valido → `Ok(None)` (la
+/// dimensionalita'/il framing non dichiarati restano non risolti, R3.4; il
+/// messaggio non riporta il valore, «errori senza dati»).
+///
+/// # Errors
+///
+/// `PlenoraError::Unsupported` se la chiave `encoding` e' presente ma non
+/// rappresentabile: valore non testuale o fuori dall'enum chiuso R3.5
+/// (ammessi solo `wkb` ed `ewkb`).
 pub fn geometry_encoding_from_metadata_strict(
     field: &Field,
 ) -> Result<Option<GeometryEncoding>, PlenoraError> {
@@ -272,6 +319,11 @@ fn geo_metadata_value(field: &Field) -> Option<serde_json::Value> {
 
 /// Colonna geometria di un batch, gia' indicizzata da
 /// [`geometry_column_index`]: deve essere un `BinaryArray`.
+///
+/// # Errors
+///
+/// `PlenoraError::Schema` se la colonna all'indice `geometry_index` non e'
+/// un `BinaryArray` (schema incoerente con l'indice calcolato).
 pub fn batch_geometry_cells<'a>(
     batch: &'a RecordBatch,
     geometry_index: usize,
@@ -291,6 +343,12 @@ pub fn batch_geometry_cells<'a>(
 
 /// Decodifica una cella WKB non-null: il limite per cella e' applicato prima
 /// di toccare i dati, poi vale il contratto WKB strutturale del kernel.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se il payload supera [`MAX_CELL_BYTES`]; in piu'
+/// gli errori di [`geometry_from_wkb`] (contratto WKB strutturale e
+/// validazione OGC).
 pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     if payload.len() as u64 > MAX_CELL_BYTES {
         return Err(cell_too_large(payload.len() as u64));
@@ -300,6 +358,11 @@ pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraErro
 
 /// Codifica una geometria gia' validata dal kernel in WKB 2D entro il limite
 /// per cella.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se la serializzazione WKB della geometria
+/// fallisce o se il payload prodotto supera [`MAX_CELL_BYTES`].
 pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError> {
     let payload = geometry
         .to_wkb(CoordDimensions::xy())
@@ -311,9 +374,15 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 }
 
 /// Applica `f` a ogni cella non-null preservando i null; il limite per cella
-/// e' applicato prima di toccare i dati. Le righe sono indipendenti:
-/// l'iterazione e' parallela (rayon) con collect indicizzato, quindi
-/// l'ordine dell'output resta deterministico.
+/// e' applicato prima di toccare i dati.
+///
+/// Le righe sono indipendenti: l'iterazione e' parallela (rayon) con collect
+/// indicizzato, quindi l'ordine dell'output resta deterministico.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se una cella non-null supera [`MAX_CELL_BYTES`];
+/// in piu' l'errore restituito da `f` sulla prima cella che fallisce.
 pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
@@ -334,10 +403,17 @@ pub fn map_nullable<T: Send>(
 }
 
 /// STIMA dei byte nativi delle geometrie decodificate di una colonna
-/// geometria (ADR-0002, Fase 2B-M2b): decodifica ogni cella non-null e
-/// somma le stime per cella. Il valore e' una STIMA dichiarata (formula in
-/// [`crate::memory_estimate`]), da riportare nelle metriche come "memoria
-/// nativa stimata", mai come conteggio preciso. I null contribuiscono zero.
+/// geometria (ADR-0002, Fase 2B-M2b).
+///
+/// Decodifica ogni cella non-null e somma le stime per cella. Il valore e'
+/// una STIMA dichiarata (formula in [`crate::memory_estimate`]), da riportare
+/// nelle metriche come "memoria nativa stimata", mai come conteggio preciso.
+/// I null contribuiscono zero.
+///
+/// # Errors
+///
+/// Come [`decode_geometry_cell`], propagato via [`map_nullable`]
+/// ([`MAX_CELL_BYTES`] e contratto WKB strutturale del kernel).
 pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, PlenoraError> {
     let estimates = map_nullable(cells, |payload| {
         decode_geometry_cell(payload).map(|geometry| Some(estimate_geometry_native_bytes(&geometry)))
@@ -349,10 +425,17 @@ pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, P
 }
 
 /// Come [`estimate_decoded_cells_native_bytes`], ma accumula ogni STIMA di
-/// cella decodificata in `accumulator` (punto naturale di raccolta della
-/// metrica "stimata" per il governor; l'integrazione con `plenora-engine`
-/// e' volutamente rimandata). Restituisce il totale corrente
-/// dell'accumulatore, non il solo contributo di questa colonna.
+/// cella decodificata in `accumulator`.
+///
+/// Punto naturale di raccolta della metrica "stimata" per il governor;
+/// l'integrazione con `plenora-engine` e' volutamente rimandata. Restituisce
+/// il totale corrente dell'accumulatore, non il solo contributo di questa
+/// colonna.
+///
+/// # Errors
+///
+/// Come [`decode_geometry_cell`], propagato via [`map_nullable`]
+/// ([`MAX_CELL_BYTES`] e contratto WKB strutturale del kernel).
 pub fn accumulate_decoded_cells_native_bytes(
     cells: &BinaryArray,
     accumulator: &DecodedNativeBytesEstimate,
@@ -383,7 +466,7 @@ mod tests {
         let ids = plenora_core::arrow::array::Int64Array::from_iter_values(
             0..i64::try_from(cells.len()).expect("fixture entro i64"),
         );
-        let geometry = BinaryArray::from_iter(cells.iter().map(|cell| cell.map(Vec::as_slice)));
+        let geometry: BinaryArray = cells.iter().map(|cell| cell.map(Vec::as_slice)).collect();
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(ids), Arc::new(geometry)],
@@ -710,9 +793,7 @@ mod tests {
             None,
             Some(encode_geometry(&point).expect("point")),
         ];
-        let cells = BinaryArray::from_iter(
-            cells_payload.iter().map(|cell| cell.as_deref()),
-        );
+        let cells: BinaryArray = cells_payload.iter().map(|cell| cell.as_deref()).collect();
 
         let expected = estimate_geometry_native_bytes(&square)
             + estimate_geometry_native_bytes(&point);

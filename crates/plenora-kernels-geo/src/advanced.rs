@@ -27,7 +27,7 @@ pub enum AdvancedError {
     InvalidOutput(String),
 }
 
-fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -42,9 +42,22 @@ fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     }
 }
 
-/// Produces one bounded Voronoi polygon for every input point, retaining input
-/// order. Duplicate points receive the same cell. Nulls are intentionally not
-/// accepted because Manipola's current MultiPoint construction rejects them.
+/// One bounded Voronoi polygon for every input point, retaining input order.
+///
+/// Duplicate points receive the same cell. Nulls are intentionally not
+/// accepted because Manipola's current `MultiPoint` construction rejects them.
+///
+/// # Errors
+///
+/// - `InvalidPointLimit`: `max_points` is below 2.
+/// - `InsufficientPoints`: fewer than 2 input geometries.
+/// - `PointLimitExceeded`: more than `max_points` input geometries.
+/// - `InvalidPoint`: an input geometry fails OGC validation (e.g. NaN
+///   coordinates).
+/// - `ExpectedPoint`: an input geometry is not a `Point`.
+/// - `Voronoi`: the Voronoi construction itself failed.
+/// - `InvalidOutput`: a produced cell fails OGC validation.
+/// - `UnmatchedPoint`: no produced cell intersects an input point.
 pub fn voronoi_cells(
     geometries: &[Geometry<f64>],
     max_points: usize,

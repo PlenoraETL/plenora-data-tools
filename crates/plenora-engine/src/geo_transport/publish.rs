@@ -129,10 +129,11 @@ impl PublishProfile {
     }
 }
 
-/// Esito tipizzato del publish (ADR 7): il fallimento del `fsync` di
-/// directory dopo il rename non e' un errore generico — l'output e' completo
-/// e gia' visibile, ma la durabilita' non e' confermata. Il chiamante (CLI,
-/// adapter) decide come presentarlo.
+/// Esito tipizzato del publish (ADR 7).
+///
+/// Il fallimento del `fsync` di directory dopo il rename non e' un errore
+/// generico — l'output e' completo e gia' visibile, ma la durabilita' non e'
+/// confermata. Il chiamante (CLI, adapter) decide come presentarlo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishOutcome {
     /// Tutte le garanzie del profilo richiesto sono state soddisfatte.
@@ -333,6 +334,12 @@ thread_local! {
 /// `PlenoraError::UnsupportedPublishTarget` se il filesystem di destinazione
 /// e' di rete o non identificabile; `PlenoraError::Io` per i fallimenti di
 /// scrittura, sync o persist; propaga l'errore della closure `write`.
+///
+/// # Panics
+///
+/// Mai su input esterno: il solo `expect` copre l'invariante interna per cui
+/// il tempfile resta disponibile finche' il persist non e' riuscito — a ogni
+/// tentativo fallito `PersistError` restituisce il file al retry.
 pub fn publish_with_profile<T>(
     output_path: &Path,
     profile: PublishProfile,

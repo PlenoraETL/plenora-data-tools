@@ -4,7 +4,7 @@
 //! Kernel puri su `geo::Geometry<f64>` piu' gli adapter di colonna
 //! (`coverage_validate_rows`, `shared_paths_rows`) che mappano gli errori su
 //! [`PlenoraError`] preservando i messaggi, come `extensions.rs` (v1.1) e
-//! `extensions2.rs` (v1.2). Semantica di riferimento: PostGIS
+//! `extensions2.rs` (v1.2). Semantica di riferimento: `PostGIS`
 //! (`ST_SharedPaths`, validazione di coperture). Caso d'uso: piantine di
 //! edifici — stanze adiacenti, pareti condivise, grafo degli spazi.
 //!
@@ -21,7 +21,7 @@
 //! - `coverage_validate` rileva gli **overlap**: per ogni coppia candidata
 //!   l'intersezione nativa (`BooleanOps`, come `topology.rs`) con area
 //!   `> tolerance` produce una issue `overlap` con area e geometria della
-//!   zona sovrapposta (Polygon se singola componente, MultiPolygon altrimenti).
+//!   zona sovrapposta (Polygon se singola componente, `MultiPolygon` altrimenti).
 //!   `tolerance` default 0: solo overlap di area strettamente positiva.
 //!   **I buchi (gap) non sono rilevati in v1**: richiederebbero l'unione
 //!   dell'intera copertura e la differenza con l'envelope/la convessa,
@@ -39,14 +39,14 @@
 //!   tutto cio' che ha lunghezza positiva); la coppia produce una riga solo
 //!   se la lunghezza totale condivisa e' `>= min_length` (default 0).
 //!   **Una riga per coppia** (non per singolo segmento): la geometria e' una
-//!   LineString se il confine condiviso e' un segmento unico, altrimenti una
-//!   MultiLineString; `shared_length` e' la somma delle lunghezze. Per il
+//!   `LineString` se il confine condiviso e' un segmento unico, altrimenti una
+//!   `MultiLineString`; `shared_length` e' la somma delle lunghezze. Per il
 //!   grafo delle adiacenze (un arco per coppia di stanze) questa e' la
 //!   granularita' utile; lo splitting in tratti connessi separati alla
-//!   PostGIS e' un possibile raffinamento (punto aperto).
+//!   `PostGIS` e' un possibile raffinamento (punto aperto).
 //! - Le coppie con overlap di area non sono escluse da `shared_paths`: se
 //!   condividono anche porzioni di boundary collineari, i tratti sono
-//!   riportati (come in PostGIS).
+//!   riportati (come in `PostGIS`).
 //!
 //! Complessita': la conferma per coppia di `shared_paths` e' O(n*m) sui
 //! segmenti dei boundary (con pre-filtro bbox per segmento); accettabile per
@@ -96,7 +96,7 @@ pub enum ExtensionV3Error {
     Internal(&'static str),
 }
 
-fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV3Error {
+const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV3Error {
     ExtensionV3Error::InvalidParameter { name, reason }
 }
 
@@ -124,7 +124,7 @@ fn u64_index(index: usize) -> Result<u64, ExtensionV3Error> {
     u64::try_from(index).map_err(|_| ExtensionV3Error::IndexOverflow)
 }
 
-fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -255,9 +255,10 @@ pub enum CoverageIssueType {
 }
 
 impl CoverageIssueType {
-    pub fn name(self) -> &'static str {
+    #[must_use] 
+    pub const fn name(self) -> &'static str {
         match self {
-            CoverageIssueType::Overlap => "overlap",
+            Self::Overlap => "overlap",
         }
     }
 }
@@ -274,7 +275,7 @@ pub struct CoverageIssue {
 }
 
 /// Normalizza l'intersezione di due multipoligoni: Polygon se singola
-/// componente, MultiPolygon altrimenti. Precondizione: intersezione non
+/// componente, `MultiPolygon` altrimenti. Precondizione: intersezione non
 /// vuota (area positiva). Validata (fail-closed).
 fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, ExtensionV3Error> {
     let geometry = if intersection.0.len() == 1 {
@@ -328,10 +329,25 @@ fn coverage_validate_elements(
     Ok(issues)
 }
 
-/// Trova gli overlap di una copertura poligonale: per ogni coppia di
-/// geometrie con intersezione di area `> tolerance`, una issue `overlap` con
-/// indici (posizioni originali), area e geometria della zona. Fail-closed su
-/// `max_issues` e su input non poligonali/invalide.
+/// Trova gli overlap di una copertura poligonale.
+///
+/// Per ogni coppia di geometrie con intersezione di area `> tolerance`
+/// produce una issue `overlap` con indici (posizioni originali), area e
+/// geometria della zona. Fail-closed su `max_issues` e su input non
+/// poligonali/invalide.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `tolerance` non finita o negativa, oppure
+///   `max_issues` uguale a zero.
+/// - `UnsupportedGeometry`: una geometria non e' Polygon/MultiPolygon.
+/// - `InvalidGeometry`: una geometria di input non supera la validazione
+///   OGC.
+/// - `NonFiniteCoordinate`: una geometria contiene coordinate NaN o
+///   infinite.
+/// - `IssueLimit`: le issue superano `max_issues` (fail-closed, non tronca).
+/// - `InvalidOutput`: la geometria di overlap prodotta non e' valida.
+/// - `IndexOverflow`: un conteggio non e' rappresentabile come `u64`.
 pub fn coverage_validate(
     geometries: &[Geometry<f64>],
     tolerance: f64,
@@ -343,6 +359,11 @@ pub fn coverage_validate(
 
 /// Variante nullable: le righe `None` non partecipano mai, ma conservano la
 /// loro posizione (gli indici delle issue sono quelli originali).
+///
+/// # Errors
+///
+/// Come [`coverage_validate`] (questa e' l'implementazione; la variante
+/// non-null vi delega).
 pub fn coverage_validate_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
@@ -354,7 +375,7 @@ pub fn coverage_validate_nullable(
     coverage_validate_elements(&elements, &tree, tolerance, max_issues)
 }
 
-fn coverage_error(error: ExtensionV3Error) -> PlenoraError {
+fn coverage_error(error: &ExtensionV3Error) -> PlenoraError {
     PlenoraError::Contract(format!("geo.coverage_validate: {error}"))
 }
 
@@ -371,6 +392,15 @@ pub struct CoverageIssueRow {
 
 /// Adapter di colonna per `geo.coverage_validate`: decodifica le celle WKB
 /// non-null, rileva gli overlap e codifica la geometria di ogni issue.
+///
+/// # Errors
+///
+/// - `PlenoraError::Contract`: una cella WKB viola il contratto strutturale
+///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
+///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
+///   di una issue fallisce.
+/// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
+///   preservabili nel protocollo 2D.
 pub fn coverage_validate_rows(
     cells: &BinaryArray,
     tolerance: f64,
@@ -378,7 +408,7 @@ pub fn coverage_validate_rows(
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
     let issues = coverage_validate_nullable(&geometries, tolerance, max_issues)
-        .map_err(coverage_error)?;
+        .map_err(|error| coverage_error(&error))?;
     issues
         .iter()
         .map(|issue| {
@@ -398,8 +428,8 @@ pub fn coverage_validate_rows(
 // ---------------------------------------------------------------------------
 
 /// Un confine condiviso tra una coppia di poligoni: indici (posizioni
-/// originali, `a < b`), lunghezza totale e geometria del tratto (LineString
-/// se segmento unico, MultiLineString altrimenti).
+/// originali, `a < b`), lunghezza totale e geometria del tratto (`LineString`
+/// se segmento unico, `MultiLineString` altrimenti).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedPath {
     pub index_a: u64,
@@ -464,9 +494,21 @@ fn shared_boundary_segments(
     segments
 }
 
-/// Tratti di confine condivisi tra le coppie di una copertura poligonale:
-/// una riga per coppia con lunghezza totale `>= min_length`; le coppie con
+/// Tratti di confine condivisi tra le coppie di una copertura poligonale.
+///
+/// Una riga per coppia con lunghezza totale `>= min_length`; le coppie con
 /// solo contatto puntuale o disjointe non producono righe.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `tolerance` o `min_length` non finite o negative.
+/// - `UnsupportedGeometry`: una geometria non e' Polygon/MultiPolygon.
+/// - `InvalidGeometry`: una geometria di input non supera la validazione
+///   OGC.
+/// - `NonFiniteCoordinate`: una geometria contiene coordinate NaN o
+///   infinite.
+/// - `InvalidOutput`: la geometria prodotta non e' valida.
+/// - `IndexOverflow`: un conteggio non e' rappresentabile come `u64`.
 pub fn shared_paths(
     geometries: &[Geometry<f64>],
     tolerance: f64,
@@ -478,6 +520,11 @@ pub fn shared_paths(
 
 /// Variante nullable: come [`coverage_validate_nullable`], le righe `None`
 /// conservano la posizione senza partecipare.
+///
+/// # Errors
+///
+/// Come [`shared_paths`] (questa e' l'implementazione; la variante non-null
+/// vi delega).
 pub fn shared_paths_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
@@ -530,7 +577,7 @@ pub fn shared_paths_nullable(
     Ok(paths)
 }
 
-fn shared_paths_error(error: ExtensionV3Error) -> PlenoraError {
+fn shared_paths_error(error: &ExtensionV3Error) -> PlenoraError {
     PlenoraError::Contract(format!("geo.shared_paths: {error}"))
 }
 
@@ -546,14 +593,23 @@ pub struct SharedPathRow {
 /// Adapter di colonna per `geo.shared_paths`: decodifica le celle WKB
 /// non-null, estrae i confini condivisi e codifica la geometria di ogni
 /// tratto.
+///
+/// # Errors
+///
+/// - `PlenoraError::Contract`: una cella WKB viola il contratto strutturale
+///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
+///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
+///   di un tratto fallisce.
+/// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
+///   preservabili nel protocollo 2D.
 pub fn shared_paths_rows(
     cells: &BinaryArray,
     tolerance: f64,
     min_length: f64,
 ) -> Result<Vec<SharedPathRow>, PlenoraError> {
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
-    let paths =
-        shared_paths_nullable(&geometries, tolerance, min_length).map_err(shared_paths_error)?;
+    let paths = shared_paths_nullable(&geometries, tolerance, min_length)
+        .map_err(|error| shared_paths_error(&error))?;
     paths
         .iter()
         .map(|path| {
@@ -568,6 +624,10 @@ pub fn shared_paths_rows(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{polygon, MultiPolygon as GeoMultiPolygon, Point};
@@ -593,7 +653,10 @@ mod tests {
             .iter()
             .map(|geometry| geometry.as_ref().map(|g| encode_geometry(g).expect("encode")))
             .collect();
-        ArrowBinaryArray::from_iter(encoded.iter().map(|cell| cell.as_deref()))
+        encoded
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<ArrowBinaryArray>()
     }
 
     // --- geo.coverage_validate ---------------------------------------------
@@ -811,13 +874,11 @@ mod tests {
     fn shared_paths_covers_multipolygons_and_holes() {
         // Un MultiPolygon la cui seconda componente condivide la parete con
         // la seconda stanza; indici posizionali della riga madre.
-        let component = match rectangle(10.0, 0.0, 14.0, 3.0) {
-            Geometry::Polygon(p) => p,
-            _ => unreachable!(),
+        let Geometry::Polygon(component) = rectangle(10.0, 0.0, 14.0, 3.0) else {
+            unreachable!()
         };
-        let first = match rectangle(0.0, 0.0, 4.0, 3.0) {
-            Geometry::Polygon(p) => p,
-            _ => unreachable!(),
+        let Geometry::Polygon(first) = rectangle(0.0, 0.0, 4.0, 3.0) else {
+            unreachable!()
         };
         let multi = Geometry::MultiPolygon(GeoMultiPolygon::new(vec![first, component]));
         let inputs = vec![multi, rectangle(14.0, 0.0, 18.0, 3.0)];

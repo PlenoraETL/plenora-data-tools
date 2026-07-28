@@ -35,6 +35,20 @@ const fn default_true() -> bool {
     true
 }
 
+/// Colonna Int64 con il numero di riga progressivo a partire da
+/// `config.start`.
+///
+/// Con `partition_column` il conteggio riparte a ogni partizione (chiave =
+/// valore testuale della colonna); l'ordinamento non e' gestito da questo
+/// kernel.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido, `order_column`
+///   valorizzato (l'ordinamento e' delegato al kernel blocking sort),
+///   overflow i64 del contatore, valore di partizione non rappresentabile
+///   come testo (come `scalar_as_string`);
+/// - `Schema`: `partition_column` assente dal batch.
 pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<RecordBatch> {
     let _ = config.ascending;
     validate_output_name(&config.output_column)?;
@@ -200,6 +214,23 @@ fn parse_datetime_default(
     None
 }
 
+/// Estrae le parti di data/ora richieste in colonne Int64 `<prefix><parte>`.
+///
+/// Il parsing usa `date_format` se dato, altrimenti il parser deterministico
+/// multi-formato del profilo legacy; i valori non parsabili producono null
+/// oppure errore secondo `config.invalid`.
+///
+/// # Errors
+///
+/// - `Contract`: valore non parsabile con `invalid = error`, nome di colonna
+///   di output non valido, valore non rappresentabile come testo (come
+///   `scalar_as_string`, percorso non-Utf8), guardia interna su parser
+///   compilato singolo;
+/// - `Schema`: colonna assente dal batch.
+// Sequenza lineare (parsing esplicito o multi-formato, poi estrazione delle
+// parti in colonne): lunga per costruzione, uno spezzone artificiale
+// peggiorerebbe solo la leggibilita'.
+#[allow(clippy::too_many_lines)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -321,6 +352,11 @@ pub struct Limit {
 /// a ciascun batch (stesso modello di `filter`/`distinct`). Se in futuro
 /// servisse un limite globale sull'intero stream servira' un operatore con
 /// stato nel layer engine, non un kernel puro.
+///
+/// # Errors
+///
+/// - `Contract`: numero di righe non rappresentabile come u64, `offset` o
+///   `n` non rappresentabili come usize.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     let rows = u64::try_from(batch.num_rows())
         .map_err(|_| PlenoraError::Contract("limit: righe oltre u64".into()))?;
@@ -347,6 +383,11 @@ fn default_uuid_name() -> String {
     "uuid".into()
 }
 
+/// Colonna con un UUID v4 (formato hyphenated) per riga.
+///
+/// # Errors
+///
+/// - `Contract`: nome della colonna di output non valido.
 pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let values = (0..batch.num_rows())

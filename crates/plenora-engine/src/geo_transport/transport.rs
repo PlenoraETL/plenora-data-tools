@@ -3552,9 +3552,12 @@ fn replace_geometry_batches(
     for batch in left_batches {
         let end = offset + batch.num_rows();
         let mut columns = batch.columns().to_vec();
-        columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(
-            values[offset..end].iter().map(|value| value.as_deref()),
-        ));
+        columns[geometry_index] = std::sync::Arc::new(
+            values[offset..end]
+                .iter()
+                .map(|value| value.as_deref())
+                .collect::<BinaryArray>(),
+        );
         offset = end;
         out_batches.push(
             RecordBatch::try_new(out_schema.clone(), columns)
@@ -3567,6 +3570,26 @@ fn replace_geometry_batches(
 /// Pipeline pair-arrow: due envelope v3 -> kernel binario -> envelope v3.
 /// I CRS sono trattati come metadati opachi; l'uguaglianza semantica e'
 /// verificata dal livello comandi.
+///
+/// # Errors
+///
+/// - `ArrowTransportError::UnsupportedSchemaVersion`: `schema_version` non
+///   supportata;
+/// - `ArrowTransportError::CrsRequired`: `left_crs` o `right_crs` assente;
+/// - come `PairArrowSchema::validate_parameters` per i parametri;
+/// - `ArrowTransportError::OutputRowsExceeded`: righe di output oltre
+///   `max_output_rows`;
+/// - `ArrowTransportError::SideLengthMismatch`: `row_count` left/right diversi
+///   per le operazioni allineate per riga;
+/// - `ArrowTransportError::Internal`: invariante interna violata (parametro
+///   gia' validato assente — difetto del trasporto, non dell'input);
+/// - propaga gli errori di decodifica dei due lati (envelope, IPC, limiti,
+///   validazione WKB), dei kernel binari e di codifica dell'output
+///   (`encode_ipc`, `EnvelopeWriter`).
+// Pipeline unica su tutte le PairOperation: la lunghezza e' data dalla
+// sequenza lineare dei casi del dispatcher sul contratto v3, non da
+// complessita' logica (fase di pulizia: niente refactor strutturali).
+#[allow(clippy::too_many_lines)]
 pub fn pair_arrow(
     left_reader: impl Read,
     right_reader: impl Read,
@@ -3809,9 +3832,12 @@ pub fn pair_arrow(
             let batch = RecordBatch::try_new(
                 out_schema.clone(),
                 vec![
-                    std::sync::Arc::new(BinaryArray::from_iter(
-                        encoded.iter().map(|value| Some(value.as_slice())),
-                    )),
+                    std::sync::Arc::new(
+                        encoded
+                            .iter()
+                            .map(|value| Some(value.as_slice()))
+                            .collect::<BinaryArray>(),
+                    ),
                     std::sync::Arc::new(UInt64Array::from(left_index)),
                     std::sync::Arc::new(UInt64Array::from(right_index)),
                 ],
@@ -4184,6 +4210,10 @@ pub fn pair_arrow(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use plenora_core::arrow::array::Int64Array;
@@ -4256,7 +4286,7 @@ mod tests {
                         })
                         .collect::<Vec<_>>(),
                 )),
-                Arc::new(BinaryArray::from_iter(geometries.iter().copied())),
+                Arc::new(geometries.iter().copied().collect::<BinaryArray>()),
             ],
         )
         .expect("fixture batch");
@@ -5429,6 +5459,8 @@ mod tests {
 
     #[test]
     fn voronoi_preserves_positions_and_enforces_point_cap() {
+        use geo::Intersects;
+
         let points: Vec<Vec<u8>> = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
             .into_iter()
             .map(|(x, y)| {
@@ -5463,7 +5495,6 @@ mod tests {
         ] {
             let cell = geometry_from_wkb(cells.value(row)).expect("cella");
             let expected_point = geometry_from_wkb(point).unwrap();
-            use geo::Intersects;
             assert!(cell.intersects(&expected_point), "cella riga {row}");
         }
         // attributi preservati sulle stesse righe.
@@ -6006,6 +6037,10 @@ mod tests {
             let total: f64 = (0..expected_pieces)
                 .map(|i| geometry_from_wkb(cells.value(i)).unwrap().unsigned_area())
                 .sum();
+            // Bracci separati per costruzione: ogni OverlayMode ha una
+            // semantica diversa; 4.0 coincide per SymmetricDifference e
+            // Identity solo su questa fixture, non per lo stesso caso.
+            #[allow(clippy::match_same_arms)]
             let expected_area = match mode {
                 OverlayMode::Intersection => 2.0,
                 OverlayMode::Union => 6.0,
@@ -6297,12 +6332,12 @@ mod tests {
     }
 
     fn run_single(
-        schema: TransformArrowSchema,
+        schema: &TransformArrowSchema,
         wkb: &[u8],
     ) -> Result<Vec<u8>, ArrowTransportError> {
         let (fixture_schema, batch) = fixture_batch(&[Some(wkb)]);
         let input = envelope_bytes(&fixture_schema, std::slice::from_ref(&batch));
-        run(&schema, &input)
+        run(schema, &input)
     }
 
     #[test]
@@ -6314,7 +6349,7 @@ mod tests {
             y_offset: Some(-5.0),
             ..arrow_schema(1, ArrowOperation::Translate)
         };
-        let output = run_single(schema, &square).expect("translate");
+        let output = run_single(&schema, &square).expect("translate");
         let Geometry::Polygon(translated) = single_geometry_output(&output) else {
             panic!("atteso Polygon")
         };
@@ -6325,21 +6360,21 @@ mod tests {
             y_factor: Some(2.0),
             ..arrow_schema(1, ArrowOperation::Scale)
         };
-        let output = run_single(schema, &square).expect("scale");
+        let output = run_single(&schema, &square).expect("scale");
         assert!((single_geometry_output(&output).unsigned_area() - 16.0).abs() < 1e-12);
 
         let schema = TransformArrowSchema {
             degrees: Some(90.0),
             ..arrow_schema(1, ArrowOperation::Rotate)
         };
-        let output = run_single(schema, &square).expect("rotate");
+        let output = run_single(&schema, &square).expect("rotate");
         assert!((single_geometry_output(&output).unsigned_area() - 4.0).abs() < 1e-12);
 
         let schema = TransformArrowSchema {
             coefficients: Some(vec![1.0, 0.0, 5.0, 0.0, 1.0, 5.0]),
             ..arrow_schema(1, ArrowOperation::AffineTransform)
         };
-        let output = run_single(schema, &square).expect("affine");
+        let output = run_single(&schema, &square).expect("affine");
         let Geometry::Polygon(shifted) = single_geometry_output(&output) else {
             panic!("atteso Polygon")
         };
@@ -6359,7 +6394,7 @@ mod tests {
             concavity: Some(2.0),
             ..arrow_schema(1, ArrowOperation::ConcaveHull)
         };
-        let output = run_single(schema, &scattered).expect("concave_hull");
+        let output = run_single(&schema, &scattered).expect("concave_hull");
         assert!(matches!(
             single_geometry_output(&output),
             Geometry::Polygon(_)
@@ -6420,7 +6455,7 @@ mod tests {
             max_segment_length: Some(1.0),
             ..arrow_schema(1, ArrowOperation::Densify)
         };
-        let output = run_single(schema, &line).expect("densify");
+        let output = run_single(&schema, &line).expect("densify");
         let densified = single_geometry_output(&output);
         assert!(densified.coords_count() > 3);
 
@@ -6428,7 +6463,7 @@ mod tests {
             grid_size: Some(0.5),
             ..arrow_schema(1, ArrowOperation::SnapToGrid)
         };
-        let output = run_single(schema, &line).expect("snap");
+        let output = run_single(&schema, &line).expect("snap");
         let snapped = single_geometry_output(&output);
         assert!(snapped
             .coords_iter()
@@ -6473,7 +6508,7 @@ mod tests {
             end_ratio: Some(0.75),
             ..arrow_schema(1, ArrowOperation::LineSubstring)
         };
-        let output = run_single(schema, &line).expect("substring");
+        let output = run_single(&schema, &line).expect("substring");
         let Geometry::LineString(piece) = single_geometry_output(&output) else {
             panic!("atteso LineString")
         };
@@ -6484,7 +6519,7 @@ mod tests {
             ratio: Some(0.5),
             ..arrow_schema(1, ArrowOperation::LineInterpolatePoint)
         };
-        let output = run_single(schema, &line).expect("interpolate");
+        let output = run_single(&schema, &line).expect("interpolate");
         assert_eq!(
             single_geometry_output(&output),
             Geometry::Point(Point::new(5.0, 0.0))
@@ -6533,7 +6568,7 @@ mod tests {
         line.extend_from_slice(&0.0_f64.to_le_bytes());
         line.extend_from_slice(&1.0_f64.to_le_bytes());
         line.extend_from_slice(&0.0_f64.to_le_bytes());
-        let output = run_single(arrow_schema(1, ArrowOperation::GeodesicLineLength), &line)
+        let output = run_single(&arrow_schema(1, ArrowOperation::GeodesicLineLength), &line)
             .expect("geodesic_line_length");
         let (out_schema, out_batches) = decode_output(&output);
         let values = out_batches[0]
@@ -6544,7 +6579,7 @@ mod tests {
         assert!((values.value(0) - 111_319.5).abs() / 111_319.5 < 1e-3);
 
         let square = square_wkb(1.0);
-        let output = run_single(arrow_schema(1, ArrowOperation::GeodesicArea), &square)
+        let output = run_single(&arrow_schema(1, ArrowOperation::GeodesicArea), &square)
             .expect("geodesic_area");
         let (out_schema, out_batches) = decode_output(&output);
         let values = out_batches[0]

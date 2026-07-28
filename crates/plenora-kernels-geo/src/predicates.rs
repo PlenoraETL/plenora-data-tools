@@ -44,6 +44,14 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
         })
 }
 
+/// Valuta il predicato OGC/DE-9IM fra due geometrie, dopo la validazione.
+///
+/// # Errors
+///
+/// - `PredicateError::NonFiniteCoordinate`: `left` o `right` contiene
+///   coordinate NaN o infinite;
+/// - `PredicateError::InvalidGeometry`: `left` o `right` non supera la
+///   validazione OGC (es. anello auto-intersecato).
 pub fn evaluate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,

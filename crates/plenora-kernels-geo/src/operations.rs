@@ -57,6 +57,10 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, OperationEr
 
 /// Planar unsigned area. CRS/unit policy remains the responsibility of the
 /// caller; geographic coordinates must be projected before this kernel.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.unsigned_area())
@@ -64,6 +68,10 @@ pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
 
 /// Planar geometry length with Shapely-compatible semantics for polygons:
 /// polygon length is the sum of exterior and interior ring lengths.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     Ok(length_unchecked(geometry))
@@ -95,10 +103,20 @@ fn length_unchecked(geometry: &Geometry<f64>) -> f64 {
 
 /// Manipola currently defines perimeter through GeoSeries.length, therefore
 /// this intentionally shares the same semantics as `length`.
+///
+/// # Errors
+///
+/// Come [`length`].
 pub fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     length(geometry)
 }
 
+/// Distanza euclidea planare fra due geometrie; `None` se una delle due non
+/// ha coordinate (geometria vuota).
+///
+/// # Errors
+///
+/// - `InvalidInput`: una delle due geometrie non supera la validazione OGC.
 pub fn distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -111,6 +129,12 @@ pub fn distance(
     Ok(Some(Euclidean.distance(left, right)))
 }
 
+/// Bounding box planare come `[min_x, min_y, max_x, max_y]`; `None` per
+/// geometrie senza coordinate.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.bounding_rect().map(|rect| {
@@ -120,26 +144,57 @@ pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationErr
     }))
 }
 
+/// Numero di coordinate (vertici) della geometria.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `Internal`: invariante interna violata (`usize` non rappresentabile in
+///   `u64`; mai sui target supportati).
 pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
     ensure_valid(geometry)?;
     u64::try_from(geometry.coords_count())
         .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))
 }
 
+/// Punto interno alla geometria (garantito sulla superficie); `None` per
+/// geometrie senza coordinate.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.interior_point().map(Geometry::Point))
 }
 
+/// Serializzazione WKT della geometria.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.wkt_string())
 }
 
+/// Buffer planare della geometria con estremita' arrotondate
+/// (`BufferCapStyle::Round`).
+///
+/// # Errors
+///
+/// Come [`buffer_with_cap`].
 pub fn buffer(geometry: &Geometry<f64>, distance: f64) -> Result<Geometry<f64>, OperationError> {
     buffer_with_cap(geometry, distance, BufferCapStyle::Round)
 }
 
+/// Buffer planare della geometria con lo stile di estremita' richiesto.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
+/// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,
     distance: f64,
@@ -163,10 +218,28 @@ pub fn buffer_with_cap(
     validate_output(Geometry::MultiPolygon(geometry.buffer_with_style(style)))
 }
 
+/// Semplificazione della geometria con Douglas-Peucker
+/// (`SimplifyPolicy::DouglasPeucker`).
+///
+/// # Errors
+///
+/// Come [`simplify_with_policy`].
 pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64>, OperationError> {
     simplify_with_policy(geometry, tolerance, SimplifyPolicy::DouglasPeucker)
 }
 
+/// Semplificazione della geometria con la politica richiesta.
+///
+/// Le coordinate vicine ai limiti di `f64` sono elaborate in uno spazio
+/// scalato uniformemente e riportate alle unita' originali, per evitare
+/// overflow/underflow nei kernel a distanza quadratica.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa;
+/// - `InvalidOutput`: la geometria semplificata non supera la validazione
+///   OGC.
 pub fn simplify_with_policy(
     geometry: &Geometry<f64>,
     tolerance: f64,
@@ -255,6 +328,10 @@ pub fn simplify_with_policy(
 
 /// Explodes one multipart/collection level while preserving deterministic
 /// component order. Simple geometries produce exactly one row.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
     Ok(match geometry {
@@ -269,6 +346,11 @@ pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, Operation
 }
 
 /// OGC boundary for the WKB geometry variants used by Plenora-Geo.
+///
+/// # Errors
+///
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `InvalidOutput`: il boundary prodotto non supera la validazione OGC.
 pub fn boundary(geometry: &Geometry<f64>) -> Result<Geometry<f64>, OperationError> {
     ensure_valid(geometry)?;
     let output = boundary_unchecked(geometry);
@@ -334,7 +416,7 @@ fn multi_line_string_boundary(lines: &MultiLineString<f64>) -> Geometry<f64> {
             endpoints
                 .entry(key)
                 .and_modify(|(_, odd)| *odd = !*odd)
-                .or_insert((geo::Point::new(canonical_x, canonical_y), true));
+                .or_insert_with(|| (geo::Point::new(canonical_x, canonical_y), true));
         }
     }
     Geometry::MultiPoint(MultiPoint::new(
@@ -356,6 +438,10 @@ fn line_string_boundary(line: &LineString<f64>) -> Geometry<f64> {
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{
@@ -427,8 +513,8 @@ mod tests {
     #[test]
     fn simplify_normalizes_extreme_coordinates_without_panicking() {
         let line = Geometry::LineString(LineString::from(vec![
-            (-5.48880284031224e303, -6.971241357778827e182),
-            (-5.486124068793689e303, 7.064166183585296e-304),
+            (-5.488_802_840_312_24e303, -6.971_241_357_778_827e182),
+            (-5.486_124_068_793_689e303, 7.064_166_183_585_296e-304),
             (0.0, 0.0),
         ]));
         for tolerance in [0.0, 1.0] {
@@ -478,9 +564,8 @@ mod tests {
 
     #[test]
     fn measurements_simplify_explode_and_boundary_cover_all_geometry_families() {
-        let polygon = match rectangle() {
-            Geometry::Polygon(value) => value,
-            _ => unreachable!(),
+        let Geometry::Polygon(polygon) = rectangle() else {
+            unreachable!()
         };
         let values = vec![
             Geometry::Point(Point::new(0.0, 0.0)),
@@ -491,7 +576,7 @@ mod tests {
                 (x: 0.0, y: 0.0), (x: 3.0, y: 4.0)
             ]])),
             Geometry::Polygon(polygon.clone()),
-            Geometry::MultiPolygon(MultiPolygon::new(vec![polygon.clone()])),
+            Geometry::MultiPolygon(MultiPolygon::new(vec![polygon])),
             Geometry::GeometryCollection(GeometryCollection(vec![rectangle()])),
             Geometry::Rect(Rect::new((0.0, 0.0), (2.0, 1.0))),
             Geometry::Triangle(Triangle::new(
@@ -531,9 +616,8 @@ mod tests {
 
     #[test]
     fn multipart_explode_and_boundary_endpoint_parity_are_deterministic() {
-        let polygon = match rectangle() {
-            Geometry::Polygon(value) => value,
-            _ => unreachable!(),
+        let Geometry::Polygon(polygon) = rectangle() else {
+            unreachable!()
         };
         assert_eq!(
             explode(&Geometry::MultiPoint(MultiPoint::new(vec![
@@ -555,7 +639,7 @@ mod tests {
         );
         assert_eq!(
             explode(&Geometry::MultiPolygon(MultiPolygon::new(vec![
-                polygon.clone(),
+                polygon,
                 polygon![
                     (x: 10.0, y: 0.0), (x: 14.0, y: 0.0),
                     (x: 14.0, y: 2.0), (x: 10.0, y: 2.0),

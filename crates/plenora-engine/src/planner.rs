@@ -119,9 +119,11 @@ pub fn compiled_capabilities() -> CapabilitySet {
 }
 
 /// Capability dell'ambiente locale: backend compilati piu' i profili di
-/// publish implementati dall'engine (ADR 7 — entrambi; il riconoscimento
-/// fail-closed del filesystem di destinazione resta al momento del publish,
-/// non e' una capability statica).
+/// publish implementati dall'engine (ADR 7).
+///
+/// Entrambi i profili sono inclusi; il riconoscimento fail-closed del
+/// filesystem di destinazione resta al momento del publish, non e' una
+/// capability statica.
 ///
 /// E' l'insieme contro cui `execute` riverifica l'identita' del grafo.
 #[must_use]

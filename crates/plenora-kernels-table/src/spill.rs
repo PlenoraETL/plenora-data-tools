@@ -288,6 +288,22 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
     estimated_batch_bytes(batch) > limits.max_memory_bytes
 }
 
+/// Set operation binaria con spill su disco delle chiavi compatte.
+///
+/// Le chiavi delle righe sono partizionate per hash su file binari con
+/// quota `max_temp_bytes`; il matching per partizione applica
+/// `union_distinct`, `intersect` oppure `except` (default) rispettando
+/// `max_memory_bytes` sul working set, poi le righe sopravvissute sono
+/// riselezionate dagli input con `select_rows`.
+///
+/// # Errors
+///
+/// - `Schema`: schemi dei due input incompatibili (`validate_schema`) o
+///   errore Arrow in `select_rows`/`concat_compatible`;
+/// - `Contract`: vincoli dello spill violati (partizioni zero, chiave
+///   oltre `max_temp_bytes`, working set di una partizione oltre
+///   `max_memory_bytes`, overflow interni di accounting);
+/// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
 pub fn execute_set_operation(
     operation: &str,
     left: &RecordBatch,
@@ -416,6 +432,10 @@ pub struct RowSpillWorkspace {
 
 impl RowSpillWorkspace {
     /// Workspace con directory temporanea posseduta (rimossa al drop).
+    ///
+    /// # Errors
+    ///
+    /// - `Io`: creazione della directory temporanea fallita.
     pub fn new(max_temp_bytes: u64) -> Result<Self> {
         Ok(Self {
             root: SpillRoot::Owned(
@@ -431,9 +451,15 @@ impl RowSpillWorkspace {
         })
     }
 
-    /// Workspace su directory del chiamante (es. il `TempStore` condiviso per
-    /// `execution_id` di plenora-engine): creata se manca, MAI rimossa da
-    /// questo modulo; i file di spill registrati sono comunque ripuliti.
+    /// Workspace su directory del chiamante (es. il `TempStore` condiviso
+    /// per `execution_id` di plenora-engine).
+    ///
+    /// La directory e' creata se manca e MAI rimossa da questo modulo; i
+    /// file di spill registrati sono comunque ripuliti.
+    ///
+    /// # Errors
+    ///
+    /// - `Io`: creazione della directory fallita.
     pub fn with_directory(directory: &Path, max_temp_bytes: u64) -> Result<Self> {
         std::fs::create_dir_all(directory)?;
         Ok(Self {
@@ -485,6 +511,10 @@ impl RowSpillWorkspace {
 
     /// Rimuove i file di spill registrati (la directory resta: al drop per
     /// quella posseduta, al chiamante per quella esterna).
+    ///
+    /// # Errors
+    ///
+    /// - `Io`: rimozione di un file fallita con errore diverso da `NotFound`.
     pub fn cleanup(&mut self) -> Result<()> {
         for path in std::mem::take(&mut self.files) {
             match std::fs::remove_file(&path) {
@@ -580,10 +610,12 @@ fn write_ipc_chunks(
     workspace.check_quota()
 }
 
-/// Spilla `batch` in `partitions` file IPC partizionati per hash dei byte di
-/// chiave (`KeyColumn`, stessi byte di `row_key`): chiavi uguali finiscono
-/// sempre nella stessa partizione. Indici per partizione in memoria (un
-/// `usize` per riga) per una sola passata di encoding delle chiavi.
+/// Spilla `batch` in `partitions` file IPC partizionati per hash.
+///
+/// Il partizionamento usa i byte di chiave (`KeyColumn`, stessi byte di
+/// `row_key`): chiavi uguali finiscono sempre nella stessa partizione.
+/// Indici per partizione in memoria (un `usize` per riga) per una sola
+/// passata di encoding delle chiavi.
 fn spill_partitioned(
     workspace: &mut RowSpillWorkspace,
     batch: &RecordBatch,
@@ -659,6 +691,11 @@ fn read_partition(
 /// `row_key` del percorso in memoria. Output identico a `distinct`: la mappa
 /// delle chiavi resta in RAM (e' dimensionata sull'output, una voce per
 /// chiave distinta) ed e' contabilizzata su `max_memory_bytes`.
+///
+/// # Errors
+///
+/// Come [`distinct_spilled_in`]; in piu' `Io` se la creazione della
+/// directory temporanea fallisce.
 pub fn distinct_spilled(
     batch: &RecordBatch,
     config: &Distinct,
@@ -672,6 +709,18 @@ pub fn distinct_spilled(
 ///
 /// Punto di ingresso per l'integrazione con il `TempStore` di plenora-engine
 /// (directory esterna + quota condivisa, nessuna dipendenza da engine).
+///
+/// # Errors
+///
+/// - `Schema`: colonna di `config.subset` assente (`column_index`) o
+///   errore Arrow in `replace_or_append`/`select_rows`;
+/// - `Contract`: colonna riservata allo spill gia' presente, quote
+///   superate (`max_temp_bytes`, `max_memory_bytes`), `spill_partitions`
+///   zero, ordinal/chiave non rappresentabili;
+/// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
+///   pulizia).
+///
+/// Su input vuoto delega a `distinct` e ne propaga gli errori.
 #[allow(clippy::too_many_lines)] // Una sola passata di streaming con i suoi invarianti di accounting.
 pub fn distinct_spilled_in(
     batch: &RecordBatch,
@@ -807,6 +856,11 @@ pub fn distinct_spilled_in(
 /// (lessicografico sui byte di `row_key`, lo stesso del `BTreeMap` del
 /// percorso in memoria). La mappa dei gruppi in RAM e' quindi dimensionata
 /// su una partizione, non sull'intero input. Output identico ad `aggregate`.
+///
+/// # Errors
+///
+/// Come [`aggregate_spilled_in`]; in piu' `Io` se la creazione della
+/// directory temporanea fallisce.
 pub fn aggregate_spilled(
     batch: &RecordBatch,
     config: &Aggregate,
@@ -818,6 +872,18 @@ pub fn aggregate_spilled(
 
 /// Come [`aggregate_spilled`], ma su un workspace del chiamante (integrazione
 /// `TempStore` di plenora-engine, cfr. [`distinct_spilled_in`]).
+///
+/// # Errors
+///
+/// - `Schema`: colonna di `group_by` assente (`column_index`) o errore
+///   Arrow in `aggregate`/`concat_batches`/`select_rows`;
+/// - `Contract`: `group_by` vuoto, quote superate (`max_temp_bytes`,
+///   `max_memory_bytes`), `spill_partitions` zero, output di partizione
+///   incoerente con i gruppi (invariante interna);
+/// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
+///   pulizia).
+///
+/// Su input vuoto delega ad `aggregate` e ne propaga gli errori.
 pub fn aggregate_spilled_in(
     batch: &RecordBatch,
     config: &Aggregate,
@@ -957,10 +1023,12 @@ impl RunCursor {
     }
 }
 
-/// Confronto tra celle di batch diversi (merge k-way): delega a
-/// `compare_cells_typed`, il comparatore tipizzato unico condiviso con
-/// `compare_at` e `ColumnComparator` (null in coda, `i64::cmp`/`u64::cmp`
-/// esatti, `total_cmp` su Float64, confronto testuale altrove).
+/// Confronto tra celle di batch diversi (merge k-way).
+///
+/// Delega a `compare_cells_typed`, il comparatore tipizzato unico
+/// condiviso con `compare_at` e `ColumnComparator` (null in coda,
+/// `i64::cmp`/`u64::cmp` esatti, `total_cmp` su Float64, confronto
+/// testuale altrove).
 fn compare_cells(
     challenger: &RunCursor,
     champion: &RunCursor,
@@ -989,6 +1057,11 @@ fn compare_cells(
 /// streaming (un chunk per run alla volta) produce la permutazione globale e
 /// l'output e' ricostruito con `select_rows` sull'input. A parita' di chiavi
 /// vince l'indice globale minore (stabilita'): output identico a `sort`.
+///
+/// # Errors
+///
+/// Come [`sort_spilled_in`]; in piu' `Io` se la creazione della directory
+/// temporanea fallisce.
 pub fn sort_spilled(
     batch: &RecordBatch,
     config: &Sort,
@@ -1000,6 +1073,17 @@ pub fn sort_spilled(
 
 /// Come [`sort_spilled`], ma su un workspace del chiamante (integrazione
 /// `TempStore` di plenora-engine, cfr. [`distinct_spilled_in`]).
+///
+/// # Errors
+///
+/// - `Schema`: colonna di sort assente (`column_index`) o errore Arrow in
+///   `sort`/`select_rows`;
+/// - `Contract`: nessuna colonna di sort, quota `max_temp_bytes` superata,
+///   confronto tra celle fallito (`compare_cells_typed`);
+/// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
+///   pulizia).
+///
+/// Su input vuoto delega a `sort` e ne propaga gli errori.
 pub fn sort_spilled_in(
     batch: &RecordBatch,
     config: &Sort,

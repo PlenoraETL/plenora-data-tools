@@ -141,6 +141,15 @@ fn validate_type_cast(config: &cleansing::TypeCast) -> Result<()> {
     Ok(())
 }
 
+/// Valida la config di un singolo passo tabellare contro i limiti, senza
+/// toccare i dati (dispatcher per nome di operazione).
+///
+/// # Errors
+///
+/// - `PlenoraError::Json`: config non deserializzabile nel tipo atteso
+///   dall'operazione;
+/// - `PlenoraError::Contract`: nomi, valori o limiti del passo non validi;
+/// - `PlenoraError::Unsupported`: operazione sconosciuta al dispatcher.
 #[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
 pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
     match dispatch_name(&step.operation) {
@@ -1175,6 +1184,12 @@ impl PreparedStep {
 /// Deserializza la config di un passo nella sua forma tipizzata (E1/V2).
 /// Chiamata una sola volta per passo da `Plan::validate`, mai per batch;
 /// il dispatch per nome e' lo stesso di `validate_step_contract`.
+///
+/// # Errors
+///
+/// - `PlenoraError::Json`: config non deserializzabile nel tipo atteso
+///   dall'operazione;
+/// - `PlenoraError::Unsupported`: operazione sconosciuta al dispatcher.
 #[allow(clippy::too_many_lines)] // Mirror of the audited dispatcher, one arm per operation.
 pub fn prepare_step(step: &Step) -> Result<PreparedStep> {
     Ok(match dispatch_name(&step.operation) {
@@ -1362,10 +1377,10 @@ const fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMe
 /// percorso legacy); la quota resta `limits.max_temp_bytes` in entrambi i
 /// casi.
 fn spill_workspace(spill_dir: Option<&Path>, limits: &Limits) -> Result<spill::RowSpillWorkspace> {
-    match spill_dir {
-        Some(directory) => spill::RowSpillWorkspace::with_directory(directory, limits.max_temp_bytes),
-        None => spill::RowSpillWorkspace::new(limits.max_temp_bytes),
-    }
+    spill_dir.map_or_else(
+        || spill::RowSpillWorkspace::new(limits.max_temp_bytes),
+        |directory| spill::RowSpillWorkspace::with_directory(directory, limits.max_temp_bytes),
+    )
 }
 
 /// `table.sort` con attivazione preventiva dello spill (ADR-0002): stessa
@@ -1432,8 +1447,10 @@ pub fn execute_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordB
     execute_batch_with_spill(batch, plan, None).map(|(output, _)| output)
 }
 
-/// Come [`execute_batch`], ma con la directory di spill decisa dal chiamante
-/// (ADR-0002, Fase 2B M2c): `Some(dir)` instrada i file di spill di
+/// Come [`execute_batch`], ma con la directory di spill decisa dal
+/// chiamante (ADR-0002, Fase 2B M2c).
+///
+/// `Some(dir)` instrada i file di spill di
 /// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione
 /// (il `TempStore` di plenora-engine — creata se manca, mai rimossa da qui;
 /// i file di spill sono comunque ripuliti a fine operazione), `None`

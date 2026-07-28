@@ -1229,6 +1229,10 @@ fn prepare_geo(
 /// Estensioni geo v1.1-v1.3: config tipizzate e rivalidate (E1), secondo
 /// operando da config decodificato una volta qui (mai nel loop per batch).
 /// `None` se l'op non e' un'estensione coperta.
+// Dispatcher esaustivo sulle estensioni v1.1-v1.3: la lunghezza e' data
+// dalla sequenza lineare dei casi (config tipizzata + validazione per op),
+// non da complessita' logica (fase di pulizia: niente refactor strutturali).
+#[allow(clippy::too_many_lines)]
 fn prepare_geo_extension(
     node: &NodeV4,
     descriptor: &plenora_core::catalog::OperationDescriptor,
@@ -1306,14 +1310,12 @@ fn prepare_geo_extension(
         }
         "geo.line_locate_point" => {
             let parsed: GeoLineLocatePointConfig = serde_json::from_value(node.config.clone())?;
-            let point = match decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)? {
-                Geometry::Point(point) => point,
-                _ => {
-                    return Err(PlenoraError::Contract(format!(
-                        "nodo `{}`: point_wkb deve essere un Point",
-                        node.id
-                    )))
-                }
+            let Geometry::Point(point) = decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)?
+            else {
+                return Err(PlenoraError::Contract(format!(
+                    "nodo `{}`: point_wkb deve essere un Point",
+                    node.id
+                )));
             };
             let output_column = measure_output_column(
                 &node.id,

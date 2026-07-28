@@ -977,7 +977,14 @@ fn rect_with_hole_wkb() -> Vec<u8> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write as _;
+
+    // `write!` su String non fallisce mai: il risultato e' scartato per
+    // costruzione, non un errore ignorato.
+    bytes.iter().fold(String::new(), |mut output, byte| {
+        let _ = write!(output, "{byte:02x}");
+        output
+    })
 }
 
 /// La linea di riferimento della catena snap → subdivide: 7 vertici.

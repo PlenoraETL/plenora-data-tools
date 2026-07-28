@@ -111,6 +111,13 @@ pub struct CompactRowEncoder<'a> {
 }
 
 impl<'a> CompactRowEncoder<'a> {
+    /// Costruisce l'encoder sulle colonne del batch, nell'ordine dello
+    /// schema.
+    ///
+    /// # Errors
+    ///
+    /// - `Schema`: array incoerente col tipo dichiarato nello schema,
+    ///   dictionary non Utf8 o tipo non supportato dalle set operation.
     pub fn try_new(batch: &'a RecordBatch) -> Result<Self> {
         let columns = batch
             .columns()
@@ -183,6 +190,12 @@ impl<'a> CompactRowEncoder<'a> {
         Ok(Self { columns })
     }
 
+    /// Scrive in `output` (riusato fra le righe) la chiave compatta della
+    /// riga `row`.
+    ///
+    /// # Errors
+    ///
+    /// - `Schema`: chiave dictionary negativa (array dictionary incoerente).
     pub fn encode_into(&self, row: usize, output: &mut Vec<u8>) -> Result<()> {
         output.clear();
         for column in &self.columns {
@@ -192,6 +205,12 @@ impl<'a> CompactRowEncoder<'a> {
     }
 }
 
+/// Verifica che i due batch abbiano nomi e tipi Arrow identici, colonna per
+/// colonna.
+///
+/// # Errors
+///
+/// - `Schema`: numero di colonne, nomi o tipi diversi fra i due batch.
 pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
     if left.num_columns() != right.num_columns()
         || left
@@ -210,6 +229,15 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
     Ok(())
 }
 
+/// Concatena i due batch (righe di `left` poi di `right`); la nullability
+/// di ogni colonna e' l'OR dei due input, i metadati quelli di `left`.
+///
+/// # Errors
+///
+/// - `Schema`: schemi incompatibili (come `validate_schema`) o errore Arrow
+///   nella concat o nella costruzione del batch;
+/// - `Contract`: overflow nel conteggio delle righe o totale oltre
+///   `limits.max_rows`.
 pub fn concat_compatible(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -266,6 +294,17 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
     Ok(rows)
 }
 
+/// UNION DISTINCT dei due batch: righe di `left` seguite dalle righe di
+/// `right` non gia' presenti, senza duplicati.
+///
+/// # Errors
+///
+/// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
+///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
+///   o errore nella selezione o nella concat finale (come `select_rows` e
+///   `concat_compatible`);
+/// - `Contract`: overflow nel conteggio delle righe o totale oltre
+///   `limits.max_rows`.
 pub fn union_distinct(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -326,6 +365,14 @@ fn right_keys(right: &RecordBatch) -> Result<KeySet> {
     Ok(keys)
 }
 
+/// INTERSECT DISTINCT dei due batch: righe di `left` la cui chiave compare
+/// in `right`, senza duplicati, nell'ordine di `left`.
+///
+/// # Errors
+///
+/// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
+///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
+///   o errore nella selezione finale (come `select_rows`).
 pub fn intersect(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -347,6 +394,14 @@ pub fn intersect(
     select_rows(left, &rows)
 }
 
+/// EXCEPT DISTINCT dei due batch: righe di `left` la cui chiave non compare
+/// in `right`, senza duplicati, nell'ordine di `left`.
+///
+/// # Errors
+///
+/// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
+///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
+///   o errore nella selezione finale (come `select_rows`).
 pub fn except(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -495,6 +550,9 @@ mod tests {
 
     /// Fixture multi-tipo con casi limite: null in ogni colonna, stringhe
     /// vuote, NaN con payload diversi, +0.0/-0.0, duplicati esatti.
+    // Lunga per costruzione: una colonna esplicita per tipo coperto, con i
+    // casi limite elencati valore per valore (fixture di test, niente logica).
+    #[allow(clippy::too_many_lines)]
     fn mixed_fixture() -> RecordBatch {
         let nan_a = f64::from_bits(0x7ff8_0000_0000_0001);
         let nan_b = f64::from_bits(0x7ff8_0000_0000_0042);
@@ -537,9 +595,7 @@ mod tests {
                         true,
                     ),
                 ],
-                [("origin".to_owned(), "oracle".to_owned())]
-                    .into_iter()
-                    .collect(),
+                std::iter::once(("origin".to_owned(), "oracle".to_owned())).collect(),
             )),
             vec![
                 Arc::new(StringArray::from(vec![

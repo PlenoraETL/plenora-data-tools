@@ -40,9 +40,11 @@ fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String>
 }
 
 /// Confronto tipizzato tra due celle, condiviso dai tre siti di confronto di
-/// `table.sort`: `compare_at` (stesso batch), `ColumnComparator` (fast path
-/// tipizzato) e il merge k-way dello spill (`spill::compare_cells`, batch
-/// diversi — da qui la forma a due array).
+/// `table.sort`.
+///
+/// I tre siti sono `compare_at` (stesso batch), `ColumnComparator` (fast
+/// path tipizzato) e il merge k-way dello spill (`spill::compare_cells`,
+/// batch diversi — da qui la forma a due array).
 ///
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nativo
 /// esatto per Int64 (`i64::cmp`: la conversione a f64 collasserebbe valori
@@ -203,7 +205,24 @@ fn compare_nullable<A: Array>(
     compare(values, left, right)
 }
 
+// Il guard del mutex nel comparatore e' gia' a scope minimo (blocco
+// `Err`): stringerlo non cambia la concorrenza e la riscrittura suggerita
+// peggiorerebbe il percorso di errore condiviso tra sort seriale e
+// parallela.
+#[allow(clippy::significant_drop_tightening)]
+/// Batch ordinato per `config.columns` (sort stabile, null in coda in
+/// ascendente).
+///
+/// # Errors
+///
+/// - `Contract`: `columns` vuoto;
+/// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
+///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
+///   fast path) e di `select_rows`.
 pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
+    // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
+    // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
+    const PARALLEL_THRESHOLD: usize = 32_768;
     let indices = config
         .columns
         .iter()
@@ -242,9 +261,6 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
         }
         left.cmp(right)
     };
-    // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
-    // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
-    const PARALLEL_THRESHOLD: usize = 32_768;
     if rows.len() >= PARALLEL_THRESHOLD {
         rows.par_sort_by(compare);
     } else {
@@ -268,14 +284,23 @@ pub struct TopN {
     pub descending: bool,
 }
 
-/// Prime `n` righe secondo l'ordinamento di `sort` (estensione v1.1):
-/// stessa semantica null (null in coda in ascendente), `total_cmp` sui
+/// Prime `n` righe secondo l'ordinamento di `sort` (estensione v1.1).
+///
+/// Stessa semantica null (null in coda in ascendente), `total_cmp` sui
 /// numerici e stabilita' (spareggio sull'indice originale). L'output e'
 /// identico a `sort` seguito da `limit(n)`, ma con `n << righe` evita il
 /// sort completo: `select_nth_unstable_by` partiziona gli indici in O(righe)
 /// e solo i primi `n` selezionati vengono ordinati. Il confronto include lo
 /// spareggio sull'indice, quindi e' un ordine totale e la permutazione
 /// finale coincide esattamente con quella dello stable sort completo.
+///
+/// # Errors
+///
+/// - `Contract`: `columns` vuoto, oppure `n` non rappresentabile come
+///   `usize`;
+/// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
+///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
+///   fast path) e di `select_rows`.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
     let indices = config
         .columns
@@ -350,7 +375,21 @@ pub struct Distinct {
     pub keep: Keep,
 }
 
+/// Righe distinte sulle colonne di `subset` (default: tutte le colonne),
+/// selezionate secondo `keep` (prima/ultima occorrenza o solo righe senza
+/// duplicati).
+///
+/// # Errors
+///
+/// - `Schema`: una colonna di `subset` assente dallo schema; in piu' gli
+///   errori di `scalar_as_string` (colonne fuori dal fast path tipizzato)
+///   e di `select_rows`.
 pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
+    struct KeyStats {
+        first: usize,
+        last: usize,
+        count: usize,
+    }
     let indices = if config.subset.is_empty() {
         (0..batch.num_columns()).collect()
     } else {
@@ -371,11 +410,6 @@ pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
         .iter()
         .map(|index| KeyColumn::new(batch.column(*index)))
         .collect::<Vec<_>>();
-    struct KeyStats {
-        first: usize,
-        last: usize,
-        count: usize,
-    }
     let mut stats: HashMap<Box<[u8]>, KeyStats, std::hash::BuildHasherDefault<KeyHasher>> =
         HashMap::default();
     let mut key = String::new();
@@ -425,6 +459,14 @@ pub struct DedupAdvanced {
     pub ascending: bool,
 }
 
+/// `distinct` con pre-ordinamento su `order_column`: prima/ultima
+/// occorrenza si riferiscono all'ordine dato.
+///
+/// # Errors
+///
+/// - `Contract`: `keep` e' `Keep::False` (non supportato);
+/// - come `sort` (se `order_column` e' presente) e `distinct`: colonne
+///   assenti (`Schema`), errori del fallback testuale e di `select_rows`.
 pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
     let ordered = if let Some(column) = &config.order_column {
         sort(
@@ -657,12 +699,14 @@ fn push_key_value(key: &mut String, value: &str) {
 }
 
 /// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64
-/// per le chiavi di gruppo. `SipHash` (default std) domina il costo di
-/// raggruppamento su milioni di righe; qui il throughput conta piu' della
-/// resistenza a input avversari, come gia' accettato da `distinct` (`HashMap`
-/// sulle stesse chiavi). Il finalizer e' necessario: senza, le chiavi con
-/// prefisso comune lungo (stesso tipo, stessa lunghezza) si concentrano in
-/// pochi bucket (verificato: max 328 contro 7 con finalizer).
+/// per le chiavi di gruppo.
+///
+/// `SipHash` (default std) domina il costo di raggruppamento su milioni di
+/// righe; qui il throughput conta piu' della resistenza a input avversari,
+/// come gia' accettato da `distinct` (`HashMap` sulle stesse chiavi). Il
+/// finalizer e' necessario: senza, le chiavi con prefisso comune lungo
+/// (stesso tipo, stessa lunghezza) si concentrano in pochi bucket
+/// (verificato: max 328 contro 7 con finalizer).
 #[derive(Default)]
 pub(crate) struct KeyHasher(u64);
 
@@ -704,9 +748,11 @@ const fn decimal_digits(value: u64) -> u32 {
 }
 
 /// Confronto lessicografico dei "tag di lunghezza" `{decimal(len)}:` delle
-/// chiavi di `row_key`. Quando una rappresentazione finisce, il suo byte
-/// successivo nella chiave e' ':' (0x3A), maggiore di ogni cifra: il piu'
-/// corto, a parita' di prefisso, e' quindi MAGGIORE.
+/// chiavi di `row_key`.
+///
+/// Quando una rappresentazione finisce, il suo byte successivo nella chiave
+/// e' ':' (0x3A), maggiore di ogni cifra: il piu' corto, a parita' di
+/// prefisso, e' quindi MAGGIORE.
 fn cmp_len_tag(a: u64, b: u64) -> Ordering {
     let digits_a = decimal_digits(a);
     let digits_b = decimal_digits(b);
@@ -723,9 +769,11 @@ fn cmp_len_tag(a: u64, b: u64) -> Ordering {
 }
 
 /// Ordine delle chiavi di `row_key` per una colonna Int64, senza
-/// materializzare le stringhe: null in testa (gestito dal chiamante), poi
-/// tag di lunghezza, poi forma decimale (il segno '-' precede le cifre, tra
-/// negativi l'ordine lessicografico e' l'inverso di quello numerico).
+/// materializzare le stringhe.
+///
+/// Null in testa (gestito dal chiamante), poi tag di lunghezza, poi forma
+/// decimale (il segno '-' precede le cifre, tra negativi l'ordine
+/// lessicografico e' l'inverso di quello numerico).
 fn cmp_i64_group_key(a: i64, b: i64) -> Ordering {
     let digits_a = u64::from(decimal_digits(a.unsigned_abs()));
     let digits_b = u64::from(decimal_digits(b.unsigned_abs()));
@@ -758,8 +806,9 @@ fn cmp_str_group_key(a: &str, b: &str) -> Ordering {
     cmp_len_tag(a.len() as u64, b.len() as u64).then_with(|| a.cmp(b))
 }
 
-/// Raggruppamento su chiave nativa di colonna singola (Int64/UInt64/Utf8):
-/// nessuna stringa di chiave, hash del valore nativo, ordinamento finale
+/// Raggruppamento su chiave nativa di colonna singola (Int64/UInt64/Utf8).
+///
+/// Nessuna stringa di chiave, hash del valore nativo, ordinamento finale
 /// con il comparatore che riproduce l'ordine lessicografico delle chiavi
 /// di `row_key`. Il gruppo dei null, se presente, e' sempre in testa
 /// (`"...0"` precede `"...1..."` nelle chiavi testuali).
@@ -810,8 +859,10 @@ fn build_native_groups<K: Copy + Eq + std::hash::Hash + Send + Sync>(
 }
 
 /// Raggruppamento generico sulle chiavi testuali di `row_key` (multi-colonna
-/// o tipi fuori dal fast path nativo): stessi byte, `HashMap` + ordinamento
-/// finale (stesso ordine lessicografico del `BTreeMap` originale).
+/// o tipi fuori dal fast path nativo).
+///
+/// Stessi byte, `HashMap` + ordinamento finale (stesso ordine lessicografico
+/// del `BTreeMap` originale).
 fn build_string_groups(batch: &RecordBatch, group_indices: &[usize]) -> Result<Vec<Vec<usize>>> {
     let key_columns = group_indices
         .iter()
@@ -951,9 +1002,11 @@ where
 type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
 
 /// Partizioni di `window_function`/`rolling_window` (ottimizzazione kernel,
-/// batch 4): righe raggruppate per la chiave testuale della colonna di
-/// partizione (`TextSource`: Utf8 preso in prestito, nessuna `String` per
-/// riga; `scalar_as_string` per gli altri tipi), hash FxHash+splitmix64
+/// batch 4).
+///
+/// Righe raggruppate per la chiave testuale della colonna di partizione
+/// (`TextSource`: Utf8 preso in prestito, nessuna `String` per riga;
+/// `scalar_as_string` per gli altri tipi), hash FxHash+splitmix64
 /// (`KeyHasher`) al posto del `BTreeMap` `SipHash`. Le partizioni sono
 /// restituite nello STESSO ordine di iterazione del `BTreeMap` originale
 /// (chiave `Option<String>` crescente): gli errori per partizione emergono
@@ -979,9 +1032,12 @@ fn build_partitions(batch: &RecordBatch, group: Option<usize>) -> Result<KeyPart
     Ok(partitions)
 }
 
-/// Calcola i valori di output per partizione (in parallelo sopra soglia con
-/// raccolta posizionale: stessi valori del sequenziale) e li scrive alle
-/// posizioni di riga originali, come il riempimento diretto originale.
+/// Calcola i valori di output per partizione e li scrive alle posizioni di
+/// riga originali.
+///
+/// Sopra soglia il calcolo va in parallelo con raccolta posizionale (stessi
+/// valori del sequenziale); la scrittura riproduce il riempimento diretto
+/// originale.
 fn scatter_partitions(
     batch: &RecordBatch,
     partitions: &[(Option<Cow<'_, str>>, Vec<usize>)],
@@ -1078,6 +1134,19 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 }
 
 #[allow(clippy::too_many_lines)] // Aggregation variants share one grouping pass and its invariants.
+/// Batch aggregato per `group_by` con le aggregazioni di
+/// `config.aggregations` (default: solo conteggio per gruppo).
+///
+/// # Errors
+///
+/// - `Contract`: `group_by` vuoto; funzione `quantile` senza il parametro
+///   `quantile`; conteggi, dimensioni o indici non rappresentabili
+///   (`i64`/`f64`/`usize`); nome di output non valido (come
+///   `validate_output_name`);
+/// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
+///   schema; valore intero non rappresentabile come `f64`; in piu' gli
+///   errori di `scalar_as_string`/`scalar_as_f64` (tipi fuori dal fast
+///   path), `select_rows` e `replace_or_append`.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     let group_indices = config
         .group_by
@@ -1337,6 +1406,17 @@ pub struct RollingWindow {
     pub output_column: String,
 }
 
+/// Finestra mobile (`window` righe) su `column`, opzionalmente partizionata
+/// per `group_by` e ordinata per `order_column`.
+///
+/// # Errors
+///
+/// - `Contract`: `window` o `min_periods` nulli, `min_periods > window`,
+///   oppure dimensioni/divisori non rappresentabili come `f64`;
+/// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
+///   schema; valore intero non rappresentabile come `f64`; in piu' gli
+///   errori di `sort`, `scalar_as_string`/`scalar_as_f64` e
+///   `replace_or_append`.
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return Err(PlenoraError::Contract(
@@ -1475,6 +1555,18 @@ pub struct WindowFunction {
 }
 
 #[allow(clippy::too_many_lines)] // All window variants share partition/order state and one output pass.
+/// Funzione finestra (`rank`, `lag`, `ntile`, ...) su `column`,
+/// opzionalmente partizionata per `group_by` e ordinata per
+/// `order_column`.
+///
+/// # Errors
+///
+/// - `Contract`: `offset` nullo; `ntile` senza `buckets` maggiore di zero;
+///   `buckets` specificato per una funzione diversa da `ntile`;
+/// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
+///   schema; valore intero non rappresentabile come `f64`; in piu' gli
+///   errori di `sort`, `scalar_as_string`/`scalar_as_f64` e
+///   `replace_or_append`.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
         return Err(PlenoraError::Contract("offset deve essere positivo".into()));
@@ -1530,7 +1622,7 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         if needs_rank {
             sorted = numbers.iter().flatten().copied().collect::<Vec<_>>();
             sorted.sort_by(f64::total_cmp);
-            dense = sorted.clone();
+            dense.clone_from(&sorted);
             dense.dedup_by(|left, right| left.total_cmp(right) == Ordering::Equal);
         }
         let mut sum = 0.0;

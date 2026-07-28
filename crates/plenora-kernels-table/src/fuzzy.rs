@@ -123,6 +123,13 @@ impl FuzzyJoin {
 
 /// Validazioni statiche della config (replicate dall'analisi a secco e dalla
 /// validazione engine: stesse regole, stessi messaggi).
+///
+/// # Errors
+///
+/// - `Contract`: `threshold` fuori da (0, 1] o non finita; `blocking_param`
+///   nullo con blocking `prefix` o presente con `soundex`/`none`;
+///   `max_candidates` nullo; nome della colonna score vuoto o oltre 1024
+///   byte (come `validate_output_name`).
 pub fn validate_config(config: &FuzzyJoin) -> Result<()> {
     if !config.threshold.is_finite()
         || config.threshold <= 0.0
@@ -169,6 +176,7 @@ const fn soundex_code(letter: char) -> u8 {
 }
 
 /// American Soundex classico: prima lettera + 3 cifre (padding di zeri).
+///
 /// Solo lettere ASCII; gli altri caratteri sono ignorati e non interrompono
 /// le run di lettere con lo stesso codice (come `h`/`w`, che non azzerano il
 /// codice precedente; le vocali invece si').
@@ -327,6 +335,19 @@ fn score(metric: FuzzyMetric, left: &str, right: &str) -> f64 {
 
 /// Join per similarita' testuale (estensione v1.3): vedi la documentazione di
 /// modulo per la semantica completa.
+///
+/// # Errors
+///
+/// - `Contract`: config non valida (come `validate_config`); blocco destro
+///   oltre `max_candidates`; output oltre `limits.max_rows` o
+///   `limits.max_columns`;
+/// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
+///   nome della colonna score con lo schema di output; errore Arrow nella
+///   costruzione del batch.
+// Sequenza lineare delle fasi del join fuzzy (validazione, blocco
+// candidati, scoring con soglia, costruzione dell'output): la lunghezza
+// e' nella pipeline, non nella complessita' logica.
+#[allow(clippy::too_many_lines)]
 pub fn fuzzy_join(
     left: &RecordBatch,
     right: &RecordBatch,

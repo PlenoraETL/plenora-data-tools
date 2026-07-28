@@ -17,7 +17,7 @@
 //! 3 run. Peak RSS da `VmHWM` di `/proc/self/status` (cumulativo di
 //! processo; `rss_delta_kib` e' il delta rispetto alla misura precedente).
 //!
-//! Op BackendPending (feature `geos`/`proj` non abilitate di default):
+//! Op `BackendPending` (feature `geos`/`proj` non abilitate di default):
 //! `geo.make_valid`, `geo.reproject`, `geo.polygonize`, `geo.split` sono
 //! riportate come `skipped`.
 //!
@@ -30,7 +30,7 @@
 //! Note operative:
 //! - kernel WSL2 6.18: sotto carico di allocazioni intensive il processo puo'
 //!   stallare in stato D su `brk`/`__vma_start_write`; mitigato con
-//!   `MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768` (vedi geo_sweep.md);
+//!   `MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768` (vedi `geo_sweep.md`);
 //! - `GEO_SWEEP_SKIP_PREFIX=1`: salta gli scenari fino a `geo.collect`
 //!   escluso (gia' misurati) e appende al JSONL esistente (resume manuale).
 
@@ -43,6 +43,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
@@ -100,11 +101,11 @@ const MAX_WORK: u64 = 1_000_000_000_000;
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -120,6 +121,10 @@ impl Rng {
     }
 
     /// Uniforme in [min, max).
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     fn range(&mut self, min: f64, max: f64) -> f64 {
         min + (max - min) * self.unit()
     }
@@ -132,17 +137,17 @@ impl Rng {
 /// Poligono semplice a stella (semplice per costruzione): raggi jitterati
 /// attorno al centro, angoli ordinati.
 fn star_polygon(rng: &mut Rng, cx: f64, cy: f64, radius: f64, vertices: usize) -> Polygon<f64> {
-    let mut ring = Vec::with_capacity(vertices + 1);
+    let mut ring_coords = Vec::with_capacity(vertices + 1);
     for index in 0..vertices {
         let angle = std::f64::consts::TAU * index as f64 / vertices as f64;
         let r = radius * rng.range(0.7, 1.3);
-        ring.push(Coord {
+        ring_coords.push(Coord {
             x: cx + r * angle.cos(),
             y: cy + r * angle.sin(),
         });
     }
-    ring.push(ring[0]);
-    Polygon::new(LineString::new(ring), Vec::new())
+    ring_coords.push(ring_coords[0]);
+    Polygon::new(LineString::new(ring_coords), Vec::new())
 }
 
 /// Linea random-walk con `vertices` vertici e passo medio `step`.
@@ -197,7 +202,7 @@ fn dbscan_points_wkb() -> &'static WkbCells {
     })
 }
 
-/// Punti ordinati su cerchi rumorosi da 1000 punti (per line/polygon_builder:
+/// Punti ordinati su cerchi rumorosi da 1000 punti (per `line/polygon_builder`:
 /// anelli validi per costruzione).
 fn polygroup_points_wkb() -> &'static WkbCells {
     static CELLS: OnceLock<WkbCells> = OnceLock::new();
@@ -258,7 +263,11 @@ fn polys_complex_wkb() -> &'static WkbCells {
     })
 }
 
-/// MultiPoligoni: 4 componenti da ~100 vertici.
+/// `MultiPoligoni`: 4 componenti da ~100 vertici.
+// Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+// violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+// fusa e' il contratto numerico.
+#[allow(clippy::suboptimal_flops)]
 fn multipolys_wkb() -> &'static WkbCells {
     static CELLS: OnceLock<WkbCells> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -352,7 +361,7 @@ fn geo_polys_wkb() -> &'static WkbCells {
     })
 }
 
-/// MultiPoint da 50 punti (per delaunay/concave hull).
+/// `MultiPoint` da 50 punti (per delaunay/concave hull).
 fn multipoint50_wkb() -> &'static WkbCells {
     static CELLS: OnceLock<WkbCells> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -403,9 +412,16 @@ fn pairs_wkb() -> (&'static WkbCells, &'static WkbCells) {
 
 /// Rettangolo di griglia [i*100, (i+1)*100) x [j*100, (j+1)*100).
 fn grid_rect(i: usize, j: usize, grow: f64, shift: f64) -> Geometry<f64> {
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let x0 = i as f64 * 100.0 - grow + shift;
+    #[allow(clippy::suboptimal_flops)]
     let y0 = j as f64 * 100.0 - grow + shift;
+    #[allow(clippy::suboptimal_flops)]
     let x1 = (i + 1) as f64 * 100.0 + grow + shift;
+    #[allow(clippy::suboptimal_flops)]
     let y1 = (j + 1) as f64 * 100.0 + grow + shift;
     Geometry::Polygon(Polygon::new(
         LineString::new(vec![
@@ -467,7 +483,7 @@ fn grid_shift_wkb() -> &'static WkbCells {
 
 /// Poligoni stellati ~100v su griglia spaziata 100 con raggio <= 26:
 /// disgiunti e non tangenti per costruzione (per geo.collect: la validazione
-/// MultiPolygon respinge overlap E contatti lungo un segmento).
+/// `MultiPolygon` respinge overlap E contatti lungo un segmento).
 fn collect_polys_wkb() -> &'static WkbCells {
     static CELLS: OnceLock<WkbCells> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -476,7 +492,12 @@ fn collect_polys_wkb() -> &'static WkbCells {
         for index in 0..100_000_usize {
             let i = index % 317;
             let j = index / 317;
+            // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+            // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+            // fusa e' il contratto numerico.
+            #[allow(clippy::suboptimal_flops)]
             let cx = 50.0 + i as f64 * 100.0;
+            #[allow(clippy::suboptimal_flops)]
             let cy = 50.0 + j as f64 * 100.0;
             cells.push(enc_cell(&Geometry::Polygon(star_polygon(
                 &mut rng, cx, cy, 20.0, 100,
@@ -486,7 +507,7 @@ fn collect_polys_wkb() -> &'static WkbCells {
     })
 }
 
-/// WKT di poligoni semplici (per geo.from_wkt).
+/// WKT di poligoni semplici (per `geo.from_wkt`).
 fn wkt_polys() -> &'static Vec<String> {
     static CELLS: OnceLock<Vec<String>> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -500,7 +521,7 @@ fn wkt_polys() -> &'static Vec<String> {
     })
 }
 
-/// Coppie (x, y) per geo.from_coords.
+/// Coppie (x, y) per `geo.from_coords`.
 fn coords_xy() -> &'static Vec<(f64, f64)> {
     static CELLS: OnceLock<Vec<(f64, f64)>> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -511,7 +532,7 @@ fn coords_xy() -> &'static Vec<(f64, f64)> {
     })
 }
 
-/// LineString decodificate (per line_merge: catene di 10 segmenti).
+/// `LineString` decodificate (per `line_merge`: catene di 10 segmenti).
 fn chain_lines() -> &'static Vec<LineString<f64>> {
     static LINES: OnceLock<Vec<LineString<f64>>> = OnceLock::new();
     LINES.get_or_init(|| {
@@ -727,9 +748,11 @@ fn sweep_cells<T: Sync>(
         .unwrap_or_else(|| len.min(1_000));
     let mut note = extra_note.to_owned();
     if chosen < 1_000_000 {
-        note.push_str(&format!(
+        write!(
+            note,
             "; scala ridotta a {chosen} (stima > {TARGET_REP_SECONDS}s/rep a 1M o fixture limitata)"
-        ));
+        )
+        .expect("nota di scala");
     }
 
     let mut durations = Vec::with_capacity(3);
@@ -801,9 +824,11 @@ fn sweep_collective(
         .unwrap_or(base);
     let mut note = extra_note.to_owned();
     if chosen < *sizes.last().unwrap_or(&base) {
-        note.push_str(&format!(
+        write!(
+            note,
             "; scala ridotta a {chosen} (stima > {TARGET_REP_SECONDS}s/rep a scala piena, esponente {exponent})"
-        ));
+        )
+        .expect("nota di scala");
     }
 
     let mut durations = Vec::with_capacity(3);
@@ -863,8 +888,8 @@ fn enc(geometry: &Geometry<f64>) -> Result<usize, String> {
         .map_err(|error| error.to_string())
 }
 
-fn enc_opt(geometry: &Option<Geometry<f64>>) -> Result<usize, String> {
-    geometry.as_ref().map_or(Ok(0), enc)
+fn enc_opt(geometry: Option<&Geometry<f64>>) -> Result<usize, String> {
+    geometry.map_or(Ok(0), enc)
 }
 
 fn enc_many(geometries: &[Geometry<f64>]) -> Result<usize, String> {
@@ -965,8 +990,9 @@ fn write_outputs(results: &[Measurement]) {
          |---|----|------|---------|-------|-------------|--------|--------------|--------|----------------|-----------------|------|\n",
     );
     for (position, entry) in sorted.iter().enumerate() {
-        markdown.push_str(&format!(
-            "| {} | `{}` | {} | {} | {} | {:.4} | {:.0} | {} | {} | {} | {} | {} |\n",
+        writeln!(
+            markdown,
+            "| {} | `{}` | {} | {} | {} | {:.4} | {:.0} | {} | {} | {} | {} | {} |",
             position + 1,
             entry.op,
             entry.kind,
@@ -975,20 +1001,15 @@ fn write_outputs(results: &[Measurement]) {
             entry.median_seconds,
             entry.geoms_per_second,
             entry
-                .decode_share
-                .map(|share| format!("{share:.2}"))
-                .unwrap_or_else(|| "-".into()),
+                .decode_share.map_or_else(|| "-".into(), |share| format!("{share:.2}")),
             entry.bound_class,
             entry
-                .peak_rss_kib
-                .map(|kib| format!("{}", kib / 1024))
-                .unwrap_or_else(|| "n/d".into()),
+                .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry
-                .rss_delta_kib
-                .map(|kib| format!("{}", kib / 1024))
-                .unwrap_or_else(|| "-".into()),
+                .rss_delta_kib.map_or_else(|| "-".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
-        ));
+        )
+        .expect("riga markdown");
     }
     std::fs::write(directory.join("geo_sweep.md"), markdown).expect("write geo_sweep.md");
 }
@@ -998,6 +1019,8 @@ fn write_outputs(results: &[Measurement]) {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    use geo::CoordsIter;
+
     let mut results: Vec<Measurement> = Vec::new();
     let directory = std::path::Path::new("benchmarks/sweep");
     std::fs::create_dir_all(directory).expect("mkdir benchmarks/sweep");
@@ -1014,7 +1037,6 @@ fn main() {
     let decode_op = |payload: &Vec<u8>| -> Result<usize, String> {
         dec(payload).map(|geometry| black_box(geometry).coords_count())
     };
-    use geo::CoordsIter;
     sweep_cells(&mut results, "_ref.wkb_decode.points", "ref_decode", "points", points_wkb(), false, true, "solo decode WKB", &decode_op);
     sweep_cells(&mut results, "_ref.wkb_decode.lines50", "ref_decode", "lines50", lines_wkb(), false, true, "solo decode WKB", &decode_op);
     sweep_cells(&mut results, "_ref.wkb_decode.poly_simple", "ref_decode", "poly_simple", polys_wkb(), false, true, "solo decode WKB", &decode_op);
@@ -1081,7 +1103,7 @@ fn main() {
     sweep_cells(&mut results, "geo.length", "per_cell", "lines50", lines_wkb(), false, false, "", &op_length);
     let op_perimeter = |payload: &Vec<u8>| dec(payload).and_then(|g| perimeter(&g).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
     sweep_cells(&mut results, "geo.perimeter", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_perimeter);
-    let op_pos = |payload: &Vec<u8>| dec(payload).and_then(|g| point_on_surface(&g).map_err(|e| e.to_string()).and_then(|r| enc_opt(&r)));
+    let op_pos = |payload: &Vec<u8>| dec(payload).and_then(|g| point_on_surface(&g).map_err(|e| e.to_string()).and_then(|r| enc_opt(r.as_ref())));
     sweep_cells(&mut results, "geo.point_on_surface", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_pos);
     let op_simplify = |payload: &Vec<u8>| dec(payload).and_then(|g| simplify_with_policy(&g, 1.0, SimplifyPolicy::DouglasPeucker).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.simplify", "per_cell", "poly_simple", polys_wkb(), true, false, "tol=1, douglas_peucker", &op_simplify);
@@ -1154,7 +1176,7 @@ fn main() {
         })
     };
     sweep_cells(&mut results, "geo.delaunay", "per_cell", "multipoint50", multipoint50_wkb(), true, false, "multipoint 50 punti, encode triangoli", &op_delaunay);
-    let op_linesub = |payload: &Vec<u8>| dec(payload).and_then(|g| line_substring(as_line(&g)?, 0.2, 0.8).map_err(|e| e.to_string()).and_then(|r| enc_opt(&r)));
+    let op_linesub = |payload: &Vec<u8>| dec(payload).and_then(|g| line_substring(as_line(&g)?, 0.2, 0.8).map_err(|e| e.to_string()).and_then(|r| enc_opt(r.as_ref())));
     sweep_cells(&mut results, "geo.line_substring", "per_cell", "lines50", lines_wkb(), true, false, "[0.2, 0.8]", &op_linesub);
     let op_lineinterp = |payload: &Vec<u8>| {
         dec(payload).and_then(|g| {
@@ -1341,7 +1363,7 @@ fn main() {
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
-                        enc_opt(out).map(|len| total + len)
+                        enc_opt(out.as_ref()).map(|len| total + len)
                     })
                 })
         },
@@ -1378,7 +1400,7 @@ fn main() {
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
-                        enc_opt(out).map(|len| total + len)
+                        enc_opt(out.as_ref()).map(|len| total + len)
                     })
                 })
         },
@@ -1434,7 +1456,7 @@ fn main() {
                 .map(|group| {
                     collect_geometries(group)
                         .map_err(|e| e.to_string())
-                        .and_then(|out| enc_opt(&out))
+                        .and_then(|out| enc_opt(out.as_ref()))
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|v| v.iter().sum())
@@ -1455,7 +1477,7 @@ fn main() {
                 .map(|group| {
                     line_from_ordered_points(group)
                         .map_err(|e| e.to_string())
-                        .and_then(|out| enc_opt(&out))
+                        .and_then(|out| enc_opt(out.as_ref()))
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|v| v.iter().sum())
@@ -1476,7 +1498,7 @@ fn main() {
                 .map(|group| {
                     polygon_from_ordered_points(group)
                         .map_err(|e| e.to_string())
-                        .and_then(|out| enc_opt(&out))
+                        .and_then(|out| enc_opt(out.as_ref()))
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|v| v.iter().sum())

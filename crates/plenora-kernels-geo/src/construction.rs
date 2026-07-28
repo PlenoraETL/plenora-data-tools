@@ -23,7 +23,7 @@ pub enum ConstructionError {
     UnsupportedWktDimension,
 }
 
-fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -38,6 +38,12 @@ fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     }
 }
 
+/// Costruisce un `Point` da longitudine e latitudine.
+///
+/// # Errors
+///
+/// `ConstructionError::NonFiniteCoordinate` se `lon` o `lat` e' NaN o
+/// infinita.
 pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, ConstructionError> {
     if !lon.is_finite() {
         return Err(ConstructionError::NonFiniteCoordinate { name: "lon" });
@@ -48,6 +54,17 @@ pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, Construct
     Ok(Geometry::Point(Point::new(lon, lat)))
 }
 
+/// Decodifica una geometria dal testo WKT (solo XY, senza SRID).
+///
+/// # Errors
+///
+/// - `ConstructionError::InvalidWkt`: testo oltre il limite di 64 MiB o
+///   parsing WKT fallito;
+/// - `ConstructionError::UnsupportedWktDimension`: il testo dichiara uno
+///   SRID (`SRID=...`) o dimensioni Z/M/ZM, non supportate dal contratto
+///   XY;
+/// - `ConstructionError::InvalidOutput`: la geometria decodificata non
+///   supera la validazione OGC.
 pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError> {
     const MAX_WKT_BYTES: usize = 64 * 1024 * 1024;
     if value.len() > MAX_WKT_BYTES {
@@ -89,6 +106,17 @@ fn collect_points(
         .collect()
 }
 
+/// Costruisce una `LineString` dai punti del gruppo ordinato.
+///
+/// Le righe `None` sono ignorate; con meno di due punti utili il risultato
+/// e' `None` (gruppo omesso, non un errore).
+///
+/// # Errors
+///
+/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+///   `Point`;
+/// - `ConstructionError::InvalidOutput`: la linea costruita non supera la
+///   validazione OGC.
 pub fn line_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {
@@ -104,6 +132,18 @@ pub fn line_from_ordered_points(
     Ok(Some(line))
 }
 
+/// Costruisce un `Polygon` (anello esterno senza buchi) dai punti del
+/// gruppo ordinato.
+///
+/// Le righe `None` sono ignorate; con meno di tre punti utili il risultato
+/// e' `None` (gruppo omesso, non un errore).
+///
+/// # Errors
+///
+/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+///   `Point`;
+/// - `ConstructionError::InvalidOutput`: il poligono costruito non supera
+///   la validazione OGC (es. auto-intersezione).
 pub fn polygon_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {
@@ -122,10 +162,17 @@ pub fn polygon_from_ordered_points(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{Area, CoordsIter};
 
+    // unnecessary_wraps: l'Option e' il contratto dei fixture (colonne con
+    // righe null), non un possibile fallimento dell'helper.
+    #[allow(clippy::unnecessary_wraps)]
     fn point(x: f64, y: f64) -> Option<Geometry<f64>> {
         Some(Geometry::Point(Point::new(x, y)))
     }

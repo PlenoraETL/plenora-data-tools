@@ -38,6 +38,7 @@ pub struct GeometryComparison {
 
 impl GeometryComparison {
     /// Confronto con tolleranza dichiarata, senza normalizzazione.
+    #[must_use] 
     pub const fn new(tolerance: f64) -> Self {
         Self {
             tolerance,
@@ -46,6 +47,7 @@ impl GeometryComparison {
     }
 
     /// Abilita o disabilita la normalizzazione topologica opzionale.
+    #[must_use] 
     pub const fn with_normalization(mut self, normalize: bool) -> Self {
         self.normalize = normalize;
         self
@@ -238,7 +240,7 @@ fn normalize_ring(ring: &LineString<f64>) -> LineString<f64> {
     LineString(canonical)
 }
 
-/// Canonizzazione di una LineString: direzione lessicograficamente minima
+/// Canonizzazione di una `LineString`: direzione lessicograficamente minima
 /// (una linea percorsa al contrario e' la stessa rappresentazione
 /// geometrica).
 fn normalize_line_string(line: &LineString<f64>) -> LineString<f64> {
@@ -313,6 +315,7 @@ pub fn normalize_geometry(geometry: &Geometry<f64>) -> Geometry<f64> {
 /// Uguaglianza geometrica con tolleranza dichiarata (ADR-0001, livello 1):
 /// confronto per-coordinate sulla struttura, con normalizzazione topologica
 /// opzionale quando `comparison.normalize` e' `true`.
+#[must_use] 
 pub fn geo_equals_with_tolerance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,

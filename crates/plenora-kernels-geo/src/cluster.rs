@@ -17,7 +17,7 @@
 //!   euclidea `<= eps`, **incluso il punto stesso**) contiene almeno
 //!   `min_points` punti; i cluster sono le componenti connesse per densita'
 //!   dei core point; i punti non-core nel vicinato di un core sono `border`;
-//!   gli altri sono `noise`. Etichette `cluster_id` UInt64 `0..k-1`; noise
+//!   gli altri sono `noise`. Etichette `cluster_id` `UInt64` `0..k-1`; noise
 //!   assegnati al cluster che li raggiunge; solo i noise mai assegnati → `null` (colonna nullable). Un border
 //!   raggiungibile da due cluster e' assegnato al primo che lo raggiunge
 //!   (ordine di visita, vedi sotto).
@@ -70,7 +70,7 @@ pub enum ClusterError {
     IndexOverflow,
 }
 
-fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
+const fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
     ClusterError::InvalidParameter { name, reason }
 }
 
@@ -84,14 +84,14 @@ fn check_eps(eps: f64) -> Result<(), ClusterError> {
     Ok(())
 }
 
-fn check_min_points(min_points: usize) -> Result<(), ClusterError> {
+const fn check_min_points(min_points: usize) -> Result<(), ClusterError> {
     if min_points < 1 {
         return Err(invalid_parameter("min_points", "deve essere almeno 1"));
     }
     Ok(())
 }
 
-fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -123,6 +123,10 @@ impl RTreeObject for IndexedPoint {
 }
 
 impl PointDistance for IndexedPoint {
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     fn distance_2(&self, point: &[f64; 2]) -> f64 {
         let dx = self.coords[0] - point[0];
         let dy = self.coords[1] - point[1];
@@ -241,6 +245,15 @@ fn prepare_points(
 
 /// Clustering DBSCAN di una colonna di geometrie puntuali: un'etichetta per
 /// riga (allineata all'input), `None` per noise e per le geometrie null.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `eps` non finito o `<= 0`, oppure `min_points` < 1.
+/// - `NonFiniteCoordinate`: una geometria ha coordinate NaN o infinite.
+/// - `InvalidGeometry`: una geometria non supera la validazione OGC.
+/// - `UnsupportedGeometry`: una geometria non e' puntuale (attesa `Point`).
+/// - `IndexOverflow`: guardia interna sul numero di cluster (non
+///   raggiungibile: i cluster sono al piu' quanti i punti in input).
 pub fn dbscan_nullable(
     geometries: &[Option<Geometry<f64>>],
     eps: f64,
@@ -257,6 +270,11 @@ pub fn dbscan_nullable(
 }
 
 /// Clustering DBSCAN di punti (shortcut non nullable).
+///
+/// # Errors
+///
+/// Come [`dbscan_nullable`]; con input puntuale `UnsupportedGeometry` non
+/// scatta mai.
 pub fn dbscan(
     points: &[Point<f64>],
     eps: f64,
@@ -269,23 +287,32 @@ pub fn dbscan(
     dbscan_nullable(&geometries, eps, min_points)
 }
 
-fn cluster_error(error: ClusterError) -> PlenoraError {
+fn cluster_error(error: &ClusterError) -> PlenoraError {
     PlenoraError::Contract(format!("geo.cluster_dbscan: {error}"))
 }
 
-/// Adapter di colonna per `geo.cluster_dbscan`: decodifica le celle WKB
-/// non-null, esegue il clustering globale e restituisce un'etichetta UInt64
+/// Adapter di colonna per `geo.cluster_dbscan`: un'etichetta `UInt64`
 /// nullable per riga (null = noise o geometria null), nello stesso ordine
 /// delle righe di input.
+///
+/// Decodifica le celle WKB non-null ed esegue il clustering globale.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` per parametri non validi (`eps`, `min_points`)
+/// e per geometrie non puntuali, non valide o con coordinate non finite; in
+/// piu' gli errori di decode delle celle WKB non-null (come
+/// [`decode_geometry_cell`], incluse le varianti `PlenoraError::Contract` e
+/// `PlenoraError::Unsupported` del contratto WKB).
 pub fn dbscan_column(
     cells: &BinaryArray,
     eps: f64,
     min_points: usize,
 ) -> Result<Vec<Option<u64>>, PlenoraError> {
-    check_eps(eps).map_err(cluster_error)?;
-    check_min_points(min_points).map_err(cluster_error)?;
+    check_eps(eps).map_err(|error| cluster_error(&error))?;
+    check_min_points(min_points).map_err(|error| cluster_error(&error))?;
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
-    dbscan_nullable(&geometries, eps, min_points).map_err(cluster_error)
+    dbscan_nullable(&geometries, eps, min_points).map_err(|error| cluster_error(&error))
 }
 
 #[cfg(test)]
@@ -301,6 +328,10 @@ mod tests {
             .collect()
     }
 
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     fn cloud(center: (f64, f64), count: usize) -> Vec<(f64, f64)> {
         // Griglia densa deterministica attorno al centro (passo 0.1).
         // count <= 100_000 nelle fixture: esatto in f64 (< 2^52) e la sua
@@ -332,7 +363,7 @@ mod tests {
                     .map(|geometry| geometry.to_wkb(CoordDimensions::xy()).expect("encode"))
             })
             .collect();
-        BinaryArray::from_iter(cells.iter().map(|cell| cell.as_deref()))
+        cells.iter().map(|cell| cell.as_deref()).collect()
     }
 
     // --- kernel puro ---------------------------------------------------------
@@ -363,7 +394,7 @@ mod tests {
             "catena non saldata: {labels:?}"
         );
         // Due catene separate: i cluster seguono l'ordine di riga.
-        let mut two = coords.clone();
+        let mut two = coords;
         two.extend((0..20).map(|index| (100.0 + f64::from(index), 0.0)));
         let labels = dbscan(&points(&two), 1.5, 2).expect("dbscan");
         assert!(labels[..20].iter().all(|label| *label == Some(0)));
@@ -408,6 +439,10 @@ mod tests {
     fn double_execution_gives_identical_labels() {
         let mut coords = cloud((0.0, 0.0), 40);
         coords.extend(cloud((50.0, 50.0), 40));
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // fusa e' il contratto numerico.
+        #[allow(clippy::suboptimal_flops)]
         coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));
         let first = dbscan(&points(&coords), 0.5, 4).expect("prima");
         let second = dbscan(&points(&coords), 0.5, 4).expect("seconda");
@@ -511,7 +546,7 @@ mod tests {
     // --- micro-benchmark (esplicito: cargo test -- --ignored) ----------------
 
     /// 100k punti: due nuvole dense su griglia + dispersione deterministica;
-    /// stampa tempo e peak RSS (VmHWM, Linux). Esecuzione manuale.
+    /// stampa tempo e peak RSS (`VmHWM`, Linux). Esecuzione manuale.
     #[test]
     #[ignore = "micro-benchmark manuale"]
     fn dbscan_100k_benchmark() {
@@ -539,8 +574,7 @@ mod tests {
             .iter()
             .filter_map(|label| *label)
             .max()
-            .map(|max| max + 1)
-            .unwrap_or(0);
+            .map_or(0, |max| max + 1);
         let noise = labels.iter().filter(|label| label.is_none()).count();
         let peak_rss = std::fs::read_to_string("/proc/self/status")
             .ok()
@@ -552,8 +586,7 @@ mod tests {
             })
             .unwrap_or_else(|| "VmHWM non disponibile".to_owned());
         eprintln!(
-            "dbscan 100k punti: {:?}, {} cluster, {} noise, peak RSS: {}",
-            elapsed, clusters, noise, peak_rss
+            "dbscan 100k punti: {elapsed:?}, {clusters} cluster, {noise} noise, peak RSS: {peak_rss}"
         );
     }
 }

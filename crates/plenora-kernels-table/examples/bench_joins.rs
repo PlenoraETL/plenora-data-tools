@@ -35,7 +35,7 @@ impl Lcg {
         self.0 >> 11
     }
 
-    fn below(&mut self, bound: u64) -> u64 {
+    const fn below(&mut self, bound: u64) -> u64 {
         self.next_u64() % bound
     }
 }
@@ -236,8 +236,8 @@ fn main() {
         join(&left_utf8, &right_utf8, &join_config(JoinHow::Inner), &limits).expect("join utf8")
     });
 
-    let left_f64 = left_table(left_rows, float64_keys(left_rows, key_space));
-    let right_f64 = right_table(
+    let left_float64 = left_table(left_rows, float64_keys(left_rows, key_space));
+    let right_float64 = right_table(
         right_rows,
         Arc::new(Float64Array::from(
             (0..right_rows)
@@ -249,6 +249,7 @@ fn main() {
         )),
     );
     run_scenario("join_inner_float64", left_rows, repetitions, || {
-        join(&left_f64, &right_f64, &join_config(JoinHow::Inner), &limits).expect("join float64")
+        join(&left_float64, &right_float64, &join_config(JoinHow::Inner), &limits)
+            .expect("join float64")
     });
 }

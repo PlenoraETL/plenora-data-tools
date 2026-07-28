@@ -35,7 +35,7 @@ impl Lcg {
         self.0 >> 11
     }
 
-    fn below(&mut self, bound: u64) -> u64 {
+    const fn below(&mut self, bound: u64) -> u64 {
         self.next_u64() % bound
     }
 }

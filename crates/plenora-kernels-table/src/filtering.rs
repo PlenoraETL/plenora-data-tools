@@ -243,9 +243,11 @@ fn numeric_eq(actual: f64, expected: f64) -> bool {
     actual.total_cmp(&expected) == Ordering::Equal || (actual == 0.0 && expected == 0.0)
 }
 
-/// Sottoinsieme ordinato di `Operator` (`>`/`>=`/`<`/`<=`) codificato nel
-/// tipo: cosi' `ordered_typed` e' totale e il compilatore dimostra che i
-/// chiamanti passano solo operatori ordinati (invariante interna, R6.4).
+/// Sottoinsieme ordinato di `Operator` (`>`/`>=`/`<`/`<=`).
+///
+/// Codificato nel tipo: cosi' `ordered_typed` e' totale e il compilatore
+/// dimostra che i chiamanti passano solo operatori ordinati (invariante
+/// interna, R6.4).
 #[derive(Clone, Copy)]
 enum OrderedOperator {
     Gt,
@@ -425,6 +427,17 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
     Some(Ok(rows))
 }
 
+/// Batch con le sole righe che soddisfano la condizione, nell'ordine
+/// originale.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
+///   scalare richiesto dall'operatore (via `scalar_as_string`/`scalar_as_f64`);
+///   errore Arrow nella selezione delle righe (come `select_rows`);
+/// - `Contract`: valore di confronto non numerico per i confronti numerici
+///   o ordinati; `between` senza estremi `min,max` validi; invarianti
+///   interne violate (errore Internal).
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index);
@@ -443,6 +456,16 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
+/// Prima condizione vera determina il valore della colonna di output
+/// (Float64 se tutti i risultati sono numerici, Utf8 altrimenti).
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
+///   scalare richiesto dagli operatori delle condizioni; errore Arrow
+///   nella sostituzione;
+/// - `Contract`: come `filter` per la valutazione delle condizioni (valore
+///   di confronto non numerico, `between` malformato).
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);

@@ -22,6 +22,7 @@
 //! `benchmarks/sweep/sweep2.md` (relativi alla cwd, /work in Docker) e
 //! stampa le stesse righe JSON su stdout.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -142,9 +143,7 @@ fn base_fixture(rows: usize) -> RecordBatch {
             Field::new("key", DataType::Int64, false),
             Field::new("path", DataType::Utf8, false),
         ],
-        [("source".to_owned(), "bench_sweep2".to_owned())]
-            .into_iter()
-            .collect(),
+        std::iter::once(("source".to_owned(), "bench_sweep2".to_owned())).collect(),
     );
     RecordBatch::try_new(
         Arc::new(schema),
@@ -398,7 +397,7 @@ impl Lcg {
         self.0 >> 11
     }
 
-    fn below(&mut self, bound: u64) -> u64 {
+    const fn below(&mut self, bound: u64) -> u64 {
         self.next_u64() % bound
     }
 }
@@ -641,8 +640,9 @@ fn write_outputs(results: &[Measurement]) {
          |---|----|-------|-------------|---------|--------------|----------------|------|\n",
     );
     for (position, entry) in sorted.iter().enumerate() {
-        markdown.push_str(&format!(
-            "| {} | `{}` | {} | {:.4} | {:.0} | {} | {} | {} |\n",
+        writeln!(
+            markdown,
+            "| {} | `{}` | {} | {:.4} | {:.0} | {} | {} | {} |",
             position + 1,
             entry.op,
             entry.rows,
@@ -652,7 +652,8 @@ fn write_outputs(results: &[Measurement]) {
             entry
                 .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
-        ));
+        )
+        .expect("markdown");
     }
     std::fs::write(directory.join("sweep2.md"), markdown).expect("write sweep2.md");
 }
@@ -946,9 +947,7 @@ fn main() {
     });
 
     let metadata_config = AssertMetadata {
-        expected: [("source".to_owned(), "bench_sweep2".to_owned())]
-            .into_iter()
-            .collect(),
+        expected: std::iter::once(("source".to_owned(), "bench_sweep2".to_owned())).collect(),
         allow_extra: true,
     };
     sweep_unary(&mut results, "table.assert_metadata", true, "1 chiave metadata", |batch| {

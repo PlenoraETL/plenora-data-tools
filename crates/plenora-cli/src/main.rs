@@ -723,6 +723,10 @@ fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Quoting Debug intenzionale nel ramo geo: produce la stringa JSON del
+// percorso (virgolette ed escape); il `.display()` suggerito da clippy
+// cambierebbe l'output del comando (contratto CLI).
+#[allow(clippy::unnecessary_debug_formatting)]
 fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     if let Some(output) = optional_value_after(args, "--output")? {
         // Variante geo del sorgente: scrive un frame WKB v2 di controllo.

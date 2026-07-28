@@ -438,7 +438,7 @@ fn sorted_only(input: &DataContract) -> ContractProperties {
 
 /// `sorted_by = Proven(chiavi, Stream)`: op blocking che riordina l'intero
 /// stream di output (Architetture.md par. 4.3; `execution_class` Blocking).
-fn proven_sorted(keys: Vec<FieldId>) -> ContractProperty<Vec<FieldId>> {
+const fn proven_sorted(keys: Vec<FieldId>) -> ContractProperty<Vec<FieldId>> {
     ContractProperty::new(PropertyConfidence::Proven(keys), PropertyScope::Stream)
 }
 
@@ -2033,7 +2033,10 @@ fn expect_type(
 }
 
 // Le regole di tipo dell'AST sono intrinsecamente ramificate.
-#[allow(clippy::too_many_lines)]
+// match_same_arms: bracci identici ma di funzioni semanticamente distinte
+// (es. coalesce/null_if vs greatest/least) restano separati per documentare
+// ogni caso del dispatcher, come da prassi safety-critical.
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn infer_expression_type(
     op: &str,
     input: &DataContract,
@@ -2638,6 +2641,8 @@ fn analyze_reconcile(
     )
 }
 
+// Controlli fail-closed in sequenza lineare: lunghezza intrinseca, non complessita'.
+#[allow(clippy::too_many_lines)]
 fn analyze_validate_rules(
     op: &str,
     inputs: &[DataContract],
@@ -4140,6 +4145,8 @@ mod tests {
     }
 
     #[test]
+    // Molte fixture in sequenza lineare: lunghezza intrinseca ai casi coperti.
+    #[allow(clippy::too_many_lines)]
     fn v1_2_extensions_analyze_contracts() {
         // align_schema: riordino/proiezione + colonna aggiunta di null (o
         // default non nullable); mismatch di tipo -> errore (mai cast).
@@ -4928,6 +4935,8 @@ mod tests {
     }
 
     #[test]
+    // Molte fixture in sequenza lineare: lunghezza intrinseca ai casi coperti.
+    #[allow(clippy::too_many_lines)]
     fn expression_date_trunc_native_temporal_types() {
         // Auto: il tipo discende dalla colonna di input (mai Utf8).
         let date = ok(

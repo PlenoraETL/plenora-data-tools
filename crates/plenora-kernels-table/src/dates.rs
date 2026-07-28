@@ -65,6 +65,12 @@ pub(crate) fn parse_with_items(value: &str, items: &[Item<'_>]) -> Option<NaiveD
     None
 }
 
+/// Valida un formato strftime (`label` identifica il campo nei messaggi).
+///
+/// # Errors
+///
+/// - `Contract`: formato vuoto o oltre `max_bytes`, oppure contenente
+///   item strftime non riconosciuti.
 pub fn validate_format(format: &str, label: &str, max_bytes: usize) -> Result<()> {
     if format.is_empty() || format.len() > max_bytes {
         return Err(PlenoraError::Contract(format!("{label} non valido")));
@@ -101,6 +107,20 @@ const fn default_invalid() -> InvalidDatePolicy {
     InvalidDatePolicy::Null
 }
 
+/// Riformatta la colonna `column` da `input_format` a `output_format`
+/// nella colonna `output_column`.
+///
+/// Fast path su colonne Utf8 (item strftime precompilati), percorso
+/// generico riga-per-riga sugli altri tipi Arrow; i valori non parsabili
+/// seguono la policy `invalid`.
+///
+/// # Errors
+///
+/// - `Contract`: valore non parsabile con `invalid` = `Error`;
+/// - `Schema`: colonna assente (come `column_index`) o tipo non
+///   supportato dal profilo scalare (come `scalar_as_string`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -191,6 +211,21 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
     value.checked_add_signed(delta)
 }
 
+/// Somma `amount` unita' (`unit`) ai valori della colonna `column`,
+/// riscritti con `output_format` nella colonna `output_column`.
+///
+/// Anni e mesi usano aritmetica di calendario (`Months`), le altre
+/// unita' durate fisse; valori non parsabili e overflow di data o delta
+/// seguono la policy `invalid`.
+///
+/// # Errors
+///
+/// - `Contract`: valore non parsabile, oppure data risultante o delta
+///   fuori range, con `invalid` = `Error`;
+/// - `Schema`: colonna assente (come `column_index`) o tipo non
+///   supportato dal profilo scalare (come `scalar_as_string`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -294,6 +329,20 @@ fn diff_value(
         })
 }
 
+/// Differenza `end_column - start_column` in unita' frazionarie
+/// (`unit`), scritta come Float64 in `output_column`.
+///
+/// Righe con un estremo null o non parsabile seguono la policy `invalid`.
+///
+/// # Errors
+///
+/// - `Contract`: valore non parsabile con `invalid` = `Error`, oppure
+///   intervallo fuori scala (nanosecondi oltre `i64` o non
+///   rappresentabili in `f64`);
+/// - `Schema`: colonna assente (come `column_index`) o tipo non
+///   supportato dal profilo scalare (come `scalar_as_string`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
     let start_index = column_index(batch, &config.start_column)?;
     let end_index = column_index(batch, &config.end_column)?;
@@ -401,6 +450,22 @@ fn localize(
     }
 }
 
+/// Converte la colonna `column` da `source_timezone` a
+/// `target_timezone`, riscritta con `output_format` nella colonna
+/// `output_column`.
+///
+/// Le ore ambigue o inesistenti (transizioni DST) seguono la policy
+/// `ambiguous`; i valori non parsabili seguono la policy `invalid`.
+///
+/// # Errors
+///
+/// - `Contract`: `source_timezone` o `target_timezone` non valida, ora
+///   ambigua con `ambiguous` = `Error`, oppure valore non parsabile o
+///   ora inesistente con `invalid` = `Error`;
+/// - `Schema`: colonna assente (come `column_index`) o tipo non
+///   supportato dal profilo scalare (come `scalar_as_string`);
+/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
+///   di `replace_or_append`).
 pub fn timezone_convert(
     batch: &RecordBatch,
     config: &TimezoneConvert,

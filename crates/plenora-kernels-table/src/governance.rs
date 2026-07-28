@@ -28,6 +28,12 @@ pub struct AssertCardinality {
     pub max_rows: Option<usize>,
 }
 
+/// Batch invariato se il numero di righe rispetta il contratto dichiarato.
+///
+/// # Errors
+///
+/// - `Contract`: righe diverse da `exact_rows`, oppure fuori dall'intervallo
+///   `min_rows`/`max_rows`.
 pub fn assert_cardinality(
     batch: &RecordBatch,
     config: &AssertCardinality,
@@ -61,6 +67,13 @@ const fn default_true() -> bool {
     true
 }
 
+/// Batch invariato se i metadata dello schema contengono tutte le coppie
+/// `expected` (con gli stessi valori).
+///
+/// # Errors
+///
+/// - `Schema`: chiave attesa assente o con valore diverso; con
+///   `allow_extra = false`, anche numero di metadata diverso da `expected`.
 pub fn assert_metadata(batch: &RecordBatch, config: &AssertMetadata) -> Result<RecordBatch> {
     let schema = batch.schema();
     let metadata = schema.metadata();
@@ -216,16 +229,19 @@ impl<'a> KeyValueColumn<'a> {
     }
 }
 
-/// Encoder zero-copy di chiavi di riga: stessi byte di `quality::key_for_row`
-/// senza allocare una String per colonna per riga. Condiviso con il fast path
-/// di `quality::assert_unique` (stesso formato chiave, stesso oracolo).
+/// Encoder zero-copy di chiavi di riga.
+///
+/// Stessi byte di `quality::key_for_row` senza allocare una String per
+/// colonna per riga. Condiviso con il fast path di `quality::assert_unique`
+/// (stesso formato chiave, stesso oracolo).
 pub(crate) struct RowKeyEncoder<'a> {
     columns: Vec<(Vec<u8>, KeyValueColumn<'a>)>,
     text: String,
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64,
-/// come nei fast path di `aggregate` e `join`: `SipHash` (default std)
+/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
+///
+/// Come nei fast path di `aggregate` e `join`: `SipHash` (default std)
 /// dominerebbe il costo di build/probe su milioni di righe; qui il throughput
 /// conta piu' della resistenza a input avversari. Le mappe che lo usano non
 /// sono mai iterate in modo osservabile: semantica invariata.
@@ -303,6 +319,16 @@ impl<'a> RowKeyEncoder<'a> {
     }
 }
 
+/// Batch sinistro invariato se ogni chiave sinistra e' referenziata nella
+/// tabella destra.
+///
+/// # Errors
+///
+/// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
+///   delle chiavi non identici fra i due lati;
+/// - `Contract`: chiave null in `left` con `allow_null = false`; chiave
+///   sinistra non presente in `right`; memoria oltre
+///   `limits.max_memory_bytes`; overflow dei contatori (errore Internal).
 pub fn assert_foreign_key(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -409,6 +435,17 @@ fn as_u64(value: usize) -> Result<u64> {
     u64::try_from(value).map_err(|_| PlenoraError::Contract("conteggio oltre u64".into()))
 }
 
+/// Report di riconciliazione fra due tabelle (batch di metriche
+/// `matched`/`left_only`/`right_only`/`duplicates`).
+///
+/// # Errors
+///
+/// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
+///   delle chiavi non identici fra i due lati; errore Arrow nella
+///   costruzione del batch di output;
+/// - `Contract`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
+///   oltre `limits.max_rows`; conteggio oltre `u64`/overflow dei contatori
+///   (errore Internal).
 pub fn reconcile(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -554,9 +591,10 @@ struct CompiledRule {
     expected: String,
     expected_number: f64,
     expected_high: f64,
-    /// Estremi in forma esatta (letterale intero preservato): usati dai
-    /// confronti tipizzati su Int64/UInt64/Float64, dove la forma f64
-    /// (`expected_number`) collasserebbe gli interi oltre 2^53.
+    /// Estremi in forma esatta (letterale intero preservato).
+    ///
+    /// Usati dai confronti tipizzati su Int64/UInt64/Float64, dove la forma
+    /// f64 (`expected_number`) collasserebbe gli interi oltre 2^53.
     expected_bound: Option<NumericBound>,
     expected_high_bound: Option<NumericBound>,
     regex: Option<regex::Regex>,
@@ -571,10 +609,11 @@ fn rule_json_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Tipi su cui i confronti ordinati/range hanno senso: leggibili da
-/// `scalar_as_f64`, escluso `Utf8` (un testo da parsare per riga non e' una
-/// colonna numerica: meglio un errore in validazione che un fallimento per
-/// riga). Riusata dall'analisi a secco del contratto.
+/// Tipi su cui i confronti ordinati/range hanno senso.
+///
+/// Leggibili da `scalar_as_f64`, escluso `Utf8` (un testo da parsare per
+/// riga non e' una colonna numerica: meglio un errore in validazione che un
+/// fallimento per riga). Riusata dall'analisi a secco del contratto.
 #[must_use]
 pub const fn is_rule_numeric(data_type: &DataType) -> bool {
     matches!(
@@ -599,9 +638,15 @@ pub const fn is_rule_comparable(data_type: &DataType) -> bool {
         )
 }
 
-/// Compila le regole: ogni errore di configurazione (colonna mancante, tipo
-/// incompatibile con l'operatore, valore atteso non parsabile, regex
-/// invalida) esce QUI, prima di leggere una sola riga di dati.
+/// Compila le regole con tutti i controlli statici.
+///
+/// Ogni errore di configurazione (colonna mancante, tipo incompatibile con
+/// l'operatore, valore atteso non parsabile, regex invalida) esce QUI, prima
+/// di leggere una sola riga di dati.
+// Dispatcher esaustivo per operatore di regola: i controlli statici di ogni
+// caso restano adiacenti in un solo corpo (la lunghezza e' nei casi, non
+// nella complessita' logica).
+#[allow(clippy::too_many_lines)]
 fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<CompiledRule>> {
     if config.rules.is_empty() {
         return Err(PlenoraError::Contract(
@@ -750,10 +795,12 @@ const fn within_rule_range(low: Option<Ordering>, high: Option<Ordering>) -> boo
         && !matches!(high, None | Some(Ordering::Greater))
 }
 
-/// Confronto ordinato di regola da un `Ordering` tipizzato (`None` = NaN:
-/// ogni confronto falso, come IEEE). Restituisce `None` se l'operatore non e'
-/// ordinato: invariante interna violata dal chiamante (`rule_passes` invoca
-/// solo con Gt/Ge/Lt/Le), segnalata come errore Internal, non panic.
+/// Confronto ordinato di regola da un `Ordering` tipizzato.
+///
+/// `None` (NaN) rende falso ogni confronto, come IEEE. Restituisce `None` se
+/// l'operatore non e' ordinato: invariante interna violata dal chiamante
+/// (`rule_passes` invoca solo con Gt/Ge/Lt/Le), segnalata come errore
+/// Internal, non panic.
 const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Option<bool> {
     match operator {
         RuleOperator::Gt => Some(matches!(ordering, Some(Ordering::Greater))),
@@ -764,16 +811,27 @@ const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Opt
     }
 }
 
-/// Valuta una regola su una riga. MAI un errore sui dati: qualunque valore
-/// non interpretabile (incluso null per gli operatori a valore) e' un
-/// fallimento della regola, non un errore del kernel. Il `Result` copre solo
-/// invarianti interne violate (errore Internal), mai i dati.
+/// Valuta una regola su una riga.
+///
+/// MAI un errore sui dati: qualunque valore non interpretabile (incluso null
+/// per gli operatori a valore) e' un fallimento della regola, non un errore
+/// del kernel. Il `Result` copre solo invarianti interne violate (errore
+/// Internal), mai i dati.
 ///
 /// Confronti numerici: Int64/UInt64 nativi esatti e Float64 in misto esatto
 /// contro i letterali interi (`NumericBound` — nessun collasso oltre 2^53);
 /// Date32/Timestamp(ms)/Decimal128 restano sul profilo f64 storico.
+// Uguaglianze IEEE esatte volute (NaN uguale a NaN): semantica storica
+// del confronto con il valore atteso, dichiarata nel corpo.
+// Dispatcher esaustivo per operatore su una riga: un solo corpo per tipo di
+// confronto, la lunghezza e' nei casi non nella logica.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::float_cmp)]
 fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<bool> {
     let array = batch.column(rule.column_index).as_ref();
+    // Dispatch tipizzato via `map_or_else` annidati (nessun if let/else):
+    // ordine di prova invariato Int64, UInt64, Float64, poi ripiego scalare.
+    let any = array.as_any();
     match rule.operator {
         RuleOperator::Isnull => return Ok(array.is_null(row)),
         RuleOperator::Notnull => return Ok(!array.is_null(row)),
@@ -782,87 +840,127 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
     }
     Ok(match rule.operator {
         RuleOperator::Eq | RuleOperator::Ne => {
-            let equal = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                rule.expected_bound.is_some_and(|bound| {
-                    compare_i64(values.value(row), bound) == Some(Ordering::Equal)
-                })
-            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                rule.expected_bound.is_some_and(|bound| {
-                    compare_u64(values.value(row), bound) == Some(Ordering::Equal)
-                })
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                let actual = values.value(row);
-                match rule.expected_bound {
-                    // Semantica IEEE storica sui double (NaN uguale a NaN).
-                    Some(NumericBound::F64(number)) => {
-                        actual == number || (actual.is_nan() && number.is_nan())
-                    }
-                    Some(bound) => compare_f64(actual, bound) == Some(Ordering::Equal),
-                    None => false,
-                }
-            } else if rule.numeric_column {
-                scalar_as_f64(array, row).ok().flatten().is_some_and(|actual| {
-                    actual == rule.expected_number || (actual.is_nan() && rule.expected_number.is_nan())
-                })
-            } else {
-                scalar_as_string(array, row)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|actual| actual == rule.expected)
-            };
+            let equal = any.downcast_ref::<Int64Array>().map_or_else(
+                || {
+                    any.downcast_ref::<UInt64Array>().map_or_else(
+                        || {
+                            any.downcast_ref::<Float64Array>().map_or_else(
+                                || {
+                                    if rule.numeric_column {
+                                        scalar_as_f64(array, row).ok().flatten().is_some_and(|actual| {
+                                            actual == rule.expected_number
+                                                || (actual.is_nan() && rule.expected_number.is_nan())
+                                        })
+                                    } else {
+                                        scalar_as_string(array, row)
+                                            .ok()
+                                            .flatten()
+                                            .is_some_and(|actual| actual == rule.expected)
+                                    }
+                                },
+                                |values| {
+                                    let actual = values.value(row);
+                                    match rule.expected_bound {
+                                        // Semantica IEEE storica sui double (NaN uguale a NaN).
+                                        Some(NumericBound::F64(number)) => {
+                                            actual == number || (actual.is_nan() && number.is_nan())
+                                        }
+                                        Some(bound) => {
+                                            compare_f64(actual, bound) == Some(Ordering::Equal)
+                                        }
+                                        None => false,
+                                    }
+                                },
+                            )
+                        },
+                        |values| {
+                            rule.expected_bound.is_some_and(|bound| {
+                                compare_u64(values.value(row), bound) == Some(Ordering::Equal)
+                            })
+                        },
+                    )
+                },
+                |values| {
+                    rule.expected_bound.is_some_and(|bound| {
+                        compare_i64(values.value(row), bound) == Some(Ordering::Equal)
+                    })
+                },
+            );
             matches!(rule.operator, RuleOperator::Ne) != equal
         }
         RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
-            let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                rule.expected_bound
-                    .and_then(|bound| compare_i64(values.value(row), bound))
-            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                rule.expected_bound
-                    .and_then(|bound| compare_u64(values.value(row), bound))
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                rule.expected_bound
-                    .and_then(|bound| compare_f64(values.value(row), bound))
-            } else {
-                scalar_as_f64(array, row)
-                    .ok()
-                    .flatten()
-                    .and_then(|actual| actual.partial_cmp(&rule.expected_number))
-            };
+            let ordering = any.downcast_ref::<Int64Array>().map_or_else(
+                || {
+                    any.downcast_ref::<UInt64Array>().map_or_else(
+                        || {
+                            any.downcast_ref::<Float64Array>().map_or_else(
+                                || {
+                                    scalar_as_f64(array, row)
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|actual| actual.partial_cmp(&rule.expected_number))
+                                },
+                                |values| {
+                                    rule.expected_bound
+                                        .and_then(|bound| compare_f64(values.value(row), bound))
+                                },
+                            )
+                        },
+                        |values| {
+                            rule.expected_bound
+                                .and_then(|bound| compare_u64(values.value(row), bound))
+                        },
+                    )
+                },
+                |values| {
+                    rule.expected_bound
+                        .and_then(|bound| compare_i64(values.value(row), bound))
+                },
+            );
             rule_ordered(ordering, rule.operator).ok_or_else(|| {
                 PlenoraError::Contract("internal error: operatore di regola non ordinato".into())
             })?
         }
         RuleOperator::Range => {
-            if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                match (rule.expected_bound, rule.expected_high_bound) {
+            any.downcast_ref::<Int64Array>().map_or_else(
+                || {
+                    any.downcast_ref::<UInt64Array>().map_or_else(
+                        || {
+                            any.downcast_ref::<Float64Array>().map_or_else(
+                                || {
+                                    scalar_as_f64(array, row)
+                                        .ok()
+                                        .flatten()
+                                        .is_some_and(|actual| {
+                                            actual >= rule.expected_number && actual <= rule.expected_high
+                                        })
+                                },
+                                |values| match (rule.expected_bound, rule.expected_high_bound) {
+                                    (Some(low), Some(high)) => within_rule_range(
+                                        compare_f64(values.value(row), low),
+                                        compare_f64(values.value(row), high),
+                                    ),
+                                    _ => false,
+                                },
+                            )
+                        },
+                        |values| match (rule.expected_bound, rule.expected_high_bound) {
+                            (Some(low), Some(high)) => within_rule_range(
+                                compare_u64(values.value(row), low),
+                                compare_u64(values.value(row), high),
+                            ),
+                            _ => false,
+                        },
+                    )
+                },
+                |values| match (rule.expected_bound, rule.expected_high_bound) {
                     (Some(low), Some(high)) => within_rule_range(
                         compare_i64(values.value(row), low),
                         compare_i64(values.value(row), high),
                     ),
                     _ => false,
-                }
-            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                match (rule.expected_bound, rule.expected_high_bound) {
-                    (Some(low), Some(high)) => within_rule_range(
-                        compare_u64(values.value(row), low),
-                        compare_u64(values.value(row), high),
-                    ),
-                    _ => false,
-                }
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                match (rule.expected_bound, rule.expected_high_bound) {
-                    (Some(low), Some(high)) => within_rule_range(
-                        compare_f64(values.value(row), low),
-                        compare_f64(values.value(row), high),
-                    ),
-                    _ => false,
-                }
-            } else {
-                scalar_as_f64(array, row)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|actual| actual >= rule.expected_number && actual <= rule.expected_high)
-            }
+                },
+            )
         }
         RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {
             scalar_as_string(array, row)
@@ -913,6 +1011,16 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
 /// delle regole fallite separati da `;`, stringa vuota se nessuna);
 /// `summary` emette una riga per regola (`name`, `errors`, `warnings` con i
 /// conteggi delle righe fallite per gravita').
+///
+/// # Errors
+///
+/// - `Contract`: nessuna regola; nome regola vuoto o ripetuto; regola senza
+///   `column`; `value` mancante o non ammesso per l'operatore; tipo della
+///   colonna incompatibile con l'operatore; valore atteso non numerico o
+///   range malformato; regex non valida; invarianti interne violate (errore
+///   Internal);
+/// - `Schema`: colonna di una regola assente; errore Arrow nella
+///   costruzione dell'output.
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
     let rules = compile_rules(batch, config)?;
     let (valid, errors, warnings) = evaluate_rules(batch, &rules)?;

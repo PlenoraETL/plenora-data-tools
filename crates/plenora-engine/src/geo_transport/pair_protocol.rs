@@ -37,6 +37,13 @@ fn header_bytes(pair_count: u64) -> Result<[u8; 16], PairProtocolError> {
     Ok(header)
 }
 
+/// Codifica le coppie di indici con header, un frame per coppia e trailer
+/// con checksum SHA-256 dell'intero stream.
+///
+/// # Errors
+///
+/// - `PairProtocolError::TooManyPairs`: piu' di `MAX_PAIRS` coppie;
+/// - `PairProtocolError::Io`: errore di scrittura o flush del writer.
 pub fn write_pairs<W: Write>(
     mut writer: W,
     pairs: &[JoinPair],
@@ -61,6 +68,18 @@ pub fn write_pairs<W: Write>(
     Ok((writer, digest))
 }
 
+/// Decodifica le coppie verificando magic, limite di conteggio, trailer e
+/// checksum; i byte residui dopo il trailer sono rifiutati (fail-closed).
+///
+/// # Errors
+///
+/// - `PairProtocolError::Io`: stream troncato o errore di lettura;
+/// - `PairProtocolError::InvalidMagic` / `InvalidTrailer`: magic di header o
+///   trailer non corrispondente;
+/// - `PairProtocolError::TooManyPairs`: `pair_count` dichiarato oltre
+///   `MAX_PAIRS`;
+/// - `PairProtocolError::ChecksumMismatch`: digest SHA-256 non coincidente;
+/// - `PairProtocolError::TrailingBytes`: byte inattesi dopo il trailer.
 pub fn read_pairs<R: Read>(mut reader: R) -> Result<Vec<JoinPair>, PairProtocolError> {
     let mut header = [0_u8; 16];
     reader.read_exact(&mut header)?;

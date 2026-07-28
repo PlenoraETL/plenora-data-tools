@@ -16,12 +16,19 @@ pub use plenora_core::crs::{
 #[cfg(feature = "proj-backend")]
 use serde_json::Value;
 
-/// Validates normalized GIS axis order (x=longitude, y=latitude).  Call this
-/// for every geographic input after WKB decoding and before any kernel work.
+/// Validates normalized GIS axis order (x=longitude, y=latitude).
 ///
-/// Wrapper tipizzato: la logica e' in
+/// Call this for every geographic input after WKB decoding and before any
+/// kernel work. Wrapper tipizzato: la logica e' in
 /// [`plenora_core::crs::validate_geometry_domain`], senza differenze di
 /// comportamento rispetto al sorgente.
+///
+/// # Errors
+///
+/// Come [`plenora_core::crs::validate_geometry_domain`]:
+/// [`CrsError::CoordinateOutOfDomain`] alla prima coordinata non finita o
+/// fuori dal dominio longitude/latitude di un CRS geografico; per un CRS
+/// proiettato non fallisce mai.
 pub fn validate_geometry_domain(
     geometry: &Geometry<f64>,
     crs: &ResolvedCrs,
@@ -32,6 +39,23 @@ pub fn validate_geometry_domain(
     )
 }
 
+/// Risolve una definizione CRS contro il database PROJ bundled.
+///
+/// Produce il [`ResolvedCrs`] canonico: PROJJSON, classificazione
+/// geographic/projected e unita' lineare orizzontale in metri.
+///
+/// # Errors
+///
+/// - come [`required_definition`]: [`CrsError::Required`] se la definizione
+///   e' vuota, [`CrsError::InvalidDefinition`] se supera il limite di byte
+///   o contiene NUL;
+/// - [`CrsError::InvalidDefinition`]: PROJ rifiuta la definizione, non
+///   produce PROJJSON o il PROJJSON prodotto non e' JSON valido;
+/// - [`CrsError::UnsupportedType`]: il tipo PROJJSON manca o non e' un
+///   `GeographicCRS` bidimensionale ne' un `ProjectedCRS`;
+/// - [`CrsError::MissingLinearUnit`]: un `ProjectedCRS` non dichiara
+///   un'unita' lineare orizzontale valida, finita, positiva e uguale sui
+///   due assi.
 #[cfg(feature = "proj-backend")]
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     use proj::Proj;

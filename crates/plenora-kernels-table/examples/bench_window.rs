@@ -85,9 +85,7 @@ fn base_fixture(rows: usize) -> RecordBatch {
             Field::new("key", DataType::Int64, false),
             Field::new("path", DataType::Utf8, false),
         ],
-        [("source".to_owned(), "bench_sweep".to_owned())]
-            .into_iter()
-            .collect(),
+        std::iter::once(("source".to_owned(), "bench_sweep".to_owned())).collect(),
     );
     RecordBatch::try_new(
         Arc::new(schema),

@@ -48,7 +48,7 @@ pub enum ExtendedAlgorithmError {
     Internal(&'static str),
 }
 
-fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -176,8 +176,21 @@ fn densified_count(
     }
 }
 
-/// Inserts vertices using planar Euclidean distance. The output bound is
-/// computed before allocation and checked again after the operation.
+/// Inserts vertices using planar Euclidean distance.
+///
+/// The output bound is computed before allocation and checked again after
+/// the operation.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+/// - `InvalidParameter`: `max_segment_length` non finita o non positiva;
+/// - `UnsupportedGeometry`: `Line`, `Rect` o `Triangle` in input;
+/// - `IndexOverflow`: conteggio delle coordinate densificate non
+///   rappresentabile come `u64`;
+/// - `OutputLimit`: coordinate stimate o prodotte oltre
+///   `max_output_coordinates`;
+/// - `InvalidOutput`: geometria prodotta non valida.
 pub fn densify(
     geometry: &Geometry<f64>,
     max_segment_length: f64,
@@ -236,8 +249,17 @@ pub fn densify(
     validate_output(output)
 }
 
-/// Rounds coordinates to an explicit grid. Collapses that make the geometry
-/// invalid are rejected instead of being silently repaired.
+/// Rounds coordinates to an explicit grid.
+///
+/// Collapses that make the geometry invalid are rejected instead of being
+/// silently repaired.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+/// - `InvalidParameter`: `grid_size` non finita o non positiva;
+/// - `InvalidOutput`: overflow durante lo snap, o geometria prodotta non
+///   valida (es. collasso che viola la validita' OGC).
 pub fn snap_to_grid(
     geometry: &Geometry<f64>,
     grid_size: f64,
@@ -266,6 +288,16 @@ pub fn snap_to_grid(
     validate_output(output)
 }
 
+/// Triangolazione Delaunay non vincolata dell'input, come poligoni.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+/// - `IndexOverflow`: conteggio non rappresentabile come `u64`;
+/// - `CoordinateLimit`: coordinate di input oltre `max_input_coordinates`;
+/// - `Triangulation`: triangolazione fallita;
+/// - `OutputLimit`: triangoli prodotti oltre `max_triangles`;
+/// - `InvalidOutput`: triangolo prodotto non valido.
 pub fn delaunay(
     geometry: &Geometry<f64>,
     max_input_coordinates: u64,
@@ -310,6 +342,14 @@ fn validate_ratio(value: f64, name: &'static str) -> Result<(), ExtendedAlgorith
     Ok(())
 }
 
+/// Punto sulla linea alla frazione `ratio` della lunghezza dall'inizio.
+///
+/// `None` se la linea non ha un punto a quella frazione (es. linea vuota).
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `ratio` non finito o fuori dall'intervallo [0, 1];
+/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida.
 pub fn line_interpolate_point(
     line: &LineString<f64>,
     ratio: f64,
@@ -319,6 +359,16 @@ pub fn line_interpolate_point(
     Ok(Euclidean.point_at_ratio_from_start(line, ratio))
 }
 
+/// Porzione di linea tra le frazioni `start_ratio` e `end_ratio`.
+///
+/// `None` se la linea e' vuota; un `Point` se le due frazioni coincidono.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: frazione non finita o fuori dall'intervallo
+///   [0, 1], oppure `start_ratio` maggiore di `end_ratio`;
+/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida;
+/// - `InvalidOutput`: porzione prodotta non valida.
 pub fn line_substring(
     line: &LineString<f64>,
     start_ratio: f64,
@@ -336,6 +386,9 @@ pub fn line_substring(
     let Some(start) = Euclidean.point_at_ratio_from_start(line, start_ratio) else {
         return Ok(None);
     };
+    // Uguaglianza esatta intenzionale: rapporti uguali per bit definiscono
+    // il caso degenere (punto), senza tolleranze implicite.
+    #[allow(clippy::float_cmp)]
     if start_ratio == end_ratio {
         return Ok(Some(Geometry::Point(start)));
     }
@@ -367,6 +420,17 @@ pub fn line_substring(
     validate_output(Geometry::LineString(LineString::new(coordinates))).map(Some)
 }
 
+/// Distanza di Frechet discreta tra due linee.
+///
+/// Il lavoro quadratico e' limitato da `max_coordinate_pairs`; `None` se
+/// una delle due linee e' vuota.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida;
+/// - `IndexOverflow`: conteggio coordinate non rappresentabile come `u64`;
+/// - `WorkLimit`: coppie di coordinate oltre `max_coordinate_pairs` (o
+///   prodotto non rappresentabile come `u64`).
 pub fn frechet_distance(
     left: &LineString<f64>,
     right: &LineString<f64>,
@@ -406,6 +470,13 @@ fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), Extended
     Ok(())
 }
 
+/// Bearing geodetico in gradi da `origin` a `destination`.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite;
+/// - `InvalidGeographicCoordinate`: longitudine fuori da [-180, 180] o
+///   latitudine fuori da [-90, 90].
 pub fn geodesic_bearing_degrees(
     origin: Point<f64>,
     destination: Point<f64>,
@@ -414,6 +485,14 @@ pub fn geodesic_bearing_degrees(
     Ok(Geodesic.bearing(origin, destination))
 }
 
+/// Area geodetica in metri quadrati di poligoni e multi-poligoni.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+/// - `InvalidGeographicCoordinate`: coordinate fuori intervallo lon/lat;
+/// - `UnsupportedGeometry`: geometria diversa da `Polygon`/`MultiPolygon`;
+/// - `InvalidOutput`: area NaN o infinita.
 pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(geometry)?;
     let area = match geometry {
@@ -448,8 +527,14 @@ pub struct GeometryDiagnostics {
     pub bounds: Option<[f64; 4]>,
 }
 
-/// Diagnostics intentionally accept invalid topology; they never run an
-/// algorithm on non-finite coordinates.
+/// Diagnostics intentionally accept invalid topology.
+///
+/// They never run an algorithm on non-finite coordinates.
+///
+/// # Errors
+///
+/// - `IndexOverflow`: conteggio delle coordinate non rappresentabile come
+///   `u64`.
 pub fn geometry_diagnostics(
     geometry: &Geometry<f64>,
 ) -> Result<GeometryDiagnostics, ExtendedAlgorithmError> {
@@ -579,8 +664,21 @@ fn walk_merged_path(
     LineString::new(output)
 }
 
-/// Merges maximal line paths. A node with degree other than two is always a
-/// barrier, matching established line-merge topology semantics.
+/// Merges maximal line paths.
+///
+/// A node with degree other than two is always a barrier, matching
+/// established line-merge topology semantics.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+/// - `CoordinateLimit`: coordinate di input oltre `max_input_coordinates`;
+/// - `UnsupportedGeometry`: geometria diversa da `LineString`,
+///   `MultiLineString` o `GeometryCollection` (anche annidata);
+/// - `IndexOverflow`: conteggio non rappresentabile come `u64`;
+/// - `Internal`: invariante interna violata (linea non vuota senza estremi);
+/// - `OutputLimit`: linee prodotte oltre `max_output_lines`;
+/// - `InvalidOutput`: linea prodotta non valida.
 pub fn line_merge(
     geometry: &Geometry<f64>,
     max_input_coordinates: u64,
@@ -630,10 +728,10 @@ pub fn line_merge(
         let start_degree = adjacency[&edge.start].len();
         let end_degree = adjacency[&edge.end].len();
         if start_degree != 2 || end_degree != 2 {
-            let start = if start_degree != 2 {
-                edge.start
-            } else {
+            let start = if start_degree == 2 {
                 edge.end
+            } else {
+                edge.start
             };
             output.push(walk_merged_path(
                 &edges, &adjacency, &mut used, start, index,
@@ -760,6 +858,10 @@ fn point_ratio_on_segment(
     if length_squared == 0.0 {
         return None;
     }
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let parameter = (((point.x() - segment.line.start.x) * dx
         + (point.y() - segment.line.start.y) * dy)
         / length_squared)
@@ -815,8 +917,28 @@ fn expanded_point_envelope(point: Point<f64>, tolerance: f64) -> AABB<[f64; 2]> 
     )
 }
 
-/// Splits a LineString using points, linework or polygon boundaries. Work is
-/// bounded before the quadratic segment-intersection loop.
+/// Splits a `LineString` using points, linework or polygon boundaries.
+///
+/// Work is bounded before the quadratic segment-intersection loop.
+///
+/// # Errors
+///
+/// - `InvalidInput`: coordinate NaN o infinite, geometria OGC non valida, o
+///   lunghezza della sorgente non finita per overflow numerico;
+/// - `CoordinateLimit`: coordinate combinate (sorgente + splitter) oltre
+///   `max_input_coordinates`;
+/// - `InvalidParameter`: `tolerance` non finita o negativa;
+/// - `UnsupportedGeometry`: splitter di tipo `Line`, `Rect` o `Triangle`;
+/// - `IndexOverflow`: conteggio non rappresentabile come `u64`;
+/// - `WorkLimit`: test di intersezione oltre `max_intersection_tests`;
+/// - `OutputLimit`: parti o coordinate di output oltre i limiti richiesti;
+/// - `InvalidOutput`: porzione prodotta non valida (propagata da
+///   `line_substring`), o split che non conserva la lunghezza della
+///   sorgente.
+// Pipeline unica di split (walking dei segmenti, test di intersezione
+// bounded, ricostruzione delle parti): lunghezza data dalla sequenza
+// lineare dei passi del contratto, non da complessita' logica.
+#[allow(clippy::too_many_lines)]
 pub fn split_line(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
@@ -895,6 +1017,10 @@ pub fn split_line(
         .fold(1.0_f64, |scale, coordinate| {
             scale.max(coordinate.x.abs()).max(coordinate.y.abs())
         });
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let query_tolerance = (tolerance + coordinate_scale * f64::EPSILON * 16.0).min(f64::MAX);
     for point in points {
         let envelope = expanded_point_envelope(point, query_tolerance);
@@ -924,7 +1050,7 @@ pub fn split_line(
                         intersection,
                         source_segment.distance_before,
                         total_length,
-                    ))
+                    ));
                 }
                 Some(LineIntersection::Collinear { intersection }) => {
                     ratios.push(ratio_on_source_segment(
@@ -997,6 +1123,10 @@ pub fn split_line(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{line_string, polygon, Area};
@@ -1330,7 +1460,7 @@ mod tests {
         assert_eq!(pieces.len(), 3);
 
         let multi_polygon =
-            Geometry::MultiPolygon(geo::MultiPolygon(vec![match polygon.clone() {
+            Geometry::MultiPolygon(geo::MultiPolygon(vec![match polygon {
                 Geometry::Polygon(value) => value,
                 _ => unreachable!(),
             }]));
@@ -1385,6 +1515,9 @@ mod tests {
 
     proptest! {
         #[test]
+        // Filtro esatto sugli input grezzi del generatore (coordinate
+        // campionate, non stime): l'uguaglianza per bit e' la semantica.
+        #[allow(clippy::float_cmp)]
         fn densify_never_exceeds_requested_segment_length(
             x1 in -100.0_f64..100.0,
             y1 in -100.0_f64..100.0,

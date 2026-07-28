@@ -20,9 +20,9 @@
 //! - `subdivide` spezza le geometrie con piu' di `max_vertices` vertici
 //!   (taglio ricorsivo sull'envelope a meta' sull'asse lungo per i poligoni,
 //!   chunking con vertice condiviso per le linee, chunking semplice per i
-//!   MultiPoint). Le geometrie sotto soglia passano invariate (stesso tipo);
-//!   sopra soglia le parti sono dei tipi componenti (Polygon, LineString,
-//!   MultiPoint). Il taglio poligonale include la linea di taglio in entrambe
+//!   `MultiPoint`). Le geometrie sotto soglia passano invariate (stesso tipo);
+//!   sopra soglia le parti sono dei tipi componenti (Polygon, `LineString`,
+//!   `MultiPoint`). Il taglio poligonale include la linea di taglio in entrambe
 //!   le meta' (sovrapposizione di area nulla): la somma delle aree delle
 //!   parti e' preservata. Ricorsione limitata da [`MAX_SUBDIVIDE_DEPTH`]
 //!   (fail-closed oltre il limite, geometrie degenere).
@@ -98,7 +98,7 @@ fn u64_len(len: usize) -> Result<u64, ExtensionV2Error> {
     u64::try_from(len).map_err(|_| ExtensionV2Error::IndexOverflow)
 }
 
-fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV2Error {
+const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV2Error {
     ExtensionV2Error::InvalidParameter { name, reason }
 }
 
@@ -124,6 +124,13 @@ pub struct GridExtent {
 }
 
 impl GridExtent {
+    /// Crea un extent validato (finito e non degenere).
+    ///
+    /// # Errors
+    ///
+    /// `ExtensionV2Error::InvalidParameter` se una coordinata non e'
+    /// finita, oppure se `xmax <= xmin` o `ymax <= ymin` (extent
+    /// degenere).
     pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Result<Self, ExtensionV2Error> {
         for (name, value) in [
             ("extent.xmin", xmin),
@@ -227,6 +234,10 @@ fn hex_centers(
 ) -> Result<Vec<(u64, u64, f64, f64)>, ExtensionV2Error> {
     let vertical_step = cell_size * 3.0_f64.sqrt();
     let column_step = 1.5 * cell_size;
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let columns_f = ((extent.width() - 2.0 * cell_size) / column_step).floor();
     let columns = if extent.width() >= 2.0 * cell_size
         && columns_f.is_finite()
@@ -256,7 +267,10 @@ fn hex_centers(
     for cell_i in 0..columns {
         // cell_i < columns <= MAX_GRID_CELLS (1e6, verificato sopra): ben
         // sotto 2^52, la conversione in f64 e' esatta.
-        #[allow(clippy::cast_precision_loss)]
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // fusa e' il contratto numerico.
+        #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
         let cx = extent.xmin + cell_size + cell_i as f64 * column_step;
         let first_cy = if cell_i % 2 == 0 {
             extent.ymin + vertical_step / 2.0
@@ -265,6 +279,11 @@ fn hex_centers(
         };
         let mut cell_j = 0_u64;
         let mut cy = first_cy;
+        // Accumulo voluto: `first_cy + cell_j * vertical_step` cambierebbe
+        // l'arrotondamento delle coordinate di griglia (contratto numerico
+        // esistente). Il loop e' limitato dal contatore `cell_j` e dal
+        // limite MAX_GRID_CELLS, mai dalla sola aritmetica float.
+        #[allow(clippy::while_float)]
         while cy + vertical_step / 2.0 <= extent.ymax {
             centers.push((cell_i, cell_j, cx, cy));
             if u64_len(centers.len())? > MAX_GRID_CELLS {
@@ -282,6 +301,16 @@ fn hex_centers(
 
 /// Numero di celle che [`generate_grid`] produrrebbe con gli stessi
 /// parametri (usato dall'analisi per il contratto e il limite).
+///
+/// # Errors
+///
+/// - `ExtensionV2Error::InvalidParameter`: `cell_size` non finito o
+///   minore o uguale a zero.
+/// - `ExtensionV2Error::CellLimit`: le celle (totale per le griglie
+///   quadrate, colonne o totale per quelle esagonali) superano
+///   [`MAX_GRID_CELLS`].
+/// - `ExtensionV2Error::IndexOverflow`: il numero di celle non e'
+///   rappresentabile come `u64`.
 pub fn grid_cell_count(
     extent: &GridExtent,
     cell_size: f64,
@@ -301,10 +330,16 @@ fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) ->
     // cell_i e cell_j sono minori delle dimensioni della griglia, il cui
     // prodotto e' <= MAX_GRID_CELLS (1e6, verificato in square_dimensions):
     // ben sotto 2^52, le conversioni in f64 sono esatte.
-    #[allow(clippy::cast_precision_loss)]
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let x0 = extent.xmin + cell_i as f64 * cell_size;
     let x1 = (x0 + cell_size).min(extent.xmax);
-    #[allow(clippy::cast_precision_loss)]
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let y0 = extent.ymin + cell_j as f64 * cell_size;
     let y1 = (y0 + cell_size).min(extent.ymax);
     let ring = LineString::from(vec![
@@ -348,6 +383,15 @@ fn hex_cell(cell_i: u64, cell_j: u64, cx: f64, cy: f64, cell_size: f64) -> GridC
 /// Genera la griglia di celle sull'extent (una riga per cella, ordine
 /// deterministico per `(cell_j, cell_i)` crescente nelle griglie quadrate e
 /// per colonna poi riga in quelle esagonali).
+///
+/// # Errors
+///
+/// - `ExtensionV2Error::InvalidParameter`: `cell_size` non finito o
+///   minore o uguale a zero.
+/// - `ExtensionV2Error::CellLimit`: le celle superano [`MAX_GRID_CELLS`]
+///   (verificato prima dell'allocazione).
+/// - `ExtensionV2Error::IndexOverflow`: il numero di celle per asse non
+///   e' rappresentabile come `u64`.
 pub fn generate_grid(
     extent: &GridExtent,
     cell_size: f64,
@@ -387,18 +431,25 @@ pub struct GridRow {
     pub centroid_y: f64,
 }
 
-fn grid_error(error: ExtensionV2Error) -> PlenoraError {
+fn grid_error(error: &ExtensionV2Error) -> PlenoraError {
     PlenoraError::Contract(format!("geo.generate_grid: {error}"))
 }
 
 /// Adapter righe per `geo.generate_grid`: le celle sono gia' valide per
 /// costruzione; ogni geometria e' codificata WKB entro il limite per cella.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` per gli errori di [`generate_grid`] (messaggio
+/// con prefisso `geo.generate_grid:`) o per la codifica WKB di una cella
+/// (`encode_geometry`: serializzazione fallita o payload oltre il limite
+/// per cella).
 pub fn generate_grid_rows(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
 ) -> Result<Vec<GridRow>, PlenoraError> {
-    let cells = generate_grid(extent, cell_size, shape).map_err(grid_error)?;
+    let cells = generate_grid(extent, cell_size, shape).map_err(|error| grid_error(&error))?;
     cells
         .iter()
         .map(|cell| {
@@ -417,7 +468,7 @@ pub fn generate_grid_rows(
 // geo.subdivide
 // ---------------------------------------------------------------------------
 
-fn check_max_vertices(max_vertices: usize) -> Result<(), ExtensionV2Error> {
+const fn check_max_vertices(max_vertices: usize) -> Result<(), ExtensionV2Error> {
     if max_vertices < MIN_SUBDIVIDE_VERTICES {
         return Err(invalid_parameter(
             "max_vertices",
@@ -427,9 +478,10 @@ fn check_max_vertices(max_vertices: usize) -> Result<(), ExtensionV2Error> {
     Ok(())
 }
 
-/// Chunking di una LineString in parti di al piu' `max_vertices` vertici con
-/// un vertice condiviso tra parti consecutive (l'ultimo vertice di una parte
-/// e' il primo della successiva). Precondizione: `line.0.len() >
+/// Chunking di una `LineString` in parti con vertice condiviso.
+///
+/// Ogni parte ha al piu' `max_vertices` vertici e l'ultimo vertice di una
+/// parte e' il primo della successiva. Precondizione: `line.0.len() >
 /// max_vertices`.
 fn chunk_line_string(line: &LineString<f64>, max_vertices: usize) -> Vec<Geometry<f64>> {
     let count = line.0.len();
@@ -449,8 +501,10 @@ fn chunk_line_string(line: &LineString<f64>, max_vertices: usize) -> Vec<Geometr
     parts
 }
 
-/// Taglio ricorsivo di un poligono: bisezione dell'envelope a meta' sull'asse
-/// lungo e intersezione nativa (`BooleanOps`) con le due meta'; la linea di
+/// Taglio ricorsivo di un poligono per bisezione dell'envelope.
+///
+/// L'envelope e' tagliato a meta' sull'asse lungo e il poligono e'
+/// intersecato nativamente (`BooleanOps`) con le due meta'; la linea di
 /// taglio appartiene a entrambe le meta' (sovrapposizione di area nulla).
 fn subdivide_polygon(
     polygon: &Polygon<f64>,
@@ -472,20 +526,20 @@ fn subdivide_polygon(
     })?;
     let min = rect.min();
     let max = rect.max();
-    let (left, right) = if max.x - min.x >= max.y - min.y {
+    let halves = if max.x - min.x >= max.y - min.y {
         let mid_x = f64::midpoint(min.x, max.x);
-        (
+        [
             Rect::new(min, Coord { x: mid_x, y: max.y }),
             Rect::new(Coord { x: mid_x, y: min.y }, max),
-        )
+        ]
     } else {
         let mid_y = f64::midpoint(min.y, max.y);
-        (
+        [
             Rect::new(min, Coord { x: max.x, y: mid_y }),
             Rect::new(Coord { x: min.x, y: mid_y }, max),
-        )
+        ]
     };
-    for half in [left, right] {
+    for half in halves {
         let intersection = polygon.intersection(&half.to_polygon());
         for part in intersection.0 {
             // Scarti di area nulla lungo la linea di taglio.
@@ -554,9 +608,24 @@ fn subdivide_validated(
     Ok(parts)
 }
 
-/// Spezza una geometria con piu' di `max_vertices` vertici in parti da al
-/// piu' `max_vertices` vertici ciascuna; le geometrie sotto soglia passano
-/// invariate (una sola parte, tipo e identita' geometrica preservati).
+/// Spezza una geometria con piu' di `max_vertices` vertici.
+///
+/// Le parti hanno al piu' `max_vertices` vertici ciascuna; le geometrie
+/// sotto soglia passano invariate (una sola parte, tipo e identita'
+/// geometrica preservati).
+///
+/// # Errors
+///
+/// - `ExtensionV2Error::InvalidInput`: la geometria in ingresso non supera
+///   la validazione OGC.
+/// - `ExtensionV2Error::InvalidParameter`: `max_vertices` e' minore di
+///   [`MIN_SUBDIVIDE_VERTICES`].
+/// - `ExtensionV2Error::SubdivideDepth`: il taglio ricorsivo non converge
+///   entro [`MAX_SUBDIVIDE_DEPTH`] livelli (geometrie degenere).
+/// - `ExtensionV2Error::InvalidOutput`: una parte prodotta non supera la
+///   validazione OGC.
+/// - `ExtensionV2Error::Internal`: invariante interna violata (mai atteso:
+///   punti e linee hanno al piu' 2 vertici).
 pub fn subdivide(
     geometry: &Geometry<f64>,
     max_vertices: usize,
@@ -566,17 +635,25 @@ pub fn subdivide(
     subdivide_validated(geometry, max_vertices)
 }
 
-fn subdivide_error(error: ExtensionV2Error) -> PlenoraError {
+fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
     PlenoraError::Contract(format!("geo.subdivide: {error}"))
 }
 
 /// Helper WKB per `geo.subdivide`: decodifica una cella, la spezza e
 /// codifica ogni parte (espansione 1:N, l'indice di riga madre e'
 /// responsabilita' del chiamante).
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` per gli errori di `subdivide_validated` e di
+/// `max_vertices` non valido (messaggio con prefisso `geo.subdivide:`), per
+/// il decode della cella WKB (`decode_geometry_cell`) o per la codifica WKB
+/// di una parte (`encode_geometry`).
 pub fn subdivide_wkb(payload: &[u8], max_vertices: usize) -> Result<Vec<Vec<u8>>, PlenoraError> {
-    check_max_vertices(max_vertices).map_err(subdivide_error)?;
+    check_max_vertices(max_vertices).map_err(|error| subdivide_error(&error))?;
     let geometry = decode_geometry_cell(payload)?;
-    let parts = subdivide_validated(&geometry, max_vertices).map_err(subdivide_error)?;
+    let parts = subdivide_validated(&geometry, max_vertices)
+        .map_err(|error| subdivide_error(&error))?;
     parts.iter().map(encode_geometry).collect()
 }
 
@@ -616,8 +693,19 @@ fn snap_validated(
 }
 
 /// Aggancia ogni vertice della geometria al vertice del riferimento piu'
-/// vicino entro `tolerance` (implementazione nativa con R-tree, niente
-/// GEOS); i vertici oltre tolleranza restano invariati. Tipo preservato.
+/// vicino entro `tolerance`.
+///
+/// Implementazione nativa con R-tree (niente GEOS); i vertici oltre
+/// tolleranza restano invariati. Tipo preservato.
+///
+/// # Errors
+///
+/// - `ExtensionV2Error::InvalidInput`: la geometria in ingresso o il
+///   riferimento non supera la validazione OGC.
+/// - `ExtensionV2Error::InvalidParameter`: `tolerance` non finita o
+///   negativa.
+/// - `ExtensionV2Error::InvalidOutput`: la geometria snappata non supera
+///   la validazione OGC (lo snap puo' collassare anelli).
 pub fn snap(
     geometry: &Geometry<f64>,
     reference: &Geometry<f64>,
@@ -639,29 +727,44 @@ fn check_tolerance(tolerance: f64) -> Result<(), ExtensionV2Error> {
     Ok(())
 }
 
-fn snap_error(error: ExtensionV2Error) -> PlenoraError {
+fn snap_error(error: &ExtensionV2Error) -> PlenoraError {
     PlenoraError::Contract(format!("geo.snap: {error}"))
 }
 
-/// Adapter di colonna per `geo.snap`: decodifica ogni cella WKB non-null,
-/// applica lo snap verso il riferimento (gia' validato in analisi) e
-/// ricodifica preservando i null. Righe indipendenti: iterazione parallela
-/// con collect indicizzato (ordine deterministico).
+/// Adapter di colonna per `geo.snap`.
+///
+/// Decodifica ogni cella WKB non-null, applica lo snap verso il
+/// riferimento (gia' validato in analisi) e ricodifica preservando i
+/// null. Righe indipendenti: iterazione parallela con collect indicizzato
+/// (ordine deterministico).
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se il riferimento non supera la validazione
+/// OGC o `tolerance` non e' finita o e' negativa (messaggio con prefisso
+/// `geo.snap:`), per il decode/encode WKB di una cella
+/// (`decode_geometry_cell`, `encode_geometry`) o se lo snap di una cella
+/// produce una geometria non valida (prefisso `geo.snap:`).
 pub fn snap_column(
     cells: &BinaryArray,
     reference: &Geometry<f64>,
     tolerance: f64,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
-    ensure_valid(reference).map_err(snap_error)?;
-    check_tolerance(tolerance).map_err(snap_error)?;
+    ensure_valid(reference).map_err(|error| snap_error(&error))?;
+    check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
     map_nullable(cells, |payload| {
         let geometry = decode_geometry_cell(payload)?;
-        let snapped = snap_validated(&geometry, reference, tolerance).map_err(snap_error)?;
+        let snapped =
+            snap_validated(&geometry, reference, tolerance).map_err(|error| snap_error(&error))?;
         encode_geometry(&snapped).map(Some)
     })
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{line_string, polygon, GeometryCollection, MultiLineString, Point};
@@ -943,7 +1046,7 @@ mod tests {
         let original_area = donut.unsigned_area();
         let parts = subdivide(&donut, 8).expect("parti");
         assert!(parts.len() > 1);
-        let total_area: f64 = parts.iter().map(|part| part.unsigned_area()).sum();
+        let total_area: f64 = parts.iter().map(geo::Area::unsigned_area).sum();
         for part in &parts {
             assert!(part.coords_count() <= 8);
             part.check_validation().expect("parte valida");
@@ -989,7 +1092,7 @@ mod tests {
 
         let collection = Geometry::GeometryCollection(GeometryCollection(vec![
             Geometry::Point(Point::new(0.0, 0.0)),
-            lines.clone(),
+            lines,
         ]));
         let parts = subdivide(&collection, 4).expect("parti");
         assert_eq!(parts.len(), 6);

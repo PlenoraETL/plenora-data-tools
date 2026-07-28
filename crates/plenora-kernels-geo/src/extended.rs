@@ -50,8 +50,16 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedErr
     Ok(geometry)
 }
 
-/// Applies the standard six-coefficient 2D affine matrix
+/// Applica la matrice affine 2D a sei coefficienti
 /// `[a, b, xoff, d, e, yoff]`.
+///
+/// # Errors
+///
+/// - `ExtendedError::InvalidInput`: coordinate NaN o infinite, o geometria
+///   di input non valida OGC;
+/// - `ExtendedError::InvalidParameter`: un coefficiente non e' finito;
+/// - `ExtendedError::InvalidOutput`: la geometria trasformata non supera
+///   la validazione OGC.
 pub fn affine_transform(
     geometry: &Geometry<f64>,
     coefficients: [f64; 6],
@@ -68,6 +76,11 @@ pub fn affine_transform(
     validate_output(geometry.affine_transform(&transform))
 }
 
+/// Traslazione di `(x_offset, y_offset)` (wrapper di [`affine_transform`]).
+///
+/// # Errors
+///
+/// Come [`affine_transform`] (gli offset entrano nei coefficienti).
 pub fn translate(
     geometry: &Geometry<f64>,
     x_offset: f64,
@@ -76,6 +89,12 @@ pub fn translate(
     affine_transform(geometry, [1.0, 0.0, x_offset, 0.0, 1.0, y_offset])
 }
 
+/// Scala di `(x_factor, y_factor)` attorno a `origin` (wrapper di
+/// [`affine_transform`]).
+///
+/// # Errors
+///
+/// Come [`affine_transform`] (fattori e origine entrano nei coefficienti).
 pub fn scale_about(
     geometry: &Geometry<f64>,
     x_factor: f64,
@@ -87,6 +106,14 @@ pub fn scale_about(
     affine_transform(geometry, [x_factor, 0.0, x_offset, 0.0, y_factor, y_offset])
 }
 
+/// Rotazione di `degrees` gradi attorno a `origin` (wrapper di
+/// [`affine_transform`]).
+///
+/// # Errors
+///
+/// `ExtendedError::InvalidParameter` se `degrees` non e' finito; in piu'
+/// come [`affine_transform`] per input non valido, coefficienti risultanti
+/// non finiti o output non valido.
 pub fn rotate_about(
     geometry: &Geometry<f64>,
     degrees: f64,
@@ -101,11 +128,33 @@ pub fn rotate_about(
     let radians = degrees.to_radians();
     let cosine = radians.cos();
     let sine = radians.sin();
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let x_offset = origin.x() - cosine * origin.x() + sine * origin.y();
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
     let y_offset = origin.y() - sine * origin.x() - cosine * origin.y();
     affine_transform(geometry, [cosine, -sine, x_offset, sine, cosine, y_offset])
 }
 
+/// Concave hull delle coordinate dell'input, con parametri e limiti di
+/// lavoro dichiarati.
+///
+/// # Errors
+///
+/// - `ExtendedError::InvalidInput`: coordinate NaN o infinite, o geometria
+///   di input non valida OGC;
+/// - `ExtendedError::InvalidParameter`: `concavity` non finita o non
+///   positiva, oppure `length_threshold` non finita o negativa;
+/// - `ExtendedError::IndexOverflow`: numero di coordinate non
+///   rappresentabile come `u64`;
+/// - `ExtendedError::CoordinateLimit`: coordinate oltre `max_coordinates`;
+/// - `ExtendedError::InvalidOutput`: l'hull prodotto non supera la
+///   validazione OGC.
 pub fn concave_hull(
     geometry: &Geometry<f64>,
     concavity: f64,
@@ -140,7 +189,17 @@ pub fn concave_hull(
     validate_output(Geometry::Polygon(hull))
 }
 
-/// Vertex-based Hausdorff distance, bounded because its complexity is O(n*m).
+/// Distanza di Hausdorff per vertici, con limite di lavoro dichiarato
+/// perche' la complessita' e' O(n*m).
+///
+/// # Errors
+///
+/// - `ExtendedError::InvalidInput`: coordinate NaN o infinite, o geometria
+///   non valida OGC in uno dei due input;
+/// - `ExtendedError::IndexOverflow`: conteggio dei vertici non
+///   rappresentabile come `u64`;
+/// - `ExtendedError::WorkLimit`: coppie di coordinate oltre
+///   `max_coordinate_pairs` (anche per overflow del prodotto n*m).
 pub fn hausdorff_distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -181,18 +240,36 @@ fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
     Ok(())
 }
 
+/// Distanza haversine in metri tra due punti geografici (lon/lat).
+///
+/// # Errors
+///
+/// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
+/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
 pub fn haversine_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
     Ok(Haversine.distance(left, right))
 }
 
+/// Distanza geodetica in metri tra due punti geografici (lon/lat).
+///
+/// # Errors
+///
+/// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
+/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
 pub fn geodesic_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
     Ok(Geodesic.distance(left, right))
 }
 
+/// Lunghezza geodetica in metri di una linea geografica (lon/lat).
+///
+/// # Errors
+///
+/// `ExtendedError::InvalidGeographicCoordinate` se un vertice non e'
+/// finito o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
 pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, ExtendedError> {
     for coordinate in line.coords() {
         validate_geographic_point(Point::from(*coordinate))?;
@@ -201,6 +278,10 @@ pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, Extend
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{line_string, polygon, Area};

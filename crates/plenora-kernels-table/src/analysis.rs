@@ -33,6 +33,14 @@ fn value_text(value: &Value) -> String {
     }
 }
 
+/// Colonna di lookup: ogni valore di `column` e' tradotto via `mapping`
+/// (o sostituito da `default`, se non null; altrimenti resta invariato).
+///
+/// # Errors
+///
+/// - `Contract`: nome di output non valido (come `validate_output_name`);
+/// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
+///   di `scalar_as_string` e `replace_or_append`.
 pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -140,6 +148,17 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
     Ok(edges)
 }
 
+/// Discretizza `column` in bin equal-width (`Bins::Count`) o su bordi
+/// espliciti (`Bins::Edges`), con etichette opzionali.
+///
+/// # Errors
+///
+/// - `Contract`: numero di bin fuori da 2..=100 o non rappresentabile;
+///   bordi non strettamente crescenti (o in numero fuori da 3..=101);
+///   numero di `labels` diverso dal numero di bin;
+/// - `Schema`: colonna `column` assente dallo schema; nessun valore
+///   numerico su cui calcolare i bordi; in piu' gli errori di
+///   `scalar_as_f64` e `replace_or_append`.
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -241,7 +260,8 @@ fn flatten(
     }
 }
 
-/// Insiemi di path per il parsing selettivo (`output_columns` esplicite):
+/// Insiemi di path per il parsing selettivo (`output_columns` esplicite).
+///
 /// `capture` sono i path esatti da emettere, `ancestors` tutti i prefissi
 /// propri a passi di punto (un sotto-albero fuori da entrambi gli insiemi
 /// non puo' contenere alcun path richiesto e viene saltato con
@@ -269,8 +289,9 @@ impl JsonTargets {
     }
 }
 
-/// Colonne path -> valori dense per riga (null dove il path manca),
-/// costruite direttamente durante la scansione: evita la `BTreeMap` per
+/// Colonne path -> valori dense per riga (null dove il path manca).
+///
+/// Costruite direttamente durante la scansione: evita la `BTreeMap` per
 /// riga, la raccolta/ordinamento delle chiavi per cella e la copia dei
 /// valori nelle colonne di output dell'implementazione originale.
 #[derive(Default)]
@@ -301,16 +322,17 @@ impl PathColumns {
     }
 }
 
-/// Stato della scansione JSON di una riga (fast path): buffer delle celle
-/// emesse dalla riga (path, testo), buffer riusato per il path corrente e
-/// flag per le chiavi "ambigue" (vuote o contenenti '.'). Le celle sono
-/// riversate nelle colonne solo a riga valida: JSON invalido o radice non
-/// oggetto scartano il buffer (l'originale produce una riga vuota). Con
-/// chiavi ambigue due derivazioni diverse possono produrre lo stesso path
-/// appiattito e l'originale risolve il conflitto iterando le chiavi in
-/// ordine lessicografico (`BTreeMap` di `serde_json`: non riproducibile in
-/// streaming ordine-documento, quindi il driver ricade sul parsing
-/// completo per quella riga.
+/// Stato della scansione JSON di una riga (fast path).
+///
+/// Buffer delle celle emesse dalla riga (path, testo), buffer riusato per
+/// il path corrente e flag per le chiavi "ambigue" (vuote o contenenti
+/// '.'). Le celle sono riversate nelle colonne solo a riga valida: JSON
+/// invalido o radice non oggetto scartano il buffer (l'originale produce
+/// una riga vuota). Con chiavi ambigue due derivazioni diverse possono
+/// produrre lo stesso path appiattito e l'originale risolve il conflitto
+/// iterando le chiavi in ordine lessicografico (`BTreeMap` di `serde_json`:
+/// non riproducibile in streaming ordine-documento, quindi il driver
+/// ricade sul parsing completo per quella riga.
 struct RowFlatten<'a> {
     cells: &'a mut Vec<(String, String)>,
     path: String,
@@ -516,8 +538,9 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
     }
 }
 
-/// Appiattisce una riga JSON nelle colonne path -> testo. Fast path:
-/// parsing streaming con serde (stessa validazione di
+/// Appiattisce una riga JSON nelle colonne path -> testo.
+///
+/// Fast path: parsing streaming con serde (stessa validazione di
 /// `from_str::<Value>`, quindi errori, limiti di annidamento e resa
 /// testuale identici), senza costruire l'albero `Value` e saltando i
 /// sotto-alberi non richiesti. JSON invalido o radice non-oggetto =>
@@ -563,6 +586,16 @@ fn flatten_row(
     }
 }
 
+/// Appiattisce i documenti JSON di `column` in colonne `prefix + path`
+/// (profondita' massima `max_level`).
+///
+/// # Errors
+///
+/// - `Contract`: `max_level` oltre 5; totale colonne oltre
+///   `limits.max_columns`; nome di output non valido o privo del `prefix`
+///   atteso;
+/// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
+///   di `scalar_as_string` (colonne non Utf8) e `replace_or_append`.
 pub fn flatten_json(
     batch: &RecordBatch,
     config: &FlattenJson,
@@ -693,11 +726,12 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
 
 /// Statistiche di un gruppo calcolate una sola volta: un sort unico (se
 /// richiesto da min/max/quantili) e momenti (somma, media, varianza) in
-/// singola passata. Replica bit per bit la semantica dell'implementazione
-/// originale, che ricalcolava sort e momenti per ogni coppia
-/// (riga, statistica): stesse operazioni f64 nello stesso ordine
-/// (somme con `Iterator::sum`, varianza su `mean`, quantili su copia
-/// ordinata con `f64::total_cmp`).
+/// singola passata.
+///
+/// Replica bit per bit la semantica dell'implementazione originale, che
+/// ricalcolava sort e momenti per ogni coppia (riga, statistica): stesse
+/// operazioni f64 nello stesso ordine (somme con `Iterator::sum`, varianza
+/// su `mean`, quantili su copia ordinata con `f64::total_cmp`).
 fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
     let count = values.len().to_f64();
     if values.is_empty() {
@@ -762,6 +796,14 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
         .collect()
 }
 
+/// Aggiunge le colonne di statistiche `prefix + nome` (count, min, max,
+/// ...) sui valori di `column`, opzionalmente per gruppi di `group_by`.
+///
+/// # Errors
+///
+/// - `Schema`: colonna `column` o `group_by` assente dallo schema; in
+///   piu' gli errori di `scalar_as_string`/`scalar_as_f64` e
+///   `replace_or_append`.
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
     let value_index = column_index(batch, &config.column)?;
     let group_index = config
@@ -873,6 +915,15 @@ fn shuffle(rows: &mut [usize], seed: u64) {
     }
 }
 
+/// Campione casuale deterministico delle righe (dimensione `n` o
+/// `fraction`, opzionalmente stratificato su `stratify_column`).
+///
+/// # Errors
+///
+/// - `Contract`: `fraction` fuori da 0..=1; dimensioni di gruppo, dataset
+///   o campione non rappresentabili;
+/// - `Schema`: colonna `stratify_column` assente dallo schema; in piu' gli
+///   errori di `scalar_as_string` e `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     if config
         .fraction

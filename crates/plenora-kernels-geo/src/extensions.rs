@@ -53,7 +53,7 @@ fn u64_len(len: usize) -> Result<u64, ExtensionError> {
 }
 
 /// Nome OGC del tipo, come esposto da `geometry_accessors`.
-fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -89,19 +89,27 @@ fn wkt_cell_to_wkb(value: &str, on_error: OnWktError) -> Result<Option<Vec<u8>>,
         Ok(geometry) => encode_geometry(&geometry).map(Some),
         Err(error) => match on_error {
             OnWktError::Null => Ok(None),
-            OnWktError::Fail => Err(wkt_error(error)),
+            OnWktError::Fail => Err(wkt_error(&error)),
         },
     }
 }
 
-fn wkt_error(error: ConstructionError) -> PlenoraError {
+fn wkt_error(error: &ConstructionError) -> PlenoraError {
     PlenoraError::Contract(format!("geo.from_wkt: {error}"))
 }
 
-/// Adapter di colonna per `geo.from_wkt`: decodifica ogni cella `Utf8`,
-/// codifica il risultato in WKB e preserva i null. Le righe sono
-/// indipendenti: iterazione parallela con collect indicizzato, quindi
-/// l'ordine dell'output resta deterministico.
+/// Adapter di colonna per `geo.from_wkt`: celle `Utf8` -> celle WKB.
+///
+/// Decodifica ogni cella `Utf8`, codifica il risultato in WKB e preserva
+/// i null. Le righe sono indipendenti: iterazione parallela con collect
+/// indicizzato, quindi l'ordine dell'output resta deterministico.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se una cella WKT non e' valida con politica
+/// [`OnWktError::Fail`] (l'errore riporta l'indice di riga), o per gli
+/// errori di codifica WKB di `encode_geometry` (geometria prodotta non
+/// valida o cella oltre il limite di byte).
 pub fn from_wkt_column(
     values: &StringArray,
     on_error: OnWktError,
@@ -110,14 +118,16 @@ pub fn from_wkt_column(
     cells
         .into_par_iter()
         .enumerate()
-        .map(|(row, cell)| match cell {
-            None => Ok(None),
-            Some(value) => wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
-                PlenoraError::Contract(reason) => {
-                    PlenoraError::Contract(format!("riga {row}: {reason}"))
-                }
-                other => other,
-            }),
+        .map(|(row, cell)| {
+            cell.map_or_else(
+                || Ok(None),
+                |value| wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
+                    PlenoraError::Contract(reason) => {
+                        PlenoraError::Contract(format!("riga {row}: {reason}"))
+                    }
+                    other => other,
+                }),
+            )
         })
         .collect()
 }
@@ -130,13 +140,13 @@ pub fn from_wkt_column(
 ///
 /// Convenzioni (documentate, v1):
 /// - `num_geometries`: parti della geometria (1 per le geometrie semplici,
-///   N per Multi*/GeometryCollection);
+///   N per Multi*/`GeometryCollection`);
 /// - `num_interior_rings`: anelli interni di Polygon/MultiPolygon, 0 altro;
-/// - `start_point`/`end_point`: WKT `POINT(x y)` solo per una LineString
+/// - `start_point`/`end_point`: WKT `POINT(x y)` solo per una `LineString`
 ///   (o Line) aperta; null per poligoni, multi-parti e linee chiuse;
 /// - `is_closed`: `LineString::is_closed` per le linee, true per i tipi
 ///   poligonali (anelli chiusi per definizione), false altro.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GeometryAccessors {
     pub geometry_type: &'static str,
     pub num_geometries: u64,
@@ -150,6 +160,16 @@ fn point_wkt(point: Point<f64>) -> String {
     Geometry::Point(point).wkt_string()
 }
 
+/// Calcola gli accessori per riga di `geo.geometry_accessors`.
+///
+/// Le convenzioni sui campi sono documentate su [`GeometryAccessors`].
+///
+/// # Errors
+///
+/// - `ExtensionError::InvalidInput`: la geometria non supera la
+///   validazione OGC;
+/// - `ExtensionError::IndexOverflow`: un conteggio (parti o anelli
+///   interni) non e' rappresentabile come `u64`.
 pub fn geometry_accessors(
     geometry: &Geometry<f64>,
 ) -> Result<GeometryAccessors, ExtensionError> {
@@ -198,10 +218,21 @@ pub fn geometry_accessors(
 // ---------------------------------------------------------------------------
 
 /// Aggrega un gruppo ordinato di geometrie in una collezione SENZA unione
-/// topologica: gruppo omogeneo di Point/LineString/Polygon -> Multi*,
-/// gruppo misto -> GeometryCollection. I null sono saltati; un gruppo con
-/// una sola geometria non-null resta la geometria singola; un gruppo senza
+/// topologica.
+///
+/// Gruppo omogeneo di Point/LineString/Polygon -> Multi*, gruppo misto ->
+/// `GeometryCollection`. I null sono saltati; un gruppo con una sola
+/// geometria non-null resta la geometria singola; un gruppo senza
 /// geometrie non-null produce `None`.
+///
+/// # Errors
+///
+/// - `ExtensionError::InvalidInput`: una geometria del gruppo non supera
+///   la validazione OGC;
+/// - `ExtensionError::InvalidOutput`: la collezione prodotta non supera
+///   la validazione OGC;
+/// - `ExtensionError::Internal`: invariante interna violata (omogeneita'
+///   del gruppo gia' verificata a monte).
 pub fn collect_geometries(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ExtensionError> {
@@ -267,8 +298,15 @@ pub fn collect_geometries(
 // ---------------------------------------------------------------------------
 
 /// Frazione [0,1] della proiezione del punto piu' vicino sulla linea
-/// (semantica `ST_LineLocatePoint`). `None` per geometrie non-LineString
-/// (incluse MultiLineString in v1) o linee vuote.
+/// (semantica `ST_LineLocatePoint`).
+///
+/// `None` per geometrie non-LineString (incluse `MultiLineString` in v1)
+/// o linee vuote.
+///
+/// # Errors
+///
+/// `ExtensionError::InvalidInput` se la geometria non supera la
+/// validazione OGC.
 pub fn line_locate_point(
     geometry: &Geometry<f64>,
     point: &Point<f64>,
@@ -284,6 +322,10 @@ pub fn line_locate_point(
 }
 
 #[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use geo::{line_string, polygon, GeometryCollection, LineString};

@@ -71,9 +71,20 @@ fn validate_geometries(
     Ok(())
 }
 
-/// For every left row, returns the minimum planar distance to any non-null,
-/// non-empty right geometry. `None` is returned when either the left geometry
-/// is null/empty or the right side has no usable geometry.
+/// Minimum planar distance from every left row to the non-null, non-empty
+/// right geometries.
+///
+/// `None` is returned when either the left geometry is null/empty or the
+/// right side has no usable geometry.
+///
+/// # Errors
+///
+/// - `InvalidWorkLimit`: `max_comparisons` is zero.
+/// - `InvalidGeometry`: a left or right geometry has NaN/infinite
+///   coordinates or fails OGC validation.
+/// - `IndexOverflow`: a row count is not representable as `u64`.
+/// - `WorkLimitExceeded`: the comparison count overflows `u64` or exceeds
+///   `max_comparisons`.
 pub fn minimum_distances(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -117,7 +128,18 @@ pub fn minimum_distances(
 }
 
 /// Exact nearest-neighbour lineage. All equidistant nearest rows are emitted,
-/// matching the duplicate-on-tie behaviour of GeoPandas `sjoin_nearest`.
+/// matching the duplicate-on-tie behaviour of `GeoPandas` `sjoin_nearest`.
+///
+/// # Errors
+///
+/// - `InvalidWorkLimit`: `max_comparisons` or `max_results` is zero.
+/// - `InvalidMaximumDistance`: `max_distance` is not finite or is negative.
+/// - `InvalidGeometry`: a left or right geometry has NaN/infinite
+///   coordinates or fails OGC validation.
+/// - `IndexOverflow`: a row index or count is not representable as `u64`.
+/// - `WorkLimitExceeded`: the comparison count overflows `u64` or exceeds
+///   `max_comparisons`.
+/// - `ResultLimitExceeded`: the emitted matches exceed `max_results`.
 pub fn nearest_matches(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -177,6 +199,9 @@ pub fn nearest_matches(
             if max_distance.is_some_and(|limit| minimum > limit) {
                 return Ok(Vec::new());
             }
+            // Uguaglianza esatta corretta per costruzione: `minimum` e' il
+            // minimo degli stessi valori (reduce(f64::min)), non una stima.
+            #[allow(clippy::float_cmp)]
             distances.retain(|(_, distance)| *distance == minimum);
             distances.sort_unstable_by_key(|(right_index, _)| *right_index);
             let additional =
@@ -206,6 +231,11 @@ pub fn nearest_matches(
 }
 
 /// Returns the stable left row indexes that are within at least one right row.
+///
+/// # Errors
+///
+/// - `SpatialJoin`: every error of `spatial_join_nullable` (`max_pairs` zero
+///   or exceeded, invalid or non-finite geometries, index overflow).
 pub fn within_indexes(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -219,6 +249,13 @@ pub fn within_indexes(
 
 /// Counts points strictly within every polygon row. Boundary points are not
 /// counted, matching Manipola's `predicate="within"` contract.
+///
+/// # Errors
+///
+/// - `SpatialJoin`: every error of `spatial_join_nullable` (`max_pairs` zero
+///   or exceeded, invalid or non-finite geometries, index overflow).
+/// - `IndexOverflow`: internal guard on the per-polygon counts (not
+///   reachable with inputs already validated by the join).
 pub fn count_points_in_polygons(
     polygons: &[Option<Geometry<f64>>],
     points: &[Option<Geometry<f64>>],
@@ -240,10 +277,15 @@ mod tests {
     use super::*;
     use geo::{polygon, Point};
 
+    // unnecessary_wraps: l'Option e' il contratto dei fixture (colonne con
+    // righe null), non un possibile fallimento dell'helper.
+    #[allow(clippy::unnecessary_wraps)]
     fn point(x: f64, y: f64) -> Option<Geometry<f64>> {
         Some(Geometry::Point(Point::new(x, y)))
     }
 
+    // Come `point` sopra: l'Option serve a comporre colonne con null.
+    #[allow(clippy::unnecessary_wraps)]
     fn square() -> Option<Geometry<f64>> {
         Some(Geometry::Polygon(polygon![
             (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),

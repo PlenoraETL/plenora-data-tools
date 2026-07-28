@@ -423,6 +423,10 @@ impl PlanV4 {
 
     /// Limiti durante il parsing + validazione strutturale + risoluzione
     /// alias. Restituisce l'ordine topologico deterministico dei nodi.
+    // Validazione strutturale in un'unica passata: la lunghezza e' data
+    // dalla sequenza lineare dei controlli sul contratto del piano, non da
+    // complessita' logica (fase di pulizia: niente refactor strutturali).
+    #[allow(clippy::too_many_lines)]
     fn validate_structure(&mut self, plan_limits: &PlanLimits) -> Result<Vec<String>> {
         if self.schema_version != PLAN_SCHEMA_VERSION_V4 {
             return Err(contract_error(format!(
@@ -816,8 +820,15 @@ fn canonical_numbers(value: &Value) -> Value {
 
 /// Forma canonica di un numero: float a valore intero esattamente
 /// rappresentabile (|v| <= 2^53) diventa intero; tutto il resto e' invariato.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::float_cmp
+)]
 // I cast sono sicuri: guardati da `trunc` (valore intero) e da |v| <= 2^53.
+// Il confronto `float == float.trunc()` e' esatto volutamente: la
+// canonicalizzazione del plan_hash (ADR 4) richiede uguaglianza per bit.
 fn canonical_number(number: &Number) -> Value {
     if let Some(float) = number.as_f64() {
         if float == float.trunc() && float.abs() <= MAX_EXACT_F64_INT as f64 {
