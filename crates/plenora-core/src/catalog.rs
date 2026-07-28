@@ -156,7 +156,7 @@ impl ExpansionConstraint {
     /// `max_expansion_factor` per la singola operazione), altrimenti il
     /// `max_expansion_factor` dei limiti effettivi passato dal chiamante.
     #[must_use]
-    pub fn binding_threshold(self, max_expansion_factor: f64) -> f64 {
+    pub const fn binding_threshold(self, max_expansion_factor: f64) -> f64 {
         match self {
             Self::Custom(factor) => factor,
             _ => max_expansion_factor,
@@ -207,7 +207,7 @@ impl JoinExpansion {
     /// input: la specificita' del vincolo e' nella soglia
     /// ([`ExpansionConstraint::binding_threshold`]), non nella base.
     #[must_use]
-    pub fn binding_metric(&self, constraint: ExpansionConstraint) -> f64 {
+    pub const fn binding_metric(&self, constraint: ExpansionConstraint) -> f64 {
         match constraint {
             ExpansionConstraint::SumRelative | ExpansionConstraint::Custom(_) => {
                 self.output_over_sum_inputs
@@ -982,6 +982,10 @@ mod tests {
     }
 
     #[test]
+    // Confronti float esatti intenzionali: le metriche sono rapporti di
+    // piccoli interi con rappresentazione binaria esatta (es. 6/5, 6/3);
+    // il test verifica il valore per costruzione, non un'approssimazione.
+    #[allow(clippy::float_cmp)]
     fn join_expansion_binding_metric_selects_the_declared_constraint() {
         let expansion = JoinExpansion::compute(6, 3, 2);
         assert_eq!(expansion.output_over_sum_inputs, 1.2);
@@ -1016,6 +1020,9 @@ mod tests {
     }
 
     #[test]
+    // Come sopra: i confronti esatti sui fattori custom verificano
+    // l'uguaglianza per bit richiesta dal fingerprint (ADR 4/6).
+    #[allow(clippy::float_cmp)]
     fn custom_constraint_overrides_the_threshold_not_the_metric() {
         // ADR 6: `Custom(fattore)` e' la stima a priori per op la cui
         // semantica di output non ha una base fissa. La metrica vincolante

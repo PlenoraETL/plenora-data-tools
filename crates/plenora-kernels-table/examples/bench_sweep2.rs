@@ -1,4 +1,4 @@
-//! Sweep prestazionale, seconda ondata (bench_sweep2): 26 kernel tabellari
+//! Sweep prestazionale, seconda ondata (`bench_sweep2)`: 26 kernel tabellari
 //! residui (mai ottimizzati) + i 9 kernel delle estensioni v1.1/v1.2/v1.3
 //! (`select_columns`, `limit`, `top_n`, `stable_fingerprint`, `align_schema`,
 //! `concat_by_name`, `validate_rules`, `hmac_sha256`, `fuzzy_join`).
@@ -13,7 +13,7 @@
 //! dominata dal prodotto riga x candidati di blocco, escalation disattivata).
 //!
 //! Config rappresentative dei nuovi kernel: `top_n` n=100, `fuzzy_join`
-//! jaro_winkler con blocking prefix su anagrafica sintetica (fixture di
+//! `jaro_winkler` con blocking prefix su anagrafica sintetica (fixture di
 //! `bench_fuzzy_join`), `hmac_sha256` con chiave da variabile d'ambiente,
 //! `validate_rules` 5 regole miste, `concat_by_name` 3 input a schemi
 //! permutati, `align_schema` 20 colonne.
@@ -87,11 +87,11 @@ fn bench_limits() -> Limits {
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -113,6 +113,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
     let mut paths = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", rng.next() % 1_024));
         texts.push(format!(
@@ -121,6 +123,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
             rng.next(),
             rng.next() & 0xffff_ffff
         ));
+        // Bound evidente: draw % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((rng.next() % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",
@@ -167,12 +171,14 @@ fn wide_fixture(rows: usize) -> RecordBatch {
         match index % 3 {
             0 => {
                 let values = (0..rows)
-                    .map(|_| Some(rng.next() as i64))
+                    .map(|_| Some(rng.next().cast_signed()))
                     .collect::<Vec<_>>();
                 fields.push(Field::new(&name, DataType::Int64, false));
                 columns.push(Arc::new(Int64Array::from(values)));
             }
             1 => {
+                // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+                #[allow(clippy::cast_precision_loss)]
                 let values = (0..rows)
                     .map(|_| Some((rng.next() % 1_000_000) as f64 / 100.0))
                     .collect::<Vec<_>>();
@@ -227,7 +233,7 @@ fn align_config() -> AlignSchema {
     }
 }
 
-/// Fixture destra per cross_join: stessa chiave `id` 0..rows, colonna extra
+/// Fixture destra per `cross_join`: stessa chiave `id` 0..rows, colonna extra
 /// `rval` (identica a `bench_sweep.rs`).
 fn right_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
@@ -236,6 +242,8 @@ fn right_fixture(rows: usize) -> RecordBatch {
     let mut rvals = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         let base = (rng.next() % 1_000_000) as f64 / 100.0;
         nums.push(Some(if row % 10 == 0 { base + 1.0 } else { base }));
         rvals.push(format!("r{:016x}", rng.next()));
@@ -260,6 +268,9 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     let ids = (0..rows)
         .map(|row| Some(2 * i64::try_from(row).unwrap_or(0) + offset))
         .collect::<Vec<_>>();
+    // Bound evidente: row < rows e rows <= M10 = 10^7 (scale del bench,
+    // costanti in testa al file) << 2^53: cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let vals = (0..rows)
         .map(|row| Some(row as f64))
         .collect::<Vec<_>>();
@@ -280,6 +291,10 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
 fn list_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
+    // Bound evidente: row < rows <= M10 = 10^7 (scale del bench) e
+    // value < length <= 4 (length = rng.next() % 5): entrambi i cast
+    // entrano in i64 senza wrap.
+    #[allow(clippy::cast_possible_wrap)]
     let lists = (0..rows)
         .map(|row| {
             let length = rng.next() % 5;
@@ -305,7 +320,12 @@ fn list_fixture(rows: usize) -> RecordBatch {
 fn struct_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
-    let a = (0..rows).map(|_| Some(rng.next() as i64)).collect::<Vec<_>>();
+    // Reinterpretazione bit a bit intenzionale: colonna random a pieno range.
+    let a = (0..rows)
+        .map(|_| Some(rng.next().cast_signed()))
+        .collect::<Vec<_>>();
+    // Bound evidente: draw % 10_000 <= 9_999 < 2^53, cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let b = (0..rows)
         .map(|_| Some((rng.next() % 10_000) as f64))
         .collect::<Vec<_>>();
@@ -340,6 +360,8 @@ fn struct_fixture(rows: usize) -> RecordBatch {
 /// l'output a `max_columns` colonne = righe input + 1).
 fn transpose_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
+    // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let columns = (0..8)
         .map(|_| {
             Arc::new(Float64Array::from(
@@ -364,11 +386,11 @@ fn transpose_fixture(rows: usize) -> RecordBatch {
 struct Lcg(u64);
 
 impl Lcg {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next_u64(&mut self) -> u64 {
+    const fn next_u64(&mut self) -> u64 {
         self.0 = self
             .0
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -390,6 +412,9 @@ const SYLLABLES: &[&str] = &[
 /// Nome sintetico da tre sillabe (lettera iniziale maiuscola).
 fn name_of(seed: u64) -> String {
     let mut lcg = Lcg(seed.wrapping_add(1));
+    // Bound evidente: below(n) < n e n = SYLLABLES.len() deriva da usize,
+    // quindi il risultato rientra in usize.
+    #[allow(clippy::cast_possible_truncation)]
     let pick = |lcg: &mut Lcg| SYLLABLES[lcg.below(SYLLABLES.len() as u64) as usize];
     let first = pick(&mut lcg);
     let mut name = String::with_capacity(12);
@@ -411,6 +436,9 @@ fn typo(name: &str, seed: u64) -> String {
     if chars.len() < 2 {
         return name.to_owned();
     }
+    // Bound evidente: below(n) < n e n = chars.len() - 1 deriva da usize,
+    // quindi il risultato rientra in usize.
+    #[allow(clippy::cast_possible_truncation)]
     let position = lcg.below((chars.len() - 1) as u64) as usize;
     if lcg.below(2) == 0 {
         chars.swap(position, position + 1);
@@ -622,9 +650,7 @@ fn write_outputs(results: &[Measurement]) {
             entry.rows_per_second,
             entry.output_rows,
             entry
-                .peak_rss_kib
-                .map(|kib| format!("{}", kib / 1024))
-                .unwrap_or_else(|| "n/d".into()),
+                .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
         ));
     }
@@ -1069,6 +1095,9 @@ fn main() {
     let mut lcg = Lcg::seeded();
     let dirty: Vec<String> = (0..M1)
         .map(|row| {
+            // Bound evidente: below(n) < n e n = fuzzy_right_rows deriva da
+            // usize, quindi il risultato rientra in usize.
+            #[allow(clippy::cast_possible_truncation)]
             let source = &clean[lcg.below(fuzzy_right_rows as u64) as usize];
             if lcg.below(4) == 0 {
                 source.clone() // ~25% gia' puliti

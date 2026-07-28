@@ -380,7 +380,9 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("geometry field"),
         ]);
-        let ids = plenora_core::arrow::array::Int64Array::from_iter_values(0..cells.len() as i64);
+        let ids = plenora_core::arrow::array::Int64Array::from_iter_values(
+            0..i64::try_from(cells.len()).expect("fixture entro i64"),
+        );
         let geometry = BinaryArray::from_iter(cells.iter().map(|cell| cell.map(Vec::as_slice)));
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -664,7 +666,10 @@ mod tests {
         assert!(decoded[1].is_none());
         assert_eq!(decoded[2].as_deref(), Some(square.as_slice()));
 
-        let oversized = vec![0_u8; (MAX_CELL_BYTES + 1) as usize];
+        let oversized = vec![
+            0_u8;
+            usize::try_from(MAX_CELL_BYTES + 1).expect("64 MiB + 1 entra in usize")
+        ];
         let cells = BinaryArray::from_iter([Some(oversized.as_slice())]);
         assert!(matches!(
             map_nullable(&cells, |payload| decode_geometry_cell(payload).map(Some)),

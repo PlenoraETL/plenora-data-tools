@@ -194,7 +194,7 @@ pub fn string_extract(
             .map(|_| StringBuilder::with_capacity(batch.num_rows(), per_group_capacity))
             .collect();
         let mut locations = regex.capture_locations();
-        for value in input.iter() {
+        for value in input {
             match value {
                 Some(text) if regex.captures_read(&mut locations, text).is_some() => {
                     for (builder, (capture_index, _)) in builders.iter_mut().zip(&named) {
@@ -230,7 +230,7 @@ pub fn string_extract(
     let mut builder = StringBuilder::with_capacity(batch.num_rows(), utf8_data_len(input));
     if config.extract_all {
         let mut scratch = String::new();
-        for value in input.iter() {
+        for value in input {
             match value {
                 None => builder.append_null(),
                 Some(text) => {
@@ -255,7 +255,7 @@ pub fn string_extract(
         }
     } else {
         let mut locations = regex.capture_locations();
-        for value in input.iter() {
+        for value in input {
             match value {
                 Some(text) if regex.captures_read(&mut locations, text).is_some() => {
                     match locations.get(capture_index) {

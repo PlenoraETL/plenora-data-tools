@@ -56,7 +56,7 @@ enum KeyVal<'a> {
     Utf8(&'a str),
 }
 
-fn f64_key_bits(value: f64) -> u64 {
+const fn f64_key_bits(value: f64) -> u64 {
     if value.is_nan() {
         0x7ff8_0000_0000_0000
     } else {
@@ -986,7 +986,7 @@ fn membership_impl(
     select_rows(left, &rows)
 }
 
-/// Fast path di `semi_join`/`anti_join`: HashSet su chiavi native, stesse
+/// Fast path di `semi_join`/`anti_join`: `HashSet` su chiavi native, stesse
 /// righe (e stesso ordine) del percorso generico.
 fn membership_fast<'a>(
     left: &'a RecordBatch,

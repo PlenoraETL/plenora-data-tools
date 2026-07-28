@@ -68,17 +68,14 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Operation; 3] = [
-        Operation::Centroid,
-        Operation::ConvexHull,
-        Operation::Envelope,
-    ];
+    pub const ALL: [Self; 3] = [Self::Centroid, Self::ConvexHull, Self::Envelope];
 
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            Operation::Centroid => "centroid",
-            Operation::ConvexHull => "convex_hull",
-            Operation::Envelope => "envelope",
+            Self::Centroid => "centroid",
+            Self::ConvexHull => "convex_hull",
+            Self::Envelope => "envelope",
         }
     }
 }
@@ -144,6 +141,16 @@ const EWKB_TYPE_MASK: u32 = 0x0000_FFFF;
 /// ISO ne' EWKB valido e va rifiutato.
 const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
+/// Decodifica una geometria dal canone GeoArrow-WKB: prima la validazione
+/// strutturale del contratto ([`validate_wkb_contract`]), poi il decode e la
+/// validazione OGC della geometria risultante.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se il payload viola il contratto WKB (struttura
+/// non valida, coordinate NaN o infinite, geometria OGC non valida) o se il
+/// decode fallisce; `PlenoraError::Unsupported` se il payload porta
+/// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     validate_wkb_contract(payload)?;
     let geometry = Wkb(payload)
@@ -161,11 +168,11 @@ struct WkbCursor<'a> {
 }
 
 impl<'a> WkbCursor<'a> {
-    fn new(payload: &'a [u8]) -> Self {
+    const fn new(payload: &'a [u8]) -> Self {
         Self { payload, offset: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    const fn remaining(&self) -> usize {
         self.payload.len().saturating_sub(self.offset)
     }
 
@@ -454,6 +461,16 @@ fn validate_wkb_geometry_with_dimensions(
     Ok(geometry_type)
 }
 
+/// Valida un payload WKB contro il contratto strutturale (limiti di byte,
+/// annidamento, conteggi, finitezza delle coordinate), con dimensionalita'
+/// attesa `Xy` e profondita' massima [`MAX_WKB_DEPTH`].
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se la struttura WKB non e' valida (byte o
+/// conteggi oltre i limiti, anelli non chiusi, coordinate NaN o infinite,
+/// byte residui); `PlenoraError::Unsupported` se il payload porta
+/// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
 pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
     validate_wkb_contract_with_depth(payload, MAX_WKB_DEPTH)
 }
@@ -461,6 +478,11 @@ pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
 /// Variante con profondita' di annidamento configurabile (il limite arriva
 /// dai `Limits` effettivi del piano, `max_geometry_depth`; il default di
 /// [`validate_wkb_contract`] resta [`MAX_WKB_DEPTH`]).
+///
+/// # Errors
+///
+/// Come [`validate_wkb_contract`]; in piu' `PlenoraError::Contract` se
+/// l'annidamento delle geometrie supera `max_depth`.
 pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Result<(), PlenoraError> {
     if payload.len() > MAX_WKB_BYTES {
         return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
@@ -474,8 +496,9 @@ pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Res
     Ok(())
 }
 
-/// Variante stride-aware (B1.2) con dimensionalita' attesa esplicita:
-/// la validazione strutturale usa lo stride della dimensionalita'
+/// Variante stride-aware (B1.2) con dimensionalita' attesa esplicita.
+///
+/// La validazione strutturale usa lo stride della dimensionalita'
 /// dichiarata e rifiuta ogni type code incoerente con essa
 /// ([`wkb_dimension_mismatch`]). Con [`GeometryDimensions::Unknown`] i byte
 /// sono preservati e la dimensionalita' e' derivata dal type code di ogni
@@ -486,6 +509,13 @@ pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Res
 /// Il cablaggio della dimensionalita' dal contratto di colonna ai chiamanti
 /// e' milestone B1.3: i chiamanti attuali continuano a usare
 /// [`validate_wkb_contract`] (dimensionalita' `Xy`).
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se la struttura WKB non e' valida o se il type
+/// code e' incoerente con la dimensionalita' attesa
+/// ([`wkb_dimension_mismatch`]); `PlenoraError::Unsupported` se il payload
+/// porta dimensioni Z/M non dichiarate o il flag SRID EWKB.
 pub fn validate_wkb_contract_for_dimensions(
     payload: &[u8],
     dimensions: GeometryDimensions,
@@ -495,6 +525,12 @@ pub fn validate_wkb_contract_for_dimensions(
 
 /// Come [`validate_wkb_contract_for_dimensions`], con profondita' di
 /// annidamento configurabile (come [`validate_wkb_contract_with_depth`]).
+///
+/// # Errors
+///
+/// Come [`validate_wkb_contract_for_dimensions`]; in piu'
+/// `PlenoraError::Contract` se l'annidamento delle geometrie supera
+/// `max_depth`.
 pub fn validate_wkb_contract_for_dimensions_with_depth(
     payload: &[u8],
     dimensions: GeometryDimensions,
@@ -512,6 +548,11 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
     Ok(())
 }
 
+// float_cmp: i confronti esatti min/max individuano gli envelope degeneri
+// (larghezza o altezza nulle) per costruzione — min e max provengono dalle
+// stesse coordinate, quindi l'uguaglianza esatta e' il criterio voluto e un
+// margine epsilon cambierebbe la geometria prodotta (determinismo ADR-0001).
+#[allow(clippy::float_cmp)]
 fn envelope(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
     let rect = geometry
         .bounding_rect()
@@ -548,6 +589,14 @@ fn robust_convex_hull(geometry: &Geometry<f64>) -> Geometry<f64> {
     }))
 }
 
+/// Applica l'operazione (`Operation::Centroid`, `ConvexHull`, `Envelope`)
+/// a una geometria gia' decodificata, validandola in ingresso e in uscita.
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` se la geometria in ingresso o quella prodotta
+/// non supera la validazione OGC, o se l'operazione non e' definita su una
+/// geometria vuota (es. centroide o envelope di una geometria vuota).
 pub fn transform_geometry(
     operation: Operation,
     geometry: &Geometry<f64>,
@@ -576,6 +625,16 @@ fn transform_geometry_validated(
     Ok(output)
 }
 
+/// Applica l'operazione direttamente su un payload WKB: decode, trasforma
+/// ([`transform_geometry`]), ri-encode nel canone XY e ri-validazione del
+/// risultato contro il contratto ([`validate_wkb_contract`]).
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` per gli errori di decode, trasformazione,
+/// serializzazione WKB o validazione del risultato;
+/// `PlenoraError::Unsupported` se il payload in ingresso porta dimensioni
+/// Z/M o SRID non preservabili nel protocollo 2D.
 pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError> {
     let geometry = geometry_from_wkb(payload)?;
     let transformed = transform_geometry_validated(operation, &geometry)?;

@@ -142,7 +142,7 @@ fn validate_type_cast(config: &cleansing::TypeCast) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
-pub(crate) fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
+pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
     match dispatch_name(&step.operation) {
         "drop_columns" => validate_name_list(
             &decode::<columns::DropColumns>(step)?.columns,
@@ -947,7 +947,7 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
 /// mappa il nome sulla variante (stessa tabella di `validate_step_contract`),
 /// `execute_step`/`execute_binary` fanno match sulla variante senza parsing.
 #[derive(Debug)]
-pub(crate) enum PreparedStep {
+pub enum PreparedStep {
     /// `drop_columns`.
     DropColumns(Box<columns::DropColumns>),
     /// `rename`.
@@ -1176,7 +1176,7 @@ impl PreparedStep {
 /// Chiamata una sola volta per passo da `Plan::validate`, mai per batch;
 /// il dispatch per nome e' lo stesso di `validate_step_contract`.
 #[allow(clippy::too_many_lines)] // Mirror of the audited dispatcher, one arm per operation.
-pub(crate) fn prepare_step(step: &Step) -> Result<PreparedStep> {
+pub fn prepare_step(step: &Step) -> Result<PreparedStep> {
     Ok(match dispatch_name(&step.operation) {
         "drop_columns" => PreparedStep::DropColumns(Box::new(decode(step)?)),
         "rename" => PreparedStep::Rename(Box::new(decode(step)?)),
@@ -1341,7 +1341,7 @@ fn execute_step(
 /// `aggregate` (la forma prodotta da `prepare` per i nodi del DAG), cioe' le
 /// operazioni con variante `*_spilled` in `plenora_kernels_table::spill`.
 /// Usata dall'executor del DAG per la gestione della quota governor.
-pub(crate) fn unary_spill_capable(plan: &ValidatedPlan) -> bool {
+pub fn unary_spill_capable(plan: &ValidatedPlan) -> bool {
     matches!(
         plan.prepared_steps(),
         [PreparedStep::Sort(_) | PreparedStep::Distinct(_) | PreparedStep::Aggregate(_)]
@@ -1350,7 +1350,7 @@ pub(crate) fn unary_spill_capable(plan: &ValidatedPlan) -> bool {
 
 /// Accumulatore delle metriche di spill della catena (saturating: contatori
 /// di osservabilita', mai un overflow a bloccare l'esecuzione).
-fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMetrics) {
+const fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMetrics) {
     total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
     total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
     total.files = total.files.saturating_add(delta.files);

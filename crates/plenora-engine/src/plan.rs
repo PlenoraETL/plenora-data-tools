@@ -11,7 +11,7 @@
 //!   output raggiungibile, arietà da catalogo) e risoluzione alias verso gli
 //!   id canonici;
 //! - [`PlanV4::from_legacy`]: migrazione del piano lineare legacy
-//!   (`Plan{steps}`, schema_version <= 3) nel caso degenerato del DAG —
+//!   (`Plan{steps}`, `schema_version` <= 3) nel caso degenerato del DAG —
 //!   deterministica e idempotente (decisione D20, ADR 4);
 //! - [`canonical_json`]: serializzazione canonica ai fini del `plan_hash`
 //!   (ADR 4): chiavi ordinate, nodi in ordine topologico deterministico,
@@ -259,7 +259,7 @@ pub struct ValidatedPlanV4 {
 
 impl ValidatedPlanV4 {
     #[must_use]
-    pub fn plan(&self) -> &PlanV4 {
+    pub const fn plan(&self) -> &PlanV4 {
         &self.plan
     }
 
@@ -287,7 +287,7 @@ impl ValidatedPlanV4 {
     }
 }
 
-fn contract_error(message: String) -> PlenoraError {
+const fn contract_error(message: String) -> PlenoraError {
     PlenoraError::Contract(message)
 }
 
@@ -310,7 +310,7 @@ impl PlanV4 {
                 plan_limits.max_plan_json_bytes
             )));
         }
-        let mut plan: PlanV4 = serde_json::from_str(json_text)?;
+        let mut plan: Self = serde_json::from_str(json_text)?;
         let topo_order = plan.validate_structure(plan_limits)?;
         Ok(ValidatedPlanV4 { plan, topo_order })
     }
@@ -323,7 +323,7 @@ impl PlanV4 {
         Self::parse(json_text, &PlanLimits::default())
     }
 
-    /// Migrazione del piano lineare legacy (`Plan{steps}`, schema_version
+    /// Migrazione del piano lineare legacy (`Plan{steps}`, `schema_version`
     /// <= 3) nel caso degenerato del DAG: ogni step diventa un nodo il cui
     /// unico `in` è il nodo precedente (o l'unico input); il singolo step
     /// binario del protocollo a due input diventa un nodo con
@@ -405,7 +405,7 @@ impl PlanV4 {
             .collect::<Vec<_>>();
 
         let output = format!("n{}", nodes.len() - 1);
-        let limits = legacy_limits_override(&legacy.limits);
+        let limits = legacy_limits_override(&legacy.limits)?;
 
         let mut plan = Self {
             schema_version: PLAN_SCHEMA_VERSION_V4,
@@ -592,19 +592,24 @@ impl PlanV4 {
 }
 
 /// Mappa i limiti legacy (`plenora_kernels_table::Limits`) sugli override v4.
-fn legacy_limits_override(legacy: &table_engine::Limits) -> LimitsOverride {
+/// Conversione totale (R5.4): i campi `usize` della config legacy possono
+/// superare `u32`/`u64` solo per errori di configurazione, che vanno
+/// rifiutati e non troncati.
+fn legacy_limits_override(legacy: &table_engine::Limits) -> Result<LimitsOverride> {
     let max_rows = legacy.max_rows as u64;
-    LimitsOverride {
+    Ok(LimitsOverride {
         max_input_rows: Some(max_rows),
         max_output_rows: Some(max_rows),
         max_rows_per_edge: Some(max_rows),
         max_memory_bytes: Some(legacy.max_memory_bytes as u64),
         max_temp_bytes: Some(legacy.max_temp_bytes),
-        spill_partitions: Some(legacy.spill_partitions as u32),
+        spill_partitions: Some(u32::try_from(legacy.spill_partitions).map_err(|_| {
+            contract_error("spill_partitions legacy oltre il range u32".into())
+        })?),
         max_string_bytes: Some(legacy.max_string_bytes),
         max_regex_bytes: Some(legacy.max_regex_bytes),
         ..LimitsOverride::default()
-    }
+    })
 }
 
 fn check_identifier(kind: &str, value: &str, plan_limits: &PlanLimits) -> Result<()> {

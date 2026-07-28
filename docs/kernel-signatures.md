@@ -1303,7 +1303,7 @@ Config vuota (`{}`).
 | `geometry_column` | string | `null` (default `"geometry"`) | non vuota; non deve collidere con colonne esistenti |
 | `crs` | string | `null` | se assente serve il CRS di piano; la definizione deve essere risolvibile |
 
-**Input:** nessuna colonna geometria (input non geografico); due colonne numeriche (`Float64`/`Int64`) per x e y.
+**Input:** nessuna colonna geometria (input non geografico); due colonne numeriche (`Float64`/`Int64`) per x e y. Su colonne `Int64` i valori oltre ±2⁵³ sono **rifiutati** (`IntegerCoordinateTooLarge`): la conversione a `f64` oltre quel limite sposterebbe la coordinata in silenzio (cast audit 2026-07-27, ICD R5.4).
 **Output:** schema invariato + nuova colonna geometria (WKB, `nullable=false`, CRS da config o di piano, dimensioni XY); l'output diventa geografico; righe invariate.
 
 ### geo.intersection

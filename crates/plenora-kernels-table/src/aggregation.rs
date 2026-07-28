@@ -46,7 +46,7 @@ fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String>
 ///
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nativo
 /// esatto per Int64 (`i64::cmp`: la conversione a f64 collasserebbe valori
-/// distinti oltre 2^53 sullo stesso double) e per UInt64 (`u64::cmp`: il
+/// distinti oltre 2^53 sullo stesso double) e per `UInt64` (`u64::cmp`: il
 /// fallback testuale ordinerebbe "10" prima di "9"); `total_cmp` per
 /// Float64 (invariato); fallback `scalar_as_string` per gli altri tipi
 /// (invariato, stesso ordine storico del kernel). Le colonne confrontate
@@ -954,7 +954,7 @@ type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
 /// batch 4): righe raggruppate per la chiave testuale della colonna di
 /// partizione (`TextSource`: Utf8 preso in prestito, nessuna `String` per
 /// riga; `scalar_as_string` per gli altri tipi), hash FxHash+splitmix64
-/// (`KeyHasher`) al posto del `BTreeMap` SipHash. Le partizioni sono
+/// (`KeyHasher`) al posto del `BTreeMap` `SipHash`. Le partizioni sono
 /// restituite nello STESSO ordine di iterazione del `BTreeMap` originale
 /// (chiave `Option<String>` crescente): gli errori per partizione emergono
 /// nello stesso ordine e il comportamento resta deterministico.
@@ -969,12 +969,9 @@ fn build_partitions(batch: &RecordBatch, group: Option<usize>) -> Result<KeyPart
             .map(|source| source.value(row))
             .transpose()?
             .flatten();
-        match lookup.get(&key) {
-            Some(index) => partitions[*index].1.push(row),
-            None => {
-                lookup.insert(key.clone(), partitions.len());
-                partitions.push((key, vec![row]));
-            }
+        if let Some(index) = lookup.get(&key) { partitions[*index].1.push(row) } else {
+            lookup.insert(key.clone(), partitions.len());
+            partitions.push((key, vec![row]));
         }
     }
     // Le chiavi sono univoche: l'ordinamento e' esatto e deterministico.

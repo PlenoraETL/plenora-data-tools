@@ -136,8 +136,8 @@ impl std::str::FromStr for GeometryDimensions {
 /// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
 /// chiuso).
 ///
-/// Solo WKB ISO ed EWKB (estensione PostGIS con SRID/flag Z/M) sono
-/// rappresentabili. Altri framing — header GeoPackage, TWKB, … — NON sono
+/// Solo WKB ISO ed EWKB (estensione `PostGIS` con SRID/flag Z/M) sono
+/// rappresentabili. Altri framing — header `GeoPackage`, TWKB, … — NON sono
 /// rappresentabili: la discovery (milestone B1.3) deve rifiutarli con
 /// errore esplicito, mai mapparli a un encoding noto.
 ///
@@ -315,7 +315,7 @@ pub enum PropertyConfidence<T> {
 
 impl<T> PropertyConfidence<T> {
     /// Il valore, se presente a qualunque livello di fiducia.
-    pub fn value(&self) -> Option<&T> {
+    pub const fn value(&self) -> Option<&T> {
         match self {
             Self::Declared(value) | Self::Proven(value) | Self::Estimated(value) => Some(value),
             Self::Unknown => None,
@@ -323,7 +323,7 @@ impl<T> PropertyConfidence<T> {
     }
 
     /// Il valore solo se `Proven` (unica precondizione semantica ammessa).
-    pub fn proven_value(&self) -> Option<&T> {
+    pub const fn proven_value(&self) -> Option<&T> {
         match self {
             Self::Proven(value) => Some(value),
             _ => None,
@@ -331,7 +331,7 @@ impl<T> PropertyConfidence<T> {
     }
 
     /// `true` solo per `Proven`.
-    pub fn is_proven(&self) -> bool {
+    pub const fn is_proven(&self) -> bool {
         matches!(self, Self::Proven(_))
     }
 }
@@ -361,17 +361,17 @@ pub struct ContractProperty<T> {
 }
 
 impl<T> ContractProperty<T> {
-    pub fn new(confidence: PropertyConfidence<T>, scope: PropertyScope) -> Self {
+    pub const fn new(confidence: PropertyConfidence<T>, scope: PropertyScope) -> Self {
         Self { confidence, scope }
     }
 
     /// `true` solo se la proprietà è `Proven` (precondizione semantica).
-    pub fn is_proven(&self) -> bool {
+    pub const fn is_proven(&self) -> bool {
         self.confidence.is_proven()
     }
 
     /// Il valore, se presente a qualunque livello di fiducia.
-    pub fn value(&self) -> Option<&T> {
+    pub const fn value(&self) -> Option<&T> {
         self.confidence.value()
     }
 }
@@ -403,6 +403,7 @@ pub struct DataContract {
 
 impl DataContract {
     /// Contratto tabellare: nessuna colonna geometrica.
+    #[must_use]
     pub fn tabular(schema: SchemaRef) -> Self {
         Self {
             schema,
@@ -482,11 +483,12 @@ impl DataContract {
 
     /// La colonna geometrica attiva, se presente: `active_geometry` se
     /// dichiarata, altrimenti l'unica geometria del contratto.
+    #[must_use]
     pub fn active_geometry_column(&self) -> Option<&GeometryColumnContract> {
-        match self.active_geometry {
-            Some(active) => self.geometries.iter().find(|g| g.field_id == active),
-            None => self.geometries.first(),
-        }
+        self.active_geometry.map_or_else(
+            || self.geometries.first(),
+            |active| self.geometries.iter().find(|g| g.field_id == active),
+        )
     }
 }
 
@@ -509,7 +511,7 @@ pub enum RuntimeStatistic<T> {
 
 impl<T> RuntimeStatistic<T> {
     /// Il valore, se noto o stimato.
-    pub fn value(&self) -> Option<&T> {
+    pub const fn value(&self) -> Option<&T> {
         match self {
             Self::Known(value) | Self::Estimated(value) => Some(value),
             Self::Unknown => None,
@@ -517,7 +519,7 @@ impl<T> RuntimeStatistic<T> {
     }
 
     /// Il valore solo se misurato (`Known`).
-    pub fn known_value(&self) -> Option<&T> {
+    pub const fn known_value(&self) -> Option<&T> {
         match self {
             Self::Known(value) => Some(value),
             _ => None,
@@ -525,7 +527,7 @@ impl<T> RuntimeStatistic<T> {
     }
 
     /// `true` solo per `Known`.
-    pub fn is_known(&self) -> bool {
+    pub const fn is_known(&self) -> bool {
         matches!(self, Self::Known(_))
     }
 }

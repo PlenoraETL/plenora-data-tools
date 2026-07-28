@@ -23,11 +23,11 @@ use serde_json::json;
 struct Lcg(u64);
 
 impl Lcg {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next_u64(&mut self) -> u64 {
+    const fn next_u64(&mut self) -> u64 {
         self.0 = self
             .0
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -49,6 +49,9 @@ const SYLLABLES: &[&str] = &[
 /// Nome sintetico da tre sillabe (lettera iniziale maiuscola).
 fn name_of(seed: u64) -> String {
     let mut lcg = Lcg(seed.wrapping_add(1));
+    // Bound evidente: below(n) < n e n = SYLLABLES.len() deriva da usize,
+    // quindi il risultato rientra in usize.
+    #[allow(clippy::cast_possible_truncation)]
     let pick = |lcg: &mut Lcg| SYLLABLES[lcg.below(SYLLABLES.len() as u64) as usize];
     let first = pick(&mut lcg);
     let mut name = String::with_capacity(12);
@@ -70,6 +73,9 @@ fn typo(name: &str, seed: u64) -> String {
     if chars.len() < 2 {
         return name.to_owned();
     }
+    // Bound evidente: below(n) < n e n = chars.len() - 1 deriva da usize,
+    // quindi il risultato rientra in usize.
+    #[allow(clippy::cast_possible_truncation)]
     let position = lcg.below((chars.len() - 1) as u64) as usize;
     if lcg.below(2) == 0 {
         chars.swap(position, position + 1);
@@ -186,6 +192,9 @@ fn main() {
     let mut lcg = Lcg::seeded();
     let dirty: Vec<String> = (0..left_rows)
         .map(|row| {
+            // Bound evidente: below(n) < n e n = right_rows deriva da usize,
+            // quindi il risultato rientra in usize.
+            #[allow(clippy::cast_possible_truncation)]
             let source = &clean[lcg.below(right_rows as u64) as usize];
             if lcg.below(4) == 0 {
                 source.clone() // ~25% gia' puliti

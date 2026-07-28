@@ -6,11 +6,14 @@
 //! feature `proj-backend` (es. `cargo test -p plenora-cli --features
 //! full-backends`). I test end-to-end avversari arrivano con la fase 1e.
 
+#[cfg(feature = "proj-backend")]
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{BinaryArray, RecordBatch, StringArray};
+#[cfg(feature = "proj-backend")]
+use plenora_core::arrow::array::BinaryArray;
+use plenora_core::arrow::array::{RecordBatch, StringArray};
 use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -142,6 +145,7 @@ fn validate_stampa_il_riepilogo_del_piano() {
 }
 
 /// POINT (2 3), little-endian OGC WKB (come `write_self_test` del sorgente).
+#[cfg(feature = "proj-backend")]
 const POINT_WKB: [u8; 21] = [
     1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64,
 ];

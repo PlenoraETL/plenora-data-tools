@@ -515,7 +515,7 @@ fn canonical_json_normalizes_numbers() {
             "schema_version": 4, "inputs": ["main"], "output": "a",
             "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
                        "config": {"column": "id", "operator": ">",
-                                  "value": value.clone(), "nested": [{"n": value}, [-2.0]]}}]
+                                  "value": value, "nested": [{"n": value}, [-2.0]]}}]
         })
         .to_string()
     };

@@ -82,6 +82,11 @@ use num_traits::ToPrimitive;
 
 use plenora_core::{PlenoraError, Result};
 
+/// Indice della colonna `name` nel batch.
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente dallo schema.
 pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
     batch
         .schema()
@@ -89,6 +94,11 @@ pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
         .map_err(|_| PlenoraError::Schema(format!("colonna non trovata: {name}")))
 }
 
+/// Colonna `name` del batch come `StringArray` (Utf8).
+///
+/// # Errors
+///
+/// - `Schema`: colonna assente o non di tipo Utf8.
 pub fn utf8_column<'a>(
     batch: &'a RecordBatch,
     name: &str,
@@ -101,6 +111,13 @@ pub fn utf8_column<'a>(
         .ok_or_else(|| PlenoraError::Schema(format!("la colonna {name} deve essere Utf8")))
 }
 
+/// Batch con la colonna `name` sostituita da `array` (o aggiunta in coda se
+/// assente), preservando i metadati dello schema.
+///
+/// # Errors
+///
+/// - `Schema`: `array` ha un numero di righe diverso dal batch, oppure lo
+///   schema risultante non e' coerente con le colonne.
 pub fn replace_or_append(
     batch: &RecordBatch,
     name: &str,
@@ -133,6 +150,11 @@ pub fn replace_or_append(
     Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
 }
 
+/// Valida il nome di una colonna di output (non vuoto, <= 1024 byte).
+///
+/// # Errors
+///
+/// - `Contract`: nome vuoto (o solo spazi) oppure oltre 1024 byte.
 pub fn validate_output_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(PlenoraError::Contract(
@@ -147,6 +169,15 @@ pub fn validate_output_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Valore scalare della riga come `String` (profilo scalare testuale).
+/// `None` se la riga e' null.
+///
+/// # Errors
+///
+/// - `Contract`: epoch date32 non valida (guardia interna);
+/// - `Schema`: valore date32/timestamp fuori intervallo, timezone Arrow non
+///   valida, decimal128 incoerente o con scala non supportata, binary non
+///   UTF-8, dictionary non Utf8, tipo non supportato dal profilo scalare.
 pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
     if array.is_null(row) {
         return Ok(None);
@@ -229,6 +260,13 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
     )))
 }
 
+/// Valore scalare della riga come `f64`. `None` se la riga e' null.
+///
+/// # Errors
+///
+/// - `Schema`: intero/timestamp/decimal128 non rappresentabile come f64,
+///   decimal128 incoerente, testo non convertibile in numero, tipo non
+///   convertibile in numero.
 pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if array.is_null(row) {
         return Ok(None);
@@ -313,7 +351,7 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
 pub enum NumericBound {
     /// Letterale intero in gamma i64: confronto nativo esatto.
     I64(i64),
-    /// Letterale intero oltre i64::MAX (gamma u64): confronto nativo esatto.
+    /// Letterale intero oltre `i64::MAX` (gamma u64): confronto nativo esatto.
     U64(u64),
     /// Qualunque altra forma numerica (frazionaria, esponenziale, inf, NaN).
     F64(f64),
@@ -339,6 +377,7 @@ impl NumericBound {
 /// falso, come IEEE): i chiamanti lo trattano come "confronto non soddisfatto".
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 // I cast intero<->intero sono guardati dai rami precedenti (gamma verificata).
+#[must_use]
 pub fn compare_i64(actual: i64, bound: NumericBound) -> Option<Ordering> {
     match bound {
         NumericBound::I64(expected) => Some(actual.cmp(&expected)),
@@ -353,6 +392,7 @@ pub fn compare_i64(actual: i64, bound: NumericBound) -> Option<Ordering> {
 
 /// Confronto esatto u64 <-> bound. `None` solo con bound NaN.
 #[allow(clippy::cast_sign_loss)] // cast i64->u64 guardato dal ramo `expected < 0`
+#[must_use]
 pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
     match bound {
         NumericBound::U64(expected) => Some(actual.cmp(&expected)),
@@ -365,9 +405,10 @@ pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
     }
 }
 
-/// Confronto esatto f64 <-> bound, duale di `compare_i64`/`compare_u64`
-/// (usato per colonne Float64 contro letterali interi di configurazione:
-/// entro 2^53 coincide col confronto IEEE storico, oltre resta esatto).
+/// Confronto esatto f64 <-> bound, duale di `compare_i64`/`compare_u64`.
+///
+/// Usato per colonne Float64 contro letterali interi di configurazione:
+/// entro 2^53 coincide col confronto IEEE storico, oltre resta esatto.
 /// Con bound `F64` vale la semantica IEEE (`partial_cmp`: NaN -> `None`).
 pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
     match bound {
@@ -412,8 +453,11 @@ fn compare_i64_f64(actual: i64, expected: f64) -> Option<Ordering> {
     })
 }
 
-#[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
 // Come `compare_i64_f64`: guardie di finitezza, segno, gamma e integrita'.
+// I cast f64 -> u64 nel corpo sono esatti per costruzione: NaN e infiniti
+// sono esclusi dalle guardie iniziali, il segno negativo dalla guardia
+// `expected < 0.0`, l'overflow dalla guardia `expected >= 2^64`.
+#[allow(clippy::float_cmp, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
     if expected.is_nan() {
         return None;
@@ -439,6 +483,12 @@ fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
     })
 }
 
+/// Batch con le sole righe indicate, nell'ordine dato.
+///
+/// # Errors
+///
+/// - `Contract`: indice di riga oltre `u32::MAX`;
+/// - `Schema`: errore Arrow nella `take` o nella costruzione del batch.
 pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows
         .iter()

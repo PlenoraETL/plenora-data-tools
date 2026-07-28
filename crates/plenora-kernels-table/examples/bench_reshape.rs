@@ -4,7 +4,7 @@
 //! Fixture deterministica (seed logico 42, xorshift64):
 //! - melt: `id` int64 + `grp` utf8 (100 gruppi) + 8 colonne float64
 //!   (wide -> long, 10M righe x 8 colonne = 80M righe in output);
-//! - melt eterogeneo (type_policy='string'): 4 colonne miste
+//! - melt eterogeneo (`type_policy`='string'): 4 colonne miste
 //!   int64/utf8/float64/bool;
 //! - pivot: `k` int64 (rows/100 chiavi) x `p` utf8 (100 valori distinti)
 //!   -> wide ~100 colonne, aggr sum/first su `v` float64.
@@ -27,7 +27,7 @@ use serde_json::json;
 struct Rng(u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -37,8 +37,9 @@ impl Rng {
 
 fn melt_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng(42);
-    #[allow(clippy::cast_precision_loss)]
-    let ids = (0..rows).map(|row| row as i64).collect::<Vec<_>>();
+    let ids = (0..rows)
+        .map(|row| i64::try_from(row).expect("fixture"))
+        .collect::<Vec<_>>();
     let groups = (0..rows)
         .map(|row| format!("g{:03}", row % 100))
         .collect::<Vec<_>>();

@@ -1,9 +1,9 @@
 //! Sweep prestazionale dei kernel tabellari NON ancora ottimizzati
 //! (filone ottimizzazioni kernel, Fase post-2A): 42 op `table.*` del
-//! catalogo escluse quelle gia' ottimizzate (filter, sort, fill_na,
-//! coalesce, type_cast, aggregate, date_add, date_diff, date_format,
-//! timezone_convert, date_extract, text_normalize, join, semi_join,
-//! anti_join, string_extract, formula, expression, melt, pivot).
+//! catalogo escluse quelle gia' ottimizzate (filter, sort, `fill_na`,
+//! coalesce, `type_cast`, aggregate, `date_add`, `date_diff`, `date_format`,
+//! `timezone_convert`, `date_extract`, `text_normalize`, join, `semi_join`,
+//! `anti_join`, `string_extract`, formula, expression, melt, pivot).
 //!
 //! Stile di `bench_filter_sort.rs`: fixture deterministica (seed logico 42
 //! via xorshift), mediana di 3 run, righe/s, peak RSS (`VmHWM`).
@@ -81,11 +81,11 @@ fn bench_limits() -> Limits {
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -97,7 +97,7 @@ impl Rng {
 
 /// Fixture base condivisa: `id` int64, `num` float64, `grp` utf8 (1024
 /// gruppi), `text` utf8 (40 char esadecimali), `key` int64 (1M valori
-/// distinti possibili), `path` utf8 ("pNNN/qNNN/rNNN" per split_column).
+/// distinti possibili), `path` utf8 ("pNNN/qNNN/rNNN" per `split_column`).
 fn base_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let mut ids = Vec::with_capacity(rows);
@@ -108,6 +108,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
     let mut paths = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", rng.next() % 1_024));
         texts.push(format!(
@@ -116,6 +118,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
             rng.next(),
             rng.next() & 0xffff_ffff
         ));
+        // Bound evidente: draw % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((rng.next() % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",
@@ -173,6 +177,8 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
             [(); DRAWS_PER_ROW].map(|()| rng.next())
         };
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draws[0] % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((draws[0] % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", draws[1] % 1_024));
         texts.push(format!(
@@ -181,6 +187,8 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
             draws[3],
             draws[4] & 0xffff_ffff
         ));
+        // Bound evidente: draws[5] % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((draws[5] % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",
@@ -205,7 +213,7 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
 }
 
 /// Fixture destra per join/diff/FK: stessa chiave `id` 0..rows, `num`
-/// perturbato sul 10% delle righe (per table_diff), colonna extra `rval`.
+/// perturbato sul 10% delle righe (per `table_diff`), colonna extra `rval`.
 fn right_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let mut ids = Vec::with_capacity(rows);
@@ -213,6 +221,8 @@ fn right_fixture(rows: usize) -> RecordBatch {
     let mut rvals = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         let base = (rng.next() % 1_000_000) as f64 / 100.0;
         nums.push(Some(if row % 10 == 0 { base + 1.0 } else { base }));
         rvals.push(format!("r{:016x}", rng.next()));
@@ -237,6 +247,9 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     let ids = (0..rows)
         .map(|row| Some(2 * i64::try_from(row).unwrap_or(0) + offset))
         .collect::<Vec<_>>();
+    // Bound evidente: row < rows e rows <= M10 = 10^7 (scale del bench,
+    // costanti in testa al file) << 2^53: cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let vals = (0..rows)
         .map(|row| Some(row as f64))
         .collect::<Vec<_>>();
@@ -257,6 +270,10 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
 fn list_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
+    // Bound evidente: row < rows <= M10 = 10^7 (scale del bench) e
+    // value < length <= 4 (length = rng.next() % 5): entrambi i cast
+    // entrano in i64 senza wrap.
+    #[allow(clippy::cast_possible_wrap)]
     let lists = (0..rows)
         .map(|row| {
             let length = rng.next() % 5;
@@ -282,7 +299,12 @@ fn list_fixture(rows: usize) -> RecordBatch {
 fn struct_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
-    let a = (0..rows).map(|_| Some(rng.next() as i64)).collect::<Vec<_>>();
+    // Reinterpretazione bit a bit intenzionale: colonna random a pieno range.
+    let a = (0..rows)
+        .map(|_| Some(rng.next().cast_signed()))
+        .collect::<Vec<_>>();
+    // Bound evidente: draw % 10_000 <= 9_999 < 2^53, cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let b = (0..rows)
         .map(|_| Some((rng.next() % 10_000) as f64))
         .collect::<Vec<_>>();
@@ -313,7 +335,7 @@ fn struct_fixture(rows: usize) -> RecordBatch {
     .expect("fixture struct")
 }
 
-/// Fixture JSON annidati (3 livelli) per flatten_json.
+/// Fixture JSON annidati (3 livelli) per `flatten_json`.
 fn json_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
     let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
@@ -345,6 +367,8 @@ fn json_fixture(rows: usize) -> RecordBatch {
 /// l'output a `max_columns` colonne = righe input + 1).
 fn transpose_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
+    // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+    #[allow(clippy::cast_precision_loss)]
     let columns = (0..8)
         .map(|_| {
             Arc::new(Float64Array::from(
@@ -524,9 +548,7 @@ fn write_outputs(results: &[Measurement]) {
             entry.rows_per_second,
             entry.output_rows,
             entry
-                .peak_rss_kib
-                .map(|kib| format!("{}", kib / 1024))
-                .unwrap_or_else(|| "n/d".into()),
+                .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
         ));
     }

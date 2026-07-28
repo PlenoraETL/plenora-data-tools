@@ -550,7 +550,7 @@ fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
     );
 }
 
-/// Punto EWKB little-endian con flag SRID (0x2000_0000) + valore SRID.
+/// Punto EWKB little-endian con flag SRID (`0x2000_0000`) + valore SRID.
 fn ewkb_srid_point_wkb(srid: u32, x: f64, y: f64) -> Vec<u8> {
     let mut payload = vec![1_u8];
     payload.extend_from_slice(&0x2000_0001_u32.to_le_bytes());

@@ -378,6 +378,7 @@ where
     Some(Arc::new(builder.finish()))
 }
 
+#[must_use]
 pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef> {
     let first = batch.column(indices[0]);
     if first.null_count() == 0 {
@@ -897,7 +898,7 @@ fn cast_to_bool(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRe
     Ok(Some(Arc::new(BooleanArray::from(out))))
 }
 
-/// Target `uint64` (UInt64).
+/// Target `uint64` (`UInt64`).
 fn cast_to_uint64(source: &ArrayRef, errors: &CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione uint64 fallita";
     if let Some(values) = source.as_any().downcast_ref::<UInt64Array>() {
@@ -1064,7 +1065,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                 return Ok(None);
             };
             let mut builder = BinaryBuilder::new();
-            for value in values.iter() {
+            for value in values {
                 if let Some(value) = value {
                     builder.append_value(value);
                 } else {
@@ -1078,7 +1079,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                 return Ok(None);
             };
             let mut builder = StringDictionaryBuilder::<Int32Type>::new();
-            for value in values.iter() {
+            for value in values {
                 if let Some(value) = value {
                     builder.append(value)?;
                 } else {

@@ -1516,7 +1516,7 @@ fn exact_args_fast(args: &[FastValue<'_>], count: usize, name: &str) -> Result<(
 
 /// Equivalente di `function` su `FastValue`.
 #[allow(clippy::too_many_lines)]
-fn fast_function<'a>(name: Function, args: Vec<FastValue<'a>>) -> Result<FastValue<'a>> {
+fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'_>> {
     match name {
         Function::Coalesce => {
             if args.is_empty() {

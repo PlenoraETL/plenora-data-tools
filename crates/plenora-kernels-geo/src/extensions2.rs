@@ -188,10 +188,16 @@ fn check_cell_size(cell_size: f64) -> Result<(), ExtensionV2Error> {
 
 fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionV2Error> {
     let cells = (span / cell_size).ceil();
-    if !cells.is_finite() || cells > u64::MAX as f64 {
+    // Soglia 2^64, esatta in f64 e uguale al valore di `u64::MAX as f64`
+    // (che arrotonderebbe per eccesso): stesso confronto di prima.
+    if !cells.is_finite() || cells > 18_446_744_073_709_551_616.0 {
         return Err(ExtensionV2Error::IndexOverflow);
     }
-    Ok(cells as u64)
+    // Guardia sopra: cells finito e <= 2^64; uno span negativo satura a 0
+    // (comportamento preesistente: extent degenere -> griglia vuota).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cells_u64 = cells as u64;
+    Ok(cells_u64)
 }
 
 /// Dimensioni della griglia quadrata `(colonne, righe)`, con il limite di
@@ -224,9 +230,14 @@ fn hex_centers(
     let columns_f = ((extent.width() - 2.0 * cell_size) / column_step).floor();
     let columns = if extent.width() >= 2.0 * cell_size
         && columns_f.is_finite()
-        && columns_f < u64::MAX as f64
+        // Soglia 2^64, esatta in f64 (uguale a `u64::MAX as f64`).
+        && columns_f < 18_446_744_073_709_551_616.0
     {
-        columns_f as u64 + 1
+        // Guardia nella condizione: columns_f finito, >= 0 (questo ramo
+        // richiede width >= 2*cell_size) e < 2^64; cast saturante esatto.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let columns_u64 = columns_f as u64;
+        columns_u64 + 1
     } else if extent.width() < 2.0 * cell_size {
         0
     } else {
@@ -243,6 +254,9 @@ fn hex_centers(
     }
     let mut centers = Vec::new();
     for cell_i in 0..columns {
+        // cell_i < columns <= MAX_GRID_CELLS (1e6, verificato sopra): ben
+        // sotto 2^52, la conversione in f64 e' esatta.
+        #[allow(clippy::cast_precision_loss)]
         let cx = extent.xmin + cell_size + cell_i as f64 * column_step;
         let first_cy = if cell_i % 2 == 0 {
             extent.ymin + vertical_step / 2.0
@@ -284,8 +298,13 @@ pub fn grid_cell_count(
 }
 
 fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) -> GridCell {
+    // cell_i e cell_j sono minori delle dimensioni della griglia, il cui
+    // prodotto e' <= MAX_GRID_CELLS (1e6, verificato in square_dimensions):
+    // ben sotto 2^52, le conversioni in f64 sono esatte.
+    #[allow(clippy::cast_precision_loss)]
     let x0 = extent.xmin + cell_i as f64 * cell_size;
     let x1 = (x0 + cell_size).min(extent.xmax);
+    #[allow(clippy::cast_precision_loss)]
     let y0 = extent.ymin + cell_j as f64 * cell_size;
     let y1 = (y0 + cell_size).min(extent.ymax);
     let ring = LineString::from(vec![
@@ -338,7 +357,11 @@ pub fn generate_grid(
     match shape {
         GridShape::Square => {
             let (columns, rows) = square_dimensions(extent, cell_size)?;
-            let mut cells = Vec::with_capacity((columns * rows) as usize);
+            // columns * rows <= MAX_GRID_CELLS (1e6, verificato in
+            // square_dimensions): entra in usize anche su target a 32 bit.
+            #[allow(clippy::cast_possible_truncation)]
+            let cell_count = (columns * rows) as usize;
+            let mut cells = Vec::with_capacity(cell_count);
             for cell_j in 0..rows {
                 for cell_i in 0..columns {
                     cells.push(square_cell(extent, cell_size, cell_i, cell_j));
@@ -828,7 +851,7 @@ mod tests {
     fn subdivide_chunks_linestrings_with_a_shared_vertex() {
         let line = Geometry::LineString(LineString::new(
             (0..10).map(|index| Coord {
-                x: index as f64,
+                x: f64::from(index),
                 y: 0.0,
             })
             .collect(),
@@ -856,7 +879,7 @@ mod tests {
         let seven = Geometry::LineString(LineString::new(
             (0..7)
                 .map(|index| Coord {
-                    x: index as f64,
+                    x: f64::from(index),
                     y: 0.0,
                 })
                 .collect(),
@@ -871,7 +894,7 @@ mod tests {
         // Poligono a stella con 41 vertici, sopra la soglia 8.
         let mut ring: Vec<(f64, f64)> = Vec::new();
         for index in 0..40 {
-            let angle = index as f64 * std::f64::consts::TAU / 40.0;
+            let angle = f64::from(index) * std::f64::consts::TAU / 40.0;
             let radius = if index % 2 == 0 { 10.0 } else { 6.0 };
             ring.push((radius * angle.cos(), radius * angle.sin()));
         }
@@ -901,10 +924,10 @@ mod tests {
     fn subdivide_handles_polygons_with_interior_rings() {
         // Corona quadrata con anello interno densificato (piu' di 8 vertici).
         let exterior: Vec<(f64, f64)> = (0..=20)
-            .map(|index| (index as f64, 0.0))
-            .chain((1..=20).map(|index| (20.0, index as f64)))
-            .chain((1..=20).map(|index| (20.0 - index as f64, 20.0)))
-            .chain((1..=20).map(|index| (0.0, 20.0 - index as f64)))
+            .map(|index| (f64::from(index), 0.0))
+            .chain((1..=20).map(|index| (20.0, f64::from(index))))
+            .chain((1..=20).map(|index| (20.0 - f64::from(index), 20.0)))
+            .chain((1..=20).map(|index| (0.0, 20.0 - f64::from(index))))
             .collect();
         let hole = vec![
             (5.0, 5.0),
@@ -935,7 +958,7 @@ mod tests {
     fn subdivide_chunks_multipoints_and_explodes_multi_lines_and_collections() {
         let points = Geometry::MultiPoint(MultiPoint::new(
             (0..10)
-                .map(|index| Point::new(index as f64, 0.0))
+                .map(|index| Point::new(f64::from(index), 0.0))
                 .collect(),
         ));
         let parts = subdivide(&points, 4).expect("parti");
@@ -953,7 +976,7 @@ mod tests {
             LineString::new(
                 (0..10)
                     .map(|index| Coord {
-                        x: index as f64,
+                        x: f64::from(index),
                         y: 1.0,
                     })
                     .collect(),
@@ -999,7 +1022,7 @@ mod tests {
         let line = Geometry::LineString(LineString::new(
             (0..10)
                 .map(|index| Coord {
-                    x: index as f64,
+                    x: f64::from(index),
                     y: 0.0,
                 })
                 .collect(),

@@ -21,7 +21,7 @@ use plenora_kernels_table::cleansing::{
 use plenora_kernels_table::quality::{coalesce, Coalesce};
 use serde_json::{json, Value};
 
-fn nullable(row: usize, modulus: usize, remainder: usize) -> bool {
+const fn nullable(row: usize, modulus: usize, remainder: usize) -> bool {
     row % modulus == remainder
 }
 

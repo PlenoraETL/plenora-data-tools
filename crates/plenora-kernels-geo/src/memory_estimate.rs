@@ -241,13 +241,13 @@ mod tests {
     fn estimate_is_monotonic_in_the_coordinate_count() {
         let short = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
         let long = Geometry::LineString(LineString::from(
-            (0..10).map(|index| (index as f64, index as f64)).collect::<Vec<_>>(),
+            (0..10).map(|index| (f64::from(index), f64::from(index))).collect::<Vec<_>>(),
         ));
         assert!(estimate_geometry_native_bytes(&long) > estimate_geometry_native_bytes(&short));
 
         let single = Geometry::MultiPoint(geo::MultiPoint::new(vec![Point::new(0.0, 0.0)]));
         let many = Geometry::MultiPoint(geo::MultiPoint::new(
-            (0..5).map(|index| Point::new(index as f64, 0.0)).collect(),
+            (0..5).map(|index| Point::new(f64::from(index), 0.0)).collect(),
         ));
         assert!(estimate_geometry_native_bytes(&many) > estimate_geometry_native_bytes(&single));
     }

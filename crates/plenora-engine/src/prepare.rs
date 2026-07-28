@@ -375,7 +375,7 @@ pub enum PreparedConfig {
         /// Indici risolti delle colonne chiave nel batch di input (V2).
         group_by_indices: Box<[usize]>,
     },
-    /// `geo.generate_grid` (blocking, WholeToMany, generativa): l'input
+    /// `geo.generate_grid` (blocking, `WholeToMany`, generativa): l'input
     /// funge da trigger; la griglia e' prodotta da
     /// `extensions2::generate_grid_rows` con parametri rivalidati.
     GeoGenerateGrid {
@@ -402,8 +402,8 @@ pub enum PreparedConfig {
         /// Lunghezza minima del tratto condiviso (default 0).
         min_length: f64,
     },
-    /// `geo.cluster_dbscan` (blocking, output OneToOne allineato alle
-    /// righe): etichetta UInt64 nullable per riga via
+    /// `geo.cluster_dbscan` (blocking, output `OneToOne` allineato alle
+    /// righe): etichetta `UInt64` nullable per riga via
     /// `cluster::dbscan_column`.
     GeoClusterDbscan {
         /// Raggio di vicinato (finito, > 0).

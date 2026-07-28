@@ -6,9 +6,9 @@
 //! con `benchmarks/sweep/sweep.json`:
 //! - statistics: `num` float64 x `grp` utf8 (1024 gruppi), tutte le 10
 //!   statistiche (config dello sweep);
-//! - flatten_json discovery: JSON annidati 3 livelli, `output_columns`
+//! - `flatten_json` discovery: JSON annidati 3 livelli, `output_columns`
 //!   vuote (config dello sweep);
-//! - flatten_json selective: stessi documenti, 3 `output_columns`
+//! - `flatten_json` selective: stessi documenti, 3 `output_columns`
 //!   esplicite (parsing selettivo dei soli path richiesti).
 //!
 //! Uso: `bench_analysis <rows> <repetitions>`
@@ -31,11 +31,11 @@ use serde_json::json;
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -53,6 +53,8 @@ fn stats_fixture(rows: usize) -> RecordBatch {
     let mut nums = Vec::with_capacity(rows);
     let mut groups = Vec::with_capacity(rows);
     for _ in 0..rows {
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", rng.next() % 1_024));
         for _ in 0..7 {

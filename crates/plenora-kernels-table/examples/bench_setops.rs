@@ -7,7 +7,7 @@
 //! sulle righe intere (righe identiche alla base nell'intervallo
 //! [rows/2, rows)).
 //!
-//! Uso: `bench_setops <rows> <repetitions>` (default 1_000_000, 3).
+//! Uso: `bench_setops <rows> <repetitions>` (default `1_000_000`, 3).
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
@@ -34,11 +34,11 @@ fn bench_limits() -> Limits {
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -61,6 +61,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
     let mut paths = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", rng.next() % 1_024));
         texts.push(format!(
@@ -69,6 +71,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
             rng.next(),
             rng.next() & 0xffff_ffff
         ));
+        // Bound evidente: draw % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((rng.next() % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",
@@ -128,6 +132,8 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
             [(); DRAWS_PER_ROW].map(|()| rng.next())
         };
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draws[0] % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((draws[0] % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", draws[1] % 1_024));
         texts.push(format!(
@@ -136,6 +142,8 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
             draws[3],
             draws[4] & 0xffff_ffff
         ));
+        // Bound evidente: draws[5] % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((draws[5] % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",

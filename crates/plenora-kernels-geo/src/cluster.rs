@@ -303,13 +303,22 @@ mod tests {
 
     fn cloud(center: (f64, f64), count: usize) -> Vec<(f64, f64)> {
         // Griglia densa deterministica attorno al centro (passo 0.1).
+        // count <= 100_000 nelle fixture: esatto in f64 (< 2^52) e la sua
+        // radice rientra in usize; conversioni senza perdita qui.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let side = (count as f64).sqrt().ceil() as usize;
         (0..count)
             .map(|index| {
-                (
-                    center.0 + (index % side) as f64 * 0.1,
-                    center.1 + (index / side) as f64 * 0.1,
-                )
+                // index < count <= 100_000 (fixture): esatto in f64.
+                #[allow(clippy::cast_precision_loss)]
+                let column = (index % side) as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let row = (index / side) as f64;
+                (center.0 + column * 0.1, center.1 + row * 0.1)
             })
             .collect()
     }
@@ -347,7 +356,7 @@ mod tests {
     fn density_connected_chain_is_one_cluster() {
         // Catena di punti a passo 1.0 (< eps): ogni punto ha 1-2 vicini, con
         // min_points 2 i punti interni sono core e la catena si salda.
-        let coords: Vec<(f64, f64)> = (0..20).map(|index| (index as f64, 0.0)).collect();
+        let coords: Vec<(f64, f64)> = (0..20).map(|index| (f64::from(index), 0.0)).collect();
         let labels = dbscan(&points(&coords), 1.5, 2).expect("dbscan");
         assert!(
             labels.iter().all(|label| *label == Some(0)),
@@ -355,7 +364,7 @@ mod tests {
         );
         // Due catene separate: i cluster seguono l'ordine di riga.
         let mut two = coords.clone();
-        two.extend((0..20).map(|index| (100.0 + index as f64, 0.0)));
+        two.extend((0..20).map(|index| (100.0 + f64::from(index), 0.0)));
         let labels = dbscan(&points(&two), 1.5, 2).expect("dbscan");
         assert!(labels[..20].iter().all(|label| *label == Some(0)));
         assert!(labels[20..].iter().all(|label| *label == Some(1)));
@@ -399,7 +408,7 @@ mod tests {
     fn double_execution_gives_identical_labels() {
         let mut coords = cloud((0.0, 0.0), 40);
         coords.extend(cloud((50.0, 50.0), 40));
-        coords.extend((0..10).map(|index| (200.0 + index as f64 * 7.0, -30.0)));
+        coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));
         let first = dbscan(&points(&coords), 0.5, 4).expect("prima");
         let second = dbscan(&points(&coords), 0.5, 4).expect("seconda");
         assert_eq!(first, second);
@@ -512,8 +521,12 @@ mod tests {
         let mut state = 0x2545_F491_4F6C_DD1D_u64;
         for _ in 0..1_000 {
             state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            // state >> 11 e' < 2^53 e (1 << 53) == 2^53: entrambi esatti in
+            // f64; schema standard per un double uniforme in [0, 1).
+            #[allow(clippy::cast_precision_loss)]
             let x = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
             state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            #[allow(clippy::cast_precision_loss)]
             let y = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
             coords.push((x, y));
         }

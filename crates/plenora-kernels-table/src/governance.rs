@@ -575,7 +575,8 @@ fn rule_json_text(value: &serde_json::Value) -> String {
 /// `scalar_as_f64`, escluso `Utf8` (un testo da parsare per riga non e' una
 /// colonna numerica: meglio un errore in validazione che un fallimento per
 /// riga). Riusata dall'analisi a secco del contratto.
-pub fn is_rule_numeric(data_type: &DataType) -> bool {
+#[must_use]
+pub const fn is_rule_numeric(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::Float64
@@ -589,7 +590,8 @@ pub fn is_rule_numeric(data_type: &DataType) -> bool {
 
 /// Tipi confrontabili per uguaglianza (profilo scalare testuale o numerico).
 /// Riusata dall'analisi a secco del contratto.
-pub fn is_rule_comparable(data_type: &DataType) -> bool {
+#[must_use]
+pub const fn is_rule_comparable(data_type: &DataType) -> bool {
     is_rule_numeric(data_type)
         || matches!(
             data_type,
@@ -905,6 +907,7 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
 }
 
 /// Valida le righe contro un set di regole dichiarative (estensione v1.2).
+///
 /// NON fallisce mai sui dati: `annotate` aggiunge `_valid` (Boolean, false
 /// se almeno una regola error e' fallita), `_errors` e `_warnings` (nomi
 /// delle regole fallite separati da `;`, stringa vuota se nessuna);

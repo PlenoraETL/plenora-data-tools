@@ -270,7 +270,7 @@ impl JsonTargets {
 }
 
 /// Colonne path -> valori dense per riga (null dove il path manca),
-/// costruite direttamente durante la scansione: evita la BTreeMap per
+/// costruite direttamente durante la scansione: evita la `BTreeMap` per
 /// riga, la raccolta/ordinamento delle chiavi per cella e la copia dei
 /// valori nelle colonne di output dell'implementazione originale.
 #[derive(Default)]
@@ -282,15 +282,12 @@ struct PathColumns {
 
 impl PathColumns {
     fn insert(&mut self, row: usize, path: &str, text: String) {
-        let id = match self.index.get(path) {
-            Some(&id) => id,
-            None => {
-                let id = self.columns.len();
-                self.index.insert(path.to_owned(), id);
-                self.paths.push(path.to_owned());
-                self.columns.push(Vec::new());
-                id
-            }
+        let id = if let Some(&id) = self.index.get(path) { id } else {
+            let id = self.columns.len();
+            self.index.insert(path.to_owned(), id);
+            self.paths.push(path.to_owned());
+            self.columns.push(Vec::new());
+            id
         };
         let column = &mut self.columns[id];
         if column.len() > row {
@@ -311,7 +308,7 @@ impl PathColumns {
 /// oggetto scartano il buffer (l'originale produce una riga vuota). Con
 /// chiavi ambigue due derivazioni diverse possono produrre lo stesso path
 /// appiattito e l'originale risolve il conflitto iterando le chiavi in
-/// ordine lessicografico (BTreeMap di serde_json): non riproducibile in
+/// ordine lessicografico (`BTreeMap` di `serde_json`: non riproducibile in
 /// streaming ordine-documento, quindi il driver ricade sul parsing
 /// completo per quella riga.
 struct RowFlatten<'a> {

@@ -1,5 +1,5 @@
 //! `table.fuzzy_join` (estensione table v1.3): join per similarita' testuale
-//! su anagrafiche sporche (BinaryOrdered, Blocking, BoundaryOnly).
+//! su anagrafiche sporche (`BinaryOrdered`, `Blocking`, `BoundaryOnly`).
 //!
 //! Semantica documentata (v1, deliberatamente semplice):
 //! - coppie candidate SOLO via blocking sul lato destro (`prefix` = primi N
@@ -156,7 +156,7 @@ pub fn validate_config(config: &FuzzyJoin) -> Result<()> {
     validate_output_name(config.score_name())
 }
 
-fn soundex_code(letter: char) -> u8 {
+const fn soundex_code(letter: char) -> u8 {
     match letter {
         'b' | 'f' | 'p' | 'v' => 1,
         'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => 2,

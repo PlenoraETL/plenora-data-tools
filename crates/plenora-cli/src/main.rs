@@ -334,6 +334,9 @@ fn transform_stream(
     writer: &mut dyn Write,
     schema: &TransformSchema,
 ) -> Result<TransformSummary, Box<dyn Error>> {
+    const BATCH_ROWS: usize = 4096;
+    const BATCH_BYTES: usize = 64 * 1024 * 1024;
+
     if schema.schema_version != 2 {
         return Err(contract(format!(
             "schema_version {} non supportata",
@@ -345,8 +348,6 @@ fn transform_stream(
     let mut input = FrameReader::new(reader, schema.row_count)?;
     let mut output = FrameWriter::new(writer, schema.row_count)?;
 
-    const BATCH_ROWS: usize = 4096;
-    const BATCH_BYTES: usize = 64 * 1024 * 1024;
     let mut rows = 0_u64;
     let mut batch_bytes = 0_usize;
     let mut batch: Vec<Option<Vec<u8>>> = Vec::with_capacity(BATCH_ROWS);
@@ -565,6 +566,9 @@ fn execute_spatial_join(
     schema_path: &Path,
     output_path: &Path,
 ) -> Result<SpatialJoinSummary, Box<dyn Error>> {
+    const MAX_JOIN_ROWS_PER_SIDE: u64 = 2_000_000;
+    const MAX_JOIN_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
+
     let schema: SpatialJoinSchema = serde_json::from_reader(BufReader::with_capacity(
         64 * 1024,
         File::open(schema_path)?,
@@ -580,8 +584,6 @@ fn execute_spatial_join(
         return Err(contract(format!("max_pairs deve essere tra 1 e {MAX_PAIRS}")).into());
     }
     validate_spatial_join_crs(&schema)?;
-    const MAX_JOIN_ROWS_PER_SIDE: u64 = 2_000_000;
-    const MAX_JOIN_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
     if schema.left_row_count > MAX_JOIN_ROWS_PER_SIDE
         || schema.right_row_count > MAX_JOIN_ROWS_PER_SIDE
     {
@@ -825,7 +827,7 @@ fn open_input(path: &Path) -> Result<Input, PlenoraError> {
     }
 }
 
-/// Definizione CRS dal metadato `geo` di una colonna GeoArrow: stringa
+/// Definizione CRS dal metadato `geo` di una colonna `GeoArrow`: stringa
 /// `authority:code` oppure PROJJSON come oggetto (serializzato compatto).
 /// Fail-closed su metadato mancante o malformato.
 fn crs_definition_from_metadata(
@@ -1223,6 +1225,11 @@ fn print_help() {
     );
 }
 
+// Dispatch unico dei sottocomandi: la lunghezza e' data dalla sequenza
+// lineare dei casi, non da complessita' logica; uno spezzone artificiale
+// peggiorerebbe solo la leggibilita' (fase di pulizia: niente refactor
+// strutturali).
+#[allow(clippy::too_many_lines)]
 fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {

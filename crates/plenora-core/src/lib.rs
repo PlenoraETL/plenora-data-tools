@@ -32,10 +32,12 @@ pub mod arrow {
     pub use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 
     /// Versione dei crate Arrow in uso (`arrow-schema` & co., unica per
-    /// decisione D0). I crate Arrow non espongono la propria versione a
-    /// runtime: la costante e' tenuta allineata al pin del workspace
-    /// (`arrow-schema = "=…"` nel `Cargo.toml` di root) da un test dedicato.
-    /// Entra nell'identita' dei grafi validati (ADR 4).
+    /// decisione D0).
+    ///
+    /// I crate Arrow non espongono la propria versione a runtime: la
+    /// costante e' tenuta allineata al pin del workspace (`arrow-schema =
+    /// "=…"` nel `Cargo.toml` di root) da un test dedicato. Entra
+    /// nell'identita' dei grafi validati (ADR 4).
     pub const VERSION: &str = "59.1.0";
 }
 

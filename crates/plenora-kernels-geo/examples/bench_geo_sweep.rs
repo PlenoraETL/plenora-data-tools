@@ -269,8 +269,8 @@ fn multipolys_wkb() -> &'static WkbCells {
                 .map(|part| {
                     star_polygon(
                         rng,
-                        cx + 150.0 * part as f64,
-                        cy + 40.0 * part as f64,
+                        cx + 150.0 * f64::from(part),
+                        cy + 40.0 * f64::from(part),
                         30.0,
                         100,
                     )
@@ -1067,7 +1067,7 @@ fn main() {
     sweep_cells(&mut results, "geo.area", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_area);
     let op_boundary = |payload: &Vec<u8>| dec(payload).and_then(|g| boundary(&g).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.boundary", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_boundary);
-    let op_bounds = |payload: &Vec<u8>| dec(payload).and_then(|g| bounds(&g).map(|v| black_box(v).is_some() as usize).map_err(|e| e.to_string()));
+    let op_bounds = |payload: &Vec<u8>| dec(payload).and_then(|g| bounds(&g).map(|v| usize::from(black_box(v).is_some())).map_err(|e| e.to_string()));
     sweep_cells(&mut results, "geo.bounds_extractor", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_bounds);
     let op_buffer = |payload: &Vec<u8>| dec(payload).and_then(|g| buffer_with_cap(&g, 10.0, BufferCapStyle::Round).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.buffer", "per_cell", "poly_simple", polys_wkb(), true, false, "d=10, cap round", &op_buffer);
@@ -1109,7 +1109,7 @@ fn main() {
         let op = move |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
                 evaluate_predicate(&g, ref_poly, predicate)
-                    .map(|v| black_box(v) as usize)
+                    .map(|v| usize::from(black_box(v)))
                     .map_err(|e| e.to_string())
             })
         };

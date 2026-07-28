@@ -103,7 +103,7 @@ impl AlignType {
     /// timezone (coerente col profilo scalare), `Decimal128` = precisione 38,
     /// scala 10.
     #[must_use]
-    pub fn data_type(self) -> DataType {
+    pub const fn data_type(self) -> DataType {
         match self {
             Self::Utf8 => DataType::Utf8,
             Self::Int64 => DataType::Int64,

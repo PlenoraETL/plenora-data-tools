@@ -39,7 +39,8 @@ impl ResolvedCrs {
     /// Riservato ai backend di risoluzione (`plenora-kernels-geo`, feature
     /// `proj-backend`) e ai test: il contratto resta che solo una risoluzione
     /// contro il database PROJ puo' produrre questi valori.
-    pub fn from_resolved_parts(
+    #[must_use]
+    pub const fn from_resolved_parts(
         definition: String,
         canonical: Value,
         kind: CrsKind,
@@ -53,18 +54,22 @@ impl ResolvedCrs {
         }
     }
 
+    #[must_use]
     pub fn definition(&self) -> &str {
         &self.definition
     }
 
-    pub fn kind(&self) -> CrsKind {
+    #[must_use]
+    pub const fn kind(&self) -> CrsKind {
         self.kind
     }
 
-    pub fn horizontal_unit_to_metre(&self) -> Option<f64> {
+    #[must_use]
+    pub const fn horizontal_unit_to_metre(&self) -> Option<f64> {
         self.horizontal_unit_to_metre
     }
 
+    #[must_use]
     pub fn semantically_equals(&self, other: &Self) -> bool {
         self.canonical == other.canonical
     }
@@ -98,10 +103,17 @@ pub enum CrsError {
 
 impl From<CrsError> for PlenoraError {
     fn from(error: CrsError) -> Self {
-        PlenoraError::Crs(error.to_string())
+        Self::Crs(error.to_string())
     }
 }
 
+/// Definizione CRS obbligatoria e testualmente valida.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::Required`] se la definizione manca o e' vuota e
+/// [`CrsError::InvalidDefinition`] se supera [`MAX_CRS_DEFINITION_BYTES`] o
+/// contiene NUL.
 pub fn required_definition<'a>(
     value: Option<&'a str>,
     name: &'static str,
@@ -139,11 +151,27 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 /// projected, unita' lineare) vive in `plenora-kernels-geo` dietro la feature
 /// `proj-backend`; senza backend nessuna dichiarazione non verificata viene
 /// accettata, esattamente come nel sorgente compilato senza `proj-backend`.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::Required`] o [`CrsError::InvalidDefinition`] per
+/// definizioni testualmente invalide; senza backend PROJ restituisce sempre
+/// [`CrsError::BackendUnavailable`] dopo la validazione testuale.
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     validate_definition_text(definition, name)?;
     Err(CrsError::BackendUnavailable)
 }
 
+/// Verifica il requisito CRS del catalogo sugli input risolti.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::InvalidContract`] se il contratto e' violato
+/// (nessun input, numero di CRS errato per `Reprojection`),
+/// [`CrsError::ProjectedRequired`]/[`CrsError::GeographicRequired`] per il
+/// tipo richiesto, [`CrsError::MissingLinearUnit`] se un CRS proiettato non
+/// dichiara un'unita' lineare valida e [`CrsError::Mismatch`] se gli input
+/// di `SameProjected` non sono semanticamente uguali.
 pub fn validate_requirement(
     requirement: CrsRequirement,
     inputs: &[&ResolvedCrs],
@@ -201,6 +229,12 @@ fn ensure_geographic(crs: &ResolvedCrs) -> Result<(), CrsError> {
 /// dipende da `geo`. Il wrapper tipizzato su `geo::Geometry` e' in
 /// `plenora-kernels-geo` (`plenora_kernels_geo::crs::validate_geometry_domain`)
 /// e deleghi a questa funzione, senza differenze di comportamento.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::CoordinateOutOfDomain`] alla prima coordinata non
+/// finita o fuori dal dominio longitude/latitude di un CRS geografico; per un
+/// CRS proiettato non fallisce mai.
 pub fn validate_geometry_domain(
     coordinates: impl Iterator<Item = (f64, f64)>,
     crs: &ResolvedCrs,

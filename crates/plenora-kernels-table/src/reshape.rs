@@ -479,7 +479,7 @@ fn pivot_column(
                     let mut sum = -0.0_f64;
                     let mut extremum = 0.0_f64;
                     let mut count = 0_usize;
-                    for row in rows.iter() {
+                    for row in *rows {
                         let Some(value) = numeric.value(*row)? else { continue };
                         if count == 0 {
                             extremum = value;
@@ -551,27 +551,21 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         for column in &key_columns {
             column.write_key(row, &mut key, &mut scratch)?;
         }
-        let key_id = match key_ids.get(key.as_str()) {
-            Some(id) => *id,
-            None => {
-                let id = representatives.len();
-                key_ids.insert(key.clone(), id);
-                representatives.push(row);
-                id
-            }
+        let key_id = if let Some(id) = key_ids.get(key.as_str()) { *id } else {
+            let id = representatives.len();
+            key_ids.insert(key.clone(), id);
+            representatives.push(row);
+            id
         };
         scratch.clear();
         if !pivot_source.write_value(row, &mut scratch)? {
             continue;
         }
         if config.mapping.is_empty() || config.mapping.contains_key(scratch.as_str()) {
-            let pivot_id = match pivot_ids.get(scratch.as_str()) {
-                Some(id) => *id,
-                None => {
-                    let id = pivot_ids.len();
-                    pivot_ids.insert(scratch.clone(), id);
-                    id
-                }
+            let pivot_id = if let Some(id) = pivot_ids.get(scratch.as_str()) { *id } else {
+                let id = pivot_ids.len();
+                pivot_ids.insert(scratch.clone(), id);
+                id
             };
             cells.entry((key_id, pivot_id)).or_default().push(row);
         }
@@ -2174,7 +2168,7 @@ mod tests {
                     None
                 } else {
                     #[allow(clippy::cast_precision_loss)]
-                    Some((row % 997) as f64 / 3.0)
+                    Some(f64::from(row % 997) / 3.0)
                 }
             })
             .collect::<Vec<_>>();

@@ -9,7 +9,7 @@
 //!   `text` utf8 (40 char esadecimali), `key` int64 (1M valori distinti
 //!   possibili), `path` utf8;
 //! - fixture destra: stessa chiave `id` 0..rows, `num` perturbato sul 10%
-//!   delle righe (per table_diff), colonna extra `rval`.
+//!   delle righe (per `table_diff`), colonna extra `rval`.
 //!
 //! Uso: `bench_quality_diff <rows> <repetitions>`
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
@@ -33,11 +33,11 @@ use serde_json::json;
 struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    const fn seeded() -> Self {
         Self(42)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -58,6 +58,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
     let mut paths = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
         groups.push(format!("g{}", rng.next() % 1_024));
         texts.push(format!(
@@ -66,6 +68,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
             rng.next(),
             rng.next() & 0xffff_ffff
         ));
+        // Bound evidente: draw % 1_000_000 <= 999_999, entra in i64 senza wrap.
+        #[allow(clippy::cast_possible_wrap)]
         keys.push((rng.next() % 1_000_000) as i64);
         paths.push(format!(
             "p{:03}/q{:03}/r{:03}",
@@ -109,6 +113,8 @@ fn right_fixture(rows: usize) -> RecordBatch {
     let mut rvals = Vec::with_capacity(rows);
     for row in 0..rows {
         ids.push(i64::try_from(row).ok());
+        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
+        #[allow(clippy::cast_precision_loss)]
         let base = (rng.next() % 1_000_000) as f64 / 100.0;
         nums.push(Some(if row % 10 == 0 { base + 1.0 } else { base }));
         rvals.push(format!("r{:016x}", rng.next()));

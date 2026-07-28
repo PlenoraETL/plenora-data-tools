@@ -3623,7 +3623,7 @@ fn analyze_concat_by_name(
                                 .schema
                                 .field_with_name(&geometry.name)
                                 .ok()
-                                .map(|source| source.data_type())
+                                .map(plenora_core::arrow::Field::data_type)
                     })
             })
         })

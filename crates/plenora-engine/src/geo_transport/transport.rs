@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Le geometrie viaggiano in una colonna `Binary` con metadati di estensione
-//! GeoArrow (`ARROW:extension:name` = `geoarrow.wkb`) e metadato `geo` JSON
+//! `GeoArrow` (`ARROW:extension:name` = `geoarrow.wkb`) e metadato `geo` JSON
 //! con la chiave `crs`. Ogni cella non-null viene validata con il validatore
 //! WKB del kernel; i null sono preservati. Il modulo e' puro I/O su
 //! `Read`/`Write`: la verifica semantica del CRS e la pubblicazione atomica
@@ -23,7 +23,7 @@
 //! `simplify`, `boundary`, `point_on_surface`, `make_valid` (richiede
 //! `geos-backend`) e `reproject` (richiede `proj-backend`) producono una
 //! colonna geometria GeoArrow-WKB; `area`, `length`, `perimeter` producono
-//! Float64, `vertex_count` UInt64, `bounds` quattro colonne Float64
+//! Float64, `vertex_count` `UInt64`, `bounds` quattro colonne Float64
 //! `<geometry_column>_minx/miny/maxx/maxy`, `to_wkt` Utf8.
 
 use std::io::{Read, Write};
@@ -209,6 +209,8 @@ pub enum ArrowTransportError {
     MissingColumn(String),
     #[error("colonna `{name}` di tipo {actual}, attesa numerica (Float64 o Int64)")]
     ColumnNotNumeric { name: String, actual: String },
+    #[error("colonna `{name}`: coordinata intera oltre 2^53 in valore assoluto, conversione f64 non esatta")]
+    IntegerCoordinateTooLarge { name: String },
     #[error("colonna geometria di output `{0}` gia' presente nell'input")]
     OutputColumnExists(String),
     #[error("topologia fallita: {0}")]
@@ -264,9 +266,9 @@ impl From<PlenoraError> for ArrowTransportError {
         match error {
             PlenoraError::Contract(message)
             | PlenoraError::Unsupported(message)
-            | PlenoraError::Schema(message) => ArrowTransportError::Geometry(message),
-            PlenoraError::Io(error) => ArrowTransportError::Io(error),
-            other => ArrowTransportError::Arrow(other.to_string()),
+            | PlenoraError::Schema(message) => Self::Geometry(message),
+            PlenoraError::Io(error) => Self::Io(error),
+            other => Self::Arrow(other.to_string()),
         }
     }
 }
@@ -332,151 +334,153 @@ pub enum ArrowShape {
 }
 
 impl ArrowOperation {
-    pub const ALL: [ArrowOperation; 37] = [
-        ArrowOperation::Centroid,
-        ArrowOperation::ConvexHull,
-        ArrowOperation::Envelope,
-        ArrowOperation::Buffer,
-        ArrowOperation::Simplify,
-        ArrowOperation::Boundary,
-        ArrowOperation::PointOnSurface,
-        ArrowOperation::MakeValid,
-        ArrowOperation::Reproject,
-        ArrowOperation::Area,
-        ArrowOperation::Length,
-        ArrowOperation::Perimeter,
-        ArrowOperation::VertexCount,
-        ArrowOperation::Bounds,
-        ArrowOperation::ToWkt,
-        ArrowOperation::Explode,
-        ArrowOperation::Dissolve,
-        ArrowOperation::LineBuilder,
-        ArrowOperation::PolygonBuilder,
-        ArrowOperation::Voronoi,
-        ArrowOperation::FromCoords,
-        ArrowOperation::CleanTopology,
-        ArrowOperation::AffineTransform,
-        ArrowOperation::Translate,
-        ArrowOperation::Scale,
-        ArrowOperation::Rotate,
-        ArrowOperation::ConcaveHull,
-        ArrowOperation::Densify,
-        ArrowOperation::SnapToGrid,
-        ArrowOperation::LineSubstring,
-        ArrowOperation::LineInterpolatePoint,
-        ArrowOperation::GeodesicLineLength,
-        ArrowOperation::GeodesicArea,
-        ArrowOperation::GeometryDiagnostics,
-        ArrowOperation::Delaunay,
-        ArrowOperation::Polygonize,
-        ArrowOperation::LineMerge,
+    pub const ALL: [Self; 37] = [
+        Self::Centroid,
+        Self::ConvexHull,
+        Self::Envelope,
+        Self::Buffer,
+        Self::Simplify,
+        Self::Boundary,
+        Self::PointOnSurface,
+        Self::MakeValid,
+        Self::Reproject,
+        Self::Area,
+        Self::Length,
+        Self::Perimeter,
+        Self::VertexCount,
+        Self::Bounds,
+        Self::ToWkt,
+        Self::Explode,
+        Self::Dissolve,
+        Self::LineBuilder,
+        Self::PolygonBuilder,
+        Self::Voronoi,
+        Self::FromCoords,
+        Self::CleanTopology,
+        Self::AffineTransform,
+        Self::Translate,
+        Self::Scale,
+        Self::Rotate,
+        Self::ConcaveHull,
+        Self::Densify,
+        Self::SnapToGrid,
+        Self::LineSubstring,
+        Self::LineInterpolatePoint,
+        Self::GeodesicLineLength,
+        Self::GeodesicArea,
+        Self::GeometryDiagnostics,
+        Self::Delaunay,
+        Self::Polygonize,
+        Self::LineMerge,
     ];
 
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            ArrowOperation::Centroid => "centroid",
-            ArrowOperation::ConvexHull => "convex_hull",
-            ArrowOperation::Envelope => "envelope",
-            ArrowOperation::Buffer => "buffer",
-            ArrowOperation::Simplify => "simplify",
-            ArrowOperation::Boundary => "boundary",
-            ArrowOperation::PointOnSurface => "point_on_surface",
-            ArrowOperation::MakeValid => "make_valid",
-            ArrowOperation::Reproject => "reproject",
-            ArrowOperation::Area => "area",
-            ArrowOperation::Length => "length",
-            ArrowOperation::Perimeter => "perimeter",
-            ArrowOperation::VertexCount => "vertex_count",
-            ArrowOperation::Bounds => "bounds",
-            ArrowOperation::ToWkt => "to_wkt",
-            ArrowOperation::Explode => "explode",
-            ArrowOperation::Dissolve => "dissolve",
-            ArrowOperation::LineBuilder => "line_builder",
-            ArrowOperation::PolygonBuilder => "polygon_builder",
-            ArrowOperation::Voronoi => "voronoi",
-            ArrowOperation::FromCoords => "from_coords",
-            ArrowOperation::CleanTopology => "clean_topology",
-            ArrowOperation::AffineTransform => "affine_transform",
-            ArrowOperation::Translate => "translate",
-            ArrowOperation::Scale => "scale",
-            ArrowOperation::Rotate => "rotate",
-            ArrowOperation::ConcaveHull => "concave_hull",
-            ArrowOperation::Densify => "densify",
-            ArrowOperation::SnapToGrid => "snap_to_grid",
-            ArrowOperation::LineSubstring => "line_substring",
-            ArrowOperation::LineInterpolatePoint => "line_interpolate_point",
-            ArrowOperation::GeodesicLineLength => "geodesic_line_length",
-            ArrowOperation::GeodesicArea => "geodesic_area",
-            ArrowOperation::GeometryDiagnostics => "geometry_diagnostics",
-            ArrowOperation::Delaunay => "delaunay",
-            ArrowOperation::Polygonize => "polygonize",
-            ArrowOperation::LineMerge => "line_merge",
+            Self::Centroid => "centroid",
+            Self::ConvexHull => "convex_hull",
+            Self::Envelope => "envelope",
+            Self::Buffer => "buffer",
+            Self::Simplify => "simplify",
+            Self::Boundary => "boundary",
+            Self::PointOnSurface => "point_on_surface",
+            Self::MakeValid => "make_valid",
+            Self::Reproject => "reproject",
+            Self::Area => "area",
+            Self::Length => "length",
+            Self::Perimeter => "perimeter",
+            Self::VertexCount => "vertex_count",
+            Self::Bounds => "bounds",
+            Self::ToWkt => "to_wkt",
+            Self::Explode => "explode",
+            Self::Dissolve => "dissolve",
+            Self::LineBuilder => "line_builder",
+            Self::PolygonBuilder => "polygon_builder",
+            Self::Voronoi => "voronoi",
+            Self::FromCoords => "from_coords",
+            Self::CleanTopology => "clean_topology",
+            Self::AffineTransform => "affine_transform",
+            Self::Translate => "translate",
+            Self::Scale => "scale",
+            Self::Rotate => "rotate",
+            Self::ConcaveHull => "concave_hull",
+            Self::Densify => "densify",
+            Self::SnapToGrid => "snap_to_grid",
+            Self::LineSubstring => "line_substring",
+            Self::LineInterpolatePoint => "line_interpolate_point",
+            Self::GeodesicLineLength => "geodesic_line_length",
+            Self::GeodesicArea => "geodesic_area",
+            Self::GeometryDiagnostics => "geometry_diagnostics",
+            Self::Delaunay => "delaunay",
+            Self::Polygonize => "polygonize",
+            Self::LineMerge => "line_merge",
         }
     }
 
     /// Nome della voce di catalogo usata dal livello comandi per il requisito CRS.
-    pub fn catalog_name(self) -> &'static str {
+    #[must_use]
+    pub const fn catalog_name(self) -> &'static str {
         match self {
-            ArrowOperation::Centroid => "geo_centroid",
-            ArrowOperation::ConvexHull => "geo_convex_hull",
-            ArrowOperation::Envelope => "geo_envelope",
-            ArrowOperation::Buffer => "geo_buffer",
-            ArrowOperation::Simplify => "geo_simplify",
-            ArrowOperation::Boundary => "geo_boundary",
-            ArrowOperation::PointOnSurface => "geo_point_on_surface",
-            ArrowOperation::MakeValid => "geo_make_valid",
-            ArrowOperation::Reproject => "geo_reproject",
-            ArrowOperation::Area => "geo_area",
-            ArrowOperation::Length => "geo_length",
-            ArrowOperation::Perimeter => "geo_perimeter",
-            ArrowOperation::VertexCount => "geo_vertex_count",
-            ArrowOperation::Bounds => "geo_bounds_extractor",
-            ArrowOperation::ToWkt => "geo_to_wkt",
-            ArrowOperation::Explode => "geo_explode",
-            ArrowOperation::Dissolve => "geo_dissolve",
-            ArrowOperation::LineBuilder => "geo_line_builder",
-            ArrowOperation::PolygonBuilder => "geo_polygon_builder",
-            ArrowOperation::Voronoi => "geo_voronoi",
-            ArrowOperation::FromCoords => "geo_from_coords",
-            ArrowOperation::CleanTopology => "geo_clean_topology",
-            ArrowOperation::AffineTransform => "affine_transform",
-            ArrowOperation::Translate => "translate",
-            ArrowOperation::Scale => "scale",
-            ArrowOperation::Rotate => "rotate",
-            ArrowOperation::ConcaveHull => "concave_hull",
-            ArrowOperation::Densify => "densify",
-            ArrowOperation::SnapToGrid => "snap_to_grid",
-            ArrowOperation::Delaunay => "delaunay",
-            ArrowOperation::Polygonize => "polygonize",
-            ArrowOperation::LineMerge => "line_merge",
-            ArrowOperation::LineSubstring => "line_substring",
-            ArrowOperation::LineInterpolatePoint => "line_interpolate_point",
-            ArrowOperation::GeodesicLineLength => "geodesic_line_length",
-            ArrowOperation::GeodesicArea => "geodesic_area",
-            ArrowOperation::GeometryDiagnostics => "geometry_diagnostics",
+            Self::Centroid => "geo_centroid",
+            Self::ConvexHull => "geo_convex_hull",
+            Self::Envelope => "geo_envelope",
+            Self::Buffer => "geo_buffer",
+            Self::Simplify => "geo_simplify",
+            Self::Boundary => "geo_boundary",
+            Self::PointOnSurface => "geo_point_on_surface",
+            Self::MakeValid => "geo_make_valid",
+            Self::Reproject => "geo_reproject",
+            Self::Area => "geo_area",
+            Self::Length => "geo_length",
+            Self::Perimeter => "geo_perimeter",
+            Self::VertexCount => "geo_vertex_count",
+            Self::Bounds => "geo_bounds_extractor",
+            Self::ToWkt => "geo_to_wkt",
+            Self::Explode => "geo_explode",
+            Self::Dissolve => "geo_dissolve",
+            Self::LineBuilder => "geo_line_builder",
+            Self::PolygonBuilder => "geo_polygon_builder",
+            Self::Voronoi => "geo_voronoi",
+            Self::FromCoords => "geo_from_coords",
+            Self::CleanTopology => "geo_clean_topology",
+            Self::AffineTransform => "affine_transform",
+            Self::Translate => "translate",
+            Self::Scale => "scale",
+            Self::Rotate => "rotate",
+            Self::ConcaveHull => "concave_hull",
+            Self::Densify => "densify",
+            Self::SnapToGrid => "snap_to_grid",
+            Self::Delaunay => "delaunay",
+            Self::Polygonize => "polygonize",
+            Self::LineMerge => "line_merge",
+            Self::LineSubstring => "line_substring",
+            Self::LineInterpolatePoint => "line_interpolate_point",
+            Self::GeodesicLineLength => "geodesic_line_length",
+            Self::GeodesicArea => "geodesic_area",
+            Self::GeometryDiagnostics => "geometry_diagnostics",
         }
     }
 
-    pub fn shape(self) -> ArrowShape {
+    #[must_use]
+    pub const fn shape(self) -> ArrowShape {
         match self {
-            ArrowOperation::Explode => ArrowShape::OneToMany,
-            ArrowOperation::Dissolve
-            | ArrowOperation::LineBuilder
-            | ArrowOperation::PolygonBuilder => ArrowShape::ManyToOne,
-            ArrowOperation::Voronoi | ArrowOperation::CleanTopology => ArrowShape::Collective,
-            ArrowOperation::Delaunay => ArrowShape::OneToMany,
-            ArrowOperation::Polygonize | ArrowOperation::LineMerge => ArrowShape::WholeToMany,
-            ArrowOperation::GeometryDiagnostics => ArrowShape::Diagnostic,
-            ArrowOperation::FromCoords => ArrowShape::FromCoords,
+            Self::Explode | Self::Delaunay => ArrowShape::OneToMany,
+            Self::Dissolve
+            | Self::LineBuilder
+            | Self::PolygonBuilder => ArrowShape::ManyToOne,
+            Self::Voronoi | Self::CleanTopology => ArrowShape::Collective,
+            Self::Polygonize | Self::LineMerge => ArrowShape::WholeToMany,
+            Self::GeometryDiagnostics => ArrowShape::Diagnostic,
+            Self::FromCoords => ArrowShape::FromCoords,
             _ => ArrowShape::OneToOne,
         }
     }
 
-    fn geometry_kernel(self) -> Option<Operation> {
+    const fn geometry_kernel(self) -> Option<Operation> {
         match self {
-            ArrowOperation::Centroid => Some(Operation::Centroid),
-            ArrowOperation::ConvexHull => Some(Operation::ConvexHull),
-            ArrowOperation::Envelope => Some(Operation::Envelope),
+            Self::Centroid => Some(Operation::Centroid),
+            Self::ConvexHull => Some(Operation::ConvexHull),
+            Self::Envelope => Some(Operation::Envelope),
             _ => None,
         }
     }
@@ -484,27 +488,27 @@ impl ArrowOperation {
     /// Vero se l'output sostituisce la colonna geometria con una nuova
     /// colonna GeoArrow-WKB (con metadato CRS), falso per output scalari.
     /// Rilevante solo per le operazioni 1:1.
-    fn produces_geometry(self) -> bool {
+    const fn produces_geometry(self) -> bool {
         matches!(
             self,
-            ArrowOperation::Centroid
-                | ArrowOperation::ConvexHull
-                | ArrowOperation::Envelope
-                | ArrowOperation::Buffer
-                | ArrowOperation::Simplify
-                | ArrowOperation::Boundary
-                | ArrowOperation::PointOnSurface
-                | ArrowOperation::MakeValid
-                | ArrowOperation::Reproject
-                | ArrowOperation::AffineTransform
-                | ArrowOperation::Translate
-                | ArrowOperation::Scale
-                | ArrowOperation::Rotate
-                | ArrowOperation::ConcaveHull
-                | ArrowOperation::Densify
-                | ArrowOperation::SnapToGrid
-                | ArrowOperation::LineSubstring
-                | ArrowOperation::LineInterpolatePoint
+            Self::Centroid
+                | Self::ConvexHull
+                | Self::Envelope
+                | Self::Buffer
+                | Self::Simplify
+                | Self::Boundary
+                | Self::PointOnSurface
+                | Self::MakeValid
+                | Self::Reproject
+                | Self::AffineTransform
+                | Self::Translate
+                | Self::Scale
+                | Self::Rotate
+                | Self::ConcaveHull
+                | Self::Densify
+                | Self::SnapToGrid
+                | Self::LineSubstring
+                | Self::LineInterpolatePoint
         )
     }
 }
@@ -521,9 +525,9 @@ pub enum BufferCap {
 impl From<BufferCap> for BufferCapStyle {
     fn from(cap: BufferCap) -> Self {
         match cap {
-            BufferCap::Round => BufferCapStyle::Round,
-            BufferCap::Flat => BufferCapStyle::Flat,
-            BufferCap::Square => BufferCapStyle::Square,
+            BufferCap::Round => Self::Round,
+            BufferCap::Flat => Self::Flat,
+            BufferCap::Square => Self::Square,
         }
     }
 }
@@ -539,8 +543,8 @@ pub enum SimplifyPolicyParam {
 impl From<SimplifyPolicyParam> for SimplifyPolicy {
     fn from(policy: SimplifyPolicyParam) -> Self {
         match policy {
-            SimplifyPolicyParam::DouglasPeucker => SimplifyPolicy::DouglasPeucker,
-            SimplifyPolicyParam::PreserveTopology => SimplifyPolicy::PreserveTopology,
+            SimplifyPolicyParam::DouglasPeucker => Self::DouglasPeucker,
+            SimplifyPolicyParam::PreserveTopology => Self::PreserveTopology,
         }
     }
 }
@@ -588,36 +592,40 @@ pub struct TransformArrowSchema {
 impl TransformArrowSchema {
     pub const VERSION: u32 = 3;
 
+    #[must_use]
     pub fn geometry_column(&self) -> &str {
         self.geometry_column
             .as_deref()
             .unwrap_or(DEFAULT_GEOMETRY_COLUMN)
     }
 
+    #[must_use]
     pub fn x_column(&self) -> &str {
         self.x_column.as_deref().unwrap_or(DEFAULT_X_COLUMN)
     }
 
+    #[must_use]
     pub fn y_column(&self) -> &str {
         self.y_column.as_deref().unwrap_or(DEFAULT_Y_COLUMN)
     }
 
     /// Limite di espansione righe: obbligatorio per le operazioni 1:N,
-    /// default MAX_ROWS per le altre.
+    /// default `MAX_ROWS` per le altre.
+    #[must_use]
     pub fn max_output_rows_limit(&self) -> u64 {
         self.max_output_rows.unwrap_or(MAX_ROWS)
     }
 
     fn required_max_output_rows(&self) -> Result<u64, ArrowTransportError> {
         self.max_output_rows
-            .ok_or(ArrowTransportError::MissingParameter {
+            .ok_or_else(|| ArrowTransportError::MissingParameter {
                 operation: self.operation.name(),
                 name: "max_output_rows",
             })
     }
 
     fn required_distance(&self) -> Result<f64, ArrowTransportError> {
-        let distance = self.distance.ok_or(ArrowTransportError::MissingParameter {
+        let distance = self.distance.ok_or_else(|| ArrowTransportError::MissingParameter {
             operation: self.operation.name(),
             name: "distance",
         })?;
@@ -634,7 +642,7 @@ impl TransformArrowSchema {
     fn required_tolerance(&self) -> Result<f64, ArrowTransportError> {
         let tolerance = self
             .tolerance
-            .ok_or(ArrowTransportError::MissingParameter {
+            .ok_or_else(|| ArrowTransportError::MissingParameter {
                 operation: self.operation.name(),
                 name: "tolerance",
             })?;
@@ -652,7 +660,7 @@ impl TransformArrowSchema {
         let target = self
             .target_crs
             .as_deref()
-            .ok_or(ArrowTransportError::MissingParameter {
+            .ok_or_else(|| ArrowTransportError::MissingParameter {
                 operation: self.operation.name(),
                 name: "target_crs",
             })?;
@@ -746,13 +754,13 @@ impl TransformArrowSchema {
         name: &'static str,
         value: Option<f64>,
     ) -> Result<f64, ArrowTransportError> {
-        value.ok_or(ArrowTransportError::MissingParameter {
+        value.ok_or_else(|| ArrowTransportError::MissingParameter {
             operation: self.operation.name(),
             name,
         })
     }
 
-    fn finite_param(&self, name: &'static str, value: f64) -> Result<f64, ArrowTransportError> {
+    const fn finite_param(&self, name: &'static str, value: f64) -> Result<f64, ArrowTransportError> {
         if !value.is_finite() {
             return Err(ArrowTransportError::InvalidParameter {
                 operation: self.operation.name(),
@@ -776,6 +784,17 @@ impl TransformArrowSchema {
 
     /// Verifica che i parametri presenti siano esattamente quelli previsti
     /// dall'operazione e che i valori siano nel dominio del kernel.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::MissingParameter` se manca un parametro
+    /// obbligatorio, `ArrowTransportError::UnexpectedParameter` se ne e'
+    /// presente uno non previsto dall'operazione,
+    /// `ArrowTransportError::InvalidParameter` se un valore e' fuori dominio.
+    // Dispatch per operazione intenzionalmente in un'unica funzione: la
+    // tabella parametri ammessi/obbligatori resta leggibile come tabella;
+    // la scomposizione strutturale e' rimandata a una fase dedicata.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_parameters(&self) -> Result<(), ArrowTransportError> {
         let operation = self.operation.name();
         let unexpected = |name: &'static str, present: bool| {
@@ -847,7 +866,7 @@ impl TransformArrowSchema {
                 reject_builder_params(self)?;
                 reject_clean_params(self)?;
             }
-            ArrowOperation::Explode => {
+            ArrowOperation::Explode | ArrowOperation::Delaunay => {
                 self.required_max_output_rows()?;
                 reject_geometry_params(self)?;
                 reject_builder_params(self)?;
@@ -1021,21 +1040,6 @@ impl TransformArrowSchema {
                 reject_clean_params(self)?;
                 self.ratio_param("ratio", self.required_f64("ratio", self.ratio)?)?;
             }
-            ArrowOperation::Delaunay => {
-                self.required_max_output_rows()?;
-                reject_geometry_params(self)?;
-                reject_builder_params(self)?;
-                reject_clean_params(self)?;
-            }
-            ArrowOperation::Polygonize
-            | ArrowOperation::LineMerge
-            | ArrowOperation::GeodesicLineLength
-            | ArrowOperation::GeodesicArea
-            | ArrowOperation::GeometryDiagnostics => {
-                reject_geometry_params(self)?;
-                reject_builder_params(self)?;
-                reject_clean_params(self)?;
-            }
             ArrowOperation::CleanTopology => {
                 reject_geometry_params(self)?;
                 reject_builder_params(self)?;
@@ -1090,6 +1094,13 @@ pub struct EnvelopeReader<R> {
 }
 
 impl<R: Read> EnvelopeReader<R> {
+    /// Costruisce il lettore e verifica magic e lunghezza dichiarata.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::InvalidMagic` se il magic non corrisponde,
+    /// `ArrowTransportError::StreamTooLarge` se il payload dichiarato supera
+    /// `MAX_STREAM_BYTES`, `ArrowTransportError::Io` per errori di lettura.
     pub fn new(mut inner: R) -> Result<Self, ArrowTransportError> {
         let mut magic = [0_u8; 8];
         inner.read_exact(&mut magic)?;
@@ -1114,6 +1125,13 @@ impl<R: Read> EnvelopeReader<R> {
 
     /// Legge il payload a chunk, cosi' la memoria cresce solo con i byte che
     /// arrivano davvero, e verifica trailer, checksum e byte residui.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::InvalidTrailer` se il trailer non corrisponde,
+    /// `ArrowTransportError::ChecksumMismatch` se il digest non coincide,
+    /// `ArrowTransportError::TrailingBytes` se restano byte dopo il trailer,
+    /// `ArrowTransportError::Io` per errori di lettura.
     pub fn read_payload(mut self) -> Result<Vec<u8>, ArrowTransportError> {
         let mut payload = Vec::new();
         let mut remaining = self.payload_len;
@@ -1154,6 +1172,12 @@ pub struct EnvelopeWriter<W> {
 }
 
 impl<W: Write> EnvelopeWriter<W> {
+    /// Costruisce lo scrittore e scrive l'header con la lunghezza dichiarata.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::StreamTooLarge` se `payload_len` supera
+    /// `MAX_STREAM_BYTES`, `ArrowTransportError::Io` per errori di scrittura.
     pub fn new(mut inner: W, payload_len: u64) -> Result<Self, ArrowTransportError> {
         if payload_len > MAX_STREAM_BYTES {
             return Err(ArrowTransportError::StreamTooLarge);
@@ -1172,6 +1196,13 @@ impl<W: Write> EnvelopeWriter<W> {
         })
     }
 
+    /// Accoda un chunk di payload aggiornando il checksum incrementale.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::StreamTooLarge` se i byte scritti superano la
+    /// lunghezza dichiarata, `ArrowTransportError::Io` per errori di
+    /// scrittura.
     pub fn write_payload(&mut self, bytes: &[u8]) -> Result<(), ArrowTransportError> {
         let next = self
             .written
@@ -1184,6 +1215,14 @@ impl<W: Write> EnvelopeWriter<W> {
         Ok(())
     }
 
+    /// Chiude l'envelope scrivendo trailer e digest; restituisce il writer
+    /// sottostante e il checksum.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::PayloadLengthMismatch` se i byte scritti non
+    /// coincidono con la lunghezza dichiarata, `ArrowTransportError::Io` per
+    /// errori di scrittura o flush.
     pub fn finish(mut self) -> Result<(W, [u8; 32]), ArrowTransportError> {
         if self.written != self.payload_len {
             return Err(ArrowTransportError::PayloadLengthMismatch {
@@ -1199,7 +1238,7 @@ impl<W: Write> EnvelopeWriter<W> {
     }
 }
 
-fn align8(value: usize) -> usize {
+const fn align8(value: usize) -> usize {
     value.saturating_add(7) & !7
 }
 
@@ -1236,7 +1275,7 @@ fn fb_i64(buf: &[u8], pos: usize) -> Result<i64, ArrowTransportError> {
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
-/// Tabella flatbuffer in `pos`: ritorna (vtable_start, vtable_len).
+/// Tabella flatbuffer in `pos`: ritorna (`vtable_start`, `vtable_len`).
 /// A `pos` c'e' l'`soffset` (i32, distanza alla vtable); `vtable_len` e
 /// `table_len` stanno nella vtable stessa. L'`soffset` puo' essere NEGATIVO:
 /// con vtable deduplicate il writer puo' piazzare la vtable dopo la tabella.
@@ -1249,11 +1288,12 @@ fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportErro
     if soffset == 0 {
         return Err(ArrowTransportError::IpcTruncated);
     }
-    let vtable_signed = pos as i64 - i64::from(soffset);
-    if vtable_signed < 0 {
-        return Err(ArrowTransportError::IpcTruncated);
-    }
-    let vtable = vtable_signed as usize;
+    // Conversioni totali: un offset che non entra in i64/usize e' un
+    // riferimento malformato, mai un troncamento silenzioso (R5.4).
+    let vtable_signed = i64::try_from(pos).map_err(|_| ArrowTransportError::IpcTruncated)?
+        - i64::from(soffset);
+    let vtable =
+        usize::try_from(vtable_signed).map_err(|_| ArrowTransportError::IpcTruncated)?;
     let vtable_len = fb_u16(buf, vtable)? as usize;
     let table_len = fb_u16(buf, vtable + 2)? as usize;
     if vtable_len < 4
@@ -1359,8 +1399,8 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
     let type_type_offset = fb_field(buf, vtable, vtable_len, 2)?;
     let type_offset = fb_field(buf, vtable, vtable_len, 3)?;
     if type_offset != 0 {
-        let type_table = fb_indirect(buf, table, type_offset)?;
-        let (type_vtable, type_vtable_len) = fb_table(buf, type_table)?;
+        let union_table = fb_indirect(buf, table, type_offset)?;
+        let (type_vtable, type_vtable_len) = fb_table(buf, union_table)?;
         if type_type_offset != 0 {
             let type_type = *buf
                 .get(table + type_type_offset)
@@ -1368,7 +1408,7 @@ fn fb_field_table(buf: &[u8], table: usize, depth: usize) -> Result<(), ArrowTra
             if type_type == 14 {
                 let type_ids = fb_field(buf, type_vtable, type_vtable_len, 3)?;
                 if type_ids != 0 {
-                    fb_vector(buf, fb_indirect(buf, type_table, type_ids)?, 4)?;
+                    fb_vector(buf, fb_indirect(buf, union_table, type_ids)?, 4)?;
                 }
             }
         }
@@ -1414,11 +1454,12 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
             let entry = vector + 4 + index * 16;
             let buffer_offset = fb_i64(buf, entry)?;
             let length = fb_i64(buf, entry + 8)?;
-            if buffer_offset < 0 || length < 0 {
-                return Err(ArrowTransportError::IpcTruncated);
-            }
-            let end = (buffer_offset as usize)
-                .checked_add(length as usize)
+            // Conversione totale: negativi o oltre usize (target a 32 bit)
+            // sono offset malformati, rifiutati invece che troncati.
+            let end = usize::try_from(buffer_offset)
+                .ok()
+                .zip(usize::try_from(length).ok())
+                .and_then(|(offset, len)| offset.checked_add(len))
                 .ok_or(ArrowTransportError::IpcTruncated)?;
             if end > body_len {
                 return Err(ArrowTransportError::IpcTruncated);
@@ -1436,7 +1477,7 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
     Ok(())
 }
 
-/// Tabella `Schema`: fields, custom_metadata e feature.
+/// Tabella `Schema`: fields, `custom_metadata` e feature.
 fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
     let (vtable, vtable_len) = fb_table(buf, table)?;
     let fields = fb_field(buf, vtable, vtable_len, 1)?;
@@ -1579,6 +1620,13 @@ fn validate_ipc_framing(payload: &[u8]) -> Result<(), ArrowTransportError> {
 
 /// Decodifica il payload Arrow IPC applicando i limiti di risorse prima di
 /// accumulare i batch.
+///
+/// # Errors
+///
+/// `ArrowTransportError::IpcTruncated` o `ArrowTransportError::Arrow` per
+/// stream malformati, `ArrowTransportError::TooManyColumns` /
+/// `TooManyBatches` / `TooManyRows` / `StreamTooLarge` al superamento dei
+/// limiti di risorse.
 pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     validate_ipc_framing(payload)?;
     let reader = StreamReader::try_new(payload, None)
@@ -1624,7 +1672,7 @@ fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, ArrowTran
     Ok(index)
 }
 
-/// Metadato GeoArrow `geo` con la chiave `crs`: PROJJSON se la definizione e'
+/// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
 /// Unificazione B1.1: l'assemblaggio JSON e' unico in
@@ -1710,6 +1758,10 @@ fn map_nullable<T: Send>(
         .collect()
 }
 
+// Dispatch per operazione intenzionalmente monolitico: ogni braccio e' un
+// caso della tabella operazione -> kernel; la scomposizione strutturale e'
+// rimandata a una fase dedicata.
+#[allow(clippy::too_many_lines)]
 fn transform_cells(
     params: &TransformArrowSchema,
     cells: &BinaryArray,
@@ -1987,7 +2039,7 @@ fn transform_cells(
     }
 }
 
-fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
+const fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::MultiPoint(_) => "MultiPoint",
@@ -2016,7 +2068,7 @@ fn expect_line_string(
     }
 }
 
-fn spatial_predicate_name(predicate: SpatialPredicate) -> &'static str {
+const fn spatial_predicate_name(predicate: SpatialPredicate) -> &'static str {
     match predicate {
         SpatialPredicate::Intersects => "intersects",
         SpatialPredicate::Disjoint => "disjoint",
@@ -2057,6 +2109,12 @@ fn bounds_column_names(geometry_column: &str) -> [String; 4] {
 
 /// Applica l'operazione ai batch in input secondo la sua forma
 /// (1:1, 1:N, N:1, collettiva, costruzione da coordinate).
+///
+/// # Errors
+///
+/// Propaga gli errori del percorso specifico della forma (validazione
+/// parametri, limiti di risorse, kernel); `ArrowTransportError::Internal` se
+/// una forma non e' coperta dal dispatch (difetto del trasporto).
 pub fn transform_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -2082,7 +2140,7 @@ pub fn transform_batches(
 }
 
 /// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
-/// GeoArrow-WKB, Float64, UInt64, Utf8 oppure quattro colonne Float64 per
+/// GeoArrow-WKB, Float64, `UInt64`, Utf8 oppure quattro colonne Float64 per
 /// `bounds`); tutte le altre colonne passano invariate; i null sono preservati.
 fn one_to_one_batches(
     schema: &SchemaRef,
@@ -2129,7 +2187,7 @@ fn one_to_one_batches(
                     .into_iter()
                     .map(|name| Field::new(name, DataType::Float64, true))
                     .collect();
-                output_fields.splice(geometry_index..geometry_index + 1, bounds_fields);
+                output_fields.splice(geometry_index..=geometry_index, bounds_fields);
             }
             _ => {
                 return Err(ArrowTransportError::Internal(
@@ -2154,9 +2212,9 @@ fn one_to_one_batches(
         let mut columns = batch.columns().to_vec();
         match transformed {
             TransformedColumn::Binary(values) => {
-                columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(
-                    values.iter().map(|cell| cell.as_deref()),
-                ));
+                columns[geometry_index] = std::sync::Arc::new(
+                    values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
+                );
             }
             TransformedColumn::Float64(values) => {
                 columns[geometry_index] = std::sync::Arc::new(Float64Array::from(values));
@@ -2178,7 +2236,7 @@ fn one_to_one_batches(
                         )) as plenora_core::arrow::array::ArrayRef
                     })
                     .collect();
-                columns.splice(geometry_index..geometry_index + 1, arrays);
+                columns.splice(geometry_index..=geometry_index, arrays);
             }
         }
         output_batches.push(
@@ -2206,7 +2264,7 @@ fn batch_geometry_cells<'a>(
 
 /// `explode` (1:N): ogni geometria non-null produce le sue componenti
 /// nell'ordine del kernel; i null non producono righe figlie. Gli attributi
-/// sono replicati sulle righe figlie e `__parent_index` (UInt64) riporta
+/// sono replicati sulle righe figlie e `__parent_index` (`UInt64`) riporta
 /// l'indice globale della riga di input. L'espansione e' controllata
 /// incrementalmente contro `max_output_rows` prima di codificare i figli.
 fn explode_batches(
@@ -2279,9 +2337,12 @@ fn explode_batches(
         let mut columns: Vec<plenora_core::arrow::array::ArrayRef> = Vec::with_capacity(batch.num_columns() + 1);
         for (index, column) in batch.columns().iter().enumerate() {
             if index == geometry_index {
-                columns.push(std::sync::Arc::new(BinaryArray::from_iter(
-                    encoded.iter().map(|part| Some(part.as_slice())),
-                )));
+                columns.push(std::sync::Arc::new(
+                    encoded
+                        .iter()
+                        .map(|part| Some(part.as_slice()))
+                        .collect::<BinaryArray>(),
+                ));
             } else {
                 columns.push(
                     plenora_core::arrow::select::take::take(column, &take_indices, None)
@@ -2321,7 +2382,7 @@ fn collect_batches(
     let mut geometries: Vec<Option<Geometry<f64>>> = Vec::new();
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        for cell in cells.iter() {
+        for cell in cells {
             match cell {
                 None => geometries.push(None),
                 Some(payload) => {
@@ -2461,7 +2522,7 @@ fn voronoi_batches(
 /// (gap close morfologico e sovrapposizioni first-row-wins). Output allineato
 /// all'input: attributi invariati, geometria ripulita; i null restano null e
 /// le righe assorbite da una riga precedente diventano null. Input non
-/// poligonali o invalidi sono rifiutati (la riparazione spetta a make_valid).
+/// poligonali o invalidi sono rifiutati (la riparazione spetta a `make_valid`).
 fn clean_topology_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -2469,7 +2530,7 @@ fn clean_topology_batches(
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     let snap_tolerance = params
         .snap_tolerance
-        .ok_or(ArrowTransportError::MissingParameter {
+        .ok_or_else(|| ArrowTransportError::MissingParameter {
             operation: params.operation.name(),
             name: "snap_tolerance",
         })?;
@@ -2581,7 +2642,7 @@ fn diagnostics_batches(
         .map(|field| field.as_ref().clone())
         .collect();
     output_fields.splice(
-        geometry_index..geometry_index + 1,
+        geometry_index..=geometry_index,
         diagnostic_fields.iter().cloned(),
     );
     let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
@@ -2596,7 +2657,7 @@ fn diagnostics_batches(
         let mut is_valid: Vec<Option<bool>> = Vec::with_capacity(batch.num_rows());
         let mut validity_reason: Vec<Option<String>> = Vec::with_capacity(batch.num_rows());
         let mut bounds: Vec<Option<[f64; 4]>> = Vec::with_capacity(batch.num_rows());
-        for cell in cells.iter() {
+        for cell in cells {
             let Some(payload) = cell else {
                 geometry_type.push(None);
                 coordinate_count.push(None);
@@ -2644,7 +2705,7 @@ fn diagnostics_batches(
                 bounds.iter().map(|b| b.map(|b| b[3])).collect::<Vec<_>>(),
             )),
         ];
-        columns.splice(geometry_index..geometry_index + 1, diagnostic_columns);
+        columns.splice(geometry_index..=geometry_index, diagnostic_columns);
         output_batches.push(
             RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
                 .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
@@ -2654,7 +2715,7 @@ fn diagnostics_batches(
 }
 
 /// Raccoglie tutte le celle non-null dell'intera tabella in una
-/// GeometryCollection per i kernel collettivi (`polygonize`, `line_merge`).
+/// `GeometryCollection` per i kernel collettivi (`polygonize`, `line_merge`).
 fn collect_linework(
     batches: &[RecordBatch],
     geometry_index: usize,
@@ -2663,7 +2724,7 @@ fn collect_linework(
     let mut lines = Vec::new();
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        for cell in cells.iter() {
+        for cell in cells {
             let Some(payload) = cell else {
                 continue;
             };
@@ -2692,7 +2753,7 @@ fn geometry_rows_output(
     let output_schema =
         std::sync::Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
     let mut columns: Vec<plenora_core::arrow::array::ArrayRef> = vec![std::sync::Arc::new(
-        BinaryArray::from_iter(rows.iter().map(|row| row.0.as_deref())),
+        rows.iter().map(|row| row.0.as_deref()).collect::<BinaryArray>(),
     )];
     if with_class {
         let classes: Vec<&'static str> = rows
@@ -2756,7 +2817,7 @@ fn polygonize_batches(
 }
 
 #[cfg(not(feature = "geos-backend"))]
-fn polygonize_batches(
+const fn polygonize_batches(
     _schema: &SchemaRef,
     _batches: &[RecordBatch],
     params: &TransformArrowSchema,
@@ -2811,13 +2872,32 @@ fn numeric_values(
             .ok_or(ArrowTransportError::Internal("tipo verificato Float64"))?
             .iter()
             .collect()),
-        DataType::Int64 => Ok(column
-            .as_any()
-            .downcast_ref::<plenora_core::arrow::array::Int64Array>()
-            .ok_or(ArrowTransportError::Internal("tipo verificato Int64"))?
-            .iter()
-            .map(|value| value.map(|x| x as f64))
-            .collect()),
+        DataType::Int64 => {
+            // Guardia di range (R5.4): oltre 2^53 in valore assoluto la
+            // conversione i64 -> f64 non e' esatta e sposterebbe la
+            // coordinata in silenzio; si rifiuta la riga con errore
+            // tipizzato invece di produrre una geometria imprecisa.
+            const MAX_EXACT: u64 = 1_u64 << 53;
+            // Esattezza garantita dalla guardia: qui |x| <= 2^53, quindi
+            // ogni i64 ammesso ha un f64 esattamente uguale.
+            #[allow(clippy::cast_precision_loss)]
+            let exact = |x: i64| -> Result<f64, ArrowTransportError> {
+                if x.unsigned_abs() > MAX_EXACT {
+                    Err(ArrowTransportError::IntegerCoordinateTooLarge {
+                        name: name.to_owned(),
+                    })
+                } else {
+                    Ok(x as f64)
+                }
+            };
+            column
+                .as_any()
+                .downcast_ref::<plenora_core::arrow::array::Int64Array>()
+                .ok_or(ArrowTransportError::Internal("tipo verificato Int64"))?
+                .iter()
+                .map(|value| value.map(exact).transpose())
+                .collect()
+        }
         other => Err(ArrowTransportError::ColumnNotNumeric {
             name: name.to_owned(),
             actual: other.to_string(),
@@ -2890,9 +2970,12 @@ fn from_coords_batches(
             }
         }
         let mut columns = batch.columns().to_vec();
-        columns.push(std::sync::Arc::new(BinaryArray::from_iter(
-            points.iter().map(|point| point.as_deref()),
-        )));
+        columns.push(std::sync::Arc::new(
+            points
+                .iter()
+                .map(|point| point.as_deref())
+                .collect::<BinaryArray>(),
+        ));
         output_batches.push(
             RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
                 .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
@@ -2902,6 +2985,13 @@ fn from_coords_batches(
 }
 
 /// Codifica i batch in un payload Arrow IPC stream entro i limiti di risorse.
+///
+/// # Errors
+///
+/// `ArrowTransportError::TooManyBatches` se i batch superano il limite,
+/// `ArrowTransportError::Arrow` per errori di codifica IPC,
+/// `ArrowTransportError::StreamTooLarge` se il payload supera
+/// `MAX_STREAM_BYTES`.
 pub fn encode_ipc(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -2931,6 +3021,15 @@ pub fn encode_ipc(
 /// Pipeline completa envelope -> Arrow -> kernel -> Arrow -> envelope.
 /// Il CRS e' trattato come metadato opaco: la verifica semantica spetta al
 /// livello comandi.
+///
+/// # Errors
+///
+/// `ArrowTransportError::UnsupportedSchemaVersion` per versioni non
+/// supportate, `ArrowTransportError::TooManyRows` / `CrsRequired` /
+/// `RowCountMismatch` per violazioni del contratto di schema; propaga gli
+/// errori di envelope (`EnvelopeReader`/`EnvelopeWriter`), di decodifica
+/// (`decode_ipc`), di trasformazione (`transform_batches`) e di codifica
+/// (`encode_ipc`).
 pub fn transform_arrow(
     reader: impl Read,
     writer: impl Write,
@@ -3003,81 +3102,83 @@ pub enum PairOperation {
 }
 
 impl PairOperation {
-    pub const ALL: [PairOperation; 18] = [
-        PairOperation::SJoin,
-        PairOperation::Distance,
-        PairOperation::Nearest,
-        PairOperation::Clip,
-        PairOperation::Overlay,
-        PairOperation::Within,
-        PairOperation::CountPointsInPolygons,
-        PairOperation::Intersection,
-        PairOperation::Union,
-        PairOperation::Difference,
-        PairOperation::SymmetricDifference,
-        PairOperation::Predicate,
-        PairOperation::HausdorffDistance,
-        PairOperation::FrechetDistance,
-        PairOperation::HaversineDistance,
-        PairOperation::GeodesicDistance,
-        PairOperation::Bearing,
-        PairOperation::Split,
+    pub const ALL: [Self; 18] = [
+        Self::SJoin,
+        Self::Distance,
+        Self::Nearest,
+        Self::Clip,
+        Self::Overlay,
+        Self::Within,
+        Self::CountPointsInPolygons,
+        Self::Intersection,
+        Self::Union,
+        Self::Difference,
+        Self::SymmetricDifference,
+        Self::Predicate,
+        Self::HausdorffDistance,
+        Self::FrechetDistance,
+        Self::HaversineDistance,
+        Self::GeodesicDistance,
+        Self::Bearing,
+        Self::Split,
     ];
 
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            PairOperation::SJoin => "sjoin",
-            PairOperation::Distance => "distance",
-            PairOperation::Nearest => "nearest",
-            PairOperation::Clip => "clip",
-            PairOperation::Overlay => "overlay",
-            PairOperation::Within => "within",
-            PairOperation::CountPointsInPolygons => "count_points_in_polygons",
-            PairOperation::Intersection => "intersection",
-            PairOperation::Union => "union",
-            PairOperation::Difference => "difference",
-            PairOperation::SymmetricDifference => "symmetric_difference",
-            PairOperation::Predicate => "predicate",
-            PairOperation::HausdorffDistance => "hausdorff_distance",
-            PairOperation::FrechetDistance => "frechet_distance",
-            PairOperation::HaversineDistance => "haversine_distance",
-            PairOperation::GeodesicDistance => "geodesic_distance",
-            PairOperation::Bearing => "bearing",
-            PairOperation::Split => "split",
+            Self::SJoin => "sjoin",
+            Self::Distance => "distance",
+            Self::Nearest => "nearest",
+            Self::Clip => "clip",
+            Self::Overlay => "overlay",
+            Self::Within => "within",
+            Self::CountPointsInPolygons => "count_points_in_polygons",
+            Self::Intersection => "intersection",
+            Self::Union => "union",
+            Self::Difference => "difference",
+            Self::SymmetricDifference => "symmetric_difference",
+            Self::Predicate => "predicate",
+            Self::HausdorffDistance => "hausdorff_distance",
+            Self::FrechetDistance => "frechet_distance",
+            Self::HaversineDistance => "haversine_distance",
+            Self::GeodesicDistance => "geodesic_distance",
+            Self::Bearing => "bearing",
+            Self::Split => "split",
         }
     }
 
     /// Nome della voce di catalogo usata dal livello comandi per il requisito CRS.
-    pub fn catalog_name(self) -> &'static str {
+    #[must_use]
+    pub const fn catalog_name(self) -> &'static str {
         match self {
-            PairOperation::SJoin => "sjoin",
-            PairOperation::Distance => "geo_distance",
-            PairOperation::Nearest => "geo_nearest",
-            PairOperation::Clip => "geo_clip",
-            PairOperation::Overlay => "geo_overlay",
-            PairOperation::Within => "geo_within",
-            PairOperation::CountPointsInPolygons => "geo_count_points_in_polygons",
-            PairOperation::Intersection => "geo_intersection",
-            PairOperation::Union => "geo_union",
-            PairOperation::Difference => "geo_difference",
-            PairOperation::SymmetricDifference => "geo_symmetric_difference",
+            Self::SJoin => "sjoin",
+            Self::Distance => "geo_distance",
+            Self::Nearest => "geo_nearest",
+            Self::Clip => "geo_clip",
+            Self::Overlay => "geo_overlay",
+            Self::Within => "geo_within",
+            Self::CountPointsInPolygons => "geo_count_points_in_polygons",
+            Self::Intersection => "geo_intersection",
+            Self::Union => "geo_union",
+            Self::Difference => "geo_difference",
+            Self::SymmetricDifference => "geo_symmetric_difference",
             // Tutti i predicati DE-9IM condividono famiglia e requisito CRS.
-            PairOperation::Predicate => "predicate_intersects",
-            PairOperation::HausdorffDistance => "hausdorff_distance",
-            PairOperation::FrechetDistance => "frechet_distance",
-            PairOperation::HaversineDistance => "haversine_distance",
-            PairOperation::GeodesicDistance => "geodesic_distance",
-            PairOperation::Bearing => "bearing",
-            PairOperation::Split => "split",
+            Self::Predicate => "predicate_intersects",
+            Self::HausdorffDistance => "hausdorff_distance",
+            Self::FrechetDistance => "frechet_distance",
+            Self::HaversineDistance => "haversine_distance",
+            Self::GeodesicDistance => "geodesic_distance",
+            Self::Bearing => "bearing",
+            Self::Split => "split",
         }
     }
 
-    fn boolean_kernel(self) -> Option<BooleanOperation> {
+    const fn boolean_kernel(self) -> Option<BooleanOperation> {
         match self {
-            PairOperation::Intersection => Some(BooleanOperation::Intersection),
-            PairOperation::Union => Some(BooleanOperation::Union),
-            PairOperation::Difference => Some(BooleanOperation::Difference),
-            PairOperation::SymmetricDifference => Some(BooleanOperation::SymmetricDifference),
+            Self::Intersection => Some(BooleanOperation::Intersection),
+            Self::Union => Some(BooleanOperation::Union),
+            Self::Difference => Some(BooleanOperation::Difference),
+            Self::SymmetricDifference => Some(BooleanOperation::SymmetricDifference),
             _ => None,
         }
     }
@@ -3109,18 +3210,30 @@ pub struct PairArrowSchema {
 impl PairArrowSchema {
     pub const VERSION: u32 = 3;
 
+    #[must_use]
     pub fn geometry_column(&self) -> &str {
         self.geometry_column
             .as_deref()
             .unwrap_or(DEFAULT_GEOMETRY_COLUMN)
     }
 
+    #[must_use]
     pub fn max_output_rows_limit(&self) -> u64 {
         self.max_output_rows.unwrap_or(MAX_ROWS)
     }
 
     /// Verifica che i parametri presenti siano esattamente quelli previsti
     /// dall'operazione e che i valori siano nel dominio del kernel.
+    ///
+    /// # Errors
+    ///
+    /// `ArrowTransportError::UnexpectedParameter` se e' presente un parametro
+    /// non previsto dall'operazione, `ArrowTransportError::MissingParameter`
+    /// se ne manca uno obbligatorio, `ArrowTransportError::InvalidParameter`
+    /// se un valore e' fuori dominio.
+    // Tabella parametri per operazione intenzionalmente in un'unica funzione;
+    // la scomposizione strutturale e' rimandata a una fase dedicata.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_parameters(&self) -> Result<(), ArrowTransportError> {
         let operation = self.operation.name();
         // Parametri ammessi per operazione: tutto il resto e' rifiutato
@@ -3129,21 +3242,22 @@ impl PairArrowSchema {
             PairOperation::SJoin => &["predicate", "max_pairs"],
             PairOperation::Distance => &["max_comparisons"],
             PairOperation::Nearest => &["max_comparisons", "max_results", "max_distance"],
-            PairOperation::Clip => &[],
             PairOperation::Overlay => &["overlay_mode", "max_pairs"],
             PairOperation::Within | PairOperation::CountPointsInPolygons => &["max_pairs"],
-            PairOperation::Intersection
-            | PairOperation::Union
-            | PairOperation::Difference
-            | PairOperation::SymmetricDifference => &[],
             PairOperation::Predicate => &["spatial_predicate"],
             PairOperation::HausdorffDistance | PairOperation::FrechetDistance => {
                 &["max_coordinate_pairs"]
             }
-            PairOperation::HaversineDistance
+            PairOperation::Split => &["tolerance"],
+            // Operazioni senza parametri.
+            PairOperation::Clip
+            | PairOperation::Intersection
+            | PairOperation::Union
+            | PairOperation::Difference
+            | PairOperation::SymmetricDifference
+            | PairOperation::HaversineDistance
             | PairOperation::GeodesicDistance
             | PairOperation::Bearing => &[],
-            PairOperation::Split => &["tolerance"],
         };
         let mut present: Vec<(&'static str, bool)> = vec![
             ("predicate", self.predicate.is_some()),
@@ -3314,7 +3428,7 @@ fn decode_geometry_side(
     );
     for batch in &batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        for cell in cells.iter() {
+        for cell in cells {
             match cell {
                 None => geometries.push(None),
                 Some(payload) => {
@@ -3376,7 +3490,7 @@ fn append_column_batches(
     left_schema: &SchemaRef,
     left_batches: &[RecordBatch],
     field: Field,
-    values: AppendedColumn,
+    values: &AppendedColumn,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     let mut output_fields: Vec<Field> = left_schema
         .fields()
@@ -3392,7 +3506,7 @@ fn append_column_batches(
     let mut offset = 0_usize;
     for batch in left_batches {
         let end = offset + batch.num_rows();
-        let column: plenora_core::arrow::array::ArrayRef = match &values {
+        let column: plenora_core::arrow::array::ArrayRef = match values {
             AppendedColumn::Boolean(values) => std::sync::Arc::new(
                 plenora_core::arrow::array::BooleanArray::from(values[offset..end].to_vec()),
             ),
@@ -3676,8 +3790,21 @@ pub fn pair_arrow(
             let mut right_index: Vec<Option<u64>> = Vec::with_capacity(pieces.len());
             for piece in &pieces {
                 encoded.push(encode_geometry(&piece.geometry)?);
-                left_index.push(piece.left.map(|index| left_positions[index as usize]));
-                right_index.push(piece.right.map(|index| right_positions[index as usize]));
+                // Indici prodotti dal kernel overlay: la conversione e'
+                // totale; un u64 che non entra in usize (target a 32 bit)
+                // e' un difetto del kernel, non un valore da troncare.
+                left_index.push(match piece.left {
+                    Some(index) => Some(left_positions[usize::try_from(index).map_err(
+                        |_| ArrowTransportError::Internal("indice overlay left oltre usize"),
+                    )?]),
+                    None => None,
+                });
+                right_index.push(match piece.right {
+                    Some(index) => Some(right_positions[usize::try_from(index).map_err(
+                        |_| ArrowTransportError::Internal("indice overlay right oltre usize"),
+                    )?]),
+                    None => None,
+                });
             }
             let batch = RecordBatch::try_new(
                 out_schema.clone(),
@@ -3718,7 +3845,7 @@ pub fn pair_arrow(
                 &left_schema,
                 &left_batches,
                 Field::new(WITHIN_COLUMN, DataType::Boolean, true),
-                AppendedColumn::Boolean(flags),
+                &AppendedColumn::Boolean(flags),
             )?
         }
         PairOperation::CountPointsInPolygons => {
@@ -3745,7 +3872,7 @@ pub fn pair_arrow(
                 &left_schema,
                 &left_batches,
                 Field::new(COUNT_COLUMN, DataType::UInt64, true),
-                AppendedColumn::UInt64(values),
+                &AppendedColumn::UInt64(values),
             )?
         }
         operation @ (PairOperation::Intersection
@@ -3831,7 +3958,7 @@ pub fn pair_arrow(
                 &left_schema,
                 &left_batches,
                 Field::new(column_name, DataType::Boolean, true),
-                AppendedColumn::Boolean(flags),
+                &AppendedColumn::Boolean(flags),
             )?
         }
         PairOperation::HausdorffDistance | PairOperation::FrechetDistance => {
@@ -3874,7 +4001,7 @@ pub fn pair_arrow(
                 &left_schema,
                 &left_batches,
                 Field::new(schema.operation.name(), DataType::Float64, true),
-                AppendedColumn::Float64(values),
+                &AppendedColumn::Float64(values),
             )?
         }
         PairOperation::HaversineDistance
@@ -3919,7 +4046,7 @@ pub fn pair_arrow(
                 &left_schema,
                 &left_batches,
                 Field::new(schema.operation.name(), DataType::Float64, true),
-                AppendedColumn::Float64(values),
+                &AppendedColumn::Float64(values),
             )?
         }
         #[cfg(feature = "geos-backend")]
@@ -4107,7 +4234,11 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int64Array::from((0..rows as i64).collect::<Vec<i64>>())),
+                // righe fixture: poche per costruzione, entro i64.
+                Arc::new(Int64Array::from(
+                    (0..i64::try_from(rows).expect("righe fixture entro i64"))
+                        .collect::<Vec<i64>>(),
+                )),
                 Arc::new(StringArray::from(
                     (0..rows)
                         .map(|index| Some(format!("riga-{index}")))
@@ -4115,7 +4246,14 @@ mod tests {
                 )),
                 Arc::new(Float64Array::from(
                     (0..rows)
-                        .map(|index| Some(index as f64 * 0.5))
+                        .map(|index| {
+                            // fixture di test: `rows` e' il numero di
+                            // geometrie passate alla fixture (poche unita'),
+                            // ampiamente entro 2^53: conversione esatta.
+                            #[allow(clippy::cast_precision_loss)]
+                            let half = index as f64 * 0.5;
+                            Some(half)
+                        })
                         .collect::<Vec<_>>(),
                 )),
                 Arc::new(BinaryArray::from_iter(geometries.iter().copied())),
@@ -4822,7 +4960,10 @@ mod tests {
 
     #[test]
     fn oversized_wkb_cell_fails_before_validation() {
-        let oversized = vec![0_u8; MAX_CELL_BYTES as usize + 1];
+        // MAX_CELL_BYTES e' una costante da 64 MiB: entra in usize su
+        // ogni target supportato; la conversione e' totale per contratto.
+        let oversized =
+            vec![0_u8; usize::try_from(MAX_CELL_BYTES).expect("limite celle entro usize") + 1];
         let (schema, batch) = fixture_batch(&[Some(&oversized)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         assert!(matches!(
@@ -4911,8 +5052,11 @@ mod tests {
             Err(ArrowTransportError::IpcTruncated)
         ));
         // metadati oltre il tetto assoluto anche con continuazione moderna.
+        // MAX_IPC_METADATA_BYTES e' una costante da 16 MiB: entra in u32;
+        // la conversione e' totale per contratto.
+        let declared = u32::try_from(MAX_IPC_METADATA_BYTES).expect("tetto metadati entro u32") + 8;
         let mut oversized = vec![0xff, 0xff, 0xff, 0xff];
-        oversized.extend_from_slice(&((MAX_IPC_METADATA_BYTES as u32 + 8).to_le_bytes()));
+        oversized.extend_from_slice(&declared.to_le_bytes());
         oversized.extend_from_slice(&[0; 16]);
         assert!(matches!(
             decode_ipc(&oversized),
@@ -5108,7 +5252,10 @@ mod tests {
             let Geometry::Point(point) = geometry_from_wkb(cells.value(row)).unwrap() else {
                 panic!("componente MultiPoint deve essere Point")
             };
-            assert_eq!(point, Point::new(row as f64, row as f64));
+            // `row` e' l'indice del loop 0..3: esatto in f64.
+            #[allow(clippy::cast_precision_loss)]
+            let coordinate = row as f64;
+            assert_eq!(point, Point::new(coordinate, coordinate));
         }
         assert!(matches!(
             geometry_from_wkb(cells.value(3)).unwrap(),
@@ -5366,7 +5513,8 @@ mod tests {
             Field::new("x", DataType::Float64, true),
             Field::new("y", DataType::Float64, true),
         ]));
-        let rows = xs.len() as i64;
+        // righe fixture: poche per costruzione, entro i64.
+        let rows = i64::try_from(xs.len()).expect("righe fixture entro i64");
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -5491,6 +5639,52 @@ mod tests {
         assert_eq!(
             geometry_from_wkb(cells.value(0)).unwrap(),
             Geometry::Point(Point::new(3.0, 4.0))
+        );
+    }
+
+    #[test]
+    fn from_coords_rejects_int64_beyond_f64_exact_range() {
+        // Oltre 2^53 in valore assoluto la conversione i64 -> f64 non e'
+        // esatta: la coordinata va rifiutata, mai spostata in silenzio.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int64, true),
+            Field::new("y", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some((1_i64 << 53) + 1)])),
+                Arc::new(Int64Array::from(vec![Some(4_i64)])),
+            ],
+        )
+        .unwrap();
+        let input = envelope_bytes(&schema, &[batch]);
+        assert!(matches!(
+            run(&arrow_schema(1, ArrowOperation::FromCoords), &input),
+            Err(ArrowTransportError::IntegerCoordinateTooLarge { .. })
+        ));
+
+        // Il confine 2^53 e' esattamente rappresentabile: resta accettato.
+        let boundary = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1_i64 << 53)])),
+                Arc::new(Int64Array::from(vec![Some(-(1_i64 << 53))])),
+            ],
+        )
+        .unwrap();
+        let input = envelope_bytes(&schema, &[boundary]);
+        let output =
+            run(&arrow_schema(1, ArrowOperation::FromCoords), &input).expect("from_coords");
+        let (out_schema, out_batches) = decode_output(&output);
+        let cells = out_batches[0]
+            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(
+            geometry_from_wkb(cells.value(0)).unwrap(),
+            Geometry::Point(Point::new(2_f64.powi(53), -(2_f64.powi(53))))
         );
     }
 

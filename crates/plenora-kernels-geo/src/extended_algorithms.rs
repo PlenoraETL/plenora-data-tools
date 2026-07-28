@@ -109,11 +109,18 @@ fn checked_densified_line_count(
         let dy = segment.end.y - segment.start.y;
         let length = dx.hypot(dy);
         let pieces = (length / max_segment_length).ceil();
-        if !pieces.is_finite() || pieces > u64::MAX as f64 {
+        // Soglia 2^64, esatta in f64 e uguale al valore di `u64::MAX as f64`
+        // (che arrotonderebbe per eccesso): stesso confronto di prima.
+        if !pieces.is_finite() || pieces > 18_446_744_073_709_551_616.0 {
             return Err(ExtendedAlgorithmError::IndexOverflow);
         }
+        // Guardia sopra: pieces finito, in [0, 2^64] e a valore intero
+        // (ceil di un rapporto non negativo, max_segment_length > 0); il
+        // cast saturante non puo' perdere segno ne' troncare.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pieces_u64 = (pieces as u64).max(1);
         total = total
-            .checked_add((pieces as u64).max(1))
+            .checked_add(pieces_u64)
             .ok_or(ExtendedAlgorithmError::IndexOverflow)?;
     }
     Ok(total)
@@ -1418,8 +1425,11 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(index, reverse)| {
-                    let start = Coord { x: index as f64, y: 0.0 };
-                    let end = Coord { x: index as f64 + 1.0, y: 0.0 };
+                    // index < 128 (bound del generatore): esatto in f64.
+                    #[allow(clippy::cast_precision_loss)]
+                    let position = index as f64;
+                    let start = Coord { x: position, y: 0.0 };
+                    let end = Coord { x: position + 1.0, y: 0.0 };
                     if *reverse {
                         LineString::new(vec![end, start])
                     } else {
@@ -1430,7 +1440,10 @@ mod tests {
             let input = Geometry::MultiLineString(geo::MultiLineString(lines));
             let merged = line_merge(&input, 1_000, 2).unwrap();
             prop_assert_eq!(merged.len(), 1);
-            prop_assert!((Euclidean.length(&merged[0]) - orientations.len() as f64).abs() < 1e-12);
+            // orientations.len() <= 128 (bound del generatore): esatto in f64.
+            #[allow(clippy::cast_precision_loss)]
+            let expected_length = orientations.len() as f64;
+            prop_assert!((Euclidean.length(&merged[0]) - expected_length).abs() < 1e-12);
         }
 
         #[test]
