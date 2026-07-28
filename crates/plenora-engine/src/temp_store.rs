@@ -277,7 +277,7 @@ fn process_alive(pid: u32) -> bool {
 /// dipendenze. Fallback conservativo: il processo e' considerato vivo e
 /// decide solo il TTL dell'heartbeat (ADR 3).
 #[cfg(not(target_os = "linux"))]
-fn process_alive(_pid: u32) -> bool {
+const fn process_alive(_pid: u32) -> bool {
     true
 }
 

@@ -330,7 +330,7 @@ fn sync_directory_outcome(parent: &Path) -> PublishOutcome {
 /// profilo [`PublishProfile::DurableAtomic`] non e' confermabile (ADR 7) e
 /// l'esito e' sempre [`PublishOutcome::PublishedButDurabilityUnconfirmed`].
 #[cfg(not(unix))]
-fn sync_directory_outcome(_parent: &Path) -> PublishOutcome {
+const fn sync_directory_outcome(_parent: &Path) -> PublishOutcome {
     PublishOutcome::PublishedButDurabilityUnconfirmed
 }
 

@@ -56,4 +56,8 @@ cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
 scripts/fuzz-smoke.sh
+# gate clippy anche per il target Windows (la CI gira su Linux+Windows e
+# il codice cfg(windows)/cfg(not(unix)) non compila nel container Linux):
+rustup target add x86_64-pc-windows-msvc
+cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 ```
