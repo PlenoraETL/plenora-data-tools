@@ -687,6 +687,48 @@ fn rebuild(input: &DataContract, fields: Vec<Field>, properties: ContractPropert
     )
 }
 
+/// Merge dei metadati di SCHEMA delle due sorgenti di un'op binaria (R2.4):
+/// chiave in una sola sorgente -> copiata; in entrambe con lo stesso valore
+/// -> copiata; in entrambe con valori diversi -> errore esplicito che nomina
+/// la chiave (mai i valori: errori senza dati). Le chiavi di `right` sono
+/// esaminate in ordine lessicografico: l'eventuale errore e' deterministico
+/// (ADR-0001), mai dipendente dall'ordine di iterazione della mappa.
+fn merge_schema_metadata(
+    op: &str,
+    left: &DataContract,
+    right: &DataContract,
+) -> Result<HashMap<String, String>> {
+    let mut merged = left.schema.metadata().clone();
+    let mut right_keys: Vec<&String> = right.schema.metadata().keys().collect();
+    right_keys.sort();
+    for key in right_keys {
+        let value = &right.schema.metadata()[key];
+        match merged.get(key) {
+            None => {
+                merged.insert(key.clone(), value.clone());
+            }
+            Some(existing) if existing == value => {}
+            Some(_) => {
+                return Err(PlenoraError::Contract(format!(
+                    "{op}: metadato di schema `{key}` in conflitto fra le due sorgenti"
+                )));
+            }
+        }
+    }
+    Ok(merged)
+}
+
+/// Sostituisce i metadati di SCHEMA del contratto (campi, geometrie e
+/// proprieta' invariati): usato dalle op binarie per applicare il merge R2.4.
+fn with_schema_metadata(contract: &DataContract, metadata: HashMap<String, String>) -> Result<DataContract> {
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(output_fields(contract), metadata)),
+        contract.geometries.clone(),
+        contract.active_geometry,
+        contract.properties.clone(),
+    )
+}
+
 /// Copia del campo geometria con nullability aggiornata (per gli output a
 /// sole geometrie, dove l'aggregazione puo' produrre null).
 fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nullable: bool) -> Result<Field> {
@@ -824,6 +866,9 @@ fn analyze_expand(op: &str, input: &DataContract) -> Result<DataContract> {
 /// Aggregazione a sole geometrie (`dissolve`, builder, `polygonize`,
 /// `line_merge`, `overlay`): le colonne attributo non sono propagate; la
 /// geometria aggregata e' nullable (input vuoto -> geometria null).
+///
+/// I metadati dello SCHEMA di input sono conservati (R2.4): riguardano il
+/// dataset, non le colonne attributo eliminate.
 fn analyze_geometry_only(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -841,7 +886,10 @@ fn analyze_geometry_only(
         ..geometry.clone()
     };
     DataContract::new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        )),
         vec![aggregated],
         active,
         ContractProperties::default(),
@@ -1186,6 +1234,9 @@ fn analyze_line_locate_point(
 /// `cell_i`/`cell_j`, piu' centroidi opzionali) e il numero di celle,
 /// limitato da [`crate::extensions2::MAX_GRID_CELLS`], e' noto a secco
 /// (`row_count` `Estimated` col valore esatto).
+///
+/// Le colonne del trigger non sono propagate, ma i metadati dello SCHEMA si'
+/// (R2.4): riguardano il dataset, non le colonne soppresse.
 fn analyze_generate_grid(
     op: &str,
     input: &DataContract,
@@ -1249,7 +1300,10 @@ fn analyze_generate_grid(
         ..ContractProperties::default()
     };
     DataContract::new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        )),
         vec![geometry],
         Some(field_id),
         properties,
@@ -1325,8 +1379,12 @@ fn analyze_snap(op: &str, input: &DataContract, config: &Value) -> Result<DataCo
 /// Costruisce il contratto `WholeToMany` delle op di copertura v1.3: schema
 /// nuovo con le colonne diagnostiche non-null elencate piu' la geometria WKB
 /// non-null (nuovo `FieldId`, CRS dell'input); proprieta' azzerate.
+///
+/// I metadati dello SCHEMA di input sono conservati (R2.4): riguardano il
+/// dataset, non le colonne attributo soppresse.
 fn analyze_coverage_rows(
     geometry: &GeometryColumnContract,
+    schema_metadata: &HashMap<String, String>,
     columns: &[(&str, DataType)],
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
@@ -1357,7 +1415,7 @@ fn analyze_coverage_rows(
         types: GeometryColumnContract::undeclared_types(),
     };
     DataContract::new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(fields, schema_metadata.clone())),
         vec![output_geometry],
         Some(field_id),
         ContractProperties::default(),
@@ -1368,6 +1426,7 @@ fn analyze_coverage_rows(
 /// maggiore di zero; una riga per overlap.
 fn analyze_coverage_validate(
     op: &str,
+    input: &DataContract,
     geometry: &GeometryColumnContract,
     config: &Value,
     fields_allocator: &mut FieldAllocator,
@@ -1383,6 +1442,7 @@ fn analyze_coverage_validate(
     }
     analyze_coverage_rows(
         geometry,
+        input.schema.metadata(),
         &[
             (ISSUE_TYPE_COLUMN, DataType::Utf8),
             (INDEX_A_COLUMN, DataType::UInt64),
@@ -1397,6 +1457,7 @@ fn analyze_coverage_validate(
 /// riga per coppia con confine condiviso.
 fn analyze_shared_paths(
     op: &str,
+    input: &DataContract,
     geometry: &GeometryColumnContract,
     config: &Value,
     fields_allocator: &mut FieldAllocator,
@@ -1410,6 +1471,7 @@ fn analyze_shared_paths(
     }
     analyze_coverage_rows(
         geometry,
+        input.schema.metadata(),
         &[
             (INDEX_A_COLUMN, DataType::UInt64),
             (INDEX_B_COLUMN, DataType::UInt64),
@@ -1664,11 +1726,11 @@ fn analyze_unary(
         }
         "geo.coverage_validate" => {
             validate_requirement(requirement, &[&geometry.crs])?;
-            analyze_coverage_validate(op, geometry, config, fields)
+            analyze_coverage_validate(op, input, geometry, config, fields)
         }
         "geo.shared_paths" => {
             validate_requirement(requirement, &[&geometry.crs])?;
-            analyze_shared_paths(op, geometry, config, fields)
+            analyze_shared_paths(op, input, geometry, config, fields)
         }
         "geo.cluster_dbscan" => {
             validate_requirement(requirement, &[&geometry.crs])?;
@@ -1713,7 +1775,10 @@ fn analyze_binary(
         PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
     validate_requirement(requirement, &[&left_geometry.crs, &right_geometry.crs])?;
-    match op {
+    // R2.4: i metadati di SCHEMA delle due sorgenti sono fusi; un conflitto
+    // su valori diversi fallisce qui, in validazione, mai a runtime.
+    let schema_metadata = merge_schema_metadata(op, left, right)?;
+    let output = match op {
         // Schema left invariato, geometria sostituita in place; righe
         // allineate a left nel protocollo legacy: proprieta' preservate.
         "geo.clip" | "geo.intersection" | "geo.union" | "geo.difference"

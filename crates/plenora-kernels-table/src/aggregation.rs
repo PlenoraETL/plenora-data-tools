@@ -1067,9 +1067,73 @@ fn scatter_partitions(
 /// Riduzione numerica di un gruppo: logica IDENTICA al percorso generico
 /// originale (stesso ordine di somma, `total_cmp` per distinct/quantile,
 /// null esclusi o gruppo nullo secondo `skip_null`).
+/// Riduzione Sum/Avg/Min/Max/Variance/Stddev senza materializzare il
+/// gruppo (V2): stesse operazioni f64 nello stesso ordine del percorso
+/// materializzato (`values.iter().sum()`, due passate per la varianza) —
+/// risultato bit-identico, nessuna seconda allocazione per gruppo.
+fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> Result<Option<f64>> {
+    let mut len = 0_usize;
+    // Inizializza a -0.0: `Iterator::sum` sui float in std fa fold da -0.0
+    // (per preservare il segno dello zero); la parita' bit-a-bit con il
+    // percorso materializzato include il segno dello zero della somma.
+    let mut sum = -0.0_f64;
+    for value in raw.iter().flatten() {
+        sum += *value;
+        len += 1;
+    }
+    if len == 0 {
+        return Ok(None);
+    }
+    Ok(Some(match aggregation.function {
+        AggFunction::Sum => sum,
+        AggFunction::Avg | AggFunction::Mean => {
+            sum / len.to_f64().ok_or_else(|| {
+                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+            })?
+        }
+        AggFunction::Min => raw.iter().flatten().copied().reduce(f64::min).unwrap_or_default(),
+        AggFunction::Max => raw.iter().flatten().copied().reduce(f64::max).unwrap_or_default(),
+        AggFunction::Variance | AggFunction::Stddev => {
+            if len <= aggregation.ddof {
+                return Ok(None);
+            }
+            let length = len.to_f64().ok_or_else(|| {
+                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+            })?;
+            let mean = sum / length;
+            let divisor = (len - aggregation.ddof).to_f64().ok_or_else(|| {
+                PlenoraError::Contract("divisore statistico non rappresentabile".into())
+            })?;
+            let variance = raw
+                .iter()
+                .flatten()
+                .map(|value| (value - mean).powi(2))
+                .sum::<f64>()
+                / divisor;
+            if matches!(aggregation.function, AggFunction::Stddev) {
+                variance.sqrt()
+            } else {
+                variance
+            }
+        }
+        _ => {
+            return Err(PlenoraError::Contract(
+                "internal error: funzione fuori dal percorso streaming di reduce_numeric".into(),
+            ));
+        }
+    }))
+}
+
 fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Option<f64>> {
     if !aggregation.skip_null && raw.iter().any(Option::is_none) {
         return Ok(None);
+    }
+    // Solo `distinct` e `quantile` hanno bisogno del gruppo materializzato
+    // (ordinamento); per le altre funzioni il secondo `Vec` e' lavoro
+    // evitabile (V2): si riduce sull'iteratore flatten, stesse operazioni
+    // f64 nello stesso ordine — parita' bit-a-bit per costruzione.
+    if !aggregation.distinct && !matches!(aggregation.function, AggFunction::Quantile) {
+        return reduce_numeric_streaming(&raw, aggregation);
     }
     let mut values = raw.into_iter().flatten().collect::<Vec<_>>();
     if aggregation.distinct {

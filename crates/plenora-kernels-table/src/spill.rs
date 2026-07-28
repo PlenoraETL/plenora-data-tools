@@ -84,12 +84,19 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
         .map_err(|_| PlenoraError::Contract("indice partizione non rappresentabile".into()))
 }
 
+/// Capacita' dei buffer di I/O dello spill. Il default (8 KiB) costa ~128
+/// syscall per MB su file sequenziali; 64 KiB le riduce di 8x con un picco
+/// controllato: fino a 64 writer + 64 reader aperti (`spill_partitions`
+/// di default) = 4 MiB per lato, fuori dalla contabilita' del governor
+/// solo perche' vivono dentro la singola operazione — non oltre.
+const SPILL_IO_BUFFER_BYTES: usize = 64 * 1024;
+
 fn open_writers(paths: &[PathBuf]) -> Result<Vec<BufWriter<File>>> {
     paths
         .iter()
         .map(|path| {
             File::create(path)
-                .map(BufWriter::new)
+                .map(|file| BufWriter::with_capacity(SPILL_IO_BUFFER_BYTES, file))
                 .map_err(PlenoraError::from)
         })
         .collect()
@@ -193,7 +200,7 @@ fn read_record(
 }
 
 fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<HashSet<Box<[u8]>>> {
-    let mut reader = BufReader::new(File::open(path)?);
+    let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
     let mut keys = HashSet::new();
     let mut estimated = 0_usize;
     while let Some((_, key)) = read_record(&mut reader, max_record_bytes(limits))? {
@@ -214,7 +221,7 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<HashSet<Box<[u8]>>> {
 }
 
 fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) -> Result<()> {
-    let mut reader = BufReader::new(File::open(path)?);
+    let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
     let mut emitted: HashSet<Box<[u8]>> = HashSet::new();
     let mut estimated = 0_usize;
     while let Some((ordinal, key)) = read_record(&mut reader, max_record_bytes(limits))? {
@@ -244,7 +251,7 @@ fn collect_membership(
     let mut right = load_key_set(right_path, limits)?;
     let mut emitted = HashSet::<Box<[u8]>>::new();
     let mut emitted_bytes = 0_usize;
-    let mut reader = BufReader::new(File::open(left_path)?);
+    let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(left_path)?);
     while let Some((ordinal, key)) = read_record(&mut reader, max_record_bytes(limits))? {
         if intersect {
             if right.remove(key.as_slice()) {
@@ -548,7 +555,7 @@ struct CountingWriter {
 impl CountingWriter {
     fn create(path: &Path, counter: &Rc<Cell<u64>>) -> Result<Self> {
         Ok(Self {
-            inner: BufWriter::new(File::create(path)?),
+            inner: BufWriter::with_capacity(SPILL_IO_BUFFER_BYTES, File::create(path)?),
             counter: Rc::clone(counter),
         })
     }
@@ -577,7 +584,7 @@ struct CountingReader {
 impl CountingReader {
     fn open(path: &Path, counter: &Rc<Cell<u64>>) -> Result<Self> {
         Ok(Self {
-            inner: BufReader::new(File::open(path)?),
+            inner: BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?),
             counter: Rc::clone(counter),
         })
     }
