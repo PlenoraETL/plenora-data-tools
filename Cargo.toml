@@ -64,16 +64,15 @@ plenora-engine = { path = "crates/plenora-engine" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# Politica lint (passata di pulizia 2026-07-27): si nega solo cio' che la
-# CI applica davvero. I gruppi default restano deny; pedantic e nursery
-# scendono a warn (aspirazionali, visibili nel log, non bloccanti) perche'
-# il codebase non li ha mai passati e una configurazione non applicata e'
-# peggiore di una configurazione onesta. Il gate anti-panic R6 resta un
-# passo CI dedicato con lint espliciti (piu' stretto di questa tabella).
+# Politica lint: si nega solo cio' che la CI applica davvero. Dopo la
+# pulizia profonda 2026-07-28 (863 -> 0 warning) tutti i gruppi sono
+# deny; ogni deviazione voluta resta possibile solo come `#[allow]`
+# mirato e motivato nel codice. Il gate anti-panic R6 resta un passo CI
+# dedicato con lint espliciti (piu' stretto di questa tabella).
 [workspace.lints.clippy]
 all = "deny"
-pedantic = "warn"
-nursery = "warn"
+pedantic = "deny"
+nursery = "deny"
 
 [profile.release]
 codegen-units = 1
