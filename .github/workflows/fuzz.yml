@@ -82,6 +82,12 @@ jobs:
 
       - name: Fuzz ${{ matrix.target }} (${{ env.MINUTES }} min)
         working-directory: fuzz
+        # RUSTUP_TOOLCHAIN vince su rust-toolchain.toml (stabile 1.92, R13):
+        # senza questa variabile cargo-fuzz usa la toolchain pinnata di
+        # progetto e `-Zsanitizer` fallisce ("only accepted on nightly").
+        # Deroga registrata: docs/deroghe.md DER-001 (ICD §16 R16.1).
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: |
           SECONDS=$(( MINUTES * 60 ))
           cargo fuzz run "${{ matrix.target }}" -- \

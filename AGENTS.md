@@ -35,6 +35,10 @@ agente — segue queste regole. Non sono opzionali.
 
 - ADR in `docs/adr/` — contratto architetturale; lo stato di attuazione è
   riportato in coda a ciascuno.
+- Registro delle deroghe: `docs/deroghe.md` (ICD §16 R16.2) — unico punto
+  di raccolta; ogni deroga dichiara regola, motivo, hazard, owner e
+  condizione di rientro (R16.1). Fonte normativa citata nelle CIA:
+  `plenora-contracts`, tag `v2.0-rc3`.
 - `Architetture.md`, `Prestazioni.md` — decisioni (D*) e invarianti (I*, P*).
 - Catalogo operazioni: snapshot test
   (`crates/plenora-engine/tests/catalog_snapshot.snap`) — ogni cambio di
