@@ -48,6 +48,7 @@ fn geo_contract() -> DataContract {
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
         }],
         None,
         ContractProperties::default(),

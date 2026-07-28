@@ -67,6 +67,7 @@ fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
         }],
         None,
         ContractProperties::default(),

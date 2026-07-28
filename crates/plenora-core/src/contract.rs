@@ -194,6 +194,702 @@ impl std::str::FromStr for GeometryEncoding {
     }
 }
 
+/// Tipo geometrico canonico di una colonna (ICD §3.1, regola R3.1).
+///
+/// Enum chiuso dei sedici tipi canonici, serializzati in minuscolo SENZA
+/// separatore (`point`, `linestring`, …): la forma coincide con quella dei
+/// sistemi esterni (`PostGIS`, `GeoPackage`, OGC WKT usano `LINESTRING`,
+/// `MULTIPOLYGON`), cosi' nessuna traduzione — e nessun punto di perdita di
+/// informazione — e' richiesta ai confini.
+///
+/// R3.2: un componente PUO' supportare un sottoinsieme dei tipi, ma DEVE
+/// rifiutare esplicitamente quelli che non supporta — mai degradarli,
+/// approssimarli o ignorarli in silenzio.
+///
+/// INVARIANTE: l'ordine di dichiarazione delle varianti E' l'ordine
+/// canonico di §3.1. `Ord` deriva da tale ordine e la serializzazione
+/// canonica delle liste di tipi (R3.4.1, vedi [`GeometryTypesProperty`])
+/// dipende da esso: non riordinare le varianti.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GeometryType {
+    Point,
+    LineString,
+    Polygon,
+    MultiPoint,
+    MultiLineString,
+    MultiPolygon,
+    GeometryCollection,
+    CircularString,
+    CompoundCurve,
+    CurvePolygon,
+    MultiCurve,
+    MultiSurface,
+    PolyhedralSurface,
+    Tin,
+    Triangle,
+    /// Tipo non risolto (R3.1): mai degradato a un tipo noto.
+    Unknown,
+}
+
+impl GeometryType {
+    /// Forma testuale ICD (minuscola senza separatore, R3.1). Coincide con
+    /// la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Point => "point",
+            Self::LineString => "linestring",
+            Self::Polygon => "polygon",
+            Self::MultiPoint => "multipoint",
+            Self::MultiLineString => "multilinestring",
+            Self::MultiPolygon => "multipolygon",
+            Self::GeometryCollection => "geometrycollection",
+            Self::CircularString => "circularstring",
+            Self::CompoundCurve => "compoundcurve",
+            Self::CurvePolygon => "curvepolygon",
+            Self::MultiCurve => "multicurve",
+            Self::MultiSurface => "multisurface",
+            Self::PolyhedralSurface => "polyhedralsurface",
+            Self::Tin => "tin",
+            Self::Triangle => "triangle",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Mappa il type code WKB base ISO (senza la serie dimensionale 1000+
+    /// ne' i flag EWKB, gia' estratti dal chiamante) al tipo canonico.
+    ///
+    /// Codici: 1..=7 i sette tipi base, 8 `circularstring`,
+    /// 9 `compoundcurve`, 10 `curvepolygon`, 11 `multicurve`,
+    /// 12 `multisurface`, 15 `polyhedralsurface`, 16 `tin`, 17 `triangle`.
+    ///
+    /// Restituisce `None` per 13 e 14 (`curve`/`surface`, tipi ASTRATTI
+    /// non istanziabili: non compaiono mai come type code di una geometria
+    /// concreta sul filo) e per qualunque altro codice (0, 18+, code con
+    /// serie dimensionale non estratta). La scelta del rifiuto spetta al
+    /// chiamante (R3.2: rifiuto esplicito, mai degradazione) — coerente
+    /// con `parse_wkb_type_code` di `plenora-kernels-geo`, che oggi
+    /// supporta solo 1..=7 e rifiuta esplicitamente il resto.
+    #[must_use]
+    pub const fn from_wkb_base_type(code: u32) -> Option<Self> {
+        match code {
+            1 => Some(Self::Point),
+            2 => Some(Self::LineString),
+            3 => Some(Self::Polygon),
+            4 => Some(Self::MultiPoint),
+            5 => Some(Self::MultiLineString),
+            6 => Some(Self::MultiPolygon),
+            7 => Some(Self::GeometryCollection),
+            8 => Some(Self::CircularString),
+            9 => Some(Self::CompoundCurve),
+            10 => Some(Self::CurvePolygon),
+            11 => Some(Self::MultiCurve),
+            12 => Some(Self::MultiSurface),
+            15 => Some(Self::PolyhedralSurface),
+            16 => Some(Self::Tin),
+            17 => Some(Self::Triangle),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for GeometryType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`GeometryType`]: valore non riconosciuto.
+///
+/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
+/// «errori senza dati» di `plenora-core`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownGeometryType;
+
+impl fmt::Display for UnknownGeometryType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "tipo geometrico non riconosciuto (ammessi: point, linestring, polygon, multipoint, multilinestring, multipolygon, geometrycollection, circularstring, compoundcurve, curvepolygon, multicurve, multisurface, polyhedralsurface, tin, triangle, unknown)",
+        )
+    }
+}
+
+impl std::error::Error for UnknownGeometryType {}
+
+impl std::str::FromStr for GeometryType {
+    type Err = UnknownGeometryType;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "point" => Ok(Self::Point),
+            "linestring" => Ok(Self::LineString),
+            "polygon" => Ok(Self::Polygon),
+            "multipoint" => Ok(Self::MultiPoint),
+            "multilinestring" => Ok(Self::MultiLineString),
+            "multipolygon" => Ok(Self::MultiPolygon),
+            "geometrycollection" => Ok(Self::GeometryCollection),
+            "circularstring" => Ok(Self::CircularString),
+            "compoundcurve" => Ok(Self::CompoundCurve),
+            "curvepolygon" => Ok(Self::CurvePolygon),
+            "multicurve" => Ok(Self::MultiCurve),
+            "multisurface" => Ok(Self::MultiSurface),
+            "polyhedralsurface" => Ok(Self::PolyhedralSurface),
+            "tin" => Ok(Self::Tin),
+            "triangle" => Ok(Self::Triangle),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(UnknownGeometryType),
+        }
+    }
+}
+
+/// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
+/// chiave canonica `plenora.geometry.types_declaration`).
+///
+/// Tre stati che la 1.x confondeva in `unknown`:
+///
+/// - `Exact`: l'insieme dei tipi presenti e' noto ed e' quello elencato;
+/// - `Mixed`: la colonna ammette tipi diversi PER DICHIARAZIONE (es. una
+///   colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
+///   ignoranza;
+/// - `Unresolved`: i byte non sono stati ispezionati e nessuna
+///   dichiarazione e' disponibile.
+///
+/// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy
+/// privo di entrambe le chiavi `types`/`types_declaration` NON e'
+/// `Unresolved`: significa «proprieta' non dichiarata» e va preservato o
+/// normalizzato con un `LossReport`, mai interpretato come `unresolved`.
+///
+/// Serializzazione ICD: `"exact"`, `"mixed"`, `"unresolved"` (minuscola).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TypesDeclaration {
+    Exact,
+    Mixed,
+    Unresolved,
+}
+
+impl TypesDeclaration {
+    /// Forma testuale ICD (minuscola): `"exact"`, `"mixed"`,
+    /// `"unresolved"`. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Mixed => "mixed",
+            Self::Unresolved => "unresolved",
+        }
+    }
+}
+
+impl fmt::Display for TypesDeclaration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`TypesDeclaration`]: valore non riconosciuto.
+///
+/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
+/// «errori senza dati» di `plenora-core`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownTypesDeclaration;
+
+impl fmt::Display for UnknownTypesDeclaration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("types_declaration non riconosciuta (ammesse: exact, mixed, unresolved)")
+    }
+}
+
+impl std::error::Error for UnknownTypesDeclaration {}
+
+impl std::str::FromStr for TypesDeclaration {
+    type Err = UnknownTypesDeclaration;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "exact" => Ok(Self::Exact),
+            "mixed" => Ok(Self::Mixed),
+            "unresolved" => Ok(Self::Unresolved),
+            _ => Err(UnknownTypesDeclaration),
+        }
+    }
+}
+
+/// Errore di costruzione o parsing di [`GeometryTypesProperty`].
+///
+/// I messaggi descrivono la violazione senza riportare mai il contenuto
+/// dell'elenco (regola «errori senza dati» di `plenora-core`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeometryTypesPropertyError {
+    /// `exact` senza elenco o con elenco vuoto (R3.4.1).
+    ExactWithoutTypes,
+    /// `unresolved` con elenco presente (R3.4.1).
+    UnresolvedWithTypes,
+    /// Valore non canonico nell'elenco testuale (maiuscole, `snake_case`,
+    /// spazi, token vuoti o nomi ignoti).
+    UnknownTypeInList,
+    /// Duplicato nell'elenco testuale: la forma canonica richiede valori
+    /// unici (R3.4.1).
+    DuplicateTypeInList,
+    /// Elenco testuale fuori dall'ordine canonico di §3.1 (R3.4.1).
+    NonCanonicalOrder,
+}
+
+impl fmt::Display for GeometryTypesPropertyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ExactWithoutTypes => {
+                "types_declaration `exact` richiede un elenco di tipi presente e non vuoto (R3.4.1)"
+            }
+            Self::UnresolvedWithTypes => {
+                "types_declaration `unresolved` non ammette un elenco di tipi (R3.4.1)"
+            }
+            Self::UnknownTypeInList => {
+                "elenco tipi con valore non canonico (ammessi i 16 tipi di R3.1, minuscoli senza separatore, separati da `,` senza spazi)"
+            }
+            Self::DuplicateTypeInList => {
+                "elenco tipi con duplicati: la forma canonica richiede valori unici (R3.4.1)"
+            }
+            Self::NonCanonicalOrder => {
+                "elenco tipi fuori ordine canonico (R3.4.1, ordine di §3.1)"
+            }
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for GeometryTypesPropertyError {}
+
+/// Coppia coerente (`types_declaration`, `types`) delle chiavi canoniche
+/// R2.2/R3.4.1 per una colonna geometrica.
+///
+/// Le coerenze di R3.4.1 sono imposte per costruzione — campi privati,
+/// unico ingresso [`GeometryTypesProperty::new`]:
+///
+/// - `Exact` richiede un elenco presente e non vuoto;
+/// - `Unresolved` vieta l'elenco (errore se presente);
+/// - `Mixed` ammette elenco assente o non vuoto (un elenco vuoto NON e'
+///   distinguibile dall'assenza e conta come assente).
+///
+/// `new` normalizza l'elenco (valori unici, ordine canonico §3.1) cosi'
+/// una stessa dichiarazione ha una sola serializzazione
+/// ([`GeometryTypesProperty::to_canonical_list`]). Il parsing testuale
+/// ([`GeometryTypesProperty::from_canonical_list`]) e' invece fail-closed:
+/// spazi, duplicati e ordine non canonico sono errori, mai correzioni
+/// silenziose — un produttore conforme non li emette.
+///
+/// Nessuna derivazione serde: la forma sul filo e' la coppia di chiavi di
+/// metadati R2.2 (`types_declaration` + lista canonica), non una
+/// serializzazione di struct, e una `Deserialize` derivata bypasserebbe il
+/// validatore.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GeometryTypesProperty {
+    declaration: TypesDeclaration,
+    types: Box<[GeometryType]>,
+}
+
+impl GeometryTypesProperty {
+    /// Costruisce la proprieta' validando le coerenze R3.4.1 e
+    /// normalizzando l'elenco (dedup + ordine canonico §3.1).
+    ///
+    /// # Errors
+    ///
+    /// - [`GeometryTypesPropertyError::ExactWithoutTypes`] se `exact` con
+    ///   elenco vuoto;
+    /// - [`GeometryTypesPropertyError::UnresolvedWithTypes`] se
+    ///   `unresolved` con elenco non vuoto.
+    pub fn new(
+        declaration: TypesDeclaration,
+        mut types: Vec<GeometryType>,
+    ) -> std::result::Result<Self, GeometryTypesPropertyError> {
+        // Normalizzazione R3.4.1: valori unici in ordine canonico §3.1 —
+        // una stessa dichiarazione ha una sola serializzazione.
+        types.sort_unstable();
+        types.dedup();
+        Self::check_coherence(declaration, types.len())?;
+        Ok(Self {
+            declaration,
+            types: types.into_boxed_slice(),
+        })
+    }
+
+    /// Parsing fail-closed dalla forma canonica sul filo: valori unici in
+    /// ordine §3.1 separati da `,` senza spazi. La stringa vuota modella
+    /// l'elenco assente (chiave `types` non emessa).
+    ///
+    /// # Errors
+    ///
+    /// Oltre alle coerenze di [`GeometryTypesProperty::new`]:
+    /// [`GeometryTypesPropertyError::UnknownTypeInList`],
+    /// [`GeometryTypesPropertyError::DuplicateTypeInList`],
+    /// [`GeometryTypesPropertyError::NonCanonicalOrder`].
+    pub fn from_canonical_list(
+        declaration: TypesDeclaration,
+        list: &str,
+    ) -> std::result::Result<Self, GeometryTypesPropertyError> {
+        if list.is_empty() {
+            Self::check_coherence(declaration, 0)?;
+            return Ok(Self {
+                declaration,
+                types: Vec::new().into_boxed_slice(),
+            });
+        }
+        let mut parsed: Vec<GeometryType> = Vec::new();
+        for token in list.split(',') {
+            // Fail-closed: maiuscole, snake_case, spazi, token vuoti e nomi
+            // ignoti sono rifiutati da `FromStr`; mai correggere.
+            let geometry_type = token
+                .parse::<GeometryType>()
+                .map_err(|_| GeometryTypesPropertyError::UnknownTypeInList)?;
+            if let Some(&last) = parsed.last() {
+                if last == geometry_type {
+                    return Err(GeometryTypesPropertyError::DuplicateTypeInList);
+                }
+                if last > geometry_type {
+                    return Err(GeometryTypesPropertyError::NonCanonicalOrder);
+                }
+            }
+            parsed.push(geometry_type);
+        }
+        Self::check_coherence(declaration, parsed.len())?;
+        Ok(Self {
+            declaration,
+            types: parsed.into_boxed_slice(),
+        })
+    }
+
+    const fn check_coherence(
+        declaration: TypesDeclaration,
+        len: usize,
+    ) -> std::result::Result<(), GeometryTypesPropertyError> {
+        match declaration {
+            TypesDeclaration::Exact if len == 0 => {
+                Err(GeometryTypesPropertyError::ExactWithoutTypes)
+            }
+            TypesDeclaration::Unresolved if len > 0 => {
+                Err(GeometryTypesPropertyError::UnresolvedWithTypes)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// La dichiarazione R3.4.1.
+    #[must_use]
+    pub const fn declaration(&self) -> TypesDeclaration {
+        self.declaration
+    }
+
+    /// L'elenco normalizzato dei tipi (unici, ordine canonico §3.1);
+    /// vuoto quando la dichiarazione non porta elenco.
+    #[must_use]
+    pub fn types(&self) -> &[GeometryType] {
+        &self.types
+    }
+
+    /// Serializzazione canonica della chiave `plenora.geometry.types`
+    /// (R2.2): valori unici in ordine §3.1 separati da `,` senza spazi.
+    /// Stringa vuota quando l'elenco e' assente.
+    #[must_use]
+    pub fn to_canonical_list(&self) -> String {
+        let mut list = String::new();
+        for (index, geometry_type) in self.types.iter().enumerate() {
+            if index > 0 {
+                list.push(',');
+            }
+            list.push_str(geometry_type.as_str());
+        }
+        list
+    }
+}
+
+/// Ordine degli assi del CRS (chiave canonica `plenora.geometry.axis_order`,
+/// tabella R2.2). Serializzazione ICD minuscola con `_`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisOrder {
+    LonLat,
+    LatLon,
+    EastingNorthing,
+    NorthingEasting,
+    Other,
+    Unknown,
+}
+
+impl AxisOrder {
+    /// Forma testuale ICD. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LonLat => "lon_lat",
+            Self::LatLon => "lat_lon",
+            Self::EastingNorthing => "easting_northing",
+            Self::NorthingEasting => "northing_easting",
+            Self::Other => "other",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for AxisOrder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`AxisOrder`]: valore non riconosciuto (nessun dato
+/// nel messaggio, regola «errori senza dati»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownAxisOrder;
+
+impl fmt::Display for UnknownAxisOrder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "ordine assi non riconosciuto (ammessi: lon_lat, lat_lon, easting_northing, northing_easting, other, unknown)",
+        )
+    }
+}
+
+impl std::error::Error for UnknownAxisOrder {}
+
+impl std::str::FromStr for AxisOrder {
+    type Err = UnknownAxisOrder;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "lon_lat" => Ok(Self::LonLat),
+            "lat_lon" => Ok(Self::LatLon),
+            "easting_northing" => Ok(Self::EastingNorthing),
+            "northing_easting" => Ok(Self::NorthingEasting),
+            "other" => Ok(Self::Other),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(UnknownAxisOrder),
+        }
+    }
+}
+
+/// Stato di risoluzione del CRS (chiave canonica
+/// `plenora.geometry.crs_resolution`, tabella R2.2). Serializzazione ICD
+/// minuscola con `_`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrsResolution {
+    Resolved,
+    DeclaredUnresolved,
+    Missing,
+}
+
+impl CrsResolution {
+    /// Forma testuale ICD. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Resolved => "resolved",
+            Self::DeclaredUnresolved => "declared_unresolved",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+impl fmt::Display for CrsResolution {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`CrsResolution`]: valore non riconosciuto (nessun
+/// dato nel messaggio, regola «errori senza dati»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownCrsResolution;
+
+impl fmt::Display for UnknownCrsResolution {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "risoluzione CRS non riconosciuta (ammesse: resolved, declared_unresolved, missing)",
+        )
+    }
+}
+
+impl std::error::Error for UnknownCrsResolution {}
+
+impl std::str::FromStr for CrsResolution {
+    type Err = UnknownCrsResolution;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "resolved" => Ok(Self::Resolved),
+            "declared_unresolved" => Ok(Self::DeclaredUnresolved),
+            "missing" => Ok(Self::Missing),
+            _ => Err(UnknownCrsResolution),
+        }
+    }
+}
+
+/// Formato testuale della definizione CRS (chiave canonica
+/// `plenora.geometry.crs_definition_format`, tabella R2.2).
+/// Serializzazione ICD minuscola.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrsDefinitionFormat {
+    Wkt,
+    Wkt2,
+    Projjson,
+}
+
+impl CrsDefinitionFormat {
+    /// Forma testuale ICD. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wkt => "wkt",
+            Self::Wkt2 => "wkt2",
+            Self::Projjson => "projjson",
+        }
+    }
+}
+
+impl fmt::Display for CrsDefinitionFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`CrsDefinitionFormat`]: valore non riconosciuto
+/// (nessun dato nel messaggio, regola «errori senza dati»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownCrsDefinitionFormat;
+
+impl fmt::Display for UnknownCrsDefinitionFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("formato definizione CRS non riconosciuto (ammessi: wkt, wkt2, projjson)")
+    }
+}
+
+impl std::error::Error for UnknownCrsDefinitionFormat {}
+
+impl std::str::FromStr for CrsDefinitionFormat {
+    type Err = UnknownCrsDefinitionFormat;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "wkt" => Ok(Self::Wkt),
+            "wkt2" => Ok(Self::Wkt2),
+            "projjson" => Ok(Self::Projjson),
+            _ => Err(UnknownCrsDefinitionFormat),
+        }
+    }
+}
+
+/// Semantica spaziale della colonna (chiave canonica
+/// `plenora.geometry.spatial_semantics`, tabella R2.2). Serializzazione ICD
+/// minuscola.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpatialSemantics {
+    Geometry,
+    Geography,
+}
+
+impl SpatialSemantics {
+    /// Forma testuale ICD. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Geometry => "geometry",
+            Self::Geography => "geography",
+        }
+    }
+}
+
+impl fmt::Display for SpatialSemantics {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`SpatialSemantics`]: valore non riconosciuto
+/// (nessun dato nel messaggio, regola «errori senza dati»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownSpatialSemantics;
+
+impl fmt::Display for UnknownSpatialSemantics {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("semantica spaziale non riconosciuta (ammesse: geometry, geography)")
+    }
+}
+
+impl std::error::Error for UnknownSpatialSemantics {}
+
+impl std::str::FromStr for SpatialSemantics {
+    type Err = UnknownSpatialSemantics;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "geometry" => Ok(Self::Geometry),
+            "geography" => Ok(Self::Geography),
+            _ => Err(UnknownSpatialSemantics),
+        }
+    }
+}
+
+/// Precisione delle coordinate (chiave canonica
+/// `plenora.geometry.precision`, tabella R2.2). Serializzazione ICD
+/// minuscola.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GeometryPrecision {
+    Float64,
+    Float32,
+    Native,
+}
+
+impl GeometryPrecision {
+    /// Forma testuale ICD. Coincide con la serializzazione serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Float64 => "float64",
+            Self::Float32 => "float32",
+            Self::Native => "native",
+        }
+    }
+}
+
+impl fmt::Display for GeometryPrecision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Errore di parsing di [`GeometryPrecision`]: valore non riconosciuto
+/// (nessun dato nel messaggio, regola «errori senza dati»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownGeometryPrecision;
+
+impl fmt::Display for UnknownGeometryPrecision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("precisione geometria non riconosciuta (ammesse: float64, float32, native)")
+    }
+}
+
+impl std::error::Error for UnknownGeometryPrecision {}
+
+impl std::str::FromStr for GeometryPrecision {
+    type Err = UnknownGeometryPrecision;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "float64" => Ok(Self::Float64),
+            "float32" => Ok(Self::Float32),
+            "native" => Ok(Self::Native),
+            _ => Err(UnknownGeometryPrecision),
+        }
+    }
+}
+
 /// Contratto di una colonna geometrica (Architetture.md par. 4.3).
 #[derive(Clone, Debug)]
 pub struct GeometryColumnContract {
@@ -213,6 +909,34 @@ pub struct GeometryColumnContract {
     /// con errore esplicito prima di costruire il contratto.
     pub encoding: Option<GeometryEncoding>,
     pub nullable: bool,
+    /// Dichiarazione dei tipi geometrici della colonna (chiavi canoniche
+    /// `plenora.geometry.types` + `plenora.geometry.types_declaration`,
+    /// R2.2/R3.4.1).
+    ///
+    /// DEFAULT per i costruttori esistenti:
+    /// [`GeometryColumnContract::undeclared_types`] — confidence `Unknown`,
+    /// cioe' «proprieta' non dichiarata». Attenzione alla distinzione di
+    /// R3.4.1: un input legacy privo di entrambe le chiavi NON e'
+    /// `TypesDeclaration::Unresolved`. `Unresolved` e' una dichiarazione
+    /// esplicita del produttore («byte non ispezionati»); il legacy
+    /// assente va preservato o normalizzato con un `LossReport`, mai
+    /// interpretato come `unresolved` (ne' convertito in/da `mixed`).
+    pub types: ContractProperty<GeometryTypesProperty>,
+}
+
+impl GeometryColumnContract {
+    /// Default del campo `types` per i contratti costruiti senza ispezione
+    /// dei tipi: proprieta' NON dichiarata (confidence `Unknown`, scope
+    /// `Schema`).
+    ///
+    /// NON equivale a `Declared(TypesDeclaration::Unresolved)`: per
+    /// R3.4.1 l'assenza delle chiavi in un ingresso legacy significa
+    /// «proprieta' non dichiarata», uno stato distinto da `unresolved` che
+    /// va preservato o normalizzato con un `LossReport`.
+    #[must_use]
+    pub const fn undeclared_types() -> ContractProperty<GeometryTypesProperty> {
+        ContractProperty::new(PropertyConfidence::Unknown, PropertyScope::Schema)
+    }
 }
 
 /// Assegnatore di [`FieldId`] nel namespace globale del grafo (decisione D16).
@@ -583,6 +1307,7 @@ mod tests {
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable,
+            types: GeometryColumnContract::undeclared_types(),
         }
     }
 
@@ -817,6 +1542,391 @@ mod tests {
                 Err(UnknownGeometryEncoding)
             );
         }
+    }
+
+    /// I sedici tipi canonici di §3.1, in ordine canonico (R3.1).
+    const CANONICAL_TYPES: [(GeometryType, &str); 16] = [
+        (GeometryType::Point, "point"),
+        (GeometryType::LineString, "linestring"),
+        (GeometryType::Polygon, "polygon"),
+        (GeometryType::MultiPoint, "multipoint"),
+        (GeometryType::MultiLineString, "multilinestring"),
+        (GeometryType::MultiPolygon, "multipolygon"),
+        (GeometryType::GeometryCollection, "geometrycollection"),
+        (GeometryType::CircularString, "circularstring"),
+        (GeometryType::CompoundCurve, "compoundcurve"),
+        (GeometryType::CurvePolygon, "curvepolygon"),
+        (GeometryType::MultiCurve, "multicurve"),
+        (GeometryType::MultiSurface, "multisurface"),
+        (GeometryType::PolyhedralSurface, "polyhedralsurface"),
+        (GeometryType::Tin, "tin"),
+        (GeometryType::Triangle, "triangle"),
+        (GeometryType::Unknown, "unknown"),
+    ];
+
+    #[test]
+    fn geometry_type_serde_roundtrip_icd_lowercase_no_separator() {
+        for (geometry_type, text) in CANONICAL_TYPES {
+            assert_eq!(geometry_type.as_str(), text);
+            assert_eq!(geometry_type.to_string(), text);
+            let serialized = serde_json::to_string(&geometry_type).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: GeometryType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, geometry_type);
+            assert_eq!(text.parse::<GeometryType>(), Ok(geometry_type));
+        }
+    }
+
+    #[test]
+    fn geometry_type_ord_matches_canonical_r31_declaration_order() {
+        // L'ordine di dichiarazione delle varianti E' l'ordine canonico di
+        // §3.1: `Ord` (deriva dall'ordine di dichiarazione) e la
+        // serializzazione delle liste R3.4.1 dipendono da questa invariante.
+        let shuffled = [
+            GeometryType::Unknown,
+            GeometryType::Tin,
+            GeometryType::MultiPolygon,
+            GeometryType::Point,
+        ];
+        let mut sorted = shuffled;
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            [
+                GeometryType::Point,
+                GeometryType::MultiPolygon,
+                GeometryType::Tin,
+                GeometryType::Unknown,
+            ]
+        );
+        for pair in CANONICAL_TYPES.windows(2) {
+            assert!(pair[0].0 < pair[1].0);
+        }
+    }
+
+    #[test]
+    fn geometry_type_from_str_rejects_non_canonical_forms() {
+        // Fail-closed: maiuscole, snake_case, spazi, vuoto e nomi ignoti
+        // sono rifiutati, mai normalizzati in silenzio (R3.1/R3.2).
+        for value in [
+            "Point",
+            "LINESTRING",
+            "line_string",
+            "multi_polygon",
+            " point",
+            "point ",
+            "",
+            "geomcollection",
+        ] {
+            assert_eq!(value.parse::<GeometryType>(), Err(UnknownGeometryType));
+            assert!(serde_json::from_str::<GeometryType>(&format!("\"{value}\"")).is_err());
+        }
+    }
+
+    #[test]
+    fn geometry_type_from_wkb_base_type_maps_iso_codes() {
+        let concrete = [
+            (1, GeometryType::Point),
+            (2, GeometryType::LineString),
+            (3, GeometryType::Polygon),
+            (4, GeometryType::MultiPoint),
+            (5, GeometryType::MultiLineString),
+            (6, GeometryType::MultiPolygon),
+            (7, GeometryType::GeometryCollection),
+            (8, GeometryType::CircularString),
+            (9, GeometryType::CompoundCurve),
+            (10, GeometryType::CurvePolygon),
+            (11, GeometryType::MultiCurve),
+            (12, GeometryType::MultiSurface),
+            (15, GeometryType::PolyhedralSurface),
+            (16, GeometryType::Tin),
+            (17, GeometryType::Triangle),
+        ];
+        for (code, expected) in concrete {
+            assert_eq!(GeometryType::from_wkb_base_type(code), Some(expected));
+        }
+        // 13/14 (curve/surface ASTRATTI, non istanziabili) e tutto il resto
+        // — incluso un code con serie dimensionale non estratta (1001) — ->
+        // None: il rifiuto esplicito spetta al chiamante (R3.2).
+        for code in [0, 13, 14, 18, 99, 1001] {
+            assert_eq!(GeometryType::from_wkb_base_type(code), None);
+        }
+    }
+
+    #[test]
+    fn types_declaration_serde_roundtrip_icd_lowercase() {
+        let cases = [
+            (TypesDeclaration::Exact, "exact"),
+            (TypesDeclaration::Mixed, "mixed"),
+            (TypesDeclaration::Unresolved, "unresolved"),
+        ];
+        for (declaration, text) in cases {
+            assert_eq!(declaration.as_str(), text);
+            assert_eq!(declaration.to_string(), text);
+            let serialized = serde_json::to_string(&declaration).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: TypesDeclaration = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, declaration);
+            assert_eq!(text.parse::<TypesDeclaration>(), Ok(declaration));
+        }
+        for value in ["Exact", "EXACT", "un_resolved", "", "unknown"] {
+            assert_eq!(
+                value.parse::<TypesDeclaration>(),
+                Err(UnknownTypesDeclaration)
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_types_property_enforces_r341_coherences() {
+        // exact richiede un elenco presente e non vuoto.
+        assert_eq!(
+            GeometryTypesProperty::new(TypesDeclaration::Exact, Vec::new()),
+            Err(GeometryTypesPropertyError::ExactWithoutTypes)
+        );
+        // unresolved vieta l'elenco.
+        assert_eq!(
+            GeometryTypesProperty::new(TypesDeclaration::Unresolved, vec![GeometryType::Point]),
+            Err(GeometryTypesPropertyError::UnresolvedWithTypes)
+        );
+        // mixed ammette l'elenco assente...
+        let mixed = GeometryTypesProperty::new(TypesDeclaration::Mixed, Vec::new()).unwrap();
+        assert_eq!(mixed.declaration(), TypesDeclaration::Mixed);
+        assert!(mixed.types().is_empty());
+        assert_eq!(mixed.to_canonical_list(), "");
+        // ... e quello non vuoto.
+        let mixed_with_types =
+            GeometryTypesProperty::new(TypesDeclaration::Mixed, vec![GeometryType::Point]).unwrap();
+        assert_eq!(mixed_with_types.to_canonical_list(), "point");
+        // exact con elenco non vuoto: ok.
+        let exact =
+            GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point]).unwrap();
+        assert_eq!(exact.declaration(), TypesDeclaration::Exact);
+        // unresolved senza elenco: ok.
+        assert!(GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn geometry_types_property_normalizes_unique_canonical_order() {
+        let property = GeometryTypesProperty::new(
+            TypesDeclaration::Exact,
+            vec![
+                GeometryType::MultiPolygon,
+                GeometryType::Point,
+                GeometryType::MultiPolygon,
+                GeometryType::LineString,
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            property.types(),
+            &[
+                GeometryType::Point,
+                GeometryType::LineString,
+                GeometryType::MultiPolygon,
+            ]
+        );
+        assert_eq!(property.to_canonical_list(), "point,linestring,multipolygon");
+        // Una stessa dichiarazione ha una sola serializzazione (R3.4.1).
+        let reordered = GeometryTypesProperty::new(
+            TypesDeclaration::Exact,
+            vec![
+                GeometryType::LineString,
+                GeometryType::MultiPolygon,
+                GeometryType::Point,
+            ],
+        )
+        .unwrap();
+        assert_eq!(property, reordered);
+    }
+
+    #[test]
+    fn geometry_types_property_from_canonical_list_is_fail_closed() {
+        let parsed = GeometryTypesProperty::from_canonical_list(
+            TypesDeclaration::Exact,
+            "point,linestring,multipolygon",
+        )
+        .unwrap();
+        assert_eq!(parsed.to_canonical_list(), "point,linestring,multipolygon");
+        assert_eq!(parsed.declaration(), TypesDeclaration::Exact);
+
+        // Stringa vuota = elenco assente (chiave non emessa): ok per mixed.
+        let mixed =
+            GeometryTypesProperty::from_canonical_list(TypesDeclaration::Mixed, "").unwrap();
+        assert!(mixed.types().is_empty());
+
+        // Le coerenze R3.4.1 valgono anche per la forma testuale.
+        assert_eq!(
+            GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, ""),
+            Err(GeometryTypesPropertyError::ExactWithoutTypes)
+        );
+        assert_eq!(
+            GeometryTypesProperty::from_canonical_list(TypesDeclaration::Unresolved, "point"),
+            Err(GeometryTypesPropertyError::UnresolvedWithTypes)
+        );
+
+        // Fail-closed: spazi, maiuscole, snake_case, token vuoti, duplicati
+        // e ordine non canonico sono errori, mai correzioni silenziose.
+        for list in ["point, polygon", "Point", "line_string", "point,,polygon", "point,"] {
+            assert_eq!(
+                GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, list),
+                Err(GeometryTypesPropertyError::UnknownTypeInList)
+            );
+        }
+        assert_eq!(
+            GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, "point,point"),
+            Err(GeometryTypesPropertyError::DuplicateTypeInList)
+        );
+        assert_eq!(
+            GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, "polygon,point"),
+            Err(GeometryTypesPropertyError::NonCanonicalOrder)
+        );
+    }
+
+    #[test]
+    fn axis_order_serde_roundtrip_icd() {
+        let cases = [
+            (AxisOrder::LonLat, "lon_lat"),
+            (AxisOrder::LatLon, "lat_lon"),
+            (AxisOrder::EastingNorthing, "easting_northing"),
+            (AxisOrder::NorthingEasting, "northing_easting"),
+            (AxisOrder::Other, "other"),
+            (AxisOrder::Unknown, "unknown"),
+        ];
+        for (axis_order, text) in cases {
+            assert_eq!(axis_order.as_str(), text);
+            assert_eq!(axis_order.to_string(), text);
+            let serialized = serde_json::to_string(&axis_order).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: AxisOrder = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, axis_order);
+            assert_eq!(text.parse::<AxisOrder>(), Ok(axis_order));
+        }
+        for value in ["lonlat", "LON_LAT", "lon lat", "", "xy"] {
+            assert_eq!(value.parse::<AxisOrder>(), Err(UnknownAxisOrder));
+        }
+    }
+
+    #[test]
+    fn crs_resolution_serde_roundtrip_icd() {
+        let cases = [
+            (CrsResolution::Resolved, "resolved"),
+            (CrsResolution::DeclaredUnresolved, "declared_unresolved"),
+            (CrsResolution::Missing, "missing"),
+        ];
+        for (resolution, text) in cases {
+            assert_eq!(resolution.as_str(), text);
+            assert_eq!(resolution.to_string(), text);
+            let serialized = serde_json::to_string(&resolution).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: CrsResolution = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, resolution);
+            assert_eq!(text.parse::<CrsResolution>(), Ok(resolution));
+        }
+        for value in ["declaredunresolved", "DECLARED_UNRESOLVED", "", "unresolved"] {
+            assert_eq!(
+                value.parse::<CrsResolution>(),
+                Err(UnknownCrsResolution)
+            );
+        }
+    }
+
+    #[test]
+    fn crs_definition_format_serde_roundtrip_icd() {
+        let cases = [
+            (CrsDefinitionFormat::Wkt, "wkt"),
+            (CrsDefinitionFormat::Wkt2, "wkt2"),
+            (CrsDefinitionFormat::Projjson, "projjson"),
+        ];
+        for (format, text) in cases {
+            assert_eq!(format.as_str(), text);
+            assert_eq!(format.to_string(), text);
+            let serialized = serde_json::to_string(&format).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: CrsDefinitionFormat = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, format);
+            assert_eq!(text.parse::<CrsDefinitionFormat>(), Ok(format));
+        }
+        for value in ["WKT", "wkt1", "proj_json", "", "wkt 2"] {
+            assert_eq!(
+                value.parse::<CrsDefinitionFormat>(),
+                Err(UnknownCrsDefinitionFormat)
+            );
+        }
+    }
+
+    #[test]
+    fn spatial_semantics_serde_roundtrip_icd() {
+        let cases = [
+            (SpatialSemantics::Geometry, "geometry"),
+            (SpatialSemantics::Geography, "geography"),
+        ];
+        for (semantics, text) in cases {
+            assert_eq!(semantics.as_str(), text);
+            assert_eq!(semantics.to_string(), text);
+            let serialized = serde_json::to_string(&semantics).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: SpatialSemantics = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, semantics);
+            assert_eq!(text.parse::<SpatialSemantics>(), Ok(semantics));
+        }
+        for value in ["Geometry", "GEOGRAPHY", "geo", ""] {
+            assert_eq!(
+                value.parse::<SpatialSemantics>(),
+                Err(UnknownSpatialSemantics)
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_precision_serde_roundtrip_icd() {
+        let cases = [
+            (GeometryPrecision::Float64, "float64"),
+            (GeometryPrecision::Float32, "float32"),
+            (GeometryPrecision::Native, "native"),
+        ];
+        for (precision, text) in cases {
+            assert_eq!(precision.as_str(), text);
+            assert_eq!(precision.to_string(), text);
+            let serialized = serde_json::to_string(&precision).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: GeometryPrecision = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, precision);
+            assert_eq!(text.parse::<GeometryPrecision>(), Ok(precision));
+        }
+        for value in ["f64", "FLOAT64", "float_64", "double", ""] {
+            assert_eq!(
+                value.parse::<GeometryPrecision>(),
+                Err(UnknownGeometryPrecision)
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_column_types_default_is_undeclared_not_unresolved() {
+        // R3.4.1: un ingresso legacy privo delle chiavi significa «proprieta'
+        // non dichiarata» (confidence Unknown), MAI `unresolved`.
+        let default = GeometryColumnContract::undeclared_types();
+        assert_eq!(default.value(), None);
+        assert!(!default.is_proven());
+        assert_eq!(default.scope, PropertyScope::Schema);
+        // Il default e' quello usato dai costruttori esistenti.
+        let column = geometry(1, "geom", true);
+        assert!(column.types.value().is_none());
+        // Un contratto col default resta valido (comportamento invariato).
+        let contract = DataContract::new(
+            schema(vec![Field::new("geom", DataType::Binary, true)]),
+            vec![column],
+            None,
+            ContractProperties::default(),
+        )
+        .unwrap();
+        assert!(contract
+            .active_geometry_column()
+            .unwrap()
+            .types
+            .value()
+            .is_none());
     }
 
     #[test]

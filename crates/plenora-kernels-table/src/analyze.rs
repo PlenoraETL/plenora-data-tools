@@ -372,6 +372,10 @@ fn propagate_geometry(
         dimensions: geometry.dimensions,
         encoding: geometry.encoding,
         nullable: field.is_nullable(),
+        // Colonna preservata identica (R2.4 identity-preserving): la
+        // dichiarazione dei tipi si propaga invariata come le altre
+        // proprieta'.
+        types: geometry.types.clone(),
     })
 }
 
@@ -3753,6 +3757,7 @@ mod tests {
             dimensions: plenora_core::contract::GeometryDimensions::Xy,
             encoding: None,
             nullable,
+            types: GeometryColumnContract::undeclared_types(),
         }
     }
 

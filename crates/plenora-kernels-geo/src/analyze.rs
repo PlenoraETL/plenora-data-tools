@@ -995,6 +995,7 @@ fn analyze_from_coords(
         dimensions: GeometryDimensions::Xy,
         encoding: None,
         nullable: false,
+        types: GeometryColumnContract::undeclared_types(),
     };
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
@@ -1072,6 +1073,7 @@ fn analyze_from_wkt(
         dimensions: GeometryDimensions::Xy,
         encoding: None,
         nullable: true,
+        types: GeometryColumnContract::undeclared_types(),
     };
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
@@ -1237,6 +1239,7 @@ fn analyze_generate_grid(
         dimensions: GeometryDimensions::Xy,
         encoding: None,
         nullable: false,
+        types: GeometryColumnContract::undeclared_types(),
     };
     let properties = ContractProperties {
         row_count: Some(ContractProperty::new(
@@ -1351,6 +1354,7 @@ fn analyze_coverage_rows(
         dimensions: GeometryDimensions::Xy,
         encoding: None,
         nullable: false,
+        types: GeometryColumnContract::undeclared_types(),
     };
     DataContract::new(
         Arc::new(Schema::new(fields)),
@@ -1914,6 +1918,7 @@ mod tests {
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
             }],
             Some(FieldId(2)),
             ContractProperties::default(),
@@ -3130,6 +3135,7 @@ mod tests {
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
             }],
             Some(FieldId(2)),
             ContractProperties::default(),
@@ -3418,6 +3424,7 @@ mod tests {
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
             }],
             Some(FieldId(2)),
             ContractProperties::default(),

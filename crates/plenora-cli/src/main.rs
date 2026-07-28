@@ -938,6 +938,7 @@ fn geometry_contract_from_field(
         dimensions,
         encoding,
         nullable: field.is_nullable(),
+        types: GeometryColumnContract::undeclared_types(),
     })
 }
 
