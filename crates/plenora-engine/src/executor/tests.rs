@@ -2,6 +2,7 @@
 //! Prestazioni.md V3/V4/V8/V9).
 
 use std::cell::Cell;
+use std::fs::File;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -20,6 +21,10 @@ use geo::{polygon, Geometry, Point};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_kernels_geo::arrow_adapter::{
     geometry_dimensions_from_metadata, geometry_output_field, geometry_output_field_with_dimensions,
+    GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY, PLENORA_CONTRACT_VERSION_KEY,
+    PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
+    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
+    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
 };
 
 use super::*;
@@ -946,6 +951,138 @@ fn ipc_roundtrip_through_publish_atomic() {
     .expect("stream ok");
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(total_rows, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Milestone C: blocco canonico R2.2/R2.5 nello schema IPC di output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn canonical_output_schema_without_geometries_is_unchanged() {
+    // R2.5: la versione accompagna le chiavi canoniche, non sta su schemi
+    // senza — uno schema tabellare resta invariato.
+    let schema = canonical_output_schema(&table_contract()).expect("schema tabellare");
+    assert_eq!(schema, table_schema());
+    assert!(!schema.metadata().contains_key(PLENORA_CONTRACT_VERSION_KEY));
+}
+
+#[test]
+fn canonical_output_schema_merges_canonical_keys_idempotently() {
+    let contract = geo_contract();
+    let merged = canonical_output_schema(&contract).expect("fusione canonica");
+    assert_eq!(
+        merged.metadata().get(PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        Some("1"),
+        "R2.5: la versione accompagna le chiavi canoniche"
+    );
+    let metadata = merged
+        .field_with_name("geom")
+        .expect("geom")
+        .metadata();
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str), Some("xy"));
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:32632"));
+    // `GeometryMetadataDetails::default()`: axis_order obbligatorio con CRS
+    // -> valore canonico `unknown` (mai inventato), encoding e types non
+    // dichiarati dal contratto -> chiavi assenti (R5.2).
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str), Some("unknown"));
+    assert!(!metadata.contains_key(PLENORA_GEOMETRY_ENCODING_KEY));
+    assert!(!metadata.contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY));
+    // Le chiavi GeoArrow legacy RESTANO (R2.6: coesistenza coerente).
+    assert_eq!(
+        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        Some(GEOARROW_WKB_EXTENSION)
+    );
+    assert!(metadata.contains_key(GEO_METADATA_KEY));
+
+    // Idempotenza: una seconda fusione sullo schema arricchito non fallisce
+    // (chiavi uguali = coerenti) e non cambia nulla.
+    let mut again = geo_contract();
+    again.schema = merged.clone();
+    let remerged = canonical_output_schema(&again).expect("idempotente");
+    assert_eq!(remerged, merged);
+}
+
+#[test]
+fn canonical_output_schema_rejects_divergent_preexisting_key() {
+    // (e) R2.6: chiave canonica gia' presente con valore diverso da quello
+    // imposto dal contratto -> errore, mai sovrascrittura silenziosa.
+    let mut contract = geo_contract();
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    assert!(matches!(
+        canonical_output_schema(&contract),
+        Err(PlenoraError::Contract(_))
+    ));
+}
+
+#[test]
+fn canonical_output_schema_rejects_geometry_missing_from_schema() {
+    // Fail-closed: colonna geometrica del contratto assente dallo schema.
+    let mut contract = geo_contract();
+    contract.schema = table_schema();
+    assert!(matches!(
+        canonical_output_schema(&contract),
+        Err(PlenoraError::Contract(_))
+    ));
+}
+
+#[test]
+fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
+    // (d) output v4 con colonna geometria: l'header IPC scritto porta il
+    // blocco canonico R2.2 sui campi geometria e la versione R2.5 nei
+    // metadati dello schema.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(point_wkb(1.0, 2.0))])]);
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    output.write_ipc_file(&destination).expect("publish");
+
+    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
+        .expect("lettore IPC");
+    let schema = reader.schema();
+    assert_eq!(
+        schema.metadata().get(PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        Some("1")
+    );
+    let metadata = schema.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str), Some("xy"));
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:32632"));
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str), Some("unknown"));
+    assert!(metadata.contains_key(PLENORA_FIELD_ID_KEY));
+    // Coesistenza R2.6: le chiavi GeoArrow legacy non sono rimosse.
+    assert_eq!(
+        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        Some(GEOARROW_WKB_EXTENSION)
+    );
+    assert!(metadata.contains_key(GEO_METADATA_KEY));
 }
 
 // ---------------------------------------------------------------------------

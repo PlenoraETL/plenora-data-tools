@@ -1,13 +1,13 @@
 # Registro delle deroghe — plenora-data-tools
 
 Unico punto di raccolta delle deroghe attive del componente (ICD §16 R16.2,
-plenora-contracts `v2.0-rc3`). Ogni deroga dichiara: regola, motivo, impatto
+plenora-contracts `v2.0-rc4`). Ogni deroga dichiara: regola, motivo, impatto
 sugli hazard, owner e condizione di rientro (R16.1). Una deroga senza
 condizione di rientro e' permanente e va dichiarata tale. Le deviazioni dai
 contratti documentati restano registrate anche nell'ADR pertinente
 (`docs/adr/`, regola 4 di AGENTS.md).
 
-Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc3`.
+Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc4`.
 
 ## DER-001 — Toolchain nightly per il fuzzing con sanitizer
 

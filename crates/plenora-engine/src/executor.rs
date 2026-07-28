@@ -136,6 +136,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use plenora_core::arrow::array::{
@@ -151,7 +152,10 @@ use plenora_core::catalog::{
 };
 use plenora_core::contract::{BatchSequence, DataContract, GeometryDimensions};
 use plenora_core::{PlenoraError, Result};
-use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
+use plenora_kernels_geo::arrow_adapter::{
+    batch_geometry_cells, canonical_geometry_metadata, canonical_schema_version_metadata,
+    decode_geometry_cell, GeometryMetadataDetails,
+};
 use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_depth};
 use plenora_kernels_table::spill::SpillMetrics;
 
@@ -814,24 +818,129 @@ impl Iterator for EdgeStream {
 // Output
 // ---------------------------------------------------------------------------
 
+/// Schema IPC dell'output: lo schema del contratto arricchito del blocco
+/// canonico R2.2 per ogni colonna geometrica e della versione di protocollo
+/// R2.5 nei metadati dello schema (milestone C — post-processo CENTRALE: i
+/// campi continuano a essere costruiti dagli `analyze_contract` con le sole
+/// chiavi `GeoArrow` legacy, che RESTANO — R2.6 ammette la coesistenza se
+/// coerente; il cablaggio dei singoli analyze e' milestone successiva).
+///
+/// Regole:
+///
+/// - per ogni `GeometryColumnContract` del contratto, le chiavi di
+///   [`canonical_geometry_metadata`] sono fuse nel metadata del campo
+///   omonimo. `GeometryMetadataDetails::default()` (nessun dettaglio
+///   opzionale modellato dal contratto) implica `axis_order = unknown`: la
+///   chiave e' obbligatoria quando un CRS e' presente e `unknown` e' il
+///   valore canonico dichiarato dalla tabella §2 — `ResolvedCrs` non porta
+///   l'ordine degli assi e dichiararlo sarebbe inventarlo (R5.2 riguarda le
+///   chiavi opzionali, che restano assenti);
+/// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
+///   schema) con valore DIVERSO da quello imposto dal contratto e' un
+///   errore, mai una sovrascrittura silenziosa; valore uguale e'
+///   idempotente;
+/// - R2.5: `plenora.contract.version` e' aggiunta ai metadati dello schema
+///   SOLO se almeno un campo porta chiavi canoniche (sempre vero quando il
+///   contratto dichiara geometrie: [`canonical_geometry_metadata`] emette
+///   comunque `dimensions`/`crs_resolution`/`field_id`); uno schema senza
+///   geometrie e' restituito invariato;
+/// - una colonna geometrica del contratto assente dallo schema e' un errore
+///   (invariante violata a monte: fail-closed, mai silenziosa).
+///
+/// # Errors
+///
+/// `PlenoraError::Contract` per chiave canonica preesistente divergente
+/// (R2.6) o colonna geometrica del contratto assente nello schema.
+fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
+    if contract.geometries.is_empty() {
+        return Ok(contract.schema.clone());
+    }
+    let mut matched = 0_usize;
+    let mut fields = Vec::with_capacity(contract.schema.fields().len());
+    for field in contract.schema.fields() {
+        let Some(geometry) = contract
+            .geometries
+            .iter()
+            .find(|geometry| geometry.name.as_str() == field.name().as_str())
+        else {
+            fields.push(field.as_ref().clone());
+            continue;
+        };
+        matched += 1;
+        let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
+        let mut metadata = field.metadata().clone();
+        for (key, value) in &canonical {
+            match metadata.get(key) {
+                Some(existing) if existing != value => {
+                    return Err(PlenoraError::Contract(format!(
+                        "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
+                         diverso da quello del contratto (R2.6: il componente fallisce, \
+                         non sovrascrive)",
+                        geometry.name
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        fields.push(field.as_ref().clone().with_metadata(metadata));
+    }
+    if matched != contract.geometries.len() {
+        return Err(PlenoraError::Contract(
+            "colonna geometrica del contratto assente nello schema di output".to_owned(),
+        ));
+    }
+    // R2.5: la versione accompagna le chiavi canoniche; qui almeno un campo
+    // le porta (guardia in testa e conteggio sopra).
+    let mut metadata = contract.schema.metadata().clone();
+    for (key, value) in canonical_schema_version_metadata() {
+        match metadata.get(&key) {
+            Some(existing) if existing != &value => {
+                return Err(PlenoraError::Contract(format!(
+                    "chiave `{key}` dello schema gia' presente con un valore diverso \
+                     (R2.6: il componente fallisce, non sovrascrive)"
+                )));
+            }
+            Some(_) => {}
+            None => {
+                metadata.insert(key, value);
+            }
+        }
+    }
+    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
+}
+
 /// Output di un'esecuzione: stream lazy dei batch finali + metriche.
 ///
 /// Iterare l'`Output` guida l'esecuzione: l'input e' consumato
 /// batch-per-batch (V3). Non e' `Send` nella v1 seriale (V8).
 pub struct Output {
     contract: DataContract,
+    /// Schema IPC emesso: quello del contratto piu' il blocco canonico
+    /// R2.2/R2.5 (milestone C), calcolato una sola volta alla costruzione
+    /// ([`canonical_output_schema`], fail-fast su divergenze R2.6).
+    schema: SchemaRef,
     stream: BatchStream,
     state: Rc<ExecState>,
 }
 
 impl Output {
-    /// Schema Arrow dell'output (dal contratto inferito in validazione).
+    /// Schema Arrow dell'output: quello del contratto inferito in
+    /// validazione arricchito del blocco canonico R2.2 e della versione
+    /// R2.5 (milestone C) — lo stesso schema scritto nell'header IPC da
+    /// [`Output::write_ipc_file`].
     #[must_use]
     pub fn schema(&self) -> SchemaRef {
-        self.contract.schema.clone()
+        self.schema.clone()
     }
 
     /// Contratto dell'arco di output del piano.
+    ///
+    /// Il suo `schema` e' quello inferito in validazione, SENZA il blocco
+    /// canonico R2.2/R2.5: lo schema effettivamente emesso in IPC e'
+    /// [`Output::schema`].
     #[must_use]
     pub const fn output_contract(&self) -> &DataContract {
         &self.contract
@@ -885,6 +994,11 @@ impl Output {
     /// wrapper su [`Output::write_ipc_file_with_profile`], l'esito tipizzato
     /// (sempre `Published` a publish riuscito) e' scartato.
     ///
+    /// L'header IPC porta lo schema di [`Output::schema`]: quello del
+    /// contratto piu' il blocco canonico R2.2 per ogni colonna geometrica e
+    /// la versione R2.5 nei metadati dello schema (milestone C); le chiavi
+    /// `GeoArrow` legacy restano (coesistenza coerente, R2.6).
+    ///
     /// # Errors
     ///
     /// Propaga errori di stream e di I/O; `PlenoraError::Contract` se la
@@ -910,12 +1024,23 @@ impl Output {
         path: &Path,
         profile: PublishProfile,
     ) -> Result<(ExecutionMetrics, PublishOutcome)> {
-        let schema = self.contract.schema.clone();
+        let schema = self.schema.clone();
         let mut stream = self.stream;
         let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
             for item in &mut stream {
-                ipc.write(&item?.into_batch())?;
+                let batch = item?.into_batch();
+                // Lo schema emesso (blocco canonico R2.2/R2.5 fuso dal
+                // contratto) puo' differire da quello del batch solo nei
+                // metadati: rivestimento a costo zero sui buffer (colonne
+                // condivise via Arc), fail-closed su qualunque altra
+                // divergenza (tipo, numero di colonne).
+                let batch = if batch.schema() == schema {
+                    batch
+                } else {
+                    RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?
+                };
+                ipc.write(&batch)?;
             }
             ipc.finish()?;
             Ok(())
@@ -1096,8 +1221,13 @@ fn execute_physical(
     })) as BatchStream;
 
     let contract = graph.output_contract().clone();
+    // Milestone C: lo schema IPC (blocco canonico R2.2 + versione R2.5) e'
+    // calcolato una sola volta qui — fail-fast su divergenze R2.6, prima di
+    // toccare i dati.
+    let schema = canonical_output_schema(&contract)?;
     Ok(Output {
         contract,
+        schema,
         stream,
         state,
     })

@@ -114,6 +114,13 @@ pub const PLENORA_CONTRACT_VERSION: u32 = 1;
 /// Prefisso del namespace canonico (R2.1): usato per rilevare la presenza di
 /// chiavi canoniche nel gate di versione R2.5.
 const PLENORA_NAMESPACE_PREFIX: &str = "plenora.";
+/// Prefisso del namespace geometrico canonico (`plenora.geometry.*`).
+///
+/// Un campo che porta almeno una di queste chiavi si dichiara colonna
+/// geometrica in forma autosufficiente (tabella §2: encoding e dimensions
+/// obbligatorie), anche in assenza dei metadati `GeoArrow` legacy. Resta
+/// escluso `plenora.field_id`, che non e' specifico delle geometrie.
+pub const PLENORA_GEOMETRY_NAMESPACE_PREFIX: &str = "plenora.geometry.";
 /// Lunghezza massima dell'identificatore di autorita' `crs_id` (allineata al
 /// lettore di plenora-database-tools, stessa regola di robustezza).
 const MAX_CRS_ID_BYTES: usize = 1_024;

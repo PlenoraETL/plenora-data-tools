@@ -39,7 +39,8 @@ use plenora_core::arrow::schema::{DataType, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, Family, OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldId, GeometryColumnContract,
+    ContractProperties, ContractProperty, DataContract, FieldId, GeometryColumnContract,
+    GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::PlenoraError;
@@ -61,8 +62,9 @@ use plenora_engine::{
     RuntimeContext,
 };
 use plenora_kernels_geo::arrow_adapter::{
-    geometry_dimensions_from_metadata, geometry_encoding_from_metadata_strict,
+    read_contract_version, read_geometry_contract_keys, CanonicalGeometryKeys,
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+    PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
@@ -856,21 +858,51 @@ fn crs_definition_from_metadata(
 }
 
 /// Scoperta del `DataContract` di un input dal solo header IPC: schema Arrow
-/// e colonna geometria se presente (metadati `geoarrow.wkb` + `geo.crs`, CRS
-/// risolto). Fail-closed su metadati incoerenti. Il `FieldId` e' provvisorio:
-/// il planner lo rimappa nel namespace globale del grafo (D16).
+/// e colonne geometria se presenti, CRS risolto. Fail-closed su metadati
+/// incoerenti. Il `FieldId` e' provvisorio: il planner lo rimappa nel
+/// namespace globale del grafo (D16).
 ///
-/// B1.3: la dimensionalita' arriva dal metadato `geo.dimensions` — chiave
-/// assente o non leggibile -> `Unknown` (R3.4, MAI default `Xy`); l'encoding
-/// dal metadato `geo.encoding` — valore fuori dall'enum chiuso -> rifiuto
-/// esplicito (R3.5, framing non rappresentabile).
+/// Milestone C (protocollo chiavi canoniche, contratti trasversali §2):
+///
+/// - gate R2.5 all'ingresso: [`read_contract_version`] — una versione
+///   successiva a quella nota, una chiave di versione malformata o chiavi
+///   canoniche senza versione sono errori propagati, mai ignorati;
+/// - sorgente primaria per ogni campo geometria:
+///   [`read_geometry_contract_keys`] — chiavi canoniche fail-closed,
+///   coerenza canonica/legacy (R2.6: divergenza -> errore) e completamento
+///   per precedenza (R2.7) sono applicati dal reader;
+/// - riconoscimento (1c): le chiavi canoniche sono autosufficienti (tabella
+///   §2), quindi un campo con chiavi `plenora.geometry.*` e' riconosciuto
+///   come colonna geometrica anche SENZA l'estensione `geoarrow.wkb` e il
+///   metadato `geo`; in entrambi i percorsi il tipo DEVE essere `Binary`,
+///   altrimenti errore esplicito;
+/// - CRS: la rappresentazione completata (canonica o legacy, vedi
+///   [`crs_definition_from_keys`]) alimenta la stessa risoluzione di prima
+///   (backend PROJ); cambia solo la sorgente dei metadati, non la
+///   risoluzione. Un campo geometrico senza CRS dichiarato resta un errore
+///   (mai un CRS inventato).
 fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
-    let schema = ipc_header_schema(path)?;
+    discover_input_contract_from_schema(ipc_header_schema(path)?)
+}
+
+/// Scoperta da schema Arrow gia' letto (seam di test: nessun file toccato).
+/// Le regole sono quelle di [`discover_input_contract`].
+fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract, PlenoraError> {
+    // Gate R2.5: la versione del protocollo vive nei metadati dello schema.
+    read_contract_version(&schema)?;
     let mut geometries = Vec::new();
     for field in schema.fields() {
         let extension = field.metadata().get(GEOARROW_EXTENSION_KEY);
         let geo_metadata = field.metadata().get(GEO_METADATA_KEY);
-        let Some(extension) = extension else {
+        if let Some(extension) = extension {
+            if extension != GEOARROW_WKB_EXTENSION {
+                return Err(contract(format!(
+                    "colonna `{}`: estensione `{extension}` non supportata \
+                     (attesa `{GEOARROW_WKB_EXTENSION}`)",
+                    field.name()
+                )));
+            }
+        } else {
             if geo_metadata.is_some() {
                 return Err(contract(format!(
                     "colonna `{}`: metadato `{GEO_METADATA_KEY}` senza estensione \
@@ -878,14 +910,15 @@ fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
                     field.name()
                 )));
             }
-            continue;
-        };
-        if extension != GEOARROW_WKB_EXTENSION {
-            return Err(contract(format!(
-                "colonna `{}`: estensione `{extension}` non supportata \
-                 (attesa `{GEOARROW_WKB_EXTENSION}`)",
-                field.name()
-            )));
+            // (1c) le chiavi canoniche sono autosufficienti (tabella §2):
+            // il campo si dichiara colonna geometrica da solo.
+            let canonical = field
+                .metadata()
+                .keys()
+                .any(|key| key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX));
+            if !canonical {
+                continue;
+            }
         }
         if field.data_type() != &DataType::Binary {
             return Err(contract(format!(
@@ -894,9 +927,10 @@ fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
                 field.data_type()
             )));
         }
-        let definition = crs_definition_from_metadata(field.name(), geo_metadata)?;
+        let keys = read_geometry_contract_keys(field)?;
+        let definition = crs_definition_from_keys(field.name(), geo_metadata, &keys)?;
         let crs = resolve_crs(&definition, "crs")?;
-        geometries.push(geometry_contract_from_field(field, crs)?);
+        geometries.push(geometry_contract_from_field(field, crs, &keys));
     }
     let active_geometry = if geometries.is_empty() {
         None
@@ -904,6 +938,27 @@ fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
         Some(FieldId(0))
     };
     DataContract::new(schema, geometries, active_geometry, ContractProperties::default())
+}
+
+/// Definizione CRS dalla lettura di contratto completata (R2.7): la forma
+/// canonica se dichiarata, altrimenti il percorso legacy `geo.crs`
+/// invariato. Se entrambe le forme canoniche sono presenti (caso non
+/// prodotto dai writer di questo workspace, che ne emettono una sola)
+/// prevale `crs_definition`, autocontenuta; la coerenza fra le due forme non
+/// e' decidibile testualmente (R2.7: mai arbitrato sul dato) e una
+/// definizione invalida e' comunque rifiutata dalla risoluzione a valle.
+fn crs_definition_from_keys(
+    field_name: &str,
+    geo_metadata: Option<&String>,
+    keys: &CanonicalGeometryKeys,
+) -> Result<String, PlenoraError> {
+    if let Some(definition) = &keys.crs_definition {
+        return Ok(definition.clone());
+    }
+    if let Some(id) = &keys.crs_id {
+        return Ok(id.clone());
+    }
+    crs_definition_from_metadata(field_name, geo_metadata)
 }
 
 /// Contesto "input `nome` (percorso)" sull'errore, preservando la variante.
@@ -918,28 +973,40 @@ fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
     }
 }
 
-/// Contratto della colonna geometria dai metadati del campo (B1.3).
+/// Contratto della colonna geometria dalla lettura di contratto completata
+/// (milestone C: [`read_geometry_contract_keys`] come sorgente primaria —
+/// fail-closed R2.6 e completamento R2.7 gia' applicati dal reader).
 ///
-/// Dimensionalita' ed encoding arrivano dai reader di `arrow_adapter`:
-/// chiave assente o non leggibile -> `Unknown` / `None` (R3.4: MAI un
-/// default silenzioso `Xy`); encoding fuori dall'enum chiuso -> rifiuto
-/// esplicito (R3.5: framing non rappresentabile). Il `FieldId` e'
+/// Dimensionalita' ed encoding arrivano dalle chiavi completate: assenti ->
+/// `Unknown` / `None` (R3.4: MAI un default silenzioso `Xy`). `types`: la
+/// coppia `types_declaration`/`types`, se presente, entra nel contratto con
+/// confidence `Declared` e scope `Schema`; assente (ingresso legacy) ->
+/// [`GeometryColumnContract::undeclared_types`] (R3.4.1: «proprieta' non
+/// dichiarata», MAI interpretata come `unresolved`). Il `FieldId` e'
 /// provvisorio (rimappato dal planner, D16).
 fn geometry_contract_from_field(
     field: &plenora_core::arrow::schema::Field,
     crs: plenora_core::crs::ResolvedCrs,
-) -> Result<GeometryColumnContract, PlenoraError> {
-    let dimensions = geometry_dimensions_from_metadata(field);
-    let encoding = geometry_encoding_from_metadata_strict(field)?;
-    Ok(GeometryColumnContract {
+    keys: &CanonicalGeometryKeys,
+) -> GeometryColumnContract {
+    let types = keys.types.as_ref().map_or_else(
+        GeometryColumnContract::undeclared_types,
+        |types| {
+            ContractProperty::new(
+                PropertyConfidence::Declared(types.clone()),
+                PropertyScope::Schema,
+            )
+        },
+    );
+    GeometryColumnContract {
         field_id: FieldId(0),
         name: field.name().clone(),
         crs,
-        dimensions,
-        encoding,
+        dimensions: keys.dimensions.unwrap_or(GeometryDimensions::Unknown),
+        encoding: keys.encoding,
         nullable: field.is_nullable(),
-        types: GeometryColumnContract::undeclared_types(),
-    })
+        types,
+    }
 }
 
 /// Accoppia i percorsi CLI agli input dichiarati dal piano v4, in ordine di
@@ -1365,9 +1432,17 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use plenora_core::arrow::schema::Field;
+    use plenora_core::arrow::schema::{Field, Schema};
     use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
+    #[cfg(feature = "proj-backend")]
+    use plenora_core::contract::{GeometryType, TypesDeclaration};
     use plenora_core::crs::{CrsKind, ResolvedCrs};
+    use plenora_kernels_geo::arrow_adapter::{
+        PLENORA_CONTRACT_VERSION_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+        PLENORA_GEOMETRY_CRS_ID_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+        PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY,
+        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
+    };
 
     use super::*;
 
@@ -1393,12 +1468,55 @@ mod tests {
         Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
     }
 
+    /// Campo geometria con SOLE chiavi canoniche (niente `GeoArrow` legacy).
+    fn canonical_geometry_field(data_type: DataType) -> Field {
+        let metadata = std::collections::HashMap::from([
+            (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned()),
+            (
+                PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+                "exact".to_owned(),
+            ),
+            (PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "point".to_owned()),
+            (
+                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                "resolved".to_owned(),
+            ),
+            (
+                PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                "EPSG:32632".to_owned(),
+            ),
+            (
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                "unknown".to_owned(),
+            ),
+        ]);
+        Field::new("geometry", data_type, true).with_metadata(metadata)
+    }
+
+    /// Schema con la versione di protocollo R2.5 nei metadati di schema.
+    fn schema_v1(fields: Vec<Field>) -> SchemaRef {
+        std::sync::Arc::new(Schema::new_with_metadata(
+            fields,
+            std::collections::HashMap::from([(
+                PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+                "1".to_owned(),
+            )]),
+        ))
+    }
+
+    /// Lettura di contratto del campo + costruzione del contratto, come nel
+    /// loop di discovery (la risoluzione CRS resta iniettata dai test).
+    fn contract_from_field(field: &Field) -> Result<GeometryColumnContract, PlenoraError> {
+        let keys = read_geometry_contract_keys(field)?;
+        Ok(geometry_contract_from_field(field, projected_crs(), &keys))
+    }
+
     #[test]
     fn discovery_reads_dimensions_and_encoding_from_metadata() {
-        let contract = geometry_contract_from_field(
-            &geometry_field(Some(r#"{"crs":"EPSG:32632","dimensions":"xyz","encoding":"ewkb"}"#)),
-            projected_crs(),
-        )
+        let contract = contract_from_field(&geometry_field(Some(
+            r#"{"crs":"EPSG:32632","dimensions":"xyz","encoding":"ewkb"}"#,
+        )))
         .expect("discovery");
         assert_eq!(contract.dimensions, GeometryDimensions::Xyz);
         assert_eq!(contract.encoding, Some(GeometryEncoding::Ewkb));
@@ -1409,29 +1527,36 @@ mod tests {
             "EPSG:32632",
         )
         .expect("field");
-        let contract = geometry_contract_from_field(&written, projected_crs()).expect("discovery");
+        let contract = contract_from_field(&written).expect("discovery");
         assert_eq!(contract.dimensions, GeometryDimensions::Xy);
-        assert_eq!(contract.encoding, None);
+        // Milestone C (R2.7): il nome di estensione `geoarrow.wkb` dichiara
+        // la famiglia WKB e completa l'encoding assente altrove (ultimo
+        // rango della precedenza): non piu' `None`.
+        assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
     }
 
     #[test]
     fn discovery_without_dimensions_metadata_propagates_unknown_never_xy() {
-        // (b) R3.4: chiave `dimensions` assente o valore non riconosciuto ->
-        // Unknown propagato nel contratto, MAI un default silenzioso Xy.
+        // (b) R3.4: chiave `dimensions` assente -> Unknown propagato nel
+        // contratto, MAI un default silenzioso Xy.
+        let contract = contract_from_field(&geometry_field(Some(r#"{"crs":"EPSG:32632"}"#)))
+            .expect("discovery");
+        assert_eq!(contract.dimensions, GeometryDimensions::Unknown);
+        // Come sopra: encoding completato dal nome di estensione (R2.7).
+        assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
+    }
+
+    #[test]
+    fn discovery_rejects_unreadable_dimensions_never_ignores_them() {
+        // Milestone C (reader strict, R5.1): valore `dimensions` non canonico
+        // o non testuale -> errore esplicito, mai ignorato ne' mappato a
+        // Unknown. Comportamento piu' stretto della lettura lenient pre-C.
         for geo_json in [
-            r#"{"crs":"EPSG:32632"}"#,
             r#"{"crs":"EPSG:32632","dimensions":"2d"}"#,
             r#"{"crs":"EPSG:32632","dimensions":42}"#,
         ] {
-            let contract =
-                geometry_contract_from_field(&geometry_field(Some(geo_json)), projected_crs())
-                    .expect("discovery");
-            assert_eq!(
-                contract.dimensions,
-                GeometryDimensions::Unknown,
-                "geo: {geo_json}"
-            );
-            assert_eq!(contract.encoding, None);
+            let result = read_geometry_contract_keys(&geometry_field(Some(geo_json)));
+            assert!(result.is_err(), "geo: {geo_json}");
         }
     }
 
@@ -1444,8 +1569,7 @@ mod tests {
             r#"{"crs":"EPSG:32632","encoding":"twkb"}"#,
             r#"{"crs":"EPSG:32632","encoding":42}"#,
         ] {
-            let result =
-                geometry_contract_from_field(&geometry_field(Some(geo_json)), projected_crs());
+            let result = read_geometry_contract_keys(&geometry_field(Some(geo_json)));
             assert!(
                 matches!(result, Err(PlenoraError::Unsupported(_))),
                 "geo: {geo_json}"
@@ -1453,11 +1577,109 @@ mod tests {
         }
 
         // Encoding rappresentabile -> propagato nel contratto.
-        let contract = geometry_contract_from_field(
-            &geometry_field(Some(r#"{"crs":"EPSG:32632","encoding":"wkb"}"#)),
-            projected_crs(),
-        )
+        let contract = contract_from_field(&geometry_field(Some(
+            r#"{"crs":"EPSG:32632","encoding":"wkb"}"#,
+        )))
         .expect("discovery");
         assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
+    }
+
+    #[test]
+    fn discovery_legacy_field_leaves_types_undeclared() {
+        // R3.4.1: ingresso legacy senza la coppia types_declaration/types ->
+        // «proprieta' non dichiarata» (confidence Unknown), MAI unresolved.
+        let contract = contract_from_field(&geometry_field(Some(r#"{"crs":"EPSG:32632"}"#)))
+            .expect("discovery");
+        assert!(contract.types.value().is_none());
+    }
+
+    #[test]
+    fn discovery_recognizes_canonical_only_geometry_field() {
+        // (a) tabella §2: le chiavi canoniche sono autosufficienti — il campo
+        // e' riconosciuto come geometria anche senza estensione `geoarrow.wkb`
+        // e metadato `geo`, con types Declared/Schema dalla coppia canonica.
+        let schema = schema_v1(vec![
+            Field::new("id", DataType::Int64, false),
+            canonical_geometry_field(DataType::Binary),
+        ]);
+        let result = discover_input_contract_from_schema(schema);
+        #[cfg(feature = "proj-backend")]
+        {
+            let contract = result.expect("discovery canonica");
+            assert_eq!(contract.geometries.len(), 1);
+            let geometry = &contract.geometries[0];
+            assert_eq!(geometry.dimensions, GeometryDimensions::Xyz);
+            assert_eq!(geometry.encoding, Some(GeometryEncoding::Wkb));
+            assert!(
+                matches!(geometry.types.confidence, PropertyConfidence::Declared(_)),
+                "types dichiarati dalla coppia canonica"
+            );
+            assert_eq!(geometry.types.scope, PropertyScope::Schema);
+            let types = geometry.types.value().expect("types");
+            assert_eq!(types.declaration(), TypesDeclaration::Exact);
+            assert_eq!(types.types(), &[GeometryType::Point]);
+        }
+        #[cfg(not(feature = "proj-backend"))]
+        {
+            // Senza backend PROJ la risoluzione CRS fallisce chiusa DOPO il
+            // riconoscimento: un errore `Crs` (non `Contract`) dimostra che
+            // il campo canonico-only e' stato riconosciuto come geometria e
+            // le chiavi lette senza errori.
+            assert!(
+                matches!(result, Err(PlenoraError::Crs(_))),
+                "atteso fallimento di risoluzione CRS, ottenuto {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_canonical_geometry_field_of_non_binary_type() {
+        // (1c) chiavi canoniche coerenti ma tipo non Binary -> errore.
+        let schema = schema_v1(vec![canonical_geometry_field(DataType::Utf8)]);
+        let result = discover_input_contract_from_schema(schema);
+        assert!(matches!(result, Err(PlenoraError::Contract(_))));
+    }
+
+    #[test]
+    fn discovery_rejects_contract_version_newer_than_supported() {
+        // (b) R2.5: versione successiva a quella nota -> fallimento
+        // esplicito (Unsupported), mai interpretazione parziale.
+        let schema = std::sync::Arc::new(Schema::new_with_metadata(
+            vec![Field::new("id", DataType::Int64, false)],
+            std::collections::HashMap::from([(
+                PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+                "2".to_owned(),
+            )]),
+        ));
+        let result = discover_input_contract_from_schema(schema);
+        assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
+    }
+
+    #[test]
+    fn discovery_rejects_canonical_keys_without_contract_version() {
+        // R2.5: chiavi canoniche senza `plenora.contract.version` nei
+        // metadati dello schema -> errore esplicito.
+        let schema = std::sync::Arc::new(Schema::new(vec![canonical_geometry_field(
+            DataType::Binary,
+        )]));
+        let result = discover_input_contract_from_schema(schema);
+        assert!(matches!(result, Err(PlenoraError::Contract(_))));
+    }
+
+    #[test]
+    fn discovery_rejects_canonical_legacy_divergence() {
+        // (c) R2.6: nozione divergente fra chiavi canoniche e metadato legacy
+        // -> il componente fallisce, non sceglie.
+        let field = geometry_field(Some(r#"{"crs":"EPSG:32632","dimensions":"xy"}"#));
+        let mut metadata = field.metadata().clone();
+        metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
+        let field = field.with_metadata(metadata);
+        let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+        match result {
+            Err(PlenoraError::Contract(message)) => {
+                assert!(message.contains("divergente"), "{message}");
+            }
+            other => panic!("attesa divergenza R2.6, ottenuto {other:?}"),
+        }
     }
 }
