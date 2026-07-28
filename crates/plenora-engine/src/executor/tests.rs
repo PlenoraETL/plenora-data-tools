@@ -1076,7 +1076,9 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
     );
     assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:32632"));
     assert_eq!(metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str), Some("unknown"));
-    assert!(metadata.contains_key(PLENORA_FIELD_ID_KEY));
+    // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non ha
+    // significato fuori dal processo, ADR-0009 decisione 3).
+    assert!(!metadata.contains_key(PLENORA_FIELD_ID_KEY));
     // Coesistenza R2.6: le chiavi GeoArrow legacy non sono rimosse.
     assert_eq!(
         metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),

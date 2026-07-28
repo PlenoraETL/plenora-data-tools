@@ -18,10 +18,14 @@
 //! Le geometrie viaggiano in una colonna `Binary`; ogni cella non-null e'
 //! validata dal validatore WKB del kernel e i null sono preservati.
 //!
-//! Milestone B (contratti trasversali v2.0-rc3 §2, proposta in attesa di
-//! ratifica): protocollo delle chiavi canoniche `plenora.geometry.*`,
-//! `plenora.field_id` e `plenora.contract.version` (R2.1/R2.2: namespace
-//! dedicato, una chiave per nozione, MAI un blob unico). Questo modulo
+//! Milestone B (contratti trasversali v2.0-rc8 §2, proposta in attesa di
+//! ratifica; emissione con deroga registrata §15.4/DER-ICD-002 — vedi
+//! `docs/deroghe.md` DER-002): protocollo delle chiavi canoniche
+//! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
+//! dedicato, una chiave per nozione, MAI un blob unico). `plenora.field_id`
+//! e' solo letta (R2.2 opzionale; non si emette il `FieldId` di grafo, che
+//! non ha significato fuori dal processo — ADR-0009 decisione 3). Questo
+//! modulo
 //! fornisce emissione da [`GeometryColumnContract`], lettura fail-closed per
 //! chiave (R5.1: valore non canonico → errore esplicito, mai ignorato o
 //! corretto), coerenza fra chiavi canoniche e metadato legacy `geo` (R2.6:
@@ -531,10 +535,12 @@ pub fn canonical_geometry_metadata(
             precision.as_str().to_owned(),
         );
     }
-    metadata.insert(
-        PLENORA_FIELD_ID_KEY.to_owned(),
-        contract.field_id.0.to_string(),
-    );
+    // `plenora.field_id` NON e' emesso: la tabella R2.2 lo dichiara
+    // opzionale e il `FieldId` del contratto appartiene al namespace del
+    // grafo che lo ha assegnato (ADR-0009, decisione 3) — non ha
+    // significato fuori dal processo. Una chiave `plenora.field_id`
+    // RICEVUTA resta propagata invariata dalla lineage (R2.4), mai
+    // sovrascritta dal valore di grafo.
     metadata
 }
 
@@ -1729,7 +1735,9 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("3857"));
         assert_eq!(get(PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY), Some("geometry"));
         assert_eq!(get(PLENORA_GEOMETRY_PRECISION_KEY), Some("float64"));
-        assert_eq!(get(PLENORA_FIELD_ID_KEY), Some("7"));
+        // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
+        // ha significato fuori dal processo, ADR-0009 decisione 3).
+        assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
     }
 
     #[test]
@@ -1743,12 +1751,14 @@ mod tests {
         let get = |key: &str| metadata.get(key).map(String::as_str);
         // Obbligatorie e oneste: dimensions, crs_resolution, crs_id,
         // axis_order = `unknown` (valore canonico, la chiave e' obbligatoria
-        // quando un CRS e' presente), field_id.
+        // quando un CRS e' presente).
         assert_eq!(get(PLENORA_GEOMETRY_DIMENSIONS_KEY), Some("xyz"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY), Some("resolved"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
         assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
-        assert_eq!(get(PLENORA_FIELD_ID_KEY), Some("7"));
+        // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
+        // ha significato fuori dal processo, ADR-0009 decisione 3).
+        assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
         // R5.2 + R3.4.1: le opzionali e le non dichiarate restano assenti.
         for key in [
             PLENORA_GEOMETRY_ENCODING_KEY,
@@ -1843,6 +1853,16 @@ mod tests {
         assert_eq!(keys.axis_order, Some(AxisOrder::EastingNorthing));
         assert_eq!(keys.spatial_semantics, Some(SpatialSemantics::Geometry));
         assert_eq!(keys.precision, Some(GeometryPrecision::Float64));
+        // `field_id` non e' emesso dal contratto (R2.2 opzionale)...
+        assert_eq!(keys.field_id, None);
+        // ...ma una chiave RICEVUTA e' propagata invariata (R2.4).
+        let mut received = Field::new("geom", DataType::Binary, true)
+            .with_metadata(canonical_geometry_metadata(&full_contract(), &full_details()))
+            .metadata()
+            .clone();
+        received.insert(PLENORA_FIELD_ID_KEY.to_owned(), "7".to_owned());
+        let field = Field::new("geom", DataType::Binary, true).with_metadata(received);
+        let keys = read_geometry_contract_keys(&field).expect("read con field_id");
         assert_eq!(keys.field_id, Some(FieldId(7)));
 
         // Round-trip PROJJSON: la definizione sopravvive byte-per-byte.

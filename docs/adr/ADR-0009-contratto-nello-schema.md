@@ -2,15 +2,16 @@
 
 - **Stato**: accettato, attuazione in corso (milestone A, B, D attuate; C
   parziale per vincolo sui monoliti)
-- **Fonte normativa**: `plenora-contracts`, tag `v2.0-rc4` — §2 (chiavi dei
-  metadati Arrow), §3 (modello geometrico), §9 (modello di errore) sono
-  **proposte in attesa di ratifica**: l'implementazione segue la proposta
-  come scelta progettuale dichiarata, non come obbligo ratificato (§16
-  R16.3: ratifica e implementazione sono atti distinti). Fino alla ratifica
-  questo ADR e' l'autorita' locale; alla ratifica si allinea. (I commenti
-  nel codice delle milestone A/B/D citano `v2.0-rc3`: normativamente
-  identica — rc4 non modifica requisiti, solo processo e fotografia di
-  conformita'.)
+- **Fonte normativa**: `plenora-contracts`, tag `v2.0-rc8` (revisione
+  `62b12e3496466d2c908dac3cc098640b99b52e21`) — §2 (chiavi dei metadati
+  Arrow), §3 (modello geometrico), §9 (modello di errore) sono **proposte
+  in attesa di ratifica**: l'implementazione segue la proposta come scelta
+  progettuale dichiarata, non come obbligo ratificato (§16 R16.3: ratifica
+  e implementazione sono atti distinti). Fino alla ratifica questo ADR e'
+  l'autorita' locale; alla ratifica si allinea. L'emissione delle chiavi
+  §2 prima della ratifica e' registrata come deroga (§15.4 emendata rc5 /
+  DER-ICD-002) in `docs/deroghe.md` DER-002. (I commenti nel codice delle
+  milestone A/B/D citano `v2.0-rc3`: normativamente identica.)
 - **Decisioni collegate**: D16 (FieldId), ADR 3 (failure), ADR 7 (publish),
   ADR 8 (modello dimensionale)
 - **Riferimenti**: `docs/deroghe.md` (registro deroghe, R16.2)
@@ -48,12 +49,17 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    senza spazi). Un ingresso legacy privo delle chiavi NON e' `unresolved`:
    e' «proprieta' non dichiarata» (confidence `Unknown`) — le due forme non
    sono convertibili (R3.4.1).
-3. **`FieldId` non viaggia.** L'identita' di colonna fuori dal processo e'
-   per **nome**: `FieldId` appartiene al namespace del grafo che lo ha
-   assegnato (D16) e perde significato al confine. Divergenza consapevole
-   dalla tabella §2, che elenca `plenora.field_id` senza chiarirne la
-   semantica cross-processo: la chiave e' letta se presente ma non e' usata
-   per ricostruire identita'. Da proporre come chiarimento all'owner ICD.
+3. **`FieldId` non viaggia — e non si inventa.** L'identita' di colonna
+   fuori dal processo e' per **nome**: `FieldId` appartiene al namespace
+   del grafo che lo ha assegnato (D16) e perde significato al confine. La
+   tabella §2 dichiara `plenora.field_id` **opzionale**: NON emettere il
+   valore di grafo e' lecito (e' la scelta attuata — l'emissione iniziale
+   e' stata rimossa perche' presentava come identita' un numero privo di
+   significato cross-processo); una chiave `plenora.field_id` RICEVUTA e'
+   invece propagata INVARIATA per R2.4 (chiave canonica non interpretata),
+   mai sovrascritta dal valore di grafo. Il chiarimento da proporre
+   all'owner ICD riguarda la semantica cross-processo di un `field_id`
+   assegnato da un altro processo, non la liceita' dell'omissione.
 4. **Lineage R2.4 come politica esplicita.** Propagazione delle chiavi non
    interpretate per lineage del campo: identity-preserving → copia
    invariata; type-preserving → copia selettiva; campo derivato →
