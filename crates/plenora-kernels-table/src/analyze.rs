@@ -27,6 +27,17 @@
 //! `table.pivot`, `table.transpose` e `table.flatten_json` senza
 //! `output_columns` esplicito falliscono con `Unsupported` esplicito —
 //! meglio fallire in validazione che indovinare uno schema sbagliato.
+//!
+//! Lineage dei metadata Arrow (R2.4, plenora-contracts v2.0-rc4 par. 2): i
+//! metadata dello schema di input attraversano sempre lo schema di output;
+//! per le op a due sorgenti (join e varianti, `union_distinct`, `table_diff`)
+//! vale la merge-policy — chiave su una sola sorgente o con valore identico
+//! copiata, valori diversi -> errore `Contract` (mai precedenza implicita).
+//! I metadata di campo seguono le classi R2.4: identity/type-preserving ->
+//! copiati dal campo sorgente, colonne derivate -> non ereditati. Le chiavi
+//! canoniche `plenora.*` non sono mai emesse qui (emissione centralizzata
+//! in `executor.rs::canonical_output_schema`): il compito e' solo non
+//! perdere quelle esistenti.
 
 // Firma uniforme degli analyzer per-op: il dispatch passa l'allocatore di
 // FieldId a ogni operazione, anche a quelle (assert, gate, join) che non
@@ -394,6 +405,65 @@ fn merge_geometry(
         ),
         (left, right) => Ok(left.or(right)),
     }
+}
+
+/// Merge R2.4 dei metadata di schema di due sorgenti.
+///
+/// Per le op con due schemi di input (join e varianti, `union_distinct`,
+/// `table_diff`): chiave presente in una sola sorgente -> copiata; presente
+/// in entrambe con lo stesso valore -> copiata; presente in entrambe con
+/// valori diversi -> errore `Contract` (conflitto fra sorgenti = errore, mai
+/// precedenza implicita; il messaggio nomina la chiave, mai i valori).
+/// Merge dei metadata di schema di N sorgenti (R2.4): una chiave presente
+/// in una sola sorgente e' copiata; presente in piu' sorgenti con lo
+/// stesso valore e' copiata; con valori diversi e' un errore che nomina
+/// SOLO la chiave (mai i valori, regola 8). Le sorgenti sono esaminate in
+/// ordine di dichiarazione e le chiavi di ciascuna in ordine
+/// lessicografico: il primo conflitto riportato e' deterministico
+/// (ADR-0001), mai dipendente dall'ordine di iterazione delle `HashMap`.
+fn merge_metadata_maps(
+    op: &str,
+    merged: &mut HashMap<String, String>,
+    right: &HashMap<String, String>,
+) -> Result<()> {
+    let mut right_keys: Vec<_> = right.keys().collect();
+    right_keys.sort();
+    for key in right_keys {
+        let value = &right[key];
+        match merged.get(key) {
+            None => {
+                merged.insert(key.clone(), value.clone());
+            }
+            Some(existing) if existing == value => {}
+            Some(_) => {
+                return contract_error(
+                    op,
+                    format!("metadata di schema in conflitto sulla chiave {key:?}"),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn merge_schema_metadata(
+    op: &str,
+    left: &Schema,
+    right: &Schema,
+) -> Result<HashMap<String, String>> {
+    let mut merged = left.metadata().clone();
+    merge_metadata_maps(op, &mut merged, right.metadata())?;
+    Ok(merged)
+}
+
+/// Merge N-ario per `concat`: come [`merge_schema_metadata`] sulle
+/// sorgenti in ordine di dichiarazione.
+fn merge_schema_metadata_many(op: &str, inputs: &[DataContract]) -> Result<HashMap<String, String>> {
+    let mut merged = HashMap::new();
+    for input in inputs {
+        merge_metadata_maps(op, &mut merged, input.schema.metadata())?;
+    }
+    Ok(merged)
 }
 
 fn finish(
@@ -1596,7 +1666,10 @@ fn analyze_fill_na(
             );
         }
         check_fill_value(op, &data_type, &config.value)?;
-        fields_out[index] = Field::new(fields_out[index].name(), data_type, true);
+        // R2.4 type-preserving: il tipo non muta, quindi i metadata del campo
+        // sorgente restano validi e si conservano (clone); cambia solo la
+        // nullability (i valori riempiti possono non essere piu' null).
+        fields_out[index] = fields_out[index].clone().with_nullable(true);
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // La colonna geometrica (Binary) non e' mai un target valido: preservata.
@@ -1618,8 +1691,18 @@ fn analyze_replace(
         regex::Regex::new(&config.old_value)
             .map_err(|error| PlenoraError::Contract(format!("{op}: regex non valida: {error}")))?;
     }
+    // R2.4 type-preserving: Utf8 -> Utf8 (tipo invariato), i metadata del
+    // campo sorgente restano validi; `produce` ricostruisce il campo e li
+    // azzera, quindi vanno ripristinati dal sorgente.
+    let source_metadata = field_of(op, input, &config.column)?.metadata().clone();
     let mut fields_out = clone_fields(input);
     produce(&mut fields_out, fields, &config.column, DataType::Utf8, true);
+    if let Some(replaced) = fields_out
+        .iter_mut()
+        .find(|field| field.name() == &config.column)
+    {
+        *replaced = replaced.clone().with_metadata(source_metadata);
+    }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
     finish(schema, geometry, input.active_geometry, rows_only(input))
@@ -1868,8 +1951,11 @@ fn analyze_aggregate(
     if config.aggregations.is_empty() {
         produce(&mut fields_out, fields, "count", DataType::Int64, false);
     }
-    // Base group_by costruita con Schema::new: metadata non preservati.
-    let schema = Schema::new(fields_out);
+    // R2.4: i metadata dello schema di input si conservano sempre (le chiavi
+    // sconosciute non sono giudicabili dal centro; perderle rompe i
+    // round-trip). Le colonne aggregate restano derivate: nessun metadata di
+    // campo ereditato.
+    let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let preserved = input
         .geometries
         .first()
@@ -2636,6 +2722,9 @@ fn analyze_reconcile(
     let _ = fields;
     check_foreign_keys(op, &inputs[0], &inputs[1], &config.left_keys, &config.right_keys)?;
     // Schema fisso: 5 righe di metriche, indipendente dagli input.
+    // R2.4: dataset derivato — nessuna colonna degli input sopravvive e i
+    // metadata di schema degli input NON si ereditano (descriverebbero il
+    // risultato con le proprieta' dell'ingresso, R5.1). Deroga segnalata.
     let schema = Schema::new(vec![
         Field::new("metric", DataType::Utf8, false),
         Field::new("value", DataType::UInt64, false),
@@ -2796,6 +2885,8 @@ fn analyze_validate_rules(
         ),
         governance::ValidateOutputMode::Summary => {
             // Dataset nuovo: una riga per regola, nessuna colonna d'input.
+            // R2.4: dataset derivato — i metadata di schema dell'input NON si
+            // ereditano (come `reconcile`, R5.1). Deroga segnalata.
             for name in ["name", "errors", "warnings"] {
                 fields.derive(name);
             }
@@ -2888,8 +2979,10 @@ fn analyze_melt(
         .collect();
     fields_out.push(Field::new(&var_name, DataType::Utf8, false));
     fields_out.push(Field::new(&value_name, value_data_type, true));
-    // Schema::new nel kernel: metadata non preservati.
-    let schema = Schema::new(fields_out);
+    // R2.4: i metadata dello schema di input si conservano (le colonne id
+    // sono passthrough); `variable`/`value` sono colonne derivate e non
+    // ereditano metadata di campo.
+    let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // La geometria sopravvive solo come colonna id (valori passthrough).
     let preserved = input
         .geometries
@@ -3089,7 +3182,12 @@ fn analyze_table_diff(
     fields_out.push(Field::new("_diff_status", DataType::Utf8, false));
     fields_out.push(Field::new("_diff_columns", DataType::Utf8, true));
     fields_out.push(Field::new("_diff_old_values", DataType::Utf8, true));
-    let schema = Schema::new(fields_out);
+    // R2.4: chiavi e colonne di confronto sono ricostruite (nullability
+    // forzata, valori provenienti da entrambe le sorgenti) — classificate
+    // derivate: nessun metadata di campo ereditato. I metadata di SCHEMA
+    // delle due sorgenti si fondono invece con la merge-policy dei join.
+    let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+    let schema = Schema::new_with_metadata(fields_out, metadata);
     let emitted = |name: &str| config.left_keys.contains(&name.to_owned()) || compare.iter().any(|c| c == name);
     let left_geometry = left
         .geometries
@@ -3260,7 +3358,10 @@ fn analyze_join(
         &right_indices,
         HorizontalNaming::ManipolaJoin(&left_indices),
     )?;
-    let schema = Schema::new(fields_out);
+    // R2.4: i metadata di schema delle due sorgenti si fondono; stessa chiave
+    // con valori diversi -> errore, mai precedenza implicita.
+    let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+    let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
     let active = left
@@ -3319,7 +3420,9 @@ fn analyze_fuzzy_join(
     if fields_out.len() > Limits::default().max_columns {
         return contract_error(op, "fuzzy_join supera max_columns");
     }
-    let schema = Schema::new(fields_out);
+    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+    let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
@@ -3342,7 +3445,9 @@ fn analyze_cross_join(
         &HashSet::new(),
         HorizontalNaming::PandasCross,
     )?;
-    let schema = Schema::new(fields_out);
+    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+    let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
@@ -3437,7 +3542,9 @@ fn analyze_asof_join(
         .collect::<Result<HashSet<_>>>()?;
     let (fields_out, left_geometry, right_geometry) =
         combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf)?;
-    let schema = Schema::new(fields_out);
+    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+    let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
     let active = left
@@ -3477,7 +3584,9 @@ fn analyze_concat(
             field.as_ref().clone().with_nullable(nullable)
         })
         .collect();
-    let schema = Schema::new_with_metadata(fields_out, first.schema.metadata().clone());
+    // R2.4 multi-sorgente: merge dei metadata di schema di tutti gli
+    // input (conflitto su valori diversi -> errore, mai "vince il primo").
+    let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria del primo input (gli schemi sono identici per nome/tipo).
     let geometry = propagate_geometry(first, &schema, first.geometries.first().map(|g| g.name.as_str()));
     let row_count = sum_row_count(inputs);
@@ -3623,7 +3732,9 @@ fn analyze_concat_by_name(
         }
         union
     };
-    let schema = Schema::new_with_metadata(fields_out, first.schema.metadata().clone());
+    // R2.4 multi-sorgente: merge dei metadata di schema di tutti gli
+    // input (conflitto su valori diversi -> errore, mai "vince il primo").
+    let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria: propagata solo se TUTTI gli input hanno la colonna con lo
     // stesso tipo (altrimenti le righe degli input senza la colonna
     // sarebbero null materializzati, non passthrough D16).
@@ -3700,7 +3811,10 @@ fn analyze_set_operation(
                     .with_nullable(field.is_nullable() || right.schema.field(index).is_nullable())
             })
             .collect();
-        let schema = Schema::new_with_metadata(fields_out, left.schema.metadata().clone());
+        // R2.4: due sorgenti — merge dei metadata di schema; stessa chiave
+        // con valori diversi -> errore (come i join, mai precedenza implicita).
+        let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
+        let schema = Schema::new_with_metadata(fields_out, metadata);
         let geometry = propagate_geometry(left, &schema, left.geometries.first().map(|g| g.name.as_str()));
         finish(schema, geometry, left.active_geometry, ContractProperties::default())
     } else {
@@ -5526,6 +5640,185 @@ mod tests {
         )
         .to_string()
         .contains("schemi"));
+    }
+
+    // -- Lineage dei metadata Arrow (R2.4) --------------------------------------
+
+    /// Clona il contratto sostituendo i metadata dello schema Arrow.
+    fn with_schema_metadata(contract: &DataContract, entries: &[(&str, &str)]) -> DataContract {
+        let metadata: HashMap<String, String> = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        let mut out = contract.clone();
+        out.schema = Arc::new(Schema::new_with_metadata(
+            contract.schema.fields().clone(),
+            metadata,
+        ));
+        out
+    }
+
+    /// Clona il contratto aggiungendo metadata al campo `name`.
+    fn with_field_metadata(
+        contract: &DataContract,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) -> DataContract {
+        let metadata: HashMap<String, String> = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        let patched: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name().as_str() == name {
+                    field.as_ref().clone().with_metadata(metadata.clone())
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        let mut out = contract.clone();
+        out.schema = Arc::new(Schema::new_with_metadata(
+            patched,
+            contract.schema.metadata().clone(),
+        ));
+        out
+    }
+
+    #[test]
+    fn schema_metadata_survive_aggregate_and_melt() {
+        let input = with_schema_metadata(&tabular_contract(), &[("source", "driver-x")]);
+        let aggregated = ok(
+            "table.aggregate",
+            std::slice::from_ref(&input),
+            json!({"group_by": ["name"], "aggregations": [{"column": "value", "function": "sum"}]}),
+        );
+        assert_eq!(
+            aggregated.schema.metadata().get("source"),
+            Some(&"driver-x".to_owned()),
+            "aggregate: metadata di schema conservati (R2.4)"
+        );
+        let melted = ok(
+            "table.melt",
+            &[input],
+            json!({"id_columns": ["id"], "value_columns": ["value"]}),
+        );
+        assert_eq!(
+            melted.schema.metadata().get("source"),
+            Some(&"driver-x".to_owned()),
+            "melt: metadata di schema conservati (R2.4)"
+        );
+    }
+
+    #[test]
+    fn join_merges_schema_metadata_and_fails_on_conflict() {
+        let left = with_schema_metadata(
+            &tabular_contract(),
+            &[("left_only", "a"), ("shared", "same")],
+        );
+        let right = with_schema_metadata(
+            &right_contract(),
+            &[("right_only", "b"), ("shared", "same")],
+        );
+        let merged = ok(
+            "table.join",
+            &[left, right],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+        );
+        let metadata = merged.schema.metadata();
+        assert_eq!(metadata.get("left_only"), Some(&"a".to_owned()));
+        assert_eq!(metadata.get("right_only"), Some(&"b".to_owned()));
+        assert_eq!(metadata.get("shared"), Some(&"same".to_owned()));
+
+        // Stessa chiave con valori diversi: errore Contract che nomina la
+        // chiave e non riporta mai i valori (errori senza dati).
+        let conflicting = with_schema_metadata(&right_contract(), &[("shared", "other")]);
+        let error = err(
+            "table.join",
+            &[
+                with_schema_metadata(&tabular_contract(), &[("shared", "same")]),
+                conflicting,
+            ],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+        );
+        assert!(matches!(error, PlenoraError::Contract(_)), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("shared"), "chiave in conflitto nominata: {message}");
+        assert!(!message.contains("same"), "mai valori negli errori: {message}");
+        assert!(!message.contains("other"), "mai valori negli errori: {message}");
+    }
+
+    #[test]
+    fn union_distinct_merges_schema_metadata_and_fails_on_conflict() {
+        let (left, right) = simple_pair();
+        let left = with_schema_metadata(&left, &[("shared", "one")]);
+        let right = with_schema_metadata(&right, &[("extra", "two")]);
+        let merged = ok("table.union_distinct", &[left.clone(), right], json!({}));
+        let metadata = merged.schema.metadata();
+        assert_eq!(metadata.get("shared"), Some(&"one".to_owned()));
+        assert_eq!(metadata.get("extra"), Some(&"two".to_owned()));
+
+        let conflicting = with_schema_metadata(&simple_pair().1, &[("shared", "other")]);
+        assert!(matches!(
+            err("table.union_distinct", &[left, conflicting], json!({})),
+            PlenoraError::Contract(_)
+        ));
+    }
+
+    #[test]
+    fn field_metadata_survive_type_preserving_ops() {
+        let expected: HashMap<String, String> =
+            HashMap::from([("unit".to_owned(), "m/s".to_owned())]);
+        let filled = ok(
+            "table.fill_na",
+            &[with_field_metadata(&tabular_contract(), "value", &[("unit", "m/s")])],
+            json!({"column": "value", "value": 0}),
+        );
+        let field = filled.schema.field_with_name("value").unwrap();
+        assert_eq!(field.metadata(), &expected, "fill_na: metadata di campo (R2.4)");
+
+        let replaced = ok(
+            "table.replace",
+            &[with_field_metadata(&tabular_contract(), "name", &[("unit", "m/s")])],
+            json!({"column": "name", "old_value": "a", "new_value": "b"}),
+        );
+        let field = replaced.schema.field_with_name("name").unwrap();
+        assert_eq!(field.metadata(), &expected, "replace: metadata di campo (R2.4)");
+
+        // Join identity-preserving: la rinomina `_L` conserva i metadata.
+        let joined = ok(
+            "table.join",
+            &[
+                with_field_metadata(&tabular_contract(), "name", &[("unit", "m/s")]),
+                right_contract(),
+            ],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+        );
+        let field = joined.schema.field_with_name("name_L").unwrap();
+        assert_eq!(field.metadata(), &expected, "join: metadata di campo (R2.4)");
+    }
+
+    #[test]
+    fn table_diff_merges_schema_metadata_and_drops_field_metadata() {
+        let left = with_schema_metadata(&tabular_contract(), &[("shared", "v")]);
+        let left = with_field_metadata(&left, "id", &[("origin", "left")]);
+        let right = with_schema_metadata(&right_contract(), &[("shared", "v"), ("r_only", "1")]);
+        let output = ok(
+            "table.table_diff",
+            &[left, right],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+        );
+        assert_eq!(output.schema.metadata().get("r_only"), Some(&"1".to_owned()));
+        assert_eq!(output.schema.metadata().get("shared"), Some(&"v".to_owned()));
+        // Campi ricostruiti = colonne derivate (R2.4): nessun metadata ereditato.
+        let field = output.schema.field_with_name("id").unwrap();
+        assert!(
+            field.metadata().is_empty(),
+            "table_diff: campo derivato senza metadata ereditati"
+        );
     }
 
     // -- Proprieta' e geometria ----------------------------------------------------

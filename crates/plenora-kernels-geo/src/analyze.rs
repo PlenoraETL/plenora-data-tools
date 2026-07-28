@@ -731,6 +731,12 @@ fn with_schema_metadata(contract: &DataContract, metadata: HashMap<String, Strin
 
 /// Copia del campo geometria con nullability aggiornata (per gli output a
 /// sole geometrie, dove l'aggregazione puo' produrre null).
+///
+/// R2.4 identity-preserving: TUTTI i metadati del campo sorgente sono
+/// clonati — incluse le chiavi canoniche `plenora.*` gia' presenti in
+/// input — perche' il campo geometria sopravvive invariato (stesso nome,
+/// stessi byte); l'emissione canonica resta centralizzata a valle
+/// (`executor.rs::canonical_output_schema`), qui non si aggiunge nulla.
 fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nullable: bool) -> Result<Field> {
     let field = input
         .schema
@@ -868,16 +874,17 @@ fn analyze_expand(op: &str, input: &DataContract) -> Result<DataContract> {
 /// geometria aggregata e' nullable (input vuoto -> geometria null).
 ///
 /// I metadati dello SCHEMA di input sono conservati (R2.4): riguardano il
-/// dataset, non le colonne attributo eliminate.
+/// dataset, non le colonne attributo eliminate. Le colonne `extra` sono
+/// passate come `Field` interi: quelle copiate dall'input (le chiavi di
+/// `collect`) conservano i loro metadati (R2.4 identity-preserving), quelle
+/// sintetiche (`polygonize`, `overlay`) nascono senza.
 fn analyze_geometry_only(
     input: &DataContract,
     geometry: &GeometryColumnContract,
-    extra: &[(String, DataType, bool)],
+    extra: &[Field],
 ) -> Result<DataContract> {
     let mut fields = vec![geometry_field(input, geometry, true)?];
-    for (name, data_type, nullable) in extra {
-        fields.push(Field::new(name.clone(), data_type.clone(), *nullable));
-    }
+    fields.extend(extra.iter().cloned());
     let active = input
         .active_geometry
         .filter(|active| *active == geometry.field_id);
@@ -1184,7 +1191,7 @@ fn analyze_collect(
     if parsed.group_by.is_empty() {
         return Err(invalid_param(op, "group_by", "non deve essere vuoto"));
     }
-    let mut extra: Vec<(String, DataType, bool)> = Vec::with_capacity(parsed.group_by.len());
+    let mut extra: Vec<Field> = Vec::with_capacity(parsed.group_by.len());
     for name in &parsed.group_by {
         if !ensure_name(name) {
             return Err(invalid_param(op, "group_by", "nomi colonna non vuoti"));
@@ -1199,14 +1206,12 @@ fn analyze_collect(
         let field = input.schema.field_with_name(name).map_err(|_| {
             PlenoraError::Schema(format!("{op}: colonna `{name}` assente dallo schema"))
         })?;
-        if extra.iter().any(|(seen, _, _)| seen == name) {
+        if extra.iter().any(|seen| seen.name() == name) {
             return Err(invalid_param(op, "group_by", "colonne duplicate"));
         }
-        extra.push((
-            name.clone(),
-            field.data_type().clone(),
-            field.is_nullable(),
-        ));
+        // R2.4 identity-preserving: la colonna chiave sopravvive invariata —
+        // si clona il `Field` intero, metadati compresi.
+        extra.push(field.clone());
     }
     analyze_geometry_only(input, geometry, &extra)
 }
@@ -1740,7 +1745,7 @@ fn analyze_unary(
             let parsed: PolygonizeConfig = parse_config(op, config)?;
             let _ = (&parsed.node_input, &parsed.require_complete);
             validate_requirement(requirement, &[&geometry.crs])?;
-            analyze_geometry_only(input, geometry, &[(CLASS_COLUMN.to_owned(), DataType::Utf8, false)])
+            analyze_geometry_only(input, geometry, &[Field::new(CLASS_COLUMN, DataType::Utf8, false)])
         }
         "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
         | "geo.haversine_distance" | "geo.geodesic_distance" | "geo.bearing" => {
@@ -1758,6 +1763,10 @@ fn analyze_unary(
 }
 
 /// Inferenza per le operazioni binarie ordinate (left, right).
+///
+/// I metadati di SCHEMA dell'output sono il merge R2.4 delle due sorgenti
+/// ([`merge_schema_metadata`]): chiave presente in una sola copiata, uguale
+/// in entrambe copiata, diversa in entrambe -> errore che nomina la chiave.
 fn analyze_binary(
     descriptor: &OperationDescriptor,
     inputs: &[DataContract],
@@ -1775,9 +1784,6 @@ fn analyze_binary(
         PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
     validate_requirement(requirement, &[&left_geometry.crs, &right_geometry.crs])?;
-    // R2.4: i metadati di SCHEMA delle due sorgenti sono fusi; un conflitto
-    // su valori diversi fallisce qui, in validazione, mai a runtime.
-    let schema_metadata = merge_schema_metadata(op, left, right)?;
     let output = match op {
         // Schema left invariato, geometria sostituita in place; righe
         // allineate a left nel protocollo legacy: proprieta' preservate.
@@ -1827,15 +1833,19 @@ fn analyze_binary(
                 left,
                 left_geometry,
                 &[
-                    (LEFT_INDEX_COLUMN.to_owned(), DataType::UInt64, true),
-                    (RIGHT_INDEX_COLUMN.to_owned(), DataType::UInt64, true),
+                    Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),
+                    Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, true),
                 ],
             )
         }
         _ => Err(PlenoraError::Unsupported(format!(
             "{op}: analyze_contract non implementata"
         ))),
-    }
+    }?;
+    // R2.4: i metadati di SCHEMA delle due sorgenti sono fusi; un conflitto
+    // su valori diversi fallisce qui, in validazione, mai a runtime.
+    let schema_metadata = merge_schema_metadata(op, left, right)?;
+    with_schema_metadata(&output, schema_metadata)
 }
 
 /// `analyze_contract` del catalogo per le operazioni `geo.*`
@@ -3625,5 +3635,143 @@ mod tests {
         analyze_one("geo.make_valid", &inputs, &json!({}), None).expect("make_valid senza geos");
         analyze_one("geo.polygonize", &inputs, &json!({}), None).expect("polygonize senza geos");
         analyze_one("geo.split", &inputs, &other_wkb_config(), None).expect("split senza geos");
+    }
+
+    // -----------------------------------------------------------------------
+    // Lineage dei metadati Arrow (R2.4).
+    // -----------------------------------------------------------------------
+
+    /// Restituisce il contratto con i metadati di SCHEMA sostituiti dalle
+    /// coppie date (campi, geometrie e proprieta' invariati).
+    fn attach_schema_metadata(contract: &DataContract, pairs: &[(&str, &str)]) -> DataContract {
+        let mut with_metadata = contract.clone();
+        with_metadata.schema = Arc::new(Schema::new_with_metadata(
+            contract
+                .schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone())
+                .collect::<Vec<_>>(),
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ));
+        with_metadata
+    }
+
+    #[test]
+    fn schema_metadata_survive_schema_rebuilding_ops() {
+        // Aggregazione a sole geometrie: le colonne attributo cadono, i
+        // metadati di schema no.
+        let input = attach_schema_metadata(
+            &geo_contract(projected_crs()),
+            &[("plenora.contract.version", "1"), ("driver.note", "x")],
+        );
+        let expected = input.schema.metadata().clone();
+        let output = analyze_one("geo.dissolve", &[input], &json!({}), None).expect("dissolve");
+        assert_eq!(output.schema.metadata(), &expected, "dissolve");
+
+        // Op di copertura (schema nuovo): metadati di schema conservati.
+        let input = attach_schema_metadata(
+            &geo_contract(projected_crs()),
+            &[("plenora.contract.version", "1")],
+        );
+        let expected = input.schema.metadata().clone();
+        let output =
+            analyze_one("geo.coverage_validate", &[input], &json!({}), None).expect("coverage");
+        assert_eq!(output.schema.metadata(), &expected, "coverage_validate");
+
+        // Generativa con input trigger tabellare: metadati conservati.
+        let input = attach_schema_metadata(&tabular_contract(), &[("driver.note", "x")]);
+        let expected = input.schema.metadata().clone();
+        let plan = projected_crs();
+        let output = analyze_one(
+            "geo.generate_grid",
+            &[input],
+            &json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0}, "cell_size": 5.0}),
+            Some(&plan),
+        )
+        .expect("generate_grid");
+        assert_eq!(output.schema.metadata(), &expected, "generate_grid");
+    }
+
+    #[test]
+    fn binary_ops_merge_schema_metadata_and_reject_conflicts() {
+        // Chiave in una sola sorgente -> copiata; in entrambe uguale -> una
+        // sola copia, nessun errore.
+        let left = attach_schema_metadata(
+            &geo_contract(projected_crs()),
+            &[("plenora.contract.version", "1"), ("left.only", "a")],
+        );
+        let right = attach_schema_metadata(
+            &geo_contract(projected_crs()),
+            &[("plenora.contract.version", "1"), ("right.only", "b")],
+        );
+        let output = analyze_one(
+            "geo.sjoin",
+            &[left, right],
+            &json!({"predicate": "intersects"}),
+            None,
+        )
+        .expect("sjoin");
+        let metadata = output.schema.metadata();
+        for key in ["plenora.contract.version", "left.only", "right.only"] {
+            assert!(metadata.contains_key(key), "chiave `{key}` persa nel merge");
+        }
+        assert_eq!(metadata.len(), 3, "nessuna chiave duplicata o spuria");
+
+        // Chiave in entrambe con valori diversi -> errore di contratto che
+        // nomina la chiave e MAI i valori (errori senza dati).
+        let left = attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "alpha")]);
+        let right = attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "omega")]);
+        let result = analyze_one("geo.overlay", &[left, right], &json!({"mode": "union"}), None);
+        match result {
+            Err(PlenoraError::Contract(message)) => {
+                assert!(message.contains("shared.key"), "l'errore nomina la chiave: {message}");
+                assert!(
+                    !message.contains("alpha") && !message.contains("omega"),
+                    "l'errore non contiene mai i valori: {message}"
+                );
+            }
+            other => panic!("atteso errore di contratto, trovato {other:?}"),
+        }
+    }
+
+    #[test]
+    fn geometry_field_metadata_survive_geometry_only_aggregation() {
+        // R2.4 identity-preserving sul campo geometria che sopravvive
+        // invariato: TUTTI i metadati del campo sorgente (chiave canonica
+        // `plenora.*` gia' presente e chiave esterna) sono conservati.
+        let mut contract = geo_contract(projected_crs());
+        let fields: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    metadata.insert("plenora.geometry.encoding".to_owned(), "wkb".to_owned());
+                    metadata.insert("driver.native".to_owned(), "kept".to_owned());
+                    Field::new(field.name(), field.data_type().clone(), field.is_nullable())
+                        .with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        contract.schema = Arc::new(Schema::new(fields));
+        let expected = contract
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria")
+            .metadata()
+            .clone();
+        let output = analyze_one("geo.dissolve", &[contract], &json!({}), None).expect("dissolve");
+        let field = output
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria");
+        assert_eq!(field.metadata(), &expected, "metadati del campo geometria");
     }
 }

@@ -137,27 +137,36 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   (`canonical_output_schema` in `executor.rs`: fusione fail-closed delle
   chiavi canoniche nei campi geometria, versione R2.5 sullo schema,
   rivestimento dei batch in scrittura — vedi "Cambi di comportamento").
-  **Restano fuori, come follow-up esplicito** (vincolo maintainer sui
-  monoliti):
-  - `plenora-kernels-geo/src/analyze.rs`: `geometry_field` (:692),
-    `new_geometry_field` (:711), `set_geometry_crs` (:730) e gli
-    `Schema::new*` di :680, :844, :898, :927, :1001, :1079, :1252, :1304,
-    :1360 — i campi derivati escono con sole chiavi GeoArrow.
-  - `plenora-kernels-table/src/analyze.rs`: i `Field::new` di :324, :1479,
-    :1599, :3067 perdono TUTTI i metadati di campo (violazione R2.4
-    identity/type-preserving per le chiavi non interpretate) e gli
-    `Schema::new*` di :500, :1237, :1293, :1334, :1412, :1499, :1601,
-    :1623, :1862, :2630, :2793, :2882, :3017, :3471, :3617, :3694 quelli di
-    schema.
-  - Join: `combine_horizontal_fields` (:3146-3205) e `merge_geometry` (:385)
-    con precedenza implicita al ramo sinistro — R2.4 vuole errore o
-    `LossReport` su conflitto; `Schema::new` di :3083, :3254, :3313, :3336,
-    :3431.
-  - `geo_transport/transport.rs`: wrapper legacy `geometry_output_field`
-    (:1693), riscritture post-kernel (:2167, :2288, :2422, :2494, :2586,
-    :2749, :2948) e gli `Schema::new*` di :2199, :2290, :2421, :2495,
-    :2587, :2648, :2754, :2949, :3454, :3501, :3546, :3668, :3741, :3806,
-    :4156 — le chiavi canoniche dell'input si perdono nel percorso legacy.
+- **Lineage nei monoliti `analyze.rs` (attuata, 2026-07-28)**: la policy
+  R2.4 e' ora applicata nei due `analyze.rs`:
+  - metadati di SCHEMA conservati ovunque (`Schema::new_with_metadata`
+    al posto di `Schema::new` in tutti i siti identity/type-preserving e
+    derivati-dataset: le chiavi sconosciute non sono giudicabili dal
+    centro, la perdita rompe i round-trip);
+  - multi-sorgente (join e varianti, `set_operation` UnionDistinct,
+    `concat`/`concat_by_name` N-ario, op binarie geo): MERGE dei
+    metadati di schema — chiave in una sola sorgente copiata, uguale
+    copiata, **valori diversi = errore `Contract` che nomina solo la
+    chiave** (mai i valori; primo conflitto deterministico per ADR-0001:
+    sorgenti in ordine di dichiarazione, chiavi lessicografiche). La
+    precedenza implicita "vince left/primo" e' eliminata;
+  - metadati di CAMPO: identity-preserving copiati invariati (incluse
+    le chiavi canoniche su colonne geometriche sopravvissute),
+    type-preserving copiati (fill_na/replace), campi derivati NON
+    ereditano (table_diff, colonne sintetiche; le canoniche le emette
+    `canonical_output_schema` a valle);
+  - deroghe documentate nel codice: `reconcile` e `validate_rules`
+    Summary restano `Schema::new` (dataset derivati puri: ereditare
+    descriverebbe il risultato con le proprieta' dell'ingresso, R5.1).
+  - **Conseguenza fingerprint (ADR 4)**: i metadati ora propagati
+    entrano in `sorted_metadata` del fingerprint dei contratti per i
+    piani i cui input li portano — cambio atteso, dichiarato qui e
+    gia' coperto da test di regressione dedicati nei due file.
+  - **Resta fuori, follow-up esplicito**: solo il percorso legacy di
+    `geo_transport/transport.rs` (wrapper `geometry_output_field` :1693,
+    riscritture post-kernel e `Schema::new*` elencati in precedenza) —
+    le chiavi canoniche dell'input si perdono ancora li; il percorso
+    DAG v4 non passa da quel codice.
 - **Follow-up dichiarati**: disposizione di retry R9.7 (sostituisce
   `retryable()`); rinomina delle categorie d'errore verso l'enumerazione
   canonica (tabella "Mappatura dai modelli attuali" §9); chiave
