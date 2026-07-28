@@ -9,6 +9,19 @@
 //! `Step` e `Cancelled` portano l'`execution_id` dell'esecuzione che li ha
 //! prodotti (vuoto se costruiti fuori da un'esecuzione DAG, es. percorso
 //! legacy `table_engine` — il Display lo omette in quel caso).
+//!
+//! Milestone D (contratti trasversali v2.0-rc3 §9, proposta in attesa di
+//! ratifica — andra' in ADR-0009): l'errore porta i quattro assi
+//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) e
+//! ritentabilita' ([`PlenoraError::retryable`]) esistono da M1d; qui si
+//! aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]) e l'effetto
+//! remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]), entrambi da
+//! enumerazioni canoniche condivise (R9.5/R9.6: sottoinsieme ammesso,
+//! valori propri vietati). La disposizione di retry di R9.7 (che
+//! sostituisce il booleano) e' follow-up dichiarato: per ora
+//! `retryable()` resta invariato.
+
+use std::fmt;
 
 use thiserror::Error;
 
@@ -125,6 +138,115 @@ impl ErrorCategory {
     }
 }
 
+/// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
+/// R9.1 (contratti trasversali v2.0-rc3 §9, milestone D).
+///
+/// Enumerazione canonica (R9.5): sono ammessi solo questi dieci valori —
+/// data-tools ne usa un sottoinsieme e non ne definisce di propri. Il
+/// canonico non ha una fase «Execute»: l'esecuzione dei nodi del DAG ricade
+/// in [`ErrorPhase::Write`] (produzione dell'output), vedi la decisione
+/// progettuale in [`PlenoraError::phase`]. Mappatura sul ciclo di
+/// data-tools; per i bordi filesystem vale §9: `Connect` = acquisizione
+/// dell'handle/lease sulla risorsa, `Probe` = ispezione preliminare del
+/// formato, `Commit` = rename atomico di publish (ADR 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorPhase {
+    /// Validazione: parse del piano (JSON), contratti, schema, CRS,
+    /// capability, limiti del governor.
+    Validate,
+    /// Acquisizione dell'handle/lease sulla risorsa (bordo filesystem, §9).
+    Connect,
+    /// Ispezione preliminare del formato o della risorsa di destinazione
+    /// (es. riconoscimento fail-closed del filesystem, ADR 7).
+    Probe,
+    /// Preparazione di kernel e risorse prima dell'esecuzione.
+    Prepare,
+    /// Lettura dei dati di input dal supporto.
+    Read,
+    /// Produzione dell'output: esecuzione dei nodi del DAG e scrittura del
+    /// tempfile di publish.
+    Write,
+    /// Finalizzazione dello stream di output (chiusura del writer).
+    Finalize,
+    /// Commit dell'effetto: rename atomico di publish (ADR 7, §9).
+    Commit,
+    /// Annullamento dell'effetto, con conferma.
+    Rollback,
+    /// Pulizia di risorse e residui.
+    Cleanup,
+}
+
+impl ErrorPhase {
+    /// Nome stabile della fase (telemetria, report JSON): `snake_case`
+    /// canonico §9.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Validate => "validate",
+            Self::Connect => "connect",
+            Self::Probe => "probe",
+            Self::Prepare => "prepare",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Finalize => "finalize",
+            Self::Commit => "commit",
+            Self::Rollback => "rollback",
+            Self::Cleanup => "cleanup",
+        }
+    }
+}
+
+impl fmt::Display for ErrorPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Effetto restato sul sistema remoto o sul supporto quando l'operazione
+/// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6
+/// (contratti trasversali v2.0-rc3 §9, milestone D).
+///
+/// L'esito ignoto NON e' una categoria d'errore (R9.3): [`RemoteEffect::Unknown`]
+/// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
+/// effetto sempre [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]);
+/// il caso «publish riuscito, durabilita' non confermata» non e' un errore
+/// ma un esito tipizzato (`PublishOutcome`, ADR 7) che si mappa su questo
+/// asse senza duplicarlo in una variante d'errore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RemoteEffect {
+    /// L'operazione non ha prodotto alcun effetto osservabile.
+    None,
+    /// L'effetto e' stato annullato, con conferma.
+    RolledBack,
+    /// Una parte dell'effetto e' visibile e una no.
+    Partial,
+    /// L'effetto e' definitivo, benche' l'operazione riporti un errore.
+    Committed,
+    /// L'effetto non e' determinabile con i mezzi disponibili.
+    Unknown,
+}
+
+impl RemoteEffect {
+    /// Nome stabile dell'effetto (telemetria, report JSON): `snake_case`
+    /// canonico R9.6.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::RolledBack => "rolled_back",
+            Self::Partial => "partial",
+            Self::Committed => "committed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for RemoteEffect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl PlenoraError {
     /// Categoria dell'errore (ADR 3, M1d): mapping dichiarato per variante.
     #[must_use]
@@ -156,6 +278,96 @@ impl PlenoraError {
     #[must_use]
     pub const fn retryable(&self) -> bool {
         matches!(self, Self::Io(_))
+    }
+
+    /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1,
+    /// milestone D): mapping dichiarato per variante, stesso stampo di
+    /// [`PlenoraError::category`].
+    ///
+    /// La derivazione per variante e' sufficiente: NESSUN override ai
+    /// confini di tagging (`step_error`/`tag_execution` in engine,
+    /// `at_input` nella CLI, publish) e' stato introdotto in questa
+    /// milestone. Scelte di mapping (da riportare in ADR-0009):
+    ///
+    /// - `Contract`, `Unsupported`, `Schema`, `Crs`, `Json` →
+    ///   [`ErrorPhase::Validate`]: parse del piano e controlli di contratto,
+    ///   schema, CRS, capability e limiti sono validazione per natura, e il
+    ///   canonico non ha una fase «Parse». Approssimazioni dichiarate: i
+    ///   controlli del governor (es. `max_expansion_factor`) scattano
+    ///   DURANTE l'esecuzione ma restano validazione di vincoli; il check
+    ///   «output esiste gia'» di publish (ADR 7) avviene al confine di
+    ///   commit. La variante non distingue i momenti: il raffinamento e'
+    ///   follow-up.
+    /// - `UnsupportedPublishTarget` → [`ErrorPhase::Probe`]: il
+    ///   riconoscimento fail-closed del filesystem di destinazione (ADR 7)
+    ///   e' ispezione preliminare della risorsa, prima di qualunque
+    ///   scrittura — sui bordi filesystem §9 assegna l'ispezione a `Probe`.
+    /// - `Step`, `Cancelled` → [`ErrorPhase::Write`]: il canonico non ha una
+    ///   fase «Execute». DECISIONE PROGETTUALE: in data-tools la lettura
+    ///   degli input (fase `Read`) avviene al confine `Input` PRIMA
+    ///   dell'esecuzione del DAG e i suoi errori emergono come
+    ///   `Io`/`Arrow`/`Schema`, mai come `Step`; un `Step` nasce solo
+    ///   mentre un nodo produce il proprio stream di output, e la
+    ///   cancellazione (invariante I8: nessun output pubblicato) e'
+    ///   osservata agli stessi confini cooperativi. La produzione
+    ///   dell'output e' la fase `Write` del ciclo canonico.
+    /// - `Arrow`, `Io` → [`ErrorPhase::Write`]: le varianti coprono sia la
+    ///   lettura degli input sia la scrittura/publish e non distinguono.
+    ///   Si dichiara `Write` perche' e' il lato con possibile effetto sul
+    ///   supporto, il solo rilevante quando la ritentabilita' sara'
+    ///   calcolata da fase ed effetto (R9.7, follow-up): un errore in
+    ///   lettura resta privo di effetti e altrettanto gestibile.
+    ///   Approssimazione dichiarata.
+    #[must_use]
+    pub const fn phase(&self) -> ErrorPhase {
+        match self {
+            // Bracci fusi per fase (stessa decisione documentata sopra per
+            // ogni variante): l'esaustivita' e' preservata perche' tutte
+            // le varianti restano nominate esplicitamente.
+            Self::Contract(_)
+            | Self::Unsupported(_)
+            | Self::Schema(_)
+            | Self::Crs(_)
+            | Self::Json(_) => ErrorPhase::Validate,
+            Self::UnsupportedPublishTarget(_) => ErrorPhase::Probe,
+            Self::Step { .. } | Self::Cancelled { .. } | Self::Arrow(_) | Self::Io(_) => {
+                ErrorPhase::Write
+            }
+        }
+    }
+
+    /// Effetto restato sul supporto quando l'errore e' riportato (asse
+    /// «effetto» di R9.1, enumerazione R9.6): mapping dichiarato per
+    /// variante.
+    ///
+    /// Sempre [`RemoteEffect::None`], PER COSTRUZIONE: il publish atomico
+    /// (ADR 7) scrive su tempfile nella stessa directory e pubblica solo a
+    /// grafo completato con successo, eliminando il tempfile a qualunque
+    /// fallimento — nessun output parziale e' mai visibile alla
+    /// destinazione; la cancellazione rispetta l'invariante I8 (nessun
+    /// output pubblicato). Anche gli eventuali residui temp dopo un crash
+    /// restano `None`: non sono alla destinazione, non sono osservabili dal
+    /// chiamante come effetto dell'operazione. L'unico caso «effetto
+    /// presente a fronte di una segnalazione» — publish riuscito con
+    /// durabilita' non confermata — NON e' un errore (R9.3): e' tipizzato
+    /// come `PublishOutcome::PublishedButDurabilityUnconfirmed` (ADR 7) e
+    /// mappato sull'asse effetto da quel tipo, non duplicato qui.
+    #[must_use]
+    pub const fn remote_effect(&self) -> RemoteEffect {
+        match self {
+            // Tutte le varianti nominate esplicitamente (esaustivita'
+            // preservata): `None` per costruzione, vedi la doc sopra.
+            Self::Contract(_)
+            | Self::Unsupported(_)
+            | Self::Schema(_)
+            | Self::Step { .. }
+            | Self::Crs(_)
+            | Self::UnsupportedPublishTarget(_)
+            | Self::Cancelled { .. }
+            | Self::Arrow(_)
+            | Self::Json(_)
+            | Self::Io(_) => RemoteEffect::None,
+        }
     }
 }
 
@@ -235,6 +447,103 @@ mod tests {
         for (error, _) in samples() {
             let expected = matches!(error, PlenoraError::Io(_));
             assert_eq!(error.retryable(), expected, "{error}");
+        }
+    }
+
+    /// Una istanza per variante costruibile direttamente, con la fase
+    /// attesa (milestone D, R9.1); le varianti `#[from]` sono coperte a
+    /// parte, come in [`samples`].
+    fn phase_samples() -> Vec<(PlenoraError, ErrorPhase)> {
+        vec![
+            (PlenoraError::Contract("c".into()), ErrorPhase::Validate),
+            (PlenoraError::Unsupported("u".into()), ErrorPhase::Validate),
+            (PlenoraError::Schema("s".into()), ErrorPhase::Validate),
+            (step("exec-1"), ErrorPhase::Write),
+            (PlenoraError::Crs("crs".into()), ErrorPhase::Validate),
+            (
+                PlenoraError::UnsupportedPublishTarget("t".into()),
+                ErrorPhase::Probe,
+            ),
+            (cancelled(), ErrorPhase::Write),
+            (
+                PlenoraError::Io(std::io::Error::other("io")),
+                ErrorPhase::Write,
+            ),
+        ]
+    }
+
+    #[test]
+    fn phase_mapping_is_declared_per_variant() {
+        for (error, expected) in phase_samples() {
+            assert_eq!(error.phase(), expected, "{error}");
+        }
+        // Varianti `#[from]`: costruibili solo da errori reali.
+        let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
+        assert_eq!(arrow.phase(), ErrorPhase::Write);
+        let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
+            .expect_err("json invalido")
+            .into();
+        assert_eq!(json.phase(), ErrorPhase::Validate);
+    }
+
+    #[test]
+    fn remote_effect_is_none_for_every_variant_by_construction() {
+        // ADR 7 (publish atomico: nessun output parziale mai visibile) +
+        // invariante I8 (cancellazione senza output pubblicato): un
+        // `PlenoraError` non accompagna mai un effetto osservabile. Il caso
+        // «durabilita' non confermata» e' un `PublishOutcome`, non un
+        // errore (R9.3).
+        for (error, _) in samples() {
+            assert_eq!(error.remote_effect(), RemoteEffect::None, "{error}");
+        }
+        let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
+        assert_eq!(arrow.remote_effect(), RemoteEffect::None);
+        let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
+            .expect_err("json invalido")
+            .into();
+        assert_eq!(json.remote_effect(), RemoteEffect::None);
+    }
+
+    #[test]
+    fn phase_names_are_exactly_the_canonical_ten() {
+        // R9.5: solo i dieci valori canonici, snake_case; nessun valore
+        // proprio di data-tools. La tabella e' esaustiva per costruzione:
+        // aggiungere una variante all'enum senza toccare questo test lo
+        // farebbe fallire sul conteggio.
+        let all = [
+            (ErrorPhase::Validate, "validate"),
+            (ErrorPhase::Connect, "connect"),
+            (ErrorPhase::Probe, "probe"),
+            (ErrorPhase::Prepare, "prepare"),
+            (ErrorPhase::Read, "read"),
+            (ErrorPhase::Write, "write"),
+            (ErrorPhase::Finalize, "finalize"),
+            (ErrorPhase::Commit, "commit"),
+            (ErrorPhase::Rollback, "rollback"),
+            (ErrorPhase::Cleanup, "cleanup"),
+        ];
+        assert_eq!(all.len(), 10, "l'enumerazione canonica ha dieci fasi");
+        for (phase, name) in all {
+            assert_eq!(phase.as_str(), name);
+            assert_eq!(phase.to_string(), name, "Display = as_str canonico");
+        }
+    }
+
+    #[test]
+    fn remote_effect_names_are_exactly_the_canonical_five() {
+        // R9.6: solo i cinque valori canonici; l'esito ignoto e' un effetto
+        // (`unknown`), non una categoria (R9.3).
+        let all = [
+            (RemoteEffect::None, "none"),
+            (RemoteEffect::RolledBack, "rolled_back"),
+            (RemoteEffect::Partial, "partial"),
+            (RemoteEffect::Committed, "committed"),
+            (RemoteEffect::Unknown, "unknown"),
+        ];
+        assert_eq!(all.len(), 5, "l'enumerazione canonica ha cinque effetti");
+        for (effect, name) in all {
+            assert_eq!(effect.as_str(), name);
+            assert_eq!(effect.to_string(), name, "Display = as_str canonico");
         }
     }
 

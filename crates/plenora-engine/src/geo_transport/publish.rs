@@ -26,7 +26,7 @@ use std::fs::File;
 
 use plenora_core::catalog::{find_operation, CrsRequirement};
 use plenora_core::crs::{required_definition, validate_requirement};
-use plenora_core::PlenoraError;
+use plenora_core::{PlenoraError, RemoteEffect};
 
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
@@ -141,6 +141,29 @@ pub enum PublishOutcome {
     /// Publish riuscito, durabilita' non confermata (`fsync` della directory
     /// non supportato dalla piattaforma o fallito dopo il rename).
     PublishedButDurabilityUnconfirmed,
+}
+
+impl PublishOutcome {
+    /// Effetto dell'esito sull'asse canonico «effetto remoto» (R9.6,
+    /// contratti trasversali v2.0-rc3 §9, milestone D): collegamento
+    /// esplicito tra ADR 7 e il modello a quattro assi (R9.1), SENZA
+    /// duplicare l'esito in una variante d'errore — l'esito ignoto non e'
+    /// una categoria d'errore (R9.3).
+    ///
+    /// Entrambi gli esiti mappano su [`RemoteEffect::Committed`]: a publish
+    /// terminato l'output e' completo e visibile alla destinazione, quindi
+    /// l'effetto e' determinato e definitivo dal punto di vista del
+    /// chiamante. In [`PublishOutcome::PublishedButDurabilityUnconfirmed`]
+    /// cio' che non e' confermato e' la DURABILITA' (sopravvivenza a un
+    /// crash della macchina, ADR 7), non l'esistenza dell'effetto:
+    /// [`RemoteEffect::Unknown`] («effetto non determinabile con i mezzi
+    /// disponibili», R9.6) sarebbe scorretto — l'output e' osservabile.
+    #[must_use]
+    pub const fn remote_effect(self) -> RemoteEffect {
+        match self {
+            Self::Published | Self::PublishedButDurabilityUnconfirmed => RemoteEffect::Committed,
+        }
+    }
 }
 
 /// Tentativi totali di persist (1 iniziale + retry sui soli errori
@@ -541,6 +564,23 @@ mod tests {
     }
 
     // -- Profili di publish ---------------------------------------------------
+
+    #[test]
+    fn publish_outcome_maps_on_the_remote_effect_axis() {
+        // R9.1/R9.6 (milestone D): l'esito tipizzato di ADR 7 vive
+        // sull'asse effetto, non in una variante d'errore (R9.3). Committed
+        // in entrambi i casi: l'output e' completo e visibile; in
+        // `PublishedButDurabilityUnconfirmed` e' la durabilita' a non
+        // essere confermata, non l'esistenza dell'effetto.
+        assert_eq!(
+            PublishOutcome::Published.remote_effect(),
+            RemoteEffect::Committed
+        );
+        assert_eq!(
+            PublishOutcome::PublishedButDurabilityUnconfirmed.remote_effect(),
+            RemoteEffect::Committed
+        );
+    }
 
     #[test]
     fn atomic_profile_reports_published() {
