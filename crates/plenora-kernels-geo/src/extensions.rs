@@ -115,7 +115,10 @@ pub fn from_wkt_column(
     on_error: OnWktError,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     let cells: Vec<Option<&str>> = values.iter().collect();
-    cells
+    // Come `map_nullable` (ADR-0001): il primo errore IN ORDINE DI RIGA e'
+    // selezionato dal collect sequenziale — la riga riportata nel messaggio
+    // non puo' dipendere dallo scheduling di rayon.
+    let results: Vec<Result<Option<Vec<u8>>, PlenoraError>> = cells
         .into_par_iter()
         .enumerate()
         .map(|(row, cell)| {
@@ -129,7 +132,8 @@ pub fn from_wkt_column(
                 }),
             )
         })
-        .collect()
+        .collect();
+    results.into_iter().collect()
 }
 
 // ---------------------------------------------------------------------------

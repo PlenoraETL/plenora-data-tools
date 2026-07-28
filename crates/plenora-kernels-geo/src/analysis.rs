@@ -178,7 +178,10 @@ pub fn nearest_matches(
     }
 
     let result_count = AtomicU64::new(0);
-    let grouped: Result<Vec<Vec<NearestMatch>>, AnalysisError> = left
+    // ADR-0001: i `Result` sono raccolti per riga (ordine preservato) e il
+    // primo errore IN ORDINE DI RIGA e' selezionato dal collect
+    // sequenziale — il collect parallelo diretto sarebbe non deterministico.
+    let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left
         .par_iter()
         .enumerate()
         .map(|(left_index, geometry)| {
@@ -227,6 +230,7 @@ pub fn nearest_matches(
                 .collect()
         })
         .collect();
+    let grouped: Result<Vec<Vec<NearestMatch>>, AnalysisError> = groups.into_iter().collect();
     Ok(grouped?.into_iter().flatten().collect())
 }
 

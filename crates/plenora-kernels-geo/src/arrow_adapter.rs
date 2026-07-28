@@ -1193,13 +1193,20 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 /// # Errors
 ///
 /// `PlenoraError::Contract` se una cella non-null supera [`MAX_CELL_BYTES`];
-/// in piu' l'errore restituito da `f` sulla prima cella che fallisce.
+/// in piu' l'errore restituito da `f` sulla prima cella IN ORDINE DI RIGA
+/// che fallisce (deterministico, ADR-0001).
 pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
     let cell_values: Vec<Option<&[u8]>> = cells.iter().collect();
-    cell_values
+    // ADR-0001: il collect parallelo di `Result` sceglie l'errore in modo
+    // NON deterministico (il primo che acquisisce il mutex interno di
+    // rayon). Qui i `Result` sono raccolti per riga (l'ordine del collect
+    // parallelo indicizzato e' preservato) e il primo errore IN ORDINE DI
+    // RIGA e' selezionato dal collect sequenziale: stesso input, stesso
+    // errore, sempre. L'identita' dell'errore e' output.
+    let results: Vec<Result<Option<T>, PlenoraError>> = cell_values
         .into_par_iter()
         .map(|cell| match cell {
             None => Ok(None),
@@ -1210,7 +1217,8 @@ pub fn map_nullable<T: Send>(
                 f(payload)
             }
         })
-        .collect()
+        .collect();
+    results.into_iter().collect()
 }
 
 /// STIMA dei byte nativi delle geometrie decodificate di una colonna
@@ -1577,6 +1585,29 @@ mod tests {
             decode_geometry_cell(&oversized),
             Err(PlenoraError::Contract(_))
         ));
+    }
+
+    #[test]
+    fn map_nullable_reports_the_first_failing_row_deterministically() {
+        // ADR-0001: con piu' celle fallite, l'errore riportato DEVE essere
+        // quello della prima riga in ordine, a qualunque scheduling rayon
+        // (il collect parallelo diretto sceglierebbe il primo errore che
+        // acquisisce il mutex interno: non deterministico).
+        let cells: BinaryArray = (0_u8..64).map(|row| Some(vec![row])).collect();
+        for attempt in 0..50 {
+            let result = map_nullable(&cells, |payload| {
+                let row = payload[0];
+                if row == 3 || row == 7 || row == 41 {
+                    Err(PlenoraError::Contract(format!("fallimento riga {row}")))
+                } else {
+                    Ok(Some(()))
+                }
+            });
+            let Err(PlenoraError::Contract(message)) = &result else {
+                panic!("tentativo {attempt}: atteso errore, ottenuto {result:?}");
+            };
+            assert_eq!(message, "fallimento riga 3", "tentativo {attempt}");
+        }
     }
 
     #[test]

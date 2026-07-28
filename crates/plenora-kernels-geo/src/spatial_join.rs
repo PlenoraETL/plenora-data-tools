@@ -173,7 +173,10 @@ fn spatial_join_refs(
     let tree = RTree::bulk_load(right_envelopes?.into_iter().flatten().collect());
     let pair_count = AtomicU64::new(0);
 
-    let grouped: Result<Vec<Vec<JoinPair>>, SpatialJoinError> = left
+    // ADR-0001: come `map_nullable` — i `Result` per riga prima (ordine
+    // preservato), il primo errore IN ORDINE DI RIGA poi, dal collect
+    // sequenziale; mai la selezione non deterministica di rayon.
+    let groups: Vec<Result<Vec<JoinPair>, SpatialJoinError>> = left
         .par_iter()
         .enumerate()
         .map(|(left_index, left_geometry)| {
@@ -216,6 +219,7 @@ fn spatial_join_refs(
                 .collect()
         })
         .collect();
+    let grouped: Result<Vec<Vec<JoinPair>>, SpatialJoinError> = groups.into_iter().collect();
 
     Ok(grouped?.into_iter().flatten().collect())
 }
