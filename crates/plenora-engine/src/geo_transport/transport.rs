@@ -3500,6 +3500,10 @@ fn lineage_schema(nullable: bool, with_distance: bool) -> Schema {
     if with_distance {
         fields.push(Field::new(DISTANCE_COLUMN, DataType::Float64, false));
     }
+    // Dataset derivato (indici di coppia, valori da entrambe le sorgenti):
+    // per R2.4 NON si ereditano i metadati di schema degli input —
+    // descriverebbero il risultato con le proprieta' della sorgente
+    // (stessa classe di `reconcile` in plenora-kernels-table/analyze.rs).
     Schema::new(fields)
 }
 
@@ -3852,6 +3856,12 @@ pub fn pair_arrow(
                 .left_crs
                 .as_deref()
                 .ok_or(ArrowTransportError::Internal("left_crs validato assente"))?;
+            // Schema del dataset derivato (pezzi dell'overlay): per R2.4
+            // NON si ereditano i metadati di schema degli input (stessa
+            // classe di `reconcile`); la geometria prodotta e' un campo
+            // derivato e non eredita le chiavi canoniche dell'ingresso —
+            // l'emissione canonica resta nel percorso v4
+            // (`canonical_output_schema`).
             let out_schema = std::sync::Arc::new(Schema::new(vec![
                 geometry_output_field(geometry_column, output_crs)?,
                 Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),

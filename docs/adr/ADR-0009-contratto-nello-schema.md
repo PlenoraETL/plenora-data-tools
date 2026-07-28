@@ -162,11 +162,14 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
     entrano in `sorted_metadata` del fingerprint dei contratti per i
     piani i cui input li portano — cambio atteso, dichiarato qui e
     gia' coperto da test di regressione dedicati nei due file.
-  - **Resta fuori, follow-up esplicito**: solo il percorso legacy di
-    `geo_transport/transport.rs` (wrapper `geometry_output_field` :1693,
-    riscritture post-kernel e `Schema::new*` elencati in precedenza) —
-    le chiavi canoniche dell'input si perdono ancora li; il percorso
-    DAG v4 non passa da quel codice.
+  - **Percorso legacy `geo_transport/transport.rs` (analizzato
+    2026-07-28)**: i suoi output senza metadati di schema sono dataset
+    DERIVATI (indici di coppia, pezzi overlay, misure) — la classe R2.4
+    corretta e' "non si eredita" e i siti sono gia' conformi; le deroghe
+    sono ora documentate inline (`lineage_schema`, output overlay). Resta
+    una decisione di design, non un bug: se anche l'output legacy debba
+    emettere le chiavi canoniche (oggi solo GeoArrow) o restare
+    GeoArrow-only fino al ritiro del percorso.
 - **Follow-up dichiarati**: disposizione di retry R9.7 (sostituisce
   `retryable()`); rinomina delle categorie d'errore verso l'enumerazione
   canonica (tabella "Mappatura dai modelli attuali" §9); chiave
