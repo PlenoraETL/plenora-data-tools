@@ -3093,3 +3093,55 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
     assert_eq!(fused_batches, plain_batches, "output diverso dal non fuso");
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
 }
+
+/// Caso (g) dell'oracolo ADR-0012, nel crate perche' l'hook `PANIC_AT_NODES`
+/// e' privato: panic iniettato al nodo CENTRALE di un gruppo fuso di tre ->
+/// errore `Execution` attribuito a quel nodo, identico al percorso non fuso
+/// (`catch_unwind` sul gruppo con marker del kernel in corso, D12.6).
+/// Id di nodo dedicati: l'hook e' globale e i test girano in parallelo.
+#[test]
+fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "g_b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
+            {"id": "g_s", "op": "geo.simplify", "in": ["g_b"], "config": {"tolerance": 0.01}},
+            {"id": "g_c", "op": "geo.centroid", "in": ["g_s"], "config": {}},
+        ],
+        "output": "g_c",
+    });
+    let _guard = PanicHookGuard::set("g_s");
+    let run = |geo_fusion: bool| {
+        let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
+            .expect("validate");
+        let runtime = RuntimeContext {
+            geo_fusion,
+            ..RuntimeContext::default()
+        };
+        execute(&graph, single_input("main", fusion_fixture_batches()), runtime)
+            .expect("execute")
+            .collect_batches()
+            .expect_err("panic convertito in errore")
+    };
+    let fused_error = run(true);
+    let plain_error = run(false);
+    for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
+        match error {
+            PlenoraError::Execution {
+                node,
+                operation,
+                reason,
+                ..
+            } => {
+                assert_eq!(node, "g_s", "{label}: attribuzione al nodo in panic");
+                assert_eq!(operation, "geo.simplify", "{label}: operazione");
+                assert!(
+                    reason.contains("panic di test iniettato"),
+                    "{label}: il motivo riporta il messaggio del panic: {reason}"
+                );
+            }
+            other => panic!("{label}: atteso Execution, ottenuto {other}"),
+        }
+    }
+}

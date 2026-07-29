@@ -202,3 +202,12 @@ fondendo» e' una classe).
   errori (unary), A/B end-to-end e governor-oltre-soglia (executor —
   condizione DER-003 soddisfatta). Oracolo differenziale esteso: task
   separato, resta gate per nuovi op fondibili.
+- 2026-07-29: oracolo esteso completato
+  (`crates/plenora-engine/tests/geo_fusion_oracle.rs`): i casi (a)-(f)
+  piu' l'identita' contratto/schema on/off — doppia esecuzione con kill
+  switch e confronto di variante, nodo, categoria, fase, effetto e
+  disposizione retry; NESSUNA divergenza trovata (il caso -0.0/NaN di
+  D12.4 non si e' manifestato sulle fixture). Caso (g) in
+  `executor/tests.rs` (`g_fused_group_panic_is_attributed_to_the_panicking_kernel`,
+  nel crate perche' l'hook `PANIC_AT_NODES` e' privato): panic al nodo
+  centrale, stessa attribuzione nei due percorsi. 8+1 test, tutti verdi.
