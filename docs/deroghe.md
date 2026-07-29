@@ -10,6 +10,35 @@ contratti documentati restano registrate anche nell'ADR pertinente
 Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc8`
 (revisione `62b12e3496466d2c908dac3cc098640b99b52e21`).
 
+## DER-003 — `max_batch_bytes` sugli archi interni dei gruppi fusi (fusione geo)
+
+- **Regola derogata:** ADR-0006 / `check_edge_batch` (semantica limiti):
+  ogni batch su un arco interno e' soggetto al tetto byte
+  `max_batch_bytes`. Su un arco interno FUSO (ADR-0012, D12.8) il batch
+  non e' materializzato — la geometria vive in forma decodificata
+  transiente — e il check byte non e' applicabile.
+- **Ambito:** solo gli archi interni dei gruppi di fusione geo
+  (`TransformInPlace`, perimetro M1 di ADR-0012). Ingresso e uscita del
+  segmento restano soggetti a tutti i limiti, byte inclusi; righe e batch
+  per arco restano esatti (1:1) e i limiti corrispondenti si applicano.
+- **Motivo:** la fusione e' un'ottimizzazione fisica (−45% misurato sulla
+  catena di baseline); il batch intermedio non esiste in nessuna forma
+  serializzata, quindi un tetto sui suoi byte non ha oggetto.
+- **Impatto sugli hazard:** **su questo percorso H-03 e' coperto dal
+  governor (reservation esatta dei byte decodificati, ADR-0012 D12.7),
+  non da `max_batch_bytes`** — la protezione e' spostata, non rimossa
+  (condizione dell'owner, 2026-07-29). Hazard residuo: un batch
+  intermedio che avrebbe superato il tetto byte non e' piu' rifiutato in
+  quanto tale; la memoria reale resta sotto budget governor.
+- **Condizione di entrata in vigore (owner):** esiste un test che
+  dimostra che il governor scatta davvero su un batch oltre soglia.
+  **Finche' il test non e' in CI, la deroga NON e' in vigore** e la
+  fusione non puo' essere attivata in produzione.
+- **Owner:** maintainer di plenora-data-tools.
+- **Condizione di rientro:** nessuna — deroga permanente, dichiarata
+  tale (e' intrinseca alla rappresentazione transiente; il rientro
+  sarebbe la rinuncia alla fusione).
+
 ## DER-002 — Emissione delle chiavi canoniche §2 prima della ratifica
 
 - **Regola derogata:** §15.4 passo 1 (emendata 2.0-rc5) — prima della
