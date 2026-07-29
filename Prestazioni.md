@@ -165,6 +165,17 @@ Obiettivo:
 
 Il design dell'adapter Arrow deve permettere questa ottimizzazione fin dalla Fase 2, anche se l'implementazione completa viene introdotta progressivamente (Fase 2C).
 
+**Stato (2026-07-29, ADR-0012 M1):** attuata per catene di kernel unari
+`TransformInPlace` capability-gated (14 op), forma decodificata transiente
+sul batch, semantica errori invariata dimostrata dall'oracolo esteso
+(`tests/geo_fusion_oracle.rs`). Misura A/B engine-level
+(`examples/bench_geo_fusion.rs`, 200k righe miste, buffer→simplify→
+centroid, mediana di 5): **−14,6%** (0,611s → 0,522s, bande min/max non
+sovrapposte), output byte-identici, zero fallback governor. Il −45% del
+baseline kernel-level si riduce a livello engine per l'overhead fisso
+condiviso (framing RecordBatch, lease, metriche). Cantieri successivi:
+misure terminali (M2), reproject/make_valid ed estensioni (M3).
+
 ---
 
 ### V7 — Batch sizing controllato

@@ -211,3 +211,13 @@ fondendo» e' una classe).
   `executor/tests.rs` (`g_fused_group_panic_is_attributed_to_the_panicking_kernel`,
   nel crate perche' l'hook `PANIC_AT_NODES` e' privato): panic al nodo
   centrale, stessa attribuzione nei due percorsi. 8+1 test, tutti verdi.
+- 2026-07-29: M1 CHIUSO. Misura A/B engine-level
+  (`crates/plenora-engine/examples/bench_geo_fusion.rs`: catena
+  buffer→simplify→centroid, 200k righe miste poligoni/punti/null, 20
+  batch, mediana di 5 run alternate): fuso 0,522s vs non fuso 0,611s =
+  **−14,6%** (bande min/max non sovrapposte), output byte-identici,
+  `geo_fusion_fallbacks` 0. Il −45% kernel-level del baseline si conserva
+  parzialmente a livello engine (overhead fisso condiviso: framing
+  RecordBatch, lease governor, metriche per nodo, validazione al gate).
+  Prossimi cantieri: M2 misure terminali (TerminalMeasure), M3
+  reproject/make_valid ed estensioni controllate.
