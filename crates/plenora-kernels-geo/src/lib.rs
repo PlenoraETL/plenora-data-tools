@@ -49,12 +49,13 @@ pub mod predicates;
 pub mod proj_backend;
 pub mod spatial_join;
 pub mod topology;
+pub mod wkb_decoder;
 
 use geo::algorithm::validation::Validation;
 use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
-use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};
+use geozero::{CoordDimensions, ToWkb};
 use plenora_core::contract::GeometryDimensions;
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
@@ -82,10 +83,6 @@ impl Operation {
 
 /// Mappatura delle varianti `GeoEngineError` del sorgente su `PlenoraError`
 /// (messaggi invariati).
-fn invalid_wkb(error: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("WKB non valido: {error}"))
-}
-
 fn empty_geometry(operation: &'static str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!(
         "geometria vuota non supportata da {operation}"
@@ -115,7 +112,7 @@ fn non_finite_coordinate() -> PlenoraError {
     PlenoraError::InvalidPlan("WKB contiene coordinate NaN o infinite".to_owned())
 }
 
-fn invalid_wkb_structure(reason: &'static str) -> PlenoraError {
+pub(crate) fn invalid_wkb_structure(reason: &'static str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("struttura WKB non valida: {reason}"))
 }
 
@@ -143,9 +140,10 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
 /// Decodifica una geometria dal canone GeoArrow-WKB.
 ///
-/// Prima la validazione strutturale del contratto
-/// ([`validate_wkb_contract`]), poi il decode e la validazione OGC della
-/// geometria risultante.
+/// Una sola passata (ADR-0011): il decoder validante
+/// ([`wkb_decoder::decode_validated`]) esegue validazione strutturale e
+/// costruzione nella stessa camminata sui byte; poi la validazione OGC
+/// della geometria risultante.
 ///
 /// # Errors
 ///
@@ -154,17 +152,14 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 /// decode fallisce; `PlenoraError::Unsupported` se il payload porta
 /// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
-    validate_wkb_contract(payload)?;
-    let geometry = Wkb(payload)
-        .to_geo()
-        .map_err(|error| invalid_wkb(error.to_string()))?;
+    let geometry = wkb_decoder::decode_validated(payload)?;
     geometry
         .check_validation()
         .map_err(|error| invalid_geometry(error.to_string()))?;
     Ok(geometry)
 }
 
-struct WkbCursor<'a> {
+pub(crate) struct WkbCursor<'a> {
     payload: &'a [u8],
     offset: usize,
 }
@@ -244,7 +239,7 @@ impl<'a> WkbCursor<'a> {
     }
 }
 
-fn checked_count(
+pub(crate) fn checked_count(
     value: u32,
     remaining: usize,
     minimum_item_bytes: usize,
@@ -287,7 +282,7 @@ fn checked_count(
 ///   code stesso, geometria per geometria;
 /// - `Xyz`/`Xym`/`Xyzm`: la divergenza dal type code produce l'errore
 ///   dedicato [`wkb_dimension_mismatch`], mai un passthrough.
-fn parse_wkb_type_code(
+pub(crate) fn parse_wkb_type_code(
     raw_type: u32,
     expected: GeometryDimensions,
 ) -> Result<(u32, usize), PlenoraError> {
