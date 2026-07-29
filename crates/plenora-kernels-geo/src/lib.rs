@@ -18,6 +18,9 @@
 //! - [`memory_estimate`](crate::memory_estimate) per la STIMA dichiarata
 //!   della memoria nativa delle geometrie decodificate (ADR-0002, Fase
 //!   2B-M2b): mai un conteggio preciso.
+//! - [`geometry_contract`](crate::geometry_contract) per il contratto sulle
+//!   geometrie decodificate (ADR-0012): dimensione esatta del WKB ISO XY e
+//!   validazione strutturale su `Geometry`.
 //!
 //! Errori: il sorgente usava `GeoEngineError`; qui le stesse condizioni sono
 //! mappate su [`plenora_core::PlenoraError`] preservando i messaggi:
@@ -42,6 +45,7 @@ pub mod extensions2;
 pub mod extensions3;
 #[cfg(feature = "geos-backend")]
 pub mod geos_backend;
+pub mod geometry_contract;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
@@ -108,7 +112,7 @@ fn wkb_dimension_mismatch() -> PlenoraError {
     )
 }
 
-fn non_finite_coordinate() -> PlenoraError {
+pub(crate) fn non_finite_coordinate() -> PlenoraError {
     PlenoraError::InvalidPlan("WKB contiene coordinate NaN o infinite".to_owned())
 }
 
