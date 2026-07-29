@@ -146,9 +146,14 @@ fn decode_geometry(
                 if first != last {
                     return Err(invalid_wkb_structure("anello poligonale non chiuso"));
                 }
-                match exterior.take() {
-                    None => exterior = Some(LineString::from(ring)),
-                    Some(_) => interiors.push(LineString::from(ring)),
+                // Il primo anello e' l'esterno, i successivi gli interni.
+                // Mai `exterior.take()` nel discriminante: con un secondo
+                // anello scarterebbe il primo (bug trovato il 2026-07-29 —
+                // l'oracolo copriva solo poligoni a un anello).
+                if exterior.is_none() {
+                    exterior = Some(LineString::from(ring));
+                } else {
+                    interiors.push(LineString::from(ring));
                 }
             }
             // Zero anelli: poligono vuoto, accettato come dal percorso
@@ -284,6 +289,44 @@ mod tests {
         payload
     }
 
+    /// Poligono con anelli interni (la parita' multi-anello e' la classe del
+    /// bug 2026-07-29: l'esterno andava perso con un secondo anello).
+    fn polygon_with_interiors_wkb_le(exterior: &[(f64, f64)], interiors: &[&[(f64, f64)]]) -> Vec<u8> {
+        let mut payload = vec![1_u8];
+        payload.extend_from_slice(&3_u32.to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(1 + interiors.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
+        for ring in std::iter::once(exterior).chain(interiors.iter().copied()) {
+            payload.extend_from_slice(
+                &u32::try_from(ring.len())
+                    .expect("fixture entro u32")
+                    .to_le_bytes(),
+            );
+            for (x, y) in ring {
+                payload.extend_from_slice(&x.to_le_bytes());
+                payload.extend_from_slice(&y.to_le_bytes());
+            }
+        }
+        payload
+    }
+
+    fn multipolygon_wkb_le(polygons: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = vec![1_u8];
+        payload.extend_from_slice(&6_u32.to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(polygons.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
+        for polygon in polygons {
+            payload.extend_from_slice(polygon);
+        }
+        payload
+    }
+
     fn multipoint_wkb_le(points: &[(f64, f64)]) -> Vec<u8> {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&4_u32.to_le_bytes());
@@ -323,6 +366,30 @@ mod tests {
                 polygon_wkb_le(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)]),
             ]),
             "geometrycollection annidata",
+        );
+        // Poligoni multi-anello (classe del bug 2026-07-29: l'oracolo
+        // copriva solo poligoni a un anello e l'esterno andava perso).
+        let exterior = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)];
+        let hole_a = [(2.0, 2.0), (4.0, 2.0), (2.0, 4.0), (2.0, 2.0)];
+        let hole_b = [(6.0, 6.0), (8.0, 6.0), (6.0, 8.0), (6.0, 6.0)];
+        assert_parity(
+            &polygon_with_interiors_wkb_le(&exterior, &[&hole_a]),
+            "polygon con un anello interno",
+        );
+        assert_parity(
+            &polygon_with_interiors_wkb_le(&exterior, &[&hole_a, &hole_b]),
+            "polygon con due anelli interni",
+        );
+        assert_parity(
+            &multipolygon_wkb_le(&[
+                polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]),
+                polygon_with_interiors_wkb_le(&exterior, &[&hole_a]),
+            ]),
+            "multipolygon con figlio con anello interno",
+        );
+        assert_parity(
+            &collection_wkb_le(&[polygon_with_interiors_wkb_le(&exterior, &[&hole_a])]),
+            "collection con polygon con anello interno",
         );
         // Big-endian.
         let mut big = vec![0_u8];
