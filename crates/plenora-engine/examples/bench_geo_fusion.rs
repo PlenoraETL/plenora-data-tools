@@ -7,7 +7,10 @@
 //! `chain_fused` in `benchmarks/baseline/baseline.json`). A livello engine il
 //! percorso include il framing dei `RecordBatch` tra un nodo e l'altro,
 //! quindi il delta atteso e' minore del kernel-level ma deve restare
-//! significativo.
+//! significativo. Con la feature `proj-backend` e' attivo anche lo scenario
+//! `chain_reproject` (M3): `geo.reproject` (EPSG:32632 -> EPSG:3857) ->
+//! `geo.translate` -> `geo.rotate` — la riproiezione domina il costo del
+//! gruppo, quindi il delta atteso e' minore che negli altri scenari.
 //!
 //! Uso: `bench_geo_fusion` — una riga JSON per scenario+modalita' su stdout,
 //! piu' una riga di sintesi con il delta percentuale. Fallisce (exit != 0)
@@ -73,6 +76,27 @@ fn chain_plan_with_area() -> serde_json::Value {
             {"id": "a", "op": "geo.area", "in": ["c"], "config": {}},
         ],
         "output": "a",
+    })
+}
+
+/// Piano v4 (M3, richiede `proj-backend`): reproject EPSG:32632 ->
+/// EPSG:3857, poi translate e rotate in metri — tre kernel fondibili
+/// consecutivi, il primo backend-gated e `NonInterruptible`. (Il target
+/// dev'essere proiettato: i transform a valle richiedono
+/// `CrsRequirement::Projected`.)
+#[cfg(feature = "proj-backend")]
+fn chain_plan_reproject() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "p", "op": "geo.reproject", "in": ["main"],
+             "config": {"target_crs": "EPSG:3857"}},
+            {"id": "t", "op": "geo.translate", "in": ["p"],
+             "config": {"x_offset": 100.0, "y_offset": -200.0}},
+            {"id": "r", "op": "geo.rotate", "in": ["t"], "config": {"degrees": 1.0}},
+        ],
+        "output": "r",
     })
 }
 
@@ -209,9 +233,24 @@ fn report(mode: &str, durations: &mut [f64]) -> f64 {
 /// (nessun fallback, output identici), una riga JSON per modalita' e la
 /// sintesi col delta.
 fn run_scenario(label: &str, plan: &serde_json::Value) {
+    run_scenario_with_warmup(label, plan, false);
+}
+
+/// Come [`run_scenario`], con un warmup opzionale (una run per modalita',
+/// non misurata): serve agli scenari con backend che pagano un'init per
+/// thread al primo uso (la pipeline PROJ thread-local di `reproject`,
+/// condivisa tra le modalita' perche' il pool rayon e' lo stesso del
+/// processo) — senza warmup la prima run misurata includerebbe l'init e
+/// sbilancerebbe la mediana della modalita' eseguita per prima.
+fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool) {
     let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
         .expect("validate");
     let fixture = fixture_batches();
+
+    if warmup {
+        let _ = run_once(&graph, &fixture, true);
+        let _ = run_once(&graph, &fixture, false);
+    }
 
     // Run alternate A,B,A,B...: la mediana di 5 per modalita' non dipende
     // dall'ordine e un eventuale drift termico/di cache pesa su entrambe.
@@ -252,4 +291,6 @@ fn run_scenario(label: &str, plan: &serde_json::Value) {
 fn main() {
     run_scenario("chain_transforms", &chain_plan());
     run_scenario("chain_terminal_measure", &chain_plan_with_area());
+    #[cfg(feature = "proj-backend")]
+    run_scenario_with_warmup("chain_reproject", &chain_plan_reproject(), true);
 }

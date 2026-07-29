@@ -1,4 +1,4 @@
-//! GEOS-backed operations for cases where pure GeoRust must not approximate
+//! GEOS-backed operations for cases where pure `GeoRust` must not approximate
 //! established topology semantics.
 
 use geo::{Area, CoordsIter, Geometry, LineString, Polygon};
@@ -52,14 +52,26 @@ pub enum GeosBackendError {
     CoverageMismatch { area: f64 },
 }
 
+// Passato per valore per contratto di `map_err` (usato come fn-pointer sui
+// `Result` di GEOS): la conversione in stringa non richiede il consumo, ma il
+// puntatore a funzione si.
+#[allow(clippy::needless_pass_by_value)]
 fn geos_error(error: geos::Error) -> GeosBackendError {
     GeosBackendError::Geos(error.to_string())
 }
 
-/// Repairs a structurally valid 2D WKB geometry. Unlike the normal decoder,
-/// the input is allowed to be OGC-invalid because that is precisely what this
-/// operation repairs. Dimensions, non-finite coordinates and malformed WKB
-/// remain rejected before entering GEOS.
+/// Repairs a structurally valid 2D WKB geometry.
+///
+/// Unlike the normal decoder, the input is allowed to be OGC-invalid because
+/// that is precisely what this operation repairs. Dimensions, non-finite
+/// coordinates and malformed WKB remain rejected before entering GEOS.
+///
+/// # Errors
+///
+/// Restituisce `GeosBackendError` se il payload viola il contratto
+/// strutturale WKB, se GEOS fallisce la lettura o la riparazione, se
+/// l'output riparato e' ancora non valido o se la rivalidazione
+/// dell'output fallisce.
 pub fn make_valid_wkb(
     payload: &[u8],
     method: RepairMethod,
@@ -93,7 +105,32 @@ pub fn make_valid_wkb(
     Ok(output)
 }
 
-fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
+/// Variante di [`make_valid_wkb`] su geometria gia' decodificata.
+///
+/// Fusione dei segmenti geo (ADR-0012 M3): l'input resta ammesso OGC-invalido
+/// — e' esattamente cio' che l'operazione ripara. Il WKB intermedio e' la
+/// stessa forma canonica XY che il percorso non fuso consegnerebbe al nodo,
+/// quindi gate strutturale, riparazione GEOS e rivalidazione dell'output
+/// sono letteralmente quelli di [`make_valid_wkb`]: stesso risultato e
+/// stessi errori nei due percorsi.
+///
+/// # Errors
+///
+/// Come [`make_valid_wkb`]; in piu' `GeosBackendError::Geos` se la
+/// codifica WKB intermedia fallisce.
+pub fn make_valid_geometry(
+    geometry: &Geometry<f64>,
+    method: RepairMethod,
+    keep_collapsed: bool,
+) -> Result<Geometry<f64>, GeosBackendError> {
+    let payload = geometry
+        .to_wkb(CoordDimensions::xy())
+        .map_err(|error| GeosBackendError::Geos(error.to_string()))?;
+    let repaired = make_valid_wkb(&payload, method, keep_collapsed)?;
+    geometry_from_wkb(&repaired).map_err(GeosBackendError::from)
+}
+
+const fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
         Geometry::Line(_) => "Line",
@@ -293,7 +330,8 @@ pub struct PolygonizeResult {
 }
 
 impl PolygonizeResult {
-    pub fn residual_count(&self) -> usize {
+    #[must_use]
+    pub const fn residual_count(&self) -> usize {
         self.cut_edges.len() + self.dangles.len() + self.invalid_ring_lines.len()
     }
 }
@@ -324,6 +362,12 @@ fn checked_output_coordinates<'a>(
 
 /// Polygonizes valid 2D linework and preserves every residual category.
 /// `node_input` explicitly inserts crossing nodes before polygonization.
+///
+/// # Errors
+///
+/// Restituisce `GeosBackendError` se l'input non e' linework o supera i
+/// limiti di coordinate/noding, se GEOS fallisce, se l'output supera i
+/// limiti dichiarati o se `require_complete` e' attivo e restano residui.
 pub fn polygonize_linework(
     linework: &Geometry<f64>,
     node_input: bool,
@@ -397,10 +441,18 @@ pub fn polygonize_linework(
     Ok(result)
 }
 
-/// Splits a Polygon/MultiPolygon with linear geometry. Candidate faces are
-/// polygonized from fully noded boundary + splitter linework, filtered using
-/// an interior point, then checked for exact area conservation within a tight
-/// floating tolerance.
+/// Splits a Polygon/MultiPolygon with linear geometry.
+///
+/// Candidate faces are polygonized from fully noded boundary + splitter
+/// linework, filtered using an interior point, then checked for exact area
+/// conservation within a tight floating tolerance.
+///
+/// # Errors
+///
+/// Restituisce `GeosBackendError` se gli input non sono dei tipi attesi o
+/// superano i limiti di coordinate/noding, se GEOS fallisce, se l'output
+/// supera i limiti dichiarati o se la conservazione di area/copertura non
+/// e' verificata.
 pub fn split_polygon_by_linework(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
@@ -708,6 +760,33 @@ mod tests {
             split_polygon_by_linework(&source, &square_lines, 1, 1_000, 10, 100),
             Err(GeosBackendError::CoordinateLimit { .. })
         ));
+    }
+
+    #[test]
+    fn make_valid_geometry_matches_the_wkb_path() {
+        // ADR-0012 M3: la variante su forma decodificata deve produrre la
+        // STESSA geometria del percorso WKB (che la fusione sostituisce),
+        // sull'input OGC-invalido che l'operazione esiste per riparare.
+        let input = bow_tie_wkb();
+        let decoded = crate::wkb_decoder::decode_validated(&input).expect("gate solo strutturale");
+        let via_geometry = make_valid_geometry(&decoded, RepairMethod::Linework, true)
+            .expect("riparazione su forma decodificata");
+        let via_wkb = make_valid_wkb(&input, RepairMethod::Linework, true).expect("wkb");
+        assert_eq!(
+            via_geometry,
+            geometry_from_wkb(&via_wkb).expect("output wkb valido"),
+            "risultato diverso tra forma decodificata e WKB"
+        );
+        // Input gia' valido: passthrough (stessa geometria in uscita).
+        let valid = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
+            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        assert_eq!(
+            make_valid_geometry(&valid, RepairMethod::Linework, true).expect("passthrough"),
+            valid
+        );
     }
 
     #[test]

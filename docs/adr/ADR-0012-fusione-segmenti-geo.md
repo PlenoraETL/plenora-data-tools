@@ -1,7 +1,7 @@
 # ADR 12 — Fusione dei segmenti geo: forma decodificata transiente, semantica errori invariata
 
 - **Stato**: accettato (design ratificato dall'owner 2026-07-29; attuazione
-  M1 in corso)
+  M1, M2 e M3 completate)
 - **Decisioni collegate**: ADR 1 (determinismo), ADR 2 (resource
   accounting), ADR 3 (failure/cancellazione), ADR 5 (ValidatedGraph vs
   ExecutionPlan — la fusione e' decisione fisica), ADR 6 (semantica
@@ -52,7 +52,10 @@ Nuovo campo `geo_fusion` su `OperationDescriptor`
 dichiarativo di `cancellation_behavior` e di §10; esposto in
 `capabilities.rs` dalla stessa fonte. Il planner fonde solo run massimali
 di nodi consecutivi in cui *entrambi* i nodi lo permettono, a parita' di
-colonna geometria e ruolo (`TransformInPlace`).
+colonna geometria e ruolo (`TransformInPlace`). Con M3 il run ammette anche
+`reproject` e `make_valid`; a feature spenta i piani che li contengono sono
+rifiutati in validazione (capability `proj`/`geos` fail-closed), quindi la
+formazione di gruppi con questi op esiste solo a backend compilato.
 
 **Decisione deliberata: `geo_fusion` NON entra in
 `descriptor_canonical`** e quindi non cambia `catalog_fingerprint`. Il
@@ -152,8 +155,8 @@ rotate, concave_hull, densify, snap_to_grid — 14 op 1:1 pure Rust,
 revistati uno per uno con l'owner (criterio: infallibile, o fallisce
 esattamente sulle stesse righe nei due percorsi; mai se cambia il numero
 di righe). Esclusi: `reproject`/`make_valid` (backend feature-gated,
-`NonInterruptible` — cantiere M3), `line_substring`/
-`line_interpolate_point` (check di tipo per-riga — candidati M3), misure
+`NonInterruptible` — attuati in M3, vedi sotto), `line_substring`/
+`line_interpolate_point` (check di tipo per-riga — candidati futuri), misure
 terminali (M2, attuato — vedi sotto), join/binari, 1:N, blocking,
 collettive, fusione cross-segmento e table↔geo.
 
@@ -201,6 +204,102 @@ misura — ogni kernel fondibile valida il proprio output. La validazione
 pre-misura e' difesa in profondita', verificata a livello runner; i casi
 errore raggiungibili con misura in coda (limiti di cella, input invalido)
 sono nell'oracolo e mantengono l'attribuzione ai nodi trasformazione.
+
+## Perimetro (M3) — reproject e make_valid
+
+I due op rinviati in M1 (backend feature-gated, `NonInterruptible`)
+entrano nel perimetro come `TransformInPlace`: le liste chiuse diventano
+16 trasformazioni + 5 misure. Decisioni specifiche:
+
+1. **Nessuna variante di capability nuova.** La relazione di
+   raggruppamento e' identica per entrambi (1:1 in place sulla stessa
+   colonna, ruolo `TransformInPlace`): la differenza semantica di
+   `make_valid` (input OGC-invalido ammesso) e' una proprieta' del suo
+   gate di decode, non della fondibilita', e il runner gia' distingue i
+   profili per operazione. Una variante dedicata avrebbe cambiato la
+   regola di adiacenza di `annotate_fusion_groups`, il test del perimetro
+   e i nomi del JSON capability senza alterare nessuna decisione presa
+   dal catalogo. `prepare` e' INVARIATO: la capability decide; a feature
+   spenta la validazione fail-closed (capability `geos`/`proj` mancante)
+   rifiuta il piano prima di `prepare`, quindi i gruppi con questi op si
+   formano solo a backend compilato — nessun gate `cfg` necessario in
+   `prepare` (sarebbe codice irraggiungibile).
+
+2. **D12.4-M3 — eccezione OGC per make_valid (trappola 1).** Nel percorso
+   non fuso il "decode" di `make_valid` e' il SOLO gate strutturale di
+   `make_valid_wkb` (`validate_wkb_contract`, nessun check OGC: l'input
+   invalido e' esattamente cio' che l'operazione ripara). Il runner fuso
+   riproduce la stessa semantica in due punti:
+   - **decode iniziale del gruppo**: se il primo kernel e' `make_valid`,
+     decode SOLO strutturale (`wkb_decoder::decode_validated`, la stessa
+     camminata validante senza il check OGC) invece di
+     `geometry_from_wkb`;
+   - **validazione inter-passo**: davanti a un nodo `make_valid` il
+     profilo B e' SOLO strutturale (il check OGC e' omesso; restano
+     finitezza/anelli/conteggi e il check `MAX_CELL_BYTES` del
+     produttore).
+   L'eccezione e' speculare a quella di `geometry_diagnostics` (che
+   valuta la validita' come dato). Dopo `make_valid` la validazione
+   inter-passo standard (strutturale + OGC) resta in vigore: l'output
+   riparato e' valido per contratto del kernel (`InvalidRepair`
+   altrimenti, errore del kernel al nodo make_valid). Il kernel su forma
+   decodificata e' `make_valid_geometry` (plenora-kernels-geo): ri-encoda
+   la forma canonica XY e riusa LETTERALMENTE `make_valid_wkb` — stesso
+   gate, stessa riparazione GEOS, stessa rivalidazione dell'output,
+   stessi errori.
+   Nota di raggiungibilita' (come (d2)/(e)): nessun op del perimetro
+   produce output OGC-invalido, quindi la meta' inter-passo
+   dell'eccezione e' difesa in profondita'; la meta' raggiungibile
+   (make_valid in testa, input OGC-invalido dall'arco) e' il caso (m3-a)
+   dell'oracolo.
+   Divergenza registrata, irraggiungibile dai piani: su input
+   STRUTTURALMENTE invalido in testa a un gruppo che apre con
+   `make_valid`, il messaggio del runner fuso (`geometria non valida: …`
+   da `decode_validated`) differisce nel prefisso da quello non fuso
+   (`make_valid GEOS fallito: …` da `make_valid_wkb`) — stessa variante
+   `InvalidPlan`, stesso nodo, stessa riga. Il caso non puo' verificarsi
+   nel motore: l'arco di input e ogni nodo a monte rifiutano il WKB
+   strutturalmente invalido prima del gruppo (fail-closed, caso (c)
+   dell'oracolo).
+
+3. **reproject: guardie interne invariate (trappola 2).** Il kernel
+   riceve la geometria decodificata e le sue guardie (input finito,
+   `check_validation`, dominio CRS, limite coordinate, output finito,
+   output valido) si applicano identiche: errori del kernel attribuiti al
+   nodo reproject (come oggi), output al successore col profilo B
+   standard. La pipeline PROJ resta thread-local (`REPROJECTOR`), riusata
+   per kernel nel loop rayon — stesso pattern del braccio non fuso.
+
+4. **Schema di output del gruppo = schema dell'ULTIMA trasformazione.**
+   `reproject` cambia il CRS del campo geometria a meta' catena: il batch
+   di confine e' costruito sull'handle prepared dell'ultima
+   trasformazione, non del primo kernel. La ricostruzione canonica del
+   campo dipende solo da (nome colonna, CRS di output) e gli altri campi
+   passano invariati, quindi per gli op M1/M2 (CRS invariato) lo schema
+   coincide con quello del primo kernel — comportamento precedente
+   invariato — e l'handle risolto sullo schema del batch e' identico a
+   quello che il percorso non fuso risolverebbe sullo schema intermedio.
+
+5. **Attribuzione (tabella).** Per `make_valid`: errori del kernel GEOS
+   (riparazione fallita, output ancora invalido, limiti) -> nodo
+   make_valid; input strutturalmente invalido -> primo kernel se in testa
+   (come il gate di `make_valid_wkb`), altrimenti irraggiungibile; output
+   al successore: profilo B standard. Per `reproject`: errori di
+   risoluzione parametri/CRS -> nodo reproject (estrazione una tantum,
+   stessa posizione del braccio non fuso); errori del kernel PROJ -> nodo
+   reproject; output al successore: profilo B standard.
+   `BackendUnavailable` a feature spenta: stessa variante e stesso nodo
+   nei due percorsi (difesa in profondita' a livello runner — i piani
+   sono rifiutati prima, in validazione).
+
+6. **NonInterruptible compatibile per costruzione.** La cancellazione
+   della fusione e' controllata TRA i kernel (callback `control`, stessa
+   granularita' del loop non fuso), mai dentro un kernel: il callback
+   invoca `check_cancellation` del nodo, che onora il
+   `CancellationBehavior` di catalogo — davanti a `make_valid`/
+   `reproject` il check e' saltato in entrambi i percorsi e il
+   `Cancelled` e' osservato al primo nodo cooperativo successivo, con la
+   stessa attribuzione (caso m3-d dell'oracolo).
 
 ## Oracolo (gate di M1)
 
@@ -298,3 +397,33 @@ fondendo» e' una classe).
   sovrapposte; −14,6% gia' misurato per M1 in condizioni quiete. La
   direzione e' coerente in ogni condizione; i numeri canonici sono quelli
   a bande non sovrapposte. Output byte-identici, zero fallback.
+- 2026-07-29: M3 attuato. `geo.reproject` e `geo.make_valid` entrano nel
+  perimetro come `TransformInPlace` (16+5; test del perimetro e snapshot
+  di catalogo aggiornati, `catalog_fingerprint` invariato per D12.2).
+  Catalogo: nessuna variante nuova (decisione 1 del perimetro M3).
+  Runner: bracci `MakeValid`/`Reproject` in `resolve_transform`/
+  `apply_transform_cell` (con i bracci `BackendUnavailable` a feature
+  spenta, stessa variante del non fuso); kernel `make_valid` su forma
+  decodificata via `make_valid_geometry` (nuovo, riusa `make_valid_wkb`
+  letteralmente); `reproject` col thread-local `REPROJECTOR` per kernel.
+  Eccezione D12.4-M3 attuata nei due punti (decode iniziale del gruppo e
+  validazione inter-passo davanti a make_valid, entrambe SOLO
+  strutturali). Batch di confine sullo schema dell'ULTIMA trasformazione
+  (cambio CRS di reproject a meta' gruppo; identico al precedente per
+  CRS invariato). `prepare` invariato (validazione fail-closed a feature
+  spente). Test: formazione gruppi M3 (prepare, feature-gated); parita'
+  byte-per-byte, trappola 1 e `BackendUnavailable` (unary, entrambe le
+  configurazioni); oracolo esteso (m3-a riparazione di input
+  OGC-invalido senza errori, m3-b catena con reproject e schema al CRS
+  target, m3-c make_valid a meta' catena, m3-d cancellazione con
+  `NonInterruptible`, piu' il caso senza gate a feature spente).
+  Benchmark (`bench_geo_fusion`, scenario `chain_reproject` = reproject
+  EPSG:32632 -> EPSG:3857 -> translate -> rotate, con warmup delle
+  pipeline PROJ thread-local): delta fuso/non fuso favorevole ma piccolo
+  (−3% / −12% a seconda delle condizioni dell'host, con la mitigazione
+  allocatore documentata; la riproiezione domina il costo del gruppo ed
+  e' identica nei due percorsi), output byte-identici, zero fallback.
+  NOTA di ambiente: il build bundled di PROJ nel container `rust:1.92`
+  richiede `cmake`, `sqlite3` e `libsqlite3-dev` (assenti
+  dall'immagine): installati nel container effimero per la verifica
+  full-backends.

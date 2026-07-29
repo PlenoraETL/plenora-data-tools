@@ -247,7 +247,7 @@ mod tests {
                 descriptor.id
             );
         }
-        // Spot-check delle tre classi sul perimetro M1.
+        // Spot-check delle tre classi sul perimetro (M1+M3 incluso).
         let by_id = |id: &str| {
             capabilities
                 .operations
@@ -259,6 +259,7 @@ mod tests {
         assert_eq!(by_id("geo.buffer"), "transform_in_place");
         assert_eq!(by_id("geo.area"), "terminal_measure");
         assert_eq!(by_id("table.filter"), "not_fusible");
-        assert_eq!(by_id("geo.reproject"), "not_fusible");
+        assert_eq!(by_id("geo.reproject"), "transform_in_place");
+        assert_eq!(by_id("geo.make_valid"), "transform_in_place");
     }
 }

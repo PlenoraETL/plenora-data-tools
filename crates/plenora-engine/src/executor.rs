@@ -2227,11 +2227,20 @@ fn try_run_fused_group(
         }
     }
     // Handle prepared del PRIMO kernel del gruppo: valida la colonna di
-    // input attribuendo l'errore al primo nodo (come il percorso non fuso)
-    // e fornisce lo schema di output — identico a quello dell'ultimo nodo
-    // (tutte le op del gruppo sono 1:1 in place sulla stessa colonna).
+    // input attribuendo l'errore al primo nodo (come il percorso non fuso).
     let prepared = state
         .one_to_one_prepared(&kernels[0], &batch.schema(), params[0])
+        .map_err(|error| state.with_diagnostics(error, batch_detail))?;
+    // ADR-0012 M3: lo schema di output del gruppo e' quello dell'ULTIMA
+    // trasformazione — con `reproject` nel gruppo il CRS del campo geometria
+    // cambia a meta' catena. La ricostruzione canonica del campo dipende
+    // solo da (nome, CRS di output) e gli altri campi passano invariati,
+    // quindi l'handle risolto sullo schema del batch e' IDENTICO a quello
+    // che il percorso non fuso risolverebbe sullo schema intermedio; per le
+    // op M1/M2 (CRS invariato) coincide con l'handle del primo kernel.
+    let last_transform = transforms.len() - 1;
+    let output_prepared = state
+        .one_to_one_prepared(&kernels[last_transform], &batch.schema(), params[last_transform])
         .map_err(|error| state.with_diagnostics(error, batch_detail))?;
     // Marker del kernel in corso (attribuzione dei panic, D12.6).
     let current = Cell::new(0_usize);
@@ -2249,7 +2258,7 @@ fn try_run_fused_group(
     // seriale, batch e config proprieta' esclusiva della chiamata, l'errore
     // ferma lo stream e nessuno stato del kernel e' riusato dopo un panic.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        one_to_one_batch_fused(batch, &params, terminal, &prepared, &mut |index| {
+        one_to_one_batch_fused(batch, &params, terminal, &prepared, &output_prepared, &mut |index| {
             current.set(index);
             if index > 0 {
                 attempt.edges.borrow_mut().push(Instant::now());

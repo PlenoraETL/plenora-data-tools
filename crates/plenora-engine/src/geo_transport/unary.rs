@@ -27,7 +27,9 @@ use plenora_kernels_geo::extended_algorithms::{
     line_substring, snap_to_grid,
 };
 #[cfg(feature = "geos-backend")]
-use plenora_kernels_geo::geos_backend::{make_valid_wkb, polygonize_linework, RepairMethod};
+use plenora_kernels_geo::geos_backend::{
+    make_valid_geometry, make_valid_wkb, polygonize_linework, RepairMethod,
+};
 use plenora_kernels_geo::geometry_contract::{validate_geometry_structural, wkb_size_xy};
 use plenora_kernels_geo::operations::{
     area, boundary, bounds, buffer_with_cap, explode, length, perimeter, point_on_surface,
@@ -145,11 +147,11 @@ pub(in crate::geo_transport) fn encode_geometry(geometry: &Geometry<f64>) -> Res
     Ok(payload)
 }
 
-/// Parametri risolti di una trasformazione 1:1 fondibile (ADR-0012, perimetro
-/// M1): l'estrazione/validazione dei parametri avviene UNA volta per kernel
-/// ([`resolve_transform`]), prima di toccare le celle — stessa posizione e
-/// stessi errori del braccio corrispondente di `transform_cells`, anche a
-/// batch vuoto.
+/// Parametri risolti di una trasformazione 1:1 fondibile (ADR-0012,
+/// perimetro M1+M3): l'estrazione/validazione dei parametri avviene UNA
+/// volta per kernel ([`resolve_transform`]), prima di toccare le celle —
+/// stessa posizione e stessi errori del braccio corrispondente di
+/// `transform_cells`, anche a batch vuoto.
 enum ResolvedTransform {
     /// Profilo A (D12.4): `centroid`/`convex_hull`/`envelope` — pipeline
     /// canonica di `transform_wkb` su geometria decodificata (kernel + OGC
@@ -192,6 +194,31 @@ enum ResolvedTransform {
     SnapToGrid {
         grid_size: f64,
     },
+    /// `make_valid` (ADR-0012 M3): ammette input OGC-invalido — e' cio' che
+    /// ripara; la validazione che lo precede e' SOLO strutturale (trappola
+    /// 1, vedi [`accepts_ogc_invalid_input`]).
+    #[cfg(feature = "geos-backend")]
+    MakeValid,
+    /// `reproject` (ADR-0012 M3): la coppia CRS e' risolta una volta per
+    /// kernel, come l'estrazione in testa al braccio di `transform_cells`;
+    /// la pipeline PROJ resta thread-local nel passo per-cella.
+    #[cfg(feature = "proj-backend")]
+    Reproject {
+        source: String,
+        target: String,
+    },
+}
+
+/// L'operazione ammette input OGC-invalido in ingresso? Solo `make_valid`
+/// (ADR-0012 M3, trappola 1): nel percorso non fuso il suo "decode" e' il
+/// SOLO gate strutturale di `make_valid_wkb` (`validate_wkb_contract`,
+/// nessun check OGC — l'input invalido e' esattamente cio' che l'operazione
+/// ripara). Il runner fuso riproduce la stessa semantica: decode iniziale
+/// del gruppo (se `make_valid` lo apre) e validazione inter-passo davanti a
+/// un nodo `make_valid` sono SOLO strutturali, mai OGC. Eccezione speculare
+/// a `geometry_diagnostics` (che valuta la validita' come dato).
+const fn accepts_ogc_invalid_input(params: &TransformArrowSchema) -> bool {
+    matches!(params.operation, ArrowOperation::MakeValid)
 }
 
 /// Risolve i parametri di un'operazione fondibile: stesse estrazioni (e
@@ -202,8 +229,9 @@ enum ResolvedTransform {
 /// Come il braccio corrispondente di `transform_cells` per la parte
 /// parametri; `ArrowTransportError::Internal` per operazioni fuori dal
 /// perimetro fondibile (mai raggiungibile: i gruppi sono annotati da
-/// `prepare` solo sulle 14 op di M1 — difesa in profondita', non un caso
-/// d'uso).
+/// `prepare` solo sulle op del perimetro ADR-0012 — difesa in profondita',
+/// non un caso d'uso). A feature spenta `make_valid`/`reproject` danno
+/// `BackendUnavailable` esattamente come i bracci non fusi (M3).
 fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform, ArrowTransportError> {
     match params.operation {
         ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope => {
@@ -268,8 +296,32 @@ fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform,
         ArrowOperation::SnapToGrid => Ok(ResolvedTransform::SnapToGrid {
             grid_size: params.required_f64("grid_size", params.grid_size)?,
         }),
+        #[cfg(feature = "geos-backend")]
+        ArrowOperation::MakeValid => Ok(ResolvedTransform::MakeValid),
+        // A feature spenta: stesso esito del braccio non fuso
+        // (`BackendUnavailable`, senza toccare i parametri — stesso ordine).
+        #[cfg(not(feature = "geos-backend"))]
+        ArrowOperation::MakeValid => Err(ArrowTransportError::BackendUnavailable {
+            operation: params.operation.name(),
+            feature: "geos-backend",
+        }),
+        #[cfg(feature = "proj-backend")]
+        ArrowOperation::Reproject => {
+            let source = params
+                .crs
+                .as_deref()
+                .ok_or(ArrowTransportError::CrsRequired)?
+                .to_owned();
+            let target = params.required_target_crs()?.to_owned();
+            Ok(ResolvedTransform::Reproject { source, target })
+        }
+        #[cfg(not(feature = "proj-backend"))]
+        ArrowOperation::Reproject => Err(ArrowTransportError::BackendUnavailable {
+            operation: params.operation.name(),
+            feature: "proj-backend",
+        }),
         _ => Err(ArrowTransportError::Internal(
-            "operazione fuori dal perimetro fondibile (ADR-0012 M1)",
+            "operazione fuori dal perimetro fondibile (ADR-0012)",
         )),
     }
 }
@@ -334,6 +386,44 @@ fn apply_transform_cell(
         )?)),
         ResolvedTransform::SnapToGrid { grid_size } => {
             Ok(Some(snap_to_grid(geometry, *grid_size)?))
+        }
+        #[cfg(feature = "geos-backend")]
+        ResolvedTransform::MakeValid => {
+            // Come il braccio non fuso (`make_valid_wkb` sul payload):
+            // l'input puo' essere OGC-invalido — nessun check OGC qui; la
+            // riparazione e la rivalidazione dell'output sono dentro
+            // `make_valid_geometry`, che riusa `make_valid_wkb` sulla
+            // stessa forma canonica XY.
+            Ok(Some(make_valid_geometry(
+                geometry,
+                RepairMethod::Linework,
+                true,
+            )?))
+        }
+        #[cfg(feature = "proj-backend")]
+        ResolvedTransform::Reproject { source, target } => {
+            // Una pipeline PROJ per thread (PROJ non e' Sync), riusata su
+            // tutte le celle del kernel e ricreata solo se cambia coppia —
+            // stesso pattern thread-local del braccio non fuso; le guardie
+            // del kernel (input finito/valido, dominio CRS, limiti, output
+            // finito/valido) si applicano identiche sulla forma decodificata.
+            REPROJECTOR.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                let stale = slot
+                    .as_ref()
+                    .is_none_or(|(s, t, _)| s != source || t != target);
+                if stale {
+                    *slot = Some((
+                        source.clone(),
+                        target.clone(),
+                        Reprojector::new(source, target, MAX_CELL_COORDINATES)?,
+                    ));
+                }
+                let (_, _, reprojector) = slot
+                    .as_ref()
+                    .ok_or(ArrowTransportError::Internal("pipeline appena creata assente"))?;
+                Ok(Some(reprojector.reproject(geometry)?))
+            })
         }
     }
 }
@@ -899,7 +989,11 @@ struct FusedCells {
 ///   `transform_wkb`) -> kernel i;
 /// - profilo B con un kernel i+1 nel gruppo: `validate_geometry_structural`
 ///   poi `check_geometry_valid` (il fallimento del decode del nodo
-///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1;
+///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1.
+///   ECCEZIONE M3 (trappola 1): se il kernel i+1 e' `make_valid` il check
+///   OGC e' OMESSO — nel percorso non fuso quel nodo legge l'input col solo
+///   gate strutturale di `make_valid_wkb` (l'OGC-invalido e' cio' che
+///   ripara); la validazione strutturale resta;
 /// - profilo B sull'ULTIMO kernel SENZA misura terminale: NESSUNA
 ///   validazione extra — nel percorso non fuso l'output esce dopo
 ///   `encode_geometry` senza altra validazione e decodera' chi consuma;
@@ -910,13 +1004,20 @@ struct FusedCells {
 ///
 /// Il decode iniziale (con il check `MAX_CELL_BYTES` sull'input, pattern di
 /// `map_nullable`) e' attribuito al primo kernel del gruppo, l'encode finale
-/// all'ultimo — come nel percorso non fuso.
+/// all'ultimo — come nel percorso non fuso. ECCEZIONE M3 (trappola 1): se il
+/// PRIMO kernel e' `make_valid` il decode iniziale e' SOLO strutturale
+/// (`wkb_decoder::decode_validated`, la stessa camminata validante senza il
+/// check OGC) — nel percorso non fuso quel nodo non chiama affatto
+/// `geometry_from_wkb` sull'input.
 ///
 /// `control` e' invocato con l'indice del kernel PRIMA di ogni passo — la
 /// misura terminale inclusa, con indice `group.len()` (il nodo misura e'
 /// l'ultimo membro del gruppo): e' il punto di cancellazione cooperativa
 /// dell'executor (errore `Control`) e il suo marker del kernel in corso per
-/// l'attribuzione dei panic.
+/// l'attribuzione dei panic. La cancellazione resta TRA i kernel, mai dentro
+/// — compatibile per costruzione col `NonInterruptible` di
+/// `make_valid`/`reproject` (M3): il callback dell'executor onora il
+/// behavior di catalogo del nodo, come il check del loop non fuso.
 ///
 /// # Errors
 ///
@@ -938,8 +1039,17 @@ fn transform_cells_fused(
     }
     // Decode UNA volta: errori attribuiti al primo kernel del gruppo (come il
     // fallimento di `geometry_from_wkb` al primo nodo del percorso non fuso).
-    let mut geometries = map_nullable(cells, |payload| Ok(Some(geometry_from_wkb(payload)?)))
-        .map_err(|error| FusedStepError::Kernel { index: 0, error })?;
+    // M3 (trappola 1): con `make_valid` in testa il gate e' SOLO strutturale.
+    let first_repairs = group.first().is_some_and(|params| accepts_ogc_invalid_input(params));
+    let mut geometries = map_nullable(cells, |payload| {
+        let geometry = if first_repairs {
+            plenora_kernels_geo::wkb_decoder::decode_validated(payload)?
+        } else {
+            geometry_from_wkb(payload)?
+        };
+        Ok(Some(geometry))
+    })
+    .map_err(|error| FusedStepError::Kernel { index: 0, error })?;
     for (index, params) in group.iter().enumerate() {
         control(index).map_err(FusedStepError::Control)?;
         // Risoluzione parametri del kernel i: nel percorso non fuso avviene
@@ -947,7 +1057,12 @@ fn transform_cells_fused(
         // e stessa attribuzione anche a batch vuoto.
         let resolved =
             resolve_transform(params).map_err(|error| FusedStepError::Kernel { index, error })?;
-        apply_fused_kernel(&resolved, &mut geometries, index, group.len())?;
+        // M3 (trappola 1): davanti a un nodo `make_valid` la validazione
+        // inter-passo e' SOLO strutturale (vedi la tabella sopra).
+        let successor_repairs = group
+            .get(index + 1)
+            .is_some_and(|next| accepts_ogc_invalid_input(next));
+        apply_fused_kernel(&resolved, &mut geometries, index, group.len(), successor_repairs)?;
     }
     // Misura terminale (M2): passo dedicato DOPO il loop dei kernel. Nel
     // percorso non fuso il nodo trasformazione completa TUTTE le righe
@@ -981,12 +1096,15 @@ fn transform_cells_fused(
 /// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
 /// indicizzato e primo errore in ordine di riga, come `map_nullable`
 /// (ADR-0001). La tabella di attribuzione e' quella di
-/// [`transform_cells_fused`].
+/// [`transform_cells_fused`]. `successor_accepts_ogc_invalid` e' vero solo
+/// quando il kernel successivo e' `make_valid` (M3, trappola 1): la
+/// validazione inter-passo resta strutturale ma omette il check OGC.
 fn apply_fused_kernel(
     resolved: &ResolvedTransform,
     geometries: &mut [Option<Geometry<f64>>],
     index: usize,
     group_len: usize,
+    successor_accepts_ogc_invalid: bool,
 ) -> Result<(), FusedStepError> {
     // Profilo A (D12.4): la validazione post-kernel e' interamente dentro
     // `transform_geometry_canonical` (OGC, 64 MiB, strutturale — kernel i).
@@ -1024,12 +1142,17 @@ fn apply_fused_kernel(
                                 index: index + 1,
                                 error,
                             })?;
-                        check_geometry_valid(geometry)
-                            .map_err(ArrowTransportError::from)
-                            .map_err(|error| FusedStepError::Kernel {
-                                index: index + 1,
-                                error,
-                            })?;
+                        // M3 (trappola 1): il check OGC e' omesso SOLO
+                        // davanti a `make_valid` — il suo "decode" non fuso
+                        // e' il solo gate strutturale di `make_valid_wkb`.
+                        if !successor_accepts_ogc_invalid {
+                            check_geometry_valid(geometry)
+                                .map_err(ArrowTransportError::from)
+                                .map_err(|error| FusedStepError::Kernel {
+                                    index: index + 1,
+                                    error,
+                                })?;
+                        }
                     }
                 }
             }
@@ -1118,12 +1241,15 @@ fn measure_cells<T: Send>(
 }
 
 /// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
-/// kernel del gruppo (ADR-0012): la validazione della colonna di input (tipo
-/// Binary + metadati geoarrow) e' attribuita al primo nodo, come nel
-/// percorso non fuso; lo schema di output delle trasformazioni coincide con
-/// quello che il gruppo produrrebbe nodo per nodo (tutte le op del gruppo
-/// sono 1:1 in place sulla stessa colonna: stessa ricostruzione canonica del
-/// campo geometria).
+/// kernel del gruppo (ADR-0012) per la validazione della colonna di input
+/// (tipo Binary + metadati geoarrow, attribuita al primo nodo come nel
+/// percorso non fuso) e l'handle dell'ULTIMA trasformazione per lo schema
+/// di output: con `reproject` nel gruppo (M3) il CRS del campo geometria
+/// cambia a meta' catena e lo schema di confine e' quello dell'ultimo nodo
+/// — per le op M1/M2 (CRS invariato lungo il gruppo) coincide con quello
+/// del primo kernel, perche' la ricostruzione canonica del campo dipende
+/// solo da (nome colonna, CRS di output) e gli altri campi passano
+/// invariati.
 ///
 /// Misura terminale (M2): con `terminal` il runner applica il kernel scalare
 /// sulla forma decodificata dell'ultimo passo e appende la colonna misura in
@@ -1145,6 +1271,7 @@ pub fn one_to_one_batch_fused(
     group: &[&TransformArrowSchema],
     terminal: Option<FusedTerminal<'_>>,
     prepared: &OneToOnePrepared,
+    output: &OneToOnePrepared,
     control: &mut dyn FnMut(usize) -> Result<(), PlenoraError>,
 ) -> Result<RecordBatch, FusedStepError> {
     let geometry_index = prepared.geometry_index;
@@ -1178,8 +1305,10 @@ pub fn one_to_one_batch_fused(
     );
     let last = group.len().saturating_sub(1);
     // Batch al confine dell'ultima trasformazione: la costruzione del
-    // percorso non fuso (`one_to_one_batch_prepared`), stessa attribuzione.
-    let output = RecordBatch::try_new(prepared.output_schema.clone(), columns)
+    // percorso non fuso (`one_to_one_batch_prepared`), stessa attribuzione;
+    // lo schema e' quello dell'ULTIMA trasformazione (M3: `reproject` puo'
+    // cambiare il CRS del campo geometria a meta' gruppo).
+    let output = RecordBatch::try_new(output.output_schema.clone(), columns)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
         .map_err(|error| FusedStepError::Kernel { index: last, error })?;
     let Some(terminal) = terminal else {
@@ -2365,6 +2494,172 @@ mod tests {
             }
             FusedStepError::Kernel { .. } => panic!("atteso Measure, trovato Kernel"),
             FusedStepError::Control(_) => panic!("atteso Measure, trovato Control"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Perimetro M3: make_valid / reproject (backend feature-gated)
+    // -----------------------------------------------------------------------
+
+    /// Poligono a farfalla: strutturalmente ben formato ma OGC-invalido.
+    #[cfg(feature = "geos-backend")]
+    fn bowtie_geometry() -> Geometry<f64> {
+        Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0),
+            (x: 10.0, y: 10.0),
+            (x: 10.0, y: 0.0),
+            (x: 0.0, y: 10.0),
+            (x: 0.0, y: 0.0),
+        ])
+    }
+
+    /// M3, trappola 1 — il caso centrale: `make_valid` in testa al gruppo
+    /// riceve un input OGC-INVALIDO (il farfalla, che supera il solo gate
+    /// strutturale). Il percorso fuso NON deve rifiutarlo al decode iniziale
+    /// (nessun check OGC davanti a `make_valid`): riparato identico nei due
+    /// percorsi, NESSUN errore.
+    #[cfg(feature = "geos-backend")]
+    #[test]
+    fn fused_make_valid_first_accepts_ogc_invalid_input() {
+        let make_valid = fused_params(ArrowOperation::MakeValid);
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(2.0);
+        let group: Vec<&TransformArrowSchema> = [&make_valid, &translate].to_vec();
+
+        let cells = cells_array(&[
+            Some(wkb(&bowtie_geometry())),
+            Some(wkb(&Geometry::Point(Point::new(3.0, 4.0)))),
+            None,
+        ]);
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso ripara");
+        let fused = run_fused(&group, &cells).expect("il fuso NON rifiuta l'OGC-invalido");
+        assert_eq!(fused, expected, "riparazione diversa tra i percorsi");
+        // L'output riparato e' OGC-valido in entrambi i percorsi.
+        for cell in fused.iter().flatten() {
+            geometry_from_wkb(cell).expect("output riparato valido");
+        }
+    }
+
+    /// M3: `make_valid` UNICO kernel del runner (forma limite di un gruppo
+    /// con sola misura a valle): nel percorso non fuso il nodo emette i byte
+    /// WKB di GEOS (o il passthrough dell'input valido); il runner fuso
+    /// ri-encoda la forma decodificata — i byte di confine devono coincidere
+    /// (parita' GEOS/geozero sulla stessa geometria riparata).
+    #[cfg(feature = "geos-backend")]
+    #[test]
+    fn fused_make_valid_boundary_bytes_match_the_geos_encoding() {
+        let make_valid = fused_params(ArrowOperation::MakeValid);
+        let group: Vec<&TransformArrowSchema> = [&make_valid].to_vec();
+
+        let cells = cells_array(&[
+            Some(wkb(&bowtie_geometry())),
+            Some(wkb(&Geometry::Polygon(polygon![
+                (x: 0.0, y: 0.0),
+                (x: 4.0, y: 0.0),
+                (x: 4.0, y: 4.0),
+                (x: 0.0, y: 4.0),
+                (x: 0.0, y: 0.0),
+            ]))),
+            None,
+        ]);
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso");
+        let fused = run_fused(&group, &cells).expect("percorso fuso");
+        assert_eq!(fused, expected, "byte di confine diversi (GEOS vs canonico)");
+    }
+
+    /// M3: `make_valid` a meta' catena con successore — la validazione
+    /// inter-passo standard (strutturale + OGC) resta dopo la riparazione;
+    /// su input valido `make_valid` e' un passthrough byte-identico.
+    #[cfg(feature = "geos-backend")]
+    #[test]
+    fn fused_make_valid_mid_chain_matches_sequential() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(5.0);
+        translate.y_offset = Some(-2.0);
+        let make_valid = fused_params(ArrowOperation::MakeValid);
+        let mut rotate = fused_params(ArrowOperation::Rotate);
+        rotate.degrees = Some(15.0);
+        let group: Vec<&TransformArrowSchema> = [&translate, &make_valid, &rotate].to_vec();
+
+        let cells = cells_array(&multi_type_cells());
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso");
+        let fused = run_fused(&group, &cells).expect("percorso fuso");
+        assert_eq!(fused, expected, "output diverso byte-per-byte");
+    }
+
+    /// M3: catena con `reproject` (EPSG:32632 -> EPSG:4326) seguito da un
+    /// altro transform — stesso output byte-per-byte (le guardie del kernel
+    /// PROJ si applicano identiche sulla forma decodificata).
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn fused_reproject_matches_sequential() {
+        let mut reproject = fused_params(ArrowOperation::Reproject);
+        reproject.target_crs = Some("EPSG:4326".to_owned());
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(0.001);
+        translate.y_offset = Some(-0.002);
+        let group: Vec<&TransformArrowSchema> = [&reproject, &translate].to_vec();
+
+        let cells = cells_array(&multi_type_cells());
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso");
+        let fused = run_fused(&group, &cells).expect("percorso fuso");
+        assert_eq!(fused, expected, "output diverso byte-per-byte");
+    }
+
+    /// M3 a feature spenta: `make_valid` in un gruppo da' lo STESSO
+    /// `BackendUnavailable` del percorso non fuso, attribuito al suo kernel
+    /// (difesa in profondita': i piani con `make_valid` sono gia' rifiutati
+    /// in validazione senza la feature).
+    #[cfg(not(feature = "geos-backend"))]
+    #[test]
+    fn fused_make_valid_backend_unavailable_matches_sequential() {
+        let make_valid = fused_params(ArrowOperation::MakeValid);
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(2.0);
+        let group: Vec<&TransformArrowSchema> = [&make_valid, &translate].to_vec();
+
+        let cells = cells_array(&[Some(wkb(&Geometry::Point(Point::new(1.0, 2.0))))]);
+        let sequential_error = run_sequential(&group, &cells).expect_err("backend assente");
+        assert!(matches!(
+            sequential_error,
+            ArrowTransportError::BackendUnavailable { .. }
+        ));
+        match run_fused(&group, &cells).expect_err("backend assente") {
+            FusedStepError::Kernel { index, error } => {
+                assert_eq!(index, 0, "attribuzione al kernel make_valid");
+                assert_eq!(error.to_string(), sequential_error.to_string());
+            }
+            FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+            FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
+        }
+    }
+
+    /// M3 a feature spenta: `reproject` a meta' gruppo da' lo STESSO
+    /// `BackendUnavailable` del percorso non fuso, attribuito al suo kernel.
+    #[cfg(not(feature = "proj-backend"))]
+    #[test]
+    fn fused_reproject_backend_unavailable_matches_sequential() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(2.0);
+        let reproject = fused_params(ArrowOperation::Reproject);
+        let group: Vec<&TransformArrowSchema> = [&translate, &reproject].to_vec();
+
+        let cells = cells_array(&[Some(wkb(&Geometry::Point(Point::new(1.0, 2.0))))]);
+        let sequential_error = run_sequential(&group, &cells).expect_err("backend assente");
+        assert!(matches!(
+            sequential_error,
+            ArrowTransportError::BackendUnavailable { .. }
+        ));
+        match run_fused(&group, &cells).expect_err("backend assente") {
+            FusedStepError::Kernel { index, error } => {
+                assert_eq!(index, 1, "attribuzione al kernel reproject");
+                assert_eq!(error.to_string(), sequential_error.to_string());
+            }
+            FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+            FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
         }
     }
 }

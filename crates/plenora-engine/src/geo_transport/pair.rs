@@ -1158,9 +1158,12 @@ pub fn pair_arrow(
                 Vec::with_capacity(left_schema.fields().len() + 1);
             for index in 0..left_schema.fields().len() {
                 if index == geometry_index {
-                    columns.push(std::sync::Arc::new(BinaryArray::from_iter(
-                        encoded.iter().map(|piece| Some(piece.as_slice())),
-                    )));
+                    columns.push(std::sync::Arc::new(
+                        encoded
+                            .iter()
+                            .map(|piece| Some(piece.as_slice()))
+                            .collect::<BinaryArray>(),
+                    ));
                 } else {
                     let column = plenora_core::arrow::select::concat::concat(
                         &left_batches

@@ -59,14 +59,15 @@ pub enum CancellationBehavior {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeoFusion {
     /// Non fondibile: esecuzione nodo-per-nodo (default). Tutte le op
-    /// tabellari e le geo non revistate per il perimetro M1.
+    /// tabellari e le geo non revistate per il perimetro (M1+M3).
     NotFusible,
     /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
-    /// consecutivi a parita' di colonna geometria e ruolo (le 14 op di M1).
+    /// consecutivi a parita' di colonna geometria e ruolo (le 14 op di M1
+    /// piu' `reproject`/`make_valid` di M3).
     TransformInPlace,
     /// Misura terminale: consuma la geometria producendo un valore non
     /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
-    /// — cantiere M2 separato); chiude un eventuale gruppo fuso a monte.
+    /// — perimetro M2); chiude un eventuale gruppo fuso a monte.
     TerminalMeasure,
 }
 
@@ -588,8 +589,14 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.voronoi", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     // within: filtro del left sul right -> output <= left -> LeftRelative.
     op!("geo.within", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
-    op!("geo.make_valid", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &["geos"], DefinedOrder, BackendPending),
-    op!("geo.reproject", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Reprojection), &["proj"], DefinedOrder, BackendPending),
+    // ADR-0012 M3: make_valid entra nel perimetro di fusione come
+    // TransformInPlace; l'ammissione di input OGC-invalido (trappola 1) e'
+    // una proprieta' del suo gate di decode, gestita dal runner fuso con
+    // l'eccezione documentata in ADR-0012 D12.4-M3 — non richiede una
+    // variante di capability dedicata (la relazione di raggruppamento e'
+    // identica: 1:1 in place sulla stessa colonna).
+    op!("geo.make_valid", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &["geos"], DefinedOrder, BackendPending, geo_fusion = TransformInPlace),
+    op!("geo.reproject", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Reprojection), &["proj"], DefinedOrder, BackendPending, geo_fusion = TransformInPlace),
     // --- Predicati DE-9IM, estensioni geo (11) ------------------------------
     op!("geo.predicate_intersects", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     op!("geo.predicate_disjoint", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
@@ -1119,13 +1126,13 @@ mod tests {
     }
 
     #[test]
-    fn geo_fusion_matches_the_adr_0012_m1_perimeter() {
-        // ADR-0012 D12.2 + perimetro M1: esattamente le 14 trasformazioni 1:1
-        // revistate con l'owner sono TransformInPlace, le 5 misure terminali
-        // sono TerminalMeasure, TUTTO il resto (tabellari incluse) e'
-        // NotFusible. Il campo e' dichiarativo: la lista chiusa qui sotto e'
-        // il contratto; aggiungere un op fondibile richiede l'oracolo
-        // differenziale (gate di M1).
+    fn geo_fusion_matches_the_adr_0012_perimeter() {
+        // ADR-0012 D12.2 + perimetro M1+M3: esattamente le 16 trasformazioni
+        // 1:1 revistate (14 di M1 + reproject/make_valid di M3) sono
+        // TransformInPlace, le 5 misure terminali sono TerminalMeasure, TUTTO
+        // il resto (tabellari incluse) e' NotFusible. Il campo e'
+        // dichiarativo: la lista chiusa qui sotto e' il contratto; aggiungere
+        // un op fondibile richiede l'oracolo differenziale (gate di M1).
         let transforms: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.geo_fusion == GeoFusion::TransformInPlace)
@@ -1148,6 +1155,8 @@ mod tests {
                 "geo.concave_hull",
                 "geo.densify",
                 "geo.snap_to_grid",
+                "geo.reproject",
+                "geo.make_valid",
             ])
         );
         let terminals: HashSet<_> = CATALOG
@@ -1166,13 +1175,9 @@ mod tests {
             ])
         );
         for op in CATALOG {
-            // Esplicitamente fuori perimetro M1: backend feature-gated
-            // (NonInterruptible) e check di tipo per-riga.
-            if matches!(
-                op.id,
-                "geo.reproject" | "geo.make_valid" | "geo.line_substring"
-                    | "geo.line_interpolate_point"
-            ) {
+            // Esplicitamente fuori perimetro (M3 incluso): check di tipo
+            // per-riga, candidati a una milestone futura.
+            if matches!(op.id, "geo.line_substring" | "geo.line_interpolate_point") {
                 assert_eq!(op.geo_fusion, GeoFusion::NotFusible, "{}", op.id);
             }
             // La fondibilita' riguarda solo la famiglia geo: ogni tabellare

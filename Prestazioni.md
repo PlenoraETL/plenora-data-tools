@@ -179,8 +179,17 @@ misure terminali nella catena (`area`/`length`/`perimeter`/`vertex_count`/
 catena completa del baseline, con `area`): **−16,2%** a bande non
 sovrapposte (con la mitigazione allocatore documentata in
 `benchmarks/sweep/geo_sweep.md`; il delta e' sensibile alle condizioni
-dell'host, la direzione sempre coerente). Cantieri successivi:
-reproject/make_valid ed estensioni (M3).
+dell'host, la direzione sempre coerente). **M3 (2026-07-29):**
+`geo.reproject` e `geo.make_valid` nel perimetro (16 op `TransformInPlace`),
+con l'eccezione D12.4-M3 (validazione SOLO strutturale davanti a
+`make_valid`, che ammette input OGC-invalido) e lo schema di confine
+dell'ultima trasformazione (cambio CRS di `reproject` a meta' gruppo);
+oracolo esteso (casi m3-a..d + feature spente) a zero divergenze.
+Scenario `chain_reproject` (reproject 32632→3857→translate→rotate, con
+warmup delle pipeline PROJ thread-local): **−3% / −12%** a seconda delle
+condizioni dell'host (la riproiezione domina il costo del gruppo ed e'
+identica nei due percorsi: il delta di fusione e' strutturalmente piccolo),
+output byte-identici, zero fallback.
 
 ---
 

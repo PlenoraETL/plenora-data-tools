@@ -729,8 +729,8 @@ mod tests {
             panic!("atteso Point: {reprojected:?}")
         };
         // EPSG:3857 di (12E, 41N) calcolato con PROJ.
-        assert!((point.x() - 1_335_833.8895).abs() < 0.01);
-        assert!((point.y() - 5_012_341.6638).abs() < 0.01);
+        assert!((point.x() - 1_335_833.889_5).abs() < 0.01);
+        assert!((point.y() - 5_012_341.663_8).abs() < 0.01);
         assert!(cells.is_null(1));
 
         let missing_target = TransformArrowSchema {
@@ -2647,7 +2647,9 @@ mod tests {
         for ring in ring_groups {
             collection.push(1);
             collection.extend_from_slice(&2_u32.to_le_bytes());
-            collection.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+            collection.extend_from_slice(
+                &u32::try_from(ring.len()).expect("fixture: anello sotto u32::MAX").to_le_bytes(),
+            );
             for (x, y) in ring {
                 collection.extend_from_slice(&x.to_le_bytes());
                 collection.extend_from_slice(&y.to_le_bytes());

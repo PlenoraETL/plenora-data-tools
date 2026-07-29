@@ -707,3 +707,59 @@ fn geo_fusion_kill_switch_disables_groups() {
     assert!(!plan.geo_fusion(), "kill switch spento registrato nel piano");
     assert_eq!(fusion_groups(&plan), vec![None, None, None]);
 }
+
+/// M3: `make_valid` (capability `TransformInPlace`) forma gruppi come le
+/// altre op del perimetro. La validazione fail-closed (capability `geos`)
+/// rende irraggiungibile questo piano a feature spenta, quindi il caso
+/// "nessun gruppo senza backend" non ha bisogno di un gate in `prepare`.
+#[cfg(feature = "geos-backend")]
+#[test]
+fn make_valid_joins_fusion_groups() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "t", "op": "geo.translate", "in": ["main"],
+                 "config": {"x_offset": 1.0, "y_offset": 2.0}},
+                {"id": "m", "op": "geo.make_valid", "in": ["t"], "config": {}},
+                {"id": "r", "op": "geo.rotate", "in": ["m"], "config": {"degrees": 10.0}},
+            ],
+            "output": "r",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    let kernels = &plan.segments()[0].kernels;
+    assert_eq!(kernels[1].geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+    assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
+}
+
+/// M3: `reproject` forma gruppi e puo' stare in qualunque posizione del run
+/// (qui in testa, con cambio di CRS a meta' catena gestito dal runner). Il
+/// target e' EPSG:3857 (proiettato): i transform a valle richiedono un CRS
+/// proiettato (`CrsRequirement::Projected`).
+#[cfg(feature = "proj-backend")]
+#[test]
+fn reproject_joins_fusion_groups() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "p", "op": "geo.reproject", "in": ["main"],
+                 "config": {"target_crs": "EPSG:3857"}},
+                {"id": "t", "op": "geo.translate", "in": ["p"],
+                 "config": {"x_offset": 1000.0, "y_offset": 1000.0}},
+            ],
+            "output": "t",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    let kernels = &plan.segments()[0].kernels;
+    assert_eq!(kernels[0].geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+    assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
+}
