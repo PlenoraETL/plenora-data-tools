@@ -69,7 +69,7 @@ use plenora_kernels_geo::arrow_adapter::{
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
@@ -310,13 +310,6 @@ struct SpatialJoinSchema {
     max_pairs: u64,
     left_crs: Option<String>,
     right_crs: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct Capability<'a> {
-    name: &'a str,
-    input: &'a str,
-    output: &'a str,
 }
 
 #[derive(Debug)]
@@ -1312,20 +1305,16 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
         Some("validate") => validate_command(args),
         Some("run") => run_command(args),
         Some("capabilities") => {
-            let mut capabilities: Vec<_> = Operation::ALL
-                .iter()
-                .map(|operation| Capability {
-                    name: operation.name(),
-                    input: "wkb-frame-v2-sha256",
-                    output: "wkb-frame-v2-sha256",
-                })
-                .collect();
-            capabilities.push(Capability {
-                name: "spatial_join",
-                input: "2 x wkb-frame-v2-sha256",
-                output: "index-pair-v1-sha256",
-            });
-            println!("{}", serde_json::to_string(&capabilities)?);
+            // ICD §10 R10.2: capability dichiarative interrogabili prima
+            // dell'esecuzione, in forma leggibile da un programma — il
+            // documento completo (modello geometrico + catalogo, fonte
+            // unica in plenora-core::capabilities).
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &plenora_core::capabilities::component_capabilities()
+                )?
+            );
             Ok(())
         }
         Some("transform") => {

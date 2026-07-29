@@ -460,3 +460,38 @@ fn valid_blocking_plan_reports_missing_input_without_publication() {
     assert!(!status.success());
     assert!(!output.exists());
 }
+
+#[test]
+fn capabilities_emette_il_documento_dichiarativo_icd10() {
+    // ICD §10 R10.2: capability dichiarative interrogabili prima
+    // dell'esecuzione, in forma leggibile da un programma.
+    let output = Command::new(executable())
+        .arg("capabilities")
+        .output()
+        .expect("capabilities");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(document["protocol_version"], 1);
+    assert_eq!(document["arrow_version"], "59.1.0");
+    // Modello geometrico: tutte e cinque le dimensioni propagate (R3.3),
+    // elaborazione solo XY (R3.3.1), encoding chiusi (R3.5).
+    assert_eq!(
+        document["geometry"]["dimensions_propagated"],
+        json!(["xy", "xyz", "xym", "xyzm", "unknown"])
+    );
+    assert_eq!(document["geometry"]["dimensions_elaborated"], json!(["xy"]));
+    assert_eq!(document["geometry"]["encodings"], json!(["wkb", "ewkb"]));
+    // Una capability per ogni op del catalogo (fonte unica).
+    let operations = document["operations"].as_array().expect("operations");
+    assert_eq!(operations.len(), CATALOG.len());
+    let reproject = operations
+        .iter()
+        .find(|op| op["id"] == "geo.reproject")
+        .expect("geo.reproject presente");
+    assert_eq!(reproject["required_capabilities"], json!(["proj"]));
+    assert_eq!(reproject["cancellation_behavior"], "non_interruptible");
+}

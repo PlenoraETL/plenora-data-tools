@@ -13,6 +13,7 @@
 //!   plenora-geo-tools-arrow previsto in Fase 1).
 
 pub mod catalog;
+pub mod capabilities;
 pub mod contract;
 pub mod crs;
 pub mod error;
