@@ -8,7 +8,13 @@
 //! - [`publish`]: verifica semantica del CRS e pubblicazione atomica
 //!   dell'output (livello comandi del sorgente).
 
+pub(crate) mod envelope;
+pub(crate) mod error;
+pub(crate) mod ipc;
+pub(crate) mod pair;
 pub mod pair_protocol;
 pub mod protocol;
 pub mod publish;
+pub(crate) mod schema;
 pub mod transport;
+pub(crate) mod unary;
