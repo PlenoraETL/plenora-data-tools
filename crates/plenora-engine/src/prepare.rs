@@ -121,6 +121,14 @@ pub struct RuntimeContext {
     /// (ADR 3): `None` = temp di sistema. Configurabile per i test e per
     /// ambienti con una temp dedicata.
     pub temp_root: Option<PathBuf>,
+    /// Kill switch della fusione dei segmenti geo (ADR-0012 D12.9): con
+    /// `true` (default) `prepare` annota i gruppi di nodi geo 1:1 fondibili
+    /// e l'executor li esegue con il runner fuso (un decode/encode per
+    /// gruppo); con `false` i gruppi non si formano e l'esecuzione e' quella
+    /// nodo-per-nodo. Registrato nel piano come le altre opzioni runtime:
+    /// serve alla disattivazione operativa, all'oracolo differenziale e ai
+    /// benchmark A/B.
+    pub geo_fusion: bool,
 }
 
 impl Default for RuntimeContext {
@@ -133,6 +141,7 @@ impl Default for RuntimeContext {
             cancellation: CancellationToken::new(),
             diagnostics: false,
             temp_root: None,
+            geo_fusion: true,
         }
     }
 }
@@ -170,10 +179,10 @@ pub enum SegmentMode {
     /// Catena di kernel streaming (almeno uno tabellare): batch-per-batch,
     /// senza materializzazione intermedia (V3/V4).
     LinearStreaming,
-    /// Catena di sole op geo 1:1. Nella v1 e' eseguita come
-    /// `LinearStreaming`; il modo distinto predispone la cache di decode WKB
-    /// per segmento di Fase 2C (V6: al massimo un decode/encode per
-    /// segmento fuso).
+    /// Catena di sole op geo 1:1. I run di nodi fondibili annotati da
+    /// `prepare` (campo `fusion_group`, ADR-0012) sono eseguiti col runner
+    /// fuso — un decode/encode per gruppo su ogni batch; il resto e'
+    /// eseguito come `LinearStreaming`.
     GeoFused,
     /// Nodo blocking unario: materializza l'input ed esegue una sola volta.
     Blocking,
@@ -446,6 +455,16 @@ pub struct PreparedKernel {
     /// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6),
     /// risolta in `prepare` (V2: nessuno scan del catalogo a runtime).
     pub expansion_factor_exempt: bool,
+    /// Fondibilita' dichiarata in catalogo (ADR-0012 D12.2), risolta in
+    /// `prepare` come `cancellation_behavior`.
+    pub geo_fusion: plenora_core::catalog::GeoFusion,
+    /// Gruppo di fusione geo del kernel (ADR-0012): `Some(id)` per i membri
+    /// di un run massimale (>= 2) di kernel `GeoTransform` consecutivi
+    /// fondibili (capability `TransformInPlace` di entrambi i nodi adiacenti,
+    /// stessa colonna geometria, stesso ruolo); l'id e' condiviso dai membri
+    /// e apre il gruppo sul primo. `None` se il kernel non e' in un gruppo o
+    /// se il kill switch `RuntimeContext::geo_fusion` e' spento (D12.9).
+    pub fusion_group: Option<u32>,
 }
 
 /// Segmento fisico dell'`ExecutionPlan` (E2).
@@ -497,6 +516,9 @@ pub struct ExecutionPlan {
     metrics_config: MetricsConfig,
     batch_target: BatchTarget,
     limits: Limits,
+    /// Kill switch della fusione geo registrato nel piano (ADR-0012 D12.9):
+    /// copia di `RuntimeContext::geo_fusion` per questa esecuzione.
+    geo_fusion: bool,
     /// Statistiche per input come dichiarate nel `RuntimeContext`
     /// (osservabilita'; nessuna scelta fisica v1 dipende da esse).
     input_statistics: BTreeMap<String, InputStatistics>,
@@ -549,6 +571,12 @@ impl ExecutionPlan {
     #[must_use]
     pub const fn input_statistics(&self) -> &BTreeMap<String, InputStatistics> {
         &self.input_statistics
+    }
+
+    /// Kill switch della fusione geo registrato nel piano (ADR-0012 D12.9).
+    #[must_use]
+    pub const fn geo_fusion(&self) -> bool {
+        self.geo_fusion
     }
 }
 
@@ -657,8 +685,15 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
     // Scomposizione in segmenti: catene massimali di nodi Streaming unari
     // con arco intermedio a fan-out 1; ogni nodo blocking e' un segmento.
     let chains = build_chains(topo, &node_meta, &consumers, &fan_out)?;
-    let (segments, node_segment) =
-        build_segments(graph, &nodes_by_id, &node_meta, &fan_out, chains, &mut kernels_by_id)?;
+    let (segments, node_segment) = build_segments(
+        graph,
+        &nodes_by_id,
+        &node_meta,
+        &fan_out,
+        chains,
+        &mut kernels_by_id,
+        runtime.geo_fusion,
+    )?;
     let last_consumers = compute_last_consumers(plan, topo, &consumers);
 
     let input_statistics = plan
@@ -675,6 +710,7 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
         metrics_config: runtime.metrics,
         batch_target: runtime.batch_target,
         limits,
+        geo_fusion: runtime.geo_fusion,
         input_statistics,
     })
 }
@@ -737,6 +773,7 @@ fn build_segments<'a>(
     fan_out: &HashMap<&'a str, usize>,
     chains: Vec<Vec<&'a str>>,
     kernels_by_id: &mut HashMap<&'a str, PreparedKernel>,
+    geo_fusion_enabled: bool,
 ) -> Result<(Vec<PhysicalSegment>, HashMap<String, usize>)> {
     let mut segments: Vec<PhysicalSegment> = Vec::with_capacity(chains.len());
     let mut node_segment: HashMap<String, usize> = HashMap::with_capacity(nodes_by_id.len());
@@ -774,7 +811,7 @@ fn build_segments<'a>(
         for id in &chain {
             node_segment.insert((*id).to_owned(), index);
         }
-        let kernels: Vec<PreparedKernel> = chain
+        let mut kernels: Vec<PreparedKernel> = chain
             .iter()
             .map(|id| {
                 kernels_by_id.remove(id).ok_or_else(|| {
@@ -784,6 +821,12 @@ fn build_segments<'a>(
                 })
             })
             .collect::<Result<_>>()?;
+        // Gruppi di fusione geo (ADR-0012 D12.2): solo a kill switch attivo
+        // (D12.9); i segmenti blocking hanno un solo kernel, quindi il
+        // run massimale e' sempre < 2 e l'annotazione resta vuota.
+        if geo_fusion_enabled {
+            annotate_fusion_groups(&mut kernels);
+        }
         segments.push(PhysicalSegment {
             id: format!("seg{index}"),
             kernels: kernels.into_boxed_slice(),
@@ -803,6 +846,45 @@ fn build_segments<'a>(
         });
     }
     Ok((segments, node_segment))
+}
+
+/// Annota i gruppi di fusione geo dentro a un segmento (ADR-0012 D12.2):
+/// run massimali di almeno due kernel consecutivi fondibili — capability
+/// `GeoFusion::TransformInPlace` di ENTRAMBI i nodi adiacenti, ruolo
+/// [`GeoRole::TransformInPlace`], config `GeoTransform` e stessa colonna
+/// geometria. Ogni gruppo riceve un id progressivo (per segmento) condiviso
+/// dai membri; l'executor riconosce l'apertura sul primo membro. I run di un
+/// solo kernel non sono annotati: il runner fuso non avrebbe vantaggio e il
+/// percorso nodo-per-nodo resta il riferimento.
+fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
+    let fusible = |kernel: &PreparedKernel| {
+        kernel.geo_fusion == plenora_core::catalog::GeoFusion::TransformInPlace
+            && kernel.geo_role == Some(GeoRole::TransformInPlace)
+            && matches!(kernel.config, PreparedConfig::GeoTransform(_))
+            && kernel.geometry_column_index.is_some()
+    };
+    let mut next_group = 0_u32;
+    let mut start = 0_usize;
+    while start < kernels.len() {
+        if !fusible(&kernels[start]) {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < kernels.len()
+            && fusible(&kernels[end])
+            && kernels[end].geometry_column_index == kernels[end - 1].geometry_column_index
+        {
+            end += 1;
+        }
+        if end - start >= 2 {
+            for kernel in &mut kernels[start..end] {
+                kernel.fusion_group = Some(next_group);
+            }
+            next_group += 1;
+        }
+        start = end;
+    }
 }
 
 /// Last consumer per arco (V10): l'ultimo nodo consumatore in ordine
@@ -915,6 +997,8 @@ fn prepare_kernel(
         output_contract,
         cancellation_behavior: descriptor.cancellation_behavior,
         expansion_factor_exempt: descriptor.expansion_factor_exempt,
+        geo_fusion: descriptor.geo_fusion,
+        fusion_group: None,
     })
 }
 

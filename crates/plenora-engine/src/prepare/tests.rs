@@ -531,3 +531,83 @@ fn generative_geo_extensions_prepare_with_their_roles() {
         "config tipizzata della griglia"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gruppi di fusione geo (ADR-0012)
+// ---------------------------------------------------------------------------
+
+/// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi.
+fn fusible_chain_plan() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.1}},
+            {"id": "c", "op": "geo.centroid", "in": ["s"], "config": {}},
+        ],
+        "output": "c",
+    })
+}
+
+fn fusion_groups(plan: &ExecutionPlan) -> Vec<Option<u32>> {
+    plan.segments()[0]
+        .kernels
+        .iter()
+        .map(|kernel| kernel.fusion_group)
+        .collect()
+}
+
+#[test]
+fn fusible_geo_runs_form_one_fusion_group() {
+    let graph = validate_plan(&fusible_chain_plan(), geo_contract());
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // Kill switch registrato nel piano (D12.9) e capability risolta per
+    // kernel come `cancellation_behavior` (D12.2).
+    assert!(plan.geo_fusion());
+    assert_eq!(plan.segments().len(), 1);
+    for kernel in &plan.segments()[0].kernels {
+        assert_eq!(kernel.geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+    }
+    // Tre kernel fondibili consecutivi -> UN gruppo, stesso id sui membri.
+    assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
+}
+
+#[test]
+fn non_fusible_kernel_breaks_the_fusion_run() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
+                {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
+                {"id": "s", "op": "geo.simplify", "in": ["a"], "config": {"tolerance": 0.1}},
+                {"id": "t", "op": "geo.translate", "in": ["s"],
+                 "config": {"x_offset": 1.0, "y_offset": 2.0}},
+            ],
+            "output": "t",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // La misura terminale (`geo.area`, TerminalMeasure) spezza il run:
+    // buffer resta solo (run < 2, nessun gruppo), simplify+translate
+    // formano un gruppo a valle.
+    assert_eq!(fusion_groups(&plan), vec![None, None, Some(0), Some(0)]);
+}
+
+#[test]
+fn geo_fusion_kill_switch_disables_groups() {
+    let graph = validate_plan(&fusible_chain_plan(), geo_contract());
+    let runtime = RuntimeContext {
+        geo_fusion: false,
+        ..RuntimeContext::default()
+    };
+    let plan = prepare(&graph, &runtime).expect("prepare");
+
+    assert!(!plan.geo_fusion(), "kill switch spento registrato nel piano");
+    assert_eq!(fusion_groups(&plan), vec![None, None, None]);
+}

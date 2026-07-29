@@ -18,6 +18,7 @@ use plenora_kernels_geo::construction::{
 };
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 use plenora_core::contract::GeometryDimensions;
+use plenora_core::PlenoraError;
 use plenora_kernels_geo::extended::{
     affine_transform, concave_hull, geodesic_line_length_m, rotate_about, scale_about, translate,
 };
@@ -27,6 +28,7 @@ use plenora_kernels_geo::extended_algorithms::{
 };
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::geos_backend::{make_valid_wkb, polygonize_linework, RepairMethod};
+use plenora_kernels_geo::geometry_contract::{validate_geometry_structural, wkb_size_xy};
 use plenora_kernels_geo::operations::{
     area, boundary, bounds, buffer_with_cap, explode, length, perimeter, point_on_surface,
     simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, OperationError, SimplifyPolicy,
@@ -36,7 +38,10 @@ use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::proj_backend::Reprojector;
 use super::protocol::MAX_ROWS;
 use plenora_kernels_geo::topology::{clean_valid_polygon_topology, dissolve};
-use plenora_kernels_geo::{geometry_from_wkb, transform_wkb};
+use plenora_kernels_geo::{
+    MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, Operation, check_geometry_valid, geometry_from_wkb,
+    transform_geometry_canonical, transform_wkb,
+};
 
 use super::envelope::{EnvelopeReader, EnvelopeWriter};
 use super::error::ArrowTransportError;
@@ -140,6 +145,199 @@ pub(in crate::geo_transport) fn encode_geometry(geometry: &Geometry<f64>) -> Res
     Ok(payload)
 }
 
+/// Parametri risolti di una trasformazione 1:1 fondibile (ADR-0012, perimetro
+/// M1): l'estrazione/validazione dei parametri avviene UNA volta per kernel
+/// ([`resolve_transform`]), prima di toccare le celle — stessa posizione e
+/// stessi errori del braccio corrispondente di `transform_cells`, anche a
+/// batch vuoto.
+enum ResolvedTransform {
+    /// Profilo A (D12.4): `centroid`/`convex_hull`/`envelope` — pipeline
+    /// canonica di `transform_wkb` su geometria decodificata (kernel + OGC
+    /// in uscita + limite 64 MiB + validazione strutturale, tutto attribuito
+    /// al nodo).
+    Canonical(Operation),
+    Buffer {
+        distance: f64,
+        cap: BufferCapStyle,
+    },
+    Simplify {
+        tolerance: f64,
+        policy: SimplifyPolicy,
+    },
+    Boundary,
+    PointOnSurface,
+    AffineTransform {
+        coefficients: [f64; 6],
+    },
+    Translate {
+        x: f64,
+        y: f64,
+    },
+    Scale {
+        x_factor: f64,
+        y_factor: f64,
+        origin: geo::Point<f64>,
+    },
+    Rotate {
+        degrees: f64,
+        origin: geo::Point<f64>,
+    },
+    ConcaveHull {
+        concavity: f64,
+        length_threshold: f64,
+    },
+    Densify {
+        max_segment_length: f64,
+    },
+    SnapToGrid {
+        grid_size: f64,
+    },
+}
+
+/// Risolve i parametri di un'operazione fondibile: stesse estrazioni (e
+/// stessi errori) dei bracci di `transform_cells`, eseguite una sola volta.
+///
+/// # Errors
+///
+/// Come il braccio corrispondente di `transform_cells` per la parte
+/// parametri; `ArrowTransportError::Internal` per operazioni fuori dal
+/// perimetro fondibile (mai raggiungibile: i gruppi sono annotati da
+/// `prepare` solo sulle 14 op di M1 — difesa in profondita', non un caso
+/// d'uso).
+fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform, ArrowTransportError> {
+    match params.operation {
+        ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope => {
+            let kernel = params
+                .operation
+                .geometry_kernel()
+                .ok_or(ArrowTransportError::Internal("operazione geometrica senza kernel"))?;
+            Ok(ResolvedTransform::Canonical(kernel))
+        }
+        ArrowOperation::Buffer => Ok(ResolvedTransform::Buffer {
+            distance: params.required_distance()?,
+            cap: BufferCapStyle::from(params.cap.unwrap_or(BufferCap::Round)),
+        }),
+        ArrowOperation::Simplify => Ok(ResolvedTransform::Simplify {
+            tolerance: params.required_tolerance()?,
+            policy: SimplifyPolicy::from(
+                params
+                    .simplify_policy
+                    .unwrap_or(SimplifyPolicyParam::DouglasPeucker),
+            ),
+        }),
+        ArrowOperation::Boundary => Ok(ResolvedTransform::Boundary),
+        ArrowOperation::PointOnSurface => Ok(ResolvedTransform::PointOnSurface),
+        ArrowOperation::AffineTransform => {
+            let coefficients: [f64; 6] = params
+                .coefficients
+                .as_deref()
+                .ok_or(ArrowTransportError::Internal("coefficients validato assente"))?
+                .try_into()
+                .map_err(|_| {
+                    ArrowTransportError::Internal("coefficients validato non di 6 elementi")
+                })?;
+            Ok(ResolvedTransform::AffineTransform { coefficients })
+        }
+        ArrowOperation::Translate => Ok(ResolvedTransform::Translate {
+            x: params.required_f64("x_offset", params.x_offset)?,
+            y: params.required_f64("y_offset", params.y_offset)?,
+        }),
+        ArrowOperation::Scale => Ok(ResolvedTransform::Scale {
+            x_factor: params.required_f64("x_factor", params.x_factor)?,
+            y_factor: params.required_f64("y_factor", params.y_factor)?,
+            origin: geo::Point::new(
+                params.x_origin.unwrap_or(0.0),
+                params.y_origin.unwrap_or(0.0),
+            ),
+        }),
+        ArrowOperation::Rotate => Ok(ResolvedTransform::Rotate {
+            degrees: params.required_f64("degrees", params.degrees)?,
+            origin: geo::Point::new(
+                params.x_origin.unwrap_or(0.0),
+                params.y_origin.unwrap_or(0.0),
+            ),
+        }),
+        ArrowOperation::ConcaveHull => Ok(ResolvedTransform::ConcaveHull {
+            concavity: params.required_f64("concavity", params.concavity)?,
+            length_threshold: params.length_threshold.unwrap_or(0.0),
+        }),
+        ArrowOperation::Densify => Ok(ResolvedTransform::Densify {
+            max_segment_length: params
+                .required_f64("max_segment_length", params.max_segment_length)?,
+        }),
+        ArrowOperation::SnapToGrid => Ok(ResolvedTransform::SnapToGrid {
+            grid_size: params.required_f64("grid_size", params.grid_size)?,
+        }),
+        _ => Err(ArrowTransportError::Internal(
+            "operazione fuori dal perimetro fondibile (ADR-0012 M1)",
+        )),
+    }
+}
+
+/// Applica una trasformazione fondibile a UNA geometria decodificata
+/// (ADR-0012): gli stessi kernel dei bracci di `transform_cells`, chiamati
+/// con gli stessi argomenti — usata sia dal percorso nodo-per-nodo sia dal
+/// runner fuso, perche' il dispatch per singolo kernel resti unico. `None`
+/// per gli output vuoti ammessi (`point_on_surface` di geometria vuota), che
+/// diventano celle null come nel percorso non fuso.
+///
+/// Per il profilo A l'applicazione include la pipeline di validazione
+/// canonica di `transform_wkb` (OGC in uscita, limite 64 MiB, strutturale):
+/// gli errori sono gia' completi e attribuiti al kernel che la invoca.
+///
+/// # Errors
+///
+/// Come il braccio corrispondente di `transform_cells` per la parte kernel.
+fn apply_transform_cell(
+    resolved: &ResolvedTransform,
+    geometry: &Geometry<f64>,
+) -> Result<Option<Geometry<f64>>, ArrowTransportError> {
+    match resolved {
+        ResolvedTransform::Canonical(kernel) => {
+            Ok(Some(transform_geometry_canonical(*kernel, geometry)?))
+        }
+        ResolvedTransform::Buffer { distance, cap } => {
+            Ok(Some(buffer_with_cap(geometry, *distance, *cap)?))
+        }
+        ResolvedTransform::Simplify { tolerance, policy } => {
+            Ok(Some(simplify_with_policy(geometry, *tolerance, *policy)?))
+        }
+        ResolvedTransform::Boundary => Ok(Some(boundary(geometry)?)),
+        ResolvedTransform::PointOnSurface => Ok(point_on_surface(geometry)?),
+        ResolvedTransform::AffineTransform { coefficients } => {
+            Ok(Some(affine_transform(geometry, *coefficients)?))
+        }
+        ResolvedTransform::Translate { x, y } => Ok(Some(translate(geometry, *x, *y)?)),
+        ResolvedTransform::Scale {
+            x_factor,
+            y_factor,
+            origin,
+        } => Ok(Some(scale_about(geometry, *x_factor, *y_factor, *origin)?)),
+        ResolvedTransform::Rotate { degrees, origin } => {
+            Ok(Some(rotate_about(geometry, *degrees, *origin)?))
+        }
+        ResolvedTransform::ConcaveHull {
+            concavity,
+            length_threshold,
+        } => Ok(Some(concave_hull(
+            geometry,
+            *concavity,
+            *length_threshold,
+            MAX_CELL_COORDINATES,
+        )?)),
+        ResolvedTransform::Densify {
+            max_segment_length,
+        } => Ok(Some(densify(
+            geometry,
+            *max_segment_length,
+            MAX_CELL_COORDINATES,
+        )?)),
+        ResolvedTransform::SnapToGrid { grid_size } => {
+            Ok(Some(snap_to_grid(geometry, *grid_size)?))
+        }
+    }
+}
+
 /// Applica `f` a ogni cella non-null preservando i null; il limite per cella
 /// e' applicato prima di toccare i dati. Le righe sono indipendenti:
 /// l'iterazione e' parallela (rayon) con collect indicizzato, quindi
@@ -170,6 +368,26 @@ fn map_nullable<T: Send>(
     results.into_iter().collect()
 }
 
+/// Braccio condiviso delle trasformazioni 1:1 fondibili di profilo B
+/// (ADR-0012): i parametri sono risolti UNA volta ([`resolve_transform`],
+/// stessi errori e stessa posizione dei bracci storici), poi per cella
+/// decode -> kernel ([`apply_transform_cell`]) -> encode, con il primo
+/// errore in ordine di riga (pattern di `map_nullable`). Comportamento
+/// identico ai bracci per-operazione che sostituisce: stesse chiamate,
+/// stesso ordine.
+fn transform_cells_fusible(
+    params: &TransformArrowSchema,
+    cells: &BinaryArray,
+) -> Result<TransformedColumn, ArrowTransportError> {
+    let resolved = resolve_transform(params)?;
+    Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
+        let geometry = geometry_from_wkb(payload)?;
+        apply_transform_cell(&resolved, &geometry)?
+            .map(|output| encode_geometry(&output))
+            .transpose()
+    })?))
+}
+
 // Dispatch per operazione intenzionalmente monolitico: ogni braccio e' un
 // caso della tabella operazione -> kernel; la scomposizione strutturale e'
 // rimandata a una fase dedicata.
@@ -188,40 +406,17 @@ fn transform_cells(
                 Ok(transform_wkb(kernel, payload).map(Some)?)
             })?))
         }
-        ArrowOperation::Buffer => {
-            let distance = params.required_distance()?;
-            let cap = BufferCapStyle::from(params.cap.unwrap_or(BufferCap::Round));
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&buffer_with_cap(&geometry, distance, cap)?).map(Some)
-            })?))
-        }
-        ArrowOperation::Simplify => {
-            let tolerance = params.required_tolerance()?;
-            let policy = SimplifyPolicy::from(
-                params
-                    .simplify_policy
-                    .unwrap_or(SimplifyPolicyParam::DouglasPeucker),
-            );
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&simplify_with_policy(&geometry, tolerance, policy)?).map(Some)
-            })?))
-        }
-        ArrowOperation::Boundary => {
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&boundary(&geometry)?).map(Some)
-            })?))
-        }
-        ArrowOperation::PointOnSurface => {
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                point_on_surface(&geometry)?
-                    .map(|point| encode_geometry(&point))
-                    .transpose()
-            })?))
-        }
+        ArrowOperation::Buffer
+        | ArrowOperation::Simplify
+        | ArrowOperation::Boundary
+        | ArrowOperation::PointOnSurface
+        | ArrowOperation::AffineTransform
+        | ArrowOperation::Translate
+        | ArrowOperation::Scale
+        | ArrowOperation::Rotate
+        | ArrowOperation::ConcaveHull
+        | ArrowOperation::Densify
+        | ArrowOperation::SnapToGrid => transform_cells_fusible(params, cells),
         #[cfg(feature = "geos-backend")]
         ArrowOperation::MakeValid => {
             Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
@@ -310,85 +505,6 @@ fn transform_cells(
             let geometry = geometry_from_wkb(payload)?;
             Ok(to_wkt(&geometry).map(Some)?)
         })?)),
-        ArrowOperation::AffineTransform => {
-            let coefficients: [f64; 6] = params
-                .coefficients
-                .as_deref()
-                .ok_or(ArrowTransportError::Internal("coefficients validato assente"))?
-                .try_into()
-                .map_err(|_| {
-                    ArrowTransportError::Internal("coefficients validato non di 6 elementi")
-                })?;
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&affine_transform(&geometry, coefficients)?).map(Some)
-            })?))
-        }
-        ArrowOperation::Translate => {
-            let x = params.required_f64("x_offset", params.x_offset)?;
-            let y = params.required_f64("y_offset", params.y_offset)?;
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&translate(&geometry, x, y)?).map(Some)
-            })?))
-        }
-        ArrowOperation::Scale => {
-            let x_factor = params.required_f64("x_factor", params.x_factor)?;
-            let y_factor = params.required_f64("y_factor", params.y_factor)?;
-            let origin = geo::Point::new(
-                params.x_origin.unwrap_or(0.0),
-                params.y_origin.unwrap_or(0.0),
-            );
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&scale_about(&geometry, x_factor, y_factor, origin)?).map(Some)
-            })?))
-        }
-        ArrowOperation::Rotate => {
-            let degrees = params.required_f64("degrees", params.degrees)?;
-            let origin = geo::Point::new(
-                params.x_origin.unwrap_or(0.0),
-                params.y_origin.unwrap_or(0.0),
-            );
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&rotate_about(&geometry, degrees, origin)?).map(Some)
-            })?))
-        }
-        ArrowOperation::ConcaveHull => {
-            let concavity = params.required_f64("concavity", params.concavity)?;
-            let length_threshold = params.length_threshold.unwrap_or(0.0);
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&concave_hull(
-                    &geometry,
-                    concavity,
-                    length_threshold,
-                    MAX_CELL_COORDINATES,
-                )?)
-                .map(Some)
-            })?))
-        }
-        ArrowOperation::Densify => {
-            let max_segment_length =
-                params.required_f64("max_segment_length", params.max_segment_length)?;
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&densify(
-                    &geometry,
-                    max_segment_length,
-                    MAX_CELL_COORDINATES,
-                )?)
-                .map(Some)
-            })?))
-        }
-        ArrowOperation::SnapToGrid => {
-            let grid_size = params.required_f64("grid_size", params.grid_size)?;
-            Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
-                let geometry = geometry_from_wkb(payload)?;
-                encode_geometry(&snap_to_grid(&geometry, grid_size)?).map(Some)
-            })?))
-        }
         ArrowOperation::LineSubstring => {
             let start = params.required_f64("start_ratio", params.start_ratio)?;
             let end = params.required_f64("end_ratio", params.end_ratio)?;
@@ -685,6 +801,217 @@ pub fn one_to_one_batch_prepared(
     }
     RecordBatch::try_new(prepared.output_schema.clone(), columns)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Runner fuso dei gruppi geo (ADR-0012)
+// ---------------------------------------------------------------------------
+
+/// Errore del runner fuso con l'attribuzione al kernel del gruppo
+/// (ADR-0012 D12.6): il runner e' un'esecuzione alternativa del gruppo, non
+/// una rimozione dei nodi — ogni fallimento dice sempre QUALE nodo ha rotto.
+#[derive(Debug)]
+pub enum FusedStepError {
+    /// Errore di cella attribuito al kernel del gruppo (indice nel gruppo):
+    /// stessa variante e stesso nodo del percorso non fuso (D12.3/D12.4).
+    Kernel {
+        /// Indice del kernel del gruppo a cui l'errore e' attribuito.
+        index: usize,
+        /// L'errore vero e proprio.
+        error: ArrowTransportError,
+    },
+    /// Controllo dell'executor tra due kernel (cancellazione cooperativa,
+    /// ADR 3): gia' nella forma finale (`PlenoraError::Cancelled` con nodo,
+    /// operazione ed `execution_id`), propaga invariato.
+    Control(PlenoraError),
+}
+
+/// Esegue un gruppo di trasformazioni 1:1 fondibili su una colonna WKB con
+/// UN decode e UN encode per batch (ADR-0012 D12.1): la forma decodificata
+/// vive solo per la durata del gruppo sul singolo batch. Struttura
+/// kernel-esterno/celle-interno: attribuzione errori esatta per kernel,
+/// cancellazione per kernel (via `control`, stessa granularita' per batch
+/// del percorso non fuso) e `catch_unwind` per kernel (l'executor sa quale
+/// kernel e' in corso dall'ultimo `control` ritornato).
+///
+/// Tabella di attribuzione (D12.3/D12.4), per kernel i del gruppo:
+///
+/// - errore del kernel -> kernel i;
+/// - output oltre `MAX_CELL_BYTES` (misura ESATTA via `wkb_size_xy`,
+///   nessuna serializzazione) -> `CellTooLarge` al kernel i — riproduce il
+///   check di `encode_geometry`;
+/// - profilo A (`centroid`/`convex_hull`/`envelope`): la pipeline canonica
+///   e' dentro `apply_transform_cell` (`transform_geometry_canonical`: OGC
+///   in uscita, limite 64 MiB e validazione strutturale, come
+///   `transform_wkb`) -> kernel i;
+/// - profilo B con un kernel i+1 nel gruppo: `validate_geometry_structural`
+///   poi `check_geometry_valid` (il fallimento del decode del nodo
+///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1;
+/// - profilo B sull'ULTIMO kernel: NESSUNA validazione extra — nel percorso
+///   non fuso l'output esce dopo `encode_geometry` senza altra validazione e
+///   decodera' chi consuma.
+///
+/// Il decode iniziale (con il check `MAX_CELL_BYTES` sull'input, pattern di
+/// `map_nullable`) e' attribuito al primo kernel del gruppo, l'encode finale
+/// all'ultimo — come nel percorso non fuso.
+///
+/// `control` e' invocato con l'indice del kernel PRIMA di ogni passo: e' il
+/// punto di cancellazione cooperativa dell'executor (errore `Control`) e il
+/// suo marker del kernel in corso per l'attribuzione dei panic.
+///
+/// # Errors
+///
+/// [`FusedStepError::Kernel`] con l'indice del kernel responsabile per gli
+/// errori di cella; [`FusedStepError::Control`] per gli errori del controllo
+/// executor (cancellazione).
+fn transform_cells_fused(
+    group: &[&TransformArrowSchema],
+    cells: &BinaryArray,
+    control: &mut dyn FnMut(usize) -> Result<(), PlenoraError>,
+) -> Result<TransformedColumn, FusedStepError> {
+    if group.is_empty() {
+        return Err(FusedStepError::Kernel {
+            index: 0,
+            error: ArrowTransportError::Internal("gruppo fuso vuoto"),
+        });
+    }
+    // Decode UNA volta: errori attribuiti al primo kernel del gruppo (come il
+    // fallimento di `geometry_from_wkb` al primo nodo del percorso non fuso).
+    let mut geometries = map_nullable(cells, |payload| Ok(Some(geometry_from_wkb(payload)?)))
+        .map_err(|error| FusedStepError::Kernel { index: 0, error })?;
+    for (index, params) in group.iter().enumerate() {
+        control(index).map_err(FusedStepError::Control)?;
+        // Risoluzione parametri del kernel i: nel percorso non fuso avviene
+        // in testa al braccio, prima di toccare le celle — stessa posizione
+        // e stessa attribuzione anche a batch vuoto.
+        let resolved =
+            resolve_transform(params).map_err(|error| FusedStepError::Kernel { index, error })?;
+        apply_fused_kernel(&resolved, &mut geometries, index, group.len())?;
+    }
+    // Encode UNA volta alla fine: errori attribuiti all'ultimo kernel.
+    let last = group.len() - 1;
+    let results: Vec<Result<Option<Vec<u8>>, ArrowTransportError>> = geometries
+        .par_iter()
+        .map(|slot| slot.as_ref().map(encode_geometry).transpose())
+        .collect();
+    let values = results
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| FusedStepError::Kernel { index: last, error })?;
+    Ok(TransformedColumn::Binary(values))
+}
+
+/// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
+/// indicizzato e primo errore in ordine di riga, come `map_nullable`
+/// (ADR-0001). La tabella di attribuzione e' quella di
+/// [`transform_cells_fused`].
+fn apply_fused_kernel(
+    resolved: &ResolvedTransform,
+    geometries: &mut [Option<Geometry<f64>>],
+    index: usize,
+    group_len: usize,
+) -> Result<(), FusedStepError> {
+    // Profilo A (D12.4): la validazione post-kernel e' interamente dentro
+    // `transform_geometry_canonical` (OGC, 64 MiB, strutturale — kernel i).
+    let profile_a = matches!(resolved, ResolvedTransform::Canonical(_));
+    let results: Vec<Result<(), FusedStepError>> = geometries
+        .par_iter_mut()
+        .map(|slot| {
+            let Some(input) = slot.take() else {
+                return Ok(());
+            };
+            let output = apply_transform_cell(resolved, &input)
+                .map_err(|error| FusedStepError::Kernel { index, error })?;
+            if !profile_a {
+                if let Some(geometry) = &output {
+                    // D12.3: il limite di cella scatta a ogni nodo intermedio
+                    // con attribuzione al produttore — misura ESATTA via
+                    // `wkb_size_xy`, stessa variante di `encode_geometry`.
+                    let size = wkb_size_xy(geometry);
+                    if size > MAX_CELL_BYTES {
+                        return Err(FusedStepError::Kernel {
+                            index,
+                            error: ArrowTransportError::CellTooLarge(size),
+                        });
+                    }
+                    // D12.4 profilo B: l'intermedio invalido fallirebbe al
+                    // decode del nodo successivo (strutturale, poi OGC —
+                    // l'ordine di `geometry_from_wkb`) -> kernel i+1.
+                    // Sull'ultimo kernel del gruppo NESSUNA validazione
+                    // extra: l'output esce dopo `encode_geometry`, come nel
+                    // percorso non fuso.
+                    if index + 1 < group_len {
+                        validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
+                            .map_err(ArrowTransportError::from)
+                            .map_err(|error| FusedStepError::Kernel {
+                                index: index + 1,
+                                error,
+                            })?;
+                        check_geometry_valid(geometry)
+                            .map_err(ArrowTransportError::from)
+                            .map_err(|error| FusedStepError::Kernel {
+                                index: index + 1,
+                                error,
+                            })?;
+                    }
+                }
+            }
+            *slot = output;
+            Ok(())
+        })
+        .collect();
+    results.into_iter().collect()
+}
+
+/// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
+/// kernel del gruppo (ADR-0012): la validazione della colonna di input (tipo
+/// Binary + metadati geoarrow) e' attribuita al primo nodo, come nel
+/// percorso non fuso; lo schema di output coincide con quello che il gruppo
+/// produrrebbe nodo per nodo (tutte le op del gruppo sono 1:1 in place sulla
+/// stessa colonna: stessa ricostruzione canonica del campo geometria).
+///
+/// # Errors
+///
+/// [`FusedStepError::Kernel`] con l'attribuzione al kernel del gruppo
+/// (colonna di input non Binary al primo kernel, errori di cella secondo la
+/// tabella di [`transform_cells_fused`], schema incoerente all'ultimo);
+/// [`FusedStepError::Control`] per la cancellazione dell'executor.
+pub fn one_to_one_batch_fused(
+    batch: &RecordBatch,
+    group: &[&TransformArrowSchema],
+    prepared: &OneToOnePrepared,
+    control: &mut dyn FnMut(usize) -> Result<(), PlenoraError>,
+) -> Result<RecordBatch, FusedStepError> {
+    let geometry_index = prepared.geometry_index;
+    let cells = batch
+        .column(geometry_index)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| FusedStepError::Kernel {
+            index: 0,
+            error: ArrowTransportError::GeometryColumnNotBinary {
+                name: group
+                    .first()
+                    .map_or("geometry", |params| params.geometry_column())
+                    .to_owned(),
+                actual: batch.column(geometry_index).data_type().to_string(),
+            },
+        })?;
+    let transformed = transform_cells_fused(group, cells, control)?;
+    let TransformedColumn::Binary(values) = transformed else {
+        return Err(FusedStepError::Kernel {
+            index: 0,
+            error: ArrowTransportError::Internal("runner fuso: colonna non Binary"),
+        });
+    };
+    let mut columns = batch.columns().to_vec();
+    columns[geometry_index] = std::sync::Arc::new(
+        values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
+    );
+    let last = group.len().saturating_sub(1);
+    RecordBatch::try_new(prepared.output_schema.clone(), columns)
+        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+        .map_err(|error| FusedStepError::Kernel { index: last, error })
 }
 
 /// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
@@ -1497,3 +1824,236 @@ pub fn transform_arrow(
     })
 }
 
+
+// ---------------------------------------------------------------------------
+// Test del runner fuso (ADR-0012)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use geo::{LineString, MultiPoint, Point, line_string, polygon};
+
+    use super::*;
+
+    /// Parametri di una trasformazione 1:1 (tutti i default, CRS fissato).
+    fn fused_params(operation: ArrowOperation) -> TransformArrowSchema {
+        TransformArrowSchema {
+            schema_version: TransformArrowSchema::VERSION,
+            operation,
+            row_count: 0,
+            crs: Some("EPSG:32632".to_owned()),
+            geometry_column: Some("geom".to_owned()),
+            distance: None,
+            cap: None,
+            tolerance: None,
+            simplify_policy: None,
+            target_crs: None,
+            max_output_rows: None,
+            max_points: None,
+            x_column: None,
+            y_column: None,
+            snap_tolerance: None,
+            remove_overlaps: None,
+            fill_gaps: None,
+            coefficients: None,
+            x_offset: None,
+            y_offset: None,
+            x_factor: None,
+            y_factor: None,
+            degrees: None,
+            x_origin: None,
+            y_origin: None,
+            concavity: None,
+            length_threshold: None,
+            max_segment_length: None,
+            grid_size: None,
+            start_ratio: None,
+            end_ratio: None,
+            ratio: None,
+            node_input: None,
+            require_complete: None,
+        }
+    }
+
+    fn wkb(geometry: &Geometry<f64>) -> Vec<u8> {
+        geometry.to_wkb(CoordDimensions::xy()).expect("fixture wkb")
+    }
+
+    /// Fixture multi-tipo: punto, linea, poligono con buco, multipoint, null.
+    fn multi_type_cells() -> Vec<Option<Vec<u8>>> {
+        let point = Geometry::Point(Point::new(1.0, 2.0));
+        let line = Geometry::LineString(line_string![
+            (x: 0.0, y: 0.0),
+            (x: 10.0, y: 0.0),
+            (x: 10.0, y: 5.0),
+        ]);
+        let holed = Geometry::Polygon(polygon!(
+            exterior: [
+                (x: 0.0, y: 0.0),
+                (x: 20.0, y: 0.0),
+                (x: 20.0, y: 20.0),
+                (x: 0.0, y: 20.0),
+                (x: 0.0, y: 0.0),
+            ],
+            interiors: [[
+                (x: 5.0, y: 5.0),
+                (x: 10.0, y: 5.0),
+                (x: 5.0, y: 10.0),
+                (x: 5.0, y: 5.0),
+            ]],
+        ));
+        let multi = Geometry::MultiPoint(MultiPoint::new(vec![
+            Point::new(0.0, 0.0),
+            Point::new(3.0, 4.0),
+        ]));
+        vec![
+            Some(wkb(&point)),
+            Some(wkb(&line)),
+            Some(wkb(&holed)),
+            Some(wkb(&multi)),
+            None,
+        ]
+    }
+
+    fn cells_array(cells: &[Option<Vec<u8>>]) -> BinaryArray {
+        cells
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<BinaryArray>()
+    }
+
+    /// Riferimento non fuso: `transform_cells` in sequenza, nodo per nodo.
+    fn run_sequential(
+        group: &[&TransformArrowSchema],
+        cells: &BinaryArray,
+    ) -> Result<Vec<Option<Vec<u8>>>, ArrowTransportError> {
+        let mut current: Vec<Option<Vec<u8>>> = cells
+            .iter()
+            .map(|cell| cell.map(<[u8]>::to_vec))
+            .collect();
+        for params in group {
+            let array = cells_array(&current);
+            let TransformedColumn::Binary(values) = transform_cells(params, &array)? else {
+                return Err(ArrowTransportError::Internal("fixture: attesa colonna Binary"));
+            };
+            current = values;
+        }
+        Ok(current)
+    }
+
+    fn run_fused(
+        group: &[&TransformArrowSchema],
+        cells: &BinaryArray,
+    ) -> Result<Vec<Option<Vec<u8>>>, FusedStepError> {
+        let TransformedColumn::Binary(values) =
+            transform_cells_fused(group, cells, &mut |_| Ok(()))?
+        else {
+            return Err(FusedStepError::Kernel {
+                index: 0,
+                error: ArrowTransportError::Internal("fixture: attesa colonna Binary"),
+            });
+        };
+        Ok(values)
+    }
+
+    /// Gruppo [buffer, simplify, centroid] (profili B, B, A): stesso output
+    /// byte-per-byte del percorso non fuso, su fixture multi-tipo con null.
+    #[test]
+    fn fused_matches_sequential_buffer_simplify_centroid() {
+        let mut buffer = fused_params(ArrowOperation::Buffer);
+        buffer.distance = Some(1.0);
+        let mut simplify = fused_params(ArrowOperation::Simplify);
+        simplify.tolerance = Some(0.01);
+        let centroid = fused_params(ArrowOperation::Centroid);
+        let group: Vec<&TransformArrowSchema> = [&buffer, &simplify, &centroid].to_vec();
+
+        let cells = cells_array(&multi_type_cells());
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso");
+        let fused = run_fused(&group, &cells).expect("percorso fuso");
+        assert_eq!(fused, expected, "output diverso byte-per-byte");
+    }
+
+    /// Gruppo [translate, scale, envelope] (profili B, B, A): copre il check
+    /// inter-passo strutturale+OGC tra kernel di profilo B e il kernel di
+    /// profilo A in chiusura.
+    #[test]
+    fn fused_matches_sequential_translate_scale_envelope() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(5.0);
+        translate.y_offset = Some(-2.0);
+        let mut scale = fused_params(ArrowOperation::Scale);
+        scale.x_factor = Some(1.5);
+        scale.y_factor = Some(0.5);
+        let envelope = fused_params(ArrowOperation::Envelope);
+        let group: Vec<&TransformArrowSchema> = [&translate, &scale, &envelope].to_vec();
+
+        let cells = cells_array(&multi_type_cells());
+        let expected = run_sequential(&group, &cells).expect("percorso non fuso");
+        let fused = run_fused(&group, &cells).expect("percorso fuso");
+        assert_eq!(fused, expected, "output diverso byte-per-byte");
+    }
+
+    /// Cella che eccede `MAX_CELL_BYTES` al kernel 1 di 3 (D12.3): densify
+    /// produce esattamente `MAX_CELL_COORDINATES` coordinate (il cap del
+    /// kernel passa) ma il WKB equivalente supera 64 MiB -> `CellTooLarge`
+    /// attribuito al kernel che l'ha prodotta, come `encode_geometry`.
+    // Il cast e' esatto (MAX_CELL_COORDINATES < 2^53): e' la lunghezza che
+    // produce esattamente il cap di coordinate consentito dal kernel.
+    #[allow(clippy::cast_precision_loss)]
+    #[test]
+    fn cell_too_large_is_attributed_to_the_producing_kernel() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(0.0);
+        let mut densify = fused_params(ArrowOperation::Densify);
+        densify.max_segment_length = Some(16.0);
+        let group: Vec<&TransformArrowSchema> = [&translate, &densify, &translate].to_vec();
+
+        // Segmento lungo 16 * (MAX_CELL_COORDINATES - 1): il conteggio
+        // densificato e' esattamente il cap del kernel (1 + ceil(L/s)),
+        // quindi il kernel NON scatta; il WKB risultante e' 5 + 4 + 16 *
+        // MAX_CELL_COORDINATES = 64 MiB + 9 byte -> oltre il limite.
+        let length = 16.0 * (MAX_CELL_COORDINATES - 1) as f64;
+        let line = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (length, 0.0)]));
+        let cells = cells_array(&[Some(wkb(&line))]);
+        let expected_size = 5 + 4 + 16 * MAX_CELL_COORDINATES;
+
+        let error = run_fused(&group, &cells).expect_err("cella oltre il limite");
+        match error {
+            FusedStepError::Kernel { index, error } => {
+                assert_eq!(index, 1, "attribuzione al kernel che ha prodotto la cella");
+                assert!(
+                    matches!(error, ArrowTransportError::CellTooLarge(size) if size == expected_size),
+                    "variante/misura diverse da encode_geometry: {error}"
+                );
+            }
+            FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+        }
+    }
+
+    /// Input malformato: l'errore di decode e' attribuito al PRIMO kernel
+    /// del gruppo, con la stessa variante e lo stesso messaggio del percorso
+    /// non fuso.
+    #[test]
+    fn malformed_input_is_attributed_to_the_first_kernel() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(0.0);
+        let centroid = fused_params(ArrowOperation::Centroid);
+        let group: Vec<&TransformArrowSchema> = [&translate, &centroid].to_vec();
+
+        let cells = cells_array(&[
+            Some(wkb(&Geometry::Point(Point::new(0.0, 0.0)))),
+            Some(vec![0x01, 0x09, 0x00]), // WKB troncato
+        ]);
+        let sequential_error = run_sequential(&group, &cells).expect_err("input malformato");
+        let fused_error = run_fused(&group, &cells).expect_err("input malformato");
+        match fused_error {
+            FusedStepError::Kernel { index, error } => {
+                assert_eq!(index, 0, "attribuzione al primo kernel del gruppo");
+                assert_eq!(error.to_string(), sequential_error.to_string());
+            }
+            FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+        }
+    }
+}

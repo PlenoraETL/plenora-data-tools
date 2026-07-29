@@ -2948,3 +2948,148 @@ fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
         "nessun residuo nella temp root dopo l'errore"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fusione dei segmenti geo (ADR-0012)
+// ---------------------------------------------------------------------------
+
+/// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi
+/// (perimetro M1, capability `TransformInPlace`).
+fn geo_fusion_chain_plan() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.01}},
+            {"id": "c", "op": "geo.centroid", "in": ["s"], "config": {}},
+        ],
+        "output": "c",
+    })
+}
+
+fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
+    Geometry::Polygon(polygon![
+        (x: origin_x, y: origin_y),
+        (x: origin_x + side, y: origin_y),
+        (x: origin_x + side, y: origin_y + side),
+        (x: origin_x, y: origin_y + side),
+        (x: origin_x, y: origin_y),
+    ])
+    .to_wkb(CoordDimensions::xy())
+    .expect("wkb fixture")
+}
+
+fn run_geo_fusion(
+    plan: &serde_json::Value,
+    batches: Vec<RecordBatch>,
+    geo_fusion: bool,
+) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
+    let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])?;
+    let runtime = RuntimeContext {
+        geo_fusion,
+        ..RuntimeContext::default()
+    };
+    output_rows(execute(&graph, single_input("main", batches), runtime)?)
+}
+
+fn fusion_fixture_batches() -> Vec<RecordBatch> {
+    vec![
+        geo_batch(
+            &[0, 1, 2],
+            &[
+                Some(point_wkb(0.0, 0.0)),
+                Some(square_wkb(10.0, 10.0, 20.0)),
+                None,
+            ],
+        ),
+        geo_batch(
+            &[3, 4],
+            &[
+                Some(point_wkb(-5.0, 7.0)),
+                Some(square_wkb(-100.0, 0.0, 5.0)),
+            ],
+        ),
+    ]
+}
+
+/// A/B via kill switch (D12.9): la pipeline di tre geo transform fusi
+/// produce output identico al percorso non fuso, con metriche per nodo
+/// preservate (D12.6).
+#[test]
+fn fused_geo_group_matches_unfused_output_and_keeps_per_node_metrics() {
+    let plan = geo_fusion_chain_plan();
+    let (fused_batches, fused_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), true).expect("fuso");
+    let (plain_batches, plain_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
+
+    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+
+    for node in ["b", "s", "c"] {
+        let fused_node = &fused_metrics.nodes[node];
+        let plain_node = &plain_metrics.nodes[node];
+        assert_eq!(fused_node.rows_in, 5, "{node}: righe in ingresso 1:1");
+        assert_eq!(fused_node.rows_out, 5, "{node}: righe prodotte 1:1");
+        assert_eq!(fused_node.batches_in, 2, "{node}: batch in ingresso");
+        assert_eq!(fused_node.rows_in, plain_node.rows_in, "{node}: righe in A/B");
+        assert_eq!(fused_node.rows_out, plain_node.rows_out, "{node}: righe out A/B");
+    }
+    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0);
+    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+}
+
+/// Poligono semplice valido (anello da `coords` coordinate su un cerchio):
+/// gonfia i byte decodificati stimati per il test di fallback governor.
+// Angoli della fixture: conteggi piccoli ed esatti anche in f64.
+#[allow(clippy::cast_precision_loss)]
+fn circle_polygon_wkb(coords: usize) -> Vec<u8> {
+    let mut ring: Vec<(f64, f64)> = (0..coords - 1)
+        .map(|index| {
+            let angle = index as f64 / (coords - 1) as f64 * std::f64::consts::TAU;
+            (1_000.0 * angle.cos(), 1_000.0 * angle.sin())
+        })
+        .collect();
+    ring.push((1_000.0, 0.0)); // chiusura esatta sull'angolo 0
+    Geometry::Polygon(geo::Polygon::new(geo::LineString::from(ring), vec![]))
+        .to_wkb(CoordDimensions::xy())
+        .expect("wkb fixture")
+}
+
+/// Reservation governor fallita (D12.7): il budget copre il lease dell'input
+/// e quello dell'output (centroid -> punti, pochi byte) ma NON input + byte
+/// decodificati stimati (~64 KiB): il batch ricade sul percorso non fuso con
+/// metrica dedicata — mai silenzioso, mai un errore nuovo. E' anche la prova
+/// che il governor scatta davvero su un batch oltre soglia (condizione di
+/// entrata in vigore della deroga DER-003, D12.8).
+#[test]
+fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
+    let cells = || {
+        vec![
+            Some(circle_polygon_wkb(2_000)),
+            Some(circle_polygon_wkb(2_000)),
+        ]
+    };
+    let batch = geo_batch(&[0, 1], &cells());
+    let budget = batch.get_array_memory_size() as u64 + 4_096;
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "limits": {"max_memory_bytes": budget},
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.01}},
+            {"id": "c", "op": "geo.centroid", "in": ["s"], "config": {}},
+        ],
+        "output": "c",
+    });
+
+    let (fused_batches, fused_metrics) =
+        run_geo_fusion(&plan, vec![batch], true).expect("fallback, non errore");
+    let (plain_batches, plain_metrics) =
+        run_geo_fusion(&plan, vec![geo_batch(&[0, 1], &cells())], false).expect("non fuso");
+
+    assert_eq!(fused_metrics.geo_fusion_fallbacks, 1, "un batch -> un fallback");
+    assert_eq!(fused_batches, plain_batches, "output diverso dal non fuso");
+    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+}

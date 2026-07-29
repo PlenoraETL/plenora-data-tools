@@ -188,3 +188,17 @@ fondendo» e' una classe).
   condizionata al test governor; fallback solo frammentazione +
   strumentato; elenco 14 op revistato; nessun bump fingerprint; M2 in
   cantiere separato). Milestone M1 avviata.
+- 2026-07-29: M1 attuato. `RuntimeContext.geo_fusion` (D12.9, registrato
+  in `ExecutionPlan::geo_fusion`); gruppi annotati in `prepare`
+  (`PreparedKernel.fusion_group`, run massimali capability-gated D12.2);
+  runner fuso in `geo_transport/unary.rs` (`transform_cells_fused` +
+  `one_to_one_batch_fused`, loop kernel-esterno/celle-interno, tabella di
+  attribuzione D12.3/D12.4 con gli helper
+  `transform_geometry_canonical`/`check_geometry_valid` di
+  plenora-kernels-geo); ramo fuso in `run_streaming_chain` con reservation
+  D12.7, fallback strumentato (contatore `geo_fusion_fallbacks` in
+  `ExecutionMetrics`) e contabilita' per nodo D12.6. Test: formazione
+  gruppi/kill switch (prepare), parita' byte-per-byte e attribuzione
+  errori (unary), A/B end-to-end e governor-oltre-soglia (executor —
+  condizione DER-003 soddisfatta). Oracolo differenziale esteso: task
+  separato, resta gate per nuovi op fondibili.

@@ -34,6 +34,11 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc8`
   dimostra che il governor scatta davvero su un batch oltre soglia.
   **Finche' il test non e' in CI, la deroga NON e' in vigore** e la
   fusione non puo' essere attivata in produzione.
+  **Soddisfatta (2026-07-29, M1):**
+  `executor::tests::geo_fusion_falls_back_when_the_governor_rejects_the_reservation`
+  — reservation D12.7 rifiutata dal governor su batch oltre soglia,
+  fallback strumentato (contatore `geo_fusion_fallbacks`), output
+  identico al percorso non fuso.
 - **Owner:** maintainer di plenora-data-tools.
 - **Condizione di rientro:** nessuna — deroga permanente, dichiarata
   tale (e' intrinseca alla rappresentazione transiente; il rientro

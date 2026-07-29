@@ -77,9 +77,12 @@
 //!   In esecuzione seriale i consumatori drenano in sequenza, quindi
 //!   il tee coincide con la materializzazione conservativa di D9;
 //! - `LinearStreaming`/`GeoFused`: il batch attraversa la catena di kernel
-//!   senza code ne' materializzazioni (V4). `GeoFused` nella v1 esegue le
-//!   op geo 1:1 come `LinearStreaming` (la cache di decode e' Fase 2C, la
-//!   struttura [`crate::prepare::GeoRole`] la predispone);
+//!   senza code ne' materializzazioni (V4). Nei segmenti `GeoFused` i run di
+//!   kernel fondibili annotati da `prepare` (campo `fusion_group`) sono
+//!   eseguiti col runner fuso di ADR-0012 — un decode/encode per gruppo su
+//!   ogni batch, con errori/metriche/cancellazione per nodo preservati e
+//!   fallback strumentato al percorso nodo-per-nodo a reservation governor
+//!   fallita (D12.6/D12.7);
 //! - `Blocking`/`BinaryBlocking`: alla prima pull drenano gli input del
 //!   segmento (materializzazione prevista dal piano, V9), concatenano ed
 //!   eseguono il kernel una sola volta;
@@ -164,9 +167,10 @@ use plenora_kernels_table::spill::SpillMetrics;
 use crate::cancellation::CancellationToken;
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
 use crate::geo_transport::transport::{
-    one_to_one_batch_prepared, prepare_one_to_one, OneToOnePrepared, TransformArrowSchema,
+    OneToOnePrepared, TransformArrowSchema, one_to_one_batch_prepared, prepare_one_to_one,
 };
-use crate::governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics};
+use crate::geo_transport::unary::{FusedStepError, one_to_one_batch_fused};
+use crate::governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
 use crate::planner::{
     check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
 };
@@ -401,6 +405,12 @@ pub struct ExecutionMetrics {
     /// materializzati dai percorsi `*_spilled` di sort/distinct/aggregate.
     /// Tutte zero se nessun nodo ha spillato.
     pub spill: SpillMetrics,
+    /// Batch per cui il runner fuso geo e' ricaduto sul percorso non fuso
+    /// per reservation governor fallita (ADR-0012 D12.7): mai silenzioso —
+    /// una pressione ricorrente e' osservabile qui invece di manifestarsi
+    /// come rallentamento inspiegabile. Nessun errore nuovo: il risultato e'
+    /// identico, cambia solo la scelta fisica.
+    pub geo_fusion_fallbacks: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +560,13 @@ impl ExecState {
         total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
         total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
         total.files = total.files.saturating_add(delta.files);
+    }
+
+    /// Un batch e' ricaduto dal runner fuso geo al percorso non fuso
+    /// (ADR-0012 D12.7): contatore dedicato, mai silenzioso — nessun errore
+    /// nuovo, il risultato resta identico.
+    fn record_geo_fusion_fallback(&self) {
+        self.metrics.borrow_mut().geo_fusion_fallbacks += 1;
     }
 
     /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
@@ -1624,15 +1641,24 @@ fn validate_wkb_cells(
 /// (`max_rows_per_edge`, `max_batches`, byte per batch).
 fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Result<()> {
     let _ = check_batch_bytes(state, batch, edge)?;
+    check_edge_counts(state, edge, batch.num_rows() as u64)
+}
+
+/// Conteggi righe/batch di un arco intermedio e limiti corrispondenti
+/// (`max_rows_per_edge`, `max_batches`) SENZA il tetto byte del batch:
+/// archi interni dei gruppi fusi geo (ADR-0012 D12.8, deroga DER-003 di
+/// `docs/deroghe.md` — il batch non e' materializzato e H-03 e' coperto dal
+/// governor, reservation D12.7). Righe e batch restano esatti (1:1).
+fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     let mut counts = state.edge_counts.borrow_mut();
     // Chiave clonata solo al primo batch dell'arco (V2): i batch successivi
     // entrano dal `get_mut` sul nome esistente.
     if let Some(entry) = counts.get_mut(edge) {
-        entry.0 += batch.num_rows() as u64;
+        entry.0 += rows;
         entry.1 += 1;
     } else {
         let entry = counts.entry(edge.to_owned()).or_insert((0, 0));
-        entry.0 += batch.num_rows() as u64;
+        entry.0 += rows;
         entry.1 += 1;
     }
     let entry = &counts[edge];
@@ -1916,7 +1942,30 @@ fn run_streaming_chain(
     } else {
         None
     };
-    for (position, kernel) in kernels.iter().enumerate() {
+    let mut position = 0_usize;
+    while position < kernels.len() {
+        // ADR-0012: se il kernel apre un gruppo di fusione geo (>= 2 membri)
+        // il gruppo e' eseguito col runner fuso su QUESTO batch; a
+        // reservation governor fallita si ricade sul percorso non fuso per
+        // il batch (D12.7, fallback strumentato) e il loop standard
+        // processa i kernel uno a uno.
+        let group_len = fusion_group_len(kernels, position);
+        if group_len > 1
+            && try_run_fused_group(
+                segment,
+                state,
+                &mut batch,
+                position,
+                group_len,
+                &mut bytes_at_boundary,
+                batch_detail.as_deref(),
+                output_is_plan_output,
+            )?
+        {
+            position += group_len;
+            continue;
+        }
+        let kernel = &kernels[position];
         // ADR 3, M1c: check cooperativo al confine di kernel — per il primo
         // kernel della catena e' anche il check "tra batch"; onora il
         // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
@@ -1961,6 +2010,7 @@ fn run_streaming_chain(
             position == 0,
             is_last,
         );
+        position += 1;
     }
     // Ricomposizione: quota dell'output acquisita prima di rilasciare
     // l'input (mai sotto-conteggio al confine, ADR-0002).
@@ -1969,6 +2019,260 @@ fn run_streaming_chain(
         .reserve(bytes_at_boundary, &segment.output_edge)?;
     drop(input_lease);
     Ok(GovernedBatch::new(batch, Some(output_lease), seq))
+}
+
+/// Lunghezza del gruppo di fusione geo che si apre a `position` (0 se il
+/// kernel non apre un gruppo, ADR-0012): i membri condividono l'id assegnato
+/// in `prepare` e l'apertura e' il primo membro del run.
+fn fusion_group_len(kernels: &[PreparedKernel], position: usize) -> usize {
+    let Some(group) = kernels[position].fusion_group else {
+        return 0;
+    };
+    if position > 0 && kernels[position - 1].fusion_group == Some(group) {
+        return 0;
+    }
+    let mut len = 1_usize;
+    while position + len < kernels.len() && kernels[position + len].fusion_group == Some(group) {
+        len += 1;
+    }
+    len
+}
+
+/// Stima iniziale dei byte decodificati del gruppo sul batch (ADR-0012
+/// D12.7): somma ESATTA dei payload WKB non null della colonna geometria —
+/// camminata sui payload di input, perche' la forma decodificata transiente
+/// non esiste ancora. `None` se la colonna non e' Binary: il percorso non
+/// fuso produce l'errore esatto al primo kernel.
+fn fused_group_decoded_bytes(batch: &RecordBatch, kernel: &PreparedKernel) -> Option<u64> {
+    let index = kernel.geometry_column_index?;
+    let cells = batch.column(index).as_any().downcast_ref::<BinaryArray>()?;
+    let mut total = 0_u64;
+    for cell in cells.iter().flatten() {
+        total = total.saturating_add(cell.len() as u64);
+    }
+    Some(total)
+}
+
+/// Contesto di un tentativo fuso su un batch (ADR-0012): argomenti condivisi
+/// della contabilita' per kernel tra i percorsi di successo e di fallimento.
+struct FusedAttempt<'a> {
+    state: &'a ExecState,
+    segment: &'a PhysicalSegment,
+    start: usize,
+    group_len: usize,
+    rows: u64,
+    bytes_in: u64,
+    output_is_plan_output: bool,
+    /// Istanti di inizio passo (wall time per kernel): il primo copre
+    /// decode + kernel 0, come lo `start` di `run_kernel` nel loop non fuso.
+    edges: RefCell<Vec<Instant>>,
+}
+
+impl FusedAttempt<'_> {
+    /// Contabilita' dei kernel COMPLETATI del gruppo (ADR-0012 D12.6):
+    /// stessa sequenza del loop non fuso — righe per nodo, espansione,
+    /// limiti d'arco, metriche per kernel — per i primi `completed` kernel.
+    /// Sugli archi interni fusi il batch non e' materializzato: conteggi
+    /// righe/batch esatti (1:1), niente tetto byte (D12.8, deroga DER-003);
+    /// il batch materiale esiste solo a gruppo completato (ultimo kernel).
+    /// I byte ai confini interni fusi sono zero: i buffer Arrow intermedi
+    /// non esistono (metriche E3, non reservation).
+    ///
+    /// # Errors
+    ///
+    /// Come i check del loop non fuso (`max_expansion_factor`, limiti
+    /// d'arco): un loro fallimento precede l'errore del kernel in corso,
+    /// esattamente come nel percorso non fuso.
+    fn account(
+        &self,
+        completed: usize,
+        output: Option<(&RecordBatch, u64)>,
+        finished: Instant,
+    ) -> Result<()> {
+        let edges = self.edges.borrow();
+        for index in 0..completed {
+            let position = self.start + index;
+            let kernel = &self.segment.kernels[position];
+            let is_last = position + 1 == self.segment.kernels.len();
+            let kernel_bytes_in = if index == 0 { self.bytes_in } else { 0 };
+            let (kernel_bytes_out, materialized) = if index + 1 == self.group_len {
+                match output {
+                    Some((batch, bytes)) => (bytes, Some(batch)),
+                    None => (0, None),
+                }
+            } else {
+                (0, None)
+            };
+            let elapsed = edges.get(index + 1).map_or_else(
+                || finished.saturating_duration_since(edges[index]),
+                |next| next.saturating_duration_since(edges[index]),
+            );
+            {
+                let mut node_rows = self.state.node_rows.borrow_mut();
+                if let Some(entry) = node_rows.get_mut(&kernel.node_id) {
+                    entry.1 += self.rows;
+                } else {
+                    node_rows
+                        .entry(kernel.node_id.clone())
+                        .or_insert((0, 0))
+                        .1 += self.rows;
+                }
+            }
+            check_expansion(self.state, kernel, self.rows)?;
+            match materialized {
+                Some(batch) => {
+                    if !(is_last && self.output_is_plan_output) {
+                        check_edge_batch(self.state, &kernel.node_id, batch)?;
+                    }
+                }
+                None => {
+                    // Arco interno fuso (D12.8/DER-003): conteggi esatti 1:1,
+                    // il tetto byte e' coperto dal governor (D12.7).
+                    check_edge_counts(self.state, &kernel.node_id, self.rows)?;
+                }
+            }
+            record_kernel_metrics(
+                self.state,
+                self.segment,
+                kernel,
+                self.rows,
+                self.rows,
+                kernel_bytes_in,
+                kernel_bytes_out,
+                elapsed,
+                position == 0,
+                is_last,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Tentativo di esecuzione FUSA di un gruppo geo su un batch (ADR-0012):
+/// reservation dei byte decodificati sul governor (D12.7) e, a concessione
+/// avvenuta, runner fuso con un solo decode/encode. Restituisce `true` se il
+/// gruppo e' stato eseguito (batch e byte al confine aggiornati); `false` se
+/// si e' ricaduti sul percorso non fuso per QUESTO batch — reservation
+/// fallita, metrica dedicata registrata, batch invariato: nessun errore
+/// nuovo, il loop standard produce l'esito identico.
+///
+/// Errori e osservabilita' per nodo (D12.6): righe 1:1 e metriche per ogni
+/// kernel del gruppo, `check_cancellation` tra un kernel e l'altro (errore
+/// `Cancelled` attribuito al kernel in corso, come il check del loop),
+/// errori di cella via `step_error` al kernel che li ha prodotti (tabella di
+/// attribuzione del runner fuso), `catch_unwind` sul gruppo con attribuzione
+/// al kernel in corso (stesso pattern di `run_kernel`).
+///
+/// # Errors
+///
+/// Come il loop non fuso per i kernel del gruppo (limiti, errori di cella,
+/// cancellazione, panic convertito), piu' `PlenoraError::Internal` se un
+/// kernel del gruppo non e' `GeoTransform` (invariante di `prepare`).
+#[allow(clippy::too_many_arguments)]
+fn try_run_fused_group(
+    segment: &PhysicalSegment,
+    state: &ExecState,
+    batch: &mut RecordBatch,
+    start: usize,
+    group_len: usize,
+    bytes_at_boundary: &mut u64,
+    batch_detail: Option<&str>,
+    output_is_plan_output: bool,
+) -> Result<bool> {
+    let kernels = &segment.kernels[start..start + group_len];
+    let Some(decoded_bytes) = fused_group_decoded_bytes(batch, &kernels[0]) else {
+        return Ok(false);
+    };
+    let lease = match state.governor.try_reserve(decoded_bytes, &kernels[0].node_id) {
+        Ok(ReservationResult::Granted(lease)) => lease,
+        // Reservation fallita -> fallback strumentato (D12.7). Gli esiti
+        // `RetryAfterProgress`/`MustSpill` non sono mai emessi dalla v1
+        // seriale: per difesa stesso fallback, mai una primitiva di panic.
+        Ok(ReservationResult::RetryAfterProgress | ReservationResult::MustSpill) | Err(_) => {
+            state.record_geo_fusion_fallback();
+            return Ok(false);
+        }
+    };
+    // Parametri tipizzati del gruppo (config `GeoTransform` garantita da
+    // `prepare`: la condizione di fondibilita' la richiede).
+    let mut params: Vec<&TransformArrowSchema> = Vec::with_capacity(group_len);
+    for kernel in kernels {
+        match &kernel.config {
+            PreparedConfig::GeoTransform(kernel_params) => params.push(kernel_params),
+            _ => {
+                return Err(PlenoraError::Internal(format!(
+                    "nodo `{}`: kernel non GeoTransform in un gruppo fuso",
+                    kernel.node_id
+                )));
+            }
+        }
+    }
+    // Handle prepared del PRIMO kernel del gruppo: valida la colonna di
+    // input attribuendo l'errore al primo nodo (come il percorso non fuso)
+    // e fornisce lo schema di output — identico a quello dell'ultimo nodo
+    // (tutte le op del gruppo sono 1:1 in place sulla stessa colonna).
+    let prepared = state
+        .one_to_one_prepared(&kernels[0], &batch.schema(), params[0])
+        .map_err(|error| state.with_diagnostics(error, batch_detail))?;
+    // Marker del kernel in corso (attribuzione dei panic, D12.6).
+    let current = Cell::new(0_usize);
+    let attempt = FusedAttempt {
+        state,
+        segment,
+        start,
+        group_len,
+        rows: batch.num_rows() as u64,
+        bytes_in: *bytes_at_boundary,
+        output_is_plan_output,
+        edges: RefCell::new(vec![Instant::now()]),
+    };
+    // `AssertUnwindSafe`: stessa giustificazione di `run_kernel` — esecuzione
+    // seriale, batch e config proprieta' esclusiva della chiamata, l'errore
+    // ferma lo stream e nessuno stato del kernel e' riusato dopo un panic.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        one_to_one_batch_fused(batch, &params, &prepared, &mut |index| {
+            current.set(index);
+            if index > 0 {
+                attempt.edges.borrow_mut().push(Instant::now());
+            }
+            let kernel = &kernels[index];
+            #[cfg(test)]
+            inject_test_panic(&kernel.node_id);
+            state.check_cancellation(kernel)
+        })
+    }));
+    let finished = Instant::now();
+    let result = match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            attempt.account(current.get(), None, finished)?;
+            let error = panic_step_error(&kernels[current.get()], &*payload);
+            return Err(state.with_diagnostics(error, batch_detail));
+        }
+    };
+    match result {
+        Ok(output) => {
+            let out_bytes = output.get_array_memory_size() as u64;
+            attempt.account(group_len, Some((&output, out_bytes)), finished)?;
+            // D12.7: la quota decodificata e' rilasciata PRIMA della
+            // reservation del lease di uscita del segmento.
+            drop(lease);
+            *batch = output;
+            *bytes_at_boundary = out_bytes;
+            Ok(true)
+        }
+        Err(FusedStepError::Control(error)) => {
+            // Cancellazione al confine del kernel in corso: forma finale,
+            // niente `step_error` ne' diagnostica (come il check del loop).
+            attempt.account(current.get(), None, finished)?;
+            Err(error)
+        }
+        Err(FusedStepError::Kernel { index, error }) => {
+            attempt.account(index, None, finished)?;
+            let error = step_error(&kernels[index], PlenoraError::InvalidPlan(error.to_string()));
+            Err(state.with_diagnostics(error, batch_detail))
+        }
+    }
 }
 
 /// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per
