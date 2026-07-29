@@ -86,7 +86,9 @@ pub fn make_valid_wkb(
         return Err(GeosBackendError::InvalidRepair);
     }
     let output = repaired.to_wkb().map_err(geos_error)?;
-    validate_wkb_contract(&output)?;
+    // Rivalidazione dell'output (R0.1: nessuna fiducia nel produttore):
+    // il decoder validante (ADR-0011) applica lo stesso contratto
+    // strutturale DURANTE la costruzione — una passata, garanzia identica.
     geometry_from_wkb(&output)?;
     Ok(output)
 }
@@ -219,7 +221,9 @@ fn checked_noding_work(
 
 fn geos_to_geo(geometry: &GeosGeometry) -> Result<Geometry<f64>, GeosBackendError> {
     let payload = geometry.to_wkb().map_err(geos_error)?;
-    validate_wkb_contract(&payload)?;
+    // Come in make_valid_wkb: geometry_from_wkb include il contratto
+    // strutturale (decoder validante, ADR-0011) — nessuna scansione
+    // separata, la garanzia fail-closed e' identica.
     geometry_from_wkb(&payload).map_err(GeosBackendError::from)
 }
 
