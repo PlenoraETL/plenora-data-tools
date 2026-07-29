@@ -55,21 +55,23 @@ jobs:
         run: cargo test --workspace --locked --no-fail-fast
 
       # Gate R6 (ICD): nei target --lib nessuna primitiva di panic e
-      # nessun unsafe. Bloccante. --cap-lints=warn cappeggia i lint di
-      # stile preesistenti (pedantic/nursery da workspace); i -D da riga
-      # di comando restano deny perche' espliciti.
+      # nessun unsafe. Bloccante. MAI aggiungere --cap-lints=warn: cappera'
+      # anche i -D espliciti declassandoli a warn (regressione trovata il
+      # 2026-07-29 — il gate non bloccava nulla, 27 siti accumulati). I
+      # lint di stile sono gia' deny da workspace.lints con zero warning,
+      # non serve alcun cap.
       - name: Gate anti-panic (R6)
         run: >
           cargo clippy -p plenora-core -p plenora-engine
           -p plenora-kernels-table -p plenora-kernels-geo
           --lib --locked --
-          --cap-lints=warn -D unsafe-code
+          -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 
-      # Clippy bloccante (dopo la passata di pulizia 2026-07-27):
-      # la configurazione workspace e' onesta (all=deny, pedantic/nursery
-      # a warn) e il codebase passa con zero errori. Da qui in poi il
-      # debito lint non puo' piu' accumularsi.
+      # Clippy bloccante (dopo la passata di pulizia 2026-07-27 e il
+      # rialzo a deny di pedantic/nursery): tutti i gruppi lint sono deny
+      # da workspace.lints e il codebase passa con zero warning. Da qui in
+      # poi il debito lint non puo' piu' accumularsi.
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
