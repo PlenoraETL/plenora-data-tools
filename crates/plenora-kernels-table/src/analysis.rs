@@ -38,7 +38,7 @@ fn value_text(value: &Value) -> String {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome di output non valido (come `validate_output_name`);
+/// - `InvalidPlan`: nome di output non valido (come `validate_output_name`);
 /// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
 ///   di `scalar_as_string` e `replace_or_append`.
 pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
@@ -165,7 +165,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 ///
 /// # Errors
 ///
-/// - `Contract`: numero di bin fuori da 2..=100 o non rappresentabile;
+/// - `InvalidPlan`: numero di bin fuori da 2..=100 o non rappresentabile;
 ///   bordi non strettamente crescenti (o in numero fuori da 3..=101);
 ///   numero di `labels` diverso dal numero di bin;
 /// - `Schema`: colonna `column` assente dallo schema; nessun valore
@@ -603,7 +603,7 @@ fn flatten_row(
 ///
 /// # Errors
 ///
-/// - `Contract`: `max_level` oltre 5; totale colonne oltre
+/// - `InvalidPlan`: `max_level` oltre 5; totale colonne oltre
 ///   `limits.max_columns`; nome di output non valido o privo del `prefix`
 ///   atteso;
 /// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
@@ -937,7 +937,7 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 ///
 /// # Errors
 ///
-/// - `Contract`: `fraction` fuori da 0..=1; dimensioni di gruppo, dataset
+/// - `InvalidPlan`: `fraction` fuori da 0..=1; dimensioni di gruppo, dataset
 ///   o campione non rappresentabili;
 /// - `Schema`: colonna `stratify_column` assente dallo schema; in piu' gli
 ///   errori di `scalar_as_string` e `select_rows`.

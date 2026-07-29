@@ -990,7 +990,7 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
 ///
 /// # Errors
 ///
-/// - `Contract`: nome colonna di output vuoto o oltre 1024 byte (come
+/// - `InvalidPlan`: nome colonna di output vuoto o oltre 1024 byte (come
 ///   `validate_output_name`); AST oltre la profondita' massima o oltre
 ///   `max_nodes`; nome colonna vuoto; letterale non scalare o non finito;
 ///   troppi argomenti o rami `case`; unita' di `date_trunc` non letterale o
@@ -1062,7 +1062,7 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 ///   non finito in colonna o risultato non finito; `date_trunc` su colonna
 ///   non temporale o timestamp timezone-aware; tipi eterogenei con
 ///   `output_type = auto`; errore Arrow nella sostituzione;
-/// - `Contract`: letterale non scalare o non finito; numero di argomenti
+/// - `InvalidPlan`: letterale non scalare o non finito; numero di argomenti
 ///   errato; regex non valida in `regex_replace`; indice di `substring`
 ///   negativo; unita' di `date_trunc` non valida; invarianti interne
 ///   violate (errore Internal).

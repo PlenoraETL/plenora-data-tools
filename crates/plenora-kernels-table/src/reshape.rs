@@ -248,7 +248,7 @@ impl<'a> PivotKeyColumn<'a> {
 /// # Errors
 ///
 /// - `Schema`: colonna id/value assente;
-/// - `Contract`: nessuna colonna valore, overflow o righe di output oltre
+/// - `InvalidPlan`: nessuna colonna valore, overflow o righe di output oltre
 ///   `max_rows`, valore testuale oltre `max_string_bytes`, colonne valore
 ///   eterogenee senza `type_policy='string'`, nome di output non valido o
 ///   collisione di naming non risolvibile.
@@ -545,7 +545,7 @@ fn pivot_column(
 /// # Errors
 ///
 /// - `Schema`: colonna indice/pivot/valore assente;
-/// - `Contract`: chiavi o colonne di output oltre i limiti `max_rows`/
+/// - `InvalidPlan`: chiavi o colonne di output oltre i limiti `max_rows`/
 ///   `max_columns`, nome di colonna di output non valido, oppure gli errori
 ///   di conversione/indice di `pivot_column` (es. intero non rappresentabile
 ///   come f64 nelle aggregazioni numeriche).
@@ -692,7 +692,7 @@ pub struct Transpose {
 /// # Errors
 ///
 /// - `Schema`: colonna `id_column` assente;
-/// - `Contract`: righe/colonne di output oltre i limiti, colonne dati
+/// - `InvalidPlan`: righe/colonne di output oltre i limiti, colonne dati
 ///   eterogenee senza `type_policy='string'`, valore testuale oltre
 ///   `max_string_bytes`, indice oltre u64, nome di colonna di output non
 ///   valido.
@@ -834,7 +834,7 @@ pub struct Explode {
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo List, offset List negativo;
-/// - `Contract`: righe di output oltre `max_rows`, indice elemento oltre
+/// - `InvalidPlan`: righe di output oltre `max_rows`, indice elemento oltre
 ///   u32, nome di output non valido; inoltre gli errori di
 ///   `replace_or_append`.
 pub fn explode(
@@ -904,7 +904,7 @@ const fn default_true() -> bool {
 ///
 /// - `Schema`: colonna assente o non di tipo Struct, collisione tra il nome
 ///   di una colonna figlia e una colonna esistente;
-/// - `Contract`: colonne di output oltre `max_columns`, nome di colonna
+/// - `InvalidPlan`: colonne di output oltre `max_columns`, nome di colonna
 ///   figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
@@ -1107,7 +1107,7 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
 ///
 /// # Errors
 ///
-/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati, chiavi
+/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati, chiavi
 ///   duplicate in uno dei due input, righe/colonne di output oltre i limiti;
 /// - `Schema`: colonna chiave o di confronto assente, tipi Arrow non
 ///   identici tra i due lati su una stessa colonna.

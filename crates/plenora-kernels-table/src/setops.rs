@@ -236,7 +236,7 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`) o errore Arrow
 ///   nella concat o nella costruzione del batch;
-/// - `Contract`: overflow nel conteggio delle righe o totale oltre
+/// - `InvalidPlan`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn concat_compatible(
     left: &RecordBatch,
@@ -303,7 +303,7 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
 ///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
 ///   o errore nella selezione o nella concat finale (come `select_rows` e
 ///   `concat_compatible`);
-/// - `Contract`: overflow nel conteggio delle righe o totale oltre
+/// - `InvalidPlan`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn union_distinct(
     left: &RecordBatch,

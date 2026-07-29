@@ -58,7 +58,7 @@ const fn default_true() -> bool {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, `columns` vuoto,
+/// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto,
 ///   null con `null_policy = error`, valore non rappresentabile come testo
 ///   (come `scalar_as_string`);
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
@@ -146,7 +146,7 @@ fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, null con
+/// - `InvalidPlan`: nome della colonna di output non valido, null con
 ///   `null_policy = error`, valore oltre `u64` nel framing, valore non
 ///   rappresentabile come testo (come `scalar_as_string`);
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
@@ -433,7 +433,7 @@ fn fingerprint_rows<D: Digest>(
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, colonna ripetuta
+/// - `InvalidPlan`: nome della colonna di output non valido, colonna ripetuta
 ///   in `columns`, nessuna colonna disponibile (config vuota su schema senza
 ///   colonne), valore oltre `u64` nel framing, valore non rappresentabile
 ///   come testo (come `scalar_as_string`);
@@ -586,7 +586,7 @@ fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, `key_env` vuoto,
+/// - `InvalidPlan`: nome della colonna di output non valido, `key_env` vuoto,
 ///   `columns` vuoto, colonna ripetuta, chiave HMAC non disponibile
 ///   (variabile d'ambiente assente o vuota), valore oltre `u64` nel framing,
 ///   valore non rappresentabile come testo (come `scalar_as_string`);
@@ -814,7 +814,7 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - `Contract`: `maskings` vuoto, nome della colonna di output non valido,
+/// - `InvalidPlan`: `maskings` vuoto, nome della colonna di output non valido,
 ///   `mask_char` vuoto o piu' di un carattere (tipo `custom`), valore non
 ///   rappresentabile come testo (come `scalar_as_string`);
 /// - `Schema`: colonna assente dal batch.

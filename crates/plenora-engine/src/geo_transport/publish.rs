@@ -3,7 +3,7 @@
 //!
 //! Port Fase 1 ("coesistenza") da `main.rs` di plenora-geo-tools-arrow:
 //! stessa logica, stessi messaggi; gli errori `Box<dyn Error>` del sorgente
-//! sono mappati su [`PlenoraError`] (`Contract` per le violazioni di
+//! sono mappati su [`PlenoraError`] (`InvalidPlan` per le violazioni di
 //! contratto, `Crs` per gli errori CRS, `Io` per gli errori I/O).
 //!
 //! Sequenza attesa dal chiamante (come nel sorgente): parse dello schema

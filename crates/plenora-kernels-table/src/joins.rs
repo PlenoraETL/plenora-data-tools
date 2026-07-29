@@ -290,7 +290,7 @@ pub struct Join {
 ///
 /// # Errors
 ///
-/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati, oppure
+/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati, oppure
 ///   righe/colonne di output oltre i limiti `max_rows`/`max_columns`;
 /// - `Schema`: colonna chiave assente, tipi Arrow delle chiavi non identici
 ///   tra i due lati, collisione di nomi in output o, per `right`/`outer`,
@@ -724,7 +724,7 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch;
-/// - `Contract`: overflow nel conteggio delle righe o righe totali oltre
+/// - `InvalidPlan`: overflow nel conteggio delle righe o righe totali oltre
 ///   `max_rows`; propaga inoltre gli errori Arrow di concatenazione.
 pub fn concat(
     left: &RecordBatch,
@@ -872,7 +872,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 ///
 /// # Errors
 ///
-/// - `Contract`: nessun input, overflow nel conteggio delle righe o righe
+/// - `InvalidPlan`: nessun input, overflow nel conteggio delle righe o righe
 ///   totali oltre `max_rows`;
 /// - `Schema`: con `strict` schemi non identici, o tipi incompatibili per
 ///   una stessa colonna (nessun cast); propaga inoltre gli errori Arrow di
@@ -936,7 +936,7 @@ pub struct CrossJoin {}
 ///
 /// # Errors
 ///
-/// - `Contract`: overflow nel prodotto delle righe, righe oltre `max_rows`
+/// - `InvalidPlan`: overflow nel prodotto delle righe, righe oltre `max_rows`
 ///   o colonne oltre `max_columns`;
 /// - `Schema`: collisione di nomi nelle colonne di output.
 pub fn cross_join(
@@ -1131,7 +1131,7 @@ fn membership_range(
 ///
 /// # Errors
 ///
-/// - `Contract`: chiavi vuote o cardinalita' diversa tra i due lati;
+/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati;
 /// - `Schema`: colonna chiave assente o tipi Arrow delle chiavi non
 ///   identici; inoltre gli errori di `select_rows` sull'output.
 pub fn semi_join(
@@ -1373,7 +1373,7 @@ fn choose_asof(
 ///
 /// # Errors
 ///
-/// - `Contract`: cardinalita' diversa tra `left_by` e `right_by`, oppure
+/// - `InvalidPlan`: cardinalita' diversa tra `left_by` e `right_by`, oppure
 ///   `tolerance` non finita o negativa;
 /// - `Schema`: colonna assente, chiavi `on` non numeriche o di tipo diverso
 ///   tra i lati, tipi `by` incompatibili, collisione di nomi in output;

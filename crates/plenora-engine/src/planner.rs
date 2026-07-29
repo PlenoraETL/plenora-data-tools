@@ -390,7 +390,7 @@ impl ValidatedGraph {
 ///
 /// # Errors
 ///
-/// - `Contract`: limiti o struttura del piano violati, input duplicati /
+/// - `InvalidPlan`: limiti o struttura del piano violati, input duplicati /
 ///   mancanti / extra, `sorted_by` con chiavi su un input, config non valide,
 ///   grafo che perde la geometria prima di un'op geo;
 /// - `Unsupported`: operazione sconosciuta/`Planned`, capability non

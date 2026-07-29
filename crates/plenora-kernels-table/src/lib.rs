@@ -154,7 +154,7 @@ pub fn replace_or_append(
 ///
 /// # Errors
 ///
-/// - `Contract`: nome vuoto (o solo spazi) oppure oltre 1024 byte.
+/// - `InvalidPlan`: nome vuoto (o solo spazi) oppure oltre 1024 byte.
 pub fn validate_output_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -174,7 +174,7 @@ pub fn validate_output_name(name: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Contract`: epoch date32 non valida (guardia interna);
+/// - `InvalidPlan`: epoch date32 non valida (guardia interna);
 /// - `Schema`: valore date32/timestamp fuori intervallo, timezone Arrow non
 ///   valida, decimal128 incoerente o con scala non supportata, binary non
 ///   UTF-8, dictionary non Utf8, tipo non supportato dal profilo scalare.
@@ -487,7 +487,7 @@ fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
 ///
 /// # Errors
 ///
-/// - `Contract`: indice di riga oltre `u32::MAX`;
+/// - `InvalidPlan`: indice di riga oltre `u32::MAX`;
 /// - `Schema`: errore Arrow nella `take` o nella costruzione del batch.
 pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows

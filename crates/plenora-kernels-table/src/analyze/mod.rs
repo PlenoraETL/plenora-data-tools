@@ -2,7 +2,7 @@
 //! `table.*` del catalogo (Fase 2A-2, Architetture.md par. 4.3 e 6.1, ADR 5).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
-//! (fail-closed: config non valida -> errore `Contract` puntuale), replica le
+//! (fail-closed: config non valida -> errore `InvalidPlan` puntuale), replica le
 //! validazioni statiche del kernel (esistenza colonne, vincoli di tipo,
 //! parametri) e inferisce il contratto di output: schema Arrow, propagazione
 //! della colonna geometrica (D16) e proprietà (`sorted_by`, `row_count`) con
@@ -32,7 +32,7 @@
 //! metadata dello schema di input attraversano sempre lo schema di output;
 //! per le op a due sorgenti (join e varianti, `union_distinct`, `table_diff`)
 //! vale la merge-policy — chiave su una sola sorgente o con valore identico
-//! copiata, valori diversi -> errore `Contract` (mai precedenza implicita).
+//! copiata, valori diversi -> errore `InvalidPlan` (mai precedenza implicita).
 //! I metadata di campo seguono le classi R2.4: identity/type-preserving ->
 //! copiati dal campo sorgente, colonne derivate -> non ereditati. Le chiavi
 //! canoniche `plenora.*` non sono mai emesse qui (emissione centralizzata
@@ -113,7 +113,7 @@ use self::strings::{
 ///
 /// - `Unsupported`: operazione sconosciuta, non `table.*`, oppure schema di
 ///   output non inferibile a secco (dipende dai dati);
-/// - `Contract`: config non valida, arieta' errata, colonne mancanti,
+/// - `InvalidPlan`: config non valida, arieta' errata, colonne mancanti,
 ///   vincoli di tipo o parametri violati, collisioni di naming;
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
 // Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 71 op.

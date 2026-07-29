@@ -32,7 +32,7 @@ pub struct AssertCardinality {
 ///
 /// # Errors
 ///
-/// - `Contract`: righe diverse da `exact_rows`, oppure fuori dall'intervallo
+/// - `InvalidPlan`: righe diverse da `exact_rows`, oppure fuori dall'intervallo
 ///   `min_rows`/`max_rows`.
 pub fn assert_cardinality(
     batch: &RecordBatch,
@@ -326,7 +326,7 @@ impl<'a> RowKeyEncoder<'a> {
 ///
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
 ///   delle chiavi non identici fra i due lati;
-/// - `Contract`: chiave null in `left` con `allow_null = false`; chiave
+/// - `InvalidPlan`: chiave null in `left` con `allow_null = false`; chiave
 ///   sinistra non presente in `right`; memoria oltre
 ///   `limits.max_memory_bytes`; overflow dei contatori (errore Internal).
 pub fn assert_foreign_key(
@@ -443,7 +443,7 @@ fn as_u64(value: usize) -> Result<u64> {
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
 ///   delle chiavi non identici fra i due lati; errore Arrow nella
 ///   costruzione del batch di output;
-/// - `Contract`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
+/// - `InvalidPlan`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
 ///   oltre `limits.max_rows`; conteggio oltre `u64`/overflow dei contatori
 ///   (errore Internal).
 pub fn reconcile(
@@ -1023,7 +1023,7 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
 ///
 /// # Errors
 ///
-/// - `Contract`: nessuna regola; nome regola vuoto o ripetuto; regola senza
+/// - `InvalidPlan`: nessuna regola; nome regola vuoto o ripetuto; regola senza
 ///   `column`; `value` mancante o non ammesso per l'operatore; tipo della
 ///   colonna incompatibile con l'operatore; valore atteso non numerico o
 ///   range malformato; regex non valida; invarianti interne violate (errore

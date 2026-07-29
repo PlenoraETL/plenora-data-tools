@@ -213,7 +213,7 @@ pub(in crate::analyze) fn merge_geometry(
 /// Per le op con due schemi di input (join e varianti, `union_distinct`,
 /// `table_diff`): chiave presente in una sola sorgente -> copiata; presente
 /// in entrambe con lo stesso valore -> copiata; presente in entrambe con
-/// valori diversi -> errore `Contract` (conflitto fra sorgenti = errore, mai
+/// valori diversi -> errore `InvalidPlan` (conflitto fra sorgenti = errore, mai
 /// precedenza implicita; il messaggio nomina la chiave, mai i valori).
 /// Merge dei metadata di schema di N sorgenti (R2.4): una chiave presente
 /// in una sola sorgente e' copiata; presente in piu' sorgenti con lo

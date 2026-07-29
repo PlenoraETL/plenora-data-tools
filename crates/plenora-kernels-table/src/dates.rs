@@ -69,7 +69,7 @@ pub(crate) fn parse_with_items(value: &str, items: &[Item<'_>]) -> Option<NaiveD
 ///
 /// # Errors
 ///
-/// - `Contract`: formato vuoto o oltre `max_bytes`, oppure contenente
+/// - `InvalidPlan`: formato vuoto o oltre `max_bytes`, oppure contenente
 ///   item strftime non riconosciuti.
 pub fn validate_format(format: &str, label: &str, max_bytes: usize) -> Result<()> {
     if format.is_empty() || format.len() > max_bytes {
@@ -116,7 +116,7 @@ const fn default_invalid() -> InvalidDatePolicy {
 ///
 /// # Errors
 ///
-/// - `Contract`: valore non parsabile con `invalid` = `Error`;
+/// - `InvalidPlan`: valore non parsabile con `invalid` = `Error`;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
@@ -220,7 +220,7 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 ///
 /// # Errors
 ///
-/// - `Contract`: valore non parsabile, oppure data risultante o delta
+/// - `InvalidPlan`: valore non parsabile, oppure data risultante o delta
 ///   fuori range, con `invalid` = `Error`;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
@@ -336,7 +336,7 @@ fn diff_value(
 ///
 /// # Errors
 ///
-/// - `Contract`: valore non parsabile con `invalid` = `Error`, oppure
+/// - `InvalidPlan`: valore non parsabile con `invalid` = `Error`, oppure
 ///   intervallo fuori scala (nanosecondi oltre `i64` o non
 ///   rappresentabili in `f64`);
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
@@ -459,7 +459,7 @@ fn localize(
 ///
 /// # Errors
 ///
-/// - `Contract`: `source_timezone` o `target_timezone` non valida, ora
+/// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida, ora
 ///   ambigua con `ambiguous` = `Error`, oppure valore non parsabile o
 ///   ora inesistente con `invalid` = `Error`;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non

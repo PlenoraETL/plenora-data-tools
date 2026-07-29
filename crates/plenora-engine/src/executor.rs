@@ -34,7 +34,7 @@
 //!
 //! Fase 2B M1d — errori arricchiti (ADR 3): ogni `execute` genera un
 //! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
-//! nessuna versione nuova) riportato negli errori `Step`/`Cancelled` e nel
+//! nessuna versione nuova) riportato negli errori `Execution`/`Cancelled` e nel
 //! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
 //! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
 //! gli assi §9; R9.7 ha sostituito il `retryable()` di M1d). La modalita'
@@ -62,7 +62,7 @@
 //! sequenza e' assegnata sugli input (partizione 0, contatore per input),
 //! propagata 1:1 negli streaming e riassegnata deterministicamente nei
 //! blocking (regola in [`run_blocking`]). In seriale la reservation e'
-//! immediata: quota disponibile o errore `Contract` fail-fast (regola v1 in
+//! immediata: quota disponibile o errore `InvalidPlan` fail-fast (regola v1 in
 //! [`crate::governor::MemoryGovernor::try_reserve`]).
 //!
 //! Struttura fisica:
@@ -415,7 +415,7 @@ struct ExecState {
     /// Governor del budget memoria globale di piano (ADR-0002, M1a).
     governor: MemoryGovernor,
     /// Identita' dell'esecuzione (ADR 3, M1d): riportata negli errori
-    /// `Step`/`Cancelled` e nel lock del `TempStore`.
+    /// `Execution`/`Cancelled` e nel lock del `TempStore`.
     execution_id: String,
     /// Token di cancellazione cooperativa (ADR 3, M1c): osservato solo ai
     /// confini dell'executor, mai dentro ai kernel (M3).
@@ -597,7 +597,7 @@ impl ExecState {
         Ok(())
     }
 
-    /// Tag M1d al confine di uscita: ogni errore `Step` che lascia il DAG
+    /// Tag M1d al confine di uscita: ogni errore `Execution` che lascia il DAG
     /// porta l'`execution_id` (riempito qui se il punto di origine, in
     /// profondita' nel dispatch, non lo aveva a disposizione).
     fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
@@ -660,8 +660,8 @@ impl ExecState {
 
 /// Errore di un arco conservato in forma scomposta per la riproduzione ai
 /// consumatori successivi (`PlenoraError` non e' `Clone`): l'attribuzione
-/// originale (`Step`/`Cancelled` con nodo, operazione ed `execution_id`) e'
-/// preservata, non declassata a `Contract`.
+/// originale (`Execution`/`Cancelled` con nodo, operazione ed `execution_id`) e'
+/// preservata, non declassata a `InvalidPlan`.
 struct StoredEdgeError {
     node: Option<String>,
     operation: Option<String>,
@@ -997,7 +997,7 @@ impl Output {
     }
 
     /// Identita' dell'esecuzione (ADR 3, M1d): la stessa riportata negli
-    /// errori `Step`/`Cancelled` e nel lock del `TempStore`.
+    /// errori `Execution`/`Cancelled` e nel lock del `TempStore`.
     #[must_use]
     pub fn execution_id(&self) -> &str {
         &self.state.execution_id
@@ -1258,7 +1258,7 @@ fn execute_physical(
     let output_edge = plan.output_edge().to_owned();
     let mut output_counts = (0_u64, 0_u64);
     let stream = Box::new(stream.map(move |item| {
-        // Tag M1d: ogni errore `Step` che esce dal DAG porta l'execution_id.
+        // Tag M1d: ogni errore `Execution` che esce dal DAG porta l'execution_id.
         let governed = item.map_err(|error| output_state.tag_execution(error))?;
         // ADR 3, M1c: confine di piano — sempre attivo, anche a valle di op
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
@@ -1944,7 +1944,7 @@ fn run_streaming_chain(
 }
 
 /// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per
-/// verificare la conversione panic → errore `Step` al confine dell'executor.
+/// verificare la conversione panic → errore `Execution` al confine dell'executor.
 /// Solo `cfg(test)`: i kernel non usano panic per errori attesi. Insieme
 /// (non singolo id): i test girano in parallelo nello stesso processo e
 /// ciascuno registra/deregistra il proprio nodo senza interferire.
@@ -1966,7 +1966,7 @@ fn inject_test_panic(node_id: &str) {
 
 /// Un kernel su un batch: confine ADR 3 dell'executor. Un panic del kernel
 /// e' intercettato qui — il livello piu' interno che conserva l'attribuzione
-/// di nodo — e convertito in errore `Step` con il solo messaggio del panic
+/// di nodo — e convertito in errore `Execution` con il solo messaggio del panic
 /// ([`panic_step_error`]); l'errore propaga nello stream, quindi il publish
 /// atomico non e' mai raggiunto dopo un panic.
 ///
@@ -2731,7 +2731,7 @@ fn run_binary_blocking(
     state.check_cancellation(kernel)?;
     let start = Instant::now();
     // Confine ADR 3 come `run_kernel`: panic del kernel binario convertito
-    // in errore `Step` attribuito al nodo, mai publish dopo panic.
+    // in errore `Execution` attribuito al nodo, mai publish dopo panic.
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]
         inject_test_panic(&kernel.node_id);

@@ -657,7 +657,7 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
 ///
 /// # Errors
 ///
-/// - `Contract`: nome colonna vuoto o oltre 1024 byte (come
+/// - `InvalidPlan`: nome colonna vuoto o oltre 1024 byte (come
 ///   `validate_output_name`); formula vuota o oltre `max_bytes`; errori di
 ///   sintassi (formula incompleta, parentesi non bilanciate, stringa non
 ///   terminata o con escape, numero o esponente non valido, carattere non
@@ -681,7 +681,7 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Contract`: errori di sintassi della formula (come `validate`);
+/// - `InvalidPlan`: errori di sintassi della formula (come `validate`);
 ///   invarianti interne violate (errore Internal);
 /// - `Schema`: colonna assente; divisione per zero; negazione di testo;
 ///   operatore aritmetico su testo; valore non convertibile (via

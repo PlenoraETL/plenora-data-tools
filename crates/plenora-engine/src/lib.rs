@@ -45,7 +45,7 @@
 //! (ADR 3): [`CancellationToken`] cooperativo osservato ai confini
 //! dell'executor (mai dentro ai kernel in M1 — il passaggio e' M3) con
 //! errore dedicato `PlenoraError::Cancelled`; `execution_id` per esecuzione
-//! negli errori `Step`/`Cancelled` e nel lock del `TempStore`;
+//! negli errori `Execution`/`Cancelled` e nel lock del `TempStore`;
 //! `PlenoraError::category()` e gli assi §9 (`phase()`, `remote_effect()`,
 //! `retry_disposition()` — R9.7, sostituisce il `retryable()` di M1d);
 //! modalita' diagnostica opt-in

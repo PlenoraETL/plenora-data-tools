@@ -494,7 +494,7 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
 /// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
 ///   scalare richiesto dall'operatore (via `scalar_as_string`/`scalar_as_f64`);
 ///   errore Arrow nella selezione delle righe (come `select_rows`);
-/// - `Contract`: valore di confronto non numerico per i confronti numerici
+/// - `InvalidPlan`: valore di confronto non numerico per i confronti numerici
 ///   o ordinati; `between` senza estremi `min,max` validi; invarianti
 ///   interne violate (errore Internal).
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
@@ -526,7 +526,7 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 /// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
 ///   scalare richiesto dagli operatori delle condizioni; errore Arrow
 ///   nella sostituzione;
-/// - `Contract`: come `filter` per la valutazione delle condizioni (valore
+/// - `InvalidPlan`: come `filter` per la valutazione delle condizioni (valore
 ///   di confronto non numerico, `between` malformato).
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;

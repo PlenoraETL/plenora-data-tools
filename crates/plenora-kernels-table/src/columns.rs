@@ -65,7 +65,7 @@ pub struct SelectColumns {
 ///
 /// # Errors
 ///
-/// - `Contract`: elenco `columns` vuoto o colonna ripetuta nella
+/// - `InvalidPlan`: elenco `columns` vuoto o colonna ripetuta nella
 ///   proiezione;
 /// - `Schema`: colonna non trovata nello schema;
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
@@ -295,7 +295,7 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
 ///
 /// # Errors
 ///
-/// - `Contract`: `default` non convertibile in `align_type` (stessa
+/// - `InvalidPlan`: `default` non convertibile in `align_type` (stessa
 ///   conversione di `align_default_column`, guardia epoch date32
 ///   inclusa);
 /// - `Arrow`: errore Arrow sulla precisione/scala `Decimal128`.
@@ -313,7 +313,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Contract`: elenco `columns` vuoto, colonna ripetuta, nome di
+/// - `InvalidPlan`: elenco `columns` vuoto, colonna ripetuta, nome di
 ///   output non valido (come `validate_output_name`), tipo presente
 ///   diverso dal dichiarato (nessun cast implicito) o `default` non
 ///   convertibile (come `check_align_default`);
@@ -394,7 +394,7 @@ pub struct Rename {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome di output non valido (come
+/// - `InvalidPlan`: nome di output non valido (come
 ///   `validate_output_name`);
 /// - `Schema`: la rinomina produce un nome duplicato;
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
@@ -443,7 +443,7 @@ pub struct ReorderColumns {
 ///
 /// # Errors
 ///
-/// - `Contract`: colonna ripetuta nell'elenco;
+/// - `InvalidPlan`: colonna ripetuta nell'elenco;
 /// - `Schema`: colonna non trovata nello schema;
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
@@ -512,7 +512,7 @@ const fn default_true() -> bool {
 ///
 /// # Errors
 ///
-/// - `Contract`: elenco `columns` vuoto, nome di output non valido
+/// - `InvalidPlan`: elenco `columns` vuoto, nome di output non valido
 ///   (come `validate_output_name`) o valore concatenato oltre
 ///   `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8 (come `utf8_column`);
@@ -599,7 +599,7 @@ const fn default_max_splits() -> i64 {
 ///
 /// # Errors
 ///
-/// - `Contract`: `delimiter` vuoto, `new_columns` vuoto o oltre
+/// - `InvalidPlan`: `delimiter` vuoto, `new_columns` vuoto o oltre
 ///   `limits.max_split_columns`, nome di output non valido (come
 ///   `validate_output_name`);
 /// - `Schema`: nomi di output duplicati, oppure colonna assente o non

@@ -215,7 +215,7 @@ fn compare_nullable<A: Array>(
 ///
 /// # Errors
 ///
-/// - `Contract`: `columns` vuoto;
+/// - `InvalidPlan`: `columns` vuoto;
 /// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
 ///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
 ///   fast path) e di `select_rows`.
@@ -296,7 +296,7 @@ pub struct TopN {
 ///
 /// # Errors
 ///
-/// - `Contract`: `columns` vuoto, oppure `n` non rappresentabile come
+/// - `InvalidPlan`: `columns` vuoto, oppure `n` non rappresentabile come
 ///   `usize`;
 /// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
 ///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
@@ -464,7 +464,7 @@ pub struct DedupAdvanced {
 ///
 /// # Errors
 ///
-/// - `Contract`: `keep` e' `Keep::False` (non supportato);
+/// - `InvalidPlan`: `keep` e' `Keep::False` (non supportato);
 /// - come `sort` (se `order_column` e' presente) e `distinct`: colonne
 ///   assenti (`Schema`), errori del fallback testuale e di `select_rows`.
 pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
@@ -1209,7 +1209,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 ///
 /// # Errors
 ///
-/// - `Contract`: `group_by` vuoto; funzione `quantile` senza il parametro
+/// - `InvalidPlan`: `group_by` vuoto; funzione `quantile` senza il parametro
 ///   `quantile` o con valore fuori `[0, 1]`; conteggi, dimensioni o indici
 ///   non rappresentabili
 ///   (`i64`/`f64`/`usize`); nome di output non valido (come
@@ -1496,7 +1496,7 @@ pub struct RollingWindow {
 ///
 /// # Errors
 ///
-/// - `Contract`: `window` o `min_periods` nulli, `min_periods > window`,
+/// - `InvalidPlan`: `window` o `min_periods` nulli, `min_periods > window`,
 ///   oppure dimensioni/divisori non rappresentabili come `f64`;
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
 ///   schema; valore intero non rappresentabile come `f64`; in piu' gli
@@ -1646,7 +1646,7 @@ pub struct WindowFunction {
 ///
 /// # Errors
 ///
-/// - `Contract`: `offset` nullo; `ntile` senza `buckets` maggiore di zero;
+/// - `InvalidPlan`: `offset` nullo; `ntile` senza `buckets` maggiore di zero;
 ///   `buckets` specificato per una funzione diversa da `ntile`;
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
 ///   schema; valore intero non rappresentabile come `f64`; in piu' gli

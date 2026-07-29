@@ -1611,7 +1611,7 @@ mod tests {
         #[cfg(not(feature = "proj-backend"))]
         {
             // Senza backend PROJ la risoluzione CRS fallisce chiusa DOPO il
-            // riconoscimento: un errore `Crs` (non `Contract`) dimostra che
+            // riconoscimento: un errore `Crs` (non `InvalidPlan`) dimostra che
             // il campo canonico-only e' stato riconosciuto come geometria e
             // le chiavi lette senza errori.
             assert!(

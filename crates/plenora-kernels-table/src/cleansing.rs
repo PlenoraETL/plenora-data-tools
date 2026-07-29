@@ -337,7 +337,7 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
 ///
 /// - `Schema`: colonna assente; tipo di colonna non supportato (coperti
 ///   Utf8, Int64, Float64, Boolean); errore Arrow nella sostituzione;
-/// - `Contract`: valore di fill non convertibile al tipo della colonna.
+/// - `InvalidPlan`: valore di fill non convertibile al tipo della colonna.
 pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
     let targets: Vec<usize> = if let Some(name) = &config.column {
         vec![column_index(batch, name)?]
@@ -435,7 +435,7 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non Utf8; errore Arrow nella sostituzione;
-/// - `Contract`: `old_value` non e' una regex valida (con `regex = true`).
+/// - `InvalidPlan`: `old_value` non e' una regex valida (con `regex = true`).
 pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let values = batch
@@ -1132,7 +1132,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
 ///   tipo sorgente fuori dal profilo scalare (percorso generico, via
 ///   `scalar_as_string`); errore Arrow nella costruzione (es. precision/
 ///   scale decimal128, builder dictionary);
-/// - `Contract`: `errors = ignore` (nessun tipo Arrow omogeneo garantibile);
+/// - `InvalidPlan`: `errors = ignore` (nessun tipo Arrow omogeneo garantibile);
 ///   `decimal128` senza `precision`/`scale`.
 pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;

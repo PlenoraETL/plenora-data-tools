@@ -218,7 +218,7 @@ impl MemoryGovernor {
     /// riprovi il nodo con lo spill (M3; lo spill M2c e' attivato
     /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
     /// resta l'unico esito residuo dell'ADR-0002, il fail-fast "nessuna
-    /// strategia sicura disponibile": errore `Contract` `max_memory_bytes`.
+    /// strategia sicura disponibile": errore `InvalidPlan` `max_memory_bytes`.
     /// Per questo `RetryAfterProgress` e `MustSpill` esistono nell'API ma
     /// non sono MAI emessi da questa implementazione.
     ///
@@ -270,7 +270,7 @@ impl MemoryGovernor {
         }))
     }
 
-    /// Acquisizione v1: il lease, o l'errore `Contract` fail-fast se il
+    /// Acquisizione v1: il lease, o l'errore `InvalidPlan` fail-fast se il
     /// budget e' esaurito (regola in [`Self::try_reserve`]).
     ///
     /// # Errors

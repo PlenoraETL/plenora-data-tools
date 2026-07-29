@@ -48,7 +48,7 @@ fn default_fill() -> String {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, `fill_char` vuoto
+/// - `InvalidPlan`: nome della colonna di output non valido, `fill_char` vuoto
 ///   o piu' di un carattere Unicode, risultato oltre
 ///   `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8.
@@ -120,7 +120,7 @@ pub struct StringLength {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, conteggio caratteri
+/// - `InvalidPlan`: nome della colonna di output non valido, conteggio caratteri
 ///   non rappresentabile come i64;
 /// - `Schema`: colonna assente o non Utf8.
 pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<RecordBatch> {
@@ -188,7 +188,7 @@ fn utf8_data_len(values: &StringArray) -> usize {
 ///
 /// # Errors
 ///
-/// - `Contract`: pattern oltre `limits.max_regex_bytes`, regex non valida,
+/// - `InvalidPlan`: pattern oltre `limits.max_regex_bytes`, regex non valida,
 ///   nome di colonna di output (esplicito o da gruppo nominato) non valido;
 /// - `Schema`: colonna assente o non Utf8.
 // Tre forme di output (gruppi nominati, gruppo singolo, extract_all) su una
@@ -412,7 +412,7 @@ fn normalize_into(value: &str, operation: &NormalizeOperation, out: &mut String)
 ///
 /// # Errors
 ///
-/// - `Contract`: `columns` vuoto, nome della colonna di output non valido,
+/// - `InvalidPlan`: `columns` vuoto, nome della colonna di output non valido,
 ///   risultato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8.
 pub fn text_normalize(

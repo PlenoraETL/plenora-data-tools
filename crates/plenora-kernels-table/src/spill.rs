@@ -321,7 +321,7 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 ///
 /// - `Schema`: schemi dei due input incompatibili (`validate_schema`) o
 ///   errore Arrow in `select_rows`/`concat_compatible`;
-/// - `Contract`: vincoli dello spill violati (partizioni zero, chiave
+/// - `InvalidPlan`: vincoli dello spill violati (partizioni zero, chiave
 ///   oltre `max_temp_bytes`, working set di una partizione oltre
 ///   `max_memory_bytes`, overflow interni di accounting);
 /// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
@@ -735,7 +735,7 @@ pub fn distinct_spilled(
 ///
 /// - `Schema`: colonna di `config.subset` assente (`column_index`) o
 ///   errore Arrow in `replace_or_append`/`select_rows`;
-/// - `Contract`: colonna riservata allo spill gia' presente, quote
+/// - `InvalidPlan`: colonna riservata allo spill gia' presente, quote
 ///   superate (`max_temp_bytes`, `max_memory_bytes`), `spill_partitions`
 ///   zero, ordinal/chiave non rappresentabili;
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
@@ -898,7 +898,7 @@ pub fn aggregate_spilled(
 ///
 /// - `Schema`: colonna di `group_by` assente (`column_index`) o errore
 ///   Arrow in `aggregate`/`concat_batches`/`select_rows`;
-/// - `Contract`: `group_by` vuoto, quote superate (`max_temp_bytes`,
+/// - `InvalidPlan`: `group_by` vuoto, quote superate (`max_temp_bytes`,
 ///   `max_memory_bytes`), `spill_partitions` zero, output di partizione
 ///   incoerente con i gruppi (invariante interna);
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
@@ -1099,7 +1099,7 @@ pub fn sort_spilled(
 ///
 /// - `Schema`: colonna di sort assente (`column_index`) o errore Arrow in
 ///   `sort`/`select_rows`;
-/// - `Contract`: nessuna colonna di sort, quota `max_temp_bytes` superata,
+/// - `InvalidPlan`: nessuna colonna di sort, quota `max_temp_bytes` superata,
 ///   confronto tra celle fallito (`compare_cells_typed`);
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).

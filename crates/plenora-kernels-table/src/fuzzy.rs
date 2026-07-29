@@ -27,7 +27,7 @@
 //!   iterazione su hash map influenza l'ordine (i blocchi sono `Vec` in
 //!   ordine di inserzione);
 //! - limiti fail-closed: un blocco destro con piu' di `max_candidates` righe
-//!   abortisce con errore `Contract` (default 50); le righe di output non
+//!   abortisce con errore `InvalidPlan` (default 50); le righe di output non
 //!   possono superare `limits.max_rows`.
 //!
 //! Metriche (implementate a mano, nessuna dipendenza nuova):
@@ -126,7 +126,7 @@ impl FuzzyJoin {
 ///
 /// # Errors
 ///
-/// - `Contract`: `threshold` fuori da (0, 1] o non finita; `blocking_param`
+/// - `InvalidPlan`: `threshold` fuori da (0, 1] o non finita; `blocking_param`
 ///   nullo con blocking `prefix` o presente con `soundex`/`none`;
 ///   `max_candidates` nullo; nome della colonna score vuoto o oltre 1024
 ///   byte (come `validate_output_name`).
@@ -441,7 +441,7 @@ enum FuzzyRowForm<'a> {
 ///
 /// # Errors
 ///
-/// - `Contract`: config non valida (come `validate_config`); blocco destro
+/// - `InvalidPlan`: config non valida (come `validate_config`); blocco destro
 ///   oltre `max_candidates`; output oltre `limits.max_rows` o
 ///   `limits.max_columns`;
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del

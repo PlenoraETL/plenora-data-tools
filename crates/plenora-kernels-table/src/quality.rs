@@ -96,7 +96,7 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
 /// - `Schema`: numero di colonne diverso con `allow_extra=false`, colonna
 ///   assente, nome diverso in posizione (`ordered=true`), tipo o nullability
 ///   diversi dall'atteso;
-/// - `Contract`: tipo atteso non supportato da `assert_schema`.
+/// - `InvalidPlan`: tipo atteso non supportato da `assert_schema`.
 pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<RecordBatch> {
     if !config.allow_extra && batch.num_columns() != config.fields.len() {
         return Err(PlenoraError::Schema(format!(
@@ -158,7 +158,7 @@ pub struct AssertNotNull {
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`);
-/// - `Contract`: una colonna contiene un null.
+/// - `InvalidPlan`: una colonna contiene un null.
 pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<RecordBatch> {
     for name in &config.columns {
         let index = column_index(batch, name)?;
@@ -221,7 +221,7 @@ pub struct AssertUnique {
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
 ///   non codificabile nella chiave (come `key_for_row`);
-/// - `Contract`: chiave duplicata.
+/// - `InvalidPlan`: chiave duplicata.
 pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
     let indices = config
         .columns
@@ -408,7 +408,7 @@ fn range_outside(
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
 ///   non convertibile in numero (come `scalar_as_f64`);
-/// - `Contract`: null non ammesso o valore fuori intervallo.
+/// - `InvalidPlan`: null non ammesso o valore fuori intervallo.
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
@@ -474,7 +474,7 @@ pub struct AssertRegex {
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o non di
 ///   tipo Utf8;
-/// - `Contract`: pattern non una regex valida, oppure valore non conforme
+/// - `InvalidPlan`: pattern non una regex valida, oppure valore non conforme
 ///   (incluso un null con `allow_null=false`).
 pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
@@ -515,7 +515,7 @@ pub struct Coalesce {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome di output non valido (come `validate_output_name`),
+/// - `InvalidPlan`: nome di output non valido (come `validate_output_name`),
 ///   lista di colonne vuota o overflow degli indici interni del percorso
 ///   generico;
 /// - `Schema`: colonna assente dallo schema (come `column_index`), tipi

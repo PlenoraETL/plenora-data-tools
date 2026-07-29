@@ -44,7 +44,7 @@ const fn default_true() -> bool {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido, `order_column`
+/// - `InvalidPlan`: nome della colonna di output non valido, `order_column`
 ///   valorizzato (l'ordinamento e' delegato al kernel blocking sort),
 ///   overflow i64 del contatore, valore di partizione non rappresentabile
 ///   come testo (come `scalar_as_string`);
@@ -222,7 +222,7 @@ fn parse_datetime_default(
 ///
 /// # Errors
 ///
-/// - `Contract`: valore non parsabile con `invalid = error`, nome di colonna
+/// - `InvalidPlan`: valore non parsabile con `invalid = error`, nome di colonna
 ///   di output non valido, valore non rappresentabile come testo (come
 ///   `scalar_as_string`, percorso non-Utf8), guardia interna su parser
 ///   compilato singolo;
@@ -355,7 +355,7 @@ pub struct Limit {
 ///
 /// # Errors
 ///
-/// - `Contract`: numero di righe non rappresentabile come u64, `offset` o
+/// - `InvalidPlan`: numero di righe non rappresentabile come u64, `offset` o
 ///   `n` non rappresentabili come usize.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     let rows = u64::try_from(batch.num_rows())
@@ -387,7 +387,7 @@ fn default_uuid_name() -> String {
 ///
 /// # Errors
 ///
-/// - `Contract`: nome della colonna di output non valido.
+/// - `InvalidPlan`: nome della colonna di output non valido.
 pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let values = (0..batch.num_rows())
