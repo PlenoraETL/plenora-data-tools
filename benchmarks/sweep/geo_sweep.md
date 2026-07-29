@@ -117,6 +117,12 @@ carico di allocazioni intensive); workaround usato nelle run:
 `MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768`
 (`MALLOC_TOP_PAD_=268435456` non si e' dimostrato sufficiente). I container
 andati in stallo restano non killabili fino al restart di Docker Desktop.
+Aggiornamento 2026-07-28: su WSL2 piu' recente lo stallo si ripresenta
+ANCHE con il workaround e a 2 CPU (3 run su 4 congelate a punti diversi —
+race, non scenario specifico); una build musl e' risultata impraticabile
+per tempi di link. Per la verifica mirata dei percorsi geo in questa
+condizione usare `examples/bench_geo_perfcheck.rs` (fixture compatte a
+bassa pressione di allocazione, stessa classe di carico).
 
 **L'adapter WKB e' il collo di bottiglia sistemico.** Riferimenti `_ref.*`:
 punti ~59M geom/s, linee 50v ~6.6M geom/s (~330M vert/s), poligoni 100v
