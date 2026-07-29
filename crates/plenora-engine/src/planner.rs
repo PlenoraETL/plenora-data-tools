@@ -723,6 +723,13 @@ fn catalog_fingerprint(descriptors: &[&OperationDescriptor]) -> Result<CatalogFi
 
 /// Serializzazione stabile di un descrittore (nomi enum espliciti, non
 /// `Debug`: il fingerprint non deve dipendere dai nomi Rust).
+///
+/// ADR-0012 D12.2 (decisione deliberata): `geo_fusion` resta FUORI da
+/// questa forma canonica e quindi dal `catalog_fingerprint` — il fingerprint
+/// guarda la compatibilita' semantica dei piani, la fondibilita' e' una
+/// capability FISICA (ADR 5): aggiungerla invaliderebbe piani semanticamente
+/// identici. Il campo resta osservabile nello snapshot di catalogo
+/// (`planner/tests.rs`) e nelle capability JSON (`capabilities.rs`).
 fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
     json!({
         "id": descriptor.id,

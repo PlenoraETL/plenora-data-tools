@@ -49,6 +49,40 @@ pub enum CancellationBehavior {
     NonInterruptible,
 }
 
+/// Fondibilita' di un'operazione geo nella fusione dei segmenti (ADR-0012
+/// D12.2).
+///
+/// Capability dichiarativa FISICA, stesso principio di
+/// [`CancellationBehavior`]. Resta FUORI da `descriptor_canonical` e quindi
+/// dal `catalog_fingerprint` (decisione deliberata: il fingerprint guarda la
+/// compatibilita' semantica dei piani, la fondibilita' e' fisica — ADR 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeoFusion {
+    /// Non fondibile: esecuzione nodo-per-nodo (default). Tutte le op
+    /// tabellari e le geo non revistate per il perimetro M1.
+    NotFusible,
+    /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
+    /// consecutivi a parita' di colonna geometria e ruolo (le 14 op di M1).
+    TransformInPlace,
+    /// Misura terminale: consuma la geometria producendo un valore non
+    /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
+    /// — cantiere M2 separato); chiude un eventuale gruppo fuso a monte.
+    TerminalMeasure,
+}
+
+impl GeoFusion {
+    /// Nome stabile `snake_case` della variante: unica fonte per il JSON
+    /// delle capability (`capabilities.rs`) e per lo snapshot di catalogo.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFusible => "not_fusible",
+            Self::TransformInPlace => "transform_in_place",
+            Self::TerminalMeasure => "terminal_measure",
+        }
+    }
+}
+
 /// Forma del risultato rispetto alle righe di input (da geo-tools-arrow).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultShape {
@@ -246,6 +280,10 @@ pub struct OperationDescriptor {
     pub arity: Arity,
     pub execution_class: ExecutionClass,
     pub cancellation_behavior: CancellationBehavior,
+    /// Fondibilita' nella fusione dei segmenti geo (ADR-0012 D12.2):
+    /// capability fisica, NON entra in `descriptor_canonical` ne' nel
+    /// `catalog_fingerprint`. `NotFusible` per tutte le op tabellari.
+    pub geo_fusion: GeoFusion,
     pub result_shape: Option<ResultShape>,
     pub crs_requirement: Option<CrsRequirement>,
     /// Backend/feature richiesti (es. `geos`, `proj`).
@@ -317,83 +355,92 @@ macro_rules! op {
     // Variante con chiavi opzionali: `semantic_version`,
     // `config_schema_version`, `contract_analysis_version`, `kernel_version`
     // (default 1), `expansion_constraint` (default `SumRelative`; accetta un
-    // ident di variante oppure `Custom(fattore)` con il fattore f64, ADR 6)
-    // ed `expansion_factor_exempt` (default `false`) sono ammesse in
-    // qualsiasi combinazione e ordine; chiave duplicata o sconosciuta ->
-    // errore di compilazione.
+    // ident di variante oppure `Custom(fattore)` con il fattore f64, ADR 6),
+    // `expansion_factor_exempt` (default `false`) e `geo_fusion` (default
+    // `NotFusible`, ADR-0012 D12.2) sono ammesse in qualsiasi combinazione e
+    // ordine; chiave duplicata o sconosciuta -> errore di compilazione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
      $($versions:tt)+) => {
         op!(@munch
             ($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat)
-            (1, 1, 1, 1, ExpansionConstraint::SumRelative, false)
+            (1, 1, 1, 1, ExpansionConstraint::SumRelative, false, GeoFusion::NotFusible)
             $($versions)+)
     };
     // Muncher: consuma una chiave per passo aggiornando l'accumulatore
     // (semantic, config_schema, contract_analysis, kernel,
-    // expansion_constraint, expansion_factor_exempt).
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    // expansion_constraint, expansion_factor_exempt, geo_fusion).
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         semantic_version = $v:expr) => {
-        op!(@build ($($base)*) ($v, $c, $a, $k, $x, $e))
+        op!(@build ($($base)*) ($v, $c, $a, $k, $x, $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         semantic_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($v, $c, $a, $k, $x, $e) $($rest)+)
+        op!(@munch ($($base)*) ($v, $c, $a, $k, $x, $e, $g) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         config_schema_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $v, $a, $k, $x, $e))
+        op!(@build ($($base)*) ($s, $v, $a, $k, $x, $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         config_schema_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $v, $a, $k, $x, $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $v, $a, $k, $x, $e, $g) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         contract_analysis_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $v, $k, $x, $e))
+        op!(@build ($($base)*) ($s, $c, $v, $k, $x, $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         contract_analysis_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $v, $k, $x, $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $v, $k, $x, $e, $g) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         kernel_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $a, $v, $x, $e))
+        op!(@build ($($base)*) ($s, $c, $a, $v, $x, $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         kernel_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e, $g) $($rest)+)
     };
     // `expansion_constraint`: variante senza payload (ident) oppure
     // `Custom(fattore)` con fattore f64 esplicito (ADR 6).
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = Custom($v:expr)) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e))
+        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = Custom($v:expr), $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = $v:ident) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e))
+        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = $v:ident, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e, $g) $($rest)+)
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_factor_exempt = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $v))
+        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $v, $g))
     };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr)
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v) $($rest)+)
+        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v, $g) $($rest)+)
+    };
+    // `geo_fusion`: variante di [`GeoFusion`] senza payload (ADR-0012 D12.2).
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
+        geo_fusion = $v:ident) => {
+        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v))
+    };
+    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
+        geo_fusion = $v:ident, $($rest:tt)+) => {
+        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v) $($rest)+)
     };
     (@build ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident)
      ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr,
-      $constraint:expr, $exempt:expr)) => {
+      $constraint:expr, $exempt:expr, $fusion:expr)) => {
         OperationDescriptor {
             id: $id,
             family: Family::$family,
@@ -401,6 +448,7 @@ macro_rules! op {
             arity: Arity::$arity,
             execution_class: ExecutionClass::$exec,
             cancellation_behavior: CancellationBehavior::$cancel,
+            geo_fusion: $fusion,
             result_shape: $shape,
             crs_requirement: $crs,
             required_capabilities: $caps,
@@ -500,16 +548,16 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // SumRelative di default (da rivedere se emerge un vincolo piu' preciso).
     op!("table.reconcile", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
     // --- Geografiche Manipola-compat (33) -----------------------------------
-    op!("geo.centroid", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
-    op!("geo.convex_hull", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
-    op!("geo.envelope", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol),
+    op!("geo.centroid", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
+    op!("geo.convex_hull", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
+    op!("geo.envelope", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
     // sjoin: una geometria left puo' intersecare molte right (molti-a-molti)
     // -> MaxRelative (ADR 6).
     op!("geo.sjoin", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, PublicProtocol, expansion_constraint = MaxRelative),
-    op!("geo.area", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.boundary", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.area", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
+    op!("geo.boundary", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.bounds_extractor", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.buffer", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.buffer", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.clean_topology", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     // clip/difference: il taglio puo' spezzare una geometria left in piu'
     // pezzi (OneToMany) -> MaxRelative.
@@ -521,22 +569,22 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.explode", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
     op!("geo.from_coords", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::FromCoords), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.intersection", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.length", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.length", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
     op!("geo.line_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     // nearest: una corrispondenza per riga left (lookup-style) -> LeftRelative.
     op!("geo.nearest", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
     // overlay: un left puo' produrre piu' pezzi (OneToMany) -> MaxRelative.
     op!("geo.overlay", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.perimeter", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.point_on_surface", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.perimeter", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
+    op!("geo.point_on_surface", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.polygon_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.simplify", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.simplify", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.symmetric_difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.to_wkt", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!("geo.to_wkt", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
     // union: semantica di output non caratterizzata con certezza (unione
     // dissolta dei due input) -> SumRelative di default (da rivedere).
     op!("geo.union", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.vertex_count", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!("geo.vertex_count", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
     op!("geo.voronoi", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     // within: filtro del left sul right -> output <= left -> LeftRelative.
     op!("geo.within", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
@@ -555,17 +603,17 @@ pub static CATALOG: &[OperationDescriptor] = &[
     op!("geo.predicate_crosses", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     op!("geo.predicate_overlaps", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     // --- Estensioni geo (21) -------------------------------------------------
-    op!("geo.affine_transform", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.translate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.scale", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.rotate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.concave_hull", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.affine_transform", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
+    op!("geo.translate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
+    op!("geo.scale", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
+    op!("geo.rotate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
+    op!("geo.concave_hull", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.hausdorff_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
     op!("geo.haversine_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
     op!("geo.geodesic_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
     op!("geo.geodesic_line_length", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.densify", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.snap_to_grid", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!("geo.densify", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
+    op!("geo.snap_to_grid", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
     op!("geo.delaunay", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
     op!("geo.polygonize", Geo, Extension, Unary, Blocking, NonInterruptible, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &["geos"], DefinedOrder, BackendPending),
     op!("geo.line_merge", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
@@ -1068,5 +1116,93 @@ mod tests {
             ExpansionConstraint::Custom(2.5)
         );
         assert_eq!(descriptor.kernel_version, 2);
+    }
+
+    #[test]
+    fn geo_fusion_matches_the_adr_0012_m1_perimeter() {
+        // ADR-0012 D12.2 + perimetro M1: esattamente le 14 trasformazioni 1:1
+        // revistate con l'owner sono TransformInPlace, le 5 misure terminali
+        // sono TerminalMeasure, TUTTO il resto (tabellari incluse) e'
+        // NotFusible. Il campo e' dichiarativo: la lista chiusa qui sotto e'
+        // il contratto; aggiungere un op fondibile richiede l'oracolo
+        // differenziale (gate di M1).
+        let transforms: HashSet<_> = CATALOG
+            .iter()
+            .filter(|op| op.geo_fusion == GeoFusion::TransformInPlace)
+            .map(|op| op.id)
+            .collect();
+        assert_eq!(
+            transforms,
+            HashSet::from([
+                "geo.buffer",
+                "geo.simplify",
+                "geo.centroid",
+                "geo.convex_hull",
+                "geo.envelope",
+                "geo.boundary",
+                "geo.point_on_surface",
+                "geo.affine_transform",
+                "geo.translate",
+                "geo.scale",
+                "geo.rotate",
+                "geo.concave_hull",
+                "geo.densify",
+                "geo.snap_to_grid",
+            ])
+        );
+        let terminals: HashSet<_> = CATALOG
+            .iter()
+            .filter(|op| op.geo_fusion == GeoFusion::TerminalMeasure)
+            .map(|op| op.id)
+            .collect();
+        assert_eq!(
+            terminals,
+            HashSet::from([
+                "geo.area",
+                "geo.length",
+                "geo.perimeter",
+                "geo.vertex_count",
+                "geo.to_wkt",
+            ])
+        );
+        for op in CATALOG {
+            // Esplicitamente fuori perimetro M1: backend feature-gated
+            // (NonInterruptible) e check di tipo per-riga.
+            if matches!(
+                op.id,
+                "geo.reproject" | "geo.make_valid" | "geo.line_substring"
+                    | "geo.line_interpolate_point"
+            ) {
+                assert_eq!(op.geo_fusion, GeoFusion::NotFusible, "{}", op.id);
+            }
+            // La fondibilita' riguarda solo la famiglia geo: ogni tabellare
+            // resta NotFusible e nessuna tabellare puo' dichiararsi fondibile.
+            if op.family == Family::Table {
+                assert_eq!(
+                    op.geo_fusion,
+                    GeoFusion::NotFusible,
+                    "{} tabellare fondibile",
+                    op.id
+                );
+            }
+            // Invariante M1: solo op unarie streaming possono fondersi.
+            if op.geo_fusion != GeoFusion::NotFusible {
+                assert_eq!(op.family, Family::Geo, "{}", op.id);
+                assert_eq!(op.arity, Arity::Unary, "{}", op.id);
+                assert_eq!(op.execution_class, ExecutionClass::Streaming, "{}", op.id);
+            }
+        }
+        // Default di macro: senza chiave `geo_fusion` il campo e' NotFusible.
+        let filter = find_operation("table.filter").expect("table.filter");
+        assert_eq!(filter.geo_fusion, GeoFusion::NotFusible);
+    }
+
+    #[test]
+    fn geo_fusion_names_are_stable_snake_case() {
+        // Nomi usati da capabilities JSON e snapshot di catalogo: stabili per
+        // contratto (ADR-0012 D12.2), mai derivati dal `Debug` Rust.
+        assert_eq!(GeoFusion::NotFusible.as_str(), "not_fusible");
+        assert_eq!(GeoFusion::TransformInPlace.as_str(), "transform_in_place");
+        assert_eq!(GeoFusion::TerminalMeasure.as_str(), "terminal_measure");
     }
 }

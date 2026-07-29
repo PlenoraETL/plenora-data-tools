@@ -808,15 +808,28 @@ const CATALOG_SNAPSHOT_PATH: &str =
 
 /// Contenuto canonico dello snapshot: i descrittori di TUTTE le op del
 /// catalogo in ordine stabile (per id, lo stesso ordine che
-/// [`catalog_fingerprint`] richiede al chiamante), nella stessa forma
-/// canonica del fingerprint ([`descriptor_canonical`]), JSON pretty-printed
+/// [`catalog_fingerprint`] richiede al chiamante), JSON pretty-printed
 /// a chiavi ordinate per un diff leggibile in review.
+///
+/// La forma e' un SUPERINSIEME di [`descriptor_canonical`]: ADR-0012 D12.2
+/// (decisione deliberata) tiene `geo_fusion` FUORI dal fingerprint
+/// (capability fisica, non semantica) ma DENTRO lo snapshot — ogni cambio di
+/// fondibilita' resta un diff esplicito in PR.
 fn catalog_snapshot_content() -> String {
     let mut descriptors: Vec<&OperationDescriptor> = CATALOG.iter().collect();
     descriptors.sort_by(|left, right| left.id.cmp(right.id));
     let canonical: Vec<Value> = descriptors
         .iter()
-        .map(|descriptor| descriptor_canonical(descriptor))
+        .map(|descriptor| {
+            let mut value = descriptor_canonical(descriptor);
+            if let Value::Object(map) = &mut value {
+                map.insert(
+                    "geo_fusion".to_owned(),
+                    Value::String(descriptor.geo_fusion.as_str().to_owned()),
+                );
+            }
+            value
+        })
         .collect();
     let mut content =
         serde_json::to_string_pretty(&canonical).expect("la serializzazione non fallisce");

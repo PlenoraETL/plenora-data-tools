@@ -66,6 +66,10 @@ pub struct OperationCapability {
     /// Politica di determinismo (`defined_order` | `input_order` |
     /// `stable_key_order` | `canonical_order`).
     pub determinism: &'static str,
+    /// Fondibilita' nella fusione dei segmenti geo (ADR-0012 D12.2:
+    /// `not_fusible` | `transform_in_place` | `terminal_measure`).
+    /// Capability fisica: esposta qui ma FUORI dal `catalog_fingerprint`.
+    pub geo_fusion: &'static str,
     /// Backend/feature richiesti (`geos`, `proj`): vuoto se nessuno.
     pub required_capabilities: &'static [&'static str],
     /// Requisito CRS, solo op geo (`snake_case` di [`CrsRequirement`]).
@@ -139,6 +143,7 @@ fn operation_capability(descriptor: &OperationDescriptor) -> OperationCapability
         execution_class: execution_class_name(descriptor.execution_class),
         cancellation_behavior: cancellation_name(descriptor.cancellation_behavior),
         determinism: determinism_name(descriptor.determinism),
+        geo_fusion: descriptor.geo_fusion.as_str(),
         required_capabilities: descriptor.required_capabilities,
         crs_requirement: descriptor.crs_requirement.map(crs_requirement_name),
     }
@@ -221,5 +226,39 @@ mod tests {
         assert!(first.contains("\"protocol_version\":1"));
         assert!(first.contains("\"geo.reproject\""));
         assert!(first.contains("\"proj\""));
+        assert!(first.contains("\"geo_fusion\":\"transform_in_place\""));
+    }
+
+    #[test]
+    fn geo_fusion_esposta_dalla_stessa_fonte_del_catalogo() {
+        // ADR-0012 D12.2: la capability non puo' divergere dal descriptor —
+        // il valore serializzato e' il nome stabile del campo di catalogo.
+        let capabilities = component_capabilities();
+        for descriptor in CATALOG {
+            let capability = capabilities
+                .operations
+                .iter()
+                .find(|op| op.id == descriptor.id)
+                .expect("ogni op ha una capability");
+            assert_eq!(
+                capability.geo_fusion,
+                descriptor.geo_fusion.as_str(),
+                "{}",
+                descriptor.id
+            );
+        }
+        // Spot-check delle tre classi sul perimetro M1.
+        let by_id = |id: &str| {
+            capabilities
+                .operations
+                .iter()
+                .find(|op| op.id == id)
+                .expect("op in catalogo")
+                .geo_fusion
+        };
+        assert_eq!(by_id("geo.buffer"), "transform_in_place");
+        assert_eq!(by_id("geo.area"), "terminal_measure");
+        assert_eq!(by_id("table.filter"), "not_fusible");
+        assert_eq!(by_id("geo.reproject"), "not_fusible");
     }
 }
