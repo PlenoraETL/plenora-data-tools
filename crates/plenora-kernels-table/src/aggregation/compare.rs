@@ -52,13 +52,13 @@ pub fn compare_cells_typed(
 ) -> Result<Ordering> {
     let left_null = left.is_null(left_row);
     let right_null = right.is_null(right_row);
-    if left_null || right_null {
-        return Ok(match (left_null, right_null) {
-            (true, true) => Ordering::Equal,
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => unreachable!(),
-        });
+    // Match esaustivo sulle quattro combinazioni: il caso (false, false)
+    // prosegue con il confronto tipizzato, nessun braccio impossibile.
+    match (left_null, right_null) {
+        (true, true) => return Ok(Ordering::Equal),
+        (true, false) => return Ok(Ordering::Greater),
+        (false, true) => return Ok(Ordering::Less),
+        (false, false) => {}
     }
     match left.data_type() {
         DataType::Int64 => {

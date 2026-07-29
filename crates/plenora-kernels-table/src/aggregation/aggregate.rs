@@ -126,8 +126,8 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
             }
         }
         _ => {
-            return Err(PlenoraError::InvalidPlan(
-                "internal error: funzione fuori dal percorso streaming di reduce_numeric".into(),
+            return Err(PlenoraError::Internal(
+                "funzione fuori dal percorso streaming di reduce_numeric".into(),
             ));
         }
     }))
@@ -208,7 +208,15 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
             let interpolated = (values[upper] - values[lower]) * weight + values[lower];
             interpolated
         }
-        _ => unreachable!(),
+        // Il dispatch di `aggregate` instrada a `reduce_numeric` solo
+        // Sum/Avg/Mean/Min/Max/Variance/Stddev/Quantile; le altre funzioni
+        // hanno percorsi dedicati. Il compilatore non puo' dimostrarlo:
+        // invariante interna, errore esplicito (R6).
+        _ => {
+            return Err(PlenoraError::Internal(
+                "funzione fuori dal percorso numerico di reduce_numeric".into(),
+            ));
+        }
     }))
 }
 

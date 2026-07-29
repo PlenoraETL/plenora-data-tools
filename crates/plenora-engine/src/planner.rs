@@ -354,15 +354,16 @@ impl ValidatedGraph {
 
     /// Contratto dell'arco di output del piano.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Mai, per costruzione: l'output di un grafo validato e' sempre un arco
-    /// presente (garanzia della validazione strutturale + inferenza).
-    #[must_use]
-    pub fn output_contract(&self) -> &DataContract {
+    /// `Internal` se l'arco di output manca dai contratti: impossibile per
+    /// costruzione su un grafo validato (garanzia della validazione
+    /// strutturale + inferenza), ma il compilatore non puo' dimostrarlo —
+    /// l'invariante violata diventa un errore esplicito, mai un panic (R6).
+    pub fn output_contract(&self) -> Result<&DataContract> {
         self.edge_contracts
             .get(&self.plan.plan().output)
-            .expect("l'output e' un arco del grafo validato")
+            .ok_or_else(|| PlenoraError::Internal("l'output e' un arco del grafo validato".into()))
     }
 
     /// Ids canonici delle op usate, in ordine lessicografico.
@@ -397,13 +398,11 @@ impl ValidatedGraph {
 ///   compilata (`geos`/`proj`), schema di output non inferibile a secco;
 /// - `Schema`: contratti (di input o inferiti) che violano le regole v1 (D16);
 /// - `Crs`: CRS di piano assente/invalido, backend PROJ non compilato,
-///   requisito CRS di un nodo non soddisfatto, mismatch CRS left/right.
-///
-/// # Panics
-///
-/// Solo su invarianti interne gia' garantite dai passi precedenti (op risolta
-/// in parsing, arco risolto dalla validazione strutturale): mai su input
-/// esterno, per quanto malformato.
+///   requisito CRS di un nodo non soddisfatto, mismatch CRS left/right;
+/// - `Internal`: invariante interna violata (op risolta in parsing, arco
+///   risolto dalla validazione strutturale) — impossibile su input esterno,
+///   per quanto malformato; il caso "impossibile" e' un errore esplicito,
+///   mai un panic (R6).
 #[allow(clippy::too_many_lines)] // Passi sequenziali di par. 6.1: spezzarli nuocerebbe alla leggibilita'.
 pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> Result<ValidatedGraph> {
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
@@ -452,7 +451,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         .inputs
         .iter()
         .map(|name| contract_fingerprint(provided[name.as_str()]))
-        .collect();
+        .collect::<Result<_>>()?;
 
     // Passo 3: risoluzione del CRS di piano (feature-dispatch, fail-closed
     // senza proj-backend).
@@ -472,7 +471,9 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     required.insert(PublishProfile::Atomic.capability_name());
     let mut used_operations: BTreeSet<String> = BTreeSet::new();
     for node in &plan_ref.nodes {
-        let descriptor = find_operation(&node.op).expect("parse ha risolto l'op");
+        let descriptor = find_operation(&node.op).ok_or_else(|| {
+            PlenoraError::Internal(format!("op del nodo `{}` non risolta dal parse", node.id))
+        })?;
         used_operations.insert(descriptor.id.to_owned());
         for capability in descriptor.required_capabilities {
             required.insert(capability);
@@ -514,17 +515,23 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         .collect();
     for node_id in plan.topological_order() {
         let node = nodes_by_id[node_id.as_str()];
-        let descriptor = find_operation(&node.op).expect("parse ha risolto l'op");
+        let descriptor = find_operation(&node.op).ok_or_else(|| {
+            PlenoraError::Internal(format!("op del nodo `{}` non risolta dal parse", node.id))
+        })?;
         let inputs: Vec<DataContract> = node
             .inputs
             .iter()
             .map(|reference| {
                 edge_contracts
                     .get(reference)
-                    .unwrap_or_else(|| panic!("arco `{reference}` risolto dalla validazione"))
-                    .clone()
+                    .cloned()
+                    .ok_or_else(|| {
+                        PlenoraError::Internal(format!(
+                            "arco `{reference}` non risolto dalla validazione"
+                        ))
+                    })
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let output = match descriptor.family {
             Family::Table => analyze_table_contract(descriptor.id, &inputs, &node.config, &mut fields),
             Family::Geo => analyze_geo_contract(
@@ -545,9 +552,13 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     let plan_hash = PlanHash(Sha256::digest(&canonical_bytes).into());
     let used: Vec<&OperationDescriptor> = used_operations
         .iter()
-        .map(|id| find_operation(id).expect("op usata dal piano"))
-        .collect();
-    let catalog_fingerprint = catalog_fingerprint(&used);
+        .map(|id| {
+            find_operation(id).ok_or_else(|| {
+                PlenoraError::Internal(format!("op `{id}` usata dal piano assente dal catalogo"))
+            })
+        })
+        .collect::<Result<_>>()?;
+    let catalog_fingerprint = catalog_fingerprint(&used)?;
 
     Ok(ValidatedGraph {
         plan_hash,
@@ -614,7 +625,7 @@ pub fn check_compatibility(
                 .ok_or_else(|| mismatch(format!("operazione `{id}` assente dal catalogo corrente")))
         })
         .collect::<Result<_>>()?;
-    if catalog_fingerprint(&descriptors) != graph.catalog_fingerprint {
+    if catalog_fingerprint(&descriptors)? != graph.catalog_fingerprint {
         return Err(mismatch(
             "catalog_fingerprint diverso: la semantica delle op usate e' cambiata".into(),
         ));
@@ -659,7 +670,7 @@ pub fn check_input_compatibility(
         let contract = provided.get(declared.as_str()).ok_or_else(|| {
             mismatch(format!("manca il contratto per l'input `{declared}`"))
         })?;
-        if &contract_fingerprint(contract) != fingerprint {
+        if &contract_fingerprint(contract)? != fingerprint {
             return Err(mismatch(format!(
                 "il contratto dell'input `{declared}` e' diverso da quello validato"
             )));
@@ -693,15 +704,21 @@ fn at_node(node_id: &str, error: PlenoraError) -> PlenoraError {
 /// serializzati in ordine stabile (il chiamante li passa ordinati per id) con
 /// le quattro versioni per-componente, capability, classe di esecuzione e
 /// determinismo.
-fn catalog_fingerprint(descriptors: &[&OperationDescriptor]) -> CatalogFingerprint {
+///
+/// La serializzazione di un `Value` non fallisce in pratica; il caso
+/// "impossibile" e' un errore `Internal` esplicito, mai un panic (R6).
+fn catalog_fingerprint(descriptors: &[&OperationDescriptor]) -> Result<CatalogFingerprint> {
     let mut hasher = Sha256::new();
     for descriptor in descriptors {
-        let canonical = serde_json::to_vec(&descriptor_canonical(descriptor))
-            .expect("la serializzazione del descrittore non fallisce");
+        let canonical = serde_json::to_vec(&descriptor_canonical(descriptor)).map_err(|error| {
+            PlenoraError::Internal(format!(
+                "serializzazione del descrittore di catalogo fallita: {error}"
+            ))
+        })?;
         hasher.update((canonical.len() as u64).to_le_bytes());
         hasher.update(canonical);
     }
-    CatalogFingerprint(hasher.finalize().into())
+    Ok(CatalogFingerprint(hasher.finalize().into()))
 }
 
 /// Serializzazione stabile di un descrittore (nomi enum espliciti, non
@@ -783,10 +800,13 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
 /// I `FieldId` sono esclusi: identita' interna del grafo (rimappata
 /// all'ingresso, D16), non dell'input. Anche `active_geometry` e le proprieta'
 /// sono escluse per lo stesso motivo (riferiscono `FieldId`).
-fn contract_fingerprint(contract: &DataContract) -> ContractFingerprint {
-    let canonical = serde_json::to_vec(&contract_canonical(contract))
-        .expect("la serializzazione del contratto non fallisce");
-    ContractFingerprint(Sha256::digest(&canonical).into())
+fn contract_fingerprint(contract: &DataContract) -> Result<ContractFingerprint> {
+    let canonical = serde_json::to_vec(&contract_canonical(contract)).map_err(|error| {
+        PlenoraError::Internal(format!(
+            "serializzazione del contratto di input fallita: {error}"
+        ))
+    })?;
+    Ok(ContractFingerprint(Sha256::digest(&canonical).into()))
 }
 
 /// Serializzazione stabile di schema + geometrie (chiavi ordinate da

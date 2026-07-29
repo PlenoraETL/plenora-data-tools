@@ -1197,9 +1197,11 @@ fn execute_physical(
     // Schemi degli input contro i contratti validati (fail-closed, prima di
     // toccare i dati).
     for (name, input) in &inputs.readers {
-        let contract = graph
-            .edge_contract(name)
-            .expect("input dichiarato ha un contratto");
+        let contract = graph.edge_contract(name).ok_or_else(|| {
+            PlenoraError::Internal(format!(
+                "l'input `{name}` non ha un contratto nel grafo validato"
+            ))
+        })?;
         let provided = input.schema();
         if provided.fields() != contract.schema.fields() {
             return Err(PlenoraError::Schema(format!(
@@ -1238,7 +1240,14 @@ fn execute_physical(
     for name in &graph.plan().plan().inputs {
         input_contracts.insert(
             name.clone(),
-            graph.edge_contract(name).expect("input dichiarato").clone(),
+            graph
+                .edge_contract(name)
+                .ok_or_else(|| {
+                    PlenoraError::Internal(format!(
+                        "l'input `{name}` non ha un contratto nel grafo validato"
+                    ))
+                })?
+                .clone(),
         );
     }
     let mut network = Network {
@@ -1287,7 +1296,7 @@ fn execute_physical(
         Ok(governed)
     })) as BatchStream;
 
-    let contract = graph.output_contract().clone();
+    let contract = graph.output_contract()?.clone();
     // Milestone C: lo schema IPC (blocco canonico R2.2 + versione R2.5) e'
     // calcolato una sola volta qui — fail-fast su divergenze R2.6, prima di
     // toccare i dati.
@@ -1317,7 +1326,7 @@ impl Network {
             return Ok(shared.register_reader());
         }
         let upstream: BatchStream = if self.inputs.contains_key(edge) {
-            self.input_stream(edge)
+            self.input_stream(edge)?
         } else {
             let index = self.plan.segment_of(edge).ok_or_else(|| {
                 PlenoraError::InvalidPlan(format!("arco `{edge}` senza produttore"))
@@ -1337,15 +1346,25 @@ impl Network {
     /// sequenza logica (ADR-0001: `source_node` = nome dell'input,
     /// `input_partition` = 0 — nessun ramo parallelo della sorgente in v1 —
     /// `sequence_number` = contatore seriale per input).
-    fn input_stream(&mut self, edge: &str) -> BatchStream {
-        let input = self
-            .inputs
-            .remove(edge)
-            .expect("presenza verificata dal chiamante");
+    ///
+    /// Errori `Internal` sulle invarianti di costruzione della rete
+    /// (reader/contratto dell'input presenti per il dispatch del chiamante,
+    /// colonna geometria nello schema del contratto): il caso "impossibile"
+    /// e' un errore esplicito, mai un panic (R6).
+    fn input_stream(&mut self, edge: &str) -> Result<BatchStream> {
+        let input = self.inputs.remove(edge).ok_or_else(|| {
+            PlenoraError::Internal(format!(
+                "reader dell'input `{edge}` assente: invariante di dispatch violata"
+            ))
+        })?;
         let contract = self
             .input_contracts
             .get(edge)
-            .expect("contratto dell'input")
+            .ok_or_else(|| {
+                PlenoraError::Internal(format!(
+                    "contratto dell'input `{edge}` assente: invariante di dispatch violata"
+                ))
+            })?
             .clone();
         let raw: BatchStream = match input {
             Input::Batches(batches) => Box::new(
@@ -1360,13 +1379,20 @@ impl Network {
         let edge_name = edge.to_owned();
         let expected_schema = contract.schema.clone();
         let geometry_column = contract.active_geometry_column();
-        let geometry_index = geometry_column.map(|geometry| {
-            contract
-                .schema
-                .column_with_name(&geometry.name)
-                .expect("colonna geometria nel contratto")
-                .0
-        });
+        let geometry_index = geometry_column
+            .map(|geometry| {
+                contract
+                    .schema
+                    .column_with_name(&geometry.name)
+                    .map(|resolved| resolved.0)
+                    .ok_or_else(|| {
+                        PlenoraError::Internal(format!(
+                            "colonna geometria `{}` assente dallo schema del contratto",
+                            geometry.name
+                        ))
+                    })
+            })
+            .transpose()?;
         // B1.3: la dimensionalita' attesa dal gate WKB e' quella del
         // contratto risolto dell'input (stessa fonte di `geometry_index`):
         // type code incoerente col contratto -> errore dedicato; `Unknown`
@@ -1374,7 +1400,7 @@ impl Network {
         let geometry_dimensions =
             geometry_column.map_or(GeometryDimensions::Xy, |geometry| geometry.dimensions);
         let mut sequence_number = 0_u64;
-        Box::new(raw.map(move |item| {
+        Ok(Box::new(raw.map(move |item| {
             let batch = item?.batch;
             if batch.schema().as_ref() != expected_schema.as_ref() {
                 return Err(PlenoraError::Schema(format!(
@@ -1433,7 +1459,7 @@ impl Network {
             };
             sequence_number += 1;
             Ok(GovernedBatch::new(batch, Some(lease), Some(seq)))
-        }))
+        })))
     }
 
     /// Stream prodotto da un segmento, secondo la sua modalita' (E2).
@@ -1456,10 +1482,11 @@ impl Network {
                 let plan = Rc::clone(&self.plan);
                 let state = Rc::clone(&self.state);
                 let mut once = Some(move || {
-                    let kernel = plan.segments()[index]
-                        .kernels
-                        .first()
-                        .expect("segmento blocking: 1 kernel");
+                    let kernel = plan.segments()[index].kernels.first().ok_or_else(|| {
+                        PlenoraError::Internal(
+                            "segmento blocking senza kernel: invariante del planner violata".into(),
+                        )
+                    })?;
                     // ADR-0002 (Fase 2B M2c): verso un kernel spill-capable
                     // la quota governor dei batch drenati e' rilasciata
                     // subito. La soglia di attivazione dello spill ha la
@@ -1495,10 +1522,11 @@ impl Network {
                 let plan = Rc::clone(&self.plan);
                 let state = Rc::clone(&self.state);
                 let mut once = Some(move || {
-                    let kernel = plan.segments()[index]
-                        .kernels
-                        .first()
-                        .expect("segmento binario: 1 kernel");
+                    let kernel = plan.segments()[index].kernels.first().ok_or_else(|| {
+                        PlenoraError::Internal(
+                            "segmento binario senza kernel: invariante del planner violata".into(),
+                        )
+                    })?;
                     // ADR 3, M1c: come per il blocking unario — check a ogni
                     // confine di batch durante il drenaggio dei due rami.
                     let mut left_batches = Vec::new();
@@ -2142,7 +2170,15 @@ fn measure_f64(
         MeasureKind::Area => operations::area(&geometry),
         MeasureKind::Length => operations::length(&geometry),
         MeasureKind::Perimeter => operations::perimeter(&geometry),
-        MeasureKind::VertexCount | MeasureKind::ToWkt => unreachable!("misura non f64"),
+        MeasureKind::VertexCount | MeasureKind::ToWkt => {
+            return Err(step_error(
+                kernel,
+                PlenoraError::Internal(
+                    "misura non f64 nel percorso scalare f64: invariante di dispatch violata"
+                        .into(),
+                ),
+            ));
+        }
     }
     .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
     Ok(Some(value))
@@ -2598,7 +2634,9 @@ fn run_blocking(
     batches: Vec<GovernedBatch>,
 ) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
-    let kernel = segment.kernels.first().expect("segmento blocking: 1 kernel");
+    let kernel = segment.kernels.first().ok_or_else(|| {
+        PlenoraError::Internal("segmento blocking senza kernel: invariante del planner violata".into())
+    })?;
     let rows_in = batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
     let bytes_in = batches.iter().map(GovernedBatch::accounted_bytes).sum::<u64>();
     let schema = kernel.input_contracts[0].schema.clone();
@@ -2685,7 +2723,9 @@ fn run_binary_blocking(
     right_batches: Vec<GovernedBatch>,
 ) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
-    let kernel = segment.kernels.first().expect("segmento binario: 1 kernel");
+    let kernel = segment.kernels.first().ok_or_else(|| {
+        PlenoraError::Internal("segmento binario senza kernel: invariante del planner violata".into())
+    })?;
     let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
         return Err(PlenoraError::InvalidPlan(format!(
             "nodo `{}`: config non binaria in un segmento BinaryBlocking (errore interno)",

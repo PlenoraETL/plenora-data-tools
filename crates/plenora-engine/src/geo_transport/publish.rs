@@ -404,9 +404,16 @@ pub fn publish_with_profile<T>(
     }
     let mut temporary = Some(temporary);
     persist_with_retry(|| {
-        let file = temporary
-            .take()
-            .expect("il tempfile resta disponibile finche' il persist fallisce");
+        // Il tempfile resta disponibile finche' il persist fallisce (ogni
+        // errore lo restituisce via `PersistError`): un `None` qui e' una
+        // invariante interna violata, errore esplicito e non ritentabile
+        // (`retryable_persist_error`: kind diverso da `AlreadyExists` e
+        // nessun codice OS transitorio), mai un panic (R6).
+        let Some(file) = temporary.take() else {
+            return Err(io::Error::other(
+                "tempfile di publish assente al retry del persist: invariante interna violata",
+            ));
+        };
         match file.persist_noclobber(output_path) {
             Ok(_persisted) => Ok(()),
             Err(persist_error) => {

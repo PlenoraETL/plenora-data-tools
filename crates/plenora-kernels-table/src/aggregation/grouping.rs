@@ -93,8 +93,12 @@ impl KeyColumn {
                     key.push('0');
                 } else {
                     scratch.clear();
-                    write!(scratch, "{}", values.value(row)).expect("fmt su String");
-                    push_key_value(key, scratch);
+                    // La scrittura su String non fallisce mai; l'errore resta
+                    // esplicito perche' fmt::Result non lo dimostra (R6).
+                    write!(scratch, "{}", values.value(row)).map_err(|_| {
+                        PlenoraError::Internal("formattazione chiave di gruppo su String".into())
+                    })?;
+                    push_key_value(key, scratch)?;
                 }
             }
             Self::UInt64 { prefix, values } => {
@@ -104,8 +108,10 @@ impl KeyColumn {
                     key.push('0');
                 } else {
                     scratch.clear();
-                    write!(scratch, "{}", values.value(row)).expect("fmt su String");
-                    push_key_value(key, scratch);
+                    write!(scratch, "{}", values.value(row)).map_err(|_| {
+                        PlenoraError::Internal("formattazione chiave di gruppo su String".into())
+                    })?;
+                    push_key_value(key, scratch)?;
                 }
             }
             Self::Float64 { prefix, values } => {
@@ -115,8 +121,10 @@ impl KeyColumn {
                     key.push('0');
                 } else {
                     scratch.clear();
-                    write!(scratch, "{}", values.value(row)).expect("fmt su String");
-                    push_key_value(key, scratch);
+                    write!(scratch, "{}", values.value(row)).map_err(|_| {
+                        PlenoraError::Internal("formattazione chiave di gruppo su String".into())
+                    })?;
+                    push_key_value(key, scratch)?;
                 }
             }
             Self::Boolean { prefix, values } => {
@@ -126,7 +134,7 @@ impl KeyColumn {
                     key.push('0');
                 } else {
                     // "true"/"false": stessi byte di bool::to_string.
-                    push_key_value(key, if values.value(row) { "true" } else { "false" });
+                    push_key_value(key, if values.value(row) { "true" } else { "false" })?;
                 }
             }
             Self::Utf8 { prefix, values } => {
@@ -135,14 +143,14 @@ impl KeyColumn {
                 if values.is_null(row) {
                     key.push('0');
                 } else {
-                    push_key_value(key, values.value(row));
+                    push_key_value(key, values.value(row))?;
                 }
             }
             Self::Generic { prefix, array } => {
                 key.push_str(prefix);
                 key.push('\u{1e}');
                 match scalar_as_string(array.as_ref(), row)? {
-                    Some(value) => push_key_value(key, &value),
+                    Some(value) => push_key_value(key, &value)?,
                     None => key.push('0'),
                 }
             }
@@ -153,11 +161,15 @@ impl KeyColumn {
 }
 
 /// Frammento `1{len}:{value}` della chiave di `row_key`.
-fn push_key_value(key: &mut String, value: &str) {
+fn push_key_value(key: &mut String, value: &str) -> Result<()> {
     key.push('1');
-    write!(key, "{}", value.len()).expect("fmt su String");
+    // Come sopra: fmt su String e' infallibile, ma l'errore e' esplicito.
+    write!(key, "{}", value.len()).map_err(|_| {
+        PlenoraError::Internal("formattazione chiave di gruppo su String".into())
+    })?;
     key.push(':');
     key.push_str(value);
+    Ok(())
 }
 
 /// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64
@@ -184,7 +196,11 @@ impl std::hash::Hasher for KeyHasher {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
-            let value = u64::from_le_bytes(chunk.try_into().expect("blocco di 8 byte"));
+            // chunks_exact(8) garantisce blocchi pieni: la copia su array
+            // fisso non puo' fallire e non serve alcuna conversione.
+            let mut block = [0_u8; 8];
+            block.copy_from_slice(chunk);
+            let value = u64::from_le_bytes(block);
             self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
         }
         let remainder = chunks.remainder();

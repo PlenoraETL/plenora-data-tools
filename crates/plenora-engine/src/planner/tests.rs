@@ -136,8 +136,8 @@ fn contract_canonical_omits_encoding_unless_declared() {
     let mut contract = geo_contract(0);
     contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
     assert_ne!(
-        contract_fingerprint(&contract),
-        contract_fingerprint(&geo_contract(0))
+        contract_fingerprint(&contract).unwrap(),
+        contract_fingerprint(&geo_contract(0)).unwrap()
     );
 }
 
@@ -196,7 +196,7 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
     assert_eq!(buffered.geometries[0].field_id, input_geometry);
 
     // table.aggregate senza la geometria in group_by la perde: output tabellare.
-    let output = graph.output_contract();
+    let output = graph.output_contract().unwrap();
     assert!(output.geometries.is_empty());
     assert!(output.schema.field_with_name("count").is_ok());
 }
@@ -219,7 +219,7 @@ fn fan_out_fan_in_validates() {
     .to_string();
     let graph = validate(&plan, &input(table_contract())).expect("fan-out/fan-in valido");
     assert_eq!(graph.topological_order(), &["a", "b", "j"]);
-    assert!(graph.output_contract().schema.field_with_name("id").is_ok());
+    assert!(graph.output_contract().unwrap().schema.field_with_name("id").is_ok());
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn binary_geo_fan_in_remaps_input_field_ids() {
     let left_id = graph.edge_contract("left").unwrap().geometries[0].field_id;
     let right_id = graph.edge_contract("right").unwrap().geometries[0].field_id;
     assert_ne!(left_id, right_id, "FieldId rimappati in namespace globale");
-    let joined = graph.output_contract();
+    let joined = graph.output_contract().unwrap();
     assert!(joined
         .schema
         .field_with_name(plenora_kernels_geo::analyze::RIGHT_INDEX_COLUMN)
@@ -522,7 +522,7 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
     let graph = validate(&plan_json, &input(table_contract())).expect("piano migrato valido");
     assert_eq!(graph.plan_format_version(), 4);
     assert_eq!(graph.topological_order(), &["n0", "n1"]);
-    assert!(graph.output_contract().schema.field_with_name("count").is_ok());
+    assert!(graph.output_contract().unwrap().schema.field_with_name("count").is_ok());
 }
 
 // ---------------------------------------------------------------------------

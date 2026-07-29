@@ -99,17 +99,14 @@ fn compare_nullable<A: Array>(
     right: usize,
     compare: impl Fn(&A, usize, usize) -> Ordering,
 ) -> Ordering {
-    let left_null = values.is_null(left);
-    let right_null = values.is_null(right);
-    if left_null || right_null {
-        return match (left_null, right_null) {
-            (true, true) => Ordering::Equal,
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => unreachable!(),
-        };
+    // Match esaustivo sulle quattro combinazioni di null: nessun braccio
+    // impossibile, il confronto vero e proprio resta nel caso (false, false).
+    match (values.is_null(left), values.is_null(right)) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => compare(values, left, right),
     }
-    compare(values, left, right)
 }
 
 // Il guard del mutex nel comparatore e' gia' a scope minimo (blocco

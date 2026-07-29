@@ -1245,7 +1245,14 @@ pub fn table_diff(
                     )
                 }
             }
-            (None, None) => unreachable!(),
+            (None, None) => {
+                // `matched` e' costruito solo con una sorgente `Some` a
+                // sinistra o a destra: la coppia (None, None) non e'
+                // producibile; invariante interna, errore esplicito (R6).
+                return Err(PlenoraError::Internal(
+                    "table_diff: riga senza sorgente in nessuno dei due batch".into(),
+                ));
+            }
         };
         if status != "UNCHANGED" || config.include_unchanged == "yes" {
             rows.push(DiffRow {
