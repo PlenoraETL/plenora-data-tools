@@ -9,9 +9,22 @@
 //!   (misura il costo del Vec di determinismo ADR-0001);
 //! - `op.snap_reference_2k`: R-tree del riferimento condiviso vs per-cella;
 //! - `op.voronoi_2k`: pre-filtro `bounding_rect`;
-//! - `op.from_wkt`: parsing senza uppercase integrale.
+//! - `op.from_wkt`: parsing senza uppercase integrale;
+//! - `op.clip_inside_mask` / `op.overlay_union_unchanged`: scenari
+//!   "passthrough" — output identico all'input per costruzione (clip con
+//!   maschera a dominio intero, union di griglie disgiunte), misurano il
+//!   costo decode+encode che un futuro passthrough WKB eliminerebbe;
+//! - `ref.decode_polys` / `ref.encode_polys`: riferimenti decode/encode sui
+//!   poligoni semplici (stesso stile di `ref.decode_points` /
+//!   `ref.encode_points`);
+//! - `ref.decode_rects` / `ref.encode_rects`: riferimenti sui rettangoli
+//!   delle griglie di overlay (ancore di `op.overlay_union_unchanged`).
 //!
 //! Uso: `bench_geo_perfcheck` — una riga JSON per scenario su stdout.
+
+// Gli scenari sono misure lineari in sequenza: spezzare `main` in fn
+// aggiungerebbe solo indirezione (stesso allow di bench_geo_sweep).
+#![allow(clippy::too_many_lines)]
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -23,6 +36,7 @@ use plenora_kernels_geo::advanced::voronoi_cells;
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions2::snap_column;
 use plenora_kernels_geo::geometry_from_wkb;
+use plenora_kernels_geo::topology::{clip_to_mask, polygon_overlay, OverlayMode};
 
 const RUNS: usize = 5;
 
@@ -75,6 +89,29 @@ fn star_polygon(rng: &mut Rng, cx: f64, cy: f64, radius: f64, vertices: usize) -
         outline.push(first);
     }
     Polygon::new(LineString::from(outline), vec![])
+}
+
+/// Griglia 50x50 di rettangoli 100x100 su [shift, shift+5000)^2
+/// (deterministica, senza RNG).
+fn grid_geometries(shift: f64) -> Vec<Geometry<f64>> {
+    let mut geometries = Vec::with_capacity(2_500);
+    for j in 0..50 {
+        for i in 0..50 {
+            // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+            // violerebbe il determinismo bit-esatto (ADR-0001).
+            #[allow(clippy::suboptimal_flops)]
+            let x0 = f64::from(i) * 100.0 + shift;
+            #[allow(clippy::suboptimal_flops)]
+            let y0 = f64::from(j) * 100.0 + shift;
+            let x1 = x0 + 100.0;
+            let y1 = y0 + 100.0;
+            geometries.push(Geometry::Polygon(Polygon::new(
+                LineString::from(vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]),
+                vec![],
+            )));
+        }
+    }
+    geometries
 }
 
 fn cells_of(geometries: &[Geometry<f64>]) -> BinaryArray {
@@ -151,6 +188,68 @@ fn main() {
         .len()
     });
 
+    // op.clip_inside_mask: scenario "passthrough" — maschera = rettangolo su
+    // tutto il dominio [0,10000)^2 delle fixture: ogni output e' identico
+    // all'input per costruzione, quindi il tempo misura quasi solo
+    // decode+encode, cioe' il risparmio potenziale di un passthrough WKB
+    // (riuso del payload di input invece di ri-encode). Solo misura, il
+    // passthrough NON e' implementato.
+    let full_domain_mask = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            (0.0, 0.0),
+            (10_000.0, 0.0),
+            (10_000.0, 10_000.0),
+            (0.0, 10_000.0),
+            (0.0, 0.0),
+        ]),
+        vec![],
+    ));
+    measure("op.clip_inside_mask", 20_000, || {
+        let geometries: Vec<Geometry<f64>> = poly_cells
+            .iter()
+            .map(|cell| geometry_from_wkb(cell.expect("cella non null")).expect("decode"))
+            .collect();
+        clip_to_mask(&geometries, std::slice::from_ref(&full_domain_mask))
+            .expect("clip")
+            .iter()
+            .map(|out| {
+                out.as_ref()
+                    .map_or(0, |geometry| encode_geometry(geometry).expect("encode").len())
+            })
+            .sum()
+    });
+
+    // op.overlay_union_unchanged: scenario "passthrough" — union di due
+    // griglie 50x50 DISGIUNTE (la seconda traslata fuori dominio): nessuna
+    // intersezione, tutti i pezzi invariati; il decode+encode di ogni pezzo
+    // e' il costo che un passthrough WKB azzererebbe. Solo misura, il
+    // passthrough NON e' implementato.
+    let overlay_left_geoms = grid_geometries(0.0);
+    let overlay_right_geoms = grid_geometries(100_000.0);
+    let overlay_left = cells_of(&overlay_left_geoms);
+    let overlay_right = cells_of(&overlay_right_geoms);
+    measure("op.overlay_union_unchanged", 5_000, || {
+        let decode = |cells: &BinaryArray| {
+            cells
+                .iter()
+                .map(|cell| geometry_from_wkb(cell.expect("cella non null")).expect("decode"))
+                .collect::<Vec<_>>()
+        };
+        let left = decode(&overlay_left);
+        let right = decode(&overlay_right);
+        polygon_overlay(
+            &left,
+            &right,
+            OverlayMode::Union,
+            1_000_000_000_000,
+            1_000_000_000_000,
+        )
+        .expect("overlay")
+        .iter()
+        .map(|piece| encode_geometry(&piece.geometry).expect("encode").len())
+        .sum()
+    });
+
     // op.snap_reference_2k: 10k punti snappati su riferimento da 2_000
     // vertici (HEAD costruisce l'R-tree una volta; il riferimento lo
     // ricostruisce per cella).
@@ -193,6 +292,49 @@ fn main() {
     measure("ref.encode_points", 200_000, || {
         points
             .iter()
+            .map(|geometry| black_box(wkb_of(geometry)).len())
+            .sum()
+    });
+
+    // ref.decode_polys / ref.encode_polys: riferimenti decode/encode sui
+    // poligoni semplici (ancore per il risparmio potenziale del passthrough,
+    // cfr. op.clip_inside_mask).
+    measure("ref.decode_polys", 20_000, || {
+        poly_cells
+            .iter()
+            .map(|cell| {
+                geometry_from_wkb(cell.expect("cella non null"))
+                    .map(|geometry| black_box(geometry).coords_count())
+                    .expect("decode")
+            })
+            .sum()
+    });
+    measure("ref.encode_polys", 20_000, || {
+        polys
+            .iter()
+            .map(|geometry| black_box(wkb_of(geometry)).len())
+            .sum()
+    });
+
+    // ref.decode_rects / ref.encode_rects: riferimenti decode/encode sui
+    // rettangoli delle griglie di overlay (ancore per
+    // op.overlay_union_unchanged: i pezzi della union disgiunta sono questi
+    // stessi rettangoli, invariati).
+    measure("ref.decode_rects", 5_000, || {
+        overlay_left
+            .iter()
+            .chain(overlay_right.iter())
+            .map(|cell| {
+                geometry_from_wkb(cell.expect("cella non null"))
+                    .map(|geometry| black_box(geometry).coords_count())
+                    .expect("decode")
+            })
+            .sum()
+    });
+    measure("ref.encode_rects", 5_000, || {
+        overlay_left_geoms
+            .iter()
+            .chain(overlay_right_geoms.iter())
             .map(|geometry| black_box(wkb_of(geometry)).len())
             .sum()
     });

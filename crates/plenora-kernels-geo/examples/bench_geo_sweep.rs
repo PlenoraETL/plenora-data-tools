@@ -481,6 +481,22 @@ fn grid_shift_wkb() -> &'static WkbCells {
     })
 }
 
+/// Griglia 100x100 shiftata di 1e6 (fuori dominio, con jitter): disgiunta
+/// da `grid_wkb` per costruzione (per overlay union senza intersezioni).
+fn grid_far_wkb() -> &'static WkbCells {
+    static CELLS: OnceLock<WkbCells> = OnceLock::new();
+    CELLS.get_or_init(|| {
+        let mut rng = Rng::seeded();
+        let mut cells = Vec::with_capacity(10_000);
+        for j in 0..100 {
+            for i in 0..100 {
+                cells.push(enc_cell(&grid_rect(i, j, rng.range(0.0, 5.0), 1_000_000.0)));
+            }
+        }
+        cells
+    })
+}
+
 /// Poligoni stellati ~100v su griglia spaziata 100 con raggio <= 26:
 /// disgiunti e non tangenti per costruzione (per geo.collect: la validazione
 /// `MultiPolygon` respinge overlap E contatti lungo un segmento).
@@ -1379,6 +1395,63 @@ fn main() {
             let left = decode_prefix(grid_wkb(), n)?;
             let right = decode_prefix(grid_shift_wkb(), n)?;
             polygon_overlay(&left, &right, OverlayMode::Intersection, MAX_WORK, MAX_WORK)
+                .map_err(|e| e.to_string())
+                .and_then(|pieces| {
+                    pieces.iter().try_fold(0_usize, |total, piece| {
+                        enc(&piece.geometry).map(|len| total + len)
+                    })
+                })
+        },
+    );
+    // geo.clip[inside_mask]: stessa pipeline di geo.clip ma con maschera =
+    // rettangolo su tutto il dominio [0,10000)^2 di polys_wkb: ogni output
+    // e' identico all'input per costruzione, quindi il tempo misura quasi
+    // solo decode+encode — il risparmio potenziale di un passthrough WKB
+    // (riuso del payload di input invece di ri-encode). Solo misura, il
+    // passthrough NON e' implementato.
+    sweep_collective(
+        &mut results,
+        "geo.clip[inside_mask]",
+        "poly_simple x mask dominio",
+        &[1_000, 10_000],
+        1.5,
+        "maschera = unico rettangolo su tutto il dominio: tutte le geometrie dentro, output identico all'input",
+        &|n| {
+            let geoms = decode_prefix(polys_wkb(), n)?;
+            let masks = [Geometry::Polygon(Polygon::new(
+                LineString::new(vec![
+                    Coord { x: 0.0, y: 0.0 },
+                    Coord { x: 10_000.0, y: 0.0 },
+                    Coord { x: 10_000.0, y: 10_000.0 },
+                    Coord { x: 0.0, y: 10_000.0 },
+                    Coord { x: 0.0, y: 0.0 },
+                ]),
+                Vec::new(),
+            ))];
+            clip_to_mask(&geoms, &masks)
+                .map_err(|e| e.to_string())
+                .and_then(|outs| {
+                    outs.iter().try_fold(0_usize, |total, out| {
+                        enc_opt(out.as_ref()).map(|len| total + len)
+                    })
+                })
+        },
+    );
+    // geo.overlay[union_unchanged]: union di due griglie DISGIUNTE (la
+    // seconda traslata fuori dominio): nessuna intersezione, tutti i pezzi
+    // sono invariati; l'encode di ogni pezzo e' il costo che un passthrough
+    // WKB azzererebbe. Solo misura, il passthrough NON e' implementato.
+    sweep_collective(
+        &mut results,
+        "geo.overlay[union_unchanged]",
+        "grid100 x grid100 far",
+        &[1_000, 10_000],
+        1.5,
+        "mode union, griglie disgiunte (seconda shiftata di 1e6): pezzi invariati",
+        &|n| {
+            let left = decode_prefix(grid_wkb(), n)?;
+            let right = decode_prefix(grid_far_wkb(), n)?;
+            polygon_overlay(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
