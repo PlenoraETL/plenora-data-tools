@@ -95,6 +95,16 @@ pub enum PlenoraError {
     /// Errore di I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Invariante interna violata: uno stato che per costruzione non
+    /// dovrebbe esistere (categoria `Internal` di par. 9, finora senza
+    /// variante). Sostituisce le primitive di panic (`unreachable!`,
+    /// `expect`) nei punti in cui il compilatore non puo' dimostrare
+    /// l'esaustivita': il caso "impossibile" diventa un errore esplicito,
+    /// mai un panic (R6). Il testo porta il contesto strutturale, mai
+    /// valori di righe/colonne (regola 8).
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl From<arrow_schema::ArrowError> for PlenoraError {
@@ -367,6 +377,7 @@ impl PlenoraError {
             Self::Crs(_) => ErrorCategory::Crs,
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
             Self::Io(_) => ErrorCategory::Io,
+            Self::Internal(_) => ErrorCategory::Internal,
         }
     }
 
@@ -398,8 +409,9 @@ impl PlenoraError {
     ///   responsabilita' del chiamante.
     /// - [`RetryDisposition::Never`] per tutte le cause deterministiche
     ///   (contratto, schema, mapping, esecuzione di un nodo: ADR-0001 — a
-    ///   parita' di input fallirebbero allo stesso modo) e per la
-    ///   cancellazione, che e' volontaria.
+    ///   parita' di input fallirebbero allo stesso modo), per la
+    ///   cancellazione, che e' volontaria, e per le invarianti interne
+    ///   violate (`Internal`), deterministiche per definizione.
     /// - [`RetryDisposition::After`] non e' mai prodotto: data-tools non ha
     ///   sorgenti di backoff tipizzate.
     #[must_use]
@@ -412,7 +424,8 @@ impl PlenoraError {
             | Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Crs(_)
-            | Self::Cancelled { .. } => RetryDisposition::Never,
+            | Self::Cancelled { .. }
+            | Self::Internal(_) => RetryDisposition::Never,
         }
     }
 
@@ -456,6 +469,11 @@ impl PlenoraError {
     ///   Approssimazione dichiarata (la fusione §9 di `Json`+`Arrow`
     ///   cancella la distinzione parse/I-O che le due varianti separate
     ///   portavano).
+    /// - `Internal` → [`ErrorPhase::Write`]: un'invariante interna puo'
+    ///   violarsi in qualunque punto; si dichiara `Write` (lato con
+    ///   possibile effetto) per la stessa ragione conservativa di
+    ///   `DataMapping`/`Io`. La disposizione resta `Never` a qualunque
+    ///   fase: un'invariante violata e' deterministica per definizione.
     #[must_use]
     pub const fn phase(&self) -> ErrorPhase {
         match self {
@@ -466,9 +484,11 @@ impl PlenoraError {
             | Self::Unsupported(_)
             | Self::Schema(_)
             | Self::Crs(_) => ErrorPhase::Validate,
-            Self::Execution { .. } | Self::Cancelled { .. } | Self::DataMapping(_) | Self::Io(_) => {
-                ErrorPhase::Write
-            }
+            Self::Execution { .. }
+            | Self::Cancelled { .. }
+            | Self::DataMapping(_)
+            | Self::Io(_)
+            | Self::Internal(_) => ErrorPhase::Write,
         }
     }
 
@@ -500,7 +520,8 @@ impl PlenoraError {
             | Self::Execution { .. }
             | Self::Crs(_)
             | Self::Cancelled { .. }
-            | Self::Io(_) => RemoteEffect::None,
+            | Self::Io(_)
+            | Self::Internal(_) => RemoteEffect::None,
         }
     }
 }
@@ -561,6 +582,10 @@ mod tests {
                 PlenoraError::Io(std::io::Error::other("io")),
                 ErrorCategory::Io,
             ),
+            (
+                PlenoraError::Internal("invariante violata".into()),
+                ErrorCategory::Internal,
+            ),
         ]
     }
 
@@ -579,6 +604,18 @@ mod tests {
             .into();
         assert_eq!(json.category(), ErrorCategory::DataMapping);
         assert!(json.to_string().starts_with("json error: "));
+    }
+
+    #[test]
+    fn internal_display_and_axes() {
+        // R6: la variante Internal raccoglie le violazioni di invariante che
+        // prima erano primitive di panic; gli assi sono quelli dichiarati.
+        let error = PlenoraError::Internal("stato impossibile".into());
+        assert_eq!(error.to_string(), "internal error: stato impossibile");
+        assert_eq!(error.category(), ErrorCategory::Internal);
+        assert_eq!(error.phase(), ErrorPhase::Write);
+        assert_eq!(error.remote_effect(), RemoteEffect::None);
+        assert_eq!(error.retry_disposition(), RetryDisposition::Never);
     }
 
     #[test]
@@ -644,6 +681,7 @@ mod tests {
                 PlenoraError::Io(std::io::Error::other("io")),
                 ErrorPhase::Write,
             ),
+            (PlenoraError::Internal("i".into()), ErrorPhase::Write),
         ]
     }
 
