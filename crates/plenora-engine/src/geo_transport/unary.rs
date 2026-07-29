@@ -9,7 +9,7 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use geo::Geometry;
-use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};
+use geozero::{CoordDimensions, ToWkb};
 use rayon::prelude::*;
 
 use plenora_kernels_geo::advanced::voronoi_cells;
@@ -1127,10 +1127,11 @@ fn diagnostics_batches(
             if payload.len() as u64 > MAX_CELL_BYTES {
                 return Err(ArrowTransportError::CellTooLarge(payload.len() as u64));
             }
-            plenora_kernels_geo::validate_wkb_contract(payload)?;
-            let geometry = Wkb(payload)
-                .to_geo()
-                .map_err(|error| ArrowTransportError::Geometry(format!("WKB non valido: {error}")))?;
+            // Decoder validante (ADR-0011): una passata, stesso contratto
+            // strutturale di validate_wkb_contract + costruzione della
+            // geometria. Niente `check_validation` OGC: la validita' e' il
+            // dato che geometry_diagnostics stessa produce.
+            let geometry = plenora_kernels_geo::wkb_decoder::decode_validated(payload)?;
             let diagnostics = geometry_diagnostics(&geometry)?;
             geometry_type.push(Some(diagnostics.geometry_type.to_owned()));
             coordinate_count.push(Some(diagnostics.coordinate_count));
