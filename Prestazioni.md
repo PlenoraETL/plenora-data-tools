@@ -173,8 +173,14 @@ sul batch, semantica errori invariata dimostrata dall'oracolo esteso
 centroid, mediana di 5): **−14,6%** (0,611s → 0,522s, bande min/max non
 sovrapposte), output byte-identici, zero fallback governor. Il −45% del
 baseline kernel-level si riduce a livello engine per l'overhead fisso
-condiviso (framing RecordBatch, lease, metriche). Cantieri successivi:
-misure terminali (M2), reproject/make_valid ed estensioni (M3).
+condiviso (framing RecordBatch, lease, metriche). **M2 (2026-07-29):**
+misure terminali nella catena (`area`/`length`/`perimeter`/`vertex_count`/
+`to_wkt` in coda a un gruppo); scenario `chain_terminal_measure` (la
+catena completa del baseline, con `area`): **−16,2%** a bande non
+sovrapposte (con la mitigazione allocatore documentata in
+`benchmarks/sweep/geo_sweep.md`; il delta e' sensibile alle condizioni
+dell'host, la direzione sempre coerente). Cantieri successivi:
+reproject/make_valid ed estensioni (M3).
 
 ---
 

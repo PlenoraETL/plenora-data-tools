@@ -1,15 +1,17 @@
-//! Misura A/B engine-level della fusione dei segmenti geo (ADR-0012 M1,
-//! kill switch D12.9): stesso piano v4 `geo.buffer -> geo.simplify ->
-//! geo.centroid` eseguito con `RuntimeContext.geo_fusion` true/false, N run
-//! alternate per modalita'. E' la verifica a livello engine del risultato
-//! kernel-level del baseline (`chain_wkb` vs `chain_fused`,
-//! `benchmarks/baseline/baseline.json`): qui il percorso include il framing
-//! dei `RecordBatch` tra un nodo e l'altro, quindi il delta atteso e' minore
-//! ma deve restare significativo.
+//! Misura A/B engine-level della fusione dei segmenti geo (ADR-0012 M1+M2,
+//! kill switch D12.9): due scenari, ciascuno eseguito con
+//! `RuntimeContext.geo_fusion` true/false, N run alternate per modalita'.
+//! Scenario `chain_transforms`: `geo.buffer -> geo.simplify -> geo.centroid`
+//! (M1). Scenario `chain_terminal_measure`: la stessa catena + `geo.area` in
+//! coda (M2 — la catena completa del baseline kernel-level, `chain_wkb` vs
+//! `chain_fused` in `benchmarks/baseline/baseline.json`). A livello engine il
+//! percorso include il framing dei `RecordBatch` tra un nodo e l'altro,
+//! quindi il delta atteso e' minore del kernel-level ma deve restare
+//! significativo.
 //!
-//! Uso: `bench_geo_fusion` — una riga JSON per modalita' su stdout, piu'
-//! una riga di sintesi con il delta percentuale. Fallisce (exit != 0) se il
-//! percorso fuso registra fallback governor o se gli output delle due
+//! Uso: `bench_geo_fusion` — una riga JSON per scenario+modalita' su stdout,
+//! piu' una riga di sintesi con il delta percentuale. Fallisce (exit != 0)
+//! se il percorso fuso registra fallback governor o se gli output delle due
 //! modalita' non sono identici (stesso oracolo dei test di ADR-0012).
 
 use std::sync::Arc;
@@ -55,6 +57,22 @@ fn chain_plan() -> serde_json::Value {
             {"id": "c", "op": "geo.centroid", "in": ["s"], "config": {}},
         ],
         "output": "c",
+    })
+}
+
+/// Piano v4: la catena completa del baseline (buffer -> simplify -> centroid
+/// -> area): tre `TransformInPlace` + la misura terminale (M2).
+fn chain_plan_with_area() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.01}},
+            {"id": "c", "op": "geo.centroid", "in": ["s"], "config": {}},
+            {"id": "a", "op": "geo.area", "in": ["c"], "config": {}},
+        ],
+        "output": "a",
     })
 }
 
@@ -187,8 +205,11 @@ fn report(mode: &str, durations: &mut [f64]) -> f64 {
     median
 }
 
-fn main() {
-    let graph = validate(&chain_plan().to_string(), &[("main".to_owned(), geo_contract())])
+/// Uno scenario A/B completo: 2 x RUNS run alternate, controlli bloccanti
+/// (nessun fallback, output identici), una riga JSON per modalita' e la
+/// sintesi col delta.
+fn run_scenario(label: &str, plan: &serde_json::Value) {
+    let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
         .expect("validate");
     let fixture = fixture_batches();
 
@@ -204,7 +225,7 @@ fn main() {
         if fused {
             assert_eq!(
                 metrics.geo_fusion_fallbacks, 0,
-                "percorso fuso: nessun fallback governor atteso sulla fixture"
+                "{label}: nessun fallback governor atteso sulla fixture"
             );
             durations_fused.push(seconds);
             fused_reference.get_or_insert(batches);
@@ -218,12 +239,17 @@ fn main() {
     // test di ADR-0012 (confronto per valore dei RecordBatch di una run).
     let outputs_identical =
         fused_reference.expect("run fusa") == plain_reference.expect("run non fusa");
-    assert!(outputs_identical, "output fuso diverso dal non fuso");
+    assert!(outputs_identical, "{label}: output fuso diverso dal non fuso");
 
     let median_fused = report("fused", &mut durations_fused);
     let median_plain = report("unfused", &mut durations_plain);
     let delta = (median_fused - median_plain) / median_plain * 100.0;
     println!(
-        "{{\"delta_percent\":{delta},\"outputs_identical\":{outputs_identical},\"geo_fusion_fallbacks\":0}}"
+        "{{\"scenario\":\"{label}\",\"delta_percent\":{delta},\"outputs_identical\":{outputs_identical},\"geo_fusion_fallbacks\":0}}"
     );
+}
+
+fn main() {
+    run_scenario("chain_transforms", &chain_plan());
+    run_scenario("chain_terminal_measure", &chain_plan_with_area());
 }

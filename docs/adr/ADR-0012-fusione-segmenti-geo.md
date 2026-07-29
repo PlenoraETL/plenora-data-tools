@@ -287,3 +287,14 @@ fondendo» e' una classe).
   misura in coda — attribuzione ai transform invariata). Il caso «misura
   su intermedio invalido» e' non realizzabile con gli op M1 (come i casi
   (d2)/(e)): coperto a livello runner come difesa in profondita'.
+- 2026-07-29: misura A/B M2 (`bench_geo_fusion` esteso allo scenario
+  `chain_terminal_measure` = buffer→simplify→centroid→area, la catena
+  completa del baseline). NOTA METODOLOGICA: il delta fuso/non fuso
+  dipende fortemente dalle condizioni dell'host — host rumoroso con
+  allocatore di default: −2/−8% con bande sovrapposte; con
+  `MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768` (mitigazione
+  documentata in `benchmarks/sweep/geo_sweep.md`): **−20,2%** (catena
+  trasformazioni) e **−16,2%** (con misura terminale), bande min/max non
+  sovrapposte; −14,6% gia' misurato per M1 in condizioni quiete. La
+  direzione e' coerente in ogni condizione; i numeri canonici sono quelli
+  a bande non sovrapposte. Output byte-identici, zero fallback.
