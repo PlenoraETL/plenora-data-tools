@@ -49,9 +49,12 @@ agente — segue queste regole. Non sono opzionali.
 ```sh
 # test completi (container, toolchain del progetto)
 docker run --rm -v $PWD:/work -w /work rust:1.92 cargo test --workspace --no-fail-fast
-# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nei lib
+# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nei lib.
+# MAI aggiungere --cap-lints=warn: cappera' anche i -D espliciti (li
+# declassa a warn) e il gate smette di bloccare — regressione trovata il
+# 2026-07-29, 27 siti accumulati mentre il gate era inefficace.
 cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
-  -p plenora-kernels-geo --lib --locked -- --cap-lints=warn -D unsafe-code \
+  -p plenora-kernels-geo --lib --locked -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
