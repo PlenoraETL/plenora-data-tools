@@ -169,7 +169,9 @@ use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, Publis
 use crate::geo_transport::transport::{
     OneToOnePrepared, TransformArrowSchema, one_to_one_batch_prepared, prepare_one_to_one,
 };
-use crate::geo_transport::unary::{FusedStepError, one_to_one_batch_fused};
+use crate::geo_transport::unary::{
+    FusedStepError, FusedTerminal, FusedTerminalMeasure, one_to_one_batch_fused,
+};
 use crate::governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
 use crate::planner::{
     check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
@@ -2156,6 +2158,14 @@ impl FusedAttempt<'_> {
 /// fallita, metrica dedicata registrata, batch invariato: nessun errore
 /// nuovo, il loop standard produce l'esito identico.
 ///
+/// Un gruppo e' un run di trasformazioni `TransformInPlace` (>= 1) piu' UNA
+/// misura terminale opzionale in coda (M2, capability `TerminalMeasure`):
+/// la misura consuma la forma decodificata dell'ultimo passo e appende la
+/// colonna scalare (semantica v4 "add column" — la colonna geometria
+/// sopravvive e viene ri-encodata una sola volta al confine). La reservation
+/// D12.7 non cambia: copre i byte decodificati della colonna geometria e
+/// l'output scalare e' nel lease di uscita del segmento, come senza misura.
+///
 /// Errori e osservabilita' per nodo (D12.6): righe 1:1 e metriche per ogni
 /// kernel del gruppo, `check_cancellation` tra un kernel e l'altro (errore
 /// `Cancelled` attribuito al kernel in corso, come il check del loop),
@@ -2167,7 +2177,8 @@ impl FusedAttempt<'_> {
 ///
 /// Come il loop non fuso per i kernel del gruppo (limiti, errori di cella,
 /// cancellazione, panic convertito), piu' `PlenoraError::Internal` se un
-/// kernel del gruppo non e' `GeoTransform` (invariante di `prepare`).
+/// kernel non misura del gruppo non e' `GeoTransform` (invariante di
+/// `prepare`).
 #[allow(clippy::too_many_arguments)]
 fn try_run_fused_group(
     segment: &PhysicalSegment,
@@ -2193,10 +2204,18 @@ fn try_run_fused_group(
             return Ok(false);
         }
     };
-    // Parametri tipizzati del gruppo (config `GeoTransform` garantita da
-    // `prepare`: la condizione di fondibilita' la richiede).
-    let mut params: Vec<&TransformArrowSchema> = Vec::with_capacity(group_len);
-    for kernel in kernels {
+    // Misura terminale (ADR-0012 M2): se l'ultimo membro del gruppo e' una
+    // misura "add column" (`GeoMeasure`), il gruppo eseguito dal runner fuso
+    // e' il run di trasformazioni che la precede + la misura in coda, che
+    // consuma la forma decodificata dell'ultimo passo e appende la colonna
+    // scalare. La colonna geometria SOPRAVVIVE (semantica v4): viene
+    // ri-encodata una sola volta al confine, come senza misura.
+    let (transforms, terminal) = fused_group_terminal(kernels);
+    // Parametri tipizzati delle trasformazioni del gruppo (config
+    // `GeoTransform` garantita da `prepare`: la condizione di fondibilita'
+    // la richiede).
+    let mut params: Vec<&TransformArrowSchema> = Vec::with_capacity(transforms.len());
+    for kernel in transforms {
         match &kernel.config {
             PreparedConfig::GeoTransform(kernel_params) => params.push(kernel_params),
             _ => {
@@ -2230,7 +2249,7 @@ fn try_run_fused_group(
     // seriale, batch e config proprieta' esclusiva della chiamata, l'errore
     // ferma lo stream e nessuno stato del kernel e' riusato dopo un panic.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        one_to_one_batch_fused(batch, &params, &prepared, &mut |index| {
+        one_to_one_batch_fused(batch, &params, terminal, &prepared, &mut |index| {
             current.set(index);
             if index > 0 {
                 attempt.edges.borrow_mut().push(Instant::now());
@@ -2272,7 +2291,39 @@ fn try_run_fused_group(
             let error = step_error(&kernels[index], PlenoraError::InvalidPlan(error.to_string()));
             Err(state.with_diagnostics(error, batch_detail))
         }
+        Err(FusedStepError::Measure { index, error }) => {
+            // Misura terminale (M2): l'errore e' gia' nella forma del
+            // percorso non fuso (`geo_measure_batch` chiude il `PlenoraError`
+            // grezzo con `step_error`, senza wrap in `InvalidPlan`).
+            attempt.account(index, None, finished)?;
+            let error = step_error(&kernels[index], error);
+            Err(state.with_diagnostics(error, batch_detail))
+        }
     }
+}
+
+/// Scomposizione di un gruppo fuso (ADR-0012 M2): il run di trasformazioni
+/// e la misura terminale opzionale in coda (presente se l'ultimo membro e'
+/// un `GeoMeasure` — invariante di `prepare`: la misura puo' solo chiudere
+/// un gruppo, mai aprirlo o proseguirlo).
+fn fused_group_terminal(kernels: &[PreparedKernel]) -> (&[PreparedKernel], Option<FusedTerminal<'_>>) {
+    let PreparedConfig::GeoMeasure { measure, .. } = &kernels[kernels.len() - 1].config else {
+        return (kernels, None);
+    };
+    let measure = match measure {
+        MeasureKind::Area => FusedTerminalMeasure::Area,
+        MeasureKind::Length => FusedTerminalMeasure::Length,
+        MeasureKind::Perimeter => FusedTerminalMeasure::Perimeter,
+        MeasureKind::VertexCount => FusedTerminalMeasure::VertexCount,
+        MeasureKind::ToWkt => FusedTerminalMeasure::ToWkt,
+    };
+    (
+        &kernels[..kernels.len() - 1],
+        Some(FusedTerminal {
+            measure,
+            output_schema: &kernels[kernels.len() - 1].output_contract.schema,
+        }),
+    )
 }
 
 /// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per

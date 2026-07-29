@@ -154,8 +154,53 @@ esattamente sulle stesse righe nei due percorsi; mai se cambia il numero
 di righe). Esclusi: `reproject`/`make_valid` (backend feature-gated,
 `NonInterruptible` — cantiere M3), `line_substring`/
 `line_interpolate_point` (check di tipo per-riga — candidati M3), misure
-terminali (M2, cantiere separato), join/binari, 1:N, blocking, collettive,
-fusione cross-segmento e table↔geo.
+terminali (M2, attuato — vedi sotto), join/binari, 1:N, blocking,
+collettive, fusione cross-segmento e table↔geo.
+
+## Perimetro (M2) — misure terminali in coda al gruppo
+
+Un gruppo di fusione e' un run massimale di `TransformInPlace` (>= 1) piu'
+UNA misura `TerminalMeasure` opzionale in coda (`area`, `length`,
+`perimeter`, `vertex_count`, `to_wkt` — le 5 misure "add column" dei piani
+v4), stessa colonna geometria. Una misura da sola NON forma gruppo: non
+c'e' nulla da fondere e resta sul percorso nodo-per-nodo. Vincoli
+strutturali emersi in attuazione (risposte del design check):
+
+1. **La colonna geometria SOPRAVVIVE alla misura** (semantica v4 "add
+   column": `geo_measure_batch` appende la colonna scalare in coda allo
+   schema; `output_column` cambia solo il nome della colonna misura). Il
+   gruppo con misura ri-encoda quindi la geometria UNA volta al confine,
+   come senza misura, e produce in piu' la colonna scalare.
+2. **Le misure dei piani v4 non passano per `one_to_one_batch_prepared`**:
+   sono un ramo executor dedicato (`PreparedConfig::GeoMeasure` ->
+   `geo_measure_batch`). I bracci misura di `transform_cells` (trasporto
+   legacy v3, sostituzione della colonna geometria) non sono raggiunti dai
+   piani v4 e restano intoccati.
+3. **Attribuzione errori del ramo non fuso, riprodotta esatta**: decode
+   per cella via `decode_geometry_cell` chiuso da `step_error` SENZA
+   transito da `ArrowTransportError`; kernel misura chiuso in
+   `InvalidPlan` dal display dell'`OperationError`; null-in -> null-out;
+   primo errore in ordine di riga. Per questo il runner fuso ha la
+   variante dedicata `FusedStepError::Measure` che porta il `PlenoraError`
+   grezzo: la validazione inter-passo prima della misura (strutturale +
+   OGC, profilo B di D12.4) e' attribuita al NODO MISURA (e' il decode
+   che fallirebbe li'), gli errori del kernel misura al nodo misura.
+   Il check `MAX_CELL_BYTES` input-side del decode della misura non e'
+   riprodotto: irraggiungibile (l'encode del nodo a monte scatta prima,
+   stessa classe di D12.3). Il passo misura e' DOPO il loop dei kernel:
+   nel percorso non fuso il nodo trasformazione completa tutte le righe
+   (kernel + encode) prima che il nodo misura decodifichi la prima cella —
+   la precedenza degli errori e' identica per costruzione.
+4. **Governor invariato**: la reservation D12.7 (byte decodificati della
+   colonna geometria) copre il gruppo con misura senza cambi; l'output
+   scalare e' nel lease di uscita del segmento, come per ogni nodo.
+
+Nota di copertura (come i casi (d2)/(e) dell'oracolo): con gli op del
+perimetro M1+M2 nessun intermedio OGC-invalido puo' raggiungere il nodo
+misura — ogni kernel fondibile valida il proprio output. La validazione
+pre-misura e' difesa in profondita', verificata a livello runner; i casi
+errore raggiungibili con misura in coda (limiti di cella, input invalido)
+sono nell'oracolo e mantengono l'attribuzione ai nodi trasformazione.
 
 ## Oracolo (gate di M1)
 
@@ -221,3 +266,24 @@ fondendo» e' una classe).
   RecordBatch, lease governor, metriche per nodo, validazione al gate).
   Prossimi cantieri: M2 misure terminali (TerminalMeasure), M3
   reproject/make_valid ed estensioni controllate.
+- 2026-07-29: M2 attuato. I gruppi ammettono UNA misura `TerminalMeasure`
+  in coda (run di `TransformInPlace` >= 1 + misura opzionale, stessa
+  colonna; misura singola: nessun gruppo) — annotazione in `prepare`
+  (`annotate_fusion_groups`), runner fuso esteso in
+  `geo_transport/unary.rs` (`transform_cells_fused` con terminale,
+  `apply_fused_measure`/`measure_cells` in un passo dedicato DOPO il loop
+  dei kernel — precedenza errori identica al non fuso — e nuova variante
+  `FusedStepError::Measure` col `PlenoraError` grezzo: il ramo non fuso
+  delle misure non transita da `ArrowTransportError`), innesto in
+  `try_run_fused_group` (batch costruito in due `try_new`: confine ultima
+  trasformazione -> ultimo transform, append colonna misura sul contratto
+  -> nodo misura, come `append_output_column`). Colonna geometria
+  SOPRAVVIVENTE ri-encodata una sola volta; governor invariato (D12.7);
+  cancellazione/metriche/`node_rows` per nodo come M1 (misura 1:1).
+  Test: formazione gruppi M2 + misura singola senza gruppo (prepare);
+  parita' byte-per-byte runner (unary) e A/B engine translate+area /
+  translate+to_wkt con null e multi-tipo (executor); oracolo esteso
+  (happy path con misura in coda, cella oversize e input OGC-invalido con
+  misura in coda — attribuzione ai transform invariata). Il caso «misura
+  su intermedio invalido» e' non realizzabile con gli op M1 (come i casi
+  (d2)/(e)): coperto a livello runner come difesa in profondita'.

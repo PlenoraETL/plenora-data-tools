@@ -582,8 +582,9 @@ fn non_fusible_kernel_breaks_the_fusion_run() {
             "inputs": ["main"],
             "nodes": [
                 {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
-                {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
-                {"id": "s", "op": "geo.simplify", "in": ["a"], "config": {"tolerance": 0.1}},
+                {"id": "ls", "op": "geo.line_substring", "in": ["b"],
+                 "config": {"start_ratio": 0.0, "end_ratio": 0.5}},
+                {"id": "s", "op": "geo.simplify", "in": ["ls"], "config": {"tolerance": 0.1}},
                 {"id": "t", "op": "geo.translate", "in": ["s"],
                  "config": {"x_offset": 1.0, "y_offset": 2.0}},
             ],
@@ -593,10 +594,105 @@ fn non_fusible_kernel_breaks_the_fusion_run() {
     );
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
-    // La misura terminale (`geo.area`, TerminalMeasure) spezza il run:
-    // buffer resta solo (run < 2, nessun gruppo), simplify+translate
+    // Un kernel non fondibile (`geo.line_substring`, NotFusible) spezza il
+    // run: buffer resta solo (run < 2, nessun gruppo), simplify+translate
     // formano un gruppo a valle.
     assert_eq!(fusion_groups(&plan), vec![None, None, Some(0), Some(0)]);
+}
+
+#[test]
+fn transforms_and_terminal_measure_form_one_fusion_group() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
+                {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.1}},
+                {"id": "a", "op": "geo.area", "in": ["s"], "config": {}},
+            ],
+            "output": "a",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // M2: la misura terminale (`geo.area`, capability TerminalMeasure)
+    // chiude il run di transform ed entra nel gruppo come ultimo membro.
+    let kernels = &plan.segments()[0].kernels;
+    assert_eq!(kernels[2].geo_fusion, plenora_core::catalog::GeoFusion::TerminalMeasure);
+    assert!(matches!(kernels[2].config, PreparedConfig::GeoMeasure { .. }));
+    assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
+}
+
+#[test]
+fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "t", "op": "geo.translate", "in": ["main"],
+                 "config": {"x_offset": 1.0, "y_offset": 2.0}},
+                {"id": "w", "op": "geo.to_wkt", "in": ["t"], "config": {}},
+            ],
+            "output": "w",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // M2: con la misura in coda basta UN transform (gruppo di due nodi).
+    assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
+}
+
+#[test]
+fn lone_terminal_measure_forms_no_group() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "a", "op": "geo.area", "in": ["main"], "config": {}},
+            ],
+            "output": "a",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // Una misura da sola non forma mai gruppo: non c'e' nulla da fondere,
+    // resta sul percorso nodo-per-nodo.
+    assert_eq!(fusion_groups(&plan), vec![None]);
+}
+
+#[test]
+fn terminal_measure_closes_but_does_not_extend_the_run() {
+    let graph = validate_plan(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "t", "op": "geo.translate", "in": ["main"],
+                 "config": {"x_offset": 1.0, "y_offset": 2.0}},
+                {"id": "a", "op": "geo.area", "in": ["t"], "config": {}},
+                {"id": "vc", "op": "geo.vertex_count", "in": ["a"], "config": {}},
+                {"id": "s", "op": "geo.simplify", "in": ["vc"], "config": {"tolerance": 0.1}},
+                {"id": "r", "op": "geo.rotate", "in": ["s"], "config": {"degrees": 10.0}},
+            ],
+            "output": "r",
+        }),
+        geo_contract(),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+
+    // UNA sola misura per gruppo e solo in coda: la seconda misura non
+    // entra nel gruppo di translate+area; simplify+rotate formano un nuovo
+    // gruppo a valle.
+    assert_eq!(
+        fusion_groups(&plan),
+        vec![Some(0), Some(0), None, Some(1), Some(1)]
+    );
 }
 
 #[test]

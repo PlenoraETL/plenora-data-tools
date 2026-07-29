@@ -820,10 +820,63 @@ pub enum FusedStepError {
         /// L'errore vero e proprio.
         error: ArrowTransportError,
     },
+    /// Errore della misura terminale del gruppo (ADR-0012 M2): il percorso
+    /// non fuso delle misure (`geo_measure_batch` nell'executor) NON transita
+    /// da `ArrowTransportError` — il decode e' `decode_geometry_cell` chiuso
+    /// direttamente da `step_error` e il kernel e' chiuso in `InvalidPlan`
+    /// dal display dell'`OperationError`. La variante porta quindi il
+    /// `PlenoraError` gia' nella forma del percorso non fuso: l'executor lo
+    /// chiude con `step_error` al nodo misura, senza wrap aggiuntivi.
+    Measure {
+        /// Indice del nodo misura nel gruppo (l'ultimo membro).
+        index: usize,
+        /// L'errore vero e proprio, nella forma del percorso non fuso.
+        error: PlenoraError,
+    },
     /// Controllo dell'executor tra due kernel (cancellazione cooperativa,
     /// ADR 3): gia' nella forma finale (`PlenoraError::Cancelled` con nodo,
     /// operazione ed `execution_id`), propaga invariato.
     Control(PlenoraError),
+}
+
+/// Misura terminale di un gruppo fuso (ADR-0012 M2): il kernel scalare che
+/// chiude il gruppo consumando la forma decodificata dell'ultimo passo,
+/// senza ri-decodificare il WKB di confine. Le 5 misure "add column" dei
+/// piani v4 (ramo `geo_measure_batch` dell'executor).
+#[derive(Clone, Copy, Debug)]
+pub enum FusedTerminalMeasure {
+    /// `geo.area` -> colonna `Float64`.
+    Area,
+    /// `geo.length` -> colonna `Float64`.
+    Length,
+    /// `geo.perimeter` -> colonna `Float64`.
+    Perimeter,
+    /// `geo.vertex_count` -> colonna `UInt64`.
+    VertexCount,
+    /// `geo.to_wkt` -> colonna `Utf8`.
+    ToWkt,
+}
+
+/// Terminale misura di un gruppo fuso (ADR-0012 M2): il kernel scalare e lo
+/// schema di output del nodo misura (contratto inferito in validazione —
+/// input + colonna misura appesa in coda, semantica v4 "add column").
+#[derive(Clone, Copy)]
+pub struct FusedTerminal<'a> {
+    /// Misura da applicare sulla forma decodificata dell'ultimo passo.
+    pub measure: FusedTerminalMeasure,
+    /// Schema di output del nodo misura (input + colonna misura).
+    pub output_schema: &'a SchemaRef,
+}
+
+/// Celle prodotte da un gruppo fuso (ADR-0012): la geometria ri-encodata UNA
+/// volta (sempre — nel perimetro M2 la colonna geometria SOPRAVVIVE alla
+/// misura, semantica v4 "add column") e, se il gruppo chiude con una misura
+/// terminale, la colonna scalare calcolata sulla forma decodificata.
+struct FusedCells {
+    /// Geometrie al confine del gruppo, WKB canonico XY.
+    geometry: Vec<Option<Vec<u8>>>,
+    /// Colonna della misura terminale, se il gruppo ne ha una (M2).
+    measure: Option<TransformedColumn>,
 }
 
 /// Esegue un gruppo di trasformazioni 1:1 fondibili su una colonna WKB con
@@ -847,28 +900,36 @@ pub enum FusedStepError {
 /// - profilo B con un kernel i+1 nel gruppo: `validate_geometry_structural`
 ///   poi `check_geometry_valid` (il fallimento del decode del nodo
 ///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1;
-/// - profilo B sull'ULTIMO kernel: NESSUNA validazione extra — nel percorso
-///   non fuso l'output esce dopo `encode_geometry` senza altra validazione e
-///   decodera' chi consuma.
+/// - profilo B sull'ULTIMO kernel SENZA misura terminale: NESSUNA
+///   validazione extra — nel percorso non fuso l'output esce dopo
+///   `encode_geometry` senza altra validazione e decodera' chi consuma;
+/// - con misura terminale (M2): la validazione del "decode" prima della
+///   misura (strutturale, poi OGC) e' nel passo della misura -> nodo misura
+///   (variante [`FusedStepError::Measure`], mai `ArrowTransportError`: il
+///   ramo non fuso delle misure non la attraversa).
 ///
 /// Il decode iniziale (con il check `MAX_CELL_BYTES` sull'input, pattern di
 /// `map_nullable`) e' attribuito al primo kernel del gruppo, l'encode finale
 /// all'ultimo — come nel percorso non fuso.
 ///
-/// `control` e' invocato con l'indice del kernel PRIMA di ogni passo: e' il
-/// punto di cancellazione cooperativa dell'executor (errore `Control`) e il
-/// suo marker del kernel in corso per l'attribuzione dei panic.
+/// `control` e' invocato con l'indice del kernel PRIMA di ogni passo — la
+/// misura terminale inclusa, con indice `group.len()` (il nodo misura e'
+/// l'ultimo membro del gruppo): e' il punto di cancellazione cooperativa
+/// dell'executor (errore `Control`) e il suo marker del kernel in corso per
+/// l'attribuzione dei panic.
 ///
 /// # Errors
 ///
 /// [`FusedStepError::Kernel`] con l'indice del kernel responsabile per gli
-/// errori di cella; [`FusedStepError::Control`] per gli errori del controllo
-/// executor (cancellazione).
+/// errori di cella delle trasformazioni; [`FusedStepError::Measure`] per gli
+/// errori della misura terminale; [`FusedStepError::Control`] per gli errori
+/// del controllo executor (cancellazione).
 fn transform_cells_fused(
     group: &[&TransformArrowSchema],
+    terminal: Option<FusedTerminalMeasure>,
     cells: &BinaryArray,
     control: &mut dyn FnMut(usize) -> Result<(), PlenoraError>,
-) -> Result<TransformedColumn, FusedStepError> {
+) -> Result<FusedCells, FusedStepError> {
     if group.is_empty() {
         return Err(FusedStepError::Kernel {
             index: 0,
@@ -888,6 +949,19 @@ fn transform_cells_fused(
             resolve_transform(params).map_err(|error| FusedStepError::Kernel { index, error })?;
         apply_fused_kernel(&resolved, &mut geometries, index, group.len())?;
     }
+    // Misura terminale (M2): passo dedicato DOPO il loop dei kernel. Nel
+    // percorso non fuso il nodo trasformazione completa TUTTE le righe
+    // (kernel + encode) prima che il nodo misura decodifichi la prima cella;
+    // il passo separato riproduce esattamente questa precedenza, con lo
+    // stesso confine di cancellazione (`control` sull'indice del nodo
+    // misura).
+    let measure = match terminal {
+        None => None,
+        Some(terminal) => {
+            control(group.len()).map_err(FusedStepError::Control)?;
+            Some(apply_fused_measure(terminal, &geometries, group.len())?)
+        }
+    };
     // Encode UNA volta alla fine: errori attribuiti all'ultimo kernel.
     let last = group.len() - 1;
     let results: Vec<Result<Option<Vec<u8>>, ArrowTransportError>> = geometries
@@ -898,7 +972,10 @@ fn transform_cells_fused(
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| FusedStepError::Kernel { index: last, error })?;
-    Ok(TransformedColumn::Binary(values))
+    Ok(FusedCells {
+        geometry: values,
+        measure,
+    })
 }
 
 /// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
@@ -963,22 +1040,110 @@ fn apply_fused_kernel(
     results.into_iter().collect()
 }
 
+/// Misura terminale di un gruppo fuso sulle geometrie decodificate
+/// (ADR-0012 M2); `index` e' l'indice del nodo misura nel gruppo (numero di
+/// trasformazioni). Per cella, nell'ordine del percorso non fuso
+/// (`geo_measure_batch`): validazione del "decode" (strutturale, poi OGC —
+/// l'ordine di `geometry_from_wkb`, profilo B di D12.4) poi kernel scalare;
+/// null-in -> null-out senza validazione ne' kernel, come il ramo non fuso.
+///
+/// Il check `MAX_CELL_BYTES` input-side del decode non fuso non e'
+/// riprodotto: irraggiungibile (l'encode del nodo a monte scatta prima —
+/// stessa classe del check input-side dei nodi interni, D12.3).
+///
+/// # Errors
+///
+/// [`FusedStepError::Measure`] con il `PlenoraError` nella forma del
+/// percorso non fuso (validazione grezza; kernel chiuso in `InvalidPlan`
+/// dal display dell'`OperationError`), attribuito al nodo misura.
+fn apply_fused_measure(
+    measure: FusedTerminalMeasure,
+    geometries: &[Option<Geometry<f64>>],
+    index: usize,
+) -> Result<TransformedColumn, FusedStepError> {
+    match measure {
+        FusedTerminalMeasure::Area => {
+            Ok(TransformedColumn::Float64(measure_cells(geometries, index, area)?))
+        }
+        FusedTerminalMeasure::Length => {
+            Ok(TransformedColumn::Float64(measure_cells(geometries, index, length)?))
+        }
+        FusedTerminalMeasure::Perimeter => {
+            Ok(TransformedColumn::Float64(measure_cells(geometries, index, perimeter)?))
+        }
+        FusedTerminalMeasure::VertexCount => {
+            Ok(TransformedColumn::UInt64(measure_cells(geometries, index, vertex_count)?))
+        }
+        FusedTerminalMeasure::ToWkt => {
+            Ok(TransformedColumn::Utf8(measure_cells(geometries, index, to_wkt)?))
+        }
+    }
+}
+
+/// Una misura scalare su tutte le celle decodificate del gruppo (M2): per
+/// cella validazione pre-misura poi kernel, primo errore in ordine di riga
+/// (pattern rayon con collect indicizzato, ADR-0001 — come `map_nullable`;
+/// il ramo non fuso e' un loop sequenziale con lo stesso criterio di
+/// selezione).
+fn measure_cells<T: Send>(
+    geometries: &[Option<Geometry<f64>>],
+    index: usize,
+    kernel: impl Fn(&Geometry<f64>) -> Result<T, OperationError> + Sync,
+) -> Result<Vec<Option<T>>, FusedStepError> {
+    let results: Vec<Result<Option<T>, FusedStepError>> = geometries
+        .par_iter()
+        .map(|slot| {
+            let Some(geometry) = slot.as_ref() else {
+                return Ok(None);
+            };
+            // Validazione inter-passo prima della misura (D12.4 profilo B):
+            // l'intermedio invalido fallirebbe al decode del nodo misura
+            // (strutturale, poi OGC — l'ordine di `geometry_from_wkb`) ->
+            // attribuzione al nodo misura, con il `PlenoraError` grezzo del
+            // ramo non fuso.
+            validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
+                .and_then(|()| check_geometry_valid(geometry))
+                .map_err(|error| FusedStepError::Measure { index, error })?;
+            // Stessa chiusura del ramo non fuso: `OperationError` ->
+            // `InvalidPlan` del suo display.
+            kernel(geometry)
+                .map(Some)
+                .map_err(|error| FusedStepError::Measure {
+                    index,
+                    error: PlenoraError::InvalidPlan(error.to_string()),
+                })
+        })
+        .collect();
+    results.into_iter().collect()
+}
+
 /// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
 /// kernel del gruppo (ADR-0012): la validazione della colonna di input (tipo
 /// Binary + metadati geoarrow) e' attribuita al primo nodo, come nel
-/// percorso non fuso; lo schema di output coincide con quello che il gruppo
-/// produrrebbe nodo per nodo (tutte le op del gruppo sono 1:1 in place sulla
-/// stessa colonna: stessa ricostruzione canonica del campo geometria).
+/// percorso non fuso; lo schema di output delle trasformazioni coincide con
+/// quello che il gruppo produrrebbe nodo per nodo (tutte le op del gruppo
+/// sono 1:1 in place sulla stessa colonna: stessa ricostruzione canonica del
+/// campo geometria).
+///
+/// Misura terminale (M2): con `terminal` il runner applica il kernel scalare
+/// sulla forma decodificata dell'ultimo passo e appende la colonna misura in
+/// coda — la STESSA sequenza del percorso non fuso (`one_to_one_batch_prepared`
+/// dell'ultima trasformazione, poi `append_output_column` del nodo misura):
+/// la colonna geometria SOPRAVVIVE (ri-encodata una sola volta) e il batch
+/// finale e' costruito sullo schema del contratto del nodo misura.
 ///
 /// # Errors
 ///
 /// [`FusedStepError::Kernel`] con l'attribuzione al kernel del gruppo
 /// (colonna di input non Binary al primo kernel, errori di cella secondo la
-/// tabella di [`transform_cells_fused`], schema incoerente all'ultimo);
+/// tabella di [`transform_cells_fused`], schema incoerente all'ultima
+/// trasformazione); [`FusedStepError::Measure`] per gli errori della misura
+/// terminale (validazione pre-misura, kernel, schema del nodo misura);
 /// [`FusedStepError::Control`] per la cancellazione dell'executor.
 pub fn one_to_one_batch_fused(
     batch: &RecordBatch,
     group: &[&TransformArrowSchema],
+    terminal: Option<FusedTerminal<'_>>,
     prepared: &OneToOnePrepared,
     control: &mut dyn FnMut(usize) -> Result<(), PlenoraError>,
 ) -> Result<RecordBatch, FusedStepError> {
@@ -997,21 +1162,55 @@ pub fn one_to_one_batch_fused(
                 actual: batch.column(geometry_index).data_type().to_string(),
             },
         })?;
-    let transformed = transform_cells_fused(group, cells, control)?;
-    let TransformedColumn::Binary(values) = transformed else {
-        return Err(FusedStepError::Kernel {
-            index: 0,
-            error: ArrowTransportError::Internal("runner fuso: colonna non Binary"),
-        });
-    };
+    let fused = transform_cells_fused(
+        group,
+        terminal.map(|terminal| terminal.measure),
+        cells,
+        control,
+    )?;
     let mut columns = batch.columns().to_vec();
     columns[geometry_index] = std::sync::Arc::new(
-        values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
+        fused
+            .geometry
+            .iter()
+            .map(|cell| cell.as_deref())
+            .collect::<BinaryArray>(),
     );
     let last = group.len().saturating_sub(1);
-    RecordBatch::try_new(prepared.output_schema.clone(), columns)
+    // Batch al confine dell'ultima trasformazione: la costruzione del
+    // percorso non fuso (`one_to_one_batch_prepared`), stessa attribuzione.
+    let output = RecordBatch::try_new(prepared.output_schema.clone(), columns)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
-        .map_err(|error| FusedStepError::Kernel { index: last, error })
+        .map_err(|error| FusedStepError::Kernel { index: last, error })?;
+    let Some(terminal) = terminal else {
+        return Ok(output);
+    };
+    // Append della colonna misura sullo schema del nodo misura: la sequenza
+    // di `append_output_column`, con lo stesso errore (`PlenoraError` da
+    // `ArrowError`, attribuito al nodo misura).
+    let column: plenora_core::arrow::array::ArrayRef = match fused.measure {
+        Some(TransformedColumn::Float64(values)) => std::sync::Arc::new(Float64Array::from(values)),
+        Some(TransformedColumn::UInt64(values)) => std::sync::Arc::new(UInt64Array::from(values)),
+        Some(TransformedColumn::Utf8(values)) => std::sync::Arc::new(StringArray::from(values)),
+        // Invariante di `transform_cells_fused` (il tipo della colonna e'
+        // funzione della misura): mai raggiungibile — errore, non panic.
+        _ => {
+            return Err(FusedStepError::Measure {
+                index: group.len(),
+                error: PlenoraError::Internal(
+                    "runner fuso: colonna misura assente o di tipo inatteso".to_owned(),
+                ),
+            });
+        }
+    };
+    let mut columns = output.columns().to_vec();
+    columns.push(column);
+    RecordBatch::try_new(terminal.output_schema.clone(), columns)
+        .map_err(PlenoraError::from)
+        .map_err(|error| FusedStepError::Measure {
+            index: group.len(),
+            error,
+        })
 }
 
 /// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
@@ -1945,15 +2144,7 @@ mod tests {
         group: &[&TransformArrowSchema],
         cells: &BinaryArray,
     ) -> Result<Vec<Option<Vec<u8>>>, FusedStepError> {
-        let TransformedColumn::Binary(values) =
-            transform_cells_fused(group, cells, &mut |_| Ok(()))?
-        else {
-            return Err(FusedStepError::Kernel {
-                index: 0,
-                error: ArrowTransportError::Internal("fixture: attesa colonna Binary"),
-            });
-        };
-        Ok(values)
+        Ok(transform_cells_fused(group, None, cells, &mut |_| Ok(()))?.geometry)
     }
 
     /// Gruppo [buffer, simplify, centroid] (profili B, B, A): stesso output
@@ -2028,6 +2219,7 @@ mod tests {
                 );
             }
             FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+            FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
         }
     }
 
@@ -2054,6 +2246,125 @@ mod tests {
                 assert_eq!(error.to_string(), sequential_error.to_string());
             }
             FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
+            FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Misura terminale del gruppo fuso (ADR-0012 M2)
+    // -----------------------------------------------------------------------
+
+    /// Riferimento non fuso della misura: il braccio misura di
+    /// `transform_cells` sulle celle gia' trasformate in sequenza (stesso
+    /// decode + stesso kernel scalare del ramo v4 `geo_measure_batch`, che
+    /// usa gli stessi `plenora_kernels_geo::operations`).
+    fn run_sequential_measure(
+        group: &[&TransformArrowSchema],
+        measure_params: &TransformArrowSchema,
+        cells: &BinaryArray,
+    ) -> Result<TransformedColumn, ArrowTransportError> {
+        let transformed = run_sequential(group, cells)?;
+        transform_cells(measure_params, &cells_array(&transformed))
+    }
+
+    fn run_fused_measured(
+        group: &[&TransformArrowSchema],
+        terminal: FusedTerminalMeasure,
+        cells: &BinaryArray,
+    ) -> Result<FusedCells, FusedStepError> {
+        transform_cells_fused(group, Some(terminal), cells, &mut |_| Ok(()))
+    }
+
+    /// Gruppo [translate, simplify] + misura terminale `area` (M2): la
+    /// geometria ri-encodata e la colonna misura sono identiche byte-per-byte
+    /// al riferimento nodo-per-nodo, su fixture multi-tipo con null
+    /// (null-in -> null-out sulla misura).
+    #[test]
+    fn fused_terminal_area_matches_sequential() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(5.0);
+        translate.y_offset = Some(-2.0);
+        let mut simplify = fused_params(ArrowOperation::Simplify);
+        simplify.tolerance = Some(0.01);
+        let group: Vec<&TransformArrowSchema> = [&translate, &simplify].to_vec();
+        let area_params = fused_params(ArrowOperation::Area);
+
+        let cells = cells_array(&multi_type_cells());
+        let expected_geometry = run_sequential(&group, &cells).expect("sequenziale");
+        let TransformedColumn::Float64(expected_area) =
+            run_sequential_measure(&group, &area_params, &cells).expect("misura sequenziale")
+        else {
+            panic!("fixture: attesa colonna Float64");
+        };
+        let fused = run_fused_measured(&group, FusedTerminalMeasure::Area, &cells)
+            .expect("percorso fuso");
+        assert_eq!(fused.geometry, expected_geometry, "geometria diversa byte-per-byte");
+        let Some(TransformedColumn::Float64(fused_area)) = fused.measure else {
+            panic!("attesa colonna misura Float64");
+        };
+        assert_eq!(fused_area, expected_area, "misura diversa dal riferimento");
+        assert!(fused_area[4].is_none(), "null-in -> null-out sulla misura");
+    }
+
+    /// Gruppo [translate, simplify] + misura terminale `to_wkt` (M2): parita'
+    /// byte-per-byte della colonna Utf8 e della geometria di confine.
+    #[test]
+    fn fused_terminal_to_wkt_matches_sequential() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(5.0);
+        translate.y_offset = Some(-2.0);
+        let mut simplify = fused_params(ArrowOperation::Simplify);
+        simplify.tolerance = Some(0.01);
+        let group: Vec<&TransformArrowSchema> = [&translate, &simplify].to_vec();
+        let wkt_params = fused_params(ArrowOperation::ToWkt);
+
+        let cells = cells_array(&multi_type_cells());
+        let expected_geometry = run_sequential(&group, &cells).expect("sequenziale");
+        let TransformedColumn::Utf8(expected_wkt) =
+            run_sequential_measure(&group, &wkt_params, &cells).expect("misura sequenziale")
+        else {
+            panic!("fixture: attesa colonna Utf8");
+        };
+        let fused = run_fused_measured(&group, FusedTerminalMeasure::ToWkt, &cells)
+            .expect("percorso fuso");
+        assert_eq!(fused.geometry, expected_geometry, "geometria diversa byte-per-byte");
+        let Some(TransformedColumn::Utf8(fused_wkt)) = fused.measure else {
+            panic!("attesa colonna misura Utf8");
+        };
+        assert_eq!(fused_wkt, expected_wkt, "misura diversa dal riferimento");
+        assert!(fused_wkt[4].is_none(), "null-in -> null-out sulla misura");
+    }
+
+    /// Validazione pre-misura (D12.4 profilo B -> nodo misura): un intermedio
+    /// OGC-invalido fallirebbe al decode del nodo misura nel percorso non
+    /// fuso — il runner fuso lo rifiuta con la STESSA variante e lo STESSO
+    /// messaggio di `check_geometry_valid` (nessun transito da
+    /// `ArrowTransportError`, come `decode_geometry_cell` +
+    /// `step_error`). Difesa in profondita': gli op di M1 non producono
+    /// intermedi invalidi, quindi il trigger e' diretto su
+    /// `apply_fused_measure` (stesso stato dei casi (d2)/(e) dell'oracolo).
+    #[test]
+    fn measure_validation_error_is_attributed_to_the_measure_node() {
+        let bowtie = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0),
+            (x: 10.0, y: 10.0),
+            (x: 10.0, y: 0.0),
+            (x: 0.0, y: 10.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let expected = check_geometry_valid(&bowtie).expect_err("bowtie OGC-invalido");
+        let geometries = vec![Some(bowtie), None];
+        let Err(error) = apply_fused_measure(FusedTerminalMeasure::VertexCount, &geometries, 2)
+        else {
+            panic!("misura su geometria invalida riuscita");
+        };
+        match error {
+            FusedStepError::Measure { index, error } => {
+                assert_eq!(index, 2, "attribuzione al nodo misura");
+                assert_eq!(error.to_string(), expected.to_string(), "forma del non fuso");
+            }
+            FusedStepError::Kernel { .. } => panic!("atteso Measure, trovato Kernel"),
+            FusedStepError::Control(_) => panic!("atteso Measure, trovato Control"),
         }
     }
 }

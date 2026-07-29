@@ -461,9 +461,11 @@ pub struct PreparedKernel {
     /// Gruppo di fusione geo del kernel (ADR-0012): `Some(id)` per i membri
     /// di un run massimale (>= 2) di kernel `GeoTransform` consecutivi
     /// fondibili (capability `TransformInPlace` di entrambi i nodi adiacenti,
-    /// stessa colonna geometria, stesso ruolo); l'id e' condiviso dai membri
-    /// e apre il gruppo sul primo. `None` se il kernel non e' in un gruppo o
-    /// se il kill switch `RuntimeContext::geo_fusion` e' spento (D12.9).
+    /// stessa colonna geometria, stesso ruolo), piu' UNA misura terminale
+    /// opzionale in coda (M2: capability `TerminalMeasure`, config
+    /// `GeoMeasure`); l'id e' condiviso dai membri e apre il gruppo sul
+    /// primo. `None` se il kernel non e' in un gruppo o se il kill switch
+    /// `RuntimeContext::geo_fusion` e' spento (D12.9).
     pub fusion_group: Option<u32>,
 }
 
@@ -852,38 +854,57 @@ fn build_segments<'a>(
 /// run massimali di almeno due kernel consecutivi fondibili — capability
 /// `GeoFusion::TransformInPlace` di ENTRAMBI i nodi adiacenti, ruolo
 /// [`GeoRole::TransformInPlace`], config `GeoTransform` e stessa colonna
-/// geometria. Ogni gruppo riceve un id progressivo (per segmento) condiviso
-/// dai membri; l'executor riconosce l'apertura sul primo membro. I run di un
-/// solo kernel non sono annotati: il runner fuso non avrebbe vantaggio e il
-/// percorso nodo-per-nodo resta il riferimento.
+/// geometria — piu' UNA misura terminale opzionale in coda (M2: capability
+/// `GeoFusion::TerminalMeasure`, ruolo [`GeoRole::MeasureAddColumn`], config
+/// `GeoMeasure`, stessa colonna). Con la misura in coda basta UN solo
+/// transform (gruppo di due nodi); una misura da sola non forma mai gruppo
+/// (non c'e' nulla da fondere: resta sul percorso nodo-per-nodo). Ogni
+/// gruppo riceve un id progressivo (per segmento) condiviso dai membri;
+/// l'executor riconosce l'apertura sul primo membro. I run di un solo
+/// transform senza misura non sono annotati: il runner fuso non avrebbe
+/// vantaggio e il percorso nodo-per-nodo resta il riferimento.
 fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
-    let fusible = |kernel: &PreparedKernel| {
+    let fusible_transform = |kernel: &PreparedKernel| {
         kernel.geo_fusion == plenora_core::catalog::GeoFusion::TransformInPlace
             && kernel.geo_role == Some(GeoRole::TransformInPlace)
             && matches!(kernel.config, PreparedConfig::GeoTransform(_))
             && kernel.geometry_column_index.is_some()
     };
+    // Misura terminale (M2): puo' solo CHIUDERE un run di transform, mai
+    // aprirlo o proseguirlo (una sola misura per gruppo, D12.2).
+    let terminal_measure = |kernel: &PreparedKernel| {
+        kernel.geo_fusion == plenora_core::catalog::GeoFusion::TerminalMeasure
+            && kernel.geo_role == Some(GeoRole::MeasureAddColumn)
+            && matches!(kernel.config, PreparedConfig::GeoMeasure { .. })
+            && kernel.geometry_column_index.is_some()
+    };
     let mut next_group = 0_u32;
     let mut start = 0_usize;
     while start < kernels.len() {
-        if !fusible(&kernels[start]) {
+        if !fusible_transform(&kernels[start]) {
             start += 1;
             continue;
         }
         let mut end = start + 1;
         while end < kernels.len()
-            && fusible(&kernels[end])
+            && fusible_transform(&kernels[end])
             && kernels[end].geometry_column_index == kernels[end - 1].geometry_column_index
         {
             end += 1;
         }
-        if end - start >= 2 {
-            for kernel in &mut kernels[start..end] {
+        // M2: una misura `TerminalMeasure` in coda al run, sulla stessa
+        // colonna geometria, entra nel gruppo come ultimo membro.
+        let terminal = end < kernels.len()
+            && terminal_measure(&kernels[end])
+            && kernels[end].geometry_column_index == kernels[end - 1].geometry_column_index;
+        let group_end = if terminal { end + 1 } else { end };
+        if group_end - start >= 2 {
+            for kernel in &mut kernels[start..group_end] {
                 kernel.fusion_group = Some(next_group);
             }
             next_group += 1;
         }
-        start = end;
+        start = group_end;
     }
 }
 

@@ -828,3 +828,161 @@ fn f_cancellation_mid_group_same_node() {
         "f: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M2 — misura terminale in coda al gruppo fuso
+// ---------------------------------------------------------------------------
+//
+// Nota sul caso errore «misura su geometria invalida prodotta a meta'
+// catena»: NON realizzabile con gli op del perimetro M1+M2, per la stessa
+// ragione dei casi (d2)/(e) — OGNI kernel fondibile valida il proprio
+// output (validate_output / pipeline canonica di profilo A), quindi nessun
+// intermedio OGC-invalido raggiunge mai il decode del nodo misura. La
+// validazione pre-misura del runner fuso (D12.4 profilo B -> nodo misura,
+// variante `FusedStepError::Measure`) resta difesa in profondita' ed e'
+// verificata direttamente a livello runner
+// (`unary.rs::tests::measure_validation_error_is_attributed_to_the_measure_node`).
+// I casi errore raggiungibili con misura in coda sono coperti qui sotto:
+// limiti di cella e input invalido, che devono mantenere l'attribuzione ai
+// nodi trasformazione (la misura non li sposta).
+
+/// Piano M2: due transform fondibili + misura terminale `geo.area`.
+fn terminal_area_plan() -> Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 3.0, "y_offset": -2.0}},
+            {"id": "r", "op": "geo.rotate", "in": ["t"], "config": {"degrees": 15.0}},
+            {"id": "a", "op": "geo.area", "in": ["r"], "config": {}},
+        ],
+        "output": "a",
+    })
+}
+
+/// Piano M2: UN transform + misura terminale `geo.to_wkt` (gruppo di due).
+fn terminal_to_wkt_plan() -> Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 3.0, "y_offset": -2.0}},
+            {"id": "w", "op": "geo.to_wkt", "in": ["t"], "config": {}},
+        ],
+        "output": "w",
+    })
+}
+
+/// (M2) Percorso felice con misura terminale: il gruppo include il nodo
+/// misura (prova di formazione, D12.2), l'output e' byte-per-byte identico
+/// al percorso non fuso su fixture multi-tipo con null, le metriche per nodo
+/// sono preservate (D12.6) e la colonna geometria SOPRAVVIVE (semantica v4
+/// "add column": misura appesa in coda, null-in -> null-out).
+#[test]
+fn m2_happy_path_terminal_measure_byte_per_byte() {
+    use plenora_core::arrow::array::{Array, Float64Array, StringArray};
+
+    for (case, plan, nodes) in [
+        ("m2-area", terminal_area_plan(), vec!["t", "r", "a"]),
+        ("m2-to_wkt", terminal_to_wkt_plan(), vec!["t", "w"]),
+    ] {
+        assert_group_formation(&plan, &nodes);
+        let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
+        let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
+        assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "{case}: percorso fuso eseguito");
+        assert_eq!(plain_metrics.geo_fusion_fallbacks, 0, "{case}: nessun fallback atteso");
+        assert_eq!(
+            fused_batches, plain_batches,
+            "{case}: output fuso diverso dal non fuso"
+        );
+        for node in &nodes {
+            let fused_node = &fused_metrics.nodes[*node];
+            let plain_node = &plain_metrics.nodes[*node];
+            assert_eq!(
+                (fused_node.rows_in, fused_node.rows_out),
+                (plain_node.rows_in, plain_node.rows_out),
+                "{case}: {node}: righe 1:1 in A/B"
+            );
+        }
+        // La colonna geometria sopravvive (indice 1, Binary) e la misura
+        // (indice 2) e' null esattamente dove la geometria e' null (riga 4
+        // del batch 0 della fixture multi-tipo).
+        let batch = &fused_batches[0];
+        assert_eq!(
+            batch.column(1).data_type(),
+            &DataType::Binary,
+            "{case}: la colonna geometria sopravvive alla misura"
+        );
+        let measure_null = match batch.column(2).data_type() {
+            DataType::Float64 => batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .map(|column| column.is_null(4)),
+            DataType::Utf8 => batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .map(|column| column.is_null(4)),
+            other => panic!("{case}: tipo misura inatteso {other}"),
+        };
+        assert_eq!(measure_null, Some(true), "{case}: null-in -> null-out");
+    }
+}
+
+/// (M2) Cella oltre `MAX_CELL_BYTES` al primo transform con misura in coda:
+/// la misura NON sposta l'attribuzione — `CellTooLarge` scatta al nodo che
+/// ha prodotto la cella (D12.3) in entrambi i percorsi, prima che il nodo
+/// misura sia eseguito (nel non fuso il nodo misura parte solo dopo che il
+/// nodo trasformazione ha completato tutte le righe).
+#[test]
+fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "d1", "op": "geo.densify", "in": ["main"],
+             "config": {"max_segment_length": 1.0}},
+            {"id": "t", "op": "geo.translate", "in": ["d1"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "vc", "op": "geo.vertex_count", "in": ["t"], "config": {}},
+        ],
+        "output": "vc",
+    });
+    assert_group_formation(&plan, &["d1", "t", "vc"]);
+    let signature = assert_oracle_error("m2-b", &plan, &oversized_cell_batches, Some("d1"));
+    assert_eq!(signature.variant, "Execution", "m2-b: errore di esecuzione");
+    assert!(
+        signature.reason.contains("cella WKB da"),
+        "m2-b: motivo `CellTooLarge`: {}",
+        signature.reason
+    );
+}
+
+/// (M2) Input OGC-invalido (bowtie, strutturalmente valido: supera l'arco di
+/// input) con misura in coda: fallisce al decode del PRIMO nodo in entrambi
+/// i percorsi — la misura in coda non cambia l'attribuzione degli errori di
+/// input.
+#[test]
+fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "a", "op": "geo.area", "in": ["t"], "config": {}},
+        ],
+        "output": "a",
+    });
+    assert_group_formation(&plan, &["t", "a"]);
+    let signature = assert_oracle_error(
+        "m2-c",
+        &plan,
+        &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
+        Some("t"),
+    );
+    assert_eq!(signature.variant, "Execution", "m2-c: errore di esecuzione");
+}

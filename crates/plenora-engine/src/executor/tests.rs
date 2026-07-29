@@ -3145,3 +3145,98 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fusione dei segmenti geo: misura terminale in coda al gruppo (ADR-0012 M2)
+// ---------------------------------------------------------------------------
+
+/// Catena translate -> simplify -> area: due transform + misura terminale in
+/// un unico gruppo (M2). A/B via kill switch (D12.9): output byte-per-byte
+/// identico al percorso non fuso su fixture multi-tipo con null, metriche
+/// per nodo preservate (D12.6), nessun fallback (D12.7). La colonna
+/// geometria SOPRAVVIVE alla misura (semantica v4 "add column"): ri-encodata
+/// una sola volta al confine, la misura e' appesa in coda.
+#[test]
+fn fused_transforms_plus_terminal_area_matches_unfused() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 3.0, "y_offset": -2.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["t"], "config": {"tolerance": 0.01}},
+            {"id": "a", "op": "geo.area", "in": ["s"], "config": {}},
+        ],
+        "output": "a",
+    });
+    let (fused_batches, fused_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), true).expect("fuso");
+    let (plain_batches, plain_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
+
+    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    for node in ["t", "s", "a"] {
+        let fused_node = &fused_metrics.nodes[node];
+        let plain_node = &plain_metrics.nodes[node];
+        assert_eq!(
+            (fused_node.rows_in, fused_node.rows_out),
+            (plain_node.rows_in, plain_node.rows_out),
+            "{node}: righe 1:1 in A/B"
+        );
+    }
+    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+    // Schema [id, geom, area]: la geometria sopravvive (Binary) e la misura
+    // e' null esattamente dove la geometria e' null (riga 2 del batch 0).
+    let batch = &fused_batches[0];
+    assert_eq!(batch.schema().fields().len(), 3, "misura appesa in coda allo schema");
+    assert_eq!(batch.column(1).data_type(), &DataType::Binary, "geometria sopravvive");
+    let area = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+        .expect("colonna area Float64");
+    assert!(area.is_null(2), "null-in -> null-out sulla misura");
+}
+
+/// Catena translate -> `to_wkt`: UN transform + misura terminale basta a
+/// formare il gruppo (M2). Parita' byte-per-byte della colonna Utf8 e della
+/// geometria di confine, null-in -> null-out.
+#[test]
+fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 3.0, "y_offset": -2.0}},
+            {"id": "w", "op": "geo.to_wkt", "in": ["t"], "config": {}},
+        ],
+        "output": "w",
+    });
+    let (fused_batches, fused_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), true).expect("fuso");
+    let (plain_batches, plain_metrics) =
+        run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
+
+    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    for node in ["t", "w"] {
+        let fused_node = &fused_metrics.nodes[node];
+        let plain_node = &plain_metrics.nodes[node];
+        assert_eq!(
+            (fused_node.rows_in, fused_node.rows_out),
+            (plain_node.rows_in, plain_node.rows_out),
+            "{node}: righe 1:1 in A/B"
+        );
+    }
+    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+    let batch = &fused_batches[0];
+    assert_eq!(batch.schema().fields().len(), 3, "misura appesa in coda allo schema");
+    let wkt = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("colonna wkt Utf8");
+    assert!(wkt.is_null(2), "null-in -> null-out sulla misura");
+}
