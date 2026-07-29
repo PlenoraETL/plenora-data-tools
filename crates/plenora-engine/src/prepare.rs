@@ -639,8 +639,8 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
         HashMap::with_capacity(plan.nodes.len());
     for node in &plan.nodes {
         let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!(
-                "internal error: nodo `{}`: op risolta in validazione",
+            PlenoraError::Internal(format!(
+                "nodo `{}`: op risolta in validazione",
                 node.id
             ))
         })?;
@@ -700,8 +700,8 @@ fn build_chains<'a>(
             // streaming unario.
             loop {
                 let Some(&last) = chain.last() else {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: catena non vuota".to_owned(),
+                    return Err(PlenoraError::Internal(
+                        "catena non vuota".to_owned(),
                     ));
                 };
                 if fan_out[last] != 1 {
@@ -778,8 +778,8 @@ fn build_segments<'a>(
             .iter()
             .map(|id| {
                 kernels_by_id.remove(id).ok_or_else(|| {
-                    PlenoraError::InvalidPlan(format!(
-                        "internal error: nodo `{id}`: ogni nodo in esattamente un segmento"
+                    PlenoraError::Internal(format!(
+                        "nodo `{id}`: ogni nodo in esattamente un segmento"
                     ))
                 })
             })
@@ -794,8 +794,8 @@ fn build_segments<'a>(
             output_contract: graph
                 .edge_contract(last)
                 .ok_or_else(|| {
-                    PlenoraError::InvalidPlan(format!(
-                        "internal error: arco `{last}` inferito in validazione"
+                    PlenoraError::Internal(format!(
+                        "arco `{last}` inferito in validazione"
                     ))
                 })?
                 .clone(),
@@ -849,8 +849,8 @@ fn prepare_kernel(
     limits: &Limits,
 ) -> Result<PreparedKernel> {
     let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-        PlenoraError::InvalidPlan(format!(
-            "internal error: nodo `{}`: op risolta in validazione",
+        PlenoraError::Internal(format!(
+            "nodo `{}`: op risolta in validazione",
             node.id
         ))
     })?;
@@ -861,8 +861,8 @@ fn prepare_kernel(
             graph
                 .edge_contract(edge)
                 .ok_or_else(|| {
-                    PlenoraError::InvalidPlan(format!(
-                        "internal error: arco `{edge}` inferito in validazione"
+                    PlenoraError::Internal(format!(
+                        "arco `{edge}` inferito in validazione"
                     ))
                 })
                 .cloned()
@@ -871,8 +871,8 @@ fn prepare_kernel(
     let output_contract = graph
         .edge_contract(&node.id)
         .ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!(
-                "internal error: arco `{}` inferito in validazione",
+            PlenoraError::Internal(format!(
+                "arco `{}` inferito in validazione",
                 node.id
             ))
         })?
@@ -886,8 +886,8 @@ fn prepare_kernel(
                 .schema
                 .column_with_name(&geometry.name)
                 .ok_or_else(|| {
-                    PlenoraError::InvalidPlan(
-                        "internal error: colonna geometria nel contratto".to_owned(),
+                    PlenoraError::Internal(
+                        "colonna geometria nel contratto".to_owned(),
                     )
                 })?
                 .0,
@@ -1142,8 +1142,8 @@ fn prepare_geo(
         let geometry = input_contract
             .active_geometry_column()
             .ok_or_else(|| {
-                PlenoraError::InvalidPlan(
-                    "internal error: geometria attiva verificata in validazione".to_owned(),
+                PlenoraError::Internal(
+                    "geometria attiva verificata in validazione".to_owned(),
                 )
             })?;
         let params = TransformArrowSchema {

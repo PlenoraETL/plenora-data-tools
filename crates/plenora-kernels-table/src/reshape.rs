@@ -108,7 +108,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
@@ -117,7 +117,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
@@ -126,7 +126,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -135,7 +135,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -228,7 +228,7 @@ impl<'a> PivotKeyColumn<'a> {
             // `fmt::Write` su `String` e' infallibile; l'errore e'
             // comunque propagato come Internal, mai ignorato (R6.5).
             write!(key, "{}", value.len())
-                .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             key.push(':');
             key.push_str(value);
         } else {
@@ -523,8 +523,8 @@ fn pivot_column(
                         })?,
                         PivotAgg::Min | PivotAgg::Max => extremum,
                         _ => {
-                            return Err(PlenoraError::InvalidPlan(
-                                "internal error: funzione pivot non numerica nel ramo numerico"
+                            return Err(PlenoraError::Internal(
+                                "funzione pivot non numerica nel ramo numerico"
                                     .into(),
                             ));
                         }

@@ -445,8 +445,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                     FastValue::Number(f64::from(date.year()))
                 }
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
+                    return Err(PlenoraError::Internal(
+                        "il ramo unario ammette solo lower/upper/trim/length/year"
                             .into(),
                     ));
                 }
@@ -478,8 +478,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::StartsWith => value.starts_with(pattern),
                 Function::EndsWith => value.ends_with(pattern),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
+                    return Err(PlenoraError::Internal(
+                        "il ramo testo ammette solo contains/starts_with/ends_with"
                             .into(),
                     ));
                 }
@@ -494,8 +494,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo numerico ammette solo abs/round".into(),
+                    return Err(PlenoraError::Internal(
+                        "il ramo numerico ammette solo abs/round".into(),
                     ));
                 }
             }))
@@ -509,8 +509,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo numerico ammette solo floor/ceil".into(),
+                    return Err(PlenoraError::Internal(
+                        "il ramo numerico ammette solo floor/ceil".into(),
                     ));
                 }
             }))
@@ -601,8 +601,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
             }
             Ok(best)
         }
-        Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::InvalidPlan(
-            "internal error: regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
+        Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::Internal(
+            "regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
                 .into(),
         )),
     }
@@ -945,8 +945,8 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 FastValue::TimestampMs(ms) => {
                     Ok(FastValue::TimestampMs(trunc_timestamp_ms_value(ms, *unit)?))
                 }
-                _ => Err(PlenoraError::InvalidPlan(
-                    "internal error: la sorgente temporale produce solo valori temporali".into(),
+                _ => Err(PlenoraError::Internal(
+                    "la sorgente temporale produce solo valori temporali".into(),
                 )),
             }
         }
@@ -980,8 +980,8 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 (RegexSource::Compiled(_, text), None) => Some(*text),
                 (RegexSource::Dynamic(_), Some(value)) => fast_text(value, "regex_replace")?,
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: sorgente regex e valore dinamico incoerenti".into(),
+                    return Err(PlenoraError::Internal(
+                        "sorgente regex e valore dinamico incoerenti".into(),
                     ));
                 }
             };
@@ -1088,8 +1088,8 @@ impl<'a> FastProgram<'a> {
             }
         }
         match resolved {
-            OutputType::Auto => Err(PlenoraError::InvalidPlan(
-            "internal error: output_type Auto non risolto".into(),
+            OutputType::Auto => Err(PlenoraError::Internal(
+            "output_type Auto non risolto".into(),
         )),
             OutputType::Number => replace_or_append(
                 batch,

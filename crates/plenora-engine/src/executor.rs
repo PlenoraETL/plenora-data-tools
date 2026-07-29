@@ -2030,8 +2030,8 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
             state.add_spill_metrics(spill_metrics);
             Ok(output)
         }
-        PreparedConfig::TableBinary(_) => Err(PlenoraError::InvalidPlan(format!(
-            "nodo `{}`: kernel binario in una catena streaming (errore interno)",
+        PreparedConfig::TableBinary(_) => Err(PlenoraError::Internal(format!(
+            "nodo `{}`: kernel binario in una catena streaming",
             kernel.node_id
         ))),
         PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params, state),
@@ -2727,8 +2727,8 @@ fn run_binary_blocking(
         PlenoraError::Internal("segmento binario senza kernel: invariante del planner violata".into())
     })?;
     let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
-        return Err(PlenoraError::InvalidPlan(format!(
-            "nodo `{}`: config non binaria in un segmento BinaryBlocking (errore interno)",
+        return Err(PlenoraError::Internal(format!(
+            "nodo `{}`: config non binaria in un segmento BinaryBlocking",
             kernel.node_id
         )));
     };

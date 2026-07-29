@@ -189,7 +189,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
@@ -198,7 +198,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
@@ -207,7 +207,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -216,7 +216,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -918,7 +918,7 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                 },
             );
             rule_ordered(ordering, rule.operator).ok_or_else(|| {
-                PlenoraError::InvalidPlan("internal error: operatore di regola non ordinato".into())
+                PlenoraError::Internal("operatore di regola non ordinato".into())
             })?
         }
         RuleOperator::Range => {
@@ -978,8 +978,8 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
             )
         }),
         RuleOperator::Isnull | RuleOperator::Notnull => {
-            return Err(PlenoraError::InvalidPlan(
-                "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
+            return Err(PlenoraError::Internal(
+                "isnull/notnull sono valutati prima del confronto scalare".into(),
             ));
         }
     })

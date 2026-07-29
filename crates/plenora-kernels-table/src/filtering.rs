@@ -222,8 +222,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                     .partial_cmp(&bound_as_f64(bound))
             };
             let operator = OrderedOperator::from_operator(operator).ok_or_else(|| {
-                PlenoraError::InvalidPlan(
-                    "internal error: operatore non ordinato nel ramo ordinato".into(),
+                PlenoraError::Internal(
+                    "operatore non ordinato nel ramo ordinato".into(),
                 )
             })?;
             Ok(ordered_typed(ordering, operator))
@@ -237,8 +237,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                 Operator::Startswith => actual.starts_with(expected),
                 Operator::Endswith => actual.ends_with(expected),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: operatore non testuale nel ramo testuale".into(),
+                    return Err(PlenoraError::Internal(
+                        "operatore non testuale nel ramo testuale".into(),
                     ));
                 }
             })
@@ -267,8 +267,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
             };
             Ok(within)
         }
-        Operator::Isnull | Operator::Notnull => Err(PlenoraError::InvalidPlan(
-            "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
+        Operator::Isnull | Operator::Notnull => Err(PlenoraError::Internal(
+            "isnull/notnull sono valutati prima del confronto scalare".into(),
         )),
     }
 }
@@ -411,8 +411,8 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             let bound = NumericBound::parse(&json_text(value))?;
             let Some(operator) = OrderedOperator::from_operator(operator) else {
-                return Some(Err(PlenoraError::InvalidPlan(
-                    "internal error: operatore non ordinato nel ramo ordinato".into(),
+                return Some(Err(PlenoraError::Internal(
+                    "operatore non ordinato nel ramo ordinato".into(),
                 )));
             };
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
@@ -476,8 +476,8 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
                     rows_where(values, |row| values.value(row).ends_with(&expected))
                 }
                 _ => {
-                    return Some(Err(PlenoraError::InvalidPlan(
-                        "internal error: solo operatori testuali".into(),
+                    return Some(Err(PlenoraError::Internal(
+                        "solo operatori testuali".into(),
                     )));
                 }
             }

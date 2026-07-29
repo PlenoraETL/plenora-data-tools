@@ -451,8 +451,8 @@ impl<'a> FastProgram<'a> {
                             stack.push((values.value(row).to_f64().unwrap_or_default(), values.is_null(row)));
                         }
                         FastColumn::Str(_) => {
-                            return Err(PlenoraError::InvalidPlan(
-                                "internal error: programma numerico senza testo".into(),
+                            return Err(PlenoraError::Internal(
+                                "programma numerico senza testo".into(),
                             ));
                         }
                     },
@@ -476,8 +476,8 @@ impl<'a> FastProgram<'a> {
                             }
                             FastOp::Divide => left / right,
                             _ => {
-                                return Err(PlenoraError::InvalidPlan(
-                                    "internal error: operatore non aritmetico nel ramo aritmetico"
+                                return Err(PlenoraError::Internal(
+                                    "operatore non aritmetico nel ramo aritmetico"
                                         .into(),
                                 ));
                             }
@@ -485,8 +485,8 @@ impl<'a> FastProgram<'a> {
                         stack.push((value, false));
                     }
                     FastOp::Text(_) | FastOp::MissingColumn(_) => {
-                        return Err(PlenoraError::InvalidPlan(
-                            "internal error: programma numerico senza testo".into(),
+                        return Err(PlenoraError::Internal(
+                            "programma numerico senza testo".into(),
                         ));
                     }
                 }
@@ -634,8 +634,8 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
             }
             FastOp::Divide => Slot::Number(left / right),
             _ => {
-                return Err(PlenoraError::InvalidPlan(
-                    "internal error: operatore non aritmetico su operandi numerici".into(),
+                return Err(PlenoraError::Internal(
+                    "operatore non aritmetico su operandi numerici".into(),
                 ));
             }
         },

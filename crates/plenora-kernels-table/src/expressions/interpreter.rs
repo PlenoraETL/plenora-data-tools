@@ -149,8 +149,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                     Scalar::Number(f64::from(date.year()))
                 }
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
+                    return Err(PlenoraError::Internal(
+                        "il ramo unario ammette solo lower/upper/trim/length/year"
                             .into(),
                     ));
                 }
@@ -182,8 +182,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::StartsWith => value.starts_with(&pattern),
                 Function::EndsWith => value.ends_with(&pattern),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
+                    return Err(PlenoraError::Internal(
+                        "il ramo testo ammette solo contains/starts_with/ends_with"
                             .into(),
                     ));
                 }
@@ -198,8 +198,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo numerico ammette solo abs/round".into(),
+                    return Err(PlenoraError::Internal(
+                        "il ramo numerico ammette solo abs/round".into(),
                     ));
                 }
             }))
@@ -213,8 +213,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: il ramo numerico ammette solo floor/ceil".into(),
+                    return Err(PlenoraError::Internal(
+                        "il ramo numerico ammette solo floor/ceil".into(),
                     ));
                 }
             }))
@@ -320,8 +320,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             }
             Ok(best)
         }
-        Function::DateTrunc | Function::In => Err(PlenoraError::InvalidPlan(
-            "internal error: date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
+        Function::DateTrunc | Function::In => Err(PlenoraError::Internal(
+            "date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
                 .into(),
         )),
     }
@@ -577,8 +577,8 @@ pub fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> 
         }
     }
     match resolved {
-        OutputType::Auto => Err(PlenoraError::InvalidPlan(
-            "internal error: output_type Auto non risolto".into(),
+        OutputType::Auto => Err(PlenoraError::Internal(
+            "output_type Auto non risolto".into(),
         )),
         OutputType::Number => replace_or_append(
             batch,

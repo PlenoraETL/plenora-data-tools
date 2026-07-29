@@ -256,8 +256,8 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                     parse_datetime_default(value, datetime_items, date_items)
                 }
                 _ => {
-                    return Err(PlenoraError::InvalidPlan(
-                        "internal error: un solo parser compilato".into(),
+                    return Err(PlenoraError::Internal(
+                        "un solo parser compilato".into(),
                     ));
                 }
             };

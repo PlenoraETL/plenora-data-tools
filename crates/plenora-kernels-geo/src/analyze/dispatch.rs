@@ -125,8 +125,8 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
             ensure_ratio(op, "ratio", parsed.ratio)?;
         }
         _ => {
-            return Err(PlenoraError::InvalidPlan(
-                "internal error: validate_transform_params: op non una trasformazione".to_owned(),
+            return Err(PlenoraError::Internal(
+                "validate_transform_params: op non una trasformazione".to_owned(),
             ));
         }
     }

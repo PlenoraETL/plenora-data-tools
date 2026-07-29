@@ -245,9 +245,9 @@ fn infer_expression_type(
                     }
                     Ok(StaticType::Number)
                 }
-                Function::DateTrunc | Function::In => {
-                    contract_error(op, "internal error: date_trunc/in hanno nodi dedicati")
-                }
+                Function::DateTrunc | Function::In => Err(PlenoraError::Internal(format!(
+                    "{op}: date_trunc/in hanno nodi dedicati"
+                ))),
             }
         }
         Expression::Case {

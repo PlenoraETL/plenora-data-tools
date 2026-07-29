@@ -537,8 +537,8 @@ pub fn fuzzy_join(
                 };
                 for &right_row in candidates {
                     let null_block_error = || {
-                        PlenoraError::InvalidPlan(
-                            "internal error: righe destre nei blocchi non sono null".into(),
+                        PlenoraError::Internal(
+                            "righe destre nei blocchi non sono null".into(),
                         )
                     };
                     let similarity = match (config.metric, &left_decoded, &right_decoded) {
@@ -570,8 +570,8 @@ pub fn fuzzy_join(
                             jaccard_sets(left_tokens, right_tokens)
                         }
                         _ => {
-                            return Err(PlenoraError::InvalidPlan(
-                                "internal error: forma decodificata incoerente con la metrica"
+                            return Err(PlenoraError::Internal(
+                                "forma decodificata incoerente con la metrica"
                                     .into(),
                             ));
                         }

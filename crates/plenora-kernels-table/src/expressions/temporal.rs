@@ -59,7 +59,7 @@ pub fn literal_unit(expression: &Expression) -> Result<TruncUnit> {
 
 fn date32_epoch() -> Result<NaiveDate> {
     NaiveDate::from_ymd_opt(1970, 1, 1)
-        .ok_or_else(|| PlenoraError::InvalidPlan("internal error: epoca Date32 valida".into()))
+        .ok_or_else(|| PlenoraError::Internal("epoca Date32 valida".into()))
 }
 
 /// Unita' sub-day non ammesse su Date32 (una data non ha componente oraria).
@@ -81,8 +81,8 @@ pub fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
         TruncUnit::Month => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
         TruncUnit::Day => Some(date),
         TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second => {
-            return Err(PlenoraError::InvalidPlan(
-                "internal error: unita' sub-day gia' rifiutata da check_date32_unit".into(),
+            return Err(PlenoraError::Internal(
+                "unita' sub-day gia' rifiutata da check_date32_unit".into(),
             ));
         }
     }
@@ -131,8 +131,8 @@ pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) 
         Scalar::Null => Ok(Scalar::Null),
         Scalar::Date32(days) => Ok(Scalar::Date32(trunc_date32_days(days, unit)?)),
         Scalar::TimestampMs(ms) => Ok(Scalar::TimestampMs(trunc_timestamp_ms_value(ms, unit)?)),
-        _ => Err(PlenoraError::InvalidPlan(
-            "internal error: eval_temporal produce solo valori temporali".into(),
+        _ => Err(PlenoraError::Internal(
+            "eval_temporal produce solo valori temporali".into(),
         )),
     }
 }

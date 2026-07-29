@@ -145,8 +145,8 @@ pub(in crate::analyze) fn analyze_join(
         .iter()
         .map(|name| {
             left.schema.index_of(name).map_err(|_| {
-                PlenoraError::InvalidPlan(format!(
-                    "internal error: {op}: chiave verificata assente nello schema"
+                PlenoraError::Internal(format!(
+                    "{op}: chiave verificata assente nello schema"
                 ))
             })
         })
@@ -156,8 +156,8 @@ pub(in crate::analyze) fn analyze_join(
         .iter()
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::InvalidPlan(format!(
-                    "internal error: {op}: chiave verificata assente nello schema"
+                PlenoraError::Internal(format!(
+                    "{op}: chiave verificata assente nello schema"
                 ))
             })
         })
@@ -207,8 +207,8 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     require_utf8(op, left, &config.left_key)?;
     require_utf8(op, right, &config.right_key)?;
     let left_index = left.schema.index_of(&config.left_key).map_err(|_| {
-        PlenoraError::InvalidPlan(format!(
-            "internal error: {op}: chiave verificata assente nello schema"
+        PlenoraError::Internal(format!(
+            "{op}: chiave verificata assente nello schema"
         ))
     })?;
     let (mut fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
@@ -345,8 +345,8 @@ pub(in crate::analyze) fn analyze_asof_join(
         .chain(std::iter::once(&config.right_on))
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::InvalidPlan(format!(
-                    "internal error: {op}: chiave verificata assente nello schema"
+                PlenoraError::Internal(format!(
+                    "{op}: chiave verificata assente nello schema"
                 ))
             })
         })
