@@ -618,8 +618,8 @@ struct ExecutionContext {
 
 **Failure e cancellazione**: un ramo che fallisce cancella immediatamente gli
 altri (first-error wins). L'errore primario conserva diagnosi completa:
-`execution_id`, nodo, operazione, categoria, source chain interna, indicazione
-retryable/non-retryable se applicabile — mai valori o payload sensibili. Gli
+`execution_id`, nodo, operazione, categoria, source chain interna, disposizione
+di retry (R9.7) se applicabile — mai valori o payload sensibili. Gli
 errori secondari restano telemetria. Per il debugging operativo è prevista una
 **modalità diagnostica esplicitamente opt-in** (solo per input fidati):
 l'errore può includere nodo, indice batch, indice riga, colonna e tipo di

@@ -67,13 +67,16 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    `LossReport`, mai precedenza implicita. Attuazione per tappe (vedi
    "Stato di attuazione"): prima i confini non-monolitici (discovery CLI,
    output v4), poi i monoliti.
-5. **Errore a quattro assi.** `ErrorPhase` (10 valori canonici) e
-   `RemoteEffect` (5 valori canonici R9.6) come assi **derivati** per
-   variante di `PlenoraError` (stesso stampo di `category()`); R9.5 vieta
-   valori propri. Categoria (M1d) e `retryable()` invariati; la
-   disposizione di retry di R9.7 (sostituisce il booleano) e' follow-up
-   dichiarato — richiede la fase operativa ai confini, che questa
-   attuazione prepara ma non ancora annota.
+5. **Errore a quattro assi.** `ErrorPhase` (10 valori canonici),
+   `RemoteEffect` (5 valori canonici R9.6) e `RetryDisposition` (5 valori
+   canonici R9.7) come assi **derivati** per variante di `PlenoraError`
+   (stesso stampo di `category()`); R9.5 vieta valori propri. R9.7
+   sostituisce il booleano `retryable()` di M1d (rimosso): la disposizione
+   e' calcolata da fase, effetto e idempotenza, mai dalla sola categoria.
+   Il tagging di fase ai confini (`step_error`, `at_input`, publish) resta
+   follow-up: raffinera' la fase, non la disposizione — effetto `None` per
+   costruzione e idempotenza della riesecuzione valgono a qualunque fase
+   raffinata, quindi il mapping di `retry_disposition()` non cambia.
 6. **`PublishOutcome` mappato sull'asse effetto, non duplicato.**
    `PublishedButDurabilityUnconfirmed` (ADR 7) non e' un errore (R9.3):
    mappa su `RemoteEffect::Committed` — l'effetto esiste ed e'
@@ -176,10 +179,11 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
     una decisione di design, non un bug: se anche l'output legacy debba
     emettere le chiavi canoniche (oggi solo GeoArrow) o restare
     GeoArrow-only fino al ritiro del percorso.
-- **Follow-up dichiarati**: disposizione di retry R9.7 (sostituisce
-  `retryable()`); chiave `plenora.field_id` (decisione 3) da proporre
-  all'owner ICD; test di catena completa bordo-centro-bordo con gli
-  altri due componenti.
+- **Follow-up dichiarati**: tagging di fase ai confini (`step_error`,
+  `at_input`, publish — raffina le approssimazioni di fase, non la
+  disposizione R9.7, gia' attuata); chiave `plenora.field_id` (decisione
+  3) da proporre all'owner ICD; test di catena completa bordo-centro-bordo
+  con gli altri due componenti.
 - **Rinomina categorie §9 (attuata, 2026-07-29)**: varianti allineate
   all'enumerazione canonica (Appendice C): `Contract` → `InvalidPlan`,
   `Step` → `Execution`, `UnsupportedPublishTarget` → `Unsupported`,
@@ -194,6 +198,18 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   `Write`); `Unsupported` assorbe la destinazione di publish non
   supportata (prima `Probe`, ora `Validate`) — entrambe da raffinare
   col tagging ai confini di R9.7.
+- **Disposizione di retry R9.7 (attuata, 2026-07-29)**: enum
+  `RetryDisposition` canonico a 5 valori (`never`, `safe`,
+  `requires_idempotency_key`, `requires_recovery`, `after(durata)`) e
+  `PlenoraError::retry_disposition()` calcolata da fase, effetto e
+  idempotenza — mai dalla sola categoria; il booleano `retryable()` di
+  M1d e' rimosso (R9.7 lo dichiara insufficiente e pericoloso). Mapping:
+  `Safe` solo per `Io` (causa transitoria, effetto `None` per
+  costruzione, riesecuzione idempotente), `Never` per cause
+  deterministiche o volontarie; `RequiresIdempotencyKey`/
+  `RequiresRecovery` mai prodotti (nessuno stato remoto), `After` mai
+  prodotto (nessuna sorgente di backoff tipizzata — backoff e tentativi
+  restano al chiamante).
 
 ## Cambi di comportamento (dichiarati)
 

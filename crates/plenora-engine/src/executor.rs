@@ -36,7 +36,9 @@
 //! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
 //! nessuna versione nuova) riportato negli errori `Step`/`Cancelled` e nel
 //! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
-//! `category()` e `retryable()`. La modalita' diagnostica opt-in
+//! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
+//! gli assi §9; R9.7 ha sostituito il `retryable()` di M1d). La modalita'
+//! diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
 //! motivazione contesto strutturale — indice di batch, riga, colonna dove
 //! disponibile — MAI valori; a flag spento i messaggi sono invariati.

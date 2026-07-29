@@ -19,7 +19,9 @@ pub mod crs;
 pub mod error;
 pub mod limits;
 
-pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result};
+pub use error::{
+    ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, RetryDisposition,
+};
 
 /// Re-export unico di Arrow: tutti i crate del workspace dipendono da Arrow
 /// solo tramite questo modulo.

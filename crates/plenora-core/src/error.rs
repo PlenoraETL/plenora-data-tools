@@ -5,23 +5,26 @@
 //! dall'executor, non da queste varianti.
 //!
 //! Fase 2B M1d (ADR 3): ogni errore espone una [`ErrorCategory`] stabile
-//! ([`PlenoraError::category`]) e l'indicazione [`PlenoraError::retryable`];
-//! `Step` e `Cancelled` portano l'`execution_id` dell'esecuzione che li ha
-//! prodotti (vuoto se costruiti fuori da un'esecuzione DAG, es. percorso
-//! legacy `table_engine` — il Display lo omette in quel caso).
+//! ([`PlenoraError::category`]); `Execution` e `Cancelled` portano
+//! l'`execution_id` dell'esecuzione che li ha prodotti (vuoto se costruiti
+//! fuori da un'esecuzione DAG, es. percorso legacy `table_engine` — il
+//! Display lo omette in quel caso).
 //!
-//! Milestone D (contratti trasversali v2.0-rc3 §9, proposta in attesa di
+//! Milestone D (contratti trasversali v2.0-rc8 §9, proposta in attesa di
 //! ratifica — andra' in ADR-0009): l'errore porta i quattro assi
-//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) e
-//! ritentabilita' ([`PlenoraError::retryable`]) esistono da M1d; qui si
-//! aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]) e l'effetto
-//! remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]), entrambi da
-//! enumerazioni canoniche condivise (R9.5/R9.6: sottoinsieme ammesso,
-//! valori propri vietati). La disposizione di retry di R9.7 (che
-//! sostituisce il booleano) e' follow-up dichiarato: per ora
-//! `retryable()` resta invariato.
+//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste da
+//! M1d; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
+//! l'effetto remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]) e
+//! la disposizione di retry ([`PlenoraError::retry_disposition`],
+//! [`RetryDisposition`]), tutti da enumerazioni canoniche condivise
+//! (R9.5/R9.6: sottoinsieme ammesso, valori propri vietati). R9.7
+//! sostituisce il booleano `retryable()` di M1d — insufficiente e
+//! pericoloso: un timeout in lettura e' ritentabile, lo stesso timeout
+//! dopo l'invio di un commit non lo e' — con una disposizione calcolata
+//! da fase, effetto e idempotenza, mai dalla sola categoria.
 
 use std::fmt;
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -292,6 +295,65 @@ impl fmt::Display for RemoteEffect {
     }
 }
 
+/// Disposizione al ritentativo di un'operazione fallita: asse
+/// «ritentativo» di R9.1, enumerazione canonica R9.7 (contratti trasversali
+/// v2.0-rc8 §9).
+///
+/// Sostituisce il booleano `retryable` della 1.x, insufficiente e
+/// pericoloso (R9.7: un timeout in lettura e' ritentabile, lo stesso
+/// timeout dopo l'invio di un commit non lo e'). La disposizione e'
+/// calcolata da fase, effetto e idempotenza dell'operazione — mai dalla
+/// sola categoria — in [`PlenoraError::retry_disposition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RetryDisposition {
+    /// Ritentare e' sempre errato (causa deterministica o volontaria).
+    Never,
+    /// L'operazione e' idempotente o priva di effetti: si puo' ritentare.
+    Safe,
+    /// Ritentabile solo con una chiave che deduplichi l'effetto.
+    RequiresIdempotencyKey,
+    /// Prima di ritentare occorre accertare lo stato reale.
+    RequiresRecovery,
+    /// Ritentabile non prima della durata indicata.
+    After(Duration),
+}
+
+impl RetryDisposition {
+    /// Nome stabile della disposizione (telemetria, report JSON):
+    /// `snake_case` canonico R9.7. Per [`RetryDisposition::After`] e' il
+    /// solo nome del valore (`after`); la durata e' esposta da
+    /// [`RetryDisposition::delay`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Safe => "safe",
+            Self::RequiresIdempotencyKey => "requires_idempotency_key",
+            Self::RequiresRecovery => "requires_recovery",
+            Self::After(_) => "after",
+        }
+    }
+
+    /// Durata minima prima del retry: presente solo per
+    /// [`RetryDisposition::After`], `None` per gli altri valori.
+    #[must_use]
+    pub const fn delay(self) -> Option<Duration> {
+        match self {
+            Self::After(duration) => Some(duration),
+            Self::Never
+            | Self::Safe
+            | Self::RequiresIdempotencyKey
+            | Self::RequiresRecovery => None,
+        }
+    }
+}
+
+impl fmt::Display for RetryDisposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl PlenoraError {
     /// Categoria dell'errore (ADR 3, M1d): mapping dichiarato per variante.
     #[must_use]
@@ -308,19 +370,50 @@ impl PlenoraError {
         }
     }
 
-    /// L'errore ammette un retry da parte del chiamante?
+    /// Disposizione al ritentativo (asse «ritentativo» di R9.1,
+    /// enumerazione canonica R9.7): calcolata da fase
+    /// ([`PlenoraError::phase`]), effetto ([`PlenoraError::remote_effect`])
+    /// e idempotenza dell'operazione — MAI dalla sola categoria.
+    /// Sostituisce il booleano `retryable()` di M1d, rimosso perche'
+    /// insufficiente e pericoloso (R9.7).
     ///
-    /// Default `false`: quasi tutti gli errori del workspace sono
-    /// deterministici (contratto, schema, configurazione, limiti) o
-    /// volontari (cancellazione) — ritentare a parita' di input fallirebbe
-    /// allo stesso modo. `true` SOLO per [`ErrorCategory::Io`]: errori di
-    /// I/O potenzialmente transitori (filesystem temporaneo o di rete
-    /// momentaneamente indisponibile, esaurimento momentaneo di risorse di
-    /// sistema) possono riuscire a un tentativo successivo. Backoff e numero
-    /// di tentativi restano responsabilita' del chiamante.
+    /// Calcolo per data-tools (la variante porta gia' fase ed effetto per
+    /// mapping dichiarato; la tabella segue):
+    ///
+    /// - L'effetto e' sempre [`RemoteEffect::None`] per costruzione (ADR 7:
+    ///   publish atomico, nessun output parziale mai visibile; I8:
+    ///   cancellazione senza output pubblicato) e la riesecuzione a parita'
+    ///   di input e' idempotente (ADR-0001: stesso input → stesso output;
+    ///   il publish rifiuta una destinazione esistente, quindi un tentativo
+    ///   fallito prima del rename non lascia nulla che ostacoli il
+    ///   successivo). Nessun errore di data-tools richiede quindi
+    ///   [`RetryDisposition::RequiresIdempotencyKey`] o
+    ///   [`RetryDisposition::RequiresRecovery`]: quei valori restano
+    ///   nell'enumerazione per i componenti con stato remoto.
+    /// - [`RetryDisposition::Safe`] SOLO per gli errori di I/O: causa
+    ///   potenzialmente transitoria (filesystem temporaneo o di rete
+    ///   momentaneamente indisponibile, lock condiviso su Windows — cfr.
+    ///   `retryable_persist_error` in engine) a fronte di effetto assente
+    ///   e operazione idempotente. Backoff e numero di tentativi restano
+    ///   responsabilita' del chiamante.
+    /// - [`RetryDisposition::Never`] per tutte le cause deterministiche
+    ///   (contratto, schema, mapping, esecuzione di un nodo: ADR-0001 — a
+    ///   parita' di input fallirebbero allo stesso modo) e per la
+    ///   cancellazione, che e' volontaria.
+    /// - [`RetryDisposition::After`] non e' mai prodotto: data-tools non ha
+    ///   sorgenti di backoff tipizzate.
     #[must_use]
-    pub const fn retryable(&self) -> bool {
-        matches!(self, Self::Io(_))
+    pub const fn retry_disposition(&self) -> RetryDisposition {
+        match self {
+            Self::Io(_) => RetryDisposition::Safe,
+            Self::InvalidPlan(_)
+            | Self::Unsupported(_)
+            | Self::Schema(_)
+            | Self::DataMapping(_)
+            | Self::Execution { .. }
+            | Self::Crs(_)
+            | Self::Cancelled { .. } => RetryDisposition::Never,
+        }
     }
 
     /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1,
@@ -356,9 +449,10 @@ impl PlenoraError {
     /// - `DataMapping`, `Io` → [`ErrorPhase::Write`]: le varianti coprono
     ///   sia la lettura degli input sia la scrittura/publish e non
     ///   distinguono. Si dichiara `Write` perche' e' il lato con possibile
-    ///   effetto sul supporto, il solo rilevante quando la ritentabilita'
-    ///   sara' calcolata da fase ed effetto (R9.7, follow-up): un errore in
-    ///   lettura resta privo di effetti e altrettanto gestibile.
+    ///   effetto sul supporto, il solo rilevante per la disposizione di
+    ///   retry calcolata da fase ed effetto (R9.7, vedi
+    ///   [`PlenoraError::retry_disposition`]): un errore in lettura resta
+    ///   privo di effetti e altrettanto gestibile.
     ///   Approssimazione dichiarata (la fusione §9 di `Json`+`Arrow`
     ///   cancella la distinzione parse/I-O che le due varianti separate
     ///   portavano).
@@ -488,11 +582,50 @@ mod tests {
     }
 
     #[test]
-    fn retryable_is_true_only_for_transient_io() {
+    fn retry_disposition_is_safe_only_for_transient_io() {
+        // R9.7: la disposizione sostituisce il booleano — `Safe` solo per
+        // la causa potenzialmente transitoria (I/O) a effetto assente e
+        // operazione idempotente; `Never` per cause deterministiche o
+        // volontarie.
         for (error, _) in samples() {
-            let expected = matches!(error, PlenoraError::Io(_));
-            assert_eq!(error.retryable(), expected, "{error}");
+            let expected = if matches!(error, PlenoraError::Io(_)) {
+                RetryDisposition::Safe
+            } else {
+                RetryDisposition::Never
+            };
+            assert_eq!(error.retry_disposition(), expected, "{error}");
         }
+    }
+
+    #[test]
+    fn retry_disposition_names_are_exactly_the_canonical_five() {
+        // R9.7: solo i cinque valori canonici, snake_case; nessun valore
+        // proprio di data-tools. La tabella e' esaustiva per costruzione.
+        let all = [
+            (RetryDisposition::Never, "never"),
+            (RetryDisposition::Safe, "safe"),
+            (
+                RetryDisposition::RequiresIdempotencyKey,
+                "requires_idempotency_key",
+            ),
+            (RetryDisposition::RequiresRecovery, "requires_recovery"),
+            (RetryDisposition::After(Duration::from_millis(250)), "after"),
+        ];
+        assert_eq!(
+            all.len(),
+            5,
+            "l'enumerazione canonica ha cinque disposizioni"
+        );
+        for (disposition, name) in all {
+            assert_eq!(disposition.as_str(), name);
+            assert_eq!(disposition.to_string(), name, "Display = as_str canonico");
+        }
+        // `after(durata)` trasporta la durata minima prima del retry.
+        assert_eq!(
+            RetryDisposition::After(Duration::from_millis(250)).delay(),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(RetryDisposition::Safe.delay(), None);
     }
 
     /// Una istanza per variante costruibile direttamente, con la fase
@@ -612,7 +745,11 @@ mod tests {
              cancellazione richiesta dal chiamante"
         );
         assert_eq!(cancelled().category(), ErrorCategory::Cancelled);
-        assert!(!cancelled().retryable(), "la cancellazione e' volontaria");
+        assert_eq!(
+            cancelled().retry_disposition(),
+            RetryDisposition::Never,
+            "la cancellazione e' volontaria"
+        );
     }
 
     #[test]

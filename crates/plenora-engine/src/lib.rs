@@ -46,7 +46,9 @@
 //! dell'executor (mai dentro ai kernel in M1 — il passaggio e' M3) con
 //! errore dedicato `PlenoraError::Cancelled`; `execution_id` per esecuzione
 //! negli errori `Step`/`Cancelled` e nel lock del `TempStore`;
-//! `PlenoraError::category()`/`retryable()`; modalita' diagnostica opt-in
+//! `PlenoraError::category()` e gli assi §9 (`phase()`, `remote_effect()`,
+//! `retry_disposition()` — R9.7, sostituisce il `retryable()` di M1d);
+//! modalita' diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, contesto strutturale, mai valori).
 //!
 //! Fase 2B M2c aggiunge il wiring dello spill generalizzato (ADR-0002):

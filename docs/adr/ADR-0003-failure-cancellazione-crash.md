@@ -25,7 +25,8 @@ che nessun meccanismo in-process può intercettare.
   topologica; (3) `NodeId` minore; (4) sequence number minore. Così la
   diagnosi è deterministica anche se l'osservazione non lo è.
 - L'errore primario conserva: `execution_id`, nodo, operazione, categoria,
-  source chain interna, indicazione retryable/non-retryable se applicabile.
+  source chain interna, disposizione di retry (R9.7, da milestone D — in M1d
+  era il booleano retryable/non-retryable) se applicabile.
   **Mai** valori o payload sensibili.
 - Gli errori secondari (conseguenti alla cancellazione) sono telemetria, non
   sostituiscono la causa iniziale.
@@ -105,9 +106,11 @@ Implementato:
   tra kernel, `NonInterruptible` solo confini di piano); errore dedicato
   `PlenoraError::Cancelled`; CLI con handler Ctrl-C (1° pressione = cancel
   cooperativo, 2° = exit forzato), exit code 130, nessun publish al cancel.
-- **Errori arricchiti**: `execution_id` (`exec-<uuid v4>`) in `Step` e
-  `Cancelled`; `ErrorCategory` con `category()` (mapping dichiarato per
-  variante) e `retryable()` (true solo per `Io`); **modalità diagnostica
+- **Errori arricchiti**: `execution_id` (`exec-<uuid v4>`) in `Execution`
+  (ex `Step`) e `Cancelled`; `ErrorCategory` con `category()` (mapping
+  dichiarato per variante) e — da milestone D — `retry_disposition()` a 5
+  valori canonici R9.7 al posto del `retryable()` (true solo per `Io`)
+  qui deciso; **modalità diagnostica
   opt-in** (`RuntimeContext::diagnostics`): reason arricchita con
   nodo/batch/riga/colonna, mai valori.
 - **Crash defense**: `TempStore` per `execution_id` con `lock.json`
