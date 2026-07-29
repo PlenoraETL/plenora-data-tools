@@ -96,7 +96,7 @@ pub struct Bin {
 
 fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> {
     if !(2..=100).contains(&count) {
-        return Err(PlenoraError::Contract("bins deve essere tra 2 e 100".into()));
+        return Err(PlenoraError::InvalidPlan("bins deve essere tra 2 e 100".into()));
     }
     let values = numeric
         .iter()
@@ -112,7 +112,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
     let max = values.iter().copied().reduce(f64::max).unwrap_or(min);
     let count_f64 = count
         .to_f64()
-        .ok_or_else(|| PlenoraError::Contract("numero bin non rappresentabile".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("numero bin non rappresentabile".into()))?;
     if max.total_cmp(&min) == std::cmp::Ordering::Equal {
         // pandas.cut expands a constant range by 0.1% on both sides
         // (or by 0.001 around zero) before computing equal-width bins.
@@ -133,7 +133,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
                         let edge = width * position + lower;
                         edge
                     })
-                    .ok_or_else(|| PlenoraError::Contract("indice bin non rappresentabile".into()))
+                    .ok_or_else(|| PlenoraError::InvalidPlan("indice bin non rappresentabile".into()))
             })
             .collect();
     }
@@ -152,7 +152,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
                         edge
                     }
                 })
-                .ok_or_else(|| PlenoraError::Contract("indice bin non rappresentabile".into()))
+                .ok_or_else(|| PlenoraError::InvalidPlan("indice bin non rappresentabile".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     // pandas.cut uses right-closed intervals and expands only the open side.
@@ -186,7 +186,7 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
                     .windows(2)
                     .any(|v| !matches!(v[0].partial_cmp(&v[1]), Some(std::cmp::Ordering::Less)))
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "bordi bin non strettamente crescenti".into(),
                 ));
             }
@@ -199,7 +199,7 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
         .as_ref()
         .is_some_and(|labels| labels.len() != count)
     {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "numero labels diverso dai bin".into(),
         ));
     }
@@ -614,7 +614,7 @@ pub fn flatten_json(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.max_level > 5 {
-        return Err(PlenoraError::Contract("max_level oltre 5".into()));
+        return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
     }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -657,7 +657,7 @@ pub fn flatten_json(
         config.output_columns.clone()
     };
     if batch.num_columns().saturating_add(keys.len()) > limits.max_columns {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "flatten_json supera max_columns".into(),
         ));
     }
@@ -665,7 +665,7 @@ pub fn flatten_json(
     for output in keys {
         validate_output_name(&output)?;
         let path = output.strip_prefix(&prefix).ok_or_else(|| {
-            PlenoraError::Contract(format!("output {output} non inizia con prefix"))
+            PlenoraError::InvalidPlan(format!("output {output} non inizia con prefix"))
         })?;
         let values: Vec<Option<&str>> = match columns.index.get(path) {
             Some(&id) => columns.columns[id]
@@ -946,7 +946,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
         .fraction
         .is_some_and(|fraction| !(0.0..=1.0).contains(&fraction))
     {
-        return Err(PlenoraError::Contract("fraction fuori 0..1".into()));
+        return Err(PlenoraError::InvalidPlan("fraction fuori 0..1".into()));
     }
     let seed = config.random_state.unwrap_or(0x9e37_79b9_7f4a_7c15);
     let mut selected = Vec::new();
@@ -969,11 +969,11 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
                 Some(fraction) => (rows
                     .len()
                     .to_f64()
-                    .ok_or_else(|| PlenoraError::Contract("gruppo troppo grande".into()))?
+                    .ok_or_else(|| PlenoraError::InvalidPlan("gruppo troppo grande".into()))?
                     * fraction)
                     .floor()
                     .to_usize()
-                    .ok_or_else(|| PlenoraError::Contract("campione non rappresentabile".into()))?,
+                    .ok_or_else(|| PlenoraError::InvalidPlan("campione non rappresentabile".into()))?,
             }
             .max(1)
             .min(rows.len());
@@ -987,11 +987,11 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
             Some(fraction) => (batch
                 .num_rows()
                 .to_f64()
-                .ok_or_else(|| PlenoraError::Contract("dataset troppo grande".into()))?
+                .ok_or_else(|| PlenoraError::InvalidPlan("dataset troppo grande".into()))?
                 * fraction)
                 .round()
                 .to_usize()
-                .ok_or_else(|| PlenoraError::Contract("campione non rappresentabile".into()))?,
+                .ok_or_else(|| PlenoraError::InvalidPlan("campione non rappresentabile".into()))?,
         }
         .min(batch.num_rows());
         selected.truncate(count);
@@ -1111,7 +1111,7 @@ mod tests {
         limits: &Limits,
     ) -> Result<RecordBatch> {
         if config.max_level > 5 {
-            return Err(PlenoraError::Contract("max_level oltre 5".into()));
+            return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
         }
         let index = column_index(batch, &config.column)?;
         let source = batch.column(index);
@@ -1144,7 +1144,7 @@ mod tests {
             config.output_columns.clone()
         };
         if batch.num_columns().saturating_add(keys.len()) > limits.max_columns {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "flatten_json supera max_columns".into(),
             ));
         }
@@ -1152,7 +1152,7 @@ mod tests {
         for output in keys {
             validate_output_name(&output)?;
             let path = output.strip_prefix(&prefix).ok_or_else(|| {
-                PlenoraError::Contract(format!("output {output} non inizia con prefix"))
+                PlenoraError::InvalidPlan(format!("output {output} non inizia con prefix"))
             })?;
             let values = rows
                 .iter()

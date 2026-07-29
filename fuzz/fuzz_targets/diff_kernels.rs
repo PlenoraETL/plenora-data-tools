@@ -242,7 +242,7 @@ fn oracle_evaluate(
         Operator::Eq | Operator::Ne => {
             let equal = if array.data_type() == &DataType::Int64 {
                 let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
+                    PlenoraError::InvalidPlan("confronto numerico con valore non numerico".into())
                 })?;
                 let values = array
                     .as_any()
@@ -251,7 +251,7 @@ fn oracle_evaluate(
                 compare_i64(values.value(row), bound) == Some(Ordering::Equal)
             } else if array.data_type() == &DataType::Float64 {
                 let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                    PlenoraError::Contract("confronto numerico con valore non numerico".into())
+                    PlenoraError::InvalidPlan("confronto numerico con valore non numerico".into())
                 })?;
                 let values = array
                     .as_any()
@@ -273,7 +273,7 @@ fn oracle_evaluate(
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             let bound = NumericBound::parse(&expected).ok_or_else(|| {
-                PlenoraError::Contract("confronto ordinato richiede un valore numerico".into())
+                PlenoraError::InvalidPlan("confronto ordinato richiede un valore numerico".into())
             })?;
             let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 compare_i64(values.value(row), bound)
@@ -300,11 +300,11 @@ fn oracle_evaluate(
         Operator::Between => {
             let (low, high) = expected
                 .split_once(',')
-                .ok_or_else(|| PlenoraError::Contract("between richiede min,max".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("between richiede min,max".into()))?;
             let low = NumericBound::parse(low.trim())
-                .ok_or_else(|| PlenoraError::Contract("min between non valido".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("min between non valido".into()))?;
             let high = NumericBound::parse(high.trim())
-                .ok_or_else(|| PlenoraError::Contract("max between non valido".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("max between non valido".into()))?;
             let within = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
                 within_bounds(
                     compare_i64(values.value(row), low),

@@ -406,7 +406,7 @@ fn error_mid_stream_publishes_nothing() {
         table_schema(),
         vec![
             Ok(table_batch(&[1], &["a"])),
-            Err(PlenoraError::Contract("lettura fallita a meta' stream".into())),
+            Err(PlenoraError::InvalidPlan("lettura fallita a meta' stream".into())),
         ]
         .into_iter(),
     );
@@ -1028,7 +1028,7 @@ fn canonical_output_schema_rejects_divergent_preexisting_key() {
     contract.schema = Arc::new(Schema::new(fields));
     assert!(matches!(
         canonical_output_schema(&contract),
-        Err(PlenoraError::Contract(_))
+        Err(PlenoraError::InvalidPlan(_))
     ));
 }
 
@@ -1039,7 +1039,7 @@ fn canonical_output_schema_rejects_geometry_missing_from_schema() {
     contract.schema = table_schema();
     assert!(matches!(
         canonical_output_schema(&contract),
-        Err(PlenoraError::Contract(_))
+        Err(PlenoraError::InvalidPlan(_))
     ));
 }
 
@@ -1977,7 +1977,7 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     let upstream: BatchStream = Box::new(
         vec![
             Ok(GovernedBatch::new(table_batch(&[1], &["a"]), None, None)),
-            Err(PlenoraError::Step {
+            Err(PlenoraError::Execution {
                 node: "n1".to_owned(),
                 operation: "table.filter".to_owned(),
                 execution_id: "exec-test".to_owned(),
@@ -1994,7 +1994,7 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     // iteratore infinito di errori).
     assert!(matches!(first.next(), Some(Ok(_))));
     match first.next() {
-        Some(Err(PlenoraError::Step { node, .. })) => assert_eq!(node, "n1"),
+        Some(Err(PlenoraError::Execution { node, .. })) => assert_eq!(node, "n1"),
         other => panic!("atteso l'errore Step originale: {other:?}"),
     }
     assert!(first.next().is_none(), "errore consegnato una sola volta");
@@ -2005,7 +2005,7 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     // chiusura.
     assert!(matches!(second.next(), Some(Ok(_))));
     match second.next() {
-        Some(Err(PlenoraError::Step {
+        Some(Err(PlenoraError::Execution {
             node,
             operation,
             execution_id,
@@ -2106,7 +2106,7 @@ fn blocking_concat_error_is_attributed_to_the_node() {
     )
     .expect_err("concat con schema incoerente");
     match error {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             node,
             operation,
             reason,
@@ -2184,7 +2184,7 @@ fn execute_rejects_a_graph_incompatible_with_the_environment() {
     graph.set_engine_version_for_test("0.0.0-altra");
     let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
     match execute(&graph, inputs, RuntimeContext::default()) {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
         }
         Err(other) => panic!("atteso Contract GRAPH_MISMATCH, ottenuto {other}"),
@@ -2253,7 +2253,7 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
     .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito in errore");
     match error {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             node,
             operation,
             reason,
@@ -2286,7 +2286,7 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
     let error = output.collect_batches().expect_err("panic convertito in errore");
     match error {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             node,
             operation,
             reason,
@@ -2327,7 +2327,7 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
     let output = run(&plan, inputs, &contracts).expect("execute");
     let error = output.collect_batches().expect_err("panic convertito in errore");
     match error {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             node,
             operation,
             reason,
@@ -2719,7 +2719,7 @@ fn diagnostics_off_leaves_step_error_unchanged() {
     .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito");
     match error {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             reason,
             execution_id,
             ..
@@ -2754,7 +2754,7 @@ fn diagnostics_on_enriches_step_error_with_batch_index() {
         .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito");
     match error {
-        PlenoraError::Step { reason, .. } => {
+        PlenoraError::Execution { reason, .. } => {
             assert!(reason.contains("panic di test iniettato"), "{reason}");
             assert!(
                 reason.contains("[batch_seq=0]"),

@@ -247,9 +247,9 @@ pub fn concat_compatible(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::Contract("overflow union_distinct".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow union_distinct".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "union_distinct supera max_rows".into(),
         ));
     }
@@ -321,9 +321,9 @@ pub fn union_distinct(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::Contract("overflow union_distinct".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow union_distinct".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "union_distinct supera max_rows".into(),
         ));
     }

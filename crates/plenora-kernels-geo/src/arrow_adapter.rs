@@ -156,7 +156,7 @@ fn geometry_column_not_binary(name: &str, actual: impl std::fmt::Display) -> Ple
 }
 
 fn cell_too_large(bytes: u64) -> PlenoraError {
-    PlenoraError::Contract(format!(
+    PlenoraError::InvalidPlan(format!(
         "cella WKB da {bytes} byte oltre il limite {MAX_CELL_BYTES}"
     ))
 }
@@ -192,11 +192,11 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
 /// # Errors
 ///
 /// `PlenoraError::Crs` se `crs` e' vuota (o solo spazi) o supera
-/// [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::Json` se la serializzazione
+/// [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::DataMapping` se la serializzazione
 /// del metadato fallisce.
 pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
     let metadata = geo_metadata_map(crs)?;
-    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::from)
 }
 
 /// Come [`geo_metadata_json`], con in piu' la chiave `dimensions` in forma
@@ -226,7 +226,7 @@ pub fn geo_metadata_json_with_dimensions(
 /// # Errors
 ///
 /// Come [`geo_metadata_json`]: `PlenoraError::Crs` se `crs` e' vuota (o solo
-/// spazi) o supera [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::Json` se la
+/// spazi) o supera [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::DataMapping` se la
 /// serializzazione del metadato fallisce.
 pub fn geo_metadata_json_with_encoding(
     crs: &str,
@@ -244,7 +244,7 @@ pub fn geo_metadata_json_with_encoding(
             serde_json::Value::String(encoding.as_str().to_owned()),
         );
     }
-    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::Json)
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map_err(PlenoraError::from)
 }
 
 /// Mappa `geo` validata con la sola chiave `crs` (corpo condiviso delle due
@@ -568,7 +568,7 @@ where
     raw.map(|value| {
         value
             .parse::<T>()
-            .map_err(|error| PlenoraError::Contract(format!("chiave `{key}`: {error}")))
+            .map_err(|error| PlenoraError::InvalidPlan(format!("chiave `{key}`: {error}")))
     })
     .transpose()
 }
@@ -586,7 +586,7 @@ fn parse_unsigned_decimal(value: &str) -> Option<u32> {
 fn parse_canonical_u32(raw: Option<&String>, key: &str) -> Result<Option<u32>, PlenoraError> {
     raw.map(|value| {
         parse_unsigned_decimal(value).ok_or_else(|| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "chiave `{key}`: atteso un intero decimale senza segno (R5.4)"
             ))
         })
@@ -598,7 +598,7 @@ fn parse_canonical_u32(raw: Option<&String>, key: &str) -> Result<Option<u32>, P
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma fuori dall'enum
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma fuori dall'enum
 /// chiuso R3.5 (`wkb` | `ewkb`).
 pub fn canonical_geometry_encoding(field: &Field) -> Result<Option<GeometryEncoding>, PlenoraError> {
     parse_canonical_enum(
@@ -612,7 +612,7 @@ pub fn canonical_geometry_encoding(field: &Field) -> Result<Option<GeometryEncod
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non canonica.
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non canonica.
 pub fn canonical_geometry_dimensions(
     field: &Field,
 ) -> Result<Option<GeometryDimensions>, PlenoraError> {
@@ -632,7 +632,7 @@ pub fn canonical_geometry_dimensions(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la dichiarazione non e' canonica, se `types`
+/// `PlenoraError::InvalidPlan` se la dichiarazione non e' canonica, se `types`
 /// compare senza `types_declaration` o se la coppia viola R3.4.1.
 pub fn canonical_geometry_types(
     field: &Field,
@@ -644,7 +644,7 @@ pub fn canonical_geometry_types(
     let types = field.metadata().get(PLENORA_GEOMETRY_TYPES_KEY);
     match (declaration, types) {
         (None, None) => Ok(None),
-        (None, Some(_)) => Err(PlenoraError::Contract(format!(
+        (None, Some(_)) => Err(PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_GEOMETRY_TYPES_KEY}` senza \
              `{PLENORA_GEOMETRY_TYPES_DECLARATION_KEY}` (R3.4.1)"
         ))),
@@ -654,7 +654,7 @@ pub fn canonical_geometry_types(
             GeometryTypesProperty::from_canonical_list(declaration, list)
                 .map(Some)
                 .map_err(|error| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "chiavi `{PLENORA_GEOMETRY_TYPES_DECLARATION_KEY}`/`{PLENORA_GEOMETRY_TYPES_KEY}`: {error}"
                     ))
                 })
@@ -666,7 +666,7 @@ pub fn canonical_geometry_types(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non e' un intero
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non e' un intero
 /// decimale senza segno rappresentabile in `u32`.
 pub fn canonical_geometry_srid(field: &Field) -> Result<Option<u32>, PlenoraError> {
     parse_canonical_u32(
@@ -681,14 +681,14 @@ pub fn canonical_geometry_srid(field: &Field) -> Result<Option<u32>, PlenoraErro
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma l'identificatore non
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma l'identificatore non
 /// e' valido.
 pub fn canonical_geometry_crs_id(field: &Field) -> Result<Option<String>, PlenoraError> {
     let Some(value) = field.metadata().get(PLENORA_GEOMETRY_CRS_ID_KEY) else {
         return Ok(None);
     };
     if value.is_empty() || value.len() > MAX_CRS_ID_BYTES || value.chars().any(char::is_control) {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_GEOMETRY_CRS_ID_KEY}`: identificatore di autorita' non valido \
              (non vuoto, entro {MAX_CRS_ID_BYTES} byte, senza caratteri di controllo)"
         )));
@@ -700,7 +700,7 @@ pub fn canonical_geometry_crs_id(field: &Field) -> Result<Option<String>, Plenor
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non canonica.
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non canonica.
 pub fn canonical_geometry_crs_resolution(
     field: &Field,
 ) -> Result<Option<CrsResolution>, PlenoraError> {
@@ -720,7 +720,7 @@ pub fn canonical_geometry_crs_resolution(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se una sola delle due chiavi e' presente, se il
+/// `PlenoraError::InvalidPlan` se una sola delle due chiavi e' presente, se il
 /// formato non e' canonico, se la definizione e' vuota/oltre il limite o se
 /// dichiara `projjson` senza essere un oggetto JSON.
 pub fn canonical_geometry_crs_definition(
@@ -733,7 +733,7 @@ pub fn canonical_geometry_crs_definition(
     )?;
     match (definition, format) {
         (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => Err(PlenoraError::Contract(format!(
+        (Some(_), None) | (None, Some(_)) => Err(PlenoraError::InvalidPlan(format!(
             "le chiavi `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` e \
              `{PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY}` devono essere presenti insieme (R2.2)"
         ))),
@@ -742,7 +742,7 @@ pub fn canonical_geometry_crs_definition(
                 || definition.len() > MAX_CRS_DEFINITION_BYTES
                 || definition.contains('\0')
             {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: definizione non valida \
                      (non vuota, entro {MAX_CRS_DEFINITION_BYTES} byte, senza NUL)"
                 )));
@@ -753,7 +753,7 @@ pub fn canonical_geometry_crs_definition(
                     Ok(serde_json::Value::Object(_))
                 )
             {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: dichiara `projjson` \
                      ma non e' un oggetto JSON (R5.1)"
                 )));
@@ -767,7 +767,7 @@ pub fn canonical_geometry_crs_definition(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non canonica.
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non canonica.
 pub fn canonical_geometry_axis_order(field: &Field) -> Result<Option<AxisOrder>, PlenoraError> {
     parse_canonical_enum(
         field.metadata().get(PLENORA_GEOMETRY_AXIS_ORDER_KEY),
@@ -779,7 +779,7 @@ pub fn canonical_geometry_axis_order(field: &Field) -> Result<Option<AxisOrder>,
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non canonica.
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non canonica.
 pub fn canonical_geometry_spatial_semantics(
     field: &Field,
 ) -> Result<Option<SpatialSemantics>, PlenoraError> {
@@ -793,7 +793,7 @@ pub fn canonical_geometry_spatial_semantics(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non canonica.
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non canonica.
 pub fn canonical_geometry_precision(
     field: &Field,
 ) -> Result<Option<GeometryPrecision>, PlenoraError> {
@@ -808,7 +808,7 @@ pub fn canonical_geometry_precision(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave e' presente ma non e' un intero
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non e' un intero
 /// decimale senza segno rappresentabile in `u32`.
 pub fn canonical_field_id(field: &Field) -> Result<Option<FieldId>, PlenoraError> {
     Ok(parse_canonical_u32(field.metadata().get(PLENORA_FIELD_ID_KEY), PLENORA_FIELD_ID_KEY)?
@@ -832,14 +832,14 @@ pub fn canonical_field_id(field: &Field) -> Result<Option<FieldId>, PlenoraError
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la chiave non e' un intero decimale senza
+/// `PlenoraError::InvalidPlan` se la chiave non e' un intero decimale senza
 /// segno o se e' assente in presenza di chiavi canoniche;
 /// `PlenoraError::Unsupported` se la versione dichiarata e' successiva a
 /// [`PLENORA_CONTRACT_VERSION`].
 pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraError> {
     let Some(raw) = schema.metadata().get(PLENORA_CONTRACT_VERSION_KEY) else {
         if schema_has_canonical_keys(schema) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "chiavi canoniche `{PLENORA_NAMESPACE_PREFIX}*` senza \
                  `{PLENORA_CONTRACT_VERSION_KEY}` nei metadati dello schema (R2.5)"
             )));
@@ -847,7 +847,7 @@ pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraErro
         return Ok(None);
     };
     let version = parse_unsigned_decimal(raw).ok_or_else(|| {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_CONTRACT_VERSION_KEY}`: atteso un intero decimale senza segno (R5.4)"
         ))
     })?;
@@ -942,7 +942,7 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
         None => None,
         Some(serde_json::Value::String(text)) => {
             if text.trim().is_empty() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "metadato legacy `geo`: chiave `crs` vuota".to_owned(),
                 ));
             }
@@ -950,7 +950,7 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
         }
         Some(object @ serde_json::Value::Object(_)) => Some(LegacyCrs::Definition(object.clone())),
         Some(_) => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "metadato legacy `geo`: chiave `crs` ne' testuale ne' oggetto PROJJSON".to_owned(),
             ));
         }
@@ -958,10 +958,10 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
     let dimensions = match value.get("dimensions") {
         None => None,
         Some(serde_json::Value::String(text)) => Some(text.parse().map_err(|error| {
-            PlenoraError::Contract(format!("metadato legacy `geo`: {error}"))
+            PlenoraError::InvalidPlan(format!("metadato legacy `geo`: {error}"))
         })?),
         Some(_) => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "metadato legacy `geo`: chiave `dimensions` non testuale".to_owned(),
             ));
         }
@@ -977,7 +977,7 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
 /// il componente fallisce, non sceglie). Il messaggio nomina la nozione, mai
 /// i valori («errori senza dati»).
 fn divergent_geometry_keys(notion: &str) -> PlenoraError {
-    PlenoraError::Contract(format!(
+    PlenoraError::InvalidPlan(format!(
         "nozione `{notion}` divergente fra chiavi canoniche e metadato legacy `geo` \
          (R2.6: il componente fallisce, non sceglie)"
     ))
@@ -1019,7 +1019,7 @@ fn divergent_geometry_keys(notion: &str) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per valori canonici non validi, coerenze
+/// `PlenoraError::InvalidPlan` per valori canonici non validi, coerenze
 /// intra-canoniche violate o divergenza canonica-vs-legacy (R2.6);
 /// `PlenoraError::Unsupported` per un encoding legacy non rappresentabile
 /// (R3.5, come [`geometry_encoding_from_metadata_strict`]).
@@ -1048,7 +1048,7 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
     // completamento: riguardano la sola rappresentazione canonica, cosi' un
     // input legacy senza `axis_order` resta leggibile.
     if (keys.crs_id.is_some() || keys.crs_definition.is_some()) && keys.axis_order.is_none() {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_GEOMETRY_AXIS_ORDER_KEY}` obbligatoria quando \
              `{PLENORA_GEOMETRY_CRS_ID_KEY}` o `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` \
              e' presente (tabella R2.2; valore `unknown` ammesso)"
@@ -1060,7 +1060,7 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
             || keys.srid.is_some()
             || keys.axis_order.is_some())
     {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "`{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` = `missing` non ammette metadati CRS \
              dichiarati (R2.2)"
         )));
@@ -1163,7 +1163,7 @@ pub fn batch_geometry_cells<'a>(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se il payload supera [`MAX_CELL_BYTES`]; in piu'
+/// `PlenoraError::InvalidPlan` se il payload supera [`MAX_CELL_BYTES`]; in piu'
 /// gli errori di [`geometry_from_wkb`] (contratto WKB strutturale e
 /// validazione OGC).
 pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
@@ -1178,12 +1178,12 @@ pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraErro
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la serializzazione WKB della geometria
+/// `PlenoraError::InvalidPlan` se la serializzazione WKB della geometria
 /// fallisce o se il payload prodotto supera [`MAX_CELL_BYTES`].
 pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError> {
     let payload = geometry
         .to_wkb(CoordDimensions::xy())
-        .map_err(|error| PlenoraError::Contract(format!("geometria prodotta non valida: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("geometria prodotta non valida: {error}")))?;
     if payload.len() as u64 > MAX_CELL_BYTES {
         return Err(cell_too_large(payload.len() as u64));
     }
@@ -1198,7 +1198,7 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se una cella non-null supera [`MAX_CELL_BYTES`];
+/// `PlenoraError::InvalidPlan` se una cella non-null supera [`MAX_CELL_BYTES`];
 /// in piu' l'errore restituito da `f` sulla prima cella IN ORDINE DI RIGA
 /// che fallisce (deterministico, ADR-0001).
 pub fn map_nullable<T: Send>(
@@ -1585,11 +1585,11 @@ mod tests {
         let cells = BinaryArray::from_iter([Some(oversized.as_slice())]);
         assert!(matches!(
             map_nullable(&cells, |payload| decode_geometry_cell(payload).map(Some)),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         assert!(matches!(
             decode_geometry_cell(&oversized),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
     }
 
@@ -1604,12 +1604,12 @@ mod tests {
             let result = map_nullable(&cells, |payload| {
                 let row = payload[0];
                 if row == 3 || row == 7 || row == 41 {
-                    Err(PlenoraError::Contract(format!("fallimento riga {row}")))
+                    Err(PlenoraError::InvalidPlan(format!("fallimento riga {row}")))
                 } else {
                     Ok(Some(()))
                 }
             });
-            let Err(PlenoraError::Contract(message)) = &result else {
+            let Err(PlenoraError::InvalidPlan(message)) = &result else {
                 panic!("tentativo {attempt}: atteso errore, ottenuto {result:?}");
             };
             assert_eq!(message, "fallimento riga 3", "tentativo {attempt}");
@@ -1927,7 +1927,7 @@ mod tests {
         let without_axis = field_with_pairs(&[(PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326")]);
         assert!(matches!(
             read_geometry_contract_keys(&without_axis),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         let with_unknown_axis = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
@@ -1953,7 +1953,7 @@ mod tests {
         let exact_without = field_with_pairs(&[(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "exact")]);
         assert!(matches!(
             read_geometry_contract_keys(&exact_without),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         // `unresolved` con elenco -> errore.
         let unresolved_with = field_with_pairs(&[
@@ -2003,7 +2003,7 @@ mod tests {
         // seguono, senza di essa non sono interpretabili).
         assert!(matches!(
             read_contract_version(&Schema::new(vec![canonical_field.clone()])),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         // Versione assente + nessuna chiave canonica -> Ok(None): input
         // legacy o non plenora, nessun protocollo da verificare.
@@ -2041,7 +2041,7 @@ mod tests {
         );
         assert!(matches!(
             read_contract_version(&broken),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         // Helper di emissione: schema con la versione corrente.
         let emitted =
@@ -2062,7 +2062,7 @@ mod tests {
         ]);
         assert!(matches!(
             read_geometry_contract_keys(&divergent_dimensions),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         let divergent_encoding = field_with_pairs(&[
             (PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),

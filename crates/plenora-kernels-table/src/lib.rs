@@ -157,12 +157,12 @@ pub fn replace_or_append(
 /// - `Contract`: nome vuoto (o solo spazi) oppure oltre 1024 byte.
 pub fn validate_output_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "il nome della colonna di output e' vuoto".into(),
         ));
     }
     if name.len() > 1_024 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "il nome della colonna supera 1024 byte".into(),
         ));
     }
@@ -199,7 +199,7 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
     }
     if let Some(values) = array.as_any().downcast_ref::<Date32Array>() {
         let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-            .ok_or_else(|| PlenoraError::Contract("epoch date32 non valida".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("epoch date32 non valida".into()))?;
         let date = epoch
             .checked_add_signed(chrono::TimeDelta::days(i64::from(values.value(row))))
             .ok_or_else(|| PlenoraError::Schema("date32 fuori intervallo".into()))?;
@@ -493,7 +493,7 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows
         .iter()
         .map(|row| {
-            u32::try_from(*row).map_err(|_| PlenoraError::Contract("indice riga oltre u32".into()))
+            u32::try_from(*row).map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?
         .into();

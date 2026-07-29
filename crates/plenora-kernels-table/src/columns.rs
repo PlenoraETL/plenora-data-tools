@@ -71,7 +71,7 @@ pub struct SelectColumns {
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "select_columns richiede almeno una colonna".into(),
         ));
     }
@@ -81,7 +81,7 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
     let mut columns = Vec::with_capacity(config.columns.len());
     for name in &config.columns {
         if !seen.insert(name.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "colonna ripetuta nella proiezione: {name}"
             )));
         }
@@ -203,7 +203,7 @@ fn parse_align_decimal(text: &str) -> Option<i128> {
 /// validazione, mai a meta' dei dati).
 fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Result<ArrayRef> {
     let invalid = || {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "align_schema: default {value} non convertibile in {align_type:?}"
         ))
     };
@@ -255,7 +255,7 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
             let date = chrono::NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
                 .map_err(|_| invalid())?;
             let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                .ok_or_else(|| PlenoraError::Contract("epoch date32 non valida".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("epoch date32 non valida".into()))?;
             let days = i32::try_from((date - epoch).num_days()).map_err(|_| invalid())?;
             Arc::new(Date32Array::from(vec![days; rows]))
         }
@@ -321,7 +321,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 ///   o sulla precisione/scala `Decimal128`.
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "align_schema richiede almeno una colonna".into(),
         ));
     }
@@ -332,7 +332,7 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
     for declared in &config.columns {
         validate_output_name(&declared.name)?;
         if !seen.insert(declared.name.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "align_schema: colonna ripetuta: {}",
                 declared.name
             )));
@@ -341,7 +341,7 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
         if let Ok(index) = schema.index_of(&declared.name) {
             let field = schema.field(index);
             if field.data_type() != &data_type {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "align_schema: colonna {} di tipo {:?}, atteso {:?} (nessun cast implicito)",
                     declared.name,
                     field.data_type(),
@@ -452,7 +452,7 @@ pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<R
     let mut seen = HashSet::new();
     for name in &config.columns {
         if !seen.insert(name.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "colonna ripetuta nel riordino: {name}"
             )));
         }
@@ -524,7 +524,7 @@ pub fn concat_columns(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "concat_columns richiede almeno una colonna".into(),
         ));
     }
@@ -557,7 +557,7 @@ pub fn concat_columns(
         if config.skip_null && included == 0 {
             output.push(None);
         } else if joined.len() > limits.max_string_bytes {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "concat_columns supera max_string_bytes".into(),
             ));
         } else {
@@ -612,15 +612,15 @@ pub fn split_column(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.delimiter.is_empty() {
-        return Err(PlenoraError::Contract("delimiter vuoto".into()));
+        return Err(PlenoraError::InvalidPlan("delimiter vuoto".into()));
     }
     if config.new_columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "new_columns e' obbligatorio nel percorso streaming".into(),
         ));
     }
     if config.new_columns.len() > limits.max_split_columns {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "split_column supera max_split_columns".into(),
         ));
     }

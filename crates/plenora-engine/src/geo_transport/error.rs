@@ -147,17 +147,18 @@ pub enum ArrowTransportError {
 /// Conversione dagli errori del kernel WKB (`geometry_from_wkb`,
 /// `transform_wkb`, `validate_wkb_contract`): nel sorgente restituivano
 /// `GeoEngineError` (variante `Geometry`), ora restituiscono `PlenoraError`.
-/// Le varianti `Contract`/`Unsupported`/`Schema` portano nel payload la
-/// stringa ESATTA dell'errore originale, quindi vanno in `Geometry`
-/// preservando il messaggio. `Io` conserva l'errore I/O incapsulato.
-/// `Arrow`, `Json`, `Crs` e `Step` non hanno una variante dedicata in
-/// `ArrowTransportError` (nel flusso del trasporto non si presentano mai:
-/// il kernel WKB emette solo `Contract`/`Unsupported`): sono mappate su
-/// `Arrow` mantenendo il testo completo dell'errore.
+/// Le varianti `InvalidPlan`/`Unsupported`/`Schema` di `PlenoraError`
+/// portano nel payload la stringa ESATTA dell'errore originale, quindi
+/// vanno in `Geometry` preservando il messaggio. `Io` conserva l'errore
+/// I/O incapsulato. `DataMapping`, `Crs` e `Execution` non hanno una
+/// variante dedicata in `ArrowTransportError` (nel flusso del trasporto
+/// non si presentano mai: il kernel WKB emette solo errori di
+/// contratto/unsupported): sono mappate su `Arrow` mantenendo il testo
+/// completo dell'errore.
 impl From<PlenoraError> for ArrowTransportError {
     fn from(error: PlenoraError) -> Self {
         match error {
-            PlenoraError::Contract(message)
+            PlenoraError::InvalidPlan(message)
             | PlenoraError::Unsupported(message)
             | PlenoraError::Schema(message) => Self::Geometry(message),
             PlenoraError::Io(error) => Self::Io(error),

@@ -135,28 +135,28 @@ pub fn validate_config(config: &FuzzyJoin) -> Result<()> {
         || config.threshold <= 0.0
         || config.threshold > 1.0
     {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "threshold deve essere in (0, 1]".into(),
         ));
     }
     match config.blocking {
         FuzzyBlocking::Prefix => {
             if config.prefix_len() == 0 {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "blocking_param deve essere >= 1".into(),
                 ));
             }
         }
         FuzzyBlocking::Soundex | FuzzyBlocking::None => {
             if config.blocking_param.is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "blocking_param ammesso solo con blocking=prefix".into(),
                 ));
             }
         }
     }
     if config.max_candidates() == 0 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "max_candidates deve essere >= 1".into(),
         ));
     }
@@ -494,7 +494,7 @@ pub fn fuzzy_join(
     let max_candidates = config.max_candidates();
     for rows in blocks.values() {
         if rows.len() > max_candidates {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "fuzzy_join: blocco con {} candidati oltre max_candidates {max_candidates}",
                 rows.len()
             )));
@@ -537,7 +537,7 @@ pub fn fuzzy_join(
                 };
                 for &right_row in candidates {
                     let null_block_error = || {
-                        PlenoraError::Contract(
+                        PlenoraError::InvalidPlan(
                             "internal error: righe destre nei blocchi non sono null".into(),
                         )
                     };
@@ -570,7 +570,7 @@ pub fn fuzzy_join(
                             jaccard_sets(left_tokens, right_tokens)
                         }
                         _ => {
-                            return Err(PlenoraError::Contract(
+                            return Err(PlenoraError::InvalidPlan(
                                 "internal error: forma decodificata incoerente con la metrica"
                                     .into(),
                             ));
@@ -591,7 +591,7 @@ pub fn fuzzy_join(
             scores.push(None);
         }
         if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::Contract("fuzzy_join supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("fuzzy_join supera max_rows".into()));
         }
     }
     let mut output = combine_horizontal(
@@ -625,7 +625,7 @@ pub fn fuzzy_join(
         config.how == FuzzyHow::Left,
     ));
     if fields.len() > limits.max_columns {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "fuzzy_join supera max_columns".into(),
         ));
     }

@@ -43,7 +43,7 @@ fn validate_limits(limits: &Limits) -> Result<()> {
         || limits.spill_partitions < 2
         || limits.spill_partitions > 4_096
     {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "limiti nulli o spill_partitions fuori 2..=4096".into(),
         ));
     }
@@ -86,19 +86,19 @@ impl Plan {
     /// non rispettano il contratto fail-closed.
     pub fn validate(self) -> Result<ValidatedPlan> {
         if self.schema_version != SCHEMA_VERSION {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "schema_version {} non supportata; attesa {SCHEMA_VERSION}",
                 self.schema_version
             )));
         }
         validate_limits(&self.limits)?;
         if self.steps.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "la catena non contiene passi".into(),
             ));
         }
         if self.steps.len() > HARD_MAX_STEPS {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "troppi passi: {} > {HARD_MAX_STEPS}",
                 self.steps.len()
             )));
@@ -113,25 +113,25 @@ impl Plan {
             })
             .count();
         if binary_steps > 0 && (binary_steps != 1 || self.steps.len() != 1) {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "il protocollo a due input accetta esattamente un passo binario".into(),
             ));
         }
 
         for (index, step) in self.steps.iter().enumerate() {
             if !step.config.is_object() {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "config del passo {index} deve essere un oggetto"
                 )));
             }
             let config_size = serde_json::to_vec(&step.config)?.len();
             if config_size > HARD_MAX_CONFIG_BYTES {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "config del passo {index} troppo grande: {config_size} byte"
                 )));
             }
             let operation = resolve_table_operation(&step.operation).ok_or_else(|| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "operazione sconosciuta al passo {index}: {}",
                     step.operation
                 ))
@@ -143,7 +143,7 @@ impl Plan {
                 )));
             }
             super::executor::validate_step_contract(step, &self.limits).map_err(|error| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "config non valida al passo {index} ({}): {error}",
                     step.operation
                 ))

@@ -105,7 +105,7 @@ impl TempStore {
     /// creazione/heartbeat.
     ///
     /// # Errors
-    /// Restituisce `PlenoraError::Contract` se `execution_id` e' vuoto, troppo
+    /// Restituisce `PlenoraError::InvalidPlan` se `execution_id` e' vuoto, troppo
     /// lungo o contiene caratteri fuori da `[A-Za-z0-9._-]` (finisce nel nome
     /// della directory: validazione restrittiva fail-closed);
     /// `PlenoraError::Io` per i fallimenti di creazione di directory e lock.
@@ -294,7 +294,7 @@ fn validate_execution_id(execution_id: &str) -> Result<(), PlenoraError> {
     if valid {
         return Ok(());
     }
-    Err(PlenoraError::Contract(format!(
+    Err(PlenoraError::InvalidPlan(format!(
         "execution_id non valido per la directory temporanea (solo [A-Za-z0-9._-], \
          max {MAX_EXECUTION_ID_LEN} caratteri): {execution_id:?}"
     )))
@@ -392,7 +392,7 @@ mod tests {
             assert!(
                 matches!(
                     TempStore::with_root(bad, root.path()),
-                    Err(PlenoraError::Contract(_))
+                    Err(PlenoraError::InvalidPlan(_))
                 ),
                 "id atteso come rifiutato: {bad:?}"
             );

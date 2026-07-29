@@ -288,7 +288,7 @@ impl ValidatedPlanV4 {
 }
 
 const fn contract_error(message: String) -> PlenoraError {
-    PlenoraError::Contract(message)
+    PlenoraError::InvalidPlan(message)
 }
 
 impl PlanV4 {
@@ -297,8 +297,8 @@ impl PlanV4 {
     ///
     /// # Errors
     ///
-    /// Restituisce `PlenoraError::Contract` per ogni violazione di limiti o
-    /// di struttura, `PlenoraError::Json` per JSON malformato,
+    /// Restituisce `PlenoraError::InvalidPlan` per ogni violazione di limiti o
+    /// di struttura, `PlenoraError::DataMapping` per JSON malformato,
     /// `PlenoraError::Unsupported` per operazioni catalogate ma non
     /// disponibili (`Maturity::Planned`).
     pub fn parse(json_text: &str, plan_limits: &PlanLimits) -> Result<ValidatedPlanV4> {
@@ -335,7 +335,7 @@ impl PlanV4 {
     ///
     /// # Errors
     ///
-    /// Restituisce `PlenoraError::Contract` se il piano legacy è vuoto, ha
+    /// Restituisce `PlenoraError::InvalidPlan` se il piano legacy è vuoto, ha
     /// operazioni sconosciute alla famiglia tabellare o viola la regola
     /// "catena binaria = un solo step"; più le violazioni dei `PlanLimits`
     /// di default.

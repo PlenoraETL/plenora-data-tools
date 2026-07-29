@@ -141,10 +141,10 @@ fn main() {
     measure("op.centroid_polys", 20_000, || {
         map_nullable(&poly_cells, |payload| {
             let geometry = geometry_from_wkb(payload)
-                .map_err(|error| plenora_core::PlenoraError::Contract(error.to_string()))?;
+                .map_err(|error| plenora_core::PlenoraError::InvalidPlan(error.to_string()))?;
             let centroid = geometry
                 .centroid()
-                .ok_or_else(|| plenora_core::PlenoraError::Contract("centroide vuoto".into()))?;
+                .ok_or_else(|| plenora_core::PlenoraError::InvalidPlan("centroide vuoto".into()))?;
             encode_geometry(&Geometry::Point(centroid)).map(Some)
         })
         .expect("centroid column")

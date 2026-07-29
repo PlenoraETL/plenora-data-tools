@@ -417,14 +417,14 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     let mut provided: HashMap<&str, &DataContract> = HashMap::with_capacity(input_contracts.len());
     for (name, contract) in input_contracts {
         if provided.insert(name.as_str(), contract).is_some() {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "contratto di input duplicato per `{name}`"
             )));
         }
         contract.validate()?;
         if let Some(sorted) = &contract.properties.sorted_by {
             if sorted.confidence.value().is_some() {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "l'input `{name}` dichiara sorted_by con chiavi FieldId: il namespace \
                      dei FieldId e' assegnato dal planner (D16) e le chiavi non sono \
                      riferibili a colonne — v1 fail-closed"
@@ -434,7 +434,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     }
     for declared in &plan_ref.inputs {
         if !provided.contains_key(declared.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "manca il contratto per l'input `{declared}`"
             )));
         }
@@ -444,7 +444,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         .filter(|name| !plan_ref.inputs.iter().any(|i| i.as_str() == **name))
         .min()
     {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "contratto fornito per `{extra}`, non dichiarato tra gli input del piano"
         )));
     }
@@ -580,7 +580,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` con prefisso `GRAPH_MISMATCH` al primo mismatch.
+/// `PlenoraError::InvalidPlan` con prefisso `GRAPH_MISMATCH` al primo mismatch.
 pub fn check_compatibility(
     graph: &ValidatedGraph,
     current_catalog: &[OperationDescriptor],
@@ -588,7 +588,7 @@ pub fn check_compatibility(
     arrow_version: &str,
     capabilities: &CapabilitySet,
 ) -> Result<()> {
-    let mismatch = |reason: String| PlenoraError::Contract(format!("GRAPH_MISMATCH: {reason}"));
+    let mismatch = |reason: String| PlenoraError::InvalidPlan(format!("GRAPH_MISMATCH: {reason}"));
 
     if graph.engine_version.0 != engine_version {
         return Err(mismatch(format!(
@@ -635,13 +635,13 @@ pub fn check_compatibility(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` con prefisso `GRAPH_MISMATCH` al primo mismatch
+/// `PlenoraError::InvalidPlan` con prefisso `GRAPH_MISMATCH` al primo mismatch
 /// (nome mancante/extra/duplicato o fingerprint diverso).
 pub fn check_input_compatibility(
     graph: &ValidatedGraph,
     input_contracts: &[(String, DataContract)],
 ) -> Result<()> {
-    let mismatch = |reason: String| PlenoraError::Contract(format!("GRAPH_MISMATCH: {reason}"));
+    let mismatch = |reason: String| PlenoraError::InvalidPlan(format!("GRAPH_MISMATCH: {reason}"));
 
     let mut provided: HashMap<&str, &DataContract> = HashMap::with_capacity(input_contracts.len());
     for (name, contract) in input_contracts {
@@ -681,7 +681,7 @@ pub fn check_input_compatibility(
 fn at_node(node_id: &str, error: PlenoraError) -> PlenoraError {
     let prefix = |message: &String| format!("nodo `{node_id}`: {message}");
     match error {
-        PlenoraError::Contract(message) => PlenoraError::Contract(prefix(&message)),
+        PlenoraError::InvalidPlan(message) => PlenoraError::InvalidPlan(prefix(&message)),
         PlenoraError::Unsupported(message) => PlenoraError::Unsupported(prefix(&message)),
         PlenoraError::Schema(message) => PlenoraError::Schema(prefix(&message)),
         PlenoraError::Crs(message) => PlenoraError::Crs(prefix(&message)),

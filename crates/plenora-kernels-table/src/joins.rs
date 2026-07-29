@@ -189,7 +189,7 @@ fn take_optional(array: &dyn plenora_core::arrow::array::Array, rows: &[Option<u
         .iter()
         .map(|row| {
             row.map(|row| {
-                u32::try_from(row).map_err(|_| PlenoraError::Contract("indice oltre u32".into()))
+                u32::try_from(row).map_err(|_| PlenoraError::InvalidPlan("indice oltre u32".into()))
             })
             .transpose()
         })
@@ -312,7 +312,7 @@ fn join_impl(
     fast: bool,
 ) -> Result<RecordBatch> {
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-        return Err(PlenoraError::Contract("chiavi join non valide".into()));
+        return Err(PlenoraError::InvalidPlan("chiavi join non valide".into()));
     }
     let left_keys = config
         .left_keys
@@ -394,7 +394,7 @@ fn join_rows_generic(
             right_rows.push(None);
         }
         if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::Contract("join supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
         }
     }
     if matches!(config.how, JoinHow::Right | JoinHow::Outer) {
@@ -406,7 +406,7 @@ fn join_rows_generic(
         }
     }
     if left_rows.len() > limits.max_rows {
-        return Err(PlenoraError::Contract("join supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
     }
     Ok((left_rows, right_rows))
 }
@@ -502,7 +502,7 @@ fn join_rows_fast_inner<'a>(
         }
     }
     if left_rows.len() > limits.max_rows {
-        return Err(PlenoraError::Contract("join supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
     }
     Ok((left_rows, right_rows))
 }
@@ -578,7 +578,7 @@ fn probe_range(
             right_rows.push(None);
         }
         if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::Contract("join supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
         }
     }
     Ok(())
@@ -698,7 +698,7 @@ pub(crate) fn combine_horizontal(
         columns.push(taken_right[position].clone());
     }
     if fields.len() > limits.max_columns {
-        return Err(PlenoraError::Contract("join supera max_columns".into()));
+        return Err(PlenoraError::InvalidPlan("join supera max_columns".into()));
     }
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(fields)),
@@ -750,9 +750,9 @@ pub fn concat(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::Contract("overflow concat".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow concat".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::Contract("concat supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("concat supera max_rows".into()));
     }
     let columns = left
         .columns()
@@ -883,7 +883,7 @@ pub fn concat_by_name(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if inputs.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "concat_by_name richiede almeno un input".into(),
         ));
     }
@@ -892,10 +892,10 @@ pub fn concat_by_name(
     for input in inputs {
         rows = rows
             .checked_add(input.num_rows())
-            .ok_or_else(|| PlenoraError::Contract("overflow concat_by_name".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("overflow concat_by_name".into()))?;
     }
     if rows > limits.max_rows {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "concat_by_name supera max_rows".into(),
         ));
     }
@@ -948,9 +948,9 @@ pub fn cross_join(
     let rows = left
         .num_rows()
         .checked_mul(right.num_rows())
-        .ok_or_else(|| PlenoraError::Contract("overflow cross_join".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow cross_join".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::Contract("cross_join supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("cross_join supera max_rows".into()));
     }
     let left_rows = (0..left.num_rows())
         .flat_map(|left| std::iter::repeat_n(Some(left), right.num_rows()))
@@ -993,7 +993,7 @@ fn membership_impl(
     fast: bool,
 ) -> Result<RecordBatch> {
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "chiavi membership join non valide".into(),
         ));
     }
@@ -1385,7 +1385,7 @@ pub fn asof_join(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.left_by.len() != config.right_by.len() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "asof_join: cardinalita' by diversa".into(),
         ));
     }
@@ -1393,7 +1393,7 @@ pub fn asof_join(
         .tolerance
         .is_some_and(|value| !value.is_finite() || value < 0.0)
     {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "asof_join: tolerance non valida".into(),
         ));
     }

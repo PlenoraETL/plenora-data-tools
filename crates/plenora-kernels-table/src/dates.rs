@@ -73,10 +73,10 @@ pub(crate) fn parse_with_items(value: &str, items: &[Item<'_>]) -> Option<NaiveD
 ///   item strftime non riconosciuti.
 pub fn validate_format(format: &str, label: &str, max_bytes: usize) -> Result<()> {
     if format.is_empty() || format.len() > max_bytes {
-        return Err(PlenoraError::Contract(format!("{label} non valido")));
+        return Err(PlenoraError::InvalidPlan(format!("{label} non valido")));
     }
     if StrftimeItems::new(format).any(|item| matches!(item, Item::Error)) {
-        return Err(PlenoraError::Contract(format!("{label} non riconosciuto")));
+        return Err(PlenoraError::InvalidPlan(format!("{label} non riconosciuto")));
     }
     Ok(())
 }
@@ -85,7 +85,7 @@ fn invalid<T>(policy: &InvalidDatePolicy, operation: &str, row: usize) -> Result
     if matches!(policy, InvalidDatePolicy::Null) {
         Ok(None)
     } else {
-        Err(PlenoraError::Contract(format!(
+        Err(PlenoraError::InvalidPlan(format!(
             "{operation}: valore temporale non valido alla riga {row}"
         )))
     }
@@ -323,7 +323,7 @@ fn diff_value(
         .and_then(|nanoseconds| nanoseconds.to_f64())
         .map(|nanoseconds| nanoseconds / 1_000_000_000.0 / divisor)
         .ok_or_else(|| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "date_diff: intervallo fuori scala alla riga {row}"
             ))
         })
@@ -442,7 +442,7 @@ fn localize(
             AmbiguousPolicy::Earliest => Ok(Some(first.min(second))),
             AmbiguousPolicy::Latest => Ok(Some(first.max(second))),
             AmbiguousPolicy::Null => Ok(None),
-            AmbiguousPolicy::Error => Err(PlenoraError::Contract(format!(
+            AmbiguousPolicy::Error => Err(PlenoraError::InvalidPlan(format!(
                 "timezone_convert: ora ambigua alla riga {row}"
             ))),
         },
@@ -475,11 +475,11 @@ pub fn timezone_convert(
     let source_tz: Tz = config
         .source_timezone
         .parse()
-        .map_err(|_| PlenoraError::Contract("source_timezone non valida".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("source_timezone non valida".into()))?;
     let target_tz: Tz = config
         .target_timezone
         .parse()
-        .map_err(|_| PlenoraError::Contract("target_timezone non valida".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
     let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
         let input_items = compile_items(&config.input_format);
         let output_items = compile_items(&config.output_format);
@@ -639,11 +639,11 @@ mod tests {
         let source: Tz = config
             .source_timezone
             .parse()
-            .map_err(|_| PlenoraError::Contract("source_timezone non valida".into()))?;
+            .map_err(|_| PlenoraError::InvalidPlan("source_timezone non valida".into()))?;
         let target: Tz = config
             .target_timezone
             .parse()
-            .map_err(|_| PlenoraError::Contract("target_timezone non valida".into()))?;
+            .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
         let values = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {

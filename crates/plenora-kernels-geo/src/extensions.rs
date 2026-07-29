@@ -95,7 +95,7 @@ fn wkt_cell_to_wkb(value: &str, on_error: OnWktError) -> Result<Option<Vec<u8>>,
 }
 
 fn wkt_error(error: &ConstructionError) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.from_wkt: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.from_wkt: {error}"))
 }
 
 /// Adapter di colonna per `geo.from_wkt`: celle `Utf8` -> celle WKB.
@@ -106,7 +106,7 @@ fn wkt_error(error: &ConstructionError) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se una cella WKT non e' valida con politica
+/// `PlenoraError::InvalidPlan` se una cella WKT non e' valida con politica
 /// [`OnWktError::Fail`] (l'errore riporta l'indice di riga), o per gli
 /// errori di codifica WKB di `encode_geometry` (geometria prodotta non
 /// valida o cella oltre il limite di byte).
@@ -125,8 +125,8 @@ pub fn from_wkt_column(
             cell.map_or_else(
                 || Ok(None),
                 |value| wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
-                    PlenoraError::Contract(reason) => {
-                        PlenoraError::Contract(format!("riga {row}: {reason}"))
+                    PlenoraError::InvalidPlan(reason) => {
+                        PlenoraError::InvalidPlan(format!("riga {row}: {reason}"))
                     }
                     other => other,
                 }),
@@ -383,13 +383,13 @@ mod tests {
         // deve riportare l'indice di riga; l'ordine di short-circuit rayon
         // non e' rilevante per il contratto.
         assert!(
-            matches!(&failed, Err(PlenoraError::Contract(reason)) if reason.contains("riga ")),
+            matches!(&failed, Err(PlenoraError::InvalidPlan(reason)) if reason.contains("riga ")),
             "{failed:?}"
         );
         let dimensional = StringArray::from(vec![Some("POINT Z (1 2 3)")]);
         assert!(matches!(
             from_wkt_column(&dimensional, OnWktError::Fail),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
     }
 

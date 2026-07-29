@@ -126,7 +126,7 @@ impl PreparedCondition {
             NumericBound::parse(&self.expected).ok_or_else(|| message.to_owned())
         }) {
             Ok(bound) => Ok(*bound),
-            Err(stored) => Err(PlenoraError::Contract(stored.clone())),
+            Err(stored) => Err(PlenoraError::InvalidPlan(stored.clone())),
         }
     }
 
@@ -145,7 +145,7 @@ impl PreparedCondition {
             Ok((low, high))
         }) {
             Ok(bounds) => Ok(*bounds),
-            Err(stored) => Err(PlenoraError::Contract(stored.clone())),
+            Err(stored) => Err(PlenoraError::InvalidPlan(stored.clone())),
         }
     }
 
@@ -222,7 +222,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                     .partial_cmp(&bound_as_f64(bound))
             };
             let operator = OrderedOperator::from_operator(operator).ok_or_else(|| {
-                PlenoraError::Contract(
+                PlenoraError::InvalidPlan(
                     "internal error: operatore non ordinato nel ramo ordinato".into(),
                 )
             })?;
@@ -237,7 +237,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                 Operator::Startswith => actual.starts_with(expected),
                 Operator::Endswith => actual.ends_with(expected),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: operatore non testuale nel ramo testuale".into(),
                     ));
                 }
@@ -267,7 +267,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
             };
             Ok(within)
         }
-        Operator::Isnull | Operator::Notnull => Err(PlenoraError::Contract(
+        Operator::Isnull | Operator::Notnull => Err(PlenoraError::InvalidPlan(
             "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
         )),
     }
@@ -411,7 +411,7 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             let bound = NumericBound::parse(&json_text(value))?;
             let Some(operator) = OrderedOperator::from_operator(operator) else {
-                return Some(Err(PlenoraError::Contract(
+                return Some(Err(PlenoraError::InvalidPlan(
                     "internal error: operatore non ordinato nel ramo ordinato".into(),
                 )));
             };
@@ -476,7 +476,7 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
                     rows_where(values, |row| values.value(row).ends_with(&expected))
                 }
                 _ => {
-                    return Some(Err(PlenoraError::Contract(
+                    return Some(Err(PlenoraError::InvalidPlan(
                         "internal error: solo operatori testuali".into(),
                     )));
                 }

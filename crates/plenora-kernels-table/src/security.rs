@@ -66,7 +66,7 @@ const fn default_true() -> bool {
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract("md5_hash richiede colonne".into()));
+        return Err(PlenoraError::InvalidPlan("md5_hash richiede colonne".into()));
     }
     let mut columns = config.columns.clone();
     columns.sort();
@@ -86,7 +86,7 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
                         (None, HashNullPolicy::Empty) => String::new(),
                         (None, HashNullPolicy::Literal) => config.null_literal.clone(),
                         (None, HashNullPolicy::Error) => {
-                            return Err(PlenoraError::Contract(format!(
+                            return Err(PlenoraError::InvalidPlan(format!(
                                 "md5_hash: null alla riga {row}"
                             )))
                         }
@@ -132,7 +132,7 @@ fn default_sha256_name() -> String {
 
 fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::Contract("sha256_hash: valore troppo grande".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("sha256_hash: valore troppo grande".into()))?;
     digest.update(length.to_be_bytes());
     digest.update(value);
     Ok(())
@@ -194,7 +194,7 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
                         framed_part(&mut digest, literal.as_bytes())?;
                     }
                     (None, HashNullPolicy::Error) => {
-                        return Err(PlenoraError::Contract(format!(
+                        return Err(PlenoraError::InvalidPlan(format!(
                             "sha256_hash: null alla riga {row}"
                         )))
                     }
@@ -244,7 +244,7 @@ fn default_fingerprint_name() -> String {
 /// messaggi per riga di `stable_fingerprint`.
 fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::Contract(format!("{op}: valore troppo grande")))?;
+        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: valore troppo grande")))?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value);
     Ok(())
@@ -451,7 +451,7 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
         let mut seen = HashSet::new();
         for name in &config.columns {
             if !seen.insert(name.as_str()) {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "stable_fingerprint: colonna ripetuta: {name}"
                 )));
             }
@@ -459,7 +459,7 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
         config.columns.clone()
     };
     if names.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "stable_fingerprint richiede almeno una colonna".into(),
         ));
     }
@@ -563,7 +563,7 @@ fn hmac_sha256_with_states(inner_base: &Sha256, outer_base: &Sha256, message: &[
 fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
     match std::env::var(key_env) {
         Ok(value) if !value.is_empty() => Ok(value.into_bytes()),
-        _ => Err(PlenoraError::Contract(
+        _ => Err(PlenoraError::InvalidPlan(
             "hmac_sha256: chiave HMAC non disponibile".into(),
         )),
     }
@@ -571,7 +571,7 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
 
 fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::Contract("hmac_sha256: valore troppo grande".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("hmac_sha256: valore troppo grande".into()))?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value);
     Ok(())
@@ -594,17 +594,17 @@ fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
 pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
-        return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+        return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
     }
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "hmac_sha256 richiede almeno una colonna".into(),
         ));
     }
     let mut seen = HashSet::new();
     for name in &config.columns {
         if !seen.insert(name.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "hmac_sha256: colonna ripetuta: {name}"
             )));
         }
@@ -796,9 +796,9 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
             let mut chars = config.mask_char.chars();
             let character = chars
                 .next()
-                .ok_or_else(|| PlenoraError::Contract("mask_char vuoto".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("mask_char vuoto".into()))?;
             if chars.next().is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "mask_char deve essere un carattere".into(),
                 ));
             }
@@ -820,7 +820,7 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 /// - `Schema`: colonna assente dal batch.
 pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
     if config.maskings.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "mask_data richiede configurazioni".into(),
         ));
     }
@@ -937,9 +937,9 @@ mod tests {
                 let mut chars = config.mask_char.chars();
                 let character = chars
                     .next()
-                    .ok_or_else(|| PlenoraError::Contract("mask_char vuoto".into()))?;
+                    .ok_or_else(|| PlenoraError::InvalidPlan("mask_char vuoto".into()))?;
                 if chars.next().is_some() {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "mask_char deve essere un carattere".into(),
                     ));
                 }
@@ -951,7 +951,7 @@ mod tests {
     /// Copia verbatim di `mask_data` pre-ottimizzazione.
     fn mask_data_reference(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
         if config.maskings.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "mask_data richiede configurazioni".into(),
             ));
         }
@@ -1519,7 +1519,7 @@ mod tests {
     /// Copia verbatim di `framed_digest` pre-ottimizzazione.
     fn framed_digest_reference<D: Digest>(digest: &mut D, value: &[u8]) -> Result<()> {
         let length = u64::try_from(value.len()).map_err(|_| {
-            PlenoraError::Contract("stable_fingerprint: valore troppo grande".into())
+            PlenoraError::InvalidPlan("stable_fingerprint: valore troppo grande".into())
         })?;
         digest.update(length.to_be_bytes());
         digest.update(value);
@@ -1577,7 +1577,7 @@ mod tests {
             let mut seen = HashSet::new();
             for name in &config.columns {
                 if !seen.insert(name.as_str()) {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "stable_fingerprint: colonna ripetuta: {name}"
                     )));
                 }
@@ -1585,7 +1585,7 @@ mod tests {
             config.columns.clone()
         };
         if names.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "stable_fingerprint richiede almeno una colonna".into(),
             ));
         }
@@ -1641,17 +1641,17 @@ mod tests {
     fn hmac_sha256_reference(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
         validate_output_name(&config.output_column)?;
         if config.key_env.trim().is_empty() {
-            return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+            return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
         }
         if config.columns.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "hmac_sha256 richiede almeno una colonna".into(),
             ));
         }
         let mut seen = HashSet::new();
         for name in &config.columns {
             if !seen.insert(name.as_str()) {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "hmac_sha256: colonna ripetuta: {name}"
                 )));
             }

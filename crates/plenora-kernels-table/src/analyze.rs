@@ -100,19 +100,19 @@ pub fn analyze_table_contract(
     let id = descriptor.id;
     match descriptor.arity {
         Arity::Unary if inputs.len() != 1 => {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "{id}: atteso 1 input, ricevuti {}",
                 inputs.len()
             )));
         }
         Arity::BinaryOrdered if inputs.len() != 2 => {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "{id}: attesi 2 input (left, right), ricevuti {}",
                 inputs.len()
             )));
         }
         Arity::NAry if inputs.len() < 2 => {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "{id}: attesi almeno 2 input, ricevuti {}",
                 inputs.len()
             )));
@@ -222,11 +222,11 @@ pub fn analyze_table_contract(
 /// Deserializza la config tipizzata (fail-closed: `deny_unknown_fields`).
 fn typed<T: DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
     serde_json::from_value(config.clone())
-        .map_err(|error| PlenoraError::Contract(format!("{op}: config non valida: {error}")))
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
 }
 
 fn contract_error<T>(op: &str, message: impl Into<String>) -> Result<T> {
-    Err(PlenoraError::Contract(format!("{op}: {}", message.into())))
+    Err(PlenoraError::InvalidPlan(format!("{op}: {}", message.into())))
 }
 
 fn unsupported<T>(op: &str, message: impl Into<String>) -> Result<T> {
@@ -241,7 +241,7 @@ fn field_of<'a>(op: &str, input: &'a DataContract, name: &str) -> Result<&'a Fie
     input
         .schema
         .field_with_name(name)
-        .map_err(|_| PlenoraError::Contract(format!("{op}: colonna non trovata: {name}")))
+        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
 }
 
 /// Tipi leggibili da `scalar_as_string` (profilo scalare testuale).
@@ -318,7 +318,7 @@ fn require_utf8(op: &str, input: &DataContract, name: &str) -> Result<()> {
 
 fn check_output_name(op: &str, name: &str) -> Result<()> {
     validate_output_name(name)
-        .map_err(|_| PlenoraError::Contract(format!("{op}: nome colonna non valido: {name:?}")))
+        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: nome colonna non valido: {name:?}")))
 }
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`
@@ -726,7 +726,7 @@ fn analyze_string_extract(
         return contract_error(op, "pattern oltre max_regex_bytes");
     }
     let pattern = regex::Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: regex non valida: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
     let named: Vec<String> = pattern
         .capture_names()
         .flatten()
@@ -1009,7 +1009,7 @@ fn analyze_timezone_convert(
     for timezone in [&config.source_timezone, &config.target_timezone] {
         timezone
             .parse::<chrono_tz::Tz>()
-            .map_err(|_| PlenoraError::Contract(format!("{op}: timezone non valida: {timezone}")))?;
+            .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}")))?;
     }
     analyze_date_op(
         op,
@@ -1646,7 +1646,7 @@ fn analyze_fill_na(
         vec![input
             .schema
             .index_of(name)
-            .map_err(|_| PlenoraError::Contract(format!("{op}: colonna non trovata: {name}")))?]
+            .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))?]
     } else {
         (0..input.schema.fields().len()).collect()
     };
@@ -1689,7 +1689,7 @@ fn analyze_replace(
     require_utf8(op, input, &config.column)?;
     if config.regex {
         regex::Regex::new(&config.old_value)
-            .map_err(|error| PlenoraError::Contract(format!("{op}: regex non valida: {error}")))?;
+            .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
     }
     // R2.4 type-preserving: Utf8 -> Utf8 (tipo invariato), i metadata del
     // campo sorgente restano validi; `produce` ricostruisce il campo e li
@@ -1728,7 +1728,7 @@ fn analyze_type_cast(
         cleansing::TargetType::TimestampMillis => {
             if let Some(timezone) = &config.timezone {
                 timezone.parse::<chrono_tz::Tz>().map_err(|_| {
-                    PlenoraError::Contract(format!("{op}: timezone non valida: {timezone}"))
+                    PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}"))
                 })?;
             }
             DataType::Timestamp(
@@ -1739,10 +1739,10 @@ fn analyze_type_cast(
         cleansing::TargetType::Decimal128 => {
             let precision = config
                 .precision
-                .ok_or_else(|| PlenoraError::Contract(format!("{op}: decimal128 richiede precision")))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision")))?;
             let scale = config
                 .scale
-                .ok_or_else(|| PlenoraError::Contract(format!("{op}: decimal128 richiede scale")))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale")))?;
             if precision == 0 || precision > 38 {
                 return contract_error(op, "precision decimal128 fuori da 1..=38");
             }
@@ -2070,7 +2070,7 @@ fn analyze_formula(
     let config: formula::Formula = typed(op, config)?;
     let input = &inputs[0];
     formula::validate(&config, Limits::default().max_string_bytes)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     let inferred = formula::infer_formula_type(&config, &|name| {
         let field = field_of(op, input, name)?;
         if matches!(field.data_type(), DataType::Int64 | DataType::Float64) {
@@ -2314,7 +2314,7 @@ fn analyze_expression(
     let config: expressions::ExpressionTransform = typed(op, config)?;
     let input = &inputs[0];
     expressions::validate(&config, MAX_EXPRESSION_NODES)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     check_output_name(op, &config.output_column)?;
     let data_type = match config.output_type {
         expressions::OutputType::Number => DataType::Float64,
@@ -2449,7 +2449,7 @@ fn analyze_assert_schema(
     for (position, expectation) in config.fields.iter().enumerate() {
         let field = if config.ordered {
             input.schema.fields().get(position).ok_or_else(|| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "{op}: colonna mancante in posizione {position}"
                 ))
             })?
@@ -2458,7 +2458,7 @@ fn analyze_assert_schema(
                 .schema
                 .field_with_name(&expectation.name)
                 .map_err(|_| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "{op}: colonna mancante {}",
                         expectation.name
                     ))
@@ -2592,7 +2592,7 @@ fn analyze_assert_regex(
     let _ = fields;
     require_utf8(op, input, &config.column)?;
     regex::Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: regex non valida: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
     Ok(input.clone())
 }
 
@@ -2865,7 +2865,7 @@ fn analyze_validate_rules(
                     return contract_error(op, format!("regola {}: pattern oltre max_regex_bytes", rule.name));
                 }
                 regex::Regex::new(&expected).map_err(|error| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "{op}: regola {}: regex non valida: {error}",
                         rule.name
                     ))
@@ -2915,7 +2915,7 @@ fn collision_free(op: &str, input: &DataContract, name: &str) -> Result<String> 
         .map(|index| format!("{name}_{index}"))
         .find(|candidate| input.schema.index_of(candidate).is_err())
         .ok_or_else(|| {
-            PlenoraError::Contract(format!("{op}: impossibile evitare collisione {name}"))
+            PlenoraError::InvalidPlan(format!("{op}: impossibile evitare collisione {name}"))
         })
 }
 
@@ -2935,7 +2935,7 @@ fn analyze_melt(
             input
                 .schema
                 .index_of(name)
-                .map_err(|_| PlenoraError::Contract(format!("{op}: colonna non trovata: {name}")))
+                .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
         })
         .collect::<Result<_>>()?;
     let value_indices: Vec<usize> = if config.value_columns.is_empty() {
@@ -2948,7 +2948,7 @@ fn analyze_melt(
             .iter()
             .map(|name| {
                 input.schema.index_of(name).map_err(|_| {
-                    PlenoraError::Contract(format!("{op}: colonna non trovata: {name}"))
+                    PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}"))
                 })
             })
             .collect::<Result<_>>()?
@@ -3085,7 +3085,7 @@ fn analyze_unnest(
     let index = input
         .schema
         .index_of(&config.column)
-        .map_err(|_| PlenoraError::Contract(format!("{op}: colonna non trovata: {}", config.column)))?;
+        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {}", config.column)))?;
     let field = input.schema.field(index);
     let DataType::Struct(children) = field.data_type() else {
         return contract_error(op, "unnest richiede una colonna Struct");
@@ -3334,7 +3334,7 @@ fn analyze_join(
         .iter()
         .map(|name| {
             left.schema.index_of(name).map_err(|_| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "internal error: {op}: chiave verificata assente nello schema"
                 ))
             })
@@ -3345,7 +3345,7 @@ fn analyze_join(
         .iter()
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "internal error: {op}: chiave verificata assente nello schema"
                 ))
             })
@@ -3392,11 +3392,11 @@ fn analyze_fuzzy_join(
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
     fuzzy::validate_config(&config)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     require_utf8(op, left, &config.left_key)?;
     require_utf8(op, right, &config.right_key)?;
     let left_index = left.schema.index_of(&config.left_key).map_err(|_| {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "internal error: {op}: chiave verificata assente nello schema"
         ))
     })?;
@@ -3534,7 +3534,7 @@ fn analyze_asof_join(
         .chain(std::iter::once(&config.right_on))
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "internal error: {op}: chiave verificata assente nello schema"
                 ))
             })
@@ -4092,15 +4092,15 @@ mod tests {
         let three = [tabular_contract(), tabular_contract(), tabular_contract()];
         assert!(matches!(
             analyze_table_contract("table.join", &one, &json!({}), &mut FieldAllocator::default()),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         assert!(matches!(
             analyze_table_contract("table.filter", &three[..2], &json!({}), &mut FieldAllocator::default()),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         assert!(matches!(
             analyze_table_contract("table.concat", &one, &json!({}), &mut FieldAllocator::default()),
-            Err(PlenoraError::Contract(_))
+            Err(PlenoraError::InvalidPlan(_))
         ));
         // concat N-aria: 3 input ammessi.
         let (a, b) = simple_pair();
@@ -4119,7 +4119,7 @@ mod tests {
         assert!(output.properties.sorted_by.is_some());
         assert!(matches!(
             err("table.add_row_number", &[tabular_contract()], json!({"order_column": "id"})),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -4666,7 +4666,7 @@ mod tests {
         assert_eq!(proven_sorted_keys(&dedup).len(), 1);
         assert!(matches!(
             err("table.dedup_advanced", &[tabular_contract()], json!({"subset": ["name"], "keep": "false"})),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -5252,7 +5252,7 @@ mod tests {
             == base_fields().len());
         assert!(matches!(
             err("table.assert_cardinality", &[proven_contract()], json!({"exact_rows": 5})),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -5375,7 +5375,7 @@ mod tests {
         // Config invalida fallisce prima come Contract.
         assert!(matches!(
             err("table.pivot", &[tabular_contract()], json!({"index_col": 1})),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -5520,7 +5520,7 @@ mod tests {
                 &[geo_contract(), right],
                 json!({"left_keys": ["id"], "right_keys": ["rid"]})
             ),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -5744,7 +5744,7 @@ mod tests {
             ],
             json!({"left_keys": ["id"], "right_keys": ["rid"]}),
         );
-        assert!(matches!(error, PlenoraError::Contract(_)), "{error}");
+        assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
         let message = error.to_string();
         assert!(message.contains("shared"), "chiave in conflitto nominata: {message}");
         assert!(!message.contains("same"), "mai valori negli errori: {message}");
@@ -5764,7 +5764,7 @@ mod tests {
         let conflicting = with_schema_metadata(&simple_pair().1, &[("shared", "other")]);
         assert!(matches!(
             err("table.union_distinct", &[left, conflicting], json!({})),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 
@@ -5882,7 +5882,7 @@ mod tests {
                 &[tabular_contract()],
                 json!({"column": "value", "operator": "==", "value": 1, "bogus": true})
             ),
-            PlenoraError::Contract(_)
+            PlenoraError::InvalidPlan(_)
         ));
     }
 

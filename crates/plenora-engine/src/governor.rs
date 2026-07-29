@@ -228,7 +228,7 @@ impl MemoryGovernor {
     ///
     /// # Errors
     ///
-    /// `PlenoraError::Contract` se il budget residuo non copre `bytes`
+    /// `PlenoraError::InvalidPlan` se il budget residuo non copre `bytes`
     /// (fail-fast v1, vedi sopra).
     pub fn try_reserve(&self, bytes: u64, owner: &str) -> Result<ReservationResult> {
         // Prenotazione atomica add-e-controlla con rollback immediato: in v1
@@ -238,7 +238,7 @@ impl MemoryGovernor {
         let reserved = self.shared.reserved_bytes.fetch_add(bytes, Ordering::AcqRel) + bytes;
         if reserved > self.shared.budget {
             self.shared.reserved_bytes.fetch_sub(bytes, Ordering::AcqRel);
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "max_memory_bytes superato: `{owner}` richiede {bytes} byte, \
                  {} gia' riservati su un budget di {}",
                 reserved - bytes,
@@ -282,7 +282,7 @@ impl MemoryGovernor {
             // Mai emessi dalla v1 (vedi `try_reserve`); mappati comunque a
             // fail-fast per difesa — mai `unreachable!` su esiti futuri.
             ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => Err(
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "max_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
                 )),
             ),
@@ -403,7 +403,7 @@ mod tests {
             .reserve(60, "nodo_b")
             .expect_err("budget esaurito: fail-fast");
         assert!(
-            matches!(error, PlenoraError::Contract(ref reason) if reason.contains("max_memory_bytes")),
+            matches!(error, PlenoraError::InvalidPlan(ref reason) if reason.contains("max_memory_bytes")),
             "errore Contract max_memory_bytes: {error}"
         );
         // Il tentativo fallito non trattiene quota (rollback immediato).

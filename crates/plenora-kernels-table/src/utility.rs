@@ -53,7 +53,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
     let _ = config.ascending;
     validate_output_name(&config.output_column)?;
     if config.order_column.is_some() {
-        return Err(PlenoraError::Contract("add_row_number con ordinamento verra' eseguito dal kernel blocking sort; profilo corrente richiede order_column nullo".into()));
+        return Err(PlenoraError::InvalidPlan("add_row_number con ordinamento verra' eseguito dal kernel blocking sort; profilo corrente richiede order_column nullo".into()));
     }
     let values = if let Some(partition) = &config.partition_column {
         let index = column_index(batch, partition)?;
@@ -66,7 +66,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
                 let current = *value;
                 *value = value
                     .checked_add(1)
-                    .ok_or_else(|| PlenoraError::Contract("overflow row number".into()))?;
+                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow row number".into()))?;
                 Ok(Some(current))
             })
             .collect::<Result<Vec<_>>>()?
@@ -77,7 +77,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
                     .ok()
                     .and_then(|row| config.start.checked_add(row))
                     .map(Some)
-                    .ok_or_else(|| PlenoraError::Contract("overflow row number".into()))
+                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow row number".into()))
             })
             .collect::<Result<Vec<_>>>()?
     };
@@ -256,7 +256,7 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                     parse_datetime_default(value, datetime_items, date_items)
                 }
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: un solo parser compilato".into(),
                     ));
                 }
@@ -265,7 +265,7 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                 Some(value) => parsed.push(Some(value)),
                 None if matches!(config.invalid, InvalidDatePolicy::Null) => parsed.push(None),
                 None => {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "date_extract: valore non valido alla riga {row}"
                     )));
                 }
@@ -281,7 +281,7 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                 match parse_datetime(&value, config.date_format.as_deref()) {
                     Some(parsed) => Ok(Some(parsed)),
                     None if matches!(config.invalid, InvalidDatePolicy::Null) => Ok(None),
-                    None => Err(PlenoraError::Contract(format!(
+                    None => Err(PlenoraError::InvalidPlan(format!(
                         "date_extract: valore non valido alla riga {row}"
                     ))),
                 }
@@ -359,13 +359,13 @@ pub struct Limit {
 ///   `n` non rappresentabili come usize.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     let rows = u64::try_from(batch.num_rows())
-        .map_err(|_| PlenoraError::Contract("limit: righe oltre u64".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("limit: righe oltre u64".into()))?;
     let start = config.offset.min(rows);
     let count = config.n.min(rows - start);
     let start = usize::try_from(start)
-        .map_err(|_| PlenoraError::Contract("limit: offset oltre usize".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("limit: offset oltre usize".into()))?;
     let count = usize::try_from(count)
-        .map_err(|_| PlenoraError::Contract("limit: n oltre usize".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("limit: n oltre usize".into()))?;
     if start == 0 && count == batch.num_rows() {
         // Finestra che copre l'intero batch: nessuna copia.
         return Ok(batch.clone());
@@ -422,7 +422,7 @@ mod tests {
                 match parse_datetime(&value, config.date_format.as_deref()) {
                     Some(parsed) => Ok(Some(parsed)),
                     None if matches!(config.invalid, InvalidDatePolicy::Null) => Ok(None),
-                    None => Err(PlenoraError::Contract(format!(
+                    None => Err(PlenoraError::InvalidPlan(format!(
                         "date_extract: valore non valido alla riga {row}"
                     ))),
                 }

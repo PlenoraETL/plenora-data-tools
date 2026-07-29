@@ -432,7 +432,7 @@ pub struct GridRow {
 }
 
 fn grid_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.generate_grid: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.generate_grid: {error}"))
 }
 
 /// Adapter righe per `geo.generate_grid`: le celle sono gia' valide per
@@ -440,7 +440,7 @@ fn grid_error(error: &ExtensionV2Error) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per gli errori di [`generate_grid`] (messaggio
+/// `PlenoraError::InvalidPlan` per gli errori di [`generate_grid`] (messaggio
 /// con prefisso `geo.generate_grid:`) o per la codifica WKB di una cella
 /// (`encode_geometry`: serializzazione fallita o payload oltre il limite
 /// per cella).
@@ -636,7 +636,7 @@ pub fn subdivide(
 }
 
 fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.subdivide: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.subdivide: {error}"))
 }
 
 /// Helper WKB per `geo.subdivide`: decodifica una cella, la spezza e
@@ -645,7 +645,7 @@ fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per gli errori di `subdivide_validated` e di
+/// `PlenoraError::InvalidPlan` per gli errori di `subdivide_validated` e di
 /// `max_vertices` non valido (messaggio con prefisso `geo.subdivide:`), per
 /// il decode della cella WKB (`decode_geometry_cell`) o per la codifica WKB
 /// di una parte (`encode_geometry`).
@@ -736,7 +736,7 @@ fn check_tolerance(tolerance: f64) -> Result<(), ExtensionV2Error> {
 }
 
 fn snap_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.snap: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.snap: {error}"))
 }
 
 /// Adapter di colonna per `geo.snap`.
@@ -748,7 +748,7 @@ fn snap_error(error: &ExtensionV2Error) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se il riferimento non supera la validazione
+/// `PlenoraError::InvalidPlan` se il riferimento non supera la validazione
 /// OGC o `tolerance` non e' finita o e' negativa (messaggio con prefisso
 /// `geo.snap:`), per il decode/encode WKB di una cella
 /// (`decode_geometry_cell`, `encode_geometry`) o se lo snap di una cella

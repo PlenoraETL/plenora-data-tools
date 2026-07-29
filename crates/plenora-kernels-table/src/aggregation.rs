@@ -229,7 +229,7 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if indices.is_empty() {
-        return Err(PlenoraError::Contract("sort richiede colonne".into()));
+        return Err(PlenoraError::InvalidPlan("sort richiede colonne".into()));
     }
     let comparators = indices
         .iter()
@@ -308,10 +308,10 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if indices.is_empty() {
-        return Err(PlenoraError::Contract("top_n richiede colonne".into()));
+        return Err(PlenoraError::InvalidPlan("top_n richiede colonne".into()));
     }
     let n = usize::try_from(config.n)
-        .map_err(|_| PlenoraError::Contract("top_n: n oltre usize".into()))?
+        .map_err(|_| PlenoraError::InvalidPlan("top_n: n oltre usize".into()))?
         .min(batch.num_rows());
     if n == 0 {
         // n = 0: batch vuoto con schema invariato (colonne gia' validate).
@@ -487,7 +487,7 @@ pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<Rec
                 Keep::First => Keep::First,
                 Keep::Last => Keep::Last,
                 Keep::False => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "dedup_advanced non supporta keep=false".into(),
                     ))
                 }
@@ -1088,7 +1088,7 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
         AggFunction::Sum => sum,
         AggFunction::Avg | AggFunction::Mean => {
             sum / len.to_f64().ok_or_else(|| {
-                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
             })?
         }
         AggFunction::Min => raw.iter().flatten().copied().reduce(f64::min).unwrap_or_default(),
@@ -1098,11 +1098,11 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
                 return Ok(None);
             }
             let length = len.to_f64().ok_or_else(|| {
-                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
             let divisor = (len - aggregation.ddof).to_f64().ok_or_else(|| {
-                PlenoraError::Contract("divisore statistico non rappresentabile".into())
+                PlenoraError::InvalidPlan("divisore statistico non rappresentabile".into())
             })?;
             let variance = raw
                 .iter()
@@ -1117,7 +1117,7 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
             }
         }
         _ => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "internal error: funzione fuori dal percorso streaming di reduce_numeric".into(),
             ));
         }
@@ -1148,7 +1148,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
         AggFunction::Sum => sum,
         AggFunction::Avg | AggFunction::Mean => {
             sum / values.len().to_f64().ok_or_else(|| {
-                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
             })?
         }
         AggFunction::Min => values.iter().copied().reduce(f64::min).unwrap_or_default(),
@@ -1158,11 +1158,11 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 return Ok(None);
             }
             let length = values.len().to_f64().ok_or_else(|| {
-                PlenoraError::Contract("dimensione gruppo non rappresentabile".into())
+                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
             let divisor = (values.len() - aggregation.ddof).to_f64().ok_or_else(|| {
-                PlenoraError::Contract("divisore statistico non rappresentabile".into())
+                PlenoraError::InvalidPlan("divisore statistico non rappresentabile".into())
             })?;
             let variance = values
                 .iter()
@@ -1177,18 +1177,18 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
         }
         AggFunction::Quantile => {
             let quantile = aggregation.quantile.ok_or_else(|| {
-                PlenoraError::Contract("quantile richiede il parametro quantile".into())
+                PlenoraError::InvalidPlan("quantile richiede il parametro quantile".into())
             })?;
             values.sort_by(f64::total_cmp);
             let last = (values.len() - 1).to_f64().ok_or_else(|| {
-                PlenoraError::Contract("dimensione quantile non rappresentabile".into())
+                PlenoraError::InvalidPlan("dimensione quantile non rappresentabile".into())
             })?;
             let position = quantile * last;
             let lower = position.floor().to_usize().ok_or_else(|| {
-                PlenoraError::Contract("indice quantile non valido".into())
+                PlenoraError::InvalidPlan("indice quantile non valido".into())
             })?;
             let upper = position.ceil().to_usize().ok_or_else(|| {
-                PlenoraError::Contract("indice quantile non valido".into())
+                PlenoraError::InvalidPlan("indice quantile non valido".into())
             })?;
             let weight = position - position.floor();
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
@@ -1225,7 +1225,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if group_indices.is_empty() {
-        return Err(PlenoraError::Contract("aggregate richiede group_by".into()));
+        return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
     }
     // Fail-closed prima dei dati (regola 1): un quantile fuori [0, 1]
     // produrrebbe indici oltre il gruppo ordinato — errore esplicito, mai
@@ -1236,7 +1236,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 .quantile
                 .is_some_and(|quantile| !(0.0..=1.0).contains(&quantile))
         {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "quantile fuori dall'intervallo 0..=1".into(),
             ));
         }
@@ -1358,7 +1358,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     let count = rows.iter().filter(|row| !column.is_null(**row)).count();
                     i64::try_from(count)
                         .map(Some)
-                        .map_err(|_| PlenoraError::Contract("conteggio gruppo oltre i64".into()))
+                        .map_err(|_| PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into()))
                 })?;
                 result = replace_or_append(
                     &result,
@@ -1385,7 +1385,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     let count = seen.len() + usize::from(null_seen && !aggregation.skip_null);
                     i64::try_from(count)
                         .map(Some)
-                        .map_err(|_| PlenoraError::Contract("conteggio gruppo oltre i64".into()))
+                        .map_err(|_| PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into()))
                 })?;
                 result = replace_or_append(
                     &result,
@@ -1504,7 +1504,7 @@ pub struct RollingWindow {
 ///   `replace_or_append`.
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "rolling_window: finestra non valida".into(),
         ));
     }
@@ -1571,11 +1571,11 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
                 RollingKind::Stddev if count <= config.ddof => None,
                 RollingKind::Stddev => {
                     let length = count.to_f64().ok_or_else(|| {
-                        PlenoraError::Contract("dimensione rolling non rappresentabile".into())
+                        PlenoraError::InvalidPlan("dimensione rolling non rappresentabile".into())
                     })?;
                     let mean = sum / length;
                     let divisor = (count - config.ddof).to_f64().ok_or_else(|| {
-                        PlenoraError::Contract("divisore rolling non rappresentabile".into())
+                        PlenoraError::InvalidPlan("divisore rolling non rappresentabile".into())
                     })?;
                     Some(
                         (window
@@ -1654,16 +1654,16 @@ pub struct WindowFunction {
 ///   `replace_or_append`.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
-        return Err(PlenoraError::Contract("offset deve essere positivo".into()));
+        return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
     }
     if matches!(config.function, WindowKind::Ntile) {
         if config.buckets.is_none_or(|buckets| buckets == 0) {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "ntile richiede buckets maggiore di zero".into(),
             ));
         }
     } else if config.buckets.is_some() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "buckets e' ammesso solo per ntile".into(),
         ));
     }
@@ -2241,7 +2241,7 @@ mod tests {
             .map(|name| column_index(batch, name))
             .collect::<Result<Vec<_>>>()?;
         if group_indices.is_empty() {
-            return Err(PlenoraError::Contract("aggregate richiede group_by".into()));
+            return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
         }
         let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for row in 0..batch.num_rows() {
@@ -2330,7 +2330,7 @@ mod tests {
                                 seen.len()
                             };
                             i64::try_from(count).map(Some).map_err(|_| {
-                                PlenoraError::Contract("conteggio gruppo oltre i64".into())
+                                PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into())
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -2404,7 +2404,7 @@ mod tests {
                                 AggFunction::Sum => sum,
                                 AggFunction::Avg | AggFunction::Mean => {
                                     sum / values.len().to_f64().ok_or_else(|| {
-                                        PlenoraError::Contract(
+                                        PlenoraError::InvalidPlan(
                                             "dimensione gruppo non rappresentabile".into(),
                                         )
                                     })?
@@ -2420,7 +2420,7 @@ mod tests {
                                         return Ok(None);
                                     }
                                     let length = values.len().to_f64().ok_or_else(|| {
-                                        PlenoraError::Contract(
+                                        PlenoraError::InvalidPlan(
                                             "dimensione gruppo non rappresentabile".into(),
                                         )
                                     })?;
@@ -2428,7 +2428,7 @@ mod tests {
                                     let divisor = (values.len() - aggregation.ddof)
                                         .to_f64()
                                         .ok_or_else(|| {
-                                            PlenoraError::Contract(
+                                            PlenoraError::InvalidPlan(
                                                 "divisore statistico non rappresentabile".into(),
                                             )
                                         })?;
@@ -2445,22 +2445,22 @@ mod tests {
                                 }
                                 AggFunction::Quantile => {
                                     let quantile = aggregation.quantile.ok_or_else(|| {
-                                        PlenoraError::Contract(
+                                        PlenoraError::InvalidPlan(
                                             "quantile richiede il parametro quantile".into(),
                                         )
                                     })?;
                                     values.sort_by(f64::total_cmp);
                                     let last = (values.len() - 1).to_f64().ok_or_else(|| {
-                                        PlenoraError::Contract(
+                                        PlenoraError::InvalidPlan(
                                             "dimensione quantile non rappresentabile".into(),
                                         )
                                     })?;
                                     let position = quantile * last;
                                     let lower = position.floor().to_usize().ok_or_else(|| {
-                                        PlenoraError::Contract("indice quantile non valido".into())
+                                        PlenoraError::InvalidPlan("indice quantile non valido".into())
                                     })?;
                                     let upper = position.ceil().to_usize().ok_or_else(|| {
-                                        PlenoraError::Contract("indice quantile non valido".into())
+                                        PlenoraError::InvalidPlan("indice quantile non valido".into())
                                     })?;
                                     let weight = position - position.floor();
                                     // Niente mul_add/FMA: forma non fusa
@@ -2620,7 +2620,7 @@ mod tests {
                 }],
             };
             let result = aggregate(&batch, &config);
-            let Err(PlenoraError::Contract(message)) = &result else {
+            let Err(PlenoraError::InvalidPlan(message)) = &result else {
                 panic!("quantile {quantile}: atteso rifiuto fuori range, ottenuto {result:?}");
             };
             assert!(
@@ -3299,7 +3299,7 @@ mod tests {
                     Keep::First => Keep::First,
                     Keep::Last => Keep::Last,
                     Keep::False => {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "dedup_advanced non supporta keep=false".into(),
                         ))
                     }
@@ -3312,7 +3312,7 @@ mod tests {
     /// `rolling_window` (finestra ricostruita in un `Vec` a ogni riga).
     fn rolling_window_reference(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
         if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "rolling_window: finestra non valida".into(),
             ));
         }
@@ -3368,11 +3368,11 @@ mod tests {
                     RollingKind::Stddev if values.len() <= config.ddof => None,
                     RollingKind::Stddev => {
                         let length = values.len().to_f64().ok_or_else(|| {
-                            PlenoraError::Contract("dimensione rolling non rappresentabile".into())
+                            PlenoraError::InvalidPlan("dimensione rolling non rappresentabile".into())
                         })?;
                         let mean = values.iter().sum::<f64>() / length;
                         let divisor = (values.len() - config.ddof).to_f64().ok_or_else(|| {
-                            PlenoraError::Contract("divisore rolling non rappresentabile".into())
+                            PlenoraError::InvalidPlan("divisore rolling non rappresentabile".into())
                         })?;
                         Some(
                             (values
@@ -3401,16 +3401,16 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn window_function_reference(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
         if config.offset == 0 {
-            return Err(PlenoraError::Contract("offset deve essere positivo".into()));
+            return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
         }
         if matches!(config.function, WindowKind::Ntile) {
             if config.buckets.is_none_or(|buckets| buckets == 0) {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "ntile richiede buckets maggiore di zero".into(),
                 ));
             }
         } else if config.buckets.is_some() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "buckets e' ammesso solo per ntile".into(),
             ));
         }

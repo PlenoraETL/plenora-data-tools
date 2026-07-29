@@ -376,7 +376,7 @@ pub fn coverage_validate_nullable(
 }
 
 fn coverage_error(error: &ExtensionV3Error) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.coverage_validate: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.coverage_validate: {error}"))
 }
 
 /// Riga di output di `geo.coverage_validate` con geometria codificata WKB
@@ -395,7 +395,7 @@ pub struct CoverageIssueRow {
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Contract`: una cella WKB viola il contratto strutturale
+/// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
 ///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
 ///   di una issue fallisce.
@@ -578,7 +578,7 @@ pub fn shared_paths_nullable(
 }
 
 fn shared_paths_error(error: &ExtensionV3Error) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.shared_paths: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.shared_paths: {error}"))
 }
 
 /// Riga di output di `geo.shared_paths` con geometria codificata WKB.
@@ -596,7 +596,7 @@ pub struct SharedPathRow {
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Contract`: una cella WKB viola il contratto strutturale
+/// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
 ///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
 ///   di un tratto fallisce.

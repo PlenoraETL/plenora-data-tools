@@ -260,7 +260,7 @@ fn memory_budget_exhaustion_fails_fast_with_contract_error() {
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
     let error = output.collect_batches().expect_err("budget esaurito: fail-fast");
     assert!(
-        matches!(error, PlenoraError::Contract(_)) && error.to_string().contains("max_memory_bytes"),
+        matches!(error, PlenoraError::InvalidPlan(_)) && error.to_string().contains("max_memory_bytes"),
         "errore Contract max_memory_bytes: {error}"
     );
 }

@@ -36,13 +36,13 @@ fn decode<T: DeserializeOwned>(step: &Step) -> Result<T> {
 
 fn validate_name_list(names: &[String], max: usize, label: &str, allow_empty: bool) -> Result<()> {
     if (!allow_empty && names.is_empty()) || names.len() > max {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "numero colonne {label} non valido"
         )));
     }
     let unique: HashSet<_> = names.iter().collect();
     if unique.len() != names.len() {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "{label} contiene nomi duplicati"
         )));
     }
@@ -51,7 +51,7 @@ fn validate_name_list(names: &[String], max: usize, label: &str, allow_empty: bo
 
 fn validate_rename(config: &columns::Rename, limits: &Limits) -> Result<()> {
     if config.renames.len() > limits.max_columns {
-        return Err(PlenoraError::Contract("troppe rinomine".into()));
+        return Err(PlenoraError::InvalidPlan("troppe rinomine".into()));
     }
     let old: Vec<_> = config
         .renames
@@ -76,7 +76,7 @@ fn validate_split(config: &columns::SplitColumn, limits: &Limits) -> Result<()> 
         false,
     )?;
     if config.delimiter.is_empty() || config.delimiter.len() > limits.max_string_bytes {
-        return Err(PlenoraError::Contract("delimiter non valido".into()));
+        return Err(PlenoraError::InvalidPlan("delimiter non valido".into()));
     }
     Ok(())
 }
@@ -88,12 +88,12 @@ fn validate_pad(config: &strings::StringPad, limits: &Limits) -> Result<()> {
     }
     let mut characters = config.fill_char.chars();
     if characters.next().is_none() || characters.next().is_some() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "fill_char deve essere un carattere Unicode".into(),
         ));
     }
     if config.width > limits.max_string_bytes {
-        return Err(PlenoraError::Contract("width oltre il limite".into()));
+        return Err(PlenoraError::InvalidPlan("width oltre il limite".into()));
     }
     Ok(())
 }
@@ -104,35 +104,35 @@ fn validate_type_cast(config: &cleansing::TypeCast) -> Result<()> {
         cleansing::TargetType::Decimal128 => {
             let precision = config
                 .precision
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede precision".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede precision".into()))?;
             let scale = config
                 .scale
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede scale".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede scale".into()))?;
             if !(1..=38).contains(&precision) || scale < 0 || scale > precision.cast_signed() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "decimal128 richiede 1 <= precision <= 38 e 0 <= scale <= precision".into(),
                 ));
             }
             if config.timezone.is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "timezone non ammessa per decimal128".into(),
                 ));
             }
         }
         cleansing::TargetType::TimestampMillis => {
             if config.precision.is_some() || config.scale.is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "precision/scale non ammessi per timestamp".into(),
                 ));
             }
             if let Some(timezone) = &config.timezone {
                 timezone
                     .parse::<chrono_tz::Tz>()
-                    .map_err(|_| PlenoraError::Contract("timezone cast non valida".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("timezone cast non valida".into()))?;
             }
         }
         _ if config.precision.is_some() || config.scale.is_some() || config.timezone.is_some() => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "precision, scale e timezone non ammessi per questo target_type".into(),
             ));
         }
@@ -146,9 +146,9 @@ fn validate_type_cast(config: &cleansing::TypeCast) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Json`: config non deserializzabile nel tipo atteso
+/// - `PlenoraError::DataMapping`: config non deserializzabile nel tipo atteso
 ///   dall'operazione;
-/// - `PlenoraError::Contract`: nomi, valori o limiti del passo non validi;
+/// - `PlenoraError::InvalidPlan`: nomi, valori o limiti del passo non validi;
 /// - `PlenoraError::Unsupported`: operazione sconosciuta al dispatcher.
 #[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
 pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
@@ -186,7 +186,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "concat_columns", false)?;
             validate_output_name(&config.output_column)?;
             if config.separator.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract("separatore troppo grande".into()));
+                return Err(PlenoraError::InvalidPlan("separatore troppo grande".into()));
             }
             Ok(())
         }
@@ -216,11 +216,11 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             if config.old_value.len() > limits.max_regex_bytes
                 || config.new_value.len() > limits.max_string_bytes
             {
-                return Err(PlenoraError::Contract("replace oltre i limiti".into()));
+                return Err(PlenoraError::InvalidPlan("replace oltre i limiti".into()));
             }
             if config.regex {
                 regex::Regex::new(&config.old_value)
-                    .map_err(|e| PlenoraError::Contract(format!("regex non valida: {e}")))?;
+                    .map_err(|e| PlenoraError::InvalidPlan(format!("regex non valida: {e}")))?;
             }
             Ok(())
         }
@@ -237,7 +237,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_output_name(&config.column)?;
             validate_output_name(&config.output_column)?;
             if config.conditions.is_empty() || config.conditions.len() > limits.max_columns {
-                return Err(PlenoraError::Contract("numero condizioni non valido".into()));
+                return Err(PlenoraError::InvalidPlan("numero condizioni non valido".into()));
             }
             Ok(())
         }
@@ -245,10 +245,10 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<strings::StringExtract>(step)?;
             validate_output_name(&config.column)?;
             if config.pattern.is_empty() || config.pattern.len() > limits.max_regex_bytes {
-                return Err(PlenoraError::Contract("pattern non valido".into()));
+                return Err(PlenoraError::InvalidPlan("pattern non valido".into()));
             }
             regex::Regex::new(&config.pattern)
-                .map_err(|e| PlenoraError::Contract(format!("regex non valida: {e}")))?;
+                .map_err(|e| PlenoraError::InvalidPlan(format!("regex non valida: {e}")))?;
             if let Some(output) = config.output_column {
                 validate_output_name(&output)?;
             }
@@ -262,7 +262,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 .as_ref()
                 .is_some_and(|format| format.is_empty() || format.len() > limits.max_string_bytes)
             {
-                return Err(PlenoraError::Contract("date_format non valido".into()));
+                return Err(PlenoraError::InvalidPlan("date_format non valido".into()));
             }
             Ok(())
         }
@@ -274,7 +274,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<utility::Limit>(step)?;
             let max_rows: u64 = limits.max_rows.try_into().unwrap_or(u64::MAX);
             if config.n > max_rows || config.offset > max_rows {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "limit: n/offset oltre max_rows".into(),
                 ));
             }
@@ -284,7 +284,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<analysis::Lookup>(step)?;
             validate_output_name(&config.column)?;
             if config.mapping.len() > limits.max_rows {
-                return Err(PlenoraError::Contract("mapping oltre max_rows".into()));
+                return Err(PlenoraError::InvalidPlan("mapping oltre max_rows".into()));
             }
             if let Some(output) = config.output_column {
                 validate_output_name(&output)?;
@@ -304,7 +304,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
         "mask_data" => {
             let config = decode::<security::MaskData>(step)?;
             if config.maskings.is_empty() || config.maskings.len() > limits.max_columns {
-                return Err(PlenoraError::Contract("numero masking non valido".into()));
+                return Err(PlenoraError::InvalidPlan("numero masking non valido".into()));
             }
             config
                 .maskings
@@ -316,7 +316,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "md5_hash", false)?;
             validate_output_name(&config.output_column)?;
             if config.null_literal.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract("null_literal troppo grande".into()));
+                return Err(PlenoraError::InvalidPlan("null_literal troppo grande".into()));
             }
             Ok(())
         }
@@ -327,7 +327,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 validate_output_name(&column)?;
             }
             if config.order_column.is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "add_row_number: order_column non ancora nel safe profile".into(),
                 ));
             }
@@ -354,7 +354,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "top_n", false)?;
             let max_rows: u64 = limits.max_rows.try_into().unwrap_or(u64::MAX);
             if config.n > max_rows {
-                return Err(PlenoraError::Contract("top_n: n oltre max_rows".into()));
+                return Err(PlenoraError::InvalidPlan("top_n: n oltre max_rows".into()));
             }
             Ok(())
         }
@@ -368,7 +368,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             if let Some(column) = &config.order_column {
                 validate_output_name(column)?;
             } else if !config.ascending {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "dedup_advanced: ascending richiede order_column".into(),
                 ));
             }
@@ -378,7 +378,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<aggregation::Aggregate>(step)?;
             validate_name_list(&config.group_by, limits.max_columns, "aggregate", false)?;
             if config.aggregations.len() > limits.max_columns {
-                return Err(PlenoraError::Contract("troppe aggregazioni".into()));
+                return Err(PlenoraError::InvalidPlan("troppe aggregazioni".into()));
             }
             for aggregation in &config.aggregations {
                 validate_output_name(&aggregation.column)?;
@@ -386,7 +386,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                     validate_output_name(&aggregation.alias)?;
                 }
                 if aggregation.separator.len() > limits.max_string_bytes {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "separatore aggregazione troppo grande".into(),
                     ));
                 }
@@ -395,12 +395,12 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                         .quantile
                         .is_some_and(|value| value.is_finite() && (0.0..=1.0).contains(&value))
                     {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "quantile deve essere compreso tra 0 e 1".into(),
                         ));
                     }
                 } else if aggregation.quantile.is_some() {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "quantile ammesso solo con function=quantile".into(),
                     ));
                 }
@@ -420,19 +420,19 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 validate_output_name(name)?;
             }
             if config.offset == 0 {
-                return Err(PlenoraError::Contract("offset deve essere positivo".into()));
+                return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
             }
             if matches!(config.function, aggregation::WindowKind::Ntile) {
                 if !config
                     .buckets
                     .is_some_and(|buckets| buckets > 0 && buckets <= limits.max_rows)
                 {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "ntile richiede buckets valido".into(),
                     ));
                 }
             } else if config.buckets.is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "buckets e' ammesso solo per ntile".into(),
                 ));
             }
@@ -449,12 +449,12 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 validate_output_name(name)?;
             }
             if config.window > limits.max_rows {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "rolling_window: finestra oltre max_rows".into(),
                 ));
             }
             if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "rolling_window: finestra non valida".into(),
                 ));
             }
@@ -463,7 +463,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
         "melt" => {
             let config = decode::<reshape::Melt>(step)?;
             if config.var_name == config.value_name {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "melt richiede nomi distinti per variabile e valore".into(),
                 ));
             }
@@ -503,14 +503,14 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<governance::AssertCardinality>(step)?;
             if config.exact_rows.is_none() && config.min_rows.is_none() && config.max_rows.is_none()
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_cardinality richiede exact_rows, min_rows o max_rows".into(),
                 ));
             }
             if config.exact_rows.is_some()
                 && (config.min_rows.is_some() || config.max_rows.is_some())
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "exact_rows non puo' essere combinato con min_rows/max_rows".into(),
                 ));
             }
@@ -523,7 +523,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                     .flatten()
                     .any(|rows| rows > limits.max_rows)
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_cardinality: limiti non validi".into(),
                 ));
             }
@@ -532,7 +532,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
         "assert_metadata" => {
             let config = decode::<governance::AssertMetadata>(step)?;
             if config.expected.is_empty() || config.expected.len() > limits.max_columns {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_metadata: numero elementi non valido".into(),
                 ));
             }
@@ -541,7 +541,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                     || key.len() > limits.max_string_bytes
                     || value.len() > limits.max_string_bytes
             }) {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_metadata: chiave o valore oltre i limiti".into(),
                 ));
             }
@@ -550,7 +550,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
         "assert_schema" => {
             let config = decode::<quality::AssertSchema>(step)?;
             if config.fields.is_empty() || config.fields.len() > limits.max_columns {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_schema: numero campi non valido".into(),
                 ));
             }
@@ -582,7 +582,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                         | "list"
                         | "struct"
                 ) {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "assert_schema: tipo non supportato {}",
                         field.data_type
                     )));
@@ -606,7 +606,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<quality::AssertRange>(step)?;
             validate_output_name(&config.column)?;
             if config.min.is_none() && config.max.is_none() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_range richiede min o max".into(),
                 ));
             }
@@ -617,7 +617,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                     .zip(config.max)
                     .is_some_and(|(min, max)| min > max)
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_range: estremi non validi".into(),
                 ));
             }
@@ -627,12 +627,12 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<quality::AssertRegex>(step)?;
             validate_output_name(&config.column)?;
             if config.pattern.is_empty() || config.pattern.len() > limits.max_regex_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "assert_regex: pattern non valido".into(),
                 ));
             }
             regex::Regex::new(&config.pattern)
-                .map_err(|error| PlenoraError::Contract(format!("regex non valida: {error}")))?;
+                .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
             Ok(())
         }
         "coalesce" => {
@@ -697,11 +697,11 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             config
                 .source_timezone
                 .parse::<chrono_tz::Tz>()
-                .map_err(|_| PlenoraError::Contract("source_timezone non valida".into()))?;
+                .map_err(|_| PlenoraError::InvalidPlan("source_timezone non valida".into()))?;
             config
                 .target_timezone
                 .parse::<chrono_tz::Tz>()
-                .map_err(|_| PlenoraError::Contract("target_timezone non valida".into()))?;
+                .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
             validate_output_name(&config.output_column)
         }
         "sha256_hash" => {
@@ -709,7 +709,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "sha256_hash", false)?;
             validate_output_name(&config.output_column)?;
             if config.null_literal.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract("null_literal troppo grande".into()));
+                return Err(PlenoraError::InvalidPlan("null_literal troppo grande".into()));
             }
             Ok(())
         }
@@ -728,7 +728,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "hmac_sha256", false)?;
             validate_output_name(&config.output_column)?;
             if config.key_env.trim().is_empty() {
-                return Err(PlenoraError::Contract("hmac_sha256: key_env vuoto".into()));
+                return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
             }
             Ok(())
         }
@@ -744,7 +744,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             let config = decode::<reshape::Unnest>(step)?;
             validate_output_name(&config.column)?;
             if config.prefix.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "unnest: prefisso troppo grande".into(),
                 ));
             }
@@ -770,7 +770,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 false,
             )?;
             if config.left_keys.len() != config.right_keys.len() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "membership join: cardinalita' chiavi diversa".into(),
                 ));
             }
@@ -787,7 +787,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                     .tolerance
                     .is_some_and(|value| !value.is_finite() || value < 0.0)
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "asof_join: configurazione non valida".into(),
                 ));
             }
@@ -817,7 +817,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 false,
             )?;
             if config.left_keys.len() != config.right_keys.len() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "foreign key: cardinalita' chiavi diversa".into(),
                 ));
             }
@@ -838,7 +838,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 false,
             )?;
             if config.left_keys.len() != config.right_keys.len() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "reconcile: cardinalita' chiavi diversa".into(),
                 ));
             }
@@ -886,14 +886,14 @@ fn validate_batch(
     names_validated: &mut Option<SchemaRef>,
 ) -> Result<()> {
     if batch.num_rows() > limits.max_rows {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "batch con {} righe oltre il limite {}",
             batch.num_rows(),
             limits.max_rows
         )));
     }
     if batch.num_columns() > limits.max_columns {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "schema con {} colonne oltre il limite {}",
             batch.num_columns(),
             limits.max_columns
@@ -946,11 +946,11 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
                 .ok_or_else(|| PlenoraError::Schema("downcast LargeUtf8 fallito".into()))?;
             let bytes = strings.iter().flatten().try_fold(0_usize, |total, value| {
                 total.checked_add(value.len()).ok_or_else(|| {
-                    PlenoraError::Contract("overflow dimensione colonna LargeUtf8".into())
+                    PlenoraError::InvalidPlan("overflow dimensione colonna LargeUtf8".into())
                 })
             })?;
             if bytes > i32::MAX as usize {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow".into(),
                 ));
             }
@@ -1207,7 +1207,7 @@ impl PreparedStep {
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Json`: config non deserializzabile nel tipo atteso
+/// - `PlenoraError::DataMapping`: config non deserializzabile nel tipo atteso
 ///   dall'operazione;
 /// - `PlenoraError::Unsupported`: operazione sconosciuta al dispatcher.
 #[allow(clippy::too_many_lines)] // Mirror of the audited dispatcher, one arm per operation.
@@ -1490,7 +1490,7 @@ pub fn execute_batch_with_spill(
     spill_dir: Option<&Path>,
 ) -> Result<(RecordBatch, spill::SpillMetrics)> {
     if plan.requires_secondary() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "il piano richiede un secondo input".into(),
         ));
     }
@@ -1506,14 +1506,14 @@ pub fn execute_batch_with_spill(
         .zip(plan.prepared_steps())
         .enumerate()
     {
-        batch = execute_step(&batch, prepared, plan.limits(), spill_dir, &mut spill_metrics).map_err(|error| PlenoraError::Step {
+        batch = execute_step(&batch, prepared, plan.limits(), spill_dir, &mut spill_metrics).map_err(|error| PlenoraError::Execution {
             node: index.to_string(),
             operation: step.operation.clone(),
             // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
             execution_id: String::new(),
             reason: error.to_string(),
         })?;
-        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| PlenoraError::Step {
+        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| PlenoraError::Execution {
             node: index.to_string(),
             operation: step.operation.clone(),
             execution_id: String::new(),
@@ -1533,7 +1533,7 @@ pub fn execute_binary(
     plan: &ValidatedPlan,
 ) -> Result<RecordBatch> {
     if !plan.requires_secondary() || plan.steps().len() != 1 {
-        return Err(PlenoraError::Contract("piano binario non valido".into()));
+        return Err(PlenoraError::InvalidPlan("piano binario non valido".into()));
     }
     let left = normalize_large_utf8(left)?;
     let right = normalize_large_utf8(right)?;

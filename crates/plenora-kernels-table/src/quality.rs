@@ -64,7 +64,7 @@ fn expected_type(value: &str) -> Result<DataType> {
             true,
         )))),
         "struct" => Ok(DataType::Struct(plenora_core::arrow::schema::Fields::empty())),
-        other => Err(PlenoraError::Contract(format!(
+        other => Err(PlenoraError::InvalidPlan(format!(
             "assert_schema: tipo non supportato {other}"
         ))),
     }
@@ -163,7 +163,7 @@ pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<Re
     for name in &config.columns {
         let index = column_index(batch, name)?;
         if let Some(row) = (0..batch.num_rows()).find(|row| batch.column(index).is_null(*row)) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_not_null: null in {name} alla riga {row}"
             )));
         }
@@ -315,7 +315,7 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         }
         encoder.encode_into(row, &mut key)?;
         if !seen.insert(key.clone()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_unique: duplicato alla riga {row}"
             )));
         }
@@ -344,13 +344,13 @@ fn assert_unique_scalar<K: Hash + Eq>(
                 continue;
             }
             if seen_null {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "assert_unique: duplicato alla riga {row}"
                 )));
             }
             seen_null = true;
         } else if !seen.insert(key(row)) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_unique: duplicato alla riga {row}"
             )));
         }
@@ -445,12 +445,12 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
             if config.allow_null {
                 continue;
             }
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_range: null alla riga {row}"
             )));
         };
         if outside {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_range: valore fuori intervallo alla riga {row}"
             )));
         }
@@ -484,13 +484,13 @@ pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordB
         ));
     }
     let pattern = Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::Contract(format!("regex non valida: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
     for row in 0..batch.num_rows() {
         match scalar_as_string(batch.column(index).as_ref(), row)? {
             Some(value) if pattern.is_match(&value) => {}
             None if config.allow_null => {}
             _ => {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "assert_regex: valore non conforme alla riga {row}"
                 )))
             }
@@ -525,7 +525,7 @@ pub struct Coalesce {
 pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "coalesce richiede almeno una colonna".into(),
         ));
     }
@@ -569,12 +569,12 @@ pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result
                     position
                         .checked_mul(batch.num_rows())
                         .and_then(|offset| offset.checked_add(row))
-                        .ok_or_else(|| PlenoraError::Contract("overflow indice coalesce".into()))
+                        .ok_or_else(|| PlenoraError::InvalidPlan("overflow indice coalesce".into()))
                 })
                 .transpose()?
                 .map(u64::try_from)
                 .transpose()
-                .map_err(|_| PlenoraError::Contract("indice coalesce oltre u64".into()))
+                .map_err(|_| PlenoraError::InvalidPlan("indice coalesce oltre u64".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(plenora_core::arrow::select::take::take(
@@ -743,7 +743,7 @@ mod tests {
                 continue;
             }
             if !seen.insert(key_for_row(batch, &indices, row)?) {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "assert_unique: duplicato alla riga {row}"
                 )));
             }

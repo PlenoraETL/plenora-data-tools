@@ -377,7 +377,7 @@ fn compiled_capability_validates_and_is_required_by_graph() {
         .expect("ambiente coerente");
     // Un ambiente senza geos rifiuta il grafo (ADR 4).
     let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &CapabilitySet::default());
-    assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
+    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
 }
 
 #[test]
@@ -385,7 +385,7 @@ fn input_contracts_must_match_declared_inputs() {
     let plan = mixed_plan_json();
 
     let missing = validate(&plan, &[]);
-    assert!(matches!(missing, Err(PlenoraError::Contract(_))), "{missing:?}");
+    assert!(matches!(missing, Err(PlenoraError::InvalidPlan(_))), "{missing:?}");
 
     let extra = validate(
         &plan,
@@ -394,7 +394,7 @@ fn input_contracts_must_match_declared_inputs() {
             ("other".to_owned(), table_contract()),
         ],
     );
-    assert!(matches!(extra, Err(PlenoraError::Contract(_))), "{extra:?}");
+    assert!(matches!(extra, Err(PlenoraError::InvalidPlan(_))), "{extra:?}");
 
     let duplicate = validate(
         &plan,
@@ -403,7 +403,7 @@ fn input_contracts_must_match_declared_inputs() {
             ("main".to_owned(), geo_contract(2)),
         ],
     );
-    assert!(matches!(duplicate, Err(PlenoraError::Contract(_))), "{duplicate:?}");
+    assert!(matches!(duplicate, Err(PlenoraError::InvalidPlan(_))), "{duplicate:?}");
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn sorted_by_keys_on_input_are_rejected_fail_closed() {
     ));
     let result = validate(&mixed_plan_json(), &input(contract));
     match result {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("sorted_by"), "{message}");
         }
         other => panic!("atteso rifiuto sorted_by su input, ottenuto {other:?}"),
@@ -553,7 +553,7 @@ fn publish_profile_is_required_and_checked() {
     // Un ambiente senza il profilo di publish richiesto rifiuta il grafo.
     let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &compiled_capabilities());
     match result {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
             assert!(message.contains("atomic_publish"), "{message}");
         }
@@ -569,7 +569,7 @@ fn engine_version_mismatch_is_rejected() {
     let graph = validate_mixed();
     let result = check_compatibility(&graph, CATALOG, "0.0.0-altra", ARROW_VERSION, &local_capabilities());
     match result {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
             assert!(message.contains("engine_version"), "{message}");
         }
@@ -584,7 +584,7 @@ fn arrow_version_mismatch_is_rejected() {
     assert_eq!(graph.arrow_version().0, ARROW_VERSION);
     let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, "0.0.0-altra", &local_capabilities());
     match result {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
             assert!(message.contains("arrow_version"), "{message}");
         }
@@ -639,7 +639,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
         .collect();
     let result = check_compatibility(&graph, &bumped, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
     match result {
-        Err(PlenoraError::Contract(message)) => {
+        Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("catalog_fingerprint"), "{message}");
         }
         other => panic!("atteso mismatch fingerprint, ottenuto {other:?}"),
@@ -652,7 +652,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
         .cloned()
         .collect();
     let result = check_compatibility(&graph, &without_buffer, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
-    assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
+    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
 
     // Un'op NON usata che cambia non invalida il grafo.
     let untouched: Vec<OperationDescriptor> = CATALOG
@@ -685,16 +685,16 @@ fn input_contract_mismatch_is_rejected() {
         Field::new("extra", DataType::Utf8, true),
     ]));
     let result = check_input_compatibility(&graph, &input(wider));
-    assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
+    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
 
     // Geometria con CRS diverso -> mismatch.
     let other_crs = geo_contract_with_crs(1, geographic_crs());
     let result = check_input_compatibility(&graph, &input(other_crs));
-    assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
+    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
 
     // Input mancante -> mismatch.
     let result = check_input_compatibility(&graph, &[]);
-    assert!(matches!(result, Err(PlenoraError::Contract(_))), "{result:?}");
+    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
 }
 
 #[test]

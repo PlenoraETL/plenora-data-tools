@@ -62,9 +62,9 @@ pub fn string_pad(
     let mut fill = config.fill_char.chars();
     let fill_char = fill
         .next()
-        .ok_or_else(|| PlenoraError::Contract("fill_char e' vuoto".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("fill_char e' vuoto".into()))?;
     if fill.next().is_some() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "fill_char deve contenere un solo carattere Unicode".into(),
         ));
     }
@@ -94,7 +94,7 @@ pub fn string_pad(
             }
         }
         if padded.len() > limits.max_string_bytes {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "string_pad supera max_string_bytes".into(),
             ));
         }
@@ -137,7 +137,7 @@ pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<Recor
             } else {
                 i64::try_from(input.value(row).chars().count())
                     .map(Some)
-                    .map_err(|_| PlenoraError::Contract("stringa troppo lunga".into()))
+                    .map_err(|_| PlenoraError::InvalidPlan("stringa troppo lunga".into()))
             }
         })
         .collect();
@@ -200,12 +200,12 @@ pub fn string_extract(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.pattern.len() > limits.max_regex_bytes {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "pattern oltre max_regex_bytes".into(),
         ));
     }
     let regex = Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::Contract(format!("regex non valida: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
     let input = utf8_column(batch, &config.column)?;
     let named: Vec<(usize, String)> = regex
         .capture_names()
@@ -421,7 +421,7 @@ pub fn text_normalize(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.columns.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "text_normalize richiede almeno una colonna".into(),
         ));
     }
@@ -446,7 +446,7 @@ pub fn text_normalize(
             scratch.reserve(value.len());
             normalize_into(value, &config.operations, &mut scratch);
             if scratch.len() > limits.max_string_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "text_normalize supera max_string_bytes".into(),
                 ));
             }
@@ -526,7 +526,7 @@ mod tests {
         limits: &Limits,
     ) -> Result<RecordBatch> {
         if config.columns.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "text_normalize richiede almeno una colonna".into(),
             ));
         }
@@ -546,7 +546,7 @@ mod tests {
                 } else {
                     let value = reference_normalize(input.value(row), &config.operations);
                     if value.len() > limits.max_string_bytes {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "text_normalize supera max_string_bytes".into(),
                         ));
                     }
@@ -575,12 +575,12 @@ mod tests {
         limits: &Limits,
     ) -> Result<RecordBatch> {
         if config.pattern.len() > limits.max_regex_bytes {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "pattern oltre max_regex_bytes".into(),
             ));
         }
         let regex = Regex::new(&config.pattern)
-            .map_err(|error| PlenoraError::Contract(format!("regex non valida: {error}")))?;
+            .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
         let input = utf8_column(batch, &config.column)?;
         let named: Vec<(usize, String)> = regex
             .capture_names()

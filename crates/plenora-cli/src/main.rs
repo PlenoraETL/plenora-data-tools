@@ -81,7 +81,7 @@ use plenora_kernels_geo::crs::resolve_crs;
 // ---------------------------------------------------------------------------
 
 fn contract(message: impl Into<String>) -> PlenoraError {
-    PlenoraError::Contract(message.into())
+    PlenoraError::InvalidPlan(message.into())
 }
 
 /// Exit code dedicato alla cancellazione (ADR 3, M1c): 128 + SIGINT,
@@ -958,7 +958,7 @@ fn crs_definition_from_keys(
 fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
     let prefix = |message: &String| format!("input `{name}` ({}): {message}", path.display());
     match error {
-        PlenoraError::Contract(message) => PlenoraError::Contract(prefix(&message)),
+        PlenoraError::InvalidPlan(message) => PlenoraError::InvalidPlan(prefix(&message)),
         PlenoraError::Unsupported(message) => PlenoraError::Unsupported(prefix(&message)),
         PlenoraError::Schema(message) => PlenoraError::Schema(prefix(&message)),
         PlenoraError::Crs(message) => PlenoraError::Crs(prefix(&message)),
@@ -1626,7 +1626,7 @@ mod tests {
         // (1c) chiavi canoniche coerenti ma tipo non Binary -> errore.
         let schema = schema_v1(vec![canonical_geometry_field(DataType::Utf8)]);
         let result = discover_input_contract_from_schema(schema);
-        assert!(matches!(result, Err(PlenoraError::Contract(_))));
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
     }
 
     #[test]
@@ -1652,7 +1652,7 @@ mod tests {
             DataType::Binary,
         )]));
         let result = discover_input_contract_from_schema(schema);
-        assert!(matches!(result, Err(PlenoraError::Contract(_))));
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
     }
 
     #[test]
@@ -1665,7 +1665,7 @@ mod tests {
         let field = field.with_metadata(metadata);
         let result = discover_input_contract_from_schema(schema_v1(vec![field]));
         match result {
-            Err(PlenoraError::Contract(message)) => {
+            Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("divergente"), "{message}");
             }
             other => panic!("attesa divergenza R2.6, ottenuto {other:?}"),

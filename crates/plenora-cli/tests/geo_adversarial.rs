@@ -538,7 +538,7 @@ fn wkb_contract_rejects_malformed_nested_and_extreme_payloads() {
     }
     assert!(matches!(
         transform_geometry(Operation::Envelope, &empty_line()),
-        Err(PlenoraError::Contract(message))
+        Err(PlenoraError::InvalidPlan(message))
             if message == "geometria vuota non supportata da envelope"
     ));
     assert!(transform_geometry(Operation::Centroid, &nan_point()).is_err());

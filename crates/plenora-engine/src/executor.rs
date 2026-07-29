@@ -125,7 +125,7 @@
 //! dispatch — [`run_kernel`] per i kernel unari (streaming e blocking) e la
 //! chiamata `execute_binary` per i segmenti binari, il livello piu' interno
 //! che conserva l'attribuzione di nodo — e convertiti in
-//! `PlenoraError::Step { node, operation, .. }` con il solo messaggio del
+//! `PlenoraError::Execution { node, operation, .. }` con il solo messaggio del
 //! panic, mai dati dei batch (regola di error.rs). L'errore propaga come
 //! qualunque altro: il publish atomico non e' raggiunto (nessun publish
 //! dopo panic) e il cleanup (tempfile, buffer degli archi) avviene comunque
@@ -202,11 +202,11 @@ impl Input {
     ///
     /// # Errors
     ///
-    /// `PlenoraError::Contract` se il vettore e' vuoto (per input vuoti usare
+    /// `PlenoraError::InvalidPlan` se il vettore e' vuoto (per input vuoti usare
     /// [`Input::empty`] con lo schema esplicito).
     pub fn from_batches(batches: Vec<RecordBatch>) -> Result<Self> {
         if batches.is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "input da batch: vettore vuoto, usare Input::empty con lo schema".into(),
             ));
         }
@@ -245,7 +245,7 @@ impl Input {
     ///
     /// # Errors
     ///
-    /// `PlenoraError::Io`/`PlenoraError::Arrow` se il file non si apre o
+    /// `PlenoraError::Io`/`PlenoraError::DataMapping` se il file non si apre o
     /// l'header IPC non e' valido.
     pub fn read_ipc_file(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)?;
@@ -306,11 +306,11 @@ impl Inputs {
     ///
     /// # Errors
     ///
-    /// `PlenoraError::Contract` se il nome e' gia' presente.
+    /// `PlenoraError::InvalidPlan` se il nome e' gia' presente.
     pub fn add(&mut self, name: impl Into<String>, input: Input) -> Result<()> {
         let name = name.into();
         if self.readers.insert(name.clone(), input).is_some() {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "input duplicato `{name}`"
             )));
         }
@@ -517,7 +517,7 @@ impl ExecState {
         }
         let prepared = Rc::new(
             prepare_one_to_one(schema, params)
-                .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?,
+                .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?,
         );
         self.prepared_one_to_one
             .borrow_mut()
@@ -600,7 +600,7 @@ impl ExecState {
     /// profondita' nel dispatch, non lo aveva a disposizione).
     fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
         match error {
-            PlenoraError::Step {
+            PlenoraError::Execution {
                 node,
                 operation,
                 mut execution_id,
@@ -609,7 +609,7 @@ impl ExecState {
                 if execution_id.is_empty() {
                     execution_id.clone_from(&self.execution_id);
                 }
-                PlenoraError::Step {
+                PlenoraError::Execution {
                     node,
                     operation,
                     execution_id,
@@ -633,19 +633,19 @@ impl ExecState {
         };
         let suffix = format!(" [{detail}]");
         match error {
-            PlenoraError::Step {
+            PlenoraError::Execution {
                 node,
                 operation,
                 execution_id,
                 reason,
-            } => PlenoraError::Step {
+            } => PlenoraError::Execution {
                 node,
                 operation,
                 execution_id,
                 reason: format!("{reason}{suffix}"),
             },
-            PlenoraError::Contract(reason) => {
-                PlenoraError::Contract(format!("{reason}{suffix}"))
+            PlenoraError::InvalidPlan(reason) => {
+                PlenoraError::InvalidPlan(format!("{reason}{suffix}"))
             }
             other => other,
         }
@@ -671,7 +671,7 @@ struct StoredEdgeError {
 impl StoredEdgeError {
     fn from_error(error: &PlenoraError) -> Self {
         match error {
-            PlenoraError::Step {
+            PlenoraError::Execution {
                 node,
                 operation,
                 execution_id,
@@ -713,13 +713,13 @@ impl StoredEdgeError {
                 execution_id: self.execution_id.clone().unwrap_or_default(),
                 reason: self.reason.clone(),
             },
-            (Some(node), Some(operation)) => PlenoraError::Step {
+            (Some(node), Some(operation)) => PlenoraError::Execution {
                 node: node.clone(),
                 operation: operation.clone(),
                 execution_id: self.execution_id.clone().unwrap_or_default(),
                 reason: self.reason.clone(),
             },
-            _ => PlenoraError::Contract(format!("arco interrotto: {}", self.reason)),
+            _ => PlenoraError::InvalidPlan(format!("arco interrotto: {}", self.reason)),
         }
     }
 }
@@ -888,7 +888,7 @@ impl Iterator for EdgeStream {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per chiave canonica preesistente divergente
+/// `PlenoraError::InvalidPlan` per chiave canonica preesistente divergente
 /// (R2.6) o colonna geometrica del contratto assente nello schema.
 fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
     if contract.geometries.is_empty() {
@@ -920,7 +920,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
                     if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY && value == "unknown" {
                         continue;
                     }
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
                          diverso da quello del contratto (R2.6: il componente fallisce, \
                          non sovrascrive)",
@@ -936,7 +936,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
         fields.push(field.as_ref().clone().with_metadata(metadata));
     }
     if matched != contract.geometries.len() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "colonna geometrica del contratto assente nello schema di output".to_owned(),
         ));
     }
@@ -946,7 +946,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
     for (key, value) in canonical_schema_version_metadata() {
         match metadata.get(&key) {
             Some(existing) if existing != &value => {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "chiave `{key}` dello schema gia' presente con un valore diverso \
                      (R2.6: il componente fallisce, non sovrascrive)"
                 )));
@@ -1049,9 +1049,9 @@ impl Output {
     ///
     /// # Errors
     ///
-    /// Propaga errori di stream e di I/O; `PlenoraError::Contract` se la
+    /// Propaga errori di stream e di I/O; `PlenoraError::InvalidPlan` se la
     /// destinazione esiste gia' o la directory non esiste;
-    /// `PlenoraError::UnsupportedPublishTarget` se il filesystem di
+    /// `PlenoraError::Unsupported` se il filesystem di
     /// destinazione e' di rete o non identificabile (ADR 7).
     pub fn write_ipc_file(self, path: &Path) -> Result<ExecutionMetrics> {
         let (metrics, _outcome) = self.write_ipc_file_with_profile(path, PublishProfile::Atomic)?;
@@ -1149,11 +1149,11 @@ impl Iterator for Output {
 ///
 /// # Errors
 ///
-/// - `PlenoraError::Contract`: `GRAPH_MISMATCH` sull'identita' del grafo,
+/// - `PlenoraError::InvalidPlan`: `GRAPH_MISMATCH` sull'identita' del grafo,
 ///   input mancanti/extra/duplicati, op fuori dal dispatch v1 (da `prepare`);
 /// - `PlenoraError::Schema`: schema di un input diverso dal contratto
 ///   validato;
-/// - `PlenoraError::Io`/`PlenoraError::Contract`: `TempStore` non creabile
+/// - `PlenoraError::Io`/`PlenoraError::InvalidPlan`: `TempStore` non creabile
 ///   (fail-closed ADR 3, vedi l'header del modulo).
 #[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da ADR 5.
 pub fn execute(
@@ -1177,7 +1177,7 @@ fn execute_physical(
     let declared: Vec<&String> = graph.plan().plan().inputs.iter().collect();
     for name in declared.iter().map(|s| (*s).as_str()) {
         if !inputs.readers.contains_key(name) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "manca l'input `{name}`"
             )));
         }
@@ -1187,7 +1187,7 @@ fn execute_physical(
         .keys()
         .find(|name| !declared.iter().any(|d| d.as_str() == name.as_str()))
     {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "input `{extra}` non dichiarato nel piano"
         )));
     }
@@ -1268,13 +1268,13 @@ fn execute_physical(
         output_counts.0 += batch.num_rows() as u64;
         output_counts.1 += 1;
         if output_counts.0 > limits.rows.max_output_rows {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "max_output_rows superato: {} righe di output > {}",
                 output_counts.0, limits.rows.max_output_rows
             )));
         }
         if output_counts.1 > limits.max_batches {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "max_batches superato sull'output: {} batch > {}",
                 output_counts.1, limits.max_batches
             )));
@@ -1318,7 +1318,7 @@ impl Network {
             self.input_stream(edge)
         } else {
             let index = self.plan.segment_of(edge).ok_or_else(|| {
-                PlenoraError::Contract(format!("arco `{edge}` senza produttore"))
+                PlenoraError::InvalidPlan(format!("arco `{edge}` senza produttore"))
             })?;
             self.segment_stream(index)?
         };
@@ -1400,19 +1400,19 @@ impl Network {
                 let entry = &counts[&edge_name];
                 let limits = &state.plan.limits();
                 if entry.0 > limits.rows.max_input_rows {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
                         entry.0, limits.rows.max_input_rows
                     )));
                 }
                 if entry.1 > limits.max_batches {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "max_batches superato sull'input `{edge_name}`: {} batch > {}",
                         entry.1, limits.max_batches
                     )));
                 }
                 if entry.2 > limits.max_payload_bytes {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "max_payload_bytes superato sull'input `{edge_name}`: {} byte > {}",
                         entry.2, limits.max_payload_bytes
                     )));
@@ -1529,7 +1529,7 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
     let bytes = batch.get_array_memory_size();
     let max = state.plan.batch_target().max_batch_bytes;
     if bytes > max {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "max_batch_bytes superato su `{where_}`: {bytes} byte > {max}"
         )));
     }
@@ -1573,7 +1573,7 @@ fn validate_wkb_cells(
         let payload = cells.value(row);
         if payload.len() as u64 > max_cell {
             return Err(state.with_diagnostics(
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
                 )),
                 Some(&column_detail()),
@@ -1581,7 +1581,7 @@ fn validate_wkb_cells(
         }
         validate_wkb_contract_for_dimensions_with_depth(payload, dimensions, max_depth)
             .map_err(|error| {
-                PlenoraError::Contract(format!(
+                PlenoraError::InvalidPlan(format!(
                     "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
                 ))
             })
@@ -1608,13 +1608,13 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
     let entry = &counts[edge];
     let limits = &state.plan.limits();
     if entry.0 > limits.rows.max_rows_per_edge {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "max_rows_per_edge superato sull'arco `{edge}`: {} righe > {}",
             entry.0, limits.rows.max_rows_per_edge
         )));
     }
     if entry.1 > limits.max_batches {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "max_batches superato sull'arco `{edge}`: {} batch > {}",
             entry.1, limits.max_batches
         )));
@@ -1689,7 +1689,7 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
     let entry = &rows[&kernel.node_id];
     let factor = state.plan.limits().rows.max_expansion_factor;
     if (entry.1 as f64) > (entry.0 as f64) * factor {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "max_expansion_factor superato al nodo `{}`: {} righe output > {} x {} righe input",
             kernel.node_id, entry.1, factor, entry.0
         )));
@@ -1720,7 +1720,7 @@ fn check_join_expansion(
     let binding = expansion.binding_metric(constraint);
     let factor = constraint.binding_threshold(state.plan.limits().rows.max_expansion_factor);
     if binding > factor {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "max_expansion_factor superato al nodo `{}` (vincolo {constraint:?}): \
              metrica vincolante {binding} > {factor}; \
              output/(left+right)={}, output/left={}, output/right={} \
@@ -1740,10 +1740,10 @@ fn check_join_expansion(
 /// confine di uscita (`ExecState::tag_execution`).
 fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     let reason = match error {
-        PlenoraError::Step { reason, .. } => reason,
+        PlenoraError::Execution { reason, .. } => reason,
         other => other.to_string(),
     };
-    PlenoraError::Step {
+    PlenoraError::Execution {
         node: kernel.node_id.clone(),
         operation: kernel.operation.to_owned(),
         execution_id: String::new(),
@@ -1762,7 +1762,7 @@ fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send
         .unwrap_or_else(|| "payload non testuale".to_owned());
     step_error(
         kernel,
-        PlenoraError::Contract(format!("panic nel kernel: {message}")),
+        PlenoraError::InvalidPlan(format!("panic nel kernel: {message}")),
     )
 }
 
@@ -2000,7 +2000,7 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
             state.add_spill_metrics(spill_metrics);
             Ok(output)
         }
-        PreparedConfig::TableBinary(_) => Err(PlenoraError::Contract(format!(
+        PreparedConfig::TableBinary(_) => Err(PlenoraError::InvalidPlan(format!(
             "nodo `{}`: kernel binario in una catena streaming (errore interno)",
             kernel.node_id
         ))),
@@ -2058,7 +2058,7 @@ fn geo_transform_batch(
 ) -> Result<RecordBatch> {
     let prepared = state.one_to_one_prepared(kernel, &batch.schema(), params)?;
     one_to_one_batch_prepared(batch, params, &prepared)
-        .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))
+        .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))
 }
 
 /// Misura geo "add column" (semantica v4): decodifica le celle WKB non null,
@@ -2098,7 +2098,7 @@ fn geo_measure_batch(
                 let geometry = decode_geometry_cell(cells.value(row))
                     .map_err(|error| step_error(kernel, error))?;
                 let value = operations::vertex_count(&geometry)
-                    .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+                    .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
                 values.push(Some(value));
             }
             std::sync::Arc::new(UInt64Array::from(values))
@@ -2113,7 +2113,7 @@ fn geo_measure_batch(
                 let geometry = decode_geometry_cell(cells.value(row))
                     .map_err(|error| step_error(kernel, error))?;
                 let value = operations::to_wkt(&geometry)
-                    .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+                    .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
                 values.push(Some(value));
             }
             std::sync::Arc::new(StringArray::from(values))
@@ -2142,7 +2142,7 @@ fn measure_f64(
         MeasureKind::Perimeter => operations::perimeter(&geometry),
         MeasureKind::VertexCount | MeasureKind::ToWkt => unreachable!("misura non f64"),
     }
-    .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+    .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
     Ok(Some(value))
 }
 
@@ -2238,7 +2238,7 @@ fn geo_accessors_batch(
         let geometry = decode_geometry_cell(cells.value(row))
             .map_err(|error| step_error(kernel, error))?;
         let values = plenora_kernels_geo::extensions::geometry_accessors(&geometry)
-            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+            .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
         accessors.push(Some(values));
     }
     let mut produced: Vec<ArrayRef> = Vec::with_capacity(columns.len());
@@ -2308,7 +2308,7 @@ fn geo_line_locate_point_batch(
         let geometry = decode_geometry_cell(cells.value(row))
             .map_err(|error| step_error(kernel, error))?;
         let fraction = plenora_kernels_geo::extensions::line_locate_point(&geometry, point)
-            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+            .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
         values.push(fraction);
     }
     append_output_column(kernel, batch, std::sync::Arc::new(Float64Array::from(values)))
@@ -2428,7 +2428,7 @@ fn geo_collect_batch(
             .map(|&row| geometries[row].clone())
             .collect();
         let geometry = plenora_kernels_geo::extensions::collect_geometries(&group)
-            .map_err(|error| step_error(kernel, PlenoraError::Contract(error.to_string())))?;
+            .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
         collected.push(match &geometry {
             Some(geometry) => Some(
                 plenora_kernels_geo::arrow_adapter::encode_geometry(geometry)
@@ -2685,7 +2685,7 @@ fn run_binary_blocking(
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().expect("segmento binario: 1 kernel");
     let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "nodo `{}`: config non binaria in un segmento BinaryBlocking (errore interno)",
             kernel.node_id
         )));

@@ -288,7 +288,7 @@ pub fn dbscan(
 }
 
 fn cluster_error(error: &ClusterError) -> PlenoraError {
-    PlenoraError::Contract(format!("geo.cluster_dbscan: {error}"))
+    PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {error}"))
 }
 
 /// Adapter di colonna per `geo.cluster_dbscan`: un'etichetta `UInt64`
@@ -299,10 +299,10 @@ fn cluster_error(error: &ClusterError) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per parametri non validi (`eps`, `min_points`)
+/// `PlenoraError::InvalidPlan` per parametri non validi (`eps`, `min_points`)
 /// e per geometrie non puntuali, non valide o con coordinate non finite; in
 /// piu' gli errori di decode delle celle WKB non-null (come
-/// [`decode_geometry_cell`], incluse le varianti `PlenoraError::Contract` e
+/// [`decode_geometry_cell`], incluse le varianti `PlenoraError::InvalidPlan` e
 /// `PlenoraError::Unsupported` del contratto WKB).
 pub fn dbscan_column(
     cells: &BinaryArray,
@@ -538,7 +538,7 @@ mod tests {
         let cells = wkb_column(&[Some(line)]);
         assert!(matches!(
             dbscan_column(&cells, 1.0, 2),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message.contains("geo.cluster_dbscan") && message.contains("LineString")
         ));
     }

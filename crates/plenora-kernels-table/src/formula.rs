@@ -73,7 +73,7 @@ impl Parser<'_> {
     fn factor(&mut self) -> Result<Expr> {
         self.skip_space();
         let Some(current) = self.input.get(self.position).copied() else {
-            return Err(PlenoraError::Contract("formula incompleta".into()));
+            return Err(PlenoraError::InvalidPlan("formula incompleta".into()));
         };
         if current == b'-' {
             self.position += 1;
@@ -84,7 +84,7 @@ impl Parser<'_> {
             let expression = self.expression()?;
             self.skip_space();
             if self.input.get(self.position) != Some(&b')') {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "parentesi formula non bilanciate".into(),
                 ));
             }
@@ -100,7 +100,7 @@ impl Parser<'_> {
         if current.is_ascii_alphabetic() || current == b'_' {
             return self.identifier();
         }
-        Err(PlenoraError::Contract(format!(
+        Err(PlenoraError::InvalidPlan(format!(
             "carattere formula non ammesso: {}",
             char::from(current)
         )))
@@ -114,19 +114,19 @@ impl Parser<'_> {
             .is_some_and(|value| *value != quote)
         {
             if self.input[self.position] == b'\\' {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "escape nelle stringhe formula non supportato".into(),
                 ));
             }
             self.position += 1;
         }
         if self.input.get(self.position) != Some(&quote) {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "stringa formula non terminata".into(),
             ));
         }
         let value = std::str::from_utf8(&self.input[start..self.position])
-            .map_err(|_| PlenoraError::Contract("formula non UTF-8".into()))?
+            .map_err(|_| PlenoraError::InvalidPlan("formula non UTF-8".into()))?
             .to_owned();
         self.position += 1;
         Ok(Expr::Text(value))
@@ -162,13 +162,13 @@ impl Parser<'_> {
                 self.position += 1;
             }
             if exponent == self.position {
-                return Err(PlenoraError::Contract("esponente formula non valido".into()));
+                return Err(PlenoraError::InvalidPlan("esponente formula non valido".into()));
             }
         }
         let value = std::str::from_utf8(&self.input[start..self.position])
             .ok()
             .and_then(|value| value.parse().ok())
-            .ok_or_else(|| PlenoraError::Contract("numero formula non valido".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("numero formula non valido".into()))?;
         Ok(Expr::Number(value))
     }
     fn identifier(&mut self) -> Result<Expr> {
@@ -182,7 +182,7 @@ impl Parser<'_> {
         }
         Ok(Expr::Column(
             std::str::from_utf8(&self.input[start..self.position])
-                .map_err(|_| PlenoraError::Contract("identificatore non UTF-8".into()))?
+                .map_err(|_| PlenoraError::InvalidPlan("identificatore non UTF-8".into()))?
                 .to_owned(),
         ))
     }
@@ -196,7 +196,7 @@ fn parse(input: &str) -> Result<Expr> {
     let expression = parser.expression()?;
     parser.skip_space();
     if parser.position != parser.input.len() {
-        return Err(PlenoraError::Contract("token extra nella formula".into()));
+        return Err(PlenoraError::InvalidPlan("token extra nella formula".into()));
     }
     Ok(expression)
 }
@@ -451,7 +451,7 @@ impl<'a> FastProgram<'a> {
                             stack.push((values.value(row).to_f64().unwrap_or_default(), values.is_null(row)));
                         }
                         FastColumn::Str(_) => {
-                            return Err(PlenoraError::Contract(
+                            return Err(PlenoraError::InvalidPlan(
                                 "internal error: programma numerico senza testo".into(),
                             ));
                         }
@@ -476,7 +476,7 @@ impl<'a> FastProgram<'a> {
                             }
                             FastOp::Divide => left / right,
                             _ => {
-                                return Err(PlenoraError::Contract(
+                                return Err(PlenoraError::InvalidPlan(
                                     "internal error: operatore non aritmetico nel ramo aritmetico"
                                         .into(),
                                 ));
@@ -485,7 +485,7 @@ impl<'a> FastProgram<'a> {
                         stack.push((value, false));
                     }
                     FastOp::Text(_) | FastOp::MissingColumn(_) => {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "internal error: programma numerico senza testo".into(),
                         ));
                     }
@@ -634,7 +634,7 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
             }
             FastOp::Divide => Slot::Number(left / right),
             _ => {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "internal error: operatore non aritmetico su operandi numerici".into(),
                 ));
             }
@@ -665,7 +665,7 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
 pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
     validate_output_name(&config.new_column)?;
     if config.formula.is_empty() || config.formula.len() > max_bytes {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "formula vuota o troppo grande".into(),
         ));
     }
@@ -779,7 +779,7 @@ fn infer_expr_type(
         Expr::Column(name) => column_kind(name),
         Expr::Neg(inner) => match infer_expr_type(inner, column_kind)? {
             FormulaType::Number => Ok(FormulaType::Number),
-            FormulaType::Text => Err(PlenoraError::Contract(
+            FormulaType::Text => Err(PlenoraError::InvalidPlan(
                 "formula: negazione di testo".into(),
             )),
         },
@@ -792,7 +792,7 @@ fn infer_expr_type(
                 (FormulaType::Number, '-' | '*' | '/', FormulaType::Number) => {
                     Ok(FormulaType::Number)
                 }
-                _ => Err(PlenoraError::Contract(
+                _ => Err(PlenoraError::InvalidPlan(
                     "formula: operatore numerico su testo".into(),
                 )),
             }

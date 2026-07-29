@@ -584,7 +584,7 @@ pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<Execu
 ///
 /// `PlenoraError::Unsupported` per operazioni fuori dal dispatch v1
 /// dell'executor (fail-closed qui, non a meta' stream);
-/// `PlenoraError::Contract`/`PlenoraError::Schema` se una configurazione gia'
+/// `PlenoraError::InvalidPlan`/`PlenoraError::Schema` se una configurazione gia'
 /// validata semanticamente non supera la rivalidazione fisica (difesa in
 /// profondita': non dovrebbe accadere su un `ValidatedGraph` genuino).
 ///
@@ -639,7 +639,7 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
         HashMap::with_capacity(plan.nodes.len());
     for node in &plan.nodes {
         let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "internal error: nodo `{}`: op risolta in validazione",
                 node.id
             ))
@@ -700,7 +700,7 @@ fn build_chains<'a>(
             // streaming unario.
             loop {
                 let Some(&last) = chain.last() else {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: catena non vuota".to_owned(),
                     ));
                 };
@@ -778,7 +778,7 @@ fn build_segments<'a>(
             .iter()
             .map(|id| {
                 kernels_by_id.remove(id).ok_or_else(|| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "internal error: nodo `{id}`: ogni nodo in esattamente un segmento"
                     ))
                 })
@@ -794,7 +794,7 @@ fn build_segments<'a>(
             output_contract: graph
                 .edge_contract(last)
                 .ok_or_else(|| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "internal error: arco `{last}` inferito in validazione"
                     ))
                 })?
@@ -849,7 +849,7 @@ fn prepare_kernel(
     limits: &Limits,
 ) -> Result<PreparedKernel> {
     let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "internal error: nodo `{}`: op risolta in validazione",
             node.id
         ))
@@ -861,7 +861,7 @@ fn prepare_kernel(
             graph
                 .edge_contract(edge)
                 .ok_or_else(|| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "internal error: arco `{edge}` inferito in validazione"
                     ))
                 })
@@ -871,7 +871,7 @@ fn prepare_kernel(
     let output_contract = graph
         .edge_contract(&node.id)
         .ok_or_else(|| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "internal error: arco `{}` inferito in validazione",
                 node.id
             ))
@@ -886,7 +886,7 @@ fn prepare_kernel(
                 .schema
                 .column_with_name(&geometry.name)
                 .ok_or_else(|| {
-                    PlenoraError::Contract(
+                    PlenoraError::InvalidPlan(
                         "internal error: colonna geometria nel contratto".to_owned(),
                     )
                 })?
@@ -959,7 +959,7 @@ fn prepare_table(
         steps: vec![step],
     };
     let validated = plan.validate().map_err(|error| {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "nodo `{}`: rivalidazione fisica della config fallita: {error}",
             node.id
         ))
@@ -1142,7 +1142,7 @@ fn prepare_geo(
         let geometry = input_contract
             .active_geometry_column()
             .ok_or_else(|| {
-                PlenoraError::Contract(
+                PlenoraError::InvalidPlan(
                     "internal error: geometria attiva verificata in validazione".to_owned(),
                 )
             })?;
@@ -1183,7 +1183,7 @@ fn prepare_geo(
             require_complete: None,
         };
         params.validate_parameters().map_err(|error| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "nodo `{}`: rivalidazione fisica dei parametri fallita: {error}",
                 node.id
             ))
@@ -1279,7 +1279,7 @@ fn prepare_geo_extension(
                     .iter()
                     .map(|name| {
                         AccessorKind::from_canonical_name(name).ok_or_else(|| {
-                            PlenoraError::Contract(format!(
+                            PlenoraError::InvalidPlan(format!(
                                 "nodo `{}`: accessorio `{name}` sconosciuto",
                                 node.id
                             ))
@@ -1320,7 +1320,7 @@ fn prepare_geo_extension(
             let parsed: GeoLineLocatePointConfig = serde_json::from_value(node.config.clone())?;
             let Geometry::Point(point) = decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)?
             else {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: point_wkb deve essere un Point",
                     node.id
                 )));
@@ -1342,7 +1342,7 @@ fn prepare_geo_extension(
             // gia' applicata dal planner, niente da fare a runtime.
             let _ = &parsed.output_column;
             if parsed.max_vertices < plenora_kernels_geo::extensions2::MIN_SUBDIVIDE_VERTICES {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: max_vertices deve essere almeno 4 (anello chiuso minimo)",
                     node.id
                 )));
@@ -1358,7 +1358,7 @@ fn prepare_geo_extension(
             let parsed: GeoSnapConfig = serde_json::from_value(node.config.clone())?;
             let reference = decode_wkb_hex(&node.id, "reference_wkb", &parsed.reference_wkb)?;
             if !parsed.tolerance.is_finite() || parsed.tolerance < 0.0 {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: tolerance deve essere finita e non negativa",
                     node.id
                 )));
@@ -1402,13 +1402,13 @@ fn prepare_geo_extension(
                 parsed.extent.ymax,
             )
             .map_err(|error| {
-                PlenoraError::Contract(format!("nodo `{}`: {error}", node.id))
+                PlenoraError::InvalidPlan(format!("nodo `{}`: {error}", node.id))
             })?;
             let shape = parsed.shape.unwrap_or(GridShape::Square);
             // Rivalidazione fisica: cell_size e limite celle (E1).
             plenora_kernels_geo::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
                 .map_err(|error| {
-                    PlenoraError::Contract(format!("nodo `{}`: {error}", node.id))
+                    PlenoraError::InvalidPlan(format!("nodo `{}`: {error}", node.id))
                 })?;
             (
                 PreparedConfig::GeoGenerateGrid {
@@ -1423,7 +1423,7 @@ fn prepare_geo_extension(
             let parsed: GeoCoverageValidateConfig = serde_json::from_value(node.config.clone())?;
             let tolerance = parsed.tolerance.unwrap_or(0.0);
             if !tolerance.is_finite() || tolerance < 0.0 {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: tolerance deve essere finita e non negativa",
                     node.id
                 )));
@@ -1444,7 +1444,7 @@ fn prepare_geo_extension(
             let min_length = parsed.min_length.unwrap_or(0.0);
             for (name, value) in [("tolerance", tolerance), ("min_length", min_length)] {
                 if !value.is_finite() || value < 0.0 {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "nodo `{}`: {name} deve essere finita e non negativa",
                         node.id
                     )));
@@ -1461,13 +1461,13 @@ fn prepare_geo_extension(
         "geo.cluster_dbscan" => {
             let parsed: GeoClusterDbscanConfig = serde_json::from_value(node.config.clone())?;
             if !parsed.eps.is_finite() || parsed.eps <= 0.0 {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: eps deve essere finito e maggiore di zero",
                     node.id
                 )));
             }
             if parsed.min_points < 1 {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: min_points deve essere almeno 1",
                     node.id
                 )));
@@ -1497,7 +1497,7 @@ fn prepare_geo_extension(
 /// `prepare`, mai nel loop per batch (E1).
 fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>> {
     let invalid = || {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "nodo `{node_id}`: {name} non e' WKB esadecimale valido"
         ))
     };
@@ -1510,7 +1510,7 @@ fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>>
         .collect();
     let bytes = bytes.map_err(|_| invalid())?;
     plenora_kernels_geo::geometry_from_wkb(&bytes).map_err(|error| {
-        PlenoraError::Contract(format!(
+        PlenoraError::InvalidPlan(format!(
             "nodo `{node_id}`: {name} non decodificabile: {error}"
         ))
     })

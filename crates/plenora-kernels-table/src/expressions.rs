@@ -159,9 +159,9 @@ fn literal(value: &Value) -> Result<Scalar> {
             .as_f64()
             .filter(|value| value.is_finite())
             .map(Scalar::Number)
-            .ok_or_else(|| PlenoraError::Contract("literal numerico non finito".into())),
+            .ok_or_else(|| PlenoraError::InvalidPlan("literal numerico non finito".into())),
         Value::String(value) => Ok(Scalar::Text(value.clone())),
-        Value::Array(_) | Value::Object(_) => Err(PlenoraError::Contract(
+        Value::Array(_) | Value::Object(_) => Err(PlenoraError::InvalidPlan(
             "literal expression deve essere scalare".into(),
         )),
     }
@@ -256,7 +256,7 @@ fn arithmetic(op: BinaryOperator, left: &Scalar, right: &Scalar) -> Result<Scala
         }
         BinaryOperator::Divide => left / right,
         _ => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "operatore aritmetico inatteso".into(),
             ))
         }
@@ -284,7 +284,7 @@ fn logical(op: BinaryOperator, left: &Scalar, right: &Scalar) -> Result<Scalar> 
             (Some(false), Some(false)) => Scalar::Boolean(false),
             _ => Scalar::Null,
         },
-        _ => return Err(PlenoraError::Contract("operatore logico inatteso".into())),
+        _ => return Err(PlenoraError::InvalidPlan("operatore logico inatteso".into())),
     })
 }
 
@@ -343,7 +343,7 @@ fn trunc_unit(value: &str) -> Result<TruncUnit> {
         "hour" => Ok(TruncUnit::Hour),
         "minute" => Ok(TruncUnit::Minute),
         "second" => Ok(TruncUnit::Second),
-        other => Err(PlenoraError::Contract(format!(
+        other => Err(PlenoraError::InvalidPlan(format!(
             "date_trunc: unita' non valida: {other}"
         ))),
     }
@@ -356,7 +356,7 @@ fn literal_unit(expression: &Expression) -> Result<TruncUnit> {
         Expression::Literal {
             value: Value::String(unit),
         } => trunc_unit(unit),
-        _ => Err(PlenoraError::Contract(
+        _ => Err(PlenoraError::InvalidPlan(
             "date_trunc: unit deve essere un letterale stringa".into(),
         )),
     }
@@ -364,13 +364,13 @@ fn literal_unit(expression: &Expression) -> Result<TruncUnit> {
 
 fn date32_epoch() -> Result<NaiveDate> {
     NaiveDate::from_ymd_opt(1970, 1, 1)
-        .ok_or_else(|| PlenoraError::Contract("internal error: epoca Date32 valida".into()))
+        .ok_or_else(|| PlenoraError::InvalidPlan("internal error: epoca Date32 valida".into()))
 }
 
 /// Unita' sub-day non ammesse su Date32 (una data non ha componente oraria).
 fn check_date32_unit(unit: TruncUnit) -> Result<()> {
     if matches!(unit, TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second) {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "date_trunc: unita' sub-day non ammessa su Date32".into(),
         ));
     }
@@ -386,7 +386,7 @@ fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
         TruncUnit::Month => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
         TruncUnit::Day => Some(date),
         TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "internal error: unita' sub-day gia' rifiutata da check_date32_unit".into(),
             ));
         }
@@ -427,7 +427,7 @@ fn trunc_timestamp_ms_value(ms: i64, unit: TruncUnit) -> Result<i64> {
 /// valore e' letto nativamente da `eval_temporal`.
 fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
     if args.len() != 2 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "date_trunc richiede 2 argomenti".into(),
         ));
     }
@@ -436,7 +436,7 @@ fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> R
         Scalar::Null => Ok(Scalar::Null),
         Scalar::Date32(days) => Ok(Scalar::Date32(trunc_date32_days(days, unit)?)),
         Scalar::TimestampMs(ms) => Ok(Scalar::TimestampMs(trunc_timestamp_ms_value(ms, unit)?)),
-        _ => Err(PlenoraError::Contract(
+        _ => Err(PlenoraError::InvalidPlan(
             "internal error: eval_temporal produce solo valori temporali".into(),
         )),
     }
@@ -496,7 +496,7 @@ fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Re
         Expression::Literal {
             value: Value::Null,
         } => Ok(Scalar::Null),
-        _ => Err(PlenoraError::Contract(
+        _ => Err(PlenoraError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
     }
@@ -509,13 +509,13 @@ fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Re
 /// ammessa: sempre `false`.
 fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
     if args.len() != 2 {
-        return Err(PlenoraError::Contract("in richiede 2 argomenti".into()));
+        return Err(PlenoraError::InvalidPlan("in richiede 2 argomenti".into()));
     }
     let Expression::Literal {
         value: Value::Array(items),
     } = &args[1]
     else {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "in richiede una lista di letterali come secondo argomento".into(),
         ));
     };
@@ -546,7 +546,7 @@ fn root_temporal_type(expression: &Expression, batch: &RecordBatch) -> Result<Op
         return Ok(None);
     };
     if args.len() != 2 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "date_trunc richiede 2 argomenti".into(),
         ));
     }
@@ -592,7 +592,7 @@ fn temporal_kind(expression: &Expression, batch: &RecordBatch) -> Result<Option<
             args,
         } => {
             if args.len() != 2 {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "date_trunc richiede 2 argomenti".into(),
                 ));
             }
@@ -606,7 +606,7 @@ fn temporal_kind(expression: &Expression, batch: &RecordBatch) -> Result<Option<
         Expression::Literal {
             value: Value::Null,
         } => Ok(None),
-        _ => Err(PlenoraError::Contract(
+        _ => Err(PlenoraError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
     }
@@ -616,7 +616,7 @@ fn exact_args<'a>(args: &'a [Scalar], count: usize, name: &str) -> Result<&'a [S
     if args.len() == count {
         Ok(args)
     } else {
-        Err(PlenoraError::Contract(format!(
+        Err(PlenoraError::InvalidPlan(format!(
             "{name} richiede {count} argomenti"
         )))
     }
@@ -627,7 +627,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
     match name {
         Function::Coalesce => {
             if args.is_empty() {
-                return Err(PlenoraError::Contract("coalesce richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan("coalesce richiede argomenti".into()));
             }
             Ok(args
                 .into_iter()
@@ -656,7 +656,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Length => Scalar::Number(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
-                        .map_err(|_| PlenoraError::Contract("testo troppo lungo".into()))?,
+                        .map_err(|_| PlenoraError::InvalidPlan("testo troppo lungo".into()))?,
                 ),
                 Function::Year => {
                     let date =
@@ -665,7 +665,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                     Scalar::Number(f64::from(date.year()))
                 }
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
                             .into(),
                     ));
@@ -674,7 +674,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
         }
         Function::Concat => {
             if args.is_empty() {
-                return Err(PlenoraError::Contract("concat richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan("concat richiede argomenti".into()));
             }
             let mut output = String::new();
             for value in args {
@@ -698,7 +698,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::StartsWith => value.starts_with(&pattern),
                 Function::EndsWith => value.ends_with(&pattern),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
                             .into(),
                     ));
@@ -714,7 +714,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo numerico ammette solo abs/round".into(),
                     ));
                 }
@@ -729,7 +729,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo numerico ammette solo floor/ceil".into(),
                     ));
                 }
@@ -753,7 +753,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
         }
         Function::Substring => {
             if !(2..=3).contains(&args.len()) {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "substring richiede 2 o 3 argomenti".into(),
                 ));
             }
@@ -787,7 +787,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 return Ok(Scalar::Null);
             };
             let regex = regex::Regex::new(&pattern).map_err(|error| {
-                PlenoraError::Contract(format!("regex_replace: regex non valida: {error}"))
+                PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
             })?;
             Ok(Scalar::Text(
                 regex.replace_all(&value, replacement.as_str()).into_owned(),
@@ -816,7 +816,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 "least"
             };
             if args.is_empty() {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "{label} richiede argomenti"
                 )));
             }
@@ -836,7 +836,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             }
             Ok(best)
         }
-        Function::DateTrunc | Function::In => Err(PlenoraError::Contract(
+        Function::DateTrunc | Function::In => Err(PlenoraError::InvalidPlan(
             "internal error: date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
                 .into(),
         )),
@@ -851,7 +851,7 @@ fn substring_index(value: &Scalar, context: &str) -> Result<Option<usize>> {
         return Ok(None);
     };
     if value < 0.0 {
-        return Err(PlenoraError::Contract(format!("{context} negativo")));
+        return Err(PlenoraError::InvalidPlan(format!("{context} negativo")));
     }
     Ok(Some(value as usize))
 }
@@ -906,21 +906,21 @@ fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<
 
 fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: usize) -> Result<()> {
     if depth > 64 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "expression supera la profondita' massima".into(),
         ));
     }
     *nodes = nodes
         .checked_add(1)
-        .ok_or_else(|| PlenoraError::Contract("overflow nodi expression".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow nodi expression".into()))?;
     if *nodes > max_nodes {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "expression supera il numero massimo di nodi".into(),
         ));
     }
     match expression {
         Expression::Column { name } if name.trim().is_empty() => {
-            Err(PlenoraError::Contract("colonna expression vuota".into()))
+            Err(PlenoraError::InvalidPlan("colonna expression vuota".into()))
         }
         Expression::Literal { value } => literal(value).map(|_| ()),
         Expression::Unary { value, .. } => audit(value, depth + 1, nodes, max_nodes),
@@ -930,12 +930,12 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
         }
         Expression::Function { name, args } => {
             if args.len() > 64 {
-                return Err(PlenoraError::Contract("troppi argomenti expression".into()));
+                return Err(PlenoraError::InvalidPlan("troppi argomenti expression".into()));
             }
             // date_trunc: unita' letterale del set chiuso, rifiutata qui.
             if matches!(name, Function::DateTrunc) {
                 if args.len() != 2 {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "date_trunc richiede 2 argomenti".into(),
                     ));
                 }
@@ -945,7 +945,7 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
             // (altrimenti `literal` rifiuterebbe l'array come non scalare).
             if matches!(name, Function::In) {
                 if args.len() != 2 {
-                    return Err(PlenoraError::Contract("in richiede 2 argomenti".into()));
+                    return Err(PlenoraError::InvalidPlan("in richiede 2 argomenti".into()));
                 }
                 match &args[1] {
                     Expression::Literal {
@@ -956,7 +956,7 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
                         }
                     }
                     _ => {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "in richiede una lista di letterali come secondo argomento".into(),
                         ));
                     }
@@ -973,7 +973,7 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
             else_value,
         } => {
             if branches.is_empty() || branches.len() > 64 {
-                return Err(PlenoraError::Contract("numero rami case non valido".into()));
+                return Err(PlenoraError::InvalidPlan("numero rami case non valido".into()));
             }
             for branch in branches {
                 audit(&branch.when, depth + 1, nodes, max_nodes)?;
@@ -1093,7 +1093,7 @@ fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> Resu
         }
     }
     match resolved {
-        OutputType::Auto => Err(PlenoraError::Contract(
+        OutputType::Auto => Err(PlenoraError::InvalidPlan(
             "internal error: output_type Auto non risolto".into(),
         )),
         OutputType::Number => replace_or_append(
@@ -1202,14 +1202,14 @@ impl<'a> FastLiteral<'a> {
 /// Errore rilasciato solo quando il nodo viene valutato (lazy, come nel
 /// generico): letterale non valido o colonna assente.
 enum LazyError {
-    Contract(String),
+    InvalidPlan(String),
     Schema(String),
 }
 
 impl LazyError {
     fn build(&self) -> PlenoraError {
         match self {
-            Self::Contract(message) => PlenoraError::Contract(message.clone()),
+            Self::InvalidPlan(message) => PlenoraError::InvalidPlan(message.clone()),
             Self::Schema(message) => PlenoraError::Schema(message.clone()),
         }
     }
@@ -1452,7 +1452,7 @@ fn fast_arithmetic<'a>(
         }
         BinaryOperator::Divide => left / right,
         _ => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "operatore aritmetico inatteso".into(),
             ));
         }
@@ -1485,7 +1485,7 @@ fn fast_logical<'a>(
             (Some(false), Some(false)) => FastValue::Boolean(false),
             _ => FastValue::Null,
         },
-        _ => return Err(PlenoraError::Contract("operatore logico inatteso".into())),
+        _ => return Err(PlenoraError::InvalidPlan("operatore logico inatteso".into())),
     })
 }
 
@@ -1539,7 +1539,7 @@ fn exact_args_fast(args: &[FastValue<'_>], count: usize, name: &str) -> Result<(
     if args.len() == count {
         Ok(())
     } else {
-        Err(PlenoraError::Contract(format!(
+        Err(PlenoraError::InvalidPlan(format!(
             "{name} richiede {count} argomenti"
         )))
     }
@@ -1551,7 +1551,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
     match name {
         Function::Coalesce => {
             if args.is_empty() {
-                return Err(PlenoraError::Contract("coalesce richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan("coalesce richiede argomenti".into()));
             }
             Ok(args
                 .into_iter()
@@ -1580,7 +1580,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Length => FastValue::Number(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
-                        .map_err(|_| PlenoraError::Contract("testo troppo lungo".into()))?,
+                        .map_err(|_| PlenoraError::InvalidPlan("testo troppo lungo".into()))?,
                 ),
                 Function::Year => {
                     let date =
@@ -1589,7 +1589,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                     FastValue::Number(f64::from(date.year()))
                 }
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo unario ammette solo lower/upper/trim/length/year"
                             .into(),
                     ));
@@ -1598,7 +1598,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
         }
         Function::Concat => {
             if args.is_empty() {
-                return Err(PlenoraError::Contract("concat richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan("concat richiede argomenti".into()));
             }
             let mut output = String::new();
             for value in &args {
@@ -1622,7 +1622,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::StartsWith => value.starts_with(pattern),
                 Function::EndsWith => value.ends_with(pattern),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo testo ammette solo contains/starts_with/ends_with"
                             .into(),
                     ));
@@ -1638,7 +1638,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Abs => value.abs(),
                 Function::Round => value.round(),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo numerico ammette solo abs/round".into(),
                     ));
                 }
@@ -1653,7 +1653,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Floor => value.floor(),
                 Function::Ceil => value.ceil(),
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: il ramo numerico ammette solo floor/ceil".into(),
                     ));
                 }
@@ -1678,7 +1678,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
         }
         Function::Substring => {
             if !(2..=3).contains(&args.len()) {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "substring richiede 2 o 3 argomenti".into(),
                 ));
             }
@@ -1725,7 +1725,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 "least"
             };
             if args.is_empty() {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "{label} richiede argomenti"
                 )));
             }
@@ -1745,7 +1745,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
             }
             Ok(best)
         }
-        Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::Contract(
+        Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::InvalidPlan(
             "internal error: regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
                 .into(),
         )),
@@ -1759,7 +1759,7 @@ fn fast_substring_index(value: &FastValue<'_>, context: &str) -> Result<Option<u
         return Ok(None);
     };
     if value < 0.0 {
-        return Err(PlenoraError::Contract(format!("{context} negativo")));
+        return Err(PlenoraError::InvalidPlan(format!("{context} negativo")));
     }
     Ok(Some(value as usize))
 }
@@ -1834,7 +1834,7 @@ impl LazyError {
     /// forma lazy del fast path.
     fn from_validation(error: &PlenoraError) -> Self {
         match error {
-            PlenoraError::Contract(message) => Self::Contract(message.clone()),
+            PlenoraError::InvalidPlan(message) => Self::InvalidPlan(message.clone()),
             PlenoraError::Schema(message) => Self::Schema(message.clone()),
             // Non atteso: i percorsi di validazione emettono solo Contract/Schema.
             other => Self::Schema(other.to_string()),
@@ -1850,11 +1850,11 @@ fn compile_literal(value: &Value) -> FastNode<'_> {
             .as_f64()
             .filter(|value| value.is_finite())
             .map_or_else(
-                || FastNode::Error(LazyError::Contract("literal numerico non finito".into())),
+                || FastNode::Error(LazyError::InvalidPlan("literal numerico non finito".into())),
                 |value| FastNode::Literal(FastLiteral::Number(value)),
             ),
         Value::String(value) => FastNode::Literal(FastLiteral::Text(value.as_str())),
-        Value::Array(_) | Value::Object(_) => FastNode::Error(LazyError::Contract(
+        Value::Array(_) | Value::Object(_) => FastNode::Error(LazyError::InvalidPlan(
             "literal expression deve essere scalare".into(),
         )),
     }
@@ -1908,7 +1908,7 @@ fn compile_expression<'a>(expression: &'a Expression, batch: &'a RecordBatch) ->
 
 fn compile_date_trunc<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
     if args.len() != 2 {
-        return FastNode::Error(LazyError::Contract(
+        return FastNode::Error(LazyError::InvalidPlan(
             "date_trunc richiede 2 argomenti".into(),
         ));
     }
@@ -1971,7 +1971,7 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
         Expression::Literal {
             value: Value::Null,
         } => TemporalSource::NullLiteral,
-        _ => TemporalSource::Error(LazyError::Contract(
+        _ => TemporalSource::Error(LazyError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
     }
@@ -1979,13 +1979,13 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
 
 fn compile_in<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
     if args.len() != 2 {
-        return FastNode::Error(LazyError::Contract("in richiede 2 argomenti".into()));
+        return FastNode::Error(LazyError::InvalidPlan("in richiede 2 argomenti".into()));
     }
     let Expression::Literal {
         value: Value::Array(items),
     } = &args[1]
     else {
-        return FastNode::Error(LazyError::Contract(
+        return FastNode::Error(LazyError::InvalidPlan(
             "in richiede una lista di letterali come secondo argomento".into(),
         ));
     };
@@ -1997,7 +1997,7 @@ fn compile_in<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a
 
 fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> FastNode<'a> {
     if args.len() != 3 {
-        return FastNode::Error(LazyError::Contract(
+        return FastNode::Error(LazyError::InvalidPlan(
             "regex_replace richiede 3 argomenti".into(),
         ));
     }
@@ -2089,7 +2089,7 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 FastValue::TimestampMs(ms) => {
                     Ok(FastValue::TimestampMs(trunc_timestamp_ms_value(ms, *unit)?))
                 }
-                _ => Err(PlenoraError::Contract(
+                _ => Err(PlenoraError::InvalidPlan(
                     "internal error: la sorgente temporale produce solo valori temporali".into(),
                 )),
             }
@@ -2124,7 +2124,7 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 (RegexSource::Compiled(_, text), None) => Some(*text),
                 (RegexSource::Dynamic(_), Some(value)) => fast_text(value, "regex_replace")?,
                 _ => {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "internal error: sorgente regex e valore dinamico incoerenti".into(),
                     ));
                 }
@@ -2139,10 +2139,10 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
             let regex = match pattern {
                 RegexSource::Compiled(compiled, _) => compiled
                     .as_ref()
-                    .map_err(|message| PlenoraError::Contract(message.clone()))?,
+                    .map_err(|message| PlenoraError::InvalidPlan(message.clone()))?,
                 RegexSource::Dynamic(_) => {
                     owned = regex::Regex::new(pattern_text).map_err(|error| {
-                        PlenoraError::Contract(format!("regex_replace: regex non valida: {error}"))
+                        PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
                     })?;
                     &owned
                 }
@@ -2232,7 +2232,7 @@ impl<'a> FastProgram<'a> {
             }
         }
         match resolved {
-            OutputType::Auto => Err(PlenoraError::Contract(
+            OutputType::Auto => Err(PlenoraError::InvalidPlan(
             "internal error: output_type Auto non risolto".into(),
         )),
             OutputType::Number => replace_or_append(

@@ -56,9 +56,9 @@ impl SpillWorkspace {
         self.bytes_written = self
             .bytes_written
             .checked_add(bytes)
-            .ok_or_else(|| PlenoraError::Contract("overflow quota spill".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("overflow quota spill".into()))?;
         if self.bytes_written > self.max_temp_bytes {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "spill oltre max_temp_bytes: {} > {}",
                 self.bytes_written, self.max_temp_bytes
             )));
@@ -69,7 +69,7 @@ impl SpillWorkspace {
 
 fn partition(key: &[u8], partitions: usize) -> Result<usize> {
     if partitions == 0 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "spill richiede almeno una partizione".into(),
         ));
     }
@@ -82,7 +82,7 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
     hasher.write(key);
     let divisor = partitions as u64;
     usize::try_from(hasher.finish() % divisor)
-        .map_err(|_| PlenoraError::Contract("indice partizione non rappresentabile".into()))
+        .map_err(|_| PlenoraError::InvalidPlan("indice partizione non rappresentabile".into()))
 }
 
 /// Capacita' dei buffer di I/O dello spill. Il default (8 KiB) costa ~128
@@ -139,14 +139,14 @@ fn spill_batch(
     for row in 0..batch.num_rows() {
         encoder.encode_into(row, &mut key)?;
         if key.len() > max_record_bytes(limits) {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "singola chiave oltre max_temp_bytes".into(),
             ));
         }
         let index = partition(&key, writers.len())?;
         let ordinal = ordinal_offset
             .checked_add(row)
-            .ok_or_else(|| PlenoraError::Contract("overflow ordinal spill".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("overflow ordinal spill".into()))?;
         write_record(&mut writers[index], ordinal, &key, workspace)?;
     }
     Ok(())
@@ -159,7 +159,7 @@ fn read_u64(reader: &mut BufReader<File>) -> Result<Option<u64>> {
         count => {
             reader.read_exact(&mut bytes[count..]).map_err(|error| {
                 if error.kind() == ErrorKind::UnexpectedEof {
-                    PlenoraError::Contract("record spill troncato".into())
+                    PlenoraError::InvalidPlan("record spill troncato".into())
                 } else {
                     PlenoraError::Io(error)
                 }
@@ -178,11 +178,11 @@ fn read_record(
         return Ok(None);
     };
     let length = read_u64(reader)?
-        .ok_or_else(|| PlenoraError::Contract("record spill senza lunghezza".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("record spill senza lunghezza".into()))?;
     let length = usize::try_from(length)
-        .map_err(|_| PlenoraError::Contract("record spill non rappresentabile".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("record spill non rappresentabile".into()))?;
     if length > max_record_bytes {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "record spill oltre il limite di sicurezza".into(),
         ));
     }
@@ -192,14 +192,14 @@ fn read_record(
     key.resize(length, 0);
     reader.read_exact(key.as_mut_slice()).map_err(|error| {
         if error.kind() == ErrorKind::UnexpectedEof {
-            PlenoraError::Contract("chiave spill troncata".into())
+            PlenoraError::InvalidPlan("chiave spill troncata".into())
         } else {
             PlenoraError::Io(error)
         }
     })?;
     Ok(Some(
         usize::try_from(ordinal)
-            .map_err(|_| PlenoraError::Contract("ordinal spill non rappresentabile".into()))?,
+            .map_err(|_| PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into()))?,
     ))
 }
 
@@ -219,9 +219,9 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
         if keys.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
             if estimated > limits.max_memory_bytes {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "partizione spill oltre max_memory_bytes: {estimated} > {}",
                     limits.max_memory_bytes
                 )));
@@ -240,9 +240,9 @@ fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) ->
         if emitted.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
             if estimated > limits.max_memory_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "partizione union spill oltre max_memory_bytes".into(),
                 ));
             }
@@ -272,9 +272,9 @@ fn collect_membership(
         } else if !right.contains(key.as_slice()) && emitted.insert(key.as_slice().into()) {
             emitted_bytes = emitted_bytes
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::Contract("overflow memoria except spill".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria except spill".into()))?;
             if emitted_bytes > limits.max_memory_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "partizione except spill oltre max_memory_bytes".into(),
                 ));
             }
@@ -511,7 +511,7 @@ impl RowSpillWorkspace {
     fn check_quota(&self) -> Result<()> {
         let written = self.bytes_written.get();
         if written > self.max_temp_bytes {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "spill oltre max_temp_bytes: {} > {}",
                 written, self.max_temp_bytes
             )));
@@ -645,7 +645,7 @@ fn spill_partitioned(
     partitions: usize,
 ) -> Result<Vec<PathBuf>> {
     if partitions == 0 {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "spill richiede almeno una partizione".into(),
         ));
     }
@@ -690,9 +690,9 @@ fn read_partition(
     while let Some(batch) = reader.next().transpose()? {
         estimated = estimated
             .checked_add(estimated_batch_bytes(&batch))
-            .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
         if estimated > limits.max_memory_bytes {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "partizione spill oltre max_memory_bytes".into(),
             ));
         }
@@ -770,7 +770,7 @@ pub fn distinct_spilled_in(
             .collect::<Result<Vec<_>>>()?
     };
     if batch.schema().index_of(SPILL_ORDINAL_COLUMN).is_ok() {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "colonna riservata allo spill: {SPILL_ORDINAL_COLUMN}"
         )));
     }
@@ -781,7 +781,7 @@ pub fn distinct_spilled_in(
     let ordinals = (0..batch.num_rows())
         .map(|row| {
             u64::try_from(row)
-                .map_err(|_| PlenoraError::Contract("ordinal spill oltre u64".into()))
+                .map_err(|_| PlenoraError::InvalidPlan("ordinal spill oltre u64".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     let with_ordinal = replace_or_append(
@@ -812,7 +812,7 @@ pub fn distinct_spilled_in(
                 .column(partition_batch.num_columns() - 1)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| PlenoraError::Contract("colonna ordinale spill mancante".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("colonna ordinale spill mancante".into()))?;
             let read_keys = indices
                 .iter()
                 .map(|index| KeyColumn::new(partition_batch.column(*index)))
@@ -833,9 +833,9 @@ pub fn distinct_spilled_in(
                 } else {
                     estimated = estimated
                         .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                        .ok_or_else(|| PlenoraError::Contract("overflow memoria spill".into()))?;
+                        .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
                     if estimated > limits.max_memory_bytes {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "distinct spill oltre max_memory_bytes".into(),
                         ));
                     }
@@ -860,7 +860,7 @@ pub fn distinct_spilled_in(
         })
         .map(|ordinal| {
             usize::try_from(ordinal)
-                .map_err(|_| PlenoraError::Contract("ordinal spill non rappresentabile".into()))
+                .map_err(|_| PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     rows.sort_unstable();
@@ -917,7 +917,7 @@ pub fn aggregate_spilled_in(
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if group_indices.is_empty() {
-        return Err(PlenoraError::Contract("aggregate richiede group_by".into()));
+        return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
     }
     if batch.num_rows() == 0 {
         return Ok((
@@ -966,7 +966,7 @@ pub fn aggregate_spilled_in(
         }
         let partition_output = aggregation::aggregate(&partition_batch, config)?;
         if partition_output.num_rows() != distinct_keys.len() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "aggregate spill: righe di output diverse dai gruppi".into(),
             ));
         }
@@ -975,7 +975,7 @@ pub fn aggregate_spilled_in(
     }
     // `batch` non vuoto implica almeno una partizione non vuota.
     let Some(first) = outputs.first() else {
-        return Err(PlenoraError::Contract("aggregate spill senza partizioni".into()));
+        return Err(PlenoraError::InvalidPlan("aggregate spill senza partizioni".into()));
     };
     let combined = concat_batches(&first.schema(), &outputs)?;
     // Le chiavi sono univoche per costruzione (un gruppo = una riga),
@@ -1058,11 +1058,11 @@ fn compare_cells(
     let left_batch = challenger
         .current
         .as_ref()
-        .ok_or_else(|| PlenoraError::Contract("cursore spill esaurito".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("cursore spill esaurito".into()))?;
     let right_batch = champion
         .current
         .as_ref()
-        .ok_or_else(|| PlenoraError::Contract("cursore spill esaurito".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("cursore spill esaurito".into()))?;
     aggregation::compare_cells_typed(
         left_batch.column(column),
         challenger.row,
@@ -1117,7 +1117,7 @@ pub fn sort_spilled_in(
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if indices.is_empty() {
-        return Err(PlenoraError::Contract("sort richiede colonne".into()));
+        return Err(PlenoraError::InvalidPlan("sort richiede colonne".into()));
     }
     if batch.num_rows() == 0 {
         return Ok((aggregation::sort(batch, config)?, SpillMetrics::default()));

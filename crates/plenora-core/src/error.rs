@@ -27,20 +27,37 @@ use thiserror::Error;
 
 /// Errore unico del workspace, fusione di `EngineError` (nogeo-tools) e
 /// `GeoEngineError` (geo-tools-arrow).
+///
+/// Nomi delle varianti allineati all'enumerazione canonica §9 (Appendice C,
+/// contratti trasversali v2.0-rc8, R9.5: sottoinsieme ammesso, mai valori
+/// propri): `Contract` → `InvalidPlan`, `Step` → `Execution`,
+/// `UnsupportedPublishTarget` → fusa in `Unsupported`, `Json`/`Arrow` →
+/// fuse in `DataMapping`. **I testi `Display` sono invariati** ("contract
+/// violation", "step failed at node", "arrow error", ...): la rinomina e'
+/// a livello di variante e categoria machine-readable, non di messaggio —
+/// nessun consumatore testuale si rompe. Approssimazione dichiarata: la
+/// fusione `Json`+`Arrow` in `DataMapping` perde la sorgente tipizzata
+/// (resta nel testo) e la distinzione di fase parse/I-O (vedi
+/// [`PlenoraError::phase`]).
 #[derive(Debug, Error)]
 pub enum PlenoraError {
-    /// Violazione del contratto del piano o di un nodo.
+    /// Piano o configurazione di un nodo malformati o incoerenti.
     #[error("contract violation: {0}")]
-    Contract(String),
+    InvalidPlan(String),
 
     /// Operazione non supportata (id sconosciuto, maturity insufficiente,
-    /// capability mancante).
+    /// capability mancante, destinazione di publish non supportata).
     #[error("unsupported operation: {0}")]
     Unsupported(String),
 
     /// Violazione di schema Arrow o di `DataContract`.
     #[error("schema violation: {0}")]
     Schema(String),
+
+    /// Un valore non e' rappresentabile nella destinazione (errore Arrow o
+    /// di deserializzazione JSON di piano/config).
+    #[error("{0}")]
+    DataMapping(String),
 
     /// Fallimento di un nodo durante l'esecuzione.
     ///
@@ -49,7 +66,7 @@ pub enum PlenoraError {
     /// dispatch/uscita; resta vuoto per errori costruiti fuori da
     /// un'esecuzione DAG (percorso legacy `table_engine`).
     #[error("step failed at node `{node}` (operation `{operation}`{}): {reason}", execution_suffix(execution_id))]
-    Step {
+    Execution {
         node: String,
         operation: String,
         execution_id: String,
@@ -60,15 +77,10 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Destinazione di publish non supportata (ADR 7): filesystem di rete o
-    /// non identificabile — riconoscimento fail-closed del filesystem.
-    #[error("unsupported publish target: {0}")]
-    UnsupportedPublishTarget(String),
-
     /// Esecuzione annullata dal chiamante (ADR 3, M1c): il token di
     /// cancellazione e' stato osservato a un confine cooperativo
     /// dell'executor e nessun output e' stato pubblicato (invariante I8).
-    /// Contesto come `Step` — nodo, operazione, `execution_id` — mai dati.
+    /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
     #[error("cancelled at node `{node}` (operation `{operation}`{}): {reason}", execution_suffix(execution_id))]
     Cancelled {
         node: String,
@@ -77,63 +89,96 @@ pub enum PlenoraError {
         reason: String,
     },
 
-    /// Errore Arrow.
-    #[error("arrow error: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
-
-    /// Errore di deserializzazione JSON (piano o config).
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-
     /// Errore di I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Categoria stabile di un [`PlenoraError`] (ADR 3).
+impl From<arrow_schema::ArrowError> for PlenoraError {
+    fn from(error: arrow_schema::ArrowError) -> Self {
+        // Testo invariato rispetto alla variante `Arrow` pre-rinomina; la
+        // sorgente tipizzata resta nel messaggio (fusione §9, dichiarata).
+        Self::DataMapping(format!("arrow error: {error}"))
+    }
+}
+
+impl From<serde_json::Error> for PlenoraError {
+    fn from(error: serde_json::Error) -> Self {
+        // Come sopra: testo invariato rispetto alla variante `Json`.
+        Self::DataMapping(format!("json error: {error}"))
+    }
+}
+
+/// Categoria stabile di un [`PlenoraError`]: enumerazione canonica §9
+/// (R9.5 — il sottoinsieme usato dal componente, mai valori propri).
 ///
 /// L'errore primario conserva la categoria; pensata per telemetria e report
 /// machine-readable, non per il matching di controllo di flusso (per quello
 /// ci sono le varianti).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCategory {
-    /// Violazione del contratto del piano o di un nodo.
-    Contract,
-    /// Operazione non supportata.
-    Unsupported,
-    /// Violazione di schema Arrow o di `DataContract`.
+    /// Piano o configurazione malformati o incoerenti.
+    InvalidPlan,
+    /// Configurazione del componente invalida.
+    InvalidConfiguration,
+    /// Schema Arrow o contratto dati incoerente.
     Schema,
-    /// Fallimento di un nodo durante l'esecuzione.
-    Step,
-    /// Errore CRS.
+    /// Un valore non e' rappresentabile nella destinazione.
+    DataMapping,
+    /// CRS assente, irrisolto o incoerente.
     Crs,
-    /// Destinazione di publish non supportata (ADR 7).
-    UnsupportedPublishTarget,
-    /// Esecuzione annullata dal chiamante (ADR 3).
+    /// Capability non offerta dal componente.
+    Unsupported,
+    /// Risorsa, layer o tabella inesistente.
+    NotFound,
+    /// Destinazione gia' esistente o conflitto di scrittura.
+    Conflict,
+    /// Credenziali assenti o rifiutate.
+    Authentication,
+    /// Permessi insufficienti.
+    Authorization,
+    /// Scadenza superata.
+    Timeout,
+    /// Annullato dal chiamante.
     Cancelled,
-    /// Errore Arrow.
-    Arrow,
-    /// Errore di deserializzazione JSON.
-    Json,
-    /// Errore di I/O.
+    /// Limite di byte, righe, profondita' o quota superato.
+    ResourceLimit,
+    /// Errore del filesystem o del dispositivo.
     Io,
+    /// Violazione del protocollo di trasporto o di rete.
+    Protocol,
+    /// Condizione temporanea, ritentabile per natura.
+    Transient,
+    /// Fallimento di un nodo durante la trasformazione.
+    Execution,
+    /// Invariante interna violata.
+    Internal,
 }
 
 impl ErrorCategory {
-    /// Nome stabile della categoria (telemetria, report JSON).
+    /// Nome stabile della categoria (telemetria, report JSON): `snake_case`
+    /// canonico §9.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Contract => "contract",
-            Self::Unsupported => "unsupported",
+            Self::InvalidPlan => "invalid_plan",
+            Self::InvalidConfiguration => "invalid_configuration",
             Self::Schema => "schema",
-            Self::Step => "step",
+            Self::DataMapping => "data_mapping",
             Self::Crs => "crs",
-            Self::UnsupportedPublishTarget => "unsupported_publish_target",
+            Self::Unsupported => "unsupported",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::Timeout => "timeout",
             Self::Cancelled => "cancelled",
-            Self::Arrow => "arrow",
-            Self::Json => "json",
+            Self::ResourceLimit => "resource_limit",
             Self::Io => "io",
+            Self::Protocol => "protocol",
+            Self::Transient => "transient",
+            Self::Execution => "execution",
+            Self::Internal => "internal",
         }
     }
 }
@@ -252,15 +297,13 @@ impl PlenoraError {
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
-            Self::Contract(_) => ErrorCategory::Contract,
+            Self::InvalidPlan(_) => ErrorCategory::InvalidPlan,
             Self::Unsupported(_) => ErrorCategory::Unsupported,
             Self::Schema(_) => ErrorCategory::Schema,
-            Self::Step { .. } => ErrorCategory::Step,
+            Self::DataMapping(_) => ErrorCategory::DataMapping,
+            Self::Execution { .. } => ErrorCategory::Execution,
             Self::Crs(_) => ErrorCategory::Crs,
-            Self::UnsupportedPublishTarget(_) => ErrorCategory::UnsupportedPublishTarget,
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
-            Self::Arrow(_) => ErrorCategory::Arrow,
-            Self::Json(_) => ErrorCategory::Json,
             Self::Io(_) => ErrorCategory::Io,
         }
     }
@@ -289,48 +332,47 @@ impl PlenoraError {
     /// `at_input` nella CLI, publish) e' stato introdotto in questa
     /// milestone. Scelte di mapping (da riportare in ADR-0009):
     ///
-    /// - `Contract`, `Unsupported`, `Schema`, `Crs`, `Json` →
+    /// - `InvalidPlan`, `Unsupported`, `Schema`, `Crs` →
     ///   [`ErrorPhase::Validate`]: parse del piano e controlli di contratto,
     ///   schema, CRS, capability e limiti sono validazione per natura, e il
     ///   canonico non ha una fase «Parse». Approssimazioni dichiarate: i
     ///   controlli del governor (es. `max_expansion_factor`) scattano
     ///   DURANTE l'esecuzione ma restano validazione di vincoli; il check
     ///   «output esiste gia'» di publish (ADR 7) avviene al confine di
-    ///   commit. La variante non distingue i momenti: il raffinamento e'
-    ///   follow-up.
-    /// - `UnsupportedPublishTarget` → [`ErrorPhase::Probe`]: il
-    ///   riconoscimento fail-closed del filesystem di destinazione (ADR 7)
-    ///   e' ispezione preliminare della risorsa, prima di qualunque
-    ///   scrittura — sui bordi filesystem §9 assegna l'ispezione a `Probe`.
-    /// - `Step`, `Cancelled` → [`ErrorPhase::Write`]: il canonico non ha una
-    ///   fase «Execute». DECISIONE PROGETTUALE: in data-tools la lettura
-    ///   degli input (fase `Read`) avviene al confine `Input` PRIMA
+    ///   commit; la destinazione di publish non supportata (prima variante
+    ///   dedicata, `Probe`) e' fusa in `Unsupported` dalla rinomina §9 e
+    ///   ricade in `Validate` — la distinzione `Probe`/`Validate` richiede
+    ///   il tagging al confine di publish, follow-up di R9.7. La variante
+    ///   non distingue i momenti: il raffinamento e' follow-up.
+    /// - `Execution`, `Cancelled` → [`ErrorPhase::Write`]: il canonico non
+    ///   ha una fase «Execute». DECISIONE PROGETTUALE: in data-tools la
+    ///   lettura degli input (fase `Read`) avviene al confine `Input` PRIMA
     ///   dell'esecuzione del DAG e i suoi errori emergono come
-    ///   `Io`/`Arrow`/`Schema`, mai come `Step`; un `Step` nasce solo
-    ///   mentre un nodo produce il proprio stream di output, e la
-    ///   cancellazione (invariante I8: nessun output pubblicato) e'
+    ///   `Io`/`DataMapping`/`Schema`, mai come `Execution`; un `Execution`
+    ///   nasce solo mentre un nodo produce il proprio stream di output, e
+    ///   la cancellazione (invariante I8: nessun output pubblicato) e'
     ///   osservata agli stessi confini cooperativi. La produzione
     ///   dell'output e' la fase `Write` del ciclo canonico.
-    /// - `Arrow`, `Io` → [`ErrorPhase::Write`]: le varianti coprono sia la
-    ///   lettura degli input sia la scrittura/publish e non distinguono.
-    ///   Si dichiara `Write` perche' e' il lato con possibile effetto sul
-    ///   supporto, il solo rilevante quando la ritentabilita' sara'
-    ///   calcolata da fase ed effetto (R9.7, follow-up): un errore in
+    /// - `DataMapping`, `Io` → [`ErrorPhase::Write`]: le varianti coprono
+    ///   sia la lettura degli input sia la scrittura/publish e non
+    ///   distinguono. Si dichiara `Write` perche' e' il lato con possibile
+    ///   effetto sul supporto, il solo rilevante quando la ritentabilita'
+    ///   sara' calcolata da fase ed effetto (R9.7, follow-up): un errore in
     ///   lettura resta privo di effetti e altrettanto gestibile.
-    ///   Approssimazione dichiarata.
+    ///   Approssimazione dichiarata (la fusione §9 di `Json`+`Arrow`
+    ///   cancella la distinzione parse/I-O che le due varianti separate
+    ///   portavano).
     #[must_use]
     pub const fn phase(&self) -> ErrorPhase {
         match self {
             // Bracci fusi per fase (stessa decisione documentata sopra per
             // ogni variante): l'esaustivita' e' preservata perche' tutte
             // le varianti restano nominate esplicitamente.
-            Self::Contract(_)
+            Self::InvalidPlan(_)
             | Self::Unsupported(_)
             | Self::Schema(_)
-            | Self::Crs(_)
-            | Self::Json(_) => ErrorPhase::Validate,
-            Self::UnsupportedPublishTarget(_) => ErrorPhase::Probe,
-            Self::Step { .. } | Self::Cancelled { .. } | Self::Arrow(_) | Self::Io(_) => {
+            | Self::Crs(_) => ErrorPhase::Validate,
+            Self::Execution { .. } | Self::Cancelled { .. } | Self::DataMapping(_) | Self::Io(_) => {
                 ErrorPhase::Write
             }
         }
@@ -357,15 +399,13 @@ impl PlenoraError {
         match self {
             // Tutte le varianti nominate esplicitamente (esaustivita'
             // preservata): `None` per costruzione, vedi la doc sopra.
-            Self::Contract(_)
+            Self::InvalidPlan(_)
             | Self::Unsupported(_)
             | Self::Schema(_)
-            | Self::Step { .. }
+            | Self::DataMapping(_)
+            | Self::Execution { .. }
             | Self::Crs(_)
-            | Self::UnsupportedPublishTarget(_)
             | Self::Cancelled { .. }
-            | Self::Arrow(_)
-            | Self::Json(_)
             | Self::Io(_) => RemoteEffect::None,
         }
     }
@@ -389,7 +429,7 @@ mod tests {
     use super::*;
 
     fn step(execution_id: &str) -> PlenoraError {
-        PlenoraError::Step {
+        PlenoraError::Execution {
             node: "n".to_owned(),
             operation: "table.filter".to_owned(),
             execution_id: execution_id.to_owned(),
@@ -410,15 +450,18 @@ mod tests {
     /// attesa (le varianti `#[from]` sono coperte a parte).
     fn samples() -> Vec<(PlenoraError, ErrorCategory)> {
         vec![
-            (PlenoraError::Contract("c".into()), ErrorCategory::Contract),
+            (
+                PlenoraError::InvalidPlan("c".into()),
+                ErrorCategory::InvalidPlan,
+            ),
             (PlenoraError::Unsupported("u".into()), ErrorCategory::Unsupported),
             (PlenoraError::Schema("s".into()), ErrorCategory::Schema),
-            (step("exec-1"), ErrorCategory::Step),
-            (PlenoraError::Crs("crs".into()), ErrorCategory::Crs),
             (
-                PlenoraError::UnsupportedPublishTarget("t".into()),
-                ErrorCategory::UnsupportedPublishTarget,
+                PlenoraError::DataMapping("d".into()),
+                ErrorCategory::DataMapping,
             ),
+            (step("exec-1"), ErrorCategory::Execution),
+            (PlenoraError::Crs("crs".into()), ErrorCategory::Crs),
             (cancelled(), ErrorCategory::Cancelled),
             (
                 PlenoraError::Io(std::io::Error::other("io")),
@@ -433,13 +476,15 @@ mod tests {
             assert_eq!(error.category(), expected, "{error}");
             assert!(!error.category().as_str().is_empty());
         }
-        // Varianti `#[from]`: costruibili solo da errori reali.
+        // Conversioni `From` esterne (fusione §9 in `DataMapping`).
         let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
-        assert_eq!(arrow.category(), ErrorCategory::Arrow);
+        assert_eq!(arrow.category(), ErrorCategory::DataMapping);
+        assert!(arrow.to_string().starts_with("arrow error: "));
         let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
             .expect_err("json invalido")
             .into();
-        assert_eq!(json.category(), ErrorCategory::Json);
+        assert_eq!(json.category(), ErrorCategory::DataMapping);
+        assert!(json.to_string().starts_with("json error: "));
     }
 
     #[test]
@@ -451,19 +496,16 @@ mod tests {
     }
 
     /// Una istanza per variante costruibile direttamente, con la fase
-    /// attesa (milestone D, R9.1); le varianti `#[from]` sono coperte a
-    /// parte, come in [`samples`].
+    /// attesa (milestone D, R9.1); le conversioni `From` esterne sono
+    /// coperte a parte, come in [`samples`].
     fn phase_samples() -> Vec<(PlenoraError, ErrorPhase)> {
         vec![
-            (PlenoraError::Contract("c".into()), ErrorPhase::Validate),
+            (PlenoraError::InvalidPlan("c".into()), ErrorPhase::Validate),
             (PlenoraError::Unsupported("u".into()), ErrorPhase::Validate),
             (PlenoraError::Schema("s".into()), ErrorPhase::Validate),
+            (PlenoraError::DataMapping("d".into()), ErrorPhase::Write),
             (step("exec-1"), ErrorPhase::Write),
             (PlenoraError::Crs("crs".into()), ErrorPhase::Validate),
-            (
-                PlenoraError::UnsupportedPublishTarget("t".into()),
-                ErrorPhase::Probe,
-            ),
             (cancelled(), ErrorPhase::Write),
             (
                 PlenoraError::Io(std::io::Error::other("io")),
@@ -477,13 +519,14 @@ mod tests {
         for (error, expected) in phase_samples() {
             assert_eq!(error.phase(), expected, "{error}");
         }
-        // Varianti `#[from]`: costruibili solo da errori reali.
+        // Conversioni `From` esterne: entrambe in `DataMapping` (Write —
+        // la fusione §9 cancella la distinzione parse/I-O, dichiarata).
         let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
         assert_eq!(arrow.phase(), ErrorPhase::Write);
         let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
             .expect_err("json invalido")
             .into();
-        assert_eq!(json.phase(), ErrorPhase::Validate);
+        assert_eq!(json.phase(), ErrorPhase::Write);
     }
 
     #[test]
@@ -570,5 +613,37 @@ mod tests {
         );
         assert_eq!(cancelled().category(), ErrorCategory::Cancelled);
         assert!(!cancelled().retryable(), "la cancellazione e' volontaria");
+    }
+
+    #[test]
+    fn category_names_are_exactly_the_canonical_eighteen() {
+        // R9.5: l'enumerazione canonica delle categorie; il sottoinsieme
+        // usato dal componente e' mapping in `category()`, mai valori
+        // propri. La tabella e' esaustiva per costruzione: aggiungere una
+        // variante senza toccare questo test lo farebbe fallire.
+        let all = [
+            (ErrorCategory::InvalidPlan, "invalid_plan"),
+            (ErrorCategory::InvalidConfiguration, "invalid_configuration"),
+            (ErrorCategory::Schema, "schema"),
+            (ErrorCategory::DataMapping, "data_mapping"),
+            (ErrorCategory::Crs, "crs"),
+            (ErrorCategory::Unsupported, "unsupported"),
+            (ErrorCategory::NotFound, "not_found"),
+            (ErrorCategory::Conflict, "conflict"),
+            (ErrorCategory::Authentication, "authentication"),
+            (ErrorCategory::Authorization, "authorization"),
+            (ErrorCategory::Timeout, "timeout"),
+            (ErrorCategory::Cancelled, "cancelled"),
+            (ErrorCategory::ResourceLimit, "resource_limit"),
+            (ErrorCategory::Io, "io"),
+            (ErrorCategory::Protocol, "protocol"),
+            (ErrorCategory::Transient, "transient"),
+            (ErrorCategory::Execution, "execution"),
+            (ErrorCategory::Internal, "internal"),
+        ];
+        assert_eq!(all.len(), 18, "l'enumerazione canonica ha 18 categorie");
+        for (category, name) in all {
+            assert_eq!(category.as_str(), name, "as_str canonico §9");
+        }
     }
 }

@@ -562,7 +562,7 @@ fn unsupported_and_error_variants_are_puntuali() {
     let malformed = "{ not json".to_owned() + &"x".repeat(8);
     assert!(matches!(
         PlanV4::parse_default(&malformed),
-        Err(PlenoraError::Json(_))
+        Err(PlenoraError::DataMapping(_))
     ));
     let unknown = json!({
         "schema_version": 4, "inputs": ["main"], "output": "a",
@@ -571,7 +571,7 @@ fn unsupported_and_error_variants_are_puntuali() {
     .to_string();
     assert!(matches!(
         PlanV4::parse_default(&unknown),
-        Err(PlenoraError::Contract(_))
+        Err(PlenoraError::InvalidPlan(_))
     ));
 }
 

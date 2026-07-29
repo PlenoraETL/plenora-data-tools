@@ -108,7 +108,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
@@ -117,7 +117,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
@@ -126,7 +126,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -135,7 +135,7 @@ impl<'a> TextColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(out, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -228,7 +228,7 @@ impl<'a> PivotKeyColumn<'a> {
             // `fmt::Write` su `String` e' infallibile; l'errore e'
             // comunque propagato come Internal, mai ignorato (R6.5).
             write!(key, "{}", value.len())
-                .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             key.push(':');
             key.push_str(value);
         } else {
@@ -274,21 +274,21 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
             .collect::<Result<Vec<_>>>()?
     };
     if value_indices.is_empty() {
-        return Err(PlenoraError::Contract("melt senza value_columns".into()));
+        return Err(PlenoraError::InvalidPlan("melt senza value_columns".into()));
     }
     let output_rows = batch
         .num_rows()
         .checked_mul(value_indices.len())
-        .ok_or_else(|| PlenoraError::Contract("overflow righe melt".into()))?;
+        .ok_or_else(|| PlenoraError::InvalidPlan("overflow righe melt".into()))?;
     if output_rows > limits.max_rows {
-        return Err(PlenoraError::Contract("melt supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("melt supera max_rows".into()));
     }
     // Fast path: indici di ripetizione materializzati una sola volta come
     // UInt32 e `take` SOLO sulle colonne id (il percorso originale
     // replicava via `select_rows` l'intero batch, incluse le value_columns
     // poi scartate). Stesso controllo di overflow di `select_rows`.
     let row_count = u32::try_from(batch.num_rows())
-        .map_err(|_| PlenoraError::Contract("indice riga oltre u32".into()))?;
+        .map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))?;
     let mut repeated_indices = Vec::with_capacity(output_rows);
     for _ in 0..value_indices.len() {
         repeated_indices.extend(0..row_count);
@@ -349,7 +349,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
                 text.clear();
                 if source.write_value(row, &mut text)? {
                     if text.len() > limits.max_string_bytes {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "melt: valore testuale oltre max_string_bytes".into(),
                         ));
                     }
@@ -362,7 +362,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         fields.push(Field::new(&value_name, DataType::Utf8, true));
         columns.push(Arc::new(builder.finish()));
     } else {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "melt: value_columns eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
         ));
     }
@@ -380,7 +380,7 @@ fn collision_free(name: &str, batch: &RecordBatch) -> Result<String> {
     (1..100)
         .map(|index| format!("{name}_{index}"))
         .find(|candidate| batch.schema().index_of(candidate).is_err())
-        .ok_or_else(|| PlenoraError::Contract(format!("impossibile evitare collisione {name}")))
+        .ok_or_else(|| PlenoraError::InvalidPlan(format!("impossibile evitare collisione {name}")))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -435,7 +435,7 @@ fn pivot_column(
                     .copied()
                     .map(u32::try_from)
                     .transpose()
-                    .map_err(|_| PlenoraError::Contract("indice pivot oltre u32".into()))
+                    .map_err(|_| PlenoraError::InvalidPlan("indice pivot oltre u32".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (
@@ -449,7 +449,7 @@ fn pivot_column(
                 .map(|rows| {
                     rows.map(|rows| {
                         i64::try_from(rows.iter().filter(|row| !source.is_null(**row)).count())
-                            .map_err(|_| PlenoraError::Contract("conteggio pivot oltre i64".into()))
+                            .map_err(|_| PlenoraError::InvalidPlan("conteggio pivot oltre i64".into()))
                     })
                     .transpose()
                 })
@@ -519,11 +519,11 @@ fn pivot_column(
                     Ok(Some(match function {
                         PivotAgg::Sum => sum,
                         PivotAgg::Mean => sum / count.to_f64().ok_or_else(|| {
-                            PlenoraError::Contract("gruppo pivot non rappresentabile".into())
+                            PlenoraError::InvalidPlan("gruppo pivot non rappresentabile".into())
                         })?,
                         PivotAgg::Min | PivotAgg::Max => extremum,
                         _ => {
-                            return Err(PlenoraError::Contract(
+                            return Err(PlenoraError::InvalidPlan(
                                 "internal error: funzione pivot non numerica nel ramo numerico"
                                     .into(),
                             ));
@@ -621,7 +621,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     if sorted_keys.len() > limits.max_rows
         || index_indices.len().saturating_add(sorted_pivots.len()) > limits.max_columns
     {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "pivot supera i limiti di output".into(),
         ));
     }
@@ -632,7 +632,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .iter()
         .map(|(_, id)| {
             u32::try_from(representatives[*id])
-                .map_err(|_| PlenoraError::Contract("indice riga oltre u32".into()))
+                .map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     let representative_indices = UInt32Array::from(representative_indices);
@@ -718,7 +718,7 @@ pub fn transpose(
         .collect::<Vec<_>>();
     let output_columns = batch.num_rows().saturating_add(1);
     if data_indices.len() > limits.max_rows || output_columns > limits.max_columns {
-        return Err(PlenoraError::Contract("transpose supera i limiti".into()));
+        return Err(PlenoraError::InvalidPlan("transpose supera i limiti".into()));
     }
     let first_name = config.id_column.clone().unwrap_or_else(|| "col_0".into());
     let mut fields = vec![Field::new(&first_name, DataType::Utf8, false)];
@@ -735,7 +735,7 @@ pub fn transpose(
         .iter()
         .all(|index| batch.column(*index).data_type() == &data_type);
     if !homogeneous && matches!(config.type_policy, HeterogeneousTypePolicy::Reject) {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "transpose: colonne eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
         ));
     }
@@ -772,7 +772,7 @@ pub fn transpose(
                         .and_then(|base| base.checked_add(row))
                         .and_then(|index| u64::try_from(index).ok())
                         .map(Some)
-                        .ok_or_else(|| PlenoraError::Contract("indice transpose oltre u64".into()))
+                        .ok_or_else(|| PlenoraError::InvalidPlan("indice transpose oltre u64".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
             columns.push(plenora_core::arrow::select::take::take(
@@ -791,7 +791,7 @@ pub fn transpose(
                 .flatten()
                 .any(|value| value.len() > limits.max_string_bytes)
             {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "transpose: valore testuale oltre max_string_bytes".into(),
                 ));
             }
@@ -867,12 +867,12 @@ pub fn explode(
             for value in start..end {
                 rows.push(row);
                 values.push(Some(u32::try_from(value).map_err(|_| {
-                    PlenoraError::Contract("indice explode oltre u32".into())
+                    PlenoraError::InvalidPlan("indice explode oltre u32".into())
                 })?));
             }
         }
         if rows.len() > limits.max_rows {
-            return Err(PlenoraError::Contract("explode supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("explode supera max_rows".into()));
         }
     }
     let repeated = select_rows(batch, &rows)?;
@@ -918,7 +918,7 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         .saturating_sub(usize::from(config.drop_source))
         .saturating_add(structure.num_columns());
     if projected_columns > limits.max_columns {
-        return Err(PlenoraError::Contract("unnest supera max_columns".into()));
+        return Err(PlenoraError::InvalidPlan("unnest supera max_columns".into()));
     }
     let mut fields = Vec::with_capacity(projected_columns);
     let mut columns = Vec::with_capacity(projected_columns);
@@ -1084,11 +1084,11 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
                 left.len().saturating_add(new_row)
             } else {
                 row.old_row
-                    .ok_or_else(|| PlenoraError::Contract("riga table_diff senza sorgente".into()))?
+                    .ok_or_else(|| PlenoraError::InvalidPlan("riga table_diff senza sorgente".into()))?
             };
             u32::try_from(index)
                 .map(Some)
-                .map_err(|_| PlenoraError::Contract("indice table_diff oltre u32".into()))
+                .map_err(|_| PlenoraError::InvalidPlan("indice table_diff oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(plenora_core::arrow::select::take::take(
@@ -1119,7 +1119,7 @@ pub fn table_diff(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-        return Err(PlenoraError::Contract("chiavi table_diff non valide".into()));
+        return Err(PlenoraError::InvalidPlan("chiavi table_diff non valide".into()));
     }
     let left_keys = config
         .left_keys
@@ -1187,7 +1187,7 @@ pub fn table_diff(
     for row in 0..left.num_rows() {
         encode_diff_key(&left_key_columns, row, &mut key, &mut text)?;
         if old.insert(key.clone(), row).is_some() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "chiavi duplicate nella tabella sinistra".into(),
             ));
         }
@@ -1195,7 +1195,7 @@ pub fn table_diff(
     for row in 0..right.num_rows() {
         encode_diff_key(&right_key_columns, row, &mut key, &mut text)?;
         if new.insert(key.clone(), row).is_some() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "chiavi duplicate nella tabella destra".into(),
             ));
         }
@@ -1258,7 +1258,7 @@ pub fn table_diff(
         }
     }
     if rows.len() > limits.max_rows {
-        return Err(PlenoraError::Contract("table_diff supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan("table_diff supera max_rows".into()));
     }
     let output_count = config
         .right_keys
@@ -1266,7 +1266,7 @@ pub fn table_diff(
         .saturating_add(compare.len())
         .saturating_add(3);
     if output_count > limits.max_columns {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "table_diff supera max_columns".into(),
         ));
     }
@@ -1367,14 +1367,14 @@ mod tests {
                 .collect::<Result<Vec<_>>>()?
         };
         if value_indices.is_empty() {
-            return Err(PlenoraError::Contract("melt senza value_columns".into()));
+            return Err(PlenoraError::InvalidPlan("melt senza value_columns".into()));
         }
         let output_rows = batch
             .num_rows()
             .checked_mul(value_indices.len())
-            .ok_or_else(|| PlenoraError::Contract("overflow righe melt".into()))?;
+            .ok_or_else(|| PlenoraError::InvalidPlan("overflow righe melt".into()))?;
         if output_rows > limits.max_rows {
-            return Err(PlenoraError::Contract("melt supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("melt supera max_rows".into()));
         }
         let row_indices = value_indices
             .iter()
@@ -1422,7 +1422,7 @@ mod tests {
                         .as_ref()
                         .is_some_and(|value| value.len() > limits.max_string_bytes)
                     {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "melt: valore testuale oltre max_string_bytes".into(),
                         ));
                     }
@@ -1432,7 +1432,7 @@ mod tests {
             fields.push(Field::new(&value_name, DataType::Utf8, true));
             columns.push(Arc::new(StringArray::from(values)));
         } else {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "melt: value_columns eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
             ));
         }
@@ -1468,7 +1468,7 @@ mod tests {
                         .copied()
                         .map(u32::try_from)
                         .transpose()
-                        .map_err(|_| PlenoraError::Contract("indice pivot oltre u32".into()))
+                        .map_err(|_| PlenoraError::InvalidPlan("indice pivot oltre u32".into()))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 (
@@ -1489,7 +1489,7 @@ mod tests {
                                 rows.iter().filter(|row| !source.is_null(**row)).count(),
                             )
                             .map_err(|_| {
-                                PlenoraError::Contract("conteggio pivot oltre i64".into())
+                                PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
                             })
                         })
                         .transpose()
@@ -1531,7 +1531,7 @@ mod tests {
                             PivotAgg::Mean => {
                                 values.iter().sum::<f64>()
                                     / values.len().to_f64().ok_or_else(|| {
-                                        PlenoraError::Contract(
+                                        PlenoraError::InvalidPlan(
                                             "gruppo pivot non rappresentabile".into(),
                                         )
                                     })?
@@ -1592,7 +1592,7 @@ mod tests {
         if index_rows.len() > limits.max_rows
             || index_indices.len().saturating_add(pivot_values.len()) > limits.max_columns
         {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "pivot supera i limiti di output".into(),
             ));
         }
@@ -2409,12 +2409,12 @@ mod tests {
                     left.len().saturating_add(new_row)
                 } else {
                     row.old_row.ok_or_else(|| {
-                        PlenoraError::Contract("riga table_diff senza sorgente".into())
+                        PlenoraError::InvalidPlan("riga table_diff senza sorgente".into())
                     })?
                 };
                 u32::try_from(index)
                     .map(Some)
-                    .map_err(|_| PlenoraError::Contract("indice table_diff oltre u32".into()))
+                    .map_err(|_| PlenoraError::InvalidPlan("indice table_diff oltre u32".into()))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(plenora_core::arrow::select::take::take(
@@ -2434,7 +2434,7 @@ mod tests {
         limits: &Limits,
     ) -> Result<RecordBatch> {
         if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-            return Err(PlenoraError::Contract("chiavi table_diff non valide".into()));
+            return Err(PlenoraError::InvalidPlan("chiavi table_diff non valide".into()));
         }
         let left_keys = config
             .left_keys
@@ -2471,7 +2471,7 @@ mod tests {
         for row in 0..left.num_rows() {
             let key = composite_key(left, &left_keys, row)?;
             if old.insert(key, row).is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "chiavi duplicate nella tabella sinistra".into(),
                 ));
             }
@@ -2479,7 +2479,7 @@ mod tests {
         for row in 0..right.num_rows() {
             let key = composite_key(right, &right_keys, row)?;
             if new.insert(key, row).is_some() {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "chiavi duplicate nella tabella destra".into(),
                 ));
             }
@@ -2540,7 +2540,7 @@ mod tests {
             }
         }
         if rows.len() > limits.max_rows {
-            return Err(PlenoraError::Contract("table_diff supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan("table_diff supera max_rows".into()));
         }
         let output_count = config
             .right_keys
@@ -2548,7 +2548,7 @@ mod tests {
             .saturating_add(compare.len())
             .saturating_add(3);
         if output_count > limits.max_columns {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "table_diff supera max_columns".into(),
             ));
         }

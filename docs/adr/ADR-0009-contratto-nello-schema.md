@@ -177,11 +177,23 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
     emettere le chiavi canoniche (oggi solo GeoArrow) o restare
     GeoArrow-only fino al ritiro del percorso.
 - **Follow-up dichiarati**: disposizione di retry R9.7 (sostituisce
-  `retryable()`); rinomina delle categorie d'errore verso l'enumerazione
-  canonica (tabella "Mappatura dai modelli attuali" §9); chiave
-  `plenora.field_id` (decisione 3) da proporre all'owner ICD; test di
-  catena completa (dataset Z/M, CRS irrisolto, `lat_lon` attraverso il
-  centro — rc4 Appendice A, "cosa manca alla catena").
+  `retryable()`); chiave `plenora.field_id` (decisione 3) da proporre
+  all'owner ICD; test di catena completa bordo-centro-bordo con gli
+  altri due componenti.
+- **Rinomina categorie §9 (attuata, 2026-07-29)**: varianti allineate
+  all'enumerazione canonica (Appendice C): `Contract` → `InvalidPlan`,
+  `Step` → `Execution`, `UnsupportedPublishTarget` → `Unsupported`,
+  `Json`/`Arrow` → `DataMapping`; `ErrorCategory` e' ora l'enumerazione
+  canonica completa a 18 valori (R9.5). **I testi `Display` sono
+  invariati** ("contract violation", "step failed at node", "arrow
+  error", ...): la rinomina e' a livello di variante e categoria
+  machine-readable, non di messaggio — nessun consumatore testuale si
+  rompe. Approssimazioni dichiarate nel codice: la fusione
+  `Json`+`Arrow` in `DataMapping` perde la sorgente tipizzata (resta
+  nel testo) e la distinzione di fase parse/I-O (`DataMapping` →
+  `Write`); `Unsupported` assorbe la destinazione di publish non
+  supportata (prima `Probe`, ora `Validate`) — entrambe da raffinare
+  col tagging ai confini di R9.7.
 
 ## Cambi di comportamento (dichiarati)
 

@@ -559,12 +559,12 @@ struct ClusterDbscanConfig {
 // ---------------------------------------------------------------------------
 
 fn invalid_param(op: &str, name: &'static str, reason: &'static str) -> PlenoraError {
-    PlenoraError::Contract(format!("{op}: parametro `{name}` non valido: {reason}"))
+    PlenoraError::InvalidPlan(format!("{op}: parametro `{name}` non valido: {reason}"))
 }
 
 fn parse_config<T: serde::de::DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
     serde_json::from_value(config.clone())
-        .map_err(|error| PlenoraError::Contract(format!("{op}: config non valida: {error}")))
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
 }
 
 fn ensure_finite(op: &str, name: &'static str, value: f64) -> Result<()> {
@@ -709,7 +709,7 @@ fn merge_schema_metadata(
             }
             Some(existing) if existing == value => {}
             Some(_) => {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "{op}: metadato di schema `{key}` in conflitto fra le due sorgenti"
                 )));
             }
@@ -1262,10 +1262,10 @@ fn analyze_generate_grid(
         parsed.extent.xmax,
         parsed.extent.ymax,
     )
-    .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+    .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     let shape = parsed.shape.unwrap_or(crate::extensions2::GridShape::Square);
     let cells = crate::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
-        .map_err(|error| PlenoraError::Contract(format!("{op}: {error}")))?;
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     let crs = match &parsed.crs {
         Some(definition) => resolve_definition(definition, plan_crs)?,
         None => plan_crs.cloned().ok_or_else(|| {
@@ -1590,7 +1590,7 @@ fn validate_transform_params(op: &str, config: &Value) -> Result<()> {
             ensure_ratio(op, "ratio", parsed.ratio)?;
         }
         _ => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "internal error: validate_transform_params: op non una trasformazione".to_owned(),
             ));
         }
@@ -1632,7 +1632,7 @@ fn analyze_unary(
     // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
     require_xy_dimensions(op, geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
-        PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+        PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
     match op {
         // Trasformazioni 1:1 in place: schema e FieldId invariati.
@@ -1781,7 +1781,7 @@ fn analyze_binary(
     require_xy_dimensions(op, left_geometry)?;
     require_xy_dimensions(op, right_geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
-        PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+        PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
     validate_requirement(requirement, &[&left_geometry.crs, &right_geometry.crs])?;
     let output = match op {
@@ -1889,28 +1889,28 @@ pub fn analyze_geo_contract(
         }
     };
     if inputs.len() != expected_arity {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "{op}: attesi {expected_arity} input, ricevuti {}",
             inputs.len()
         )));
     }
     if descriptor.id == "geo.from_coords" {
         let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
         })?;
         return analyze_from_coords(descriptor.id, &inputs[0], config, plan_crs, requirement, fields);
     }
     if descriptor.id == "geo.from_wkt" {
         let op = descriptor.id;
         let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
         })?;
         return analyze_from_wkt(op, &inputs[0], config, plan_crs, requirement, fields);
     }
     if descriptor.id == "geo.generate_grid" {
         let op = descriptor.id;
         let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::Contract(format!("{op}: crs_requirement assente nel catalogo"))
+            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
         })?;
         return analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields);
     }
@@ -3278,7 +3278,7 @@ mod tests {
             &json!({"point_wkb": line_hex}),
             None,
         );
-        assert!(matches!(result, Err(PlenoraError::Contract(_))), "LineString accettata");
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "LineString accettata");
 
         // Override del nome colonna; proprieta' preservate (1:1 streaming).
         let output = analyze_one(
@@ -3326,7 +3326,7 @@ mod tests {
         // Limite celle: extent enorme con celle piccole fallisce in analisi.
         let over_limit = json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1e6, "ymax": 1e6}, "cell_size": 1.0});
         let result = analyze_one("geo.generate_grid", &inputs, &over_limit, Some(&plan));
-        assert!(matches!(result, Err(PlenoraError::Contract(_))), "limite celle non applicato");
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "limite celle non applicato");
 
         // Extent con span che overflowa il conteggio celle (coordinate finite
         // ma prodotto colonne x righe non rappresentabile).
@@ -3727,7 +3727,7 @@ mod tests {
         let right = attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "omega")]);
         let result = analyze_one("geo.overlay", &[left, right], &json!({"mode": "union"}), None);
         match result {
-            Err(PlenoraError::Contract(message)) => {
+            Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("shared.key"), "l'errore nomina la chiave: {message}");
                 assert!(
                     !message.contains("alpha") && !message.contains("omega"),

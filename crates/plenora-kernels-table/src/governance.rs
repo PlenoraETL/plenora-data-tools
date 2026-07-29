@@ -48,7 +48,7 @@ pub fn assert_cardinality(
     if valid {
         Ok(batch.clone())
     } else {
-        Err(PlenoraError::Contract(format!(
+        Err(PlenoraError::InvalidPlan(format!(
             "assert_cardinality: {} righe fuori contratto",
             batch.num_rows()
         )))
@@ -189,7 +189,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Float64(values) => {
                 if values.is_null(row) {
@@ -198,7 +198,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Boolean(values) => {
                 if values.is_null(row) {
@@ -207,7 +207,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -216,7 +216,7 @@ impl<'a> KeyValueColumn<'a> {
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
                 // comunque propagato come Internal, mai ignorato (R6.5).
                 write!(text, "{}", values.value(row))
-                    .map_err(|_| PlenoraError::Contract("internal error: fmt su String".into()))?;
+                    .map_err(|_| PlenoraError::InvalidPlan("internal error: fmt su String".into()))?;
             }
             Self::Generic(array) => {
                 let Some(value) = scalar_as_string(array.as_ref(), row)? else {
@@ -350,9 +350,9 @@ pub fn assert_foreign_key(
             if referenced.insert(std::mem::take(&mut key)) {
                 memory_used = memory_used
                     .checked_add(key_bytes.saturating_add(64))
-                    .ok_or_else(|| PlenoraError::Contract("overflow memoria foreign key".into()))?;
+                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria foreign key".into()))?;
                 if memory_used > limits.max_memory_bytes {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "assert_foreign_key oltre max_memory_bytes".into(),
                     ));
                 }
@@ -365,13 +365,13 @@ pub fn assert_foreign_key(
             if config.allow_null {
                 continue;
             }
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_foreign_key: chiave null alla riga {row}"
             )));
         }
         left_encoder.encode_into(row, &mut key)?;
         if !referenced.contains(key.as_slice()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "assert_foreign_key: riferimento mancante alla riga {row}"
             )));
         }
@@ -403,26 +403,26 @@ fn frequencies(
         if !nulls_equal && has_null(batch, indices, row) {
             *side_nulls = side_nulls
                 .checked_add(1)
-                .ok_or_else(|| PlenoraError::Contract("overflow null reconciliation".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow null reconciliation".into()))?;
             continue;
         }
         encoder.encode_into(row, &mut key)?;
         if let Some(count) = output.get_mut(key.as_slice()) {
             *count = count
                 .checked_add(1)
-                .ok_or_else(|| PlenoraError::Contract("overflow reconciliation".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow reconciliation".into()))?;
         } else {
             *memory_used = memory_used
                 .checked_add(key.len().saturating_add(64))
-                .ok_or_else(|| PlenoraError::Contract("overflow memoria reconciliation".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria reconciliation".into()))?;
             if *memory_used > limits.max_memory_bytes {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "reconcile oltre max_memory_bytes".into(),
                 ));
             }
             output.insert(std::mem::take(&mut key), 1);
             if output.len() > limits.max_rows {
-                return Err(PlenoraError::Contract(
+                return Err(PlenoraError::InvalidPlan(
                     "reconcile supera max_rows chiavi distinte".into(),
                 ));
             }
@@ -432,7 +432,7 @@ fn frequencies(
 }
 
 fn as_u64(value: usize) -> Result<u64> {
-    u64::try_from(value).map_err(|_| PlenoraError::Contract("conteggio oltre u64".into()))
+    u64::try_from(value).map_err(|_| PlenoraError::InvalidPlan("conteggio oltre u64".into()))
 }
 
 /// Report di riconciliazione fra due tabelle (batch di metriche
@@ -649,7 +649,7 @@ pub const fn is_rule_comparable(data_type: &DataType) -> bool {
 #[allow(clippy::too_many_lines)]
 fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<CompiledRule>> {
     if config.rules.is_empty() {
-        return Err(PlenoraError::Contract(
+        return Err(PlenoraError::InvalidPlan(
             "validate_rules richiede almeno una regola".into(),
         ));
     }
@@ -657,18 +657,18 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
     let mut compiled = Vec::with_capacity(config.rules.len());
     for rule in &config.rules {
         if rule.name.trim().is_empty() {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "validate_rules: nome regola vuoto".into(),
             ));
         }
         if !seen.insert(rule.name.as_str()) {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "validate_rules: regola ripetuta: {}",
                 rule.name
             )));
         }
         let column = rule.column.as_deref().ok_or_else(|| {
-            PlenoraError::Contract(format!(
+            PlenoraError::InvalidPlan(format!(
                 "validate_rules: regola {} senza column",
                 rule.name
             ))
@@ -677,7 +677,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
         let data_type = batch.column(column_index).data_type().clone();
         let needs_value = !matches!(rule.operator, RuleOperator::Isnull | RuleOperator::Notnull);
         if needs_value != rule.value.is_some() {
-            return Err(PlenoraError::Contract(format!(
+            return Err(PlenoraError::InvalidPlan(format!(
                 "validate_rules: regola {}: value {} per l'operatore {:?}",
                 rule.name,
                 if needs_value { "obbligatorio" } else { "non ammesso" },
@@ -695,14 +695,14 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             RuleOperator::Isnull | RuleOperator::Notnull => {}
             RuleOperator::Eq | RuleOperator::Ne => {
                 if !is_rule_comparable(&data_type) {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: tipo {data_type:?} non confrontabile",
                         rule.name
                     )));
                 }
                 if numeric_column {
                     expected_number = expected.parse::<f64>().map_err(|_| {
-                        PlenoraError::Contract(format!(
+                        PlenoraError::InvalidPlan(format!(
                             "validate_rules: regola {}: confronto numerico con valore non numerico",
                             rule.name
                         ))
@@ -713,13 +713,13 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             }
             RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
                 if !numeric_column {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: confronto ordinato richiede colonna numerica (tipo {data_type:?})",
                         rule.name
                     )));
                 }
                 expected_number = expected.parse::<f64>().map_err(|_| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: confronto ordinato richiede un valore numerico",
                         rule.name
                     ))
@@ -728,13 +728,13 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             }
             RuleOperator::Range => {
                 if !numeric_column {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: range richiede colonna numerica (tipo {data_type:?})",
                         rule.name
                     )));
                 }
                 let Some((low, high)) = expected.split_once(',') else {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: range richiede min,max",
                         rule.name
                     )));
@@ -742,13 +742,13 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                 expected_bound = NumericBound::parse(low.trim());
                 expected_high_bound = NumericBound::parse(high.trim());
                 let low = low.trim().parse::<f64>().map_err(|_| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: estremi range non numerici",
                         rule.name
                     ))
                 })?;
                 let high = high.trim().parse::<f64>().map_err(|_| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: estremi range non numerici",
                         rule.name
                     ))
@@ -758,13 +758,13 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             }
             RuleOperator::Regex => {
                 if data_type != DataType::Utf8 {
-                    return Err(PlenoraError::Contract(format!(
+                    return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: regex richiede colonna Utf8 (tipo {data_type:?})",
                         rule.name
                     )));
                 }
                 regex = Some(regex::Regex::new(&expected).map_err(|error| {
-                    PlenoraError::Contract(format!(
+                    PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: regex non valida: {error}",
                         rule.name
                     ))
@@ -918,7 +918,7 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                 },
             );
             rule_ordered(ordering, rule.operator).ok_or_else(|| {
-                PlenoraError::Contract("internal error: operatore di regola non ordinato".into())
+                PlenoraError::InvalidPlan("internal error: operatore di regola non ordinato".into())
             })?
         }
         RuleOperator::Range => {
@@ -978,7 +978,7 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
             )
         }),
         RuleOperator::Isnull | RuleOperator::Notnull => {
-            return Err(PlenoraError::Contract(
+            return Err(PlenoraError::InvalidPlan(
                 "internal error: isnull/notnull sono valutati prima del confronto scalare".into(),
             ));
         }
@@ -1137,28 +1137,28 @@ mod tests {
             if !nulls_equal && has_null(batch, indices, row) {
                 *side_nulls = side_nulls
                     .checked_add(1)
-                    .ok_or_else(|| PlenoraError::Contract("overflow null reconciliation".into()))?;
+                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow null reconciliation".into()))?;
                 continue;
             }
             let key = key_for_row(batch, indices, row)?;
             if let Some(count) = output.get_mut(&key) {
                 *count = count
                     .checked_add(1)
-                    .ok_or_else(|| PlenoraError::Contract("overflow reconciliation".into()))?;
+                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow reconciliation".into()))?;
             } else {
                 *memory_used = memory_used
                     .checked_add(key.len().saturating_add(64))
                     .ok_or_else(|| {
-                        PlenoraError::Contract("overflow memoria reconciliation".into())
+                        PlenoraError::InvalidPlan("overflow memoria reconciliation".into())
                     })?;
                 if *memory_used > limits.max_memory_bytes {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "reconcile oltre max_memory_bytes".into(),
                     ));
                 }
                 output.insert(key, 1);
                 if output.len() > limits.max_rows {
-                    return Err(PlenoraError::Contract(
+                    return Err(PlenoraError::InvalidPlan(
                         "reconcile supera max_rows chiavi distinte".into(),
                     ));
                 }
@@ -1263,10 +1263,10 @@ mod tests {
                     memory_used = memory_used
                         .checked_add(key_bytes.saturating_add(64))
                         .ok_or_else(|| {
-                            PlenoraError::Contract("overflow memoria foreign key".into())
+                            PlenoraError::InvalidPlan("overflow memoria foreign key".into())
                         })?;
                     if memory_used > limits.max_memory_bytes {
-                        return Err(PlenoraError::Contract(
+                        return Err(PlenoraError::InvalidPlan(
                             "assert_foreign_key oltre max_memory_bytes".into(),
                         ));
                     }
@@ -1278,12 +1278,12 @@ mod tests {
                 if config.allow_null {
                     continue;
                 }
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "assert_foreign_key: chiave null alla riga {row}"
                 )));
             }
             if !referenced.contains(&key_for_row(left, &left_indices, row)?) {
-                return Err(PlenoraError::Contract(format!(
+                return Err(PlenoraError::InvalidPlan(format!(
                     "assert_foreign_key: riferimento mancante alla riga {row}"
                 )));
             }

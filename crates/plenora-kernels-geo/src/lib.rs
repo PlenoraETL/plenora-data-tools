@@ -22,7 +22,7 @@
 //! Errori: il sorgente usava `GeoEngineError`; qui le stesse condizioni sono
 //! mappate su [`plenora_core::PlenoraError`] preservando i messaggi:
 //! - `InvalidWkb` / `EmptyGeometry` / `WkbSerialization` / `NonFiniteCoordinate`
-//!   / `InvalidWkbStructure` / `InvalidGeometry` → `PlenoraError::Contract`;
+//!   / `InvalidWkbStructure` / `InvalidGeometry` → `PlenoraError::InvalidPlan`;
 //! - `UnsupportedWkbDimension` → `PlenoraError::Unsupported`.
 //!
 //! Feature: `geos-backend`, `proj-backend`, `full-backends`.
@@ -83,17 +83,17 @@ impl Operation {
 /// Mappatura delle varianti `GeoEngineError` del sorgente su `PlenoraError`
 /// (messaggi invariati).
 fn invalid_wkb(error: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::Contract(format!("WKB non valido: {error}"))
+    PlenoraError::InvalidPlan(format!("WKB non valido: {error}"))
 }
 
 fn empty_geometry(operation: &'static str) -> PlenoraError {
-    PlenoraError::Contract(format!(
+    PlenoraError::InvalidPlan(format!(
         "geometria vuota non supportata da {operation}"
     ))
 }
 
 fn wkb_serialization(error: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::Contract(format!("serializzazione WKB fallita: {error}"))
+    PlenoraError::InvalidPlan(format!("serializzazione WKB fallita: {error}"))
 }
 
 fn unsupported_wkb_dimension() -> PlenoraError {
@@ -106,21 +106,21 @@ fn unsupported_wkb_dimension() -> PlenoraError {
 /// dimensionalita' diversa da quella attesa dal contratto. Mai un
 /// passthrough silenzioso: la divergenza e' sempre un errore esplicito.
 fn wkb_dimension_mismatch() -> PlenoraError {
-    PlenoraError::Contract(
+    PlenoraError::InvalidPlan(
         "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto".to_owned(),
     )
 }
 
 fn non_finite_coordinate() -> PlenoraError {
-    PlenoraError::Contract("WKB contiene coordinate NaN o infinite".to_owned())
+    PlenoraError::InvalidPlan("WKB contiene coordinate NaN o infinite".to_owned())
 }
 
 fn invalid_wkb_structure(reason: &'static str) -> PlenoraError {
-    PlenoraError::Contract(format!("struttura WKB non valida: {reason}"))
+    PlenoraError::InvalidPlan(format!("struttura WKB non valida: {reason}"))
 }
 
 fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::Contract(format!("geometria OGC non valida: {error}"))
+    PlenoraError::InvalidPlan(format!("geometria OGC non valida: {error}"))
 }
 
 pub const MAX_WKB_BYTES: usize = 64 * 1024 * 1024;
@@ -149,7 +149,7 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se il payload viola il contratto WKB (struttura
+/// `PlenoraError::InvalidPlan` se il payload viola il contratto WKB (struttura
 /// non valida, coordinate NaN o infinite, geometria OGC non valida) o se il
 /// decode fallisce; `PlenoraError::Unsupported` se il payload porta
 /// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
@@ -471,7 +471,7 @@ fn validate_wkb_geometry_with_dimensions(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la struttura WKB non e' valida (byte o
+/// `PlenoraError::InvalidPlan` se la struttura WKB non e' valida (byte o
 /// conteggi oltre i limiti, anelli non chiusi, coordinate NaN o infinite,
 /// byte residui); `PlenoraError::Unsupported` se il payload porta
 /// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
@@ -487,7 +487,7 @@ pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
 ///
 /// # Errors
 ///
-/// Come [`validate_wkb_contract`]; in piu' `PlenoraError::Contract` se
+/// Come [`validate_wkb_contract`]; in piu' `PlenoraError::InvalidPlan` se
 /// l'annidamento delle geometrie supera `max_depth`.
 pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Result<(), PlenoraError> {
     if payload.len() > MAX_WKB_BYTES {
@@ -518,7 +518,7 @@ pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Res
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la struttura WKB non e' valida o se il type
+/// `PlenoraError::InvalidPlan` se la struttura WKB non e' valida o se il type
 /// code e' incoerente con la dimensionalita' attesa
 /// ([`wkb_dimension_mismatch`]); `PlenoraError::Unsupported` se il payload
 /// porta dimensioni Z/M non dichiarate o il flag SRID EWKB.
@@ -535,7 +535,7 @@ pub fn validate_wkb_contract_for_dimensions(
 /// # Errors
 ///
 /// Come [`validate_wkb_contract_for_dimensions`]; in piu'
-/// `PlenoraError::Contract` se l'annidamento delle geometrie supera
+/// `PlenoraError::InvalidPlan` se l'annidamento delle geometrie supera
 /// `max_depth`.
 pub fn validate_wkb_contract_for_dimensions_with_depth(
     payload: &[u8],
@@ -600,7 +600,7 @@ fn robust_convex_hull(geometry: &Geometry<f64>) -> Geometry<f64> {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` se la geometria in ingresso o quella prodotta
+/// `PlenoraError::InvalidPlan` se la geometria in ingresso o quella prodotta
 /// non supera la validazione OGC, o se l'operazione non e' definita su una
 /// geometria vuota (es. centroide o envelope di una geometria vuota).
 pub fn transform_geometry(
@@ -639,7 +639,7 @@ fn transform_geometry_validated(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Contract` per gli errori di decode, trasformazione,
+/// `PlenoraError::InvalidPlan` per gli errori di decode, trasformazione,
 /// serializzazione WKB o validazione del risultato;
 /// `PlenoraError::Unsupported` se il payload in ingresso porta dimensioni
 /// Z/M o SRID non preservabili nel protocollo 2D.
@@ -670,7 +670,7 @@ mod tests {
     /// Equivalente dei match sulle varianti `GeoEngineError` del sorgente:
     /// la condizione e' identificata dal messaggio, preservato verbatim.
     fn is_contract_error(result: &Result<Geometry<f64>, PlenoraError>, message: &str) -> bool {
-        matches!(result, Err(PlenoraError::Contract(reason)) if reason == message)
+        matches!(result, Err(PlenoraError::InvalidPlan(reason)) if reason == message)
     }
 
     #[test]
@@ -878,7 +878,7 @@ mod tests {
         assert!(validate_wkb_contract_with_depth(&payload, 2).is_ok());
         assert!(matches!(
             validate_wkb_contract_with_depth(&payload, 1),
-            Err(PlenoraError::Contract(reason))
+            Err(PlenoraError::InvalidPlan(reason))
                 if reason == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
         // Il default resta 64 (comportamento invariato di validate_wkb_contract).
@@ -1025,14 +1025,14 @@ mod tests {
         ] {
             assert!(matches!(
                 validate_wkb_contract_for_dimensions(&xy_point, expected),
-                Err(PlenoraError::Contract(message))
+                Err(PlenoraError::InvalidPlan(message))
                     if message == "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto"
             ));
         }
         // Dichiara Xym ma il type code porta Z (ISO 1001): stesso errore.
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&z_point, GeometryDimensions::Xym),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "dimensionalita' WKB incoerente con la dimensionalita' attesa dal contratto"
         ));
     }
@@ -1049,7 +1049,7 @@ mod tests {
         push_coordinate(&mut line, 1.0, 1.0, &[2.0]);
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyz),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: conteggio elementi oltre i byte disponibili"
         ));
         // Conteggio ostile con stride ZM: sempre rifiutato, mai desync.
@@ -1098,7 +1098,7 @@ mod tests {
         push_coordinate(&mut payload, f64::NAN, 2.0, &[3.0]);
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "WKB contiene coordinate NaN o infinite"
         ));
         // Inf in Y con Z presente: rifiutato.
@@ -1107,7 +1107,7 @@ mod tests {
         push_coordinate(&mut payload, 1.0, f64::INFINITY, &[3.0]);
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "WKB contiene coordinate NaN o infinite"
         ));
         // NaN nell'ordinata Z: accettato, perche' Z non e' mai letta ne'
@@ -1137,7 +1137,7 @@ mod tests {
         .is_ok());
         assert!(matches!(
             validate_wkb_contract_for_dimensions_with_depth(&outer, GeometryDimensions::Xyzm, 1),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
         // Il default resta 64 anche per la variante stride-aware.
@@ -1172,7 +1172,7 @@ mod tests {
         push_coordinate(&mut garbage, 1.0, 2.0, &[3.0]);
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&garbage, GeometryDimensions::Unknown),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: tipo geometria non supportato"
         ));
     }
@@ -1201,7 +1201,7 @@ mod tests {
         push_coordinate(&mut open, 0.0, 4.0, &[1.0]);
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&open, GeometryDimensions::Xyz),
-            Err(PlenoraError::Contract(message))
+            Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: anello poligonale non chiuso"
         ));
     }

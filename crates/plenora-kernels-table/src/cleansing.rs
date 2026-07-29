@@ -295,9 +295,9 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
             Value::Number(n) => n.as_i64(),
             Value::String(s) => Some(
                 s.parse()
-                    .map_err(|_| PlenoraError::Contract("fill int non valido".into()))?,
+                    .map_err(|_| PlenoraError::InvalidPlan("fill int non valido".into()))?,
             ),
-            _ => return Err(PlenoraError::Contract("fill int non valido".into())),
+            _ => return Err(PlenoraError::InvalidPlan("fill int non valido".into())),
         };
         return Ok(fill_primitive(values, method, fixed));
     }
@@ -308,9 +308,9 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
             Value::String(s) => Some(
                 s.replace(',', ".")
                     .parse()
-                    .map_err(|_| PlenoraError::Contract("fill float non valido".into()))?,
+                    .map_err(|_| PlenoraError::InvalidPlan("fill float non valido".into()))?,
             ),
-            _ => return Err(PlenoraError::Contract("fill float non valido".into())),
+            _ => return Err(PlenoraError::InvalidPlan("fill float non valido".into())),
         };
         return Ok(fill_primitive(values, method, fixed));
     }
@@ -320,7 +320,7 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
             Value::Bool(v) => Some(*v),
             Value::String(s) if s.eq_ignore_ascii_case("true") => Some(true),
             Value::String(s) if s.eq_ignore_ascii_case("false") => Some(false),
-            _ => return Err(PlenoraError::Contract("fill bool non valido".into())),
+            _ => return Err(PlenoraError::InvalidPlan("fill bool non valido".into())),
         };
         return Ok(fill_boolean(values, method, fixed));
     }
@@ -447,7 +447,7 @@ pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
         .regex
         .then(|| Regex::new(&config.old_value))
         .transpose()
-        .map_err(|e| PlenoraError::Contract(format!("regex non valida: {e}")))?;
+        .map_err(|e| PlenoraError::InvalidPlan(format!("regex non valida: {e}")))?;
     let out: StringArray = values
         .iter()
         .map(|item| {
@@ -476,7 +476,7 @@ fn cast_failure<T>(errors: CastErrors, message: &str) -> Result<Option<T>> {
     match errors {
         CastErrors::Coerce => Ok(None),
         CastErrors::Raise => Err(PlenoraError::Schema(message.into())),
-        CastErrors::Ignore => Err(PlenoraError::Contract(
+        CastErrors::Ignore => Err(PlenoraError::InvalidPlan(
             "errors=ignore non puo' garantire un tipo Arrow omogeneo; usare coerce o raise".into(),
         )),
     }
@@ -1073,10 +1073,10 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
             };
             let precision = config
                 .precision
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede precision".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede precision".into()))?;
             let scale = config
                 .scale
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede scale".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede scale".into()))?;
             let out = values
                 .iter()
                 .map(|value| {
@@ -1266,10 +1266,10 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
         TargetType::Decimal128 => {
             let precision = config
                 .precision
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede precision".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede precision".into()))?;
             let scale = config
                 .scale
-                .ok_or_else(|| PlenoraError::Contract("decimal128 richiede scale".into()))?;
+                .ok_or_else(|| PlenoraError::InvalidPlan("decimal128 richiede scale".into()))?;
             let values = source_strings(source)?
                 .into_iter()
                 .map(|value| {
@@ -1393,9 +1393,9 @@ mod tests {
                 Value::Number(n) => n.as_i64(),
                 Value::String(s) => Some(
                     s.parse()
-                        .map_err(|_| PlenoraError::Contract("fill int non valido".into()))?,
+                        .map_err(|_| PlenoraError::InvalidPlan("fill int non valido".into()))?,
                 ),
-                _ => return Err(PlenoraError::Contract("fill int non valido".into())),
+                _ => return Err(PlenoraError::InvalidPlan("fill int non valido".into())),
             };
             let mut out: Vec<Option<i64>> = values.iter().collect();
             fill_options(&mut out, method, fixed);
@@ -1408,9 +1408,9 @@ mod tests {
                 Value::String(s) => Some(
                     s.replace(',', ".")
                         .parse()
-                        .map_err(|_| PlenoraError::Contract("fill float non valido".into()))?,
+                        .map_err(|_| PlenoraError::InvalidPlan("fill float non valido".into()))?,
                 ),
-                _ => return Err(PlenoraError::Contract("fill float non valido".into())),
+                _ => return Err(PlenoraError::InvalidPlan("fill float non valido".into())),
             };
             let mut out: Vec<Option<f64>> = values.iter().collect();
             fill_options(&mut out, method, fixed);
@@ -1422,7 +1422,7 @@ mod tests {
                 Value::Bool(v) => Some(*v),
                 Value::String(s) if s.eq_ignore_ascii_case("true") => Some(true),
                 Value::String(s) if s.eq_ignore_ascii_case("false") => Some(false),
-                _ => return Err(PlenoraError::Contract("fill bool non valido".into())),
+                _ => return Err(PlenoraError::InvalidPlan("fill bool non valido".into())),
             };
             let mut out: Vec<Option<bool>> = values.iter().collect();
             fill_options(&mut out, method, fixed);

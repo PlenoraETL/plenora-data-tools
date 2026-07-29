@@ -15,7 +15,7 @@
 //! storico; [`PublishProfile::DurableAtomic`] aggiunge il `fsync` della
 //! directory dopo il persist. L'esito e' tipizzato ([`PublishOutcome`]) e la
 //! destinazione passa un riconoscimento fail-closed del filesystem
-//! ([`PlenoraError::UnsupportedPublishTarget`]).
+//! ([`PlenoraError::Unsupported`]).
 
 use std::io::{self, BufWriter, ErrorKind, Write};
 use std::path::Path;
@@ -48,7 +48,7 @@ use super::transport::{ArrowOperation, PairArrowSchema, TransformArrowSchema};
 /// # Errors
 /// Restituisce `PlenoraError::Crs` se il CRS manca, e' invalido, non e'
 /// risolvibile senza backend PROJ o non soddisfa il requisito
-/// dell'operazione; `PlenoraError::Contract` se l'operazione e' assente dal
+/// dell'operazione; `PlenoraError::InvalidPlan` se l'operazione e' assente dal
 /// catalogo.
 pub fn validate_transform_arrow_crs(schema: &TransformArrowSchema) -> Result<(), PlenoraError> {
     let definition = required_definition(schema.crs.as_deref(), "crs")?;
@@ -61,7 +61,7 @@ pub fn validate_transform_arrow_crs(schema: &TransformArrowSchema) -> Result<(),
     }
     let catalog_name = schema.operation.catalog_name();
     let descriptor = find_operation(catalog_name).ok_or_else(|| {
-        PlenoraError::Contract(format!("operazione {catalog_name} assente dal catalogo"))
+        PlenoraError::InvalidPlan(format!("operazione {catalog_name} assente dal catalogo"))
     })?;
     validate_requirement(
         descriptor.crs_requirement.unwrap_or(CrsRequirement::Known),
@@ -77,7 +77,7 @@ pub fn validate_transform_arrow_crs(schema: &TransformArrowSchema) -> Result<(),
 /// # Errors
 /// Restituisce `PlenoraError::Crs` se uno dei CRS manca, e' invalido, non
 /// e' risolvibile senza backend PROJ o non soddisfa il requisito
-/// dell'operazione; `PlenoraError::Contract` se l'operazione e' assente dal
+/// dell'operazione; `PlenoraError::InvalidPlan` se l'operazione e' assente dal
 /// catalogo.
 pub fn validate_pair_arrow_crs(schema: &PairArrowSchema) -> Result<(), PlenoraError> {
     let left_definition = required_definition(schema.left_crs.as_deref(), "left_crs")?;
@@ -86,7 +86,7 @@ pub fn validate_pair_arrow_crs(schema: &PairArrowSchema) -> Result<(), PlenoraEr
     let right_crs = resolve_crs(right_definition, "right_crs")?;
     let catalog_name = schema.operation.catalog_name();
     let descriptor = find_operation(catalog_name).ok_or_else(|| {
-        PlenoraError::Contract(format!("operazione {catalog_name} assente dal catalogo"))
+        PlenoraError::InvalidPlan(format!("operazione {catalog_name} assente dal catalogo"))
     })?;
     validate_requirement(
         descriptor.crs_requirement.unwrap_or(CrsRequirement::Known),
@@ -274,11 +274,11 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
     let magic = stat.f_type as u64;
     match classify_filesystem(magic) {
         FilesystemClass::Local => Ok(()),
-        FilesystemClass::Network(name) => Err(PlenoraError::UnsupportedPublishTarget(format!(
+        FilesystemClass::Network(name) => Err(PlenoraError::Unsupported(format!(
             "filesystem di rete {name} (fuori scope v1): {}",
             parent.display()
         ))),
-        FilesystemClass::Unknown => Err(PlenoraError::UnsupportedPublishTarget(format!(
+        FilesystemClass::Unknown => Err(PlenoraError::Unsupported(format!(
             "filesystem non identificabile (f_type={magic:#x}), rifiuto fail-closed: {}",
             parent.display()
         ))),
@@ -294,7 +294,7 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
     let text = parent.as_os_str().to_string_lossy();
     let verbatim = text.starts_with("\\\\?\\") || text.starts_with("\\\\.\\");
     if (text.starts_with("\\\\") && !verbatim) || text.starts_with("//") {
-        return Err(PlenoraError::UnsupportedPublishTarget(format!(
+        return Err(PlenoraError::Unsupported(format!(
             "percorso UNC (filesystem di rete): {}",
             parent.display()
         )));
@@ -307,7 +307,7 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
 /// identificabile e' rifiutata.
 #[cfg(all(unix, not(target_os = "linux")))]
 fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
-    Err(PlenoraError::UnsupportedPublishTarget(format!(
+    Err(PlenoraError::Unsupported(format!(
         "riconoscimento del filesystem non implementato su questa piattaforma, \
          rifiuto fail-closed: {}",
         parent.display()
@@ -352,9 +352,9 @@ thread_local! {
 /// persist e l'esito riflette la conferma della durabilita'.
 ///
 /// # Errors
-/// Restituisce `PlenoraError::Contract` se l'output esiste gia' o la
+/// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' o la
 /// directory di destinazione non esiste;
-/// `PlenoraError::UnsupportedPublishTarget` se il filesystem di destinazione
+/// `PlenoraError::Unsupported` se il filesystem di destinazione
 /// e' di rete o non identificabile; `PlenoraError::Io` per i fallimenti di
 /// scrittura, sync o persist; propaga l'errore della closure `write`.
 ///
@@ -369,14 +369,14 @@ pub fn publish_with_profile<T>(
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, PublishOutcome), PlenoraError> {
     if output_path.exists() {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "output gia' esistente: {}",
             output_path.display()
         )));
     }
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
-        return Err(PlenoraError::Contract(format!(
+        return Err(PlenoraError::InvalidPlan(format!(
             "directory output inesistente: {}",
             parent.display()
         )));
@@ -631,7 +631,7 @@ mod tests {
             writer.write_all(b"altro")?;
             Ok(())
         });
-        assert!(matches!(result, Err(PlenoraError::Contract(_))));
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
     }
 
