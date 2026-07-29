@@ -25,9 +25,18 @@ pub enum ProjBackendError {
     IndexOverflow,
 }
 
-/// Reprojects all coordinates using PROJ's normalized GIS axis order:
-/// longitude/latitude and easting/northing. No network grid download is
-/// enabled; the release artifact must ship an explicitly versioned grid set.
+/// Reprojects all coordinates using PROJ's normalized GIS axis order.
+///
+/// The normalized order is longitude/latitude and easting/northing. No
+/// network grid download is enabled; the release artifact must ship an
+/// explicitly versioned grid set.
+///
+/// # Errors
+///
+/// Restituisce `ProjBackendError` se un CRS non si risolve, se la
+/// geometria di input non e' valida o supera `max_coordinates`, se la
+/// trasformazione PROJ fallisce o produce coordinate non finite, o se
+/// l'output non e' valido.
 pub fn reproject_geometry(
     geometry: &Geometry<f64>,
     source_crs: &str,
@@ -37,10 +46,12 @@ pub fn reproject_geometry(
     Reprojector::new(source_crs, target_crs, max_coordinates)?.reproject(geometry)
 }
 
-/// Trasformazione riusabile: risolve i CRS e costruisce la pipeline PROJ una
-/// sola volta per coppia (source, target), poi la applica a ogni geometria.
-/// Non e' `Sync` (PROJ non lo e'): va creata per thread o usata da un solo
-/// thread. Il comportamento e' identico a `reproject_geometry`.
+/// Trasformazione riusabile per una coppia (source, target).
+///
+/// Risolve i CRS e costruisce la pipeline PROJ una sola volta per coppia,
+/// poi la applica a ogni geometria. Non e' `Sync` (PROJ non lo e'): va
+/// creata per thread o usata da un solo thread. Il comportamento e'
+/// identico a `reproject_geometry`.
 pub struct Reprojector {
     source: crate::crs::ResolvedCrs,
     target: crate::crs::ResolvedCrs,
@@ -49,6 +60,13 @@ pub struct Reprojector {
 }
 
 impl Reprojector {
+    /// Risolve i CRS e costruisce la pipeline PROJ per la coppia.
+    ///
+    /// # Errors
+    ///
+    /// Restituisce `ProjBackendError` se un CRS non si risolve, se il
+    /// requisito di riproiezione non e' soddisfatto o se la costruzione
+    /// della pipeline PROJ fallisce.
     pub fn new(
         source_crs: &str,
         target_crs: &str,
@@ -77,6 +95,14 @@ impl Reprojector {
         })
     }
 
+    /// Applica la trasformazione a una geometria.
+    ///
+    /// # Errors
+    ///
+    /// Restituisce `ProjBackendError` se la geometria di input non e'
+    /// valida o supera il limite di coordinate, se la trasformazione PROJ
+    /// fallisce o produce coordinate non finite, o se l'output non e'
+    /// valido.
     pub fn reproject(&self, geometry: &Geometry<f64>) -> Result<Geometry<f64>, ProjBackendError> {
         if geometry
             .coords_iter()
