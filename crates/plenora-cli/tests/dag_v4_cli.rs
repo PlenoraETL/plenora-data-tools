@@ -1023,6 +1023,87 @@ fn dag_v4_misto_geo_end_to_end() {
     assert!(areas.is_null(1), "null in -> null out");
 }
 
+/// Kill switch D12.9 via CLI: `--no-geo-fusion` e' accettato, il run
+/// riesce e l'output e' identico al percorso fuso (la fusione non cambia
+/// mai i byte, ADR-0012); il contatore dei fallback e' esposto nel JSON.
+#[cfg(feature = "proj-backend")]
+#[test]
+fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    let input = directory.path().join("input.arrow");
+    std::fs::write(&plan, serde_json::to_vec(&mixed_plan()).expect("json")).expect("plan");
+    write_ipc(
+        &input,
+        &geo_schema(),
+        &[geo_batch(
+            &[0, 1, 2],
+            &[Some(point_wkb(0.0, 0.0)), Some(point_wkb(100.0, 100.0)), None],
+        )],
+    );
+
+    let mut outputs = Vec::new();
+    for (label, extra_args) in [
+        ("fuso", vec![]),
+        ("non-fuso", vec!["--no-geo-fusion"]),
+    ] {
+        let output_path = directory.path().join(format!("output-{label}.arrow"));
+        let mut command = cli();
+        command
+            .args(["run", "--plan"])
+            .arg(&plan)
+            .arg("--inputs")
+            .arg(&input)
+            .arg("--output")
+            .arg(&output_path);
+        command.args(extra_args);
+        let run = command.output().expect("run");
+        assert!(
+            run.status.success(),
+            "{label}, stderr: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let metrics: serde_json::Value =
+            serde_json::from_slice(&run.stdout).expect("JSON metriche");
+        assert_eq!(
+            metrics["geo_fusion_fallbacks"], 0,
+            "{label}: nessun fallback governor sulla fixture"
+        );
+        outputs.push(std::fs::read(&output_path).expect("output"));
+    }
+    assert_eq!(
+        outputs[0], outputs[1],
+        "l'output col kill switch spento deve essere byte-identico al fuso"
+    );
+}
+
+/// Il contatore dei fallback e' esposto anche per piani senza geo (campo
+/// top-level del JSON metriche, sempre presente).
+#[test]
+fn run_v4_espone_geo_fusion_fallbacks_anche_senza_geo() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = write_table_fixture(directory.path());
+    let output_path = directory.path().join("output.arrow");
+
+    let result = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--no-geo-fusion")
+        .output()
+        .expect("run");
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON metriche");
+    assert_eq!(metrics["geo_fusion_fallbacks"], 0);
+}
+
 // ---------------------------------------------------------------------------
 // Test di catena completa (plenora-contracts v2.0-rc10, Appendice A "cosa
 // manca alla catena"): un dataset con coordinate Z, CRS risolto e

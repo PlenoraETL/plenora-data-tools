@@ -699,7 +699,7 @@ fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
         });
     let plan_text = std::fs::read_to_string(&plan_path)?;
     if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
-        return validate_dag_v4(&plan_text, &inputs);
+        return validate_dag_v4(&plan_text, &inputs, !has_flag(args, "--no-geo-fusion"));
     }
     let plan: Plan = serde_json::from_str(&plan_text)?;
     let plan = plan.validate()?;
@@ -1299,8 +1299,9 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
 
 /// Metriche JSON di un `run` v4: per nodo logico e per segmento (righe,
 /// batch e byte in/out, wall time in millisecondi), i totali di
-/// pubblicazione, l'osservabilita' dei lease di memoria e le metriche di
-/// spill aggregate (ADR-0002).
+/// pubblicazione, il contatore dei fallback della fusione geo (D12.7: ogni
+/// fallback governor e' osservabile, mai silenzioso), l'osservabilita' dei
+/// lease di memoria e le metriche di spill aggregate (ADR-0002).
 fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
@@ -1345,6 +1346,7 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,
         "total_rows_processed": metrics.total_rows_processed,
+        "geo_fusion_fallbacks": metrics.geo_fusion_fallbacks,
         "memory": {
             "budget_bytes": metrics.memory.budget_bytes,
             "reserved_bytes": metrics.memory.reserved_bytes,
@@ -1365,15 +1367,30 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
     })
 }
 
+/// Presenza di un flag booleano negli argomenti (es. `--no-geo-fusion`).
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|argument| argument == flag)
+}
+
 /// `validate` di un piano v4: planner DAG + `explain` per la strategia, con
 /// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
-fn validate_dag_v4(plan_text: &str, paths: &[PathBuf]) -> Result<(), Box<dyn Error>> {
+/// `geo_fusion` e' il kill switch D12.9 (flag `--no-geo-fusion`): a `false`
+/// i gruppi di fusione non si formano e `explain` mostra la strategia non
+/// fusa.
+fn validate_dag_v4(
+    plan_text: &str,
+    paths: &[PathBuf],
+    geo_fusion: bool,
+) -> Result<(), Box<dyn Error>> {
     let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
     let pairs = pair_v4_inputs(&probe, paths)?;
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
-    let execution = explain(&graph, &RuntimeContext::default())?;
+    let execution = explain(&graph, &RuntimeContext {
+        geo_fusion,
+        ..RuntimeContext::default()
+    })?;
     println!(
         "{}",
         serde_json::to_string_pretty(&graph_summary_json(&graph, &execution))?
@@ -1384,8 +1401,14 @@ fn validate_dag_v4(plan_text: &str, paths: &[PathBuf]) -> Result<(), Box<dyn Err
 /// `run` di un piano v4: esecuzione DAG e pubblicazione atomica dell'output,
 /// con metriche JSON su stdout. Installa l'handler Ctrl-C: al cancel
 /// l'executor propaga `PlenoraError::Cancelled`, il publish atomico non e'
-/// mai raggiunto e `main` esce con [`EXIT_CANCELLED`].
-fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<(), Box<dyn Error>> {
+/// mai raggiunto e `main` esce con [`EXIT_CANCELLED`]. `geo_fusion` e' il
+/// kill switch D12.9 (flag `--no-geo-fusion`).
+fn run_dag_v4(
+    plan_text: &str,
+    paths: &[PathBuf],
+    output_path: &Path,
+    geo_fusion: bool,
+) -> Result<(), Box<dyn Error>> {
     if output_path.exists() {
         return Err(contract(format!(
             "output gia' esistente, rifiuto di sovrascriverlo: {}",
@@ -1406,6 +1429,7 @@ fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<
     install_ctrlc_handler(&token)?;
     let runtime = RuntimeContext {
         cancellation: token,
+        geo_fusion,
         ..RuntimeContext::default()
     };
     let output = execute(&graph, inputs, runtime)?;
@@ -1451,7 +1475,12 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
             )
             .into());
         }
-        return run_dag_v4(&plan_text, &v4_input_paths(args)?, &output_path);
+        return run_dag_v4(
+            &plan_text,
+            &v4_input_paths(args)?,
+            &output_path,
+            !has_flag(args, "--no-geo-fusion"),
+        );
     }
     Ok(run_pipeline(
         &plan_path,
@@ -1467,7 +1496,7 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     eprintln!(
-        "plenora-data-tools {}\n\n  plenora-data-tools catalog [--family table|geo]\n  plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow...\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow   (piani legacy, schema_version <= 3)\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow   (piani DAG v4: percorsi nell'ordine degli input dichiarati)\n  plenora-data-tools capabilities\n  plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools self-test [--output RESULT.bin]\n  plenora-data-tools --version",
+        "plenora-data-tools {}\n\n  plenora-data-tools catalog [--family table|geo]\n  plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow... [--no-geo-fusion]\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow   (piani legacy, schema_version <= 3)\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v4: percorsi nell'ordine degli input dichiarati)\n  plenora-data-tools capabilities\n  plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools self-test [--output RESULT.bin]\n  plenora-data-tools --version",
         env!("CARGO_PKG_VERSION")
     );
 }
