@@ -86,8 +86,8 @@
       "result": "delta fuso/non fuso: -20,2% catena trasformazioni, -16,2% con misura terminale, -11,7% reproject; output byte-identici, zero fallback. Sensibile alle condizioni host (dichiarato in ADR-0012); R4.6.3 non tocca i percorsi misurati."
     },
     "coverage": {
-      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
-      "note": "93,26% di righe (50.008/53.623), artifact target/tmp/lcov.info (+ lcov-full.info per-linea); residui dichiarati in BLOCK-04 chiuso."
+      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
+      "note": "93,28% di righe (50.718/54.372) su HEAD, artifact target/tmp/lcov.info. Moduli storici deboli: cli 89,71%, prepare 91,31%, publish 81,28% (residuo publish dichiarato in BLOCK-04: backend PROJ, mount NFS/SMB, fallimenti non producibili senza hook)."
     },
     "fuzz": {
       "note": "CI notturna (.github/workflows/fuzz.yml) con sanitizer su toolchain nightly — deroga DER-001 registrata in docs/deroghe.md con condizione di rientro."
