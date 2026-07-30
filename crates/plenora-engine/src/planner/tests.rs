@@ -7,8 +7,9 @@ use serde_json::json;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractProperties, ContractProperty, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions, GeometryEncoding, PropertyConfidence, PropertyScope,
+    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
+    GeometryColumnContract, GeometryDimensions, GeometryEncoding, PropertyConfidence,
+    PropertyScope,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -63,7 +64,7 @@ fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
         vec![GeometryColumnContract {
             field_id: FieldId(field_id),
             name: "geom".to_owned(),
-            crs,
+            crs: ContractCrs::Resolved(crs),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,
@@ -292,6 +293,132 @@ fn incompatible_crs_fails_in_validation() {
     .to_string();
     let result = validate(&plan, &input(geo_contract_with_crs(1, geographic_crs())));
     assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+}
+
+// ---------------------------------------------------------------------------
+// R4.6.3 (contratti trasversali v2.0-rc9/rc10): il requisito di CRS
+// risolvibile e' condizionato alle operazioni che lo usano.
+// ---------------------------------------------------------------------------
+
+/// Contratto con geometria SENZA CRS dichiarato (`ContractCrs::Missing`):
+/// lo stato che la discovery produce per una colonna `GeoArrow` senza alcuna
+/// rappresentazione CRS accettata (R4.4: mai un CRS inventato).
+fn geo_contract_missing_crs(field_id: u32) -> DataContract {
+    DataContract::new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geom", DataType::Binary, true),
+        ])),
+        vec![GeometryColumnContract {
+            field_id: FieldId(field_id),
+            name: "geom".to_owned(),
+            crs: ContractCrs::Missing,
+            dimensions: GeometryDimensions::Xy,
+            encoding: None,
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        }],
+        None,
+        ContractProperties::default(),
+    )
+    .expect("contratto fixture valido")
+}
+
+#[test]
+fn missing_crs_enters_the_contract_fingerprint() {
+    // ADR 4 + R4.6.3: un contratto con CRS risolto e uno con CRS mancante
+    // NON hanno lo stesso fingerprint — altrimenti un piano validato su
+    // input risolto accetterebbe in riesecuzione un input senza CRS senza
+    // rivalidazione, spostando il fallimento a runtime. La forma risolta
+    // resta byte-identica (test `contract_canonical_omits_encoding_*`).
+    let resolved = contract_fingerprint(&geo_contract(0)).expect("fingerprint risolto");
+    let missing = contract_fingerprint(&geo_contract_missing_crs(0)).expect("fingerprint missing");
+    assert_ne!(resolved, missing);
+    assert_eq!(
+        contract_fingerprint(&geo_contract_missing_crs(0)).expect("fingerprint missing"),
+        missing,
+        "fingerprint deterministico (ADR-0001)"
+    );
+    // Forma canonica: lo stato entra col valore R2.2.
+    let canonical = contract_canonical(&geo_contract_missing_crs(0));
+    assert_eq!(canonical["geometries"][0]["crs"], json!("missing"));
+}
+
+#[test]
+fn table_ops_validate_on_missing_crs_geometry_and_propagate_it() {
+    // R4.6.3: un filtro tabellare su una colonna non geometrica non ha
+    // bisogno di alcun CRS — rifiutarlo sarebbe piu' restrittivo del ruolo.
+    // R4.6.4: lo stato `missing` attraversa invariato il contratto di
+    // output (propagare non e' tollerare: le chiavi §2 lo dichiarano).
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    })
+    .to_string();
+    let graph = validate(&plan, &input(geo_contract_missing_crs(1))).expect("validazione");
+    let output = graph.output_contract().expect("contratto di output");
+    assert_eq!(output.geometries.len(), 1);
+    assert!(
+        matches!(output.geometries[0].crs, ContractCrs::Missing),
+        "lo stato mancante si propaga invariato"
+    );
+}
+
+#[test]
+fn geo_op_on_missing_crs_fails_with_the_declared_cause() {
+    // R4.6.3: il fallimento si sposta al punto in cui un'op con
+    // `CrsRequirement` tocca la colonna (analyze, a compile-plan) — la
+    // categoria e' `Crs` come ogni requisito CRS non soddisfatto e il
+    // messaggio dichiara la causa, non l'ultimo tentativo di lettura.
+    let buffer = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    })
+    .to_string();
+    let result = validate(&buffer, &input(geo_contract_missing_crs(1)));
+    match result {
+        Err(PlenoraError::Crs(message)) => {
+            assert!(
+                message.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+                "{message}"
+            );
+        }
+        other => panic!("atteso errore Crs per CRS mancante, ottenuto {other:?}"),
+    }
+
+    // Anche a valle di op tabellari: lo stato mancante si propaga nel
+    // contratto e ferma l'op geo quando la raggiunge.
+    let chained = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    })
+    .to_string();
+    let result = validate(&chained, &input(geo_contract_missing_crs(1)));
+    match result {
+        Err(PlenoraError::Crs(message)) => {
+            assert!(message.contains("nodo `b`"), "contesto nodo: {message}");
+            assert!(
+                message.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+                "{message}"
+            );
+        }
+        other => panic!("atteso errore Crs per CRS mancante, ottenuto {other:?}"),
+    }
 }
 
 #[cfg(not(feature = "proj-backend"))]

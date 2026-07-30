@@ -265,7 +265,7 @@ mod tests {
 
     use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
     use plenora_core::contract::{
-        ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
+        ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
         GeometryColumnContract, PropertyConfidence, PropertyScope,
     };
     use plenora_core::{PlenoraError, Result};
@@ -314,7 +314,7 @@ mod tests {
         GeometryColumnContract {
             field_id: FieldId(field_id),
             name: name.to_owned(),
-            crs: projected_crs(),
+            crs: ContractCrs::Resolved(projected_crs()),
             dimensions: plenora_core::contract::GeometryDimensions::Xy,
             encoding: None,
             nullable,

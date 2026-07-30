@@ -314,6 +314,256 @@ fn piano_legacy_continua_a_funzionare_invariato() {
 }
 
 // ---------------------------------------------------------------------------
+// R4.6.3 (contratti trasversali v2.0-rc9/rc10): una colonna geometria senza
+// CRS dichiarato NON ferma le operazioni che non lo richiedono. I test di
+// questa sezione non risolvono mai un CRS: valgono con e senza backend PROJ.
+// ---------------------------------------------------------------------------
+
+/// Fixture: `id` Int64 + colonna `geometry` GeoArrow-WKB SENZA CRS — solo il
+/// nome di estensione e, opzionalmente, un metadato `geo` senza chiave
+/// `crs`; nessuna chiave canonica.
+fn geometry_without_crs_schema(geo_json: Option<&str>) -> SchemaRef {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let mut metadata = std::collections::HashMap::from([(
+        adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+        adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+    )]);
+    if let Some(geo) = geo_json {
+        metadata.insert(adapter::GEO_METADATA_KEY.to_owned(), geo.to_owned());
+    }
+    let geometry = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        geometry,
+    ]))
+}
+
+/// WKB little-endian di un punto (fixture tabellare: mai decodificato).
+fn point_wkb_le(x: f64, y: f64) -> Vec<u8> {
+    let mut wkb = Vec::with_capacity(21);
+    wkb.push(1_u8);
+    wkb.extend_from_slice(&1_u32.to_le_bytes());
+    wkb.extend_from_slice(&x.to_le_bytes());
+    wkb.extend_from_slice(&y.to_le_bytes());
+    wkb
+}
+
+fn geometry_without_crs_batch(
+    geo_json: Option<&str>,
+    ids: &[i64],
+    cells: &[Option<Vec<u8>>],
+) -> RecordBatch {
+    use plenora_core::arrow::array::{ArrayRef, BinaryArray};
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
+    RecordBatch::try_new(
+        geometry_without_crs_schema(geo_json),
+        vec![
+            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch fixture senza CRS")
+}
+
+/// Piano v4: solo `table.filter` su `id` (colonna non geometrica).
+fn filter_only_plan() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    })
+}
+
+fn write_geometry_without_crs_fixture(
+    directory: &std::path::Path,
+    geo_json: Option<&str>,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let plan = directory.join("plan.json");
+    let input = directory.join("input.arrow");
+    std::fs::write(&plan, serde_json::to_vec(&filter_only_plan()).expect("json")).expect("plan");
+    write_ipc(
+        &input,
+        &geometry_without_crs_schema(geo_json),
+        &[geometry_without_crs_batch(
+            geo_json,
+            &[0, 1, 2],
+            &[
+                Some(point_wkb_le(0.0, 0.0)),
+                Some(point_wkb_le(1.0, 1.0)),
+                None,
+            ],
+        )],
+    );
+    (plan, input)
+}
+
+#[test]
+fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = write_geometry_without_crs_fixture(directory.path(), None);
+
+    // R4.6.3: il filtro tabellare non richiede alcun CRS — validate passa e
+    // dichiara lo stato, non un CRS.
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        validate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
+    let edges = summary["edges"].as_array().expect("archi");
+    let geometry = &edges[0]["contract"]["geometry"];
+    assert_eq!(geometry["name"], "geometry");
+    assert_eq!(geometry["crs"], serde_json::Value::Null);
+    assert_eq!(geometry["crs_resolution"], "missing");
+
+    // run: i byte geometrici transitano invariati (mai decodificati).
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
+        .expect("reader");
+    let schema = reader.schema();
+    // R4.6.4: lo stato mancante arriva al bordo di scrittura dichiarato —
+    // `crs_resolution = missing` e NESSUNA chiave CRS (R2.2), mai un CRS
+    // inventato (R4.4), mai la dichiarazione persa.
+    let (_, geometry_field) = schema.column_with_name("geometry").expect("colonna geometry");
+    let metadata = geometry_field.metadata();
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("missing")
+    );
+    for key in [
+        adapter::PLENORA_GEOMETRY_CRS_ID_KEY,
+        adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+        adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+        adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+        adapter::PLENORA_GEOMETRY_SRID_KEY,
+    ] {
+        assert!(
+            !metadata.contains_key(key),
+            "chiave `{key}` emessa con CRS mancante"
+        );
+    }
+    // Le altre nozioni restano oneste: dimensions non dichiarata ->
+    // `unknown` (R3.4), encoding completato dall'estensione (R2.7).
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str),
+        Some("unknown")
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_ENCODING_KEY).map(String::as_str),
+        Some("wkb")
+    );
+    assert_eq!(
+        schema.metadata().get(adapter::PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        Some("1"),
+        "versione di protocollo R2.5 con chiavi canoniche"
+    );
+
+    // Round-trip R4.6.4: l'output (con le chiavi canoniche `missing`)
+    // rientra come input dello stesso piano e ripassa — la dichiarazione
+    // sopravvive al giro bordo-centro-bordo senza risoluzioni.
+    let revalidate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&output_path)
+        .output()
+        .expect("re-validate");
+    assert!(
+        revalidate.status.success(),
+        "round-trip stderr: {}",
+        String::from_utf8_lossy(&revalidate.stderr)
+    );
+}
+
+#[test]
+fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    // Dimensionalita' dichiarata `xy` (il gate B1.3 sulle dimensioni e'
+    // valutato prima del requisito CRS): qui sotto test e' SOLO il gate CRS.
+    let (_, input) =
+        write_geometry_without_crs_fixture(directory.path(), Some(r#"{"dimensions":"xy"}"#));
+    // geo.buffer dichiara `CrsRequirement::Projected`: si ferma in
+    // validazione con la causa dichiarata (non l'ultimo tentativo di
+    // lettura fallito), categoria d'errore CRS.
+    let plan = directory.path().join("plan.json");
+    let buffer_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    });
+    std::fs::write(&plan, serde_json::to_vec(&buffer_plan).expect("json")).expect("plan");
+
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        !validate.status.success(),
+        "geo.buffer su CRS mancante deve fallire"
+    );
+    let stderr = String::from_utf8_lossy(&validate.stderr);
+    assert!(
+        stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+        "stderr: {stderr}"
+    );
+
+    // Stesso esito in `run` (la validazione del piano e' il gate, mai lo
+    // stream a meta' esecuzione).
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(!run.status.success(), "run deve fallire in validazione");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !output_path.exists(),
+        "nessun output pubblicato su piano rifiutato"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Piano v4 misto (tabellare + geo): richiede il backend PROJ per la
 // risoluzione del CRS nella scoperta del contratto di input.
 // ---------------------------------------------------------------------------

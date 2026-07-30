@@ -890,6 +890,50 @@ impl std::str::FromStr for GeometryPrecision {
     }
 }
 
+/// CRS di una colonna geometrica nel contratto (R4.1: gli stati di
+/// risoluzione non si collassano nel modello interno; R4.4: mai un CRS
+/// inventato — `Missing` non porta dati).
+///
+/// - [`ContractCrs::Resolved`]: definizione risolta contro il database PROJ
+///   (solo una risoluzione produce questo valore);
+/// - [`ContractCrs::Missing`]: nessun CRS dichiarato in alcuna
+///   rappresentazione accettata. R4.6.3: la discovery non puo' pretendere un
+///   CRS risolvibile per operazioni che non lo richiedono — lo stato entra
+///   nel contratto, si propaga invariato negli output (R4.6.4, emesso come
+///   `plenora.geometry.crs_resolution = missing`) e ferma solo le op che
+///   dichiarano un `CrsRequirement`, in analyze (mai a meta' stream).
+///
+/// `CrsResolution::DeclaredUnresolved` NON e' modellato: la discovery non lo
+/// produce (una definizione dichiarata ma non risolvibile resta un errore di
+/// risoluzione) e la risoluzione di un'incoerenza dichiarata richiede una
+/// decisione esplicita nel piano (R4.6.3) — follow-up dichiarato in ADR-0009.
+#[derive(Clone, Debug)]
+pub enum ContractCrs {
+    Resolved(ResolvedCrs),
+    Missing,
+}
+
+impl ContractCrs {
+    /// Il CRS risolto, se lo stato e' `Resolved`.
+    #[must_use]
+    pub const fn as_resolved(&self) -> Option<&ResolvedCrs> {
+        match self {
+            Self::Resolved(crs) => Some(crs),
+            Self::Missing => None,
+        }
+    }
+
+    /// Stato di risoluzione per la chiave canonica
+    /// `plenora.geometry.crs_resolution` (R2.2).
+    #[must_use]
+    pub const fn resolution(&self) -> CrsResolution {
+        match self {
+            Self::Resolved(_) => CrsResolution::Resolved,
+            Self::Missing => CrsResolution::Missing,
+        }
+    }
+}
+
 /// Contratto di una colonna geometrica (Architetture.md par. 4.3).
 #[derive(Clone, Debug)]
 pub struct GeometryColumnContract {
@@ -898,9 +942,9 @@ pub struct GeometryColumnContract {
     pub field_id: FieldId,
     /// Nome visibile della colonna nello schema Arrow.
     pub name: String,
-    /// CRS risolto (solo `geo.reproject` lo modifica; ogni altro step lo
-    /// preserva).
-    pub crs: ResolvedCrs,
+    /// Stato del CRS (solo `geo.reproject` modifica un CRS risolto; ogni
+    /// altro step lo preserva, incluso lo stato `Missing` — R4.6.4).
+    pub crs: ContractCrs,
     pub dimensions: GeometryDimensions,
     /// Framing binario delle celle (ICD §3.3, regola R3.5), se dichiarato
     /// dai metadati: `None` quando la sorgente non dichiara un `encoding`
@@ -1303,7 +1347,7 @@ mod tests {
         GeometryColumnContract {
             field_id: FieldId(field_id),
             name: name.to_owned(),
-            crs: projected_crs(),
+            crs: ContractCrs::Resolved(projected_crs()),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable,

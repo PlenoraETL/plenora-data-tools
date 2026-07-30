@@ -11,8 +11,8 @@ use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema};
 use libfuzzer_sys::fuzz_target;
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldAllocator, FieldId, GeometryColumnContract,
-    GeometryDimensions,
+    ContractCrs, ContractProperties, DataContract, FieldAllocator, FieldId,
+    GeometryColumnContract, GeometryDimensions,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
@@ -54,7 +54,7 @@ fn geo_contract(crs: ResolvedCrs) -> DataContract {
         vec![GeometryColumnContract {
             field_id: FieldId(2),
             name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-            crs,
+            crs: ContractCrs::Resolved(crs),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,

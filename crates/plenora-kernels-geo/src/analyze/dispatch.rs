@@ -4,7 +4,9 @@
 
 use plenora_core::arrow::{DataType, Field};
 use plenora_core::catalog::OperationDescriptor;
-use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+use plenora_core::contract::{
+    ContractProperties, DataContract, FieldAllocator, GeometryColumnContract,
+};
 use plenora_core::crs::{validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
@@ -37,6 +39,27 @@ use super::{
 // ---------------------------------------------------------------------------
 // Validazione parametri per gruppo di operazioni.
 // ---------------------------------------------------------------------------
+
+/// R4.6.3: il requisito di CRS risolvibile e' condizionato alle operazioni
+/// che lo usano. Una colonna con CRS `Missing` (nessun CRS dichiarato in
+/// alcuna rappresentazione accettata; R4.4: mai un CRS inventato) attraversa
+/// libera le op senza `CrsRequirement` e si ferma QUI — il punto in cui un'op
+/// che dichiara il requisito tocca la colonna, in validazione del piano
+/// (compile-plan, deterministico), mai a meta' stream. Stessa categoria degli
+/// altri requisiti CRS non soddisfatti (`PlenoraError::Crs`); il messaggio
+/// dichiara la causa, non l'ultimo tentativo di lettura fallito.
+pub(in crate::analyze) fn require_resolved_crs<'a>(
+    op: &str,
+    geometry: &'a GeometryColumnContract,
+) -> Result<&'a ResolvedCrs> {
+    geometry.crs.as_resolved().ok_or_else(|| {
+        PlenoraError::Crs(format!(
+            "{op}: colonna geometria `{}`: nessun CRS dichiarato in alcuna \
+             rappresentazione accettata",
+            geometry.name
+        ))
+    })
+}
 
 /// Trasformazioni 1:1 in place con parametri: domini identici a
 /// `TransformArrowSchema::validate_parameters` (senza i limiti di trasporto).
@@ -170,40 +193,40 @@ pub(in crate::analyze) fn analyze_unary(
         | "geo.concave_hull" | "geo.densify" | "geo.snap_to_grid" | "geo.line_substring"
         | "geo.line_interpolate_point" => {
             validate_transform_params(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             Ok(input.clone())
         }
         "geo.reproject" => analyze_reproject(op, input, geometry, config, plan_crs),
         "geo.area" | "geo.length" | "geo.perimeter" | "geo.geodesic_line_length"
         | "geo.geodesic_area" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_measure(op, input, config)
         }
         "geo.vertex_count" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
             analyze_add_column(op, input, name, DataType::UInt64)
         }
         "geo.to_wkt" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), WKT_COLUMN)?;
             analyze_add_column(op, input, name, DataType::Utf8)
         }
         "geo.bounds_extractor" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_bounds(op, input, geometry)
         }
         "geo.geometry_diagnostics" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_diagnostics(op, input, geometry)
         }
         "geo.explode" | "geo.delaunay" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_expand(op, input)
         }
         "geo.split" => {
@@ -212,7 +235,7 @@ pub(in crate::analyze) fn analyze_unary(
             if let Some(tolerance) = parsed.tolerance {
                 ensure_non_negative(op, "tolerance", tolerance)?;
             }
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_expand(op, input)
         }
         "geo.voronoi" => {
@@ -222,66 +245,66 @@ pub(in crate::analyze) fn analyze_unary(
                     return Err(invalid_param(op, "max_points", "deve essere almeno 2"));
                 }
             }
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             Ok(input.clone())
         }
         "geo.clean_topology" => {
             let parsed: CleanTopologyConfig = parse_config(op, config)?;
             ensure_non_negative(op, "snap_tolerance", parsed.snap_tolerance)?;
             let _ = (&parsed.remove_overlaps, &parsed.fill_gaps);
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             Ok(input.clone())
         }
         "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder" | "geo.line_merge" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_geometry_only(input, geometry, &[])
         }
         "geo.collect" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_collect(op, input, geometry, config)
         }
         "geo.geometry_accessors" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_geometry_accessors(op, input, config)
         }
         "geo.line_locate_point" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_line_locate_point(op, input, config)
         }
         "geo.subdivide" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_subdivide(op, input, geometry, config)
         }
         "geo.snap" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_snap(op, input, config)
         }
         "geo.coverage_validate" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_coverage_validate(op, input, geometry, config, fields)
         }
         "geo.shared_paths" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_shared_paths(op, input, geometry, config, fields)
         }
         "geo.cluster_dbscan" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_cluster_dbscan(op, input, config)
         }
         "geo.polygonize" => {
             let parsed: PolygonizeConfig = parse_config(op, config)?;
             let _ = (&parsed.node_input, &parsed.require_complete);
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_geometry_only(input, geometry, &[Field::new(CLASS_COLUMN, DataType::Utf8, false)])
         }
         "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
         | "geo.haversine_distance" | "geo.geodesic_distance" | "geo.bearing" => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_unary_pair(op, input, config, DataType::Float64)
         }
         _ if op.starts_with("geo.predicate_") => {
-            validate_requirement(requirement, &[&geometry.crs])?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_unary_pair(op, input, config, DataType::Boolean)
         }
         _ => Err(PlenoraError::Unsupported(format!(
@@ -311,7 +334,13 @@ pub(in crate::analyze) fn analyze_binary(
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
         PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
-    validate_requirement(requirement, &[&left_geometry.crs, &right_geometry.crs])?;
+    validate_requirement(
+        requirement,
+        &[
+            require_resolved_crs(op, left_geometry)?,
+            require_resolved_crs(op, right_geometry)?,
+        ],
+    )?;
     let output = match op {
         // Schema left invariato, geometria sostituita in place; righe
         // allineate a left nel protocollo legacy: proprieta' preservate.

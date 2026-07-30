@@ -336,7 +336,7 @@ mod tests {
     use plenora_core::arrow::{DataType, Field, Schema};
     use plenora_core::catalog::{find_operation, CATALOG, CrsRequirement, Family};
     use plenora_core::contract::{
-        ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
+        ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
         GeometryColumnContract, GeometryDimensions, GeometryEncoding, PropertyConfidence,
         PropertyScope,
     };
@@ -350,6 +350,12 @@ mod tests {
         geo_metadata_json_with_dimensions, DEFAULT_GEOMETRY_COLUMN, GEO_METADATA_KEY,
         GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
     };
+
+    /// Il CRS risolto di un contratto di colonna (i test di analyze lavorano
+    /// su CRS risolti; il gate R4.6.3 per `Missing` ha test dedicati).
+    fn resolved_crs_of(geometry: &GeometryColumnContract) -> &ResolvedCrs {
+        geometry.crs.as_resolved().expect("CRS risolto")
+    }
 
     fn projected_crs() -> ResolvedCrs {
         ResolvedCrs::from_resolved_parts(
@@ -402,7 +408,7 @@ mod tests {
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs,
+                crs: ContractCrs::Resolved(crs),
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
@@ -967,8 +973,8 @@ mod tests {
                     assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
                     assert_geometry_preserved(&output, &input);
                     assert_eq!(
-                        output.active_geometry_column().unwrap().crs.definition(),
-                        input.geometries[0].crs.definition(),
+                        resolved_crs_of(output.active_geometry_column().unwrap()).definition(),
+                        resolved_crs_of(&input.geometries[0]).definition(),
                         "{}: CRS preservato",
                         case.op
                     );
@@ -1008,7 +1014,7 @@ mod tests {
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
                     assert!(!geometry.nullable, "{}: geometria non null", case.op);
-                    assert_eq!(geometry.crs.definition(), "EPSG:32632");
+                    assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     let field = output
                         .schema
@@ -1031,7 +1037,7 @@ mod tests {
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
                     assert!(geometry.nullable, "{}: geometria nullable", case.op);
-                    assert_eq!(geometry.crs.definition(), "EPSG:32632");
+                    assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     let field = output
                         .schema
@@ -1061,7 +1067,7 @@ mod tests {
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
                     assert!(!geometry.nullable, "{}: geometria di griglia non null", case.op);
-                    assert_eq!(geometry.crs.definition(), "EPSG:32632");
+                    assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     // Il numero di celle (2x2 con cell_size 5 su extent 10x10)
                     // e' noto a secco.
@@ -1079,8 +1085,8 @@ mod tests {
                     assert!(!geometry.nullable, "{}: geometria non null", case.op);
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     assert_eq!(
-                        geometry.crs.definition(),
-                        input.geometries[0].crs.definition(),
+                        resolved_crs_of(geometry).definition(),
+                        resolved_crs_of(&input.geometries[0]).definition(),
                         "{}: CRS dell'input",
                         case.op
                     );
@@ -1091,7 +1097,7 @@ mod tests {
                     assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria in output");
                     assert_eq!(geometry.field_id, FieldId(2), "{}: FieldId preservato", case.op);
-                    assert_eq!(geometry.crs.definition(), "EPSG:32632", "{}: CRS target", case.op);
+                    assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632", "{}: CRS target", case.op);
                     let field = output
                         .schema
                         .field_with_name(DEFAULT_GEOMETRY_COLUMN)
@@ -1275,7 +1281,7 @@ mod tests {
         )
         .expect("target = CRS di piano");
         assert_eq!(
-            output.active_geometry_column().unwrap().crs.definition(),
+            resolved_crs_of(output.active_geometry_column().unwrap()).definition(),
             "EPSG:32632"
         );
         // Senza plan_crs ne' backend PROJ: fail-closed.
@@ -1373,7 +1379,7 @@ mod tests {
         )
         .expect("risoluzione PROJ del target");
         assert_eq!(
-            output.active_geometry_column().unwrap().crs.kind(),
+            resolved_crs_of(output.active_geometry_column().unwrap()).kind(),
             CrsKind::Projected
         );
     }
@@ -1401,7 +1407,7 @@ mod tests {
         )
         .expect("crs da config = piano");
         assert_eq!(
-            output.active_geometry_column().unwrap().crs.definition(),
+            resolved_crs_of(output.active_geometry_column().unwrap()).definition(),
             "EPSG:32632"
         );
     }
@@ -1571,7 +1577,7 @@ mod tests {
             Some(&plan),
         )
         .expect("crs da config = piano");
-        assert_eq!(output.geometries[0].crs.definition(), "EPSG:32632");
+        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
         assert!(output.geometries[0].nullable, "geometria da WKT nullable");
     }
 
@@ -1619,7 +1625,7 @@ mod tests {
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: projected_crs(),
+                crs: ContractCrs::Resolved(projected_crs()),
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
@@ -1734,7 +1740,7 @@ mod tests {
             (CENTROID_Y_COLUMN, DataType::Float64, false),
         ];
         assert_eq!(signatures(&output), expected);
-        assert_eq!(output.geometries[0].crs.definition(), "EPSG:32632");
+        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
 
         // Limite celle: extent enorme con celle piccole fallisce in analisi.
         let over_limit = json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1e6, "ymax": 1e6}, "cell_size": 1.0});
@@ -1850,7 +1856,7 @@ mod tests {
         assert_eq!(signatures(&output), expected);
         assert_eq!(output.geometries[0].field_id, FieldId(0), "allocatore da zero");
         assert!(!output.geometries[0].nullable);
-        assert_eq!(output.geometries[0].crs.definition(), "EPSG:32632");
+        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
         assert!(output.properties.sorted_by.is_none());
         assert!(output.properties.row_count.is_none());
         let field = output
@@ -1908,7 +1914,7 @@ mod tests {
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: projected_crs(),
+                crs: ContractCrs::Resolved(projected_crs()),
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
@@ -2186,5 +2192,91 @@ mod tests {
             .field_with_name(DEFAULT_GEOMETRY_COLUMN)
             .expect("campo geometria");
         assert_eq!(field.metadata(), &expected, "metadati del campo geometria");
+    }
+
+    // -------------------------------------------------------------------
+    // R4.6.3: il requisito di CRS risolvibile e' condizionato alle op che
+    // lo usano — il gate vive qui, in analyze (compile-plan).
+    // -------------------------------------------------------------------
+
+    /// Contratto con geometria SENZA CRS dichiarato (`ContractCrs::Missing`).
+    fn geo_contract_missing_crs() -> DataContract {
+        DataContract::new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
+            ])),
+            vec![GeometryColumnContract {
+                field_id: FieldId(2),
+                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
+                crs: ContractCrs::Missing,
+                dimensions: GeometryDimensions::Xy,
+                encoding: None,
+                nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
+            }],
+            Some(FieldId(2)),
+            ContractProperties::default(),
+        )
+        .expect("contratto geometrico valido")
+    }
+
+    #[test]
+    fn every_geo_op_declares_a_crs_requirement() {
+        // Perimetro verificato dal catalogo: NESSUNA op geo e' senza
+        // `CrsRequirement` (il gate R4.6.3 ha sempre un requisito da
+        // applicare); le op senza requisito sono solo le table.*.
+        for descriptor in CATALOG {
+            if descriptor.family == Family::Geo {
+                assert!(
+                    descriptor.crs_requirement.is_some(),
+                    "{}: crs_requirement assente",
+                    descriptor.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_crs_stops_geo_ops_in_analyze_with_the_declared_cause() {
+        // R4.6.3: un contratto con CRS `Missing` ferma OGNI op che dichiara
+        // un `CrsRequirement` nel punto in cui tocca la colonna — categoria
+        // `Crs` (come ogni requisito non soddisfatto) e messaggio che
+        // dichiara la causa, non l'ultimo tentativo di lettura fallito.
+        let input = geo_contract_missing_crs();
+        let cases: [(&str, Value); 5] = [
+            ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.reproject", json!({"target_crs": "EPSG:3857"})),
+            ("geo.area", json!({})),
+            ("geo.centroid", json!({})),
+            ("geo.explode", json!({})),
+        ];
+        for (op, config) in &cases {
+            let result = analyze_one(op, std::slice::from_ref(&input), config, None);
+            match result {
+                Err(PlenoraError::Crs(message)) => {
+                    assert!(
+                        message.contains(
+                            "nessun CRS dichiarato in alcuna rappresentazione accettata"
+                        ),
+                        "{op}: {message}"
+                    );
+                }
+                other => panic!("{op}: atteso errore Crs per CRS mancante, ottenuto {other:?}"),
+            }
+        }
+
+        // Binaria: il gate scatta sul primo operando senza CRS risolto.
+        let result = analyze_one("geo.union", &[input.clone(), input], &json!({}), None);
+        match result {
+            Err(PlenoraError::Crs(message)) => {
+                assert!(
+                    message
+                        .contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+                    "{message}"
+                );
+            }
+            other => panic!("geo.union: atteso errore Crs per CRS mancante, ottenuto {other:?}"),
+        }
     }
 }

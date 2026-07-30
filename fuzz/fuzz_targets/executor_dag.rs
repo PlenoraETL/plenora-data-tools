@@ -15,7 +15,8 @@ use geo::{Geometry, Point};
 use geozero::{CoordDimensions, ToWkb};
 use libfuzzer_sys::fuzz_target;
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldId, GeometryColumnContract, GeometryDimensions,
+    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
+    GeometryDimensions,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_engine::planner::validate;
@@ -79,12 +80,12 @@ fn geo_contract() -> DataContract {
         vec![GeometryColumnContract {
             field_id: FieldId(3),
             name: "geom".to_owned(),
-            crs: ResolvedCrs::from_resolved_parts(
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
                 "EPSG:32632".to_owned(),
                 json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
                 CrsKind::Projected,
                 Some(1.0),
-            ),
+            )),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,

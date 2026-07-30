@@ -18,11 +18,13 @@
 //! Le geometrie viaggiano in una colonna `Binary`; ogni cella non-null e'
 //! validata dal validatore WKB del kernel e i null sono preservati.
 //!
-//! Milestone B (contratti trasversali v2.0-rc8 §2, proposta in attesa di
+//! Milestone B (contratti trasversali v2.0-rc10 §2, proposta in attesa di
 //! ratifica; emissione con deroga registrata §15.4/DER-ICD-002 — vedi
 //! `docs/deroghe.md` DER-002): protocollo delle chiavi canoniche
 //! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
-//! dedicato, una chiave per nozione, MAI un blob unico). `plenora.field_id`
+//! dedicato, una chiave per nozione, MAI un blob unico). R4.6.3 (rc9/rc10):
+//! l'emissione porta anche lo stato `crs_resolution = missing` (nessuna
+//! chiave CRS, coerenza R2.2) — ADR-0009 decisione 7. `plenora.field_id`
 //! e' solo letta (R2.2 opzionale; non si emette il `FieldId` di grafo, che
 //! non ha significato fuori dal processo — ADR-0009 decisione 3). Questo
 //! modulo
@@ -437,10 +439,15 @@ pub struct GeometryMetadataDetails {
 /// Decisioni di formato (il punto delicato e' la coerenza con il metadato
 /// legacy `geo` e con l'emissione di plenora-database-tools):
 ///
-/// - `crs_resolution` e' sempre `resolved`: un `ResolvedCrs` e' risolto per
-///   costruzione (lo produce solo una risoluzione contro il database PROJ),
-///   quindi il valore e' onesto, non un default.
-/// - La definizione CRS che e' un oggetto JSON (PROJJSON) e' emessa come
+/// - `crs_resolution` riflette lo stato del contratto: `resolved` per un
+///   `ResolvedCrs` (risolto per costruzione — lo produce solo una risoluzione
+///   contro il database PROJ — quindi il valore e' onesto, non un default),
+///   `missing` per `ContractCrs::Missing` (R4.6.3/R4.6.4: lo stato mancante
+///   si propaga invariato, mai un CRS inventato — R4.4);
+/// - con `missing` NON sono emesse `crs_id`/`crs_definition`/
+///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
+///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
+/// - la definizione CRS che e' un oggetto JSON (PROJJSON) e' emessa come
 ///   `crs_definition` + `crs_definition_format = projjson`; ogni altra
 ///   definizione e' emessa come `crs_id` (identificatore di autorita', es.
 ///   `EPSG:4326`). E' la stessa distinzione che [`geo_metadata_json`]
@@ -451,12 +458,12 @@ pub struct GeometryMetadataDetails {
 ///   definizione WKT testuale non e' distinguibile da un identificatore di
 ///   autorita' senza un hint di formato, che `ResolvedCrs` non porta; nel
 ///   workspace le definizioni risolte sono oggi authority:code o PROJJSON.
-/// - `axis_order` e' sempre emesso (obbligatorio quando un CRS e' presente):
-///   senza dettaglio esplicito vale `unknown`, valore canonico dichiarato
-///   dalla tabella §2 — la chiave qui e' obbligatoria, non opzionale, e
-///   `unknown` non e' un default al posto dell'assente (R5.2 riguarda le
-///   chiavi opzionali: `srid`, `spatial_semantics`, `precision`, `encoding`,
-///   che restano assenti se non note).
+/// - con un CRS risolto `axis_order` e' sempre emesso (obbligatorio quando un
+///   CRS e' presente): senza dettaglio esplicito vale `unknown`, valore
+///   canonico dichiarato dalla tabella §2 — la chiave qui e' obbligatoria,
+///   non opzionale, e `unknown` non e' un default al posto dell'assente (R5.2
+///   riguarda le chiavi opzionali: `srid`, `spatial_semantics`, `precision`,
+///   `encoding`, che restano assenti se non note).
 /// - `types`/`types_declaration` sono emesse SOLO se il campo `types` porta
 ///   un valore (confidence `Declared`/`Proven`/`Estimated`); confidence
 ///   `Unknown` («proprieta' non dichiarata», R3.4.1) non emette nulla: mai
@@ -497,32 +504,36 @@ pub fn canonical_geometry_metadata(
     }
     metadata.insert(
         PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-        CrsResolution::Resolved.as_str().to_owned(),
+        contract.crs.resolution().as_str().to_owned(),
     );
-    let definition = contract.crs.definition();
-    if matches!(
-        serde_json::from_str::<serde_json::Value>(definition),
-        Ok(serde_json::Value::Object(_))
-    ) {
+    if let Some(crs) = contract.crs.as_resolved() {
+        let definition = crs.definition();
+        if matches!(
+            serde_json::from_str::<serde_json::Value>(definition),
+            Ok(serde_json::Value::Object(_))
+        ) {
+            metadata.insert(
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+                definition.to_owned(),
+            );
+            metadata.insert(
+                PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+                CrsDefinitionFormat::Projjson.as_str().to_owned(),
+            );
+        } else {
+            metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
+        }
+        let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
         metadata.insert(
-            PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
-            definition.to_owned(),
+            PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+            axis_order.as_str().to_owned(),
         );
-        metadata.insert(
-            PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
-            CrsDefinitionFormat::Projjson.as_str().to_owned(),
-        );
-    } else {
-        metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
+        if let Some(srid) = details.srid {
+            metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
+        }
     }
-    let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
-    metadata.insert(
-        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-        axis_order.as_str().to_owned(),
-    );
-    if let Some(srid) = details.srid {
-        metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
-    }
+    // Con `crs_resolution = missing` nessuna chiave CRS e' emessa (R2.2:
+    // `missing` non ammette `crs_id`/`crs_definition`/`srid`/`axis_order`).
     if let Some(semantics) = details.spatial_semantics {
         metadata.insert(
             PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY.to_owned(),
@@ -1280,7 +1291,8 @@ mod tests {
     use geo::polygon;
     use plenora_core::arrow::RecordBatch;
     use plenora_core::contract::{
-        ContractProperty, GeometryType, PropertyConfidence, PropertyScope, TypesDeclaration,
+        ContractCrs, ContractProperty, GeometryType, PropertyConfidence, PropertyScope,
+        TypesDeclaration,
     };
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use std::sync::Arc;
@@ -1682,7 +1694,7 @@ mod tests {
         GeometryColumnContract {
             field_id: FieldId(7),
             name: "geom".to_owned(),
-            crs: resolved_crs("EPSG:3857"),
+            crs: ContractCrs::Resolved(resolved_crs("EPSG:3857")),
             dimensions: GeometryDimensions::Xyz,
             encoding: Some(GeometryEncoding::Wkb),
             nullable: true,
@@ -1825,7 +1837,7 @@ mod tests {
     fn canonical_metadata_emits_projjson_definitions_as_crs_definition() {
         let projjson = r#"{"type":"ProjectedCRS","name":"demo"}"#;
         let contract = GeometryColumnContract {
-            crs: resolved_crs(projjson),
+            crs: ContractCrs::Resolved(resolved_crs(projjson)),
             ..full_contract()
         };
         let metadata = canonical_geometry_metadata(&contract, &full_details());
@@ -1870,7 +1882,7 @@ mod tests {
         let field = Field::new("geom", DataType::Binary, true).with_metadata(
             canonical_geometry_metadata(
                 &GeometryColumnContract {
-                    crs: resolved_crs(projjson),
+                    crs: ContractCrs::Resolved(resolved_crs(projjson)),
                     ..full_contract()
                 },
                 &full_details(),

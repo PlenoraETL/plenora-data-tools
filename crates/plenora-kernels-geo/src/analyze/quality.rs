@@ -9,7 +9,7 @@ use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::contract::{
     ContractProperties, DataContract, FieldAllocator, GeometryColumnContract, GeometryDimensions,
 };
-use plenora_core::Result;
+use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use crate::arrow_adapter::DEFAULT_GEOMETRY_COLUMN;
@@ -37,13 +37,22 @@ pub(in crate::analyze) fn analyze_coverage_rows(
     columns: &[(&str, DataType)],
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
+    // Invariante: le op di copertura dichiarano un `CrsRequirement` e il gate
+    // R4.6.3 di `dispatch` le ferma prima di arrivare qui se il CRS e'
+    // `Missing` — un `None` sarebbe una violazione della catena di analyze,
+    // mai uno stato da interpretare.
+    let crs = geometry.crs.as_resolved().ok_or_else(|| {
+        PlenoraError::Internal(
+            "op di copertura senza CRS risolto: gate del requisito bypassato".to_owned(),
+        )
+    })?;
     let mut fields: Vec<Field> = columns
         .iter()
         .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
         .collect();
     fields.push(new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
-        &geometry.crs,
+        crs,
         GeometryDimensions::Xy,
         // Kernel elaborante: l'output e' ricodificato WKB ISO XY — nessun
         // encoding dichiarato (chiave omessa, mai ereditata dall'input).

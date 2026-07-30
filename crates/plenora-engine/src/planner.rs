@@ -44,7 +44,9 @@
 //!   (serializzazione stabile), `FieldId` esclusi perche' identita' interna
 //!   del grafo, non dell'input; il CRS entra con definizione, tipo e unita'
 //!   lineare — due definizioni testualmente diverse dello stesso CRS producono
-//!   fingerprint diversi (conservativo, fail-closed);
+//!   fingerprint diversi (conservativo, fail-closed) — e lo stato `missing`
+//!   (R4.6.3) entra come valore canonico: un contratto senza CRS non ha lo
+//!   stesso fingerprint di uno con CRS risolto;
 //! - **profilo di publish**: il formato piano v4 non dichiara ancora un
 //!   profilo (`AtomicPublish`/`DurableAtomicPublish`, ADR 7); finche' non lo
 //!   fara', il default `AtomicPublish` entra nelle `required_capabilities`
@@ -72,7 +74,7 @@ use plenora_core::catalog::{
     find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
     ExpansionConstraint, Family, Maturity, OperationDescriptor, Origin, ResultShape,
 };
-use plenora_core::contract::{DataContract, FieldAllocator};
+use plenora_core::contract::{ContractCrs, DataContract, FieldAllocator};
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
@@ -837,19 +839,29 @@ fn contract_canonical(contract: &DataContract) -> Value {
         .geometries
         .iter()
         .map(|geometry| {
-            let mut canonical = json!({
-                "name": geometry.name,
-                "crs": {
-                    "definition": geometry.crs.definition(),
-                    "kind": match geometry.crs.kind() {
+            // R4.6.3/ADR 4: lo stato del CRS ENTRA nel fingerprint — un
+            // contratto con CRS risolto e uno con CRS mancante non sono lo
+            // stesso contratto (altrimenti un piano validato su input
+            // risolto accetterebbe in riesecuzione un input senza CRS senza
+            // rivalidazione, spostando il fallimento a runtime). La forma
+            // risolta e' byte-identica a prima (fingerprint esistenti
+            // stabili); `missing` e' il valore canonico R2.2.
+            let crs = match &geometry.crs {
+                ContractCrs::Resolved(crs) => json!({
+                    "definition": crs.definition(),
+                    "kind": match crs.kind() {
                         CrsKind::Geographic => "geographic",
                         CrsKind::Projected => "projected",
                     },
-                    "horizontal_unit_to_metre": geometry
-                        .crs
+                    "horizontal_unit_to_metre": crs
                         .horizontal_unit_to_metre()
                         .map(f64::to_bits),
-                },
+                }),
+                ContractCrs::Missing => json!(geometry.crs.resolution().as_str()),
+            };
+            let mut canonical = json!({
+                "name": geometry.name,
+                "crs": crs,
                 "dimensions": geometry.dimensions.as_str(),
                 "nullable": geometry.nullable,
             });

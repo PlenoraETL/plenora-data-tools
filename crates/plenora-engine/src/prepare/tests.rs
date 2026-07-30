@@ -6,8 +6,8 @@ use serde_json::json;
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldId, GeometryColumnContract, GeometryDimensions,
-    RuntimeStatistic,
+    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
+    GeometryDimensions, RuntimeStatistic,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -44,7 +44,7 @@ fn geo_contract() -> DataContract {
         vec![GeometryColumnContract {
             field_id: FieldId(3),
             name: "geom".to_owned(),
-            crs: projected_crs(),
+            crs: ContractCrs::Resolved(projected_crs()),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,

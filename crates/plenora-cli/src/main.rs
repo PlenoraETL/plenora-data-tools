@@ -39,8 +39,8 @@ use plenora_core::arrow::schema::{DataType, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, Family, OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractProperties, ContractProperty, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions, PropertyConfidence, PropertyScope,
+    ContractCrs, ContractProperties, ContractProperty, CrsResolution, DataContract, FieldId,
+    GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::PlenoraError;
@@ -64,7 +64,7 @@ use plenora_engine::{
 use plenora_kernels_geo::arrow_adapter::{
     read_contract_version, read_geometry_contract_keys, CanonicalGeometryKeys,
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
-    PLENORA_GEOMETRY_NAMESPACE_PREFIX,
+    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
@@ -828,22 +828,25 @@ fn open_input(path: &Path) -> Result<Input, PlenoraError> {
 
 /// Definizione CRS dal metadato `geo` di una colonna `GeoArrow`: stringa
 /// `authority:code` oppure PROJJSON come oggetto (serializzato compatto).
-/// Fail-closed su metadato mancante o malformato.
+///
+/// R4.6.3: il metadato mancante o privo della chiave `crs` NON e' piu' un
+/// errore (restituisce `None` → [`ContractCrs::Missing`]): il centro non puo'
+/// pretendere un CRS risolvibile per operazioni che non lo richiedono. Un
+/// metadato MALFORMATO resta un errore (R5.1: «illeggibile» non e'
+/// «assente»).
 fn crs_definition_from_metadata(
     field_name: &str,
     geo_metadata: Option<&String>,
-) -> Result<String, PlenoraError> {
-    let raw = geo_metadata.ok_or_else(|| {
-        contract(format!(
-            "colonna geometria `{field_name}` senza metadato `{GEO_METADATA_KEY}`: \
-             impossibile determinare il CRS"
-        ))
-    })?;
+) -> Result<Option<String>, PlenoraError> {
+    let Some(raw) = geo_metadata else {
+        return Ok(None);
+    };
     let value: serde_json::Value = serde_json::from_str(raw)?;
     match value.get("crs") {
-        Some(serde_json::Value::String(definition)) => Ok(definition.clone()),
-        Some(object @ serde_json::Value::Object(_)) => Ok(serde_json::to_string(object)?),
-        _ => Err(contract(format!(
+        None => Ok(None),
+        Some(serde_json::Value::String(definition)) => Ok(Some(definition.clone())),
+        Some(object @ serde_json::Value::Object(_)) => Ok(Some(serde_json::to_string(object)?)),
+        Some(_) => Err(contract(format!(
             "colonna geometria `{field_name}`: metadato `{GEO_METADATA_KEY}` senza \
              chiave `crs` valida"
         ))),
@@ -851,9 +854,9 @@ fn crs_definition_from_metadata(
 }
 
 /// Scoperta del `DataContract` di un input dal solo header IPC: schema Arrow
-/// e colonne geometria se presenti, CRS risolto. Fail-closed su metadati
-/// incoerenti. Il `FieldId` e' provvisorio: il planner lo rimappa nel
-/// namespace globale del grafo (D16).
+/// e colonne geometria se presenti, CRS risolto SE dichiarato. Fail-closed
+/// su metadati incoerenti. Il `FieldId` e' provvisorio: il planner lo rimappa
+/// nel namespace globale del grafo (D16).
 ///
 /// Milestone C (protocollo chiavi canoniche, contratti trasversali §2):
 ///
@@ -872,8 +875,13 @@ fn crs_definition_from_metadata(
 /// - CRS: la rappresentazione completata (canonica o legacy, vedi
 ///   [`crs_definition_from_keys`]) alimenta la stessa risoluzione di prima
 ///   (backend PROJ); cambia solo la sorgente dei metadati, non la
-///   risoluzione. Un campo geometrico senza CRS dichiarato resta un errore
-///   (mai un CRS inventato).
+///   risoluzione. R4.6.3 (v2.0-rc9/rc10): un campo geometrico SENZA CRS
+///   dichiarato NON e' piu' un errore qui — il centro non puo' pretendere un
+///   CRS risolvibile per operazioni che non lo richiedono; lo stato entra nel
+///   contratto come [`ContractCrs::Missing`] (R4.4: mai un CRS inventato) e
+///   ferma solo le op che dichiarano un `CrsRequirement`, in analyze. Resta
+///   errore la dichiarazione contraddittoria (`crs_resolution` valorizzata ma
+///   nessuna rappresentazione: R4.1 vieta di collassarla su `missing`).
 fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
     discover_input_contract_from_schema(ipc_header_schema(path)?)
 }
@@ -921,8 +929,24 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
             )));
         }
         let keys = read_geometry_contract_keys(field)?;
-        let definition = crs_definition_from_keys(field.name(), geo_metadata, &keys)?;
-        let crs = resolve_crs(&definition, "crs")?;
+        let crs = if let Some(definition) = crs_definition_from_keys(field.name(), geo_metadata, &keys)? {
+            ContractCrs::Resolved(resolve_crs(&definition, "crs")?)
+        } else {
+            // R4.1: mai collassare una dichiarazione esplicita su
+            // `missing` — `resolved`/`declared_unresolved` senza alcuna
+            // rappresentazione e' una contraddizione, non un'assenza.
+            if let Some(resolution) = keys.crs_resolution {
+                if resolution != CrsResolution::Missing {
+                    return Err(contract(format!(
+                        "colonna geometria `{}`: chiave \
+                         `{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` dichiara `{resolution}` ma \
+                         nessun CRS e' dichiarato in alcuna rappresentazione accettata",
+                        field.name()
+                    )));
+                }
+            }
+            ContractCrs::Missing
+        };
         geometries.push(geometry_contract_from_field(field, crs, &keys));
     }
     let active_geometry = if geometries.is_empty() {
@@ -940,16 +964,22 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
 /// prevale `crs_definition`, autocontenuta; la coerenza fra le due forme non
 /// e' decidibile testualmente (R2.7: mai arbitrato sul dato) e una
 /// definizione invalida e' comunque rifiutata dalla risoluzione a valle.
+///
+/// R4.6.3: `None` significa «nessun CRS dichiarato in alcuna
+/// rappresentazione accettata» e alimenta [`ContractCrs::Missing`], mai un
+/// errore. (Nota: il reader [`read_geometry_contract_keys`] completa gia'
+/// `geo.crs` nelle chiavi canoniche, quindi il fallback legacy qui sotto e'
+/// raggiunto solo da metadati `geo` senza chiave `crs` o malformati.)
 fn crs_definition_from_keys(
     field_name: &str,
     geo_metadata: Option<&String>,
     keys: &CanonicalGeometryKeys,
-) -> Result<String, PlenoraError> {
+) -> Result<Option<String>, PlenoraError> {
     if let Some(definition) = &keys.crs_definition {
-        return Ok(definition.clone());
+        return Ok(Some(definition.clone()));
     }
     if let Some(id) = &keys.crs_id {
-        return Ok(id.clone());
+        return Ok(Some(id.clone()));
     }
     crs_definition_from_metadata(field_name, geo_metadata)
 }
@@ -979,7 +1009,7 @@ fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
 /// provvisorio (rimappato dal planner, D16).
 fn geometry_contract_from_field(
     field: &plenora_core::arrow::schema::Field,
-    crs: plenora_core::crs::ResolvedCrs,
+    crs: ContractCrs,
     keys: &CanonicalGeometryKeys,
 ) -> GeometryColumnContract {
     let types = keys.types.as_ref().map_or_else(
@@ -1045,11 +1075,20 @@ fn contract_json(contract: &DataContract) -> serde_json::Value {
         })
         .collect();
     let geometry = contract.active_geometry_column().map(|geometry| {
-        serde_json::json!({
-            "name": geometry.name,
-            "crs": geometry.crs.definition(),
-            "crs_kind": format!("{:?}", geometry.crs.kind()),
-        })
+        match &geometry.crs {
+            ContractCrs::Resolved(crs) => serde_json::json!({
+                "name": geometry.name,
+                "crs": crs.definition(),
+                "crs_kind": format!("{:?}", crs.kind()),
+                "crs_resolution": geometry.crs.resolution().as_str(),
+            }),
+            ContractCrs::Missing => serde_json::json!({
+                "name": geometry.name,
+                "crs": serde_json::Value::Null,
+                "crs_kind": serde_json::Value::Null,
+                "crs_resolution": geometry.crs.resolution().as_str(),
+            }),
+        }
     });
     serde_json::json!({
         "fields": fields,
@@ -1498,7 +1537,11 @@ mod tests {
     /// loop di discovery (la risoluzione CRS resta iniettata dai test).
     fn contract_from_field(field: &Field) -> Result<GeometryColumnContract, PlenoraError> {
         let keys = read_geometry_contract_keys(field)?;
-        Ok(geometry_contract_from_field(field, projected_crs(), &keys))
+        Ok(geometry_contract_from_field(
+            field,
+            ContractCrs::Resolved(projected_crs()),
+            &keys,
+        ))
     }
 
     #[test]
@@ -1670,5 +1713,95 @@ mod tests {
             }
             other => panic!("attesa divergenza R2.6, ottenuto {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // R4.6.3 (contratti trasversali v2.0-rc9/rc10): la discovery non
+    // pretende un CRS risolvibile — lo stato `missing` entra nel contratto.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn discovery_geometry_without_crs_is_missing_not_an_error() {
+        // Colonna GeoArrow-WKB senza metadato `geo` e senza chiavi
+        // canoniche: nessun CRS dichiarato in alcuna rappresentazione
+        // accettata -> `ContractCrs::Missing` (R4.4: mai un CRS inventato),
+        // non un errore. La discovery non chiede la risoluzione, quindi il
+        // test vale con e senza backend PROJ.
+        let schema = std::sync::Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            geometry_field(None),
+        ]));
+        let contract = discover_input_contract_from_schema(schema).expect("discovery");
+        assert_eq!(contract.geometries.len(), 1);
+        assert!(
+            matches!(contract.geometries[0].crs, ContractCrs::Missing),
+            "CRS assente -> stato missing"
+        );
+    }
+
+    #[test]
+    fn discovery_geometry_with_geo_metadata_without_crs_is_missing() {
+        // Metadato `geo` presente ma senza chiave `crs` (dimensions sola):
+        // anche qui nessun CRS dichiarato -> `missing`, mai errore.
+        let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some(
+            r#"{"dimensions":"xy"}"#,
+        ))]));
+        let contract = discover_input_contract_from_schema(schema).expect("discovery");
+        assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
+        assert_eq!(contract.geometries[0].dimensions, GeometryDimensions::Xy);
+    }
+
+    #[test]
+    fn discovery_canonical_missing_resolution_is_carried() {
+        // `crs_resolution = missing` dichiarato canonicamente (senza chiavi
+        // CRS, come impone la coerenza R2.2) -> stato missing nel contratto.
+        let metadata = std::collections::HashMap::from([
+            (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
+            (
+                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                "missing".to_owned(),
+            ),
+        ]);
+        let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
+    }
+
+    #[test]
+    fn discovery_rejects_resolution_declaration_without_any_crs() {
+        // R4.1: una dichiarazione `resolved` (o `declared_unresolved`) senza
+        // alcuna rappresentazione CRS e' una contraddizione — MAI collassata
+        // su `missing`: errore esplicito che nomina la chiave.
+        for resolution in ["resolved", "declared_unresolved"] {
+            let metadata = std::collections::HashMap::from([
+                (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
+                (
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    resolution.to_owned(),
+                ),
+            ]);
+            let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+            let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+            match result {
+                Err(PlenoraError::InvalidPlan(message)) => {
+                    assert!(
+                        message.contains("nessun CRS e' dichiarato in alcuna rappresentazione"),
+                        "{resolution}: {message}"
+                    );
+                }
+                other => panic!("{resolution}: attesa contraddizione, ottenuto {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_malformed_geo_metadata_never_treats_it_as_missing() {
+        // R5.1: un metadato `geo` illeggibile non diventa «CRS assente» —
+        // «illeggibile» non e' «assente»: errore, come prima di R4.6.3.
+        let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
+        let result = discover_input_contract_from_schema(schema);
+        assert!(result.is_err(), "metadato geo malformato -> errore");
     }
 }

@@ -36,7 +36,8 @@ use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldId, GeometryColumnContract, GeometryDimensions,
+    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
+    GeometryDimensions,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
@@ -64,12 +65,12 @@ fn geo_contract() -> DataContract {
         vec![GeometryColumnContract {
             field_id: FieldId(3),
             name: "geom".to_owned(),
-            crs: ResolvedCrs::from_resolved_parts(
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
                 "EPSG:32632".to_owned(),
                 json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
                 CrsKind::Projected,
                 Some(1.0),
-            ),
+            )),
             dimensions: GeometryDimensions::Xy,
             encoding: None,
             nullable: true,

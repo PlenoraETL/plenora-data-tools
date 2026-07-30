@@ -2,8 +2,8 @@
 
 - **Stato**: accettato, attuazione in corso (milestone A, B, D attuate; C
   parziale per vincolo sui monoliti)
-- **Fonte normativa**: `plenora-contracts`, tag `v2.0-rc8` (revisione
-  `62b12e3496466d2c908dac3cc098640b99b52e21`) — §2 (chiavi dei metadati
+- **Fonte normativa**: `plenora-contracts`, tag `v2.0-rc10` (revisione
+  `3598259bbe07d1c853453ff34ca2c1d1d28a0272`) — §2 (chiavi dei metadati
   Arrow), §3 (modello geometrico), §9 (modello di errore) sono **proposte
   in attesa di ratifica**: l'implementazione segue la proposta come scelta
   progettuale dichiarata, non come obbligo ratificato (§16 R16.3: ratifica
@@ -11,7 +11,8 @@
   l'autorita' locale; alla ratifica si allinea. L'emissione delle chiavi
   §2 prima della ratifica e' registrata come deroga (§15.4 emendata rc5 /
   DER-ICD-002) in `docs/deroghe.md` DER-002. (I commenti nel codice delle
-  milestone A/B/D citano `v2.0-rc3`: normativamente identica.)
+  milestone A/B/D citano `v2.0-rc3`: normativamente identica. R4.6 e'
+  entrata in rc9; la disambiguazione `crs_missing` di R4.6.3 in rc10.)
 - **Decisioni collegate**: D16 (FieldId), ADR 3 (failure), ADR 7 (publish),
   ADR 8 (modello dimensionale)
 - **Riferimenti**: `docs/deroghe.md` (registro deroghe, R16.2)
@@ -82,6 +83,37 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    mappa su `RemoteEffect::Committed` — l'effetto esiste ed e'
    osservabile; cio' che manca e' la conferma di durabilita', non
    l'esistenza dell'effetto.
+7. **CRS mancante nel contratto, requisito condizionato alle op (R4.6.3,
+   rc9/rc10).** `GeometryColumnContract.crs` e' `ContractCrs`
+   (`Resolved(ResolvedCrs)` | `Missing`), non piu' un `ResolvedCrs`
+   obbligatorio: la discovery NON pretende un CRS risolvibile per
+   operazioni che non lo richiedono — un filtro tabellare su una colonna
+   non geometrica non ha bisogno di alcun CRS, e rifiutarlo e' piu'
+   restrittivo del ruolo (rc10). `Missing` non porta dati (R4.4 intatta:
+   mai un CRS inventato) ed e' distinto da `Resolved` nel modello interno
+   (R4.1); la forma a enum (non `Option`) e' scelta perche' lo stato sia
+   nominato e l'aggiunta futura di `DeclaredUnresolved` sia guidata dal
+   compilatore. Il fallimento si sposta dalla discovery al punto in cui
+   un'op con `CrsRequirement` tocca la colonna — `analyze_contract` delle
+   op geo, a compile-plan (deterministico, mai a meta' stream) — con
+   categoria `Crs` e messaggio che dichiara la causa («nessun CRS
+   dichiarato in alcuna rappresentazione accettata»). Propagazione
+   (R4.6.4): lo stato attraversa invariato i contratti di output e le
+   chiavi §2 (`crs_resolution = missing`, nessuna chiave
+   `crs_id`/`crs_definition`/`axis_order`/`srid` — coerenza R2.2).
+   Fingerprint (ADR 4): lo stato ENTRA — risolto e mancante non sono lo
+   stesso contratto; escluderlo farebbe accettare a un piano con op geo,
+   in riesecuzione, un input senza CRS senza rivalidazione (fallimento
+   spostato a runtime); per un filtro tabellare il mismatch costa una
+   rivalidazione che passa (conservativo, dichiarato). `DeclaredUnresolved`
+   NON e' modellato: la discovery non lo produce (una definizione
+   dichiarata ma non risolvibile resta errore di risoluzione) e risolvere
+   un'incoerenza dichiarata richiede una decisione esplicita nel piano
+   (R4.6.3) — follow-up dichiarato. Una `crs_resolution` valorizzata
+   (`resolved`/`declared_unresolved`) senza alcuna rappresentazione e'
+   contraddittoria e resta errore di discovery (R4.1: mai collassarla su
+   `missing`); un metadato `geo` malformato resta errore (R5.1:
+   «illeggibile» non e' «assente»).
 
 ## Forzature note (dichiarate)
 
@@ -184,6 +216,17 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   disposizione R9.7, gia' attuata); chiave `plenora.field_id` (decisione
   3) da proporre all'owner ICD; test di catena completa bordo-centro-bordo
   con gli altri due componenti.
+- **R4.6.3 CRS condizionato alle op (attuata, 2026-07-29)**: decisione 7 —
+  `ContractCrs` in `plenora-core`; discovery CLI che porta `Missing` invece
+  di fallire (metadato `geo` malformato e dichiarazioni contraddittorie
+  restano errori); gate `require_resolved_crs` nelle analyze geo
+  (`dispatch.rs`, `producers.rs` — punto di validazione: `analyze_contract`,
+  compile-plan); emissione `crs_resolution = missing` senza chiavi CRS in
+  `canonical_geometry_metadata`; stato `missing` nel fingerprint ADR 4
+  (forma risolta invariata). Test: unit (discovery, analyze, catalogo,
+  fingerprint) e integrazione CLI (filtro che passa e propaga `missing`
+  con round-trip, op geo che fallisce con la causa). Nessuna deroga: R4.4
+  intatta.
 - **Rinomina categorie §9 (attuata, 2026-07-29)**: varianti allineate
   all'enumerazione canonica (Appendice C): `Contract` → `InvalidPlan`,
   `Step` → `Execution`, `UnsupportedPublishTarget` → `Unsupported`,
@@ -213,6 +256,17 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
 
 ## Cambi di comportamento (dichiarati)
 
+- **Geometria senza CRS: da errore di discovery a stato `missing`
+  (R4.6.3, decisione 7)**. Prima la discovery rifiutava OGNI colonna
+  geometrica senza CRS risolvibile (`InvalidPlan` «senza metadato `geo`:
+  impossibile determinare il CRS») — piu' restrittivo del ruolo: fermava
+  anche piani puramente tabellari. Ora lo stato entra nel contratto come
+  `ContractCrs::Missing` e solo le op con `CrsRequirement` falliscono, in
+  analyze: variante `Crs` (come ogni requisito CRS non soddisfatto; prima
+  `InvalidPlan` dalla discovery), messaggio che dichiara la causa («nessun
+  CRS dichiarato in alcuna rappresentazione accettata») invece dell'ultimo
+  tentativo di lettura fallito. R4.4 invariata: nessun CRS inventato, in
+  nessun percorso.
 - **Legacy `geo.dimensions` non canonico o non testuale: da `Unknown`
   silenzioso a errore** (lettura strict R5.1 nella discovery v4). Allineato
   alla regola 1 di AGENTS.md (niente failure silenziose); deviazione dal

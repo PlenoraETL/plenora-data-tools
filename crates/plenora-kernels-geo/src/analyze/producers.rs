@@ -8,8 +8,8 @@ use std::sync::Arc;
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::CrsRequirement;
 use plenora_core::contract::{
-    ContractProperties, ContractProperty, DataContract, FieldAllocator, GeometryColumnContract,
-    GeometryDimensions, PropertyConfidence, PropertyScope,
+    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator,
+    GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -21,6 +21,7 @@ use super::config::{
     CollectConfig, FromCoordsConfig, FromWktConfig, GenerateGridConfig, ReprojectConfig, SnapConfig,
     SubdivideConfig,
 };
+use super::dispatch::require_resolved_crs;
 use super::helpers::{
     ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
     new_geometry_field, output_fields, parse_config, rebuild, resolve_definition,
@@ -95,7 +96,8 @@ pub(in crate::analyze) fn analyze_geometry_only(
 }
 
 /// `reproject`: schema invariato, CRS del contratto e metadato `geo.crs`
-/// aggiornati al target risolto.
+/// aggiornati al target risolto. La sorgente DEVE avere un CRS risolto
+/// (R4.6.3: il requisito e' dell'operazione, gate in analyze).
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
@@ -104,12 +106,16 @@ pub(in crate::analyze) fn analyze_reproject(
     plan_crs: Option<&ResolvedCrs>,
 ) -> Result<DataContract> {
     let parsed: ReprojectConfig = parse_config(op, config)?;
+    // Gate R4.6.3 PRIMA della risoluzione del target: un CRS sorgente
+    // `Missing` ferma l'op con lo stesso errore a prescindere dal backend
+    // compilato (determinismo del fallimento).
+    let source = require_resolved_crs(op, geometry)?;
     let target = resolve_definition(&parsed.target_crs, plan_crs)?;
-    validate_requirement(CrsRequirement::Reprojection, &[&geometry.crs, &target])?;
+    validate_requirement(CrsRequirement::Reprojection, &[source, &target])?;
     let mut fields = output_fields(input);
     set_geometry_crs(&mut fields, geometry, &target)?;
     let reprojected = GeometryColumnContract {
-        crs: target,
+        crs: ContractCrs::Resolved(target),
         ..geometry.clone()
     };
     DataContract::new(
@@ -179,7 +185,7 @@ pub(in crate::analyze) fn analyze_from_coords(
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
-        crs,
+        crs: ContractCrs::Resolved(crs),
         // Produttore (B1.3): `from_coords` costruisce punti XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: None,
@@ -256,7 +262,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
-        crs,
+        crs: ContractCrs::Resolved(crs),
         // Produttore (B1.3): il parser WKT decodifica in `Geometry<f64>` —
         // dichiara Xy.
         dimensions: GeometryDimensions::Xy,
@@ -368,7 +374,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
     let geometry = GeometryColumnContract {
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-        crs,
+        crs: ContractCrs::Resolved(crs),
         // Produttore (B1.3): le celle griglia sono poligoni XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: None,

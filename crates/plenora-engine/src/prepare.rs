@@ -1251,11 +1251,19 @@ fn prepare_geo(
                     "geometria attiva verificata in validazione".to_owned(),
                 )
             })?;
+        // Invariante di validazione: ogni trasformazione geo dichiara un
+        // `CrsRequirement` e il gate R4.6.3 dell'analyze ferma un CRS
+        // `Missing` a compile-plan — qui il CRS e' sempre risolto.
+        let crs = geometry.crs.as_resolved().ok_or_else(|| {
+            PlenoraError::Internal(
+                "trasformazione geo senza CRS risolto dopo la validazione".to_owned(),
+            )
+        })?;
         let params = TransformArrowSchema {
             schema_version: TransformArrowSchema::VERSION,
             operation,
             row_count: 0,
-            crs: Some(geometry.crs.definition().to_owned()),
+            crs: Some(crs.definition().to_owned()),
             geometry_column: Some(geometry.name.clone()),
             distance: parsed.distance,
             cap: parsed.cap,
