@@ -155,11 +155,12 @@ use plenora_core::arrow::select::take::take;
 use plenora_core::catalog::{
     find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion, CATALOG,
 };
-use plenora_core::contract::{BatchSequence, DataContract, GeometryDimensions};
+use plenora_core::contract::{BatchSequence, ContractCrs, DataContract, GeometryDimensions};
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{
     batch_geometry_cells, canonical_geometry_metadata, canonical_schema_version_metadata,
-    decode_geometry_cell, GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    decode_geometry_cell, strip_decided_crs_declarations, GeometryMetadataDetails,
+    PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
 };
 use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_depth};
 use plenora_kernels_table::spill::SpillMetrics;
@@ -900,10 +901,15 @@ impl Iterator for EdgeStream {
 /// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
 ///   schema) con valore DIVERSO da quello imposto dal contratto e' un
 ///   errore, mai una sovrascrittura silenziosa; valore uguale e'
-///   idempotente. Eccezione dichiarata: `axis_order = unknown` non e' una
+///   idempotente. Eccezioni dichiarate: `axis_order = unknown` non e' una
 ///   dichiarazione ma l'assenza di una (il `DataContract` non modella
 ///   l'ordine degli assi, ADR-0009) — una chiave `axis_order` gia'
 ///   presente e' informazione della lineage (R2.4/R2.7) e resta;
+///   `crs_resolution = resolved` preesistente e' corretta in
+///   `declared_unresolved` quando il contratto porta un'incoerenza rilevata
+///   (R4.6.4: mai silenziarla propagando la dichiarazione `resolved` che
+///   l'incoerenza smentisce — unica sovrascrittura ammessa, in una sola
+///   direzione);
 /// - R2.5: `plenora.contract.version` e' aggiunta ai metadati dello schema
 ///   SOLO se almeno un campo porta chiavi canoniche (sempre vero quando il
 ///   contratto dichiara geometrie: [`canonical_geometry_metadata`] emette
@@ -934,6 +940,16 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
         matched += 1;
         let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
         let mut metadata = field.metadata().clone();
+        // R4.6.3: con un CRS deciso dal piano (`ResolvedByDecision`) le
+        // dichiarazioni della sorgente sono SOSTITUITE, non fuse — il
+        // blocco canonico ri-emette il CRS deciso e la lineage non deve
+        // riproporre il conflitto a valle. Lo schema del contratto di
+        // input resta intatto (il check fail-closed input/contratto
+        // confronta i campi, metadati inclusi): la sostituzione vive solo
+        // qui, all'emissione.
+        if matches!(geometry.crs, ContractCrs::ResolvedByDecision(_)) {
+            strip_decided_crs_declarations(&mut metadata);
+        }
         for (key, value) in &canonical {
             match metadata.get(key) {
                 Some(existing) if existing != value => {
@@ -944,6 +960,25 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
                     // una divergenza — R2.7 completa solo l'assente, mai
                     // arbitra. Resta il valore dichiarato dall'ingresso.
                     if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY && value == "unknown" {
+                        continue;
+                    }
+                    // R4.6.4: un centro che ha rilevato un'incoerenza CRS la
+                    // DICHIARA (`declared_unresolved`) invece di propagare la
+                    // dichiarazione `resolved` del produttore, che
+                    // l'incoerenza stessa smentisce — silenziarla e'
+                    // vietato. E' l'unica sovrascrittura ammessa su una
+                    // chiave canonica: una sola chiave, una sola direzione
+                    // (`resolved` -> `declared_unresolved`), mai il
+                    // contrario (ADR-0009, decisione 7). La direzione
+                    // opposta (`declared_unresolved` -> `resolved`) non
+                    // passa di qui: con una decisione del piano le
+                    // dichiarazioni della sorgente sono gia' state rimosse
+                    // sopra (`strip_decided_crs_declarations`).
+                    if key == PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
+                        && existing == "resolved"
+                        && value == "declared_unresolved"
+                    {
+                        metadata.insert(key.clone(), value.clone());
                         continue;
                     }
                     return Err(PlenoraError::InvalidPlan(format!(

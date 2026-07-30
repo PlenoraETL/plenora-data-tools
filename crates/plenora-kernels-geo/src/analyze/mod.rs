@@ -2279,4 +2279,65 @@ mod tests {
             other => panic!("geo.union: atteso errore Crs per CRS mancante, ottenuto {other:?}"),
         }
     }
+
+    /// Contratto con geometria a CRS dichiarato non risolto
+    /// (`ContractCrs::DeclaredUnresolved`, R4.6.3).
+    fn geo_contract_declared_unresolved_crs() -> DataContract {
+        DataContract::new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
+            ])),
+            vec![GeometryColumnContract {
+                field_id: FieldId(2),
+                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
+                crs: ContractCrs::DeclaredUnresolved {
+                    crs_id: Some("EPSG:99999".to_owned()),
+                    definition: None,
+                    definition_format: None,
+                },
+                dimensions: GeometryDimensions::Xy,
+                encoding: None,
+                nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
+            }],
+            Some(FieldId(2)),
+            ContractProperties::default(),
+        )
+        .expect("contratto geometrico valido")
+    }
+
+    #[test]
+    fn declared_unresolved_crs_stops_geo_ops_with_a_distinct_cause() {
+        // R4.6.3: come `Missing`, lo stato `DeclaredUnresolved` ferma le op
+        // con `CrsRequirement` in analyze con categoria `Crs` — ma il
+        // messaggio e' DISTINTO: la colonna DICHIARA un'incoerenza, non
+        // un'assenza, e la risoluzione richiede una decisione esplicita nel
+        // piano (mai una scelta silenziosa del centro).
+        let input = geo_contract_declared_unresolved_crs();
+        let cases: [(&str, Value); 3] = [
+            ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.reproject", json!({"target_crs": "EPSG:3857"})),
+            ("geo.area", json!({})),
+        ];
+        for (op, config) in &cases {
+            let result = analyze_one(op, std::slice::from_ref(&input), config, None);
+            match result {
+                Err(PlenoraError::Crs(message)) => {
+                    assert!(
+                        message.contains("declared_unresolved")
+                            && message.contains("decisione esplicita nel piano"),
+                        "{op}: {message}"
+                    );
+                    assert!(
+                        !message.contains("nessun CRS dichiarato"),
+                        "{op}: il messaggio di `missing` non si applica: {message}"
+                    );
+                }
+                other => panic!(
+                    "{op}: atteso errore Crs per CRS declared_unresolved, ottenuto {other:?}"
+                ),
+            }
+        }
+    }
 }

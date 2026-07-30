@@ -237,6 +237,17 @@ pub struct PlanV4 {
     pub crs: Option<String>,
     #[serde(default)]
     pub inputs: Vec<String>,
+    /// Decisioni CRS esplicite del piano (R4.6.3): mappa nome input →
+    /// definizione CRS che il centro DECIDE per quell'input, risolvendo
+    /// un'incoerenza dichiarata (`declared_unresolved`). E' la sola forma
+    /// con cui il centro puo' risolvere un'incoerenza: esplicita nel piano,
+    /// coperta dal `plan_hash` (ADR 4) e applicata al contratto di input
+    /// prima della validazione (CLI). Le chiavi devono essere input
+    /// dichiarati; una decisione su uno stato diverso da
+    /// `declared_unresolved` e' un errore (su `missing` sarebbe un CRS
+    /// inventato — R4.4; su `resolved` una contraddizione del piano).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub crs_decisions: BTreeMap<String, String>,
     pub nodes: Vec<NodeV4>,
     /// Id del nodo (o dell'input, per un piano pass-through) che produce
     /// l'output del piano.
@@ -412,6 +423,7 @@ impl PlanV4 {
             limits,
             crs: None,
             inputs: plan_inputs,
+            crs_decisions: BTreeMap::new(),
             nodes,
             output,
         };
@@ -460,6 +472,24 @@ impl PlanV4 {
         }
         for input in &self.inputs {
             check_identifier("input", input, plan_limits)?;
+        }
+        // R4.6.3: le decisioni CRS devono nominare input dichiarati e
+        // portare una definizione non vuota (la risoluzione e l'applicazione
+        // allo stato `declared_unresolved` sono nel perimetro della CLI,
+        // dove piano e contratti scoperti si incontrano).
+        for (input, definition) in &self.crs_decisions {
+            check_identifier("input di crs_decisions", input, plan_limits)?;
+            if !self.inputs.iter().any(|declared| declared == input) {
+                return Err(contract_error(format!(
+                    "crs_decisions dichiara una decisione per `{input}`, che non e' \
+                     tra gli input del piano"
+                )));
+            }
+            if definition.trim().is_empty() {
+                return Err(contract_error(format!(
+                    "crs_decisions: definizione CRS vuota per l'input `{input}`"
+                )));
+            }
         }
         check_identifier("output", &self.output, plan_limits)?;
         for node in &mut self.nodes {
@@ -759,6 +789,13 @@ pub fn canonical_json(plan: &PlanV4) -> Value {
         root.insert("crs".to_owned(), json!(crs));
     }
     root.insert("inputs".to_owned(), json!(plan.inputs));
+    // R4.6.3: le decisioni CRS fanno parte dell'identita' del piano (ADR 4)
+    // — una decisione diversa e' un piano diverso. Mappa ordinata per
+    // costruzione (BTreeMap), assente quando vuota (piani esistenti
+    // invariati).
+    if !plan.crs_decisions.is_empty() {
+        root.insert("crs_decisions".to_owned(), json!(plan.crs_decisions));
+    }
     root.insert("nodes".to_owned(), Value::Array(nodes));
     root.insert("output".to_owned(), json!(plan.output));
     Value::Object(root)

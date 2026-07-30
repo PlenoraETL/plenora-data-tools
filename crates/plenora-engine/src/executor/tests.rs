@@ -24,7 +24,7 @@ use plenora_kernels_geo::arrow_adapter::{
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY, PLENORA_CONTRACT_VERSION_KEY,
     PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
-    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
+    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
 };
 
 use super::*;
@@ -1041,6 +1041,138 @@ fn canonical_output_schema_rejects_geometry_missing_from_schema() {
         canonical_output_schema(&contract),
         Err(PlenoraError::InvalidPlan(_))
     ));
+}
+
+#[test]
+fn canonical_output_schema_corrects_false_resolved_into_declared_unresolved() {
+    // R4.6.4: il centro che ha rilevato un'incoerenza CRS (conflitto
+    // crs_id/srid) la DICHIARA — la `crs_resolution = resolved` del
+    // produttore, smentita dall'incoerenza stessa, e' corretta in
+    // `declared_unresolved` (unica sovrascrittura ammessa, una sola
+    // direzione); le dichiarazioni originali restano invariate (srid di
+    // lineage, crs_id ri-emesso dal blocco).
+    let mut contract = geo_contract();
+    contract.geometries[0].crs = ContractCrs::DeclaredUnresolved {
+        crs_id: Some("EPSG:4326".to_owned()),
+        definition: None,
+        definition_format: None,
+    };
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata
+                    .insert(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(), "resolved".to_owned());
+                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:4326".to_owned());
+                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "3003".to_owned());
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    let merged = canonical_output_schema(&contract).expect("correzione dichiarata");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("declared_unresolved"),
+        "l'incoerenza e' dichiarata, non silenziata"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:4326"),
+        "dichiarazione originale preservata"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("3003"),
+        "srid di lineage preservato"
+    );
+
+    // La direzione opposta non passa di qui: un contratto Resolved contro
+    // una `crs_resolution = declared_unresolved` preesistente resta un
+    // errore R2.6 (la decisione del piano ripulisce le chiavi a monte).
+    let mut contract = geo_contract();
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    "declared_unresolved".to_owned(),
+                );
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    assert!(matches!(
+        canonical_output_schema(&contract),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
+    // R4.6.3: con `ResolvedByDecision` le dichiarazioni della sorgente
+    // (chiavi canoniche CRS + `geo.crs` legacy) sono SOSTITUITE dal CRS
+    // deciso — strip nella fusione e riemissione dal blocco canonico;
+    // nessun conflitto R2.6 con la lineage, nessuna chiave superstite che
+    // riproponga il conflitto a valle.
+    let mut contract = geo_contract();
+    let ContractCrs::Resolved(crs) = contract.geometries.pop().expect("fixture").crs else {
+        panic!("fixture risolta");
+    };
+    let mut contract = geo_contract();
+    contract.geometries[0].crs = ContractCrs::ResolvedByDecision(crs);
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    "declared_unresolved".to_owned(),
+                );
+                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:99999".to_owned());
+                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "99999".to_owned());
+                metadata.insert(PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(), "unknown".to_owned());
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    let merged = canonical_output_schema(&contract).expect("decisione applicata");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:32632"),
+        "il CRS deciso sostituisce la dichiarazione della sorgente"
+    );
+    assert!(
+        !metadata.contains_key(PLENORA_GEOMETRY_SRID_KEY),
+        "srid della sorgente rimosso"
+    );
+    if let Some(geo) = metadata.get(GEO_METADATA_KEY) {
+        assert!(!geo.contains("crs"), "geo.crs della sorgente rimosso: {geo}");
+    }
 }
 
 #[test]

@@ -564,6 +564,327 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
 }
 
 // ---------------------------------------------------------------------------
+// R4.6.3 (BLOCK-08): `declared_unresolved` — preservato e propagato senza
+// decisione, risolto solo da una decisione esplicita nel piano.
+// ---------------------------------------------------------------------------
+
+/// Fixture con chiavi canoniche: `id` Int64 + colonna `geometry` Binary con
+/// le coppie canoniche date + `plenora.contract.version` sullo schema
+/// (R2.5). Il campo porta anche il nome di estensione `geoarrow.wkb`:
+/// richiesto dai kernel geo a runtime (la discovery riconosce le sole
+/// chiavi canoniche, l'esecuzione no). Il batch contiene un punto WKB
+/// (mai decodificato dai test tabellari).
+fn canonical_crs_fixture(
+    directory: &std::path::Path,
+    plan: &serde_json::Value,
+    pairs: &[(&str, &str)],
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    use plenora_core::arrow::array::{ArrayRef, BinaryArray};
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let plan_path = directory.join("plan.json");
+    let input = directory.join("input.arrow");
+    std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
+    let mut metadata: std::collections::HashMap<String, String> = pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect();
+    metadata.insert(
+        adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+        adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+    );
+    let geometry = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![Field::new("id", DataType::Int64, false), geometry],
+        std::collections::HashMap::from([(
+            adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+            "1".to_owned(),
+        )]),
+    ));
+    let cells = [Some(point_wkb_le(0.0, 0.0)), Some(point_wkb_le(1.0, 1.0))];
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch fixture");
+    write_ipc(&input, &schema, &[batch]);
+    (plan_path, input)
+}
+
+/// Coppie canoniche del caso `crs_unresolved` del corpus di conformita':
+/// `declared_unresolved` con `crs_id` non risolvibile (EPSG:99999) e
+/// `axis_order` `unknown` (onesto: il CRS non si risolve).
+fn crs_unresolved_pairs() -> Vec<(&'static str, &'static str)> {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    vec![
+        (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+        (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+        (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "declared_unresolved"),
+        (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:99999"),
+        (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+    ]
+}
+
+/// Coppie canoniche del caso `conflicting_crs` del corpus: il produttore
+/// dichiara `resolved` ma `crs_id` e `srid` discordano (R4.3.1).
+fn conflicting_crs_pairs() -> Vec<(&'static str, &'static str)> {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    vec![
+        (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+        (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+        (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+        (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
+        (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
+        (adapter::PLENORA_GEOMETRY_SRID_KEY, "3003"),
+    ]
+}
+
+/// Legge i metadati della colonna `geometry` di un output IPC.
+fn geometry_metadata_of(path: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let reader =
+        FileReader::try_new(std::fs::File::open(path).expect("output"), None).expect("reader");
+    let schema = reader.schema();
+    let (_, field) = schema.column_with_name("geometry").expect("geometry");
+    field.metadata().clone()
+}
+
+#[test]
+fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
+    // Il caso `crs_unresolved` del corpus (attesa preserve): il filtro
+    // tabellare non richiede alcun CRS — validate e run passano SENZA
+    // backend di risoluzione e le dichiarazioni arrivano al bordo di
+    // scrittura invariate (R4.6.4). Cambio dichiarato: prima la discovery
+    // risolveva una definizione risolvibile ed emetteva `resolved`.
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) =
+        canonical_crs_fixture(directory.path(), &filter_only_plan(), &crs_unresolved_pairs());
+
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        validate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
+    let geometry = &summary["edges"][0]["contract"]["geometry"];
+    assert_eq!(geometry["crs_resolution"], "declared_unresolved");
+
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let metadata = geometry_metadata_of(&output_path);
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("declared_unresolved"),
+        "lo stato si propaga dichiarato (R4.6.4), mai collassato (R4.1)"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:99999"),
+        "dichiarazione originale ri-emessa invariata"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        Some("unknown")
+    );
+
+    // Round-trip: l'output rientra come input dello stesso piano e ripassa.
+    let revalidate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&output_path)
+        .output()
+        .expect("re-validate");
+    assert!(
+        revalidate.status.success(),
+        "round-trip stderr: {}",
+        String::from_utf8_lossy(&revalidate.stderr)
+    );
+}
+
+#[test]
+fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
+    // Il caso `conflicting_crs` del corpus (attesa per il centro: preserve).
+    // Il centro NON fallisce (non e' il bordo di scrittura) e NON concilia
+    // in silenzio: lo stato diventa `declared_unresolved` e le
+    // rappresentazioni in conflitto attraversano invariate (R4.6.4) — saranno
+    // il bordo di scrittura a fallire chiuso (R4.6.2).
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) =
+        canonical_crs_fixture(directory.path(), &filter_only_plan(), &conflicting_crs_pairs());
+
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "il centro preserva, non rifiuta — stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let metadata = geometry_metadata_of(&output_path);
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("declared_unresolved"),
+        "l'incoerenza e' dichiarata, non silenziata dietro il `resolved` del produttore"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:4326"),
+        "crs_id originale preservato"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("3003"),
+        "srid originale preservato (lineage R2.4)"
+    );
+}
+
+#[test]
+fn dag_v4_geo_op_on_declared_unresolved_fails_with_distinct_cause() {
+    // Gate R4.6.3: le op con CrsRequirement si fermano in validazione con
+    // categoria Crs e un messaggio DISTINTO da `missing` — la colonna
+    // dichiara un'incoerenza, non un'assenza.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let buffer_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    });
+    let (plan, input) =
+        canonical_crs_fixture(directory.path(), &buffer_plan, &crs_unresolved_pairs());
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(!validate.status.success(), "geo.buffer deve fallire");
+    let stderr = String::from_utf8_lossy(&validate.stderr);
+    assert!(
+        stderr.contains("declared_unresolved") && stderr.contains("decisione esplicita nel piano"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
+    // Una decisione su uno stato diverso da `declared_unresolved` non e'
+    // applicabile (su `missing` sarebbe un CRS inventato, R4.4): errore
+    // esplicito, mai ignorata in silenzio.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let decision_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "crs_decisions": {"main": "EPSG:32632"},
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    });
+    let (plan, input) = write_geometry_without_crs_fixture(directory.path(), None);
+    std::fs::write(&plan, serde_json::to_vec(&decision_plan).expect("json")).expect("plan");
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(!validate.status.success(), "decisione su missing deve fallire");
+    let stderr = String::from_utf8_lossy(&validate.stderr);
+    assert!(stderr.contains("non e' applicabile"), "stderr: {stderr}");
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_crs_decision_resolves_declared_unresolved() {
+    // R4.6.3: la decisione esplicita nel piano risolve l'incoerenza — con la
+    // decisione il piano geo valida e l'output dichiara `resolved` con la
+    // definizione decisa; le dichiarazioni in conflitto sono sostituite
+    // (la decisione resta nel piano, coperta da plan_hash).
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "crs_decisions": {"main": "EPSG:32632"},
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    });
+    let (plan, input) = canonical_crs_fixture(directory.path(), &plan, &crs_unresolved_pairs());
+
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "con la decisione il piano geo valida — stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let metadata = geometry_metadata_of(&output_path);
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    // geo.buffer produce una NUOVA geometria nel CRS deciso: la definizione
+    // dichiarata e' quella decisa, mai EPSG:99999.
+    let declared = metadata
+        .get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY)
+        .or_else(|| metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY))
+        .map(String::as_str);
+    assert_eq!(declared, Some("EPSG:32632"));
+    assert!(
+        !metadata.contains_key(adapter::PLENORA_GEOMETRY_SRID_KEY),
+        "nessuna dichiarazione superstite dalla sorgente"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Piano v4 misto (tabellare + geo): richiede il backend PROJ per la
 // risoluzione del CRS nella scoperta del contratto di input.
 // ---------------------------------------------------------------------------

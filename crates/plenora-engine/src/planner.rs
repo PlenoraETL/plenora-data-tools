@@ -846,8 +846,15 @@ fn contract_canonical(contract: &DataContract) -> Value {
             // rivalidazione, spostando il fallimento a runtime). La forma
             // risolta e' byte-identica a prima (fingerprint esistenti
             // stabili); `missing` e' il valore canonico R2.2.
+            // `DeclaredUnresolved` entra in forma canonica con le
+            // dichiarazioni: due incoerenze dichiarate diverse non sono lo
+            // stesso contratto, e nessuno dei tre stati collide con un
+            // altro.
             let crs = match &geometry.crs {
-                ContractCrs::Resolved(crs) => json!({
+                // `ResolvedByDecision` ha la stessa forma canonica di
+                // `Resolved`: il contratto effettivo e' lo stesso CRS
+                // risolto (la decisione e' nel piano e nel `plan_hash`).
+                ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => json!({
                     "definition": crs.definition(),
                     "kind": match crs.kind() {
                         CrsKind::Geographic => "geographic",
@@ -856,6 +863,17 @@ fn contract_canonical(contract: &DataContract) -> Value {
                     "horizontal_unit_to_metre": crs
                         .horizontal_unit_to_metre()
                         .map(f64::to_bits),
+                }),
+                ContractCrs::DeclaredUnresolved {
+                    crs_id,
+                    definition,
+                    definition_format,
+                } => json!({
+                    "resolution": "declared_unresolved",
+                    "crs_id": crs_id,
+                    "definition": definition,
+                    "definition_format": definition_format
+                        .map(plenora_core::contract::CrsDefinitionFormat::as_str),
                 }),
                 ContractCrs::Missing => json!(geometry.crs.resolution().as_str()),
             };

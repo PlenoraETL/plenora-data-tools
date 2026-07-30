@@ -1239,8 +1239,9 @@ fn prepare_geo(
                 )
             })?;
         // Invariante di validazione: ogni trasformazione geo dichiara un
-        // `CrsRequirement` e il gate R4.6.3 dell'analyze ferma un CRS
-        // `Missing` a compile-plan — qui il CRS e' sempre risolto.
+        // `CrsRequirement` e il gate R4.6.3 dell'analyze ferma un CRS non
+        // risolto (`Missing` o `DeclaredUnresolved`) a compile-plan — qui
+        // il CRS e' sempre risolto.
         let crs = geometry.crs.as_resolved().ok_or_else(|| {
             PlenoraError::Internal(
                 "trasformazione geo senza CRS risolto dopo la validazione".to_owned(),

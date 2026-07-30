@@ -23,8 +23,9 @@
 //! `docs/deroghe.md` DER-002): protocollo delle chiavi canoniche
 //! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
 //! dedicato, una chiave per nozione, MAI un blob unico). R4.6.3 (rc9/rc10):
-//! l'emissione porta anche lo stato `crs_resolution = missing` (nessuna
-//! chiave CRS, coerenza R2.2) — ADR-0009 decisione 7. `plenora.field_id`
+//! l'emissione porta anche gli stati `crs_resolution = missing` (nessuna
+//! chiave CRS, coerenza R2.2) e `declared_unresolved` (dichiarazioni
+//! originali ri-emesse invariate, R4.6.4) — ADR-0009 decisione 7. `plenora.field_id`
 //! e' solo letta (R2.2 opzionale; non si emette il `FieldId` di grafo, che
 //! non ha significato fuori dal processo — ADR-0009 decisione 3). Questo
 //! modulo
@@ -46,7 +47,7 @@ use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema};
 use plenora_core::contract::{
-    AxisOrder, CrsDefinitionFormat, CrsResolution, FieldId, GeometryColumnContract,
+    AxisOrder, ContractCrs, CrsDefinitionFormat, CrsResolution, FieldId, GeometryColumnContract,
     GeometryDimensions, GeometryEncoding, GeometryPrecision, GeometryTypesProperty,
     SpatialSemantics,
 };
@@ -442,8 +443,16 @@ pub struct GeometryMetadataDetails {
 /// - `crs_resolution` riflette lo stato del contratto: `resolved` per un
 ///   `ResolvedCrs` (risolto per costruzione — lo produce solo una risoluzione
 ///   contro il database PROJ — quindi il valore e' onesto, non un default),
+///   `declared_unresolved` per `ContractCrs::DeclaredUnresolved` (R4.6.3:
+///   l'incoerenza si propaga dichiarata, mai risolta in silenzio),
 ///   `missing` per `ContractCrs::Missing` (R4.6.3/R4.6.4: lo stato mancante
 ///   si propaga invariato, mai un CRS inventato — R4.4);
+/// - con `declared_unresolved` le dichiarazioni ORIGINALI sono ri-emesse
+///   invariate (R4.6.4: l'incoerenza non risolta arriva al bordo di
+///   scrittura — R2.4, mai una persa, mai una inventata): `crs_id` e/o
+///   `crs_definition` con il suo `crs_definition_format` (R4.3), cosi' come
+///   le porta il contratto; `srid` non e' ri-emesso dal blocco (non e'
+///   modellato dal contratto: resta propagato dalla lineage);
 /// - con `missing` NON sono emesse `crs_id`/`crs_definition`/
 ///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
 ///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
@@ -458,7 +467,8 @@ pub struct GeometryMetadataDetails {
 ///   definizione WKT testuale non e' distinguibile da un identificatore di
 ///   autorita' senza un hint di formato, che `ResolvedCrs` non porta; nel
 ///   workspace le definizioni risolte sono oggi authority:code o PROJJSON.
-/// - con un CRS risolto `axis_order` e' sempre emesso (obbligatorio quando un
+/// - con un CRS risolto o dichiarato non risolto `axis_order` e' sempre
+///   emesso (obbligatorio quando un
 ///   CRS e' presente): senza dettaglio esplicito vale `unknown`, valore
 ///   canonico dichiarato dalla tabella §2 — la chiave qui e' obbligatoria,
 ///   non opzionale, e `unknown` non e' un default al posto dell'assente (R5.2
@@ -506,34 +516,73 @@ pub fn canonical_geometry_metadata(
         PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
         contract.crs.resolution().as_str().to_owned(),
     );
-    if let Some(crs) = contract.crs.as_resolved() {
-        let definition = crs.definition();
-        if matches!(
-            serde_json::from_str::<serde_json::Value>(definition),
-            Ok(serde_json::Value::Object(_))
-        ) {
+    match &contract.crs {
+        // `ResolvedByDecision` si emette come `Resolved` (un CRS risolto a
+        // tutti gli effetti): la sostituzione delle dichiarazioni della
+        // sorgente avviene a monte, nella fusione dello schema di output
+        // ([`strip_decided_crs_declarations`]).
+        ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
+            let definition = crs.definition();
+            if matches!(
+                serde_json::from_str::<serde_json::Value>(definition),
+                Ok(serde_json::Value::Object(_))
+            ) {
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+                    definition.to_owned(),
+                );
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+                    CrsDefinitionFormat::Projjson.as_str().to_owned(),
+                );
+            } else {
+                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
+            }
+            let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
             metadata.insert(
-                PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
-                definition.to_owned(),
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                axis_order.as_str().to_owned(),
             );
+            if let Some(srid) = details.srid {
+                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
+            }
+        }
+        ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format,
+        } => {
+            // R4.6.4: le dichiarazioni originali sono ri-emesse invariate —
+            // l'incoerenza arriva al bordo di scrittura com'era, mai persa
+            // e mai conciliata. `axis_order` e' emesso come per `resolved`
+            // (obbligatorio quando una rappresentazione CRS e' presente):
+            // il default `unknown` resta l'assenza di una dichiarazione e
+            // non sovrascrive la lineage (vedi `canonical_output_schema`).
+            if let Some(crs_id) = crs_id {
+                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), crs_id.clone());
+            }
+            if let Some(definition) = definition {
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+                    definition.clone(),
+                );
+                if let Some(format) = definition_format {
+                    metadata.insert(
+                        PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+                        format.as_str().to_owned(),
+                    );
+                }
+            }
+            let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
             metadata.insert(
-                PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
-                CrsDefinitionFormat::Projjson.as_str().to_owned(),
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                axis_order.as_str().to_owned(),
             );
-        } else {
-            metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
         }
-        let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
-        metadata.insert(
-            PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-            axis_order.as_str().to_owned(),
-        );
-        if let Some(srid) = details.srid {
-            metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
-        }
+        // Con `crs_resolution = missing` nessuna chiave CRS e' emessa (R2.2:
+        // `missing` non ammette `crs_id`/`crs_definition`/`srid`/`axis_order`).
+        ContractCrs::Missing => {}
     }
-    // Con `crs_resolution = missing` nessuna chiave CRS e' emessa (R2.2:
-    // `missing` non ammette `crs_id`/`crs_definition`/`srid`/`axis_order`).
     if let Some(semantics) = details.spatial_semantics {
         metadata.insert(
             PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY.to_owned(),
@@ -564,6 +613,53 @@ pub fn canonical_schema_version_metadata() -> HashMap<String, String> {
         PLENORA_CONTRACT_VERSION_KEY.to_owned(),
         PLENORA_CONTRACT_VERSION.to_string(),
     )])
+}
+
+/// Chiavi canoniche che una decisione CRS del piano (R4.6.3) sostituisce.
+///
+/// La decisione rimpiazza le dichiarazioni in conflitto, che non devono
+/// sopravvivere accanto al CRS deciso (una `crs_id`/`srid`/`axis_order`
+/// della sorgente descriverebbe il CRS deciso con le dichiarazioni che il
+/// piano ha esplicitamente superato — e un consumatore a valle leggerebbe
+/// di nuovo il conflitto).
+pub const CRS_KEYS_REPLACED_BY_DECISION: [&str; 6] = [
+    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+    PLENORA_GEOMETRY_CRS_ID_KEY,
+    PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+    PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+    PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    PLENORA_GEOMETRY_SRID_KEY,
+];
+
+/// Rimuove le dichiarazioni CRS dai metadati di un campo geometria.
+///
+/// Toglie le chiavi canoniche di [`CRS_KEYS_REPLACED_BY_DECISION`] e il
+/// membro `crs` del metadato legacy `geo` (se il metadato resta vuoto,
+/// rimosso): usato all'emissione quando una decisione esplicita del piano
+/// ([`ContractCrs::ResolvedByDecision`], R4.6.3) sostituisce le
+/// dichiarazioni della sorgente — il blocco canonico ri-emette il CRS
+/// deciso senza conflitti R2.6 con la lineage. Un metadato `geo` non
+/// oggetto o non JSON resta invariato: non porta un membro `crs` da
+/// sostituire (un `geo` malformato e' gia' errore di discovery, a monte).
+pub fn strip_decided_crs_declarations<S: std::hash::BuildHasher>(
+    metadata: &mut HashMap<String, String, S>,
+) {
+    for key in CRS_KEYS_REPLACED_BY_DECISION {
+        metadata.remove(key);
+    }
+    let Some(raw) = metadata.get(GEO_METADATA_KEY).cloned() else {
+        return;
+    };
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("crs");
+            if object.is_empty() {
+                metadata.remove(GEO_METADATA_KEY);
+            } else if let Ok(compact) = serde_json::to_string(&value) {
+                metadata.insert(GEO_METADATA_KEY.to_owned(), compact);
+            }
+        }
+    }
 }
 
 /// Parsing tipizzato di una chiave canonica a enum: assente → `Ok(None)`;
@@ -1784,6 +1880,68 @@ mod tests {
         ] {
             assert_eq!(get(key), None, "{key} deve restare assente");
         }
+    }
+
+    #[test]
+    fn canonical_metadata_declared_unresolved_reemits_the_original_declarations() {
+        // R4.6.4: l'incoerenza dichiarata arriva al bordo di scrittura con
+        // le dichiarazioni ORIGINALI ri-emesse invariate — mai una persa,
+        // mai una inventata. `srid` non e' ri-emesso dal blocco (resta alla
+        // lineage); `axis_order` segue la stessa regola del risolto
+        // (obbligatorio con una rappresentazione presente, `unknown` come
+        // assenza dichiarata).
+        let contract = GeometryColumnContract {
+            crs: ContractCrs::DeclaredUnresolved {
+                crs_id: Some("EPSG:99999".to_owned()),
+                definition: None,
+                definition_format: None,
+            },
+            types: GeometryColumnContract::undeclared_types(),
+            encoding: None,
+            ..full_contract()
+        };
+        let metadata = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
+            Some("declared_unresolved")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:99999"));
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
+        for key in [
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+            PLENORA_GEOMETRY_SRID_KEY,
+        ] {
+            assert_eq!(get(key), None, "{key} non dichiarato -> assente");
+        }
+
+        // Definizione con il suo formato (R4.3): entrambi ri-emessi.
+        let contract = GeometryColumnContract {
+            crs: ContractCrs::DeclaredUnresolved {
+                crs_id: Some("EPSG:4326".to_owned()),
+                definition: Some(r#"{"type":"GeographicCRS"}"#.to_owned()),
+                definition_format: Some(CrsDefinitionFormat::Projjson),
+            },
+            types: GeometryColumnContract::undeclared_types(),
+            encoding: None,
+            ..full_contract()
+        };
+        let metadata = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
+            Some("declared_unresolved")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:4326"));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY),
+            Some(r#"{"type":"GeographicCRS"}"#)
+        );
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
+            Some("projjson")
+        );
     }
 
     #[test]

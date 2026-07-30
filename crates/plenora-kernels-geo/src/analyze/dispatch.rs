@@ -5,7 +5,7 @@
 use plenora_core::arrow::{DataType, Field};
 use plenora_core::catalog::OperationDescriptor;
 use plenora_core::contract::{
-    ContractProperties, DataContract, FieldAllocator, GeometryColumnContract,
+    ContractCrs, ContractProperties, DataContract, FieldAllocator, GeometryColumnContract,
 };
 use plenora_core::crs::{validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -41,24 +41,36 @@ use super::{
 // ---------------------------------------------------------------------------
 
 /// R4.6.3: il requisito di CRS risolvibile e' condizionato alle operazioni
-/// che lo usano. Una colonna con CRS `Missing` (nessun CRS dichiarato in
-/// alcuna rappresentazione accettata; R4.4: mai un CRS inventato) attraversa
-/// libera le op senza `CrsRequirement` e si ferma QUI — il punto in cui un'op
-/// che dichiara il requisito tocca la colonna, in validazione del piano
-/// (compile-plan, deterministico), mai a meta' stream. Stessa categoria degli
-/// altri requisiti CRS non soddisfatti (`PlenoraError::Crs`); il messaggio
-/// dichiara la causa, non l'ultimo tentativo di lettura fallito.
+/// che lo usano. Una colonna con CRS non risolto attraversa libera le op
+/// senza `CrsRequirement` e si ferma QUI — il punto in cui un'op che
+/// dichiara il requisito tocca la colonna, in validazione del piano
+/// (compile-plan, deterministico), mai a meta' stream. Stessa categoria
+/// degli altri requisiti CRS non soddisfatti (`PlenoraError::Crs`); il
+/// messaggio dichiara la causa, distinta per stato:
+///
+/// - `Missing`: nessun CRS dichiarato in alcuna rappresentazione accettata
+///   (R4.4: mai un CRS inventato);
+/// - `DeclaredUnresolved`: la colonna DICHIARA un'incoerenza, non
+///   un'assenza — la risoluzione richiede una decisione esplicita nel
+///   piano (R4.6.3), mai una scelta silenziosa del centro.
 pub(in crate::analyze) fn require_resolved_crs<'a>(
     op: &str,
     geometry: &'a GeometryColumnContract,
 ) -> Result<&'a ResolvedCrs> {
-    geometry.crs.as_resolved().ok_or_else(|| {
-        PlenoraError::Crs(format!(
+    match &geometry.crs {
+        ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => Ok(crs),
+        ContractCrs::Missing => Err(PlenoraError::Crs(format!(
             "{op}: colonna geometria `{}`: nessun CRS dichiarato in alcuna \
              rappresentazione accettata",
             geometry.name
-        ))
-    })
+        ))),
+        ContractCrs::DeclaredUnresolved { .. } => Err(PlenoraError::Crs(format!(
+            "{op}: colonna geometria `{}`: la colonna dichiara un'incoerenza CRS \
+             non risolta (`declared_unresolved`); la risoluzione richiede una \
+             decisione esplicita nel piano (R4.6.3)",
+            geometry.name
+        ))),
+    }
 }
 
 /// Trasformazioni 1:1 in place con parametri: domini identici a

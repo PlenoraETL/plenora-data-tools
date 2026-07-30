@@ -344,6 +344,90 @@ fn missing_crs_enters_the_contract_fingerprint() {
     assert_eq!(canonical["geometries"][0]["crs"], json!("missing"));
 }
 
+/// Contratto con geometria a CRS dichiarato non risolto
+/// (`ContractCrs::DeclaredUnresolved`, R4.6.3): lo stato che la discovery
+/// produce per un'incoerenza dichiarata o un conflitto decidibile.
+fn geo_contract_declared_unresolved_crs(field_id: u32) -> DataContract {
+    DataContract::new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geom", DataType::Binary, true),
+        ])),
+        vec![GeometryColumnContract {
+            field_id: FieldId(field_id),
+            name: "geom".to_owned(),
+            crs: ContractCrs::DeclaredUnresolved {
+                crs_id: Some("EPSG:99999".to_owned()),
+                definition: None,
+                definition_format: None,
+            },
+            dimensions: GeometryDimensions::Xy,
+            encoding: None,
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        }],
+        None,
+        ContractProperties::default(),
+    )
+    .expect("contratto fixture valido")
+}
+
+#[test]
+fn declared_unresolved_enters_the_contract_fingerprint_with_declarations() {
+    // ADR 4 + R4.1: i tre stati NON collassano — resolved, missing e
+    // declared_unresolved producono tre fingerprint distinti, e due
+    // incoerenze con dichiarazioni diverse non sono lo stesso contratto.
+    let declared = contract_fingerprint(&geo_contract_declared_unresolved_crs(0))
+        .expect("fingerprint declared_unresolved");
+    assert_ne!(declared, contract_fingerprint(&geo_contract(0)).expect("risolto"));
+    assert_ne!(
+        declared,
+        contract_fingerprint(&geo_contract_missing_crs(0)).expect("missing")
+    );
+    assert_eq!(
+        contract_fingerprint(&geo_contract_declared_unresolved_crs(0))
+            .expect("fingerprint declared_unresolved"),
+        declared,
+        "fingerprint deterministico (ADR-0001)"
+    );
+    // Forma canonica: lo stato entra con le dichiarazioni.
+    let canonical = contract_canonical(&geo_contract_declared_unresolved_crs(0));
+    let crs = &canonical["geometries"][0]["crs"];
+    assert_eq!(crs["resolution"], json!("declared_unresolved"));
+    assert_eq!(crs["crs_id"], json!("EPSG:99999"));
+}
+
+#[test]
+fn table_ops_propagate_declared_unresolved_unchanged() {
+    // R4.6.3: il centro non pretende un CRS risolvibile per operazioni che
+    // non lo richiedono — un filtro tabellare valida e propaga l'incoerenza
+    // dichiarata INVARIATA (R4.6.4: arriva al bordo di scrittura con le
+    // dichiarazioni originali).
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    })
+    .to_string();
+    let graph =
+        validate(&plan, &input(geo_contract_declared_unresolved_crs(1))).expect("validazione");
+    let output = graph.output_contract().expect("contratto di output");
+    assert_eq!(output.geometries.len(), 1);
+    let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } = &output.geometries[0].crs
+    else {
+        panic!(
+            "l'incoerenza dichiarata si propaga invariata: {:?}",
+            output.geometries[0].crs
+        );
+    };
+    assert_eq!(crs_id.as_deref(), Some("EPSG:99999"));
+    assert_eq!(definition, &None);
+}
+
 #[test]
 fn table_ops_validate_on_missing_crs_geometry_and_propagate_it() {
     // R4.6.3: un filtro tabellare su una colonna non geometrica non ha

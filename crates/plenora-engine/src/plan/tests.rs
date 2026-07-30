@@ -507,6 +507,63 @@ fn canonical_json_materializes_limits_and_differs_on_real_differences() {
 }
 
 #[test]
+fn crs_decisions_are_validated_and_enter_the_canonical_form() {
+    // R4.6.3: la decisione del centro e' esplicita nel piano — fa parte
+    // dell'identita' ADR 4 (una decisione diversa e' un piano diverso) e
+    // le chiavi devono essere input dichiarati, con definizione non vuota.
+    let with_decision = json!({
+        "schema_version": 4, "inputs": ["main"], "output": "a",
+        "crs_decisions": {"main": "EPSG:32632"},
+        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
+    })
+    .to_string();
+    let validated = PlanV4::parse_default(&with_decision).unwrap();
+    assert_eq!(
+        validated.plan().crs_decisions.get("main").map(String::as_str),
+        Some("EPSG:32632")
+    );
+    let canonical = validated.canonical_json();
+    assert_eq!(canonical["crs_decisions"]["main"], json!("EPSG:32632"));
+
+    // Piano senza decisioni: il campo non compare nella forma canonica
+    // (piani e fingerprint esistenti invariati).
+    let without = PlanV4::parse_default(&minimal_plan_json())
+        .unwrap()
+        .canonical_json();
+    assert!(without.get("crs_decisions").is_none());
+
+    // Una decisione diversa e' un piano diverso.
+    let other_decision = json!({
+        "schema_version": 4, "inputs": ["main"], "output": "a",
+        "crs_decisions": {"main": "EPSG:4326"},
+        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
+    })
+    .to_string();
+    assert_ne!(
+        canonical,
+        PlanV4::parse_default(&other_decision).unwrap().canonical_json()
+    );
+
+    // Decisione per un input non dichiarato -> errore esplicito.
+    let unknown_input = json!({
+        "schema_version": 4, "inputs": ["main"], "output": "a",
+        "crs_decisions": {"other": "EPSG:32632"},
+        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
+    })
+    .to_string();
+    assert!(parse_err(&unknown_input, &PlanLimits::default()).contains("crs_decisions"));
+
+    // Definizione vuota -> errore esplicito.
+    let empty_definition = json!({
+        "schema_version": 4, "inputs": ["main"], "output": "a",
+        "crs_decisions": {"main": "   "},
+        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
+    })
+    .to_string();
+    assert!(parse_err(&empty_definition, &PlanLimits::default()).contains("crs_decisions"));
+}
+
+#[test]
 fn canonical_json_normalizes_numbers() {
     // `100` e `100.0` denotano lo stesso valore: stessa forma canonica
     // (ADR 4), anche annidati in array e oggetti dentro la config.

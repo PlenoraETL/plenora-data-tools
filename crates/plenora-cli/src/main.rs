@@ -749,12 +749,18 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 //   header Arrow IPC (file format o stream format, sniffato dal magic
 //   `ARROW1`) e si costruisce il `DataContract`: schema Arrow e, se una
 //   colonna porta i metadati GeoArrow (`ARROW:extension:name = geoarrow.wkb`
-//   + metadato `geo` con chiave `crs`), il `GeometryColumnContract` con CRS
-//   risolto (feature-dispatch come i comandi geo legacy: senza `proj-backend`
-//   la risoluzione fallisce chiusa). Metadati incoerenti (estensione senza
-//   `geo.crs`, `geo` senza estensione, colonna non `Binary`, piu' di una
-//   colonna geometrica — D16) sono rifiutati. Il `FieldId` della geometria di
+//   + metadato `geo` con chiave `crs`) o le chiavi canoniche, il
+//   `GeometryColumnContract` con lo stato CRS deciso da
+//   `contract_crs_from_keys` (risolto se una sola rappresentazione,
+//   `DeclaredUnresolved` se dichiarato o in conflitto decidibile, `Missing`
+//   se assente — R4.6.3). Metadati incoerenti (estensione senza `geo.crs`,
+//   `geo` senza estensione, colonna non `Binary`, piu' di una colonna
+//   geometrica — D16) sono rifiutati. Il `FieldId` della geometria di
 //   input e' provvisorio: il planner lo rimappa nel namespace del grafo;
+// - **decisioni CRS del piano** (`crs_decisions`, R4.6.3): applicate ai
+//   contratti scoperti prima della validazione — la definizione decisa
+//   sostituisce uno stato `DeclaredUnresolved` (risolta col backend PROJ,
+//   feature-dispatch come gli altri percorsi);
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
@@ -778,11 +784,14 @@ struct PlanVersionProbe {
 }
 
 /// Sonda dei nomi di input dichiarati dal piano v4 (accoppiamento posizionale
-/// con i percorsi CLI; la validazione vera resta al planner).
+/// con i percorsi CLI; la validazione vera resta al planner) e delle
+/// decisioni CRS esplicite (R4.6.3, applicate da [`apply_crs_decisions`]).
 #[derive(Debug, Deserialize)]
 struct PlanInputsProbe {
     #[serde(default)]
     inputs: Vec<String>,
+    #[serde(default)]
+    crs_decisions: std::collections::BTreeMap<String, String>,
 }
 
 /// `schema_version` del piano, senza validazione strutturale.
@@ -886,16 +895,20 @@ fn crs_definition_from_metadata(
 ///   come colonna geometrica anche SENZA l'estensione `geoarrow.wkb` e il
 ///   metadato `geo`; in entrambi i percorsi il tipo DEVE essere `Binary`,
 ///   altrimenti errore esplicito;
-/// - CRS: la rappresentazione completata (canonica o legacy, vedi
-///   [`crs_definition_from_keys`]) alimenta la stessa risoluzione di prima
-///   (backend PROJ); cambia solo la sorgente dei metadati, non la
-///   risoluzione. R4.6.3 (v2.0-rc9/rc10): un campo geometrico SENZA CRS
-///   dichiarato NON e' piu' un errore qui — il centro non puo' pretendere un
-///   CRS risolvibile per operazioni che non lo richiedono; lo stato entra nel
-///   contratto come [`ContractCrs::Missing`] (R4.4: mai un CRS inventato) e
-///   ferma solo le op che dichiarano un `CrsRequirement`, in analyze. Resta
-///   errore la dichiarazione contraddittoria (`crs_resolution` valorizzata ma
-///   nessuna rappresentazione: R4.1 vieta di collassarla su `missing`).
+/// - CRS: lo stato e' deciso da [`contract_crs_from_keys`] sulla
+///   rappresentazione completata (canonica o legacy) e sulla
+///   `crs_resolution` dichiarata. R4.6.3 (v2.0-rc9/rc10): un campo
+///   geometrico SENZA CRS dichiarato NON e' un errore — il centro non puo'
+///   pretendere un CRS risolvibile per operazioni che non lo richiedono;
+///   lo stato entra nel contratto come [`ContractCrs::Missing`] (R4.4: mai
+///   un CRS inventato) e ferma solo le op che dichiarano un
+///   `CrsRequirement`, in analyze. Un'incoerenza dichiarata
+///   (`declared_unresolved`) o un conflitto decidibile fra rappresentazioni
+///   diventano [`ContractCrs::DeclaredUnresolved`], preservati e mai
+///   risolti in assenza di una decisione esplicita nel piano
+///   (`crs_decisions`). Resta errore la dichiarazione contraddittoria
+///   (`crs_resolution` valorizzata ma nessuna rappresentazione: R4.1 vieta
+///   di collassarla su `missing`).
 fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
     discover_input_contract_from_schema(ipc_header_schema(path)?)
 }
@@ -943,24 +956,7 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
             )));
         }
         let keys = read_geometry_contract_keys(field)?;
-        let crs = if let Some(definition) = crs_definition_from_keys(field.name(), geo_metadata, &keys)? {
-            ContractCrs::Resolved(resolve_crs(&definition, "crs")?)
-        } else {
-            // R4.1: mai collassare una dichiarazione esplicita su
-            // `missing` — `resolved`/`declared_unresolved` senza alcuna
-            // rappresentazione e' una contraddizione, non un'assenza.
-            if let Some(resolution) = keys.crs_resolution {
-                if resolution != CrsResolution::Missing {
-                    return Err(contract(format!(
-                        "colonna geometria `{}`: chiave \
-                         `{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` dichiara `{resolution}` ma \
-                         nessun CRS e' dichiarato in alcuna rappresentazione accettata",
-                        field.name()
-                    )));
-                }
-            }
-            ContractCrs::Missing
-        };
+        let crs = contract_crs_from_keys(field.name(), geo_metadata, &keys)?;
         geometries.push(geometry_contract_from_field(field, crs, &keys));
     }
     let active_geometry = if geometries.is_empty() {
@@ -971,31 +967,106 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
     DataContract::new(schema, geometries, active_geometry, ContractProperties::default())
 }
 
-/// Definizione CRS dalla lettura di contratto completata (R2.7): la forma
-/// canonica se dichiarata, altrimenti il percorso legacy `geo.crs`
-/// invariato. Se entrambe le forme canoniche sono presenti (caso non
-/// prodotto dai writer di questo workspace, che ne emettono una sola)
-/// prevale `crs_definition`, autocontenuta; la coerenza fra le due forme non
-/// e' decidibile testualmente (R2.7: mai arbitrato sul dato) e una
-/// definizione invalida e' comunque rifiutata dalla risoluzione a valle.
+/// Stato CRS del contratto dalla lettura di contratto completata (R2.7),
+/// con la collocazione di R4.6.3 (v2.0-rc9/rc10): il centro NON risolve
+/// un'incoerenza dichiarata in assenza di una decisione esplicita nel piano
+/// — la preserva come [`ContractCrs::DeclaredUnresolved`] con le
+/// dichiarazioni originali, mai un errore (non e' il bordo di scrittura) e
+/// mai una scelta silenziosa.
 ///
-/// R4.6.3: `None` significa «nessun CRS dichiarato in alcuna
-/// rappresentazione accettata» e alimenta [`ContractCrs::Missing`], mai un
-/// errore. (Nota: il reader [`read_geometry_contract_keys`] completa gia'
-/// `geo.crs` nelle chiavi canoniche, quindi il fallback legacy qui sotto e'
-/// raggiunto solo da metadati `geo` senza chiave `crs` o malformati.)
-fn crs_definition_from_keys(
+/// Regole, in ordine:
+///
+/// 1. `crs_resolution = declared_unresolved` con almeno una
+///    rappresentazione: il produttore dichiara l'incoerenza — preservata
+///    cosi' com'e', NESSUNA risoluzione tentata (cambio di comportamento
+///    dichiarato: prima una definizione risolvibile era risolta ed emessa
+///    come `resolved`; nessuna chiamata al backend, quindi nessun
+///    `BackendUnavailable`);
+/// 2. conflitto DECIDIBILE senza backend: `crs_id` e `crs_definition`
+///    co-presenti (l'accordo non e' decidibile testualmente — R2.7: mai
+///    arbitrato sul dato; prima vinceva `crs_definition`, scelta
+///    silenziosa) oppure `crs_id` nella forma `authority:code` con codice
+///    numerico discordante da `srid` (R4.3.1; prima lo `srid` era ignorato
+///    e l'identificatore risolto — conciliazione silenziosa): lo stato
+///    diventa `DeclaredUnresolved` con le dichiarazioni;
+/// 3. una sola rappresentazione (canonica o legacy `geo.crs`): risoluzione
+///    contro il backend PROJ, come sempre — un fallimento di risoluzione
+///    resta un errore `Crs`, NON diventa `DeclaredUnresolved` (limite
+///    dichiarato: il produttore che sa di non poter garantire la
+///    risoluzione dichiara `declared_unresolved` esplicitamente, come nel
+///    corpus di conformita');
+/// 4. nessuna rappresentazione: [`ContractCrs::Missing`] (R4.4: mai un CRS
+///    inventato), salvo la contraddizione R4.1 — `resolved`/
+///    `declared_unresolved` senza alcuna rappresentazione — che resta
+///    errore di discovery.
+fn contract_crs_from_keys(
     field_name: &str,
     geo_metadata: Option<&String>,
     keys: &CanonicalGeometryKeys,
-) -> Result<Option<String>, PlenoraError> {
-    if let Some(definition) = &keys.crs_definition {
-        return Ok(Some(definition.clone()));
+) -> Result<ContractCrs, PlenoraError> {
+    let crs_id = keys.crs_id.clone();
+    let definition = keys.crs_definition.clone();
+    // (1) Incoerenza dichiarata dal produttore: preservata, mai risolta.
+    if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
+        && (crs_id.is_some() || definition.is_some())
+    {
+        return Ok(ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format: keys.crs_definition_format,
+        });
     }
-    if let Some(id) = &keys.crs_id {
-        return Ok(Some(id.clone()));
+    // (2a) Due rappresentazioni risolvibili co-presenti: accordo non
+    // decidibile, il centro non sceglie.
+    if crs_id.is_some() && definition.is_some() {
+        return Ok(ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format: keys.crs_definition_format,
+        });
     }
-    crs_definition_from_metadata(field_name, geo_metadata)
+    // (2b) Identificatore con codice numerico contro SRID discordante.
+    if let (Some(id), Some(srid)) = (&crs_id, keys.srid) {
+        if authority_code(id).is_some_and(|code| code != srid) {
+            return Ok(ContractCrs::DeclaredUnresolved {
+                crs_id,
+                definition: None,
+                definition_format: None,
+            });
+        }
+    }
+    // (3) La rappresentazione completata (canonica o legacy) alimenta la
+    // stessa risoluzione di sempre.
+    if let Some(definition) = definition.or(crs_id) {
+        return Ok(ContractCrs::Resolved(resolve_crs(&definition, "crs")?));
+    }
+    if let Some(definition) = crs_definition_from_metadata(field_name, geo_metadata)? {
+        return Ok(ContractCrs::Resolved(resolve_crs(&definition, "crs")?));
+    }
+    // (4) R4.1: mai collassare una dichiarazione esplicita su `missing` —
+    // `resolved`/`declared_unresolved` senza alcuna rappresentazione e' una
+    // contraddizione, non un'assenza.
+    if let Some(resolution) = keys.crs_resolution {
+        if resolution != CrsResolution::Missing {
+            return Err(contract(format!(
+                "colonna geometria `{field_name}`: chiave \
+                 `{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` dichiara `{resolution}` ma \
+                 nessun CRS e' dichiarato in alcuna rappresentazione accettata"
+            )));
+        }
+    }
+    Ok(ContractCrs::Missing)
+}
+
+/// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`
+/// -> 4326); `None` per ogni altra forma — il confronto con `srid` non e'
+/// decidibile e l'identificatore resta intero alla risoluzione.
+fn authority_code(crs_id: &str) -> Option<u32> {
+    let (authority, code) = crs_id.rsplit_once(':')?;
+    if authority.is_empty() || code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    code.parse().ok()
 }
 
 /// Contesto "input `nome` (percorso)" sull'errore, preservando la variante.
@@ -1049,8 +1120,7 @@ fn geometry_contract_from_field(
 /// Accoppia i percorsi CLI agli input dichiarati dal piano v4, in ordine di
 /// dichiarazione (posizionale, deterministico). Un conteggio diverso e' un
 /// errore esplicito, prima ancora di toccare i file.
-fn pair_v4_inputs(plan_text: &str, paths: &[PathBuf]) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
-    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
+fn pair_v4_inputs(probe: &PlanInputsProbe, paths: &[PathBuf]) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
     if probe.inputs.len() != paths.len() {
         return Err(contract(format!(
             "il piano dichiara {} input ({}) ma ne sono stati forniti {}",
@@ -1059,7 +1129,7 @@ fn pair_v4_inputs(plan_text: &str, paths: &[PathBuf]) -> Result<Vec<(String, Pat
             paths.len()
         )));
     }
-    Ok(probe.inputs.into_iter().zip(paths.iter().cloned()).collect())
+    Ok(probe.inputs.iter().cloned().zip(paths.iter().cloned()).collect())
 }
 
 /// Contratti degli input di un piano v4, scoperti dagli header IPC.
@@ -1072,6 +1142,57 @@ fn discover_contracts(pairs: &[(String, PathBuf)]) -> Result<Vec<(String, DataCo
                 .map_err(|error| at_input(name, path, error))
         })
         .collect()
+}
+
+/// Applica le decisioni CRS esplicite del piano v4 (`crs_decisions`,
+/// R4.6.3) ai contratti scoperti: per ogni input nominato, la definizione
+/// decisa e' risolta contro il backend (senza `proj-backend`:
+/// `BackendUnavailable`, come il CRS di piano) e sostituisce lo stato
+/// [`ContractCrs::DeclaredUnresolved`] con
+/// [`ContractCrs::ResolvedByDecision`] — un CRS risolto a tutti gli effetti
+/// per le op a valle, marcato perche' l'emissione SOSTITUISCA le
+/// dichiarazioni della sorgente con il CRS deciso
+/// (`strip_decided_crs_declarations` nella fusione dello schema di
+/// output). Lo schema del contratto di input NON e' toccato: il check
+/// fail-closed dell'executor confronta i campi del file con quelli del
+/// contratto validato (metadati inclusi). La decisione resta esplicita nel
+/// piano e coperta dal `plan_hash` (ADR 4); il fingerprint del contratto
+/// di input cambia di conseguenza (un piano con decisione non accetta in
+/// riesecuzione l'input non deciso senza rivalidazione).
+///
+/// Errori espliciti (mai una decisione ignorata in silenzio): input non
+/// fornito o senza colonna geometrica; stato diverso da
+/// `DeclaredUnresolved` (su `Missing` sarebbe un CRS inventato — R4.4; su
+/// `Resolved` una contraddizione del piano); definizione non risolvibile.
+/// I messaggi non riportano valori di dichiarazioni (regola «errori senza
+/// dati»).
+fn apply_crs_decisions(
+    probe: &PlanInputsProbe,
+    contracts: &mut [(String, DataContract)],
+) -> Result<(), PlenoraError> {
+    for (input, definition) in &probe.crs_decisions {
+        let Some((_, input_contract)) = contracts.iter_mut().find(|(name, _)| name == input) else {
+            return Err(contract(format!(
+                "crs_decisions: l'input `{input}` non e' tra i contratti scoperti"
+            )));
+        };
+        if input_contract.geometries.len() != 1 {
+            return Err(contract(format!(
+                "crs_decisions: l'input `{input}` non dichiara esattamente una colonna \
+                 geometrica: la decisione non e' applicabile"
+            )));
+        }
+        let geometry = &mut input_contract.geometries[0];
+        if !matches!(geometry.crs, ContractCrs::DeclaredUnresolved { .. }) {
+            return Err(contract(format!(
+                "crs_decisions: l'input `{input}` dichiara il CRS come `{}`, non come \
+                 `declared_unresolved`: la decisione non e' applicabile",
+                geometry.crs.resolution()
+            )));
+        }
+        geometry.crs = ContractCrs::ResolvedByDecision(resolve_crs(definition, "crs")?);
+    }
+    Ok(())
 }
 
 /// Sintesi JSON di un contratto d'arco: campi dello schema e geometria attiva.
@@ -1090,13 +1211,17 @@ fn contract_json(contract: &DataContract) -> serde_json::Value {
         .collect();
     let geometry = contract.active_geometry_column().map(|geometry| {
         match &geometry.crs {
-            ContractCrs::Resolved(crs) => serde_json::json!({
-                "name": geometry.name,
-                "crs": crs.definition(),
-                "crs_kind": format!("{:?}", crs.kind()),
-                "crs_resolution": geometry.crs.resolution().as_str(),
-            }),
-            ContractCrs::Missing => serde_json::json!({
+            ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
+                serde_json::json!({
+                    "name": geometry.name,
+                    "crs": crs.definition(),
+                    "crs_kind": format!("{:?}", crs.kind()),
+                    "crs_resolution": geometry.crs.resolution().as_str(),
+                })
+            }
+            // Nessun CRS risolto da dichiarare: lo stato (canonico R2.2)
+            // distingue `missing` da `declared_unresolved` (R4.1).
+            ContractCrs::DeclaredUnresolved { .. } | ContractCrs::Missing => serde_json::json!({
                 "name": geometry.name,
                 "crs": serde_json::Value::Null,
                 "crs_kind": serde_json::Value::Null,
@@ -1243,8 +1368,10 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
 /// `validate` di un piano v4: planner DAG + `explain` per la strategia, con
 /// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
 fn validate_dag_v4(plan_text: &str, paths: &[PathBuf]) -> Result<(), Box<dyn Error>> {
-    let pairs = pair_v4_inputs(plan_text, paths)?;
-    let contracts = discover_contracts(&pairs)?;
+    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
+    let pairs = pair_v4_inputs(&probe, paths)?;
+    let mut contracts = discover_contracts(&pairs)?;
+    apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
     let execution = explain(&graph, &RuntimeContext::default())?;
     println!(
@@ -1266,8 +1393,10 @@ fn run_dag_v4(plan_text: &str, paths: &[PathBuf], output_path: &Path) -> Result<
         ))
         .into());
     }
-    let pairs = pair_v4_inputs(plan_text, paths)?;
-    let contracts = discover_contracts(&pairs)?;
+    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
+    let pairs = pair_v4_inputs(&probe, paths)?;
+    let mut contracts = discover_contracts(&pairs)?;
+    apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
     let mut inputs = Inputs::new();
     for (name, path) in &pairs {
@@ -1481,9 +1610,11 @@ mod tests {
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use plenora_kernels_geo::arrow_adapter::{
         PLENORA_CONTRACT_VERSION_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+        PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
         PLENORA_GEOMETRY_CRS_ID_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
         PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY,
-        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
+        PLENORA_GEOMETRY_SRID_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
+        PLENORA_GEOMETRY_TYPES_KEY,
     };
 
     use super::*;
@@ -1820,6 +1951,256 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // R4.6.3 (BLOCK-08): `declared_unresolved` — preservato, mai risolto
+    // in assenza di una decisione esplicita nel piano.
+    // -------------------------------------------------------------------
+
+    /// Campo geometria canonico con le chiavi date (helper delle fixture
+    /// CRS: schema con versione R2.5, colonna `id` + `geometry`).
+    fn canonical_crs_field(pairs: &[(&str, &str)]) -> Field {
+        let mut metadata = std::collections::HashMap::from([
+            (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
+        ]);
+        for (key, value) in pairs {
+            metadata.insert((*key).to_owned(), (*value).to_owned());
+        }
+        Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
+    }
+
+    #[test]
+    fn discovery_declared_unresolved_is_preserved_never_auto_resolved() {
+        // Cambio di comportamento dichiarato (R4.6.3): una dichiarazione
+        // `declared_unresolved` con crs_id RISOLVIBILE (EPSG:32632) non e'
+        // piu' risolta ed emessa come `resolved` — il centro preserva lo
+        // stato dichiarato. Nessun backend coinvolto: il test vale con e
+        // senza `proj-backend`.
+        let field = canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "declared_unresolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+        ]);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
+            &contract.geometries[0].crs
+        else {
+            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
+        assert_eq!(definition, &None);
+        assert_eq!(
+            contract.geometries[0].crs.resolution(),
+            CrsResolution::DeclaredUnresolved
+        );
+    }
+
+    #[test]
+    fn discovery_conflicting_crs_id_and_srid_become_declared_unresolved() {
+        // Il caso `conflicting_crs` del corpus di conformita':
+        // crs_id=EPSG:4326 con srid=3003 (R4.3.1). Il centro PRESERVA
+        // (expect_by_role: transformation_core = preserve): niente errore,
+        // niente scelta silenziosa — lo stato diventa DeclaredUnresolved
+        // con la dichiarazione originale, anche se il produttore dichiara
+        // `resolved` (la contraddizione la dichiara il centro, R4.6.4).
+        let field = canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
+            (PLENORA_GEOMETRY_SRID_KEY, "3003"),
+        ]);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
+            &contract.geometries[0].crs
+        else {
+            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
+        assert_eq!(definition, &None);
+    }
+
+    #[test]
+    fn discovery_crs_id_and_definition_copresent_become_declared_unresolved() {
+        // Due rappresentazioni risolvibili co-presenti: l'accordo non e'
+        // decidibile testualmente (R2.7: mai arbitrato sul dato) — prima
+        // vinceva `crs_definition` (scelta silenziosa), ora lo stato e'
+        // DeclaredUnresolved con ENTRAMBE le dichiarazioni.
+        let field = canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, r#"{"type":"GeographicCRS"}"#),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lat_lon"),
+        ]);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format,
+        } = &contract.geometries[0].crs
+        else {
+            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
+        assert_eq!(
+            definition.as_deref(),
+            Some(r#"{"type":"GeographicCRS"}"#)
+        );
+        assert_eq!(
+            definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
+            Some("projjson")
+        );
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn discovery_coherent_crs_id_and_srid_still_resolves() {
+        // srid coerente con il codice dell'identificatore (come il caso
+        // `multipolygon_xyzm_srid` del corpus): nessun conflitto, la
+        // risoluzione avviene come sempre.
+        let field = canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
+            (PLENORA_GEOMETRY_SRID_KEY, "32632"),
+        ]);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        assert!(
+            matches!(contract.geometries[0].crs, ContractCrs::Resolved(_)),
+            "srid coerente -> risoluzione"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Decisione esplicita nel piano (R4.6.3, campo v4 `crs_decisions`).
+    // -------------------------------------------------------------------
+
+    /// Contratto di input con geometria nello stato dato, per i test di
+    /// `apply_crs_decisions` (schema con le chiavi canoniche CRS dichiarate
+    /// e metadato legacy `geo.crs`).
+    fn contract_with_crs_state(crs: ContractCrs) -> DataContract {
+        let mut metadata = std::collections::HashMap::from([
+            (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+            (
+                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                crs.resolution().as_str().to_owned(),
+            ),
+            (
+                GEO_METADATA_KEY.to_owned(),
+                r#"{"crs":"EPSG:99999","encoding":"wkb"}"#.to_owned(),
+            ),
+        ]);
+        if let ContractCrs::DeclaredUnresolved { crs_id: Some(id), .. } = &crs {
+            metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), id.clone());
+            metadata.insert(PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(), "unknown".to_owned());
+            metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "99999".to_owned());
+        }
+        let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+        let geometry = GeometryColumnContract {
+            field_id: FieldId(0),
+            name: "geometry".to_owned(),
+            crs,
+            dimensions: GeometryDimensions::Xy,
+            encoding: Some(GeometryEncoding::Wkb),
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        };
+        DataContract::new(
+            schema_v1(vec![field]),
+            vec![geometry],
+            Some(FieldId(0)),
+            ContractProperties::default(),
+        )
+        .expect("contratto fixture valido")
+    }
+
+    fn declared_unresolved_state() -> ContractCrs {
+        ContractCrs::DeclaredUnresolved {
+            crs_id: Some("EPSG:99999".to_owned()),
+            definition: None,
+            definition_format: None,
+        }
+    }
+
+    fn decisions_probe(definition: &str) -> PlanInputsProbe {
+        PlanInputsProbe {
+            inputs: vec!["main".to_owned()],
+            crs_decisions: std::collections::BTreeMap::from([(
+                "main".to_owned(),
+                definition.to_owned(),
+            )]),
+        }
+    }
+
+    #[test]
+    fn crs_decisions_on_unknown_input_is_an_error() {
+        let mut contracts = vec![("main".to_owned(), contract_with_crs_state(
+            declared_unresolved_state(),
+        ))];
+        let probe = PlanInputsProbe {
+            inputs: vec!["main".to_owned()],
+            crs_decisions: std::collections::BTreeMap::from([(
+                "other".to_owned(),
+                "EPSG:32632".to_owned(),
+            )]),
+        };
+        let error = apply_crs_decisions(&probe, &mut contracts).expect_err("input ignoto");
+        assert!(error.to_string().contains("crs_decisions"), "{error}");
+    }
+
+    #[test]
+    fn crs_decisions_on_missing_or_resolved_state_is_an_error() {
+        // Una decisione su `missing` inventerebbe un CRS per un ingresso che
+        // non ne dichiara (R4.4); su `resolved` e' una contraddizione del
+        // piano. Mai ignorata in silenzio: errore esplicito in entrambi i
+        // casi, prima di toccare il backend (il test vale senza PROJ).
+        for state in [
+            ContractCrs::Missing,
+            ContractCrs::Resolved(projected_crs()),
+        ] {
+            let mut contracts = vec![("main".to_owned(), contract_with_crs_state(state))];
+            let error =
+                apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts)
+                    .expect_err("stato non decidibile");
+            assert!(
+                error.to_string().contains("non e' applicabile"),
+                "{error}"
+            );
+        }
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn crs_decisions_resolve_declared_unresolved_keeping_the_schema_intact() {
+        // La decisione esplicita del piano risolve l'incoerenza: il
+        // contratto diventa `ResolvedByDecision` con la definizione decisa
+        // (risolta contro PROJ). Lo schema di input NON e' toccato: il
+        // check fail-closed dell'executor confronta i campi del file con il
+        // contratto validato — la sostituzione delle dichiarazioni avviene
+        // solo in emissione (strip nella fusione dello schema di output).
+        let mut contracts = vec![("main".to_owned(), contract_with_crs_state(
+            declared_unresolved_state(),
+        ))];
+        apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts)
+            .expect("decisione");
+        let contract = &contracts[0].1;
+        let ContractCrs::ResolvedByDecision(crs) = &contract.geometries[0].crs else {
+            panic!("atteso ResolvedByDecision: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(crs.definition(), "EPSG:32632");
+        assert_eq!(contract.geometries[0].crs.resolution(), CrsResolution::Resolved);
+        let metadata = contract.schema.field_with_name("geometry").expect("campo").metadata();
+        assert_eq!(
+            metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+            Some("declared_unresolved"),
+            "lo schema di input resta quello scoperto"
+        );
+    }
+
+    // -------------------------------------------------------------------
     // Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
     // -------------------------------------------------------------------
 
@@ -1955,44 +2336,46 @@ mod tests {
     }
 
     #[test]
-    fn crs_definition_from_keys_prefers_the_canonical_forms() {
-        // `crs_definition` (autocontenuta) prevale su `crs_id`.
+    fn contract_crs_from_keys_co_presence_is_declared_unresolved_not_a_choice() {
+        // `crs_id` + `crs_definition` co-presenti: l'accordo non e'
+        // decidibile testualmente (R2.7: mai arbitrato) — nessuna
+        // precedenza silenziosa (prima vinceva `crs_definition`): lo stato
+        // e' `DeclaredUnresolved` con entrambe le dichiarazioni.
         let keys = CanonicalGeometryKeys {
             crs_definition: Some(r#"{"type":"ProjectedCRS"}"#.to_owned()),
             crs_id: Some("EPSG:32632".to_owned()),
             ..CanonicalGeometryKeys::default()
         };
-        assert_eq!(
-            crs_definition_from_keys("geometry", None, &keys)
-                .expect("definizione")
-                .as_deref(),
-            Some(r#"{"type":"ProjectedCRS"}"#)
-        );
-        // Solo `crs_id`.
-        let keys = CanonicalGeometryKeys {
-            crs_id: Some("EPSG:32632".to_owned()),
-            ..CanonicalGeometryKeys::default()
+        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
+            contract_crs_from_keys("geometry", None, &keys).expect("stato")
+        else {
+            panic!("atteso DeclaredUnresolved");
         };
-        assert_eq!(
-            crs_definition_from_keys("geometry", None, &keys)
-                .expect("id")
-                .as_deref(),
-            Some("EPSG:32632")
-        );
-        // Fallback legacy `geo.crs` quando nessuna forma canonica dichiara.
+        assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
+        assert_eq!(definition.as_deref(), Some(r#"{"type":"ProjectedCRS"}"#));
+    }
+
+    #[test]
+    fn contract_crs_from_keys_legacy_fallback_feeds_the_resolution() {
+        // Nessuna forma canonica: il legacy `geo.crs` alimenta la
+        // risoluzione (con backend -> Resolved; senza -> errore `Crs` di
+        // backend, mai `Missing` inventato).
         let legacy = r#"{"crs":"EPSG:32632"}"#.to_owned();
         let keys = CanonicalGeometryKeys::default();
-        assert_eq!(
-            crs_definition_from_keys("geometry", Some(&legacy), &keys)
-                .expect("legacy")
-                .as_deref(),
-            Some("EPSG:32632")
+        let result = contract_crs_from_keys("geometry", Some(&legacy), &keys);
+        #[cfg(feature = "proj-backend")]
+        assert!(
+            matches!(result, Ok(ContractCrs::Resolved(_))),
+            "{result:?}"
         );
-        // Nessuna rappresentazione: assenza (R4.6.3), mai errore.
-        assert_eq!(
-            crs_definition_from_keys("geometry", None, &keys).expect("assente"),
-            None
+        #[cfg(not(feature = "proj-backend"))]
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "{result:?}"
         );
+        // Nessuna rappresentazione: `Missing`, mai errore (R4.6.3).
+        let missing = contract_crs_from_keys("geometry", None, &keys).expect("assente");
+        assert!(matches!(missing, ContractCrs::Missing));
     }
 
     #[test]

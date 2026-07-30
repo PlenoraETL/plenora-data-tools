@@ -87,35 +87,81 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    l'esistenza dell'effetto.
 7. **CRS mancante nel contratto, requisito condizionato alle op (R4.6.3,
    rc9/rc10).** `GeometryColumnContract.crs` e' `ContractCrs`
-   (`Resolved(ResolvedCrs)` | `Missing`), non piu' un `ResolvedCrs`
-   obbligatorio: la discovery NON pretende un CRS risolvibile per
-   operazioni che non lo richiedono — un filtro tabellare su una colonna
-   non geometrica non ha bisogno di alcun CRS, e rifiutarlo e' piu'
-   restrittivo del ruolo (rc10). `Missing` non porta dati (R4.4 intatta:
-   mai un CRS inventato) ed e' distinto da `Resolved` nel modello interno
-   (R4.1); la forma a enum (non `Option`) e' scelta perche' lo stato sia
-   nominato e l'aggiunta futura di `DeclaredUnresolved` sia guidata dal
+   (`Resolved(ResolvedCrs)` | `DeclaredUnresolved { .. }` | `Missing`), non
+   piu' un `ResolvedCrs` obbligatorio: la discovery NON pretende un CRS
+   risolvibile per operazioni che non lo richiedono — un filtro tabellare
+   su una colonna non geometrica non ha bisogno di alcun CRS, e rifiutarlo
+   e' piu' restrittivo del ruolo (rc10). `Missing` non porta dati (R4.4
+   intatta: mai un CRS inventato) ed e' distinto da `Resolved` nel modello
+   interno (R4.1); la forma a enum (non `Option`) e' scelta perche' lo
+   stato sia nominato e l'aggiunta di `DeclaredUnresolved` sia guidata dal
    compilatore. Il fallimento si sposta dalla discovery al punto in cui
    un'op con `CrsRequirement` tocca la colonna — `analyze_contract` delle
    op geo, a compile-plan (deterministico, mai a meta' stream) — con
    categoria `Crs` e messaggio che dichiara la causa («nessun CRS
-   dichiarato in alcuna rappresentazione accettata»). Propagazione
-   (R4.6.4): lo stato attraversa invariato i contratti di output e le
-   chiavi §2 (`crs_resolution = missing`, nessuna chiave
-   `crs_id`/`crs_definition`/`axis_order`/`srid` — coerenza R2.2).
+   dichiarato in alcuna rappresentazione accettata» per `Missing`;
+   «incoerenza CRS dichiarata non risolta... decisione esplicita nel
+   piano» per `DeclaredUnresolved`: la colonna dichiara un'incoerenza, non
+   un'assenza). Propagazione (R4.6.4): lo stato attraversa invariato i
+   contratti di output e le chiavi §2 (`crs_resolution = missing`, nessuna
+   chiave `crs_id`/`crs_definition`/`axis_order`/`srid` — coerenza R2.2).
    Fingerprint (ADR 4): lo stato ENTRA — risolto e mancante non sono lo
    stesso contratto; escluderlo farebbe accettare a un piano con op geo,
    in riesecuzione, un input senza CRS senza rivalidazione (fallimento
    spostato a runtime); per un filtro tabellare il mismatch costa una
-   rivalidazione che passa (conservativo, dichiarato). `DeclaredUnresolved`
-   NON e' modellato: la discovery non lo produce (una definizione
-   dichiarata ma non risolvibile resta errore di risoluzione) e risolvere
-   un'incoerenza dichiarata richiede una decisione esplicita nel piano
-   (R4.6.3) — follow-up dichiarato. Una `crs_resolution` valorizzata
-   (`resolved`/`declared_unresolved`) senza alcuna rappresentazione e'
-   contraddittoria e resta errore di discovery (R4.1: mai collassarla su
-   `missing`); un metadato `geo` malformato resta errore (R5.1:
-   «illeggibile» non e' «assente»).
+   rivalidazione che passa (conservativo, dichiarato). Una `crs_resolution`
+   valorizzata (`resolved`/`declared_unresolved`) senza alcuna
+   rappresentazione e' contraddittoria e resta errore di discovery (R4.1:
+   mai collassarla su `missing`); un metadato `geo` malformato resta
+   errore (R5.1: «illeggibile» non e' «assente»).
+   **`DeclaredUnresolved` (attuato 2026-07-30, BLOCK-08 di
+   `release/rc.json`)**: la variante porta le dichiarazioni originali
+   (`crs_id`, `definition` con il suo formato — R2.4/R4.6.4/R4.3; lo
+   `srid` resta alla lineage dei metadati di campo: non e' una definizione
+   risolvibile dal centro). La discovery lo produce in due casi: (a) il
+   produttore dichiara `crs_resolution = declared_unresolved` — preservato
+   senza tentare alcuna risoluzione (R4.6.3: in assenza di una decisione
+   esplicita nel piano il centro propaga, non risolve; nessuna chiamata al
+   backend, quindi nessun `BackendUnavailable`); (b) conflitto DECIDIBILE
+   senza backend — `crs_id` e `crs_definition` co-presenti (accordo non
+   decidibile testualmente, R2.7: mai arbitrato) o `crs_id`
+   `authority:code` con codice numerico discordante da `srid` (R4.3.1) —
+   preservato con entrambe le dichiarazioni, mai un errore (il centro non
+   e' il bordo di scrittura) e mai una scelta silenziosa. Un fallimento di
+   risoluzione di una rappresentazione singola RESTA un errore `Crs` e non
+   diventa `DeclaredUnresolved` (limite dichiarato: il produttore che non
+   puo' garantire la risoluzione dichiara `declared_unresolved`
+   esplicitamente, come nel corpus di conformita'). La **decisione
+   esplicita nel piano** e' il campo v4 `crs_decisions: { "<input>":
+   "<definizione>" }` (alternativa scartata: `inputs` come oggetti
+   `{"name","crs"}` — breaking change del formato, e il runner di
+   conformita' emette `inputs: ["main"]`; scartato anche un nodo dedicato:
+   la decisione e' un fatto sul contratto di input, non una
+   trasformazione sul flusso). Le chiavi devono essere input dichiarati
+   (validazione strutturale); l'applicazione e' nella CLI, dove piano e
+   contratti scoperti si incontrano: la definizione e' risolta (senza
+   backend: `BackendUnavailable`, come il CRS di piano) e sostituisce lo
+   stato — su `Missing` o `Resolved` la decisione e' un errore esplicito
+   (su `Missing` sarebbe un CRS inventato, R4.4; su `Resolved` una
+   contraddizione del piano), mai ignorata in silenzio. Il contratto
+   distingue la sorgente della risoluzione: **`ResolvedByDecision`**, un
+   CRS risolto a tutti gli effetti per i consumatori (gate delle op,
+   fingerprint, riepiloghi) ma marcato per l'emissione — le dichiarazioni
+   della sorgente (chiavi canoniche CRS e `geo.crs` legacy nei metadati di
+   campo) sono SOSTITUITE dal CRS deciso nella fusione dello schema di
+   output (`strip_decided_crs_declarations`), mai propagate accanto ad
+   esso. Lo schema del contratto di input resta intatto: il check
+   fail-closed dell'executor confronta i campi del file con il contratto
+   validato, metadati inclusi (una prima versione del design ripuliva lo
+   schema di input — scartata perche' rompeva quel check).
+   **Eccezione R2.6 in emissione** (`canonical_output_schema`): una
+   `crs_resolution = resolved` preesistente e' corretta in
+   `declared_unresolved` quando il contratto porta un'incoerenza rilevata
+   — R4.6.4 vieta di silenziarla propagando la dichiarazione `resolved`
+   che l'incoerenza smentisce; unica sovrascrittura ammessa, una sola
+   chiave, una sola direzione (la direzione opposta non passa di qui: con
+   una decisione del piano le dichiarazioni sono gia' state sostituite
+   dalla strip).
 
 ## Forzature note (dichiarate)
 
@@ -171,6 +217,21 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   fingerprint escludeva gia' FieldId e proprieta').
 
 ## Stato di attuazione
+
+- **`DeclaredUnresolved` e decisione nel piano (attuati, 2026-07-30 —
+  BLOCK-08 di `release/rc.json`, decisione 7)**: variante
+  `ContractCrs::DeclaredUnresolved` in `plenora-core`; discovery CLI che
+  preserva lo stato dichiarato e i conflitti decidibili
+  (`contract_crs_from_keys`); campo v4 `crs_decisions` (validazione
+  strutturale in `PlanV4`, applicazione in `apply_crs_decisions`, identita'
+  ADR 4 nella forma canonica); gate `require_resolved_crs` con messaggio
+  distinto per stato; emissione `declared_unresolved` con le dichiarazioni
+  originali ed eccezione R2.6 dichiarata in `canonical_output_schema`;
+  stato nel fingerprint dei contratti di input (tre stati, tre
+  fingerprint). Test: unit (discovery, emissione, gate, piano, fingerprint,
+  fusione output) e integrazione CLI (propagazione `declared_unresolved`,
+  `conflicting_crs` preservato e dichiarato, gate geo, decisione su stato
+  non applicabile, decisione che risolve — con `proj-backend`).
 
 - **Milestone A (attuata, `1962405`)**: `GeometryType`, `TypesDeclaration`,
   `GeometryTypesProperty`, enum delle chiavi R2.2 in `plenora-core`;
@@ -293,6 +354,39 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   nessun errore prodotto (tempfile ripulito via `Drop`, infallibile).
 
 ## Cambi di comportamento (dichiarati)
+
+- **`declared_unresolved` non si auto-risolve piu' (R4.6.3, decisione 7,
+  BLOCK-08)**. Prima la discovery risolveva una definizione dichiarata
+  `declared_unresolved` ma risolvibile ed emetteva `resolved` — scelta
+  silenziosa contro il default propagate di R4.6.3. Ora lo stato entra nel
+  contratto come `ContractCrs::DeclaredUnresolved` con le dichiarazioni
+  originali, si propaga invariato attraverso le op senza `CrsRequirement`
+  (R4.6.4) e ferma le op geo in analyze con categoria `Crs` e messaggio
+  distinto da `missing`. Nessuna chiamata al backend per questo stato:
+  il caso `crs_unresolved` del corpus di conformita' non richiede piu'
+  `proj-backend`.
+- **Conflitto decidibile fra rappresentazioni CRS: da scelta silenziosa a
+  `DeclaredUnresolved` (R4.3.1/R4.6.3, decisione 7)**. Prima `crs_id` +
+  `crs_definition` co-presenti risolvevano `crs_definition` (precedenza
+  implicita) e uno `srid` discordante da `crs_id` era ignorato: il centro
+  sceglieva per conto dell'utente. Ora il conflitto decidibile senza
+  backend diventa `DeclaredUnresolved` con entrambe le dichiarazioni — non
+  errore (R4.6.1: il centro non e' il bordo di scrittura; attesa del corpus
+  `conflicting_crs`: `transformation_core = preserve`), non scelta. La
+  risoluzione resta possibile solo con una decisione esplicita nel piano
+  (`crs_decisions`).
+- **Emissione con incoerenza rilevata: `crs_resolution` corretta a
+  `declared_unresolved` (R4.6.4)**. Un produttore che dichiara `resolved`
+  con rappresentazioni in conflitto e' smentito dalle sue stesse chiavi:
+  il blocco canonico di output corregge lo stato (unica sovrascrittura
+  ammessa sulla fusione R2.6, una sola direzione) e ri-emette le
+  dichiarazioni originali invariate (`crs_id`, `srid` di lineage), perche'
+  l'incoerenza arrivi al bordo di scrittura, dove R4.6.2 la ferma.
+  Conseguenza misurabile: il runner di conformita' (diff meccanico prima/
+  dopo) segnala `crs_resolution: resolved -> declared_unresolved` sul caso
+  `conflicting_crs` — e' la dichiarazione dell'incoerenza, non una perdita
+  (il runner stesso dichiara di verificare solo la preservazione, non
+  l'obbligo di dichiarare).
 
 - **Geometria senza CRS: da errore di discovery a stato `missing`
   (R4.6.3, decisione 7)**. Prima la discovery rifiutava OGNI colonna

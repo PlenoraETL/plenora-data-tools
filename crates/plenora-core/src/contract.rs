@@ -895,7 +895,33 @@ impl std::str::FromStr for GeometryPrecision {
 /// inventato — `Missing` non porta dati).
 ///
 /// - [`ContractCrs::Resolved`]: definizione risolta contro il database PROJ
-///   (solo una risoluzione produce questo valore);
+///   dalla discovery (solo una risoluzione produce questo valore);
+/// - [`ContractCrs::ResolvedByDecision`]: come `Resolved` (definizione
+///   risolta contro PROJ, gli stessi consumatori), ma la risoluzione e'
+///   l'effetto di una DECISIONE ESPLICITA DEL PIANO (R4.6.3, campo v4
+///   `crs_decisions`) su uno stato `DeclaredUnresolved` — non di una
+///   dichiarazione della sorgente. La distinzione serve all'emissione: le
+///   dichiarazioni in conflitto della sorgente (chiavi canoniche CRS e
+///   `geo.crs` legacy nei metadati di campo) sono sostituite dal CRS
+///   deciso, non propagate accanto ad esso; ovunque altro (gate delle op,
+///   fingerprint, riepiloghi) il valore e' un CRS risolto a tutti gli
+///   effetti;
+/// - [`ContractCrs::DeclaredUnresolved`]: il CRS c'e' ma non si risolve —
+///   il produttore dichiara `declared_unresolved`, oppure le
+///   rappresentazioni dichiarate sono in conflitto decidibile. R4.6.3: in
+///   assenza di una decisione esplicita nel piano il centro PROPAGA
+///   l'incoerenza senza risolverla (mai una scelta silenziosa) e senza
+///   pretendere un CRS risolvibile per operazioni che non lo richiedono;
+///   R4.6.4: l'incoerenza arriva al bordo di scrittura con le dichiarazioni
+///   ORIGINALI ri-emesse invariate (mai una persa, mai una inventata) —
+///   per questo la variante porta `crs_id` e `definition` con il suo
+///   formato (R4.3: una definizione senza discriminatore non e'
+///   interpretabile). Lo `srid` non entra nella variante: non e' una
+///   definizione risolvibile dal centro e viaggia come chiave di lineage
+///   nei metadati di campo (R2.4). Invariante di costruzione (imposta
+///   dalla discovery): almeno uno fra `crs_id` e `definition` e' presente
+///   — `declared_unresolved` senza rappresentazioni e' una contraddizione
+///   R4.1 e resta un errore;
 /// - [`ContractCrs::Missing`]: nessun CRS dichiarato in alcuna
 ///   rappresentazione accettata. R4.6.3: la discovery non puo' pretendere un
 ///   CRS risolvibile per operazioni che non lo richiedono — lo stato entra
@@ -903,23 +929,39 @@ impl std::str::FromStr for GeometryPrecision {
 ///   `plenora.geometry.crs_resolution = missing`) e ferma solo le op che
 ///   dichiarano un `CrsRequirement`, in analyze (mai a meta' stream).
 ///
-/// `CrsResolution::DeclaredUnresolved` NON e' modellato: la discovery non lo
-/// produce (una definizione dichiarata ma non risolvibile resta un errore di
-/// risoluzione) e la risoluzione di un'incoerenza dichiarata richiede una
-/// decisione esplicita nel piano (R4.6.3) — follow-up dichiarato in ADR-0009.
+/// `DeclaredUnresolved` ferma le op con `CrsRequirement` come `Missing`,
+/// nello stesso punto (analyze, compile-plan) e con la stessa categoria
+/// (`Crs`), ma con un messaggio distinto: la colonna DICHIARA
+/// un'incoerenza, non un'assenza.
 #[derive(Clone, Debug)]
 pub enum ContractCrs {
     Resolved(ResolvedCrs),
+    /// Risolto per decisione esplicita del piano (R4.6.3): stesso
+    /// comportamento di [`ContractCrs::Resolved`] per i consumatori del
+    /// CRS; l'emissione sostituisce le dichiarazioni della sorgente con il
+    /// CRS deciso.
+    ResolvedByDecision(ResolvedCrs),
+    /// Incoerenza dichiarata non risolta (R4.6.3): le rappresentazioni
+    /// originali, per la ri-emissione fedele (R2.4/R4.6.4).
+    DeclaredUnresolved {
+        /// Identificatore di autorita' dichiarato (`plenora.geometry.crs_id`).
+        crs_id: Option<String>,
+        /// Definizione testuale dichiarata (`plenora.geometry.crs_definition`).
+        definition: Option<String>,
+        /// Formato della definizione (`plenora.geometry.crs_definition_format`,
+        /// R4.3), se dichiarato.
+        definition_format: Option<CrsDefinitionFormat>,
+    },
     Missing,
 }
 
 impl ContractCrs {
-    /// Il CRS risolto, se lo stato e' `Resolved`.
+    /// Il CRS risolto, se lo stato e' `Resolved` o `ResolvedByDecision`.
     #[must_use]
     pub const fn as_resolved(&self) -> Option<&ResolvedCrs> {
         match self {
-            Self::Resolved(crs) => Some(crs),
-            Self::Missing => None,
+            Self::Resolved(crs) | Self::ResolvedByDecision(crs) => Some(crs),
+            Self::DeclaredUnresolved { .. } | Self::Missing => None,
         }
     }
 
@@ -928,7 +970,8 @@ impl ContractCrs {
     #[must_use]
     pub const fn resolution(&self) -> CrsResolution {
         match self {
-            Self::Resolved(_) => CrsResolution::Resolved,
+            Self::Resolved(_) | Self::ResolvedByDecision(_) => CrsResolution::Resolved,
+            Self::DeclaredUnresolved { .. } => CrsResolution::DeclaredUnresolved,
             Self::Missing => CrsResolution::Missing,
         }
     }
