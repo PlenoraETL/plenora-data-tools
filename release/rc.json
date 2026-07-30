@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0",
-  "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
+  "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -16,11 +16,6 @@
   "verification_claim": "verified_internally",
   "independent_review": false,
   "open_blocks": [
-    {
-      "id": "BLOCK-04",
-      "title": "Copertura sotto soglia su tre moduli",
-      "detail": "Copertura di riga 92,43% (47.151/51.010, report in target/tmp/coverage su revisione c941bb28 — rigenerare su HEAD per la RC). Punti deboli: plenora-cli 59,5%, prepare.rs 75,7%, publish.rs 76,6%. La riduzione di copertura su questi moduli resta dichiarata (C5.2)."
-    },
     {
       "id": "BLOCK-05",
       "title": "Catena bordo-centro-bordo non qualificata",
@@ -44,6 +39,12 @@
   ],
   "closed_blocks": [
     {
+      "id": "BLOCK-04",
+      "title": "Copertura sotto soglia su tre moduli",
+      "closed_by": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
+      "note": "cli 65,03->89,39%, prepare 76,73->90,69%, publish 76,24->81,28%; workspace 92,42->93,26%. Residuo publish dichiarato (C5.2): 25 righe coperte solo nei run full-backends, 5 richiedono mount NFS/SMB reale, 7 non producibili senza hook. Rimosso codice morto (MeasureKind::data_type). Report per-linea: target/tmp/lcov-full.info."
+    },
+    {
       "id": "BLOCK-03",
       "title": "Tagging di fase ai confini (assi errore par. 9)",
       "closed_by": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
@@ -64,12 +65,12 @@
   ],
   "evidence": {
     "test_suite": {
-      "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
+      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "958 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
+      "result": "994 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
     },
     "lint_gate": {
-      "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
+      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
@@ -83,8 +84,8 @@
       "result": "delta fuso/non fuso: -20,2% catena trasformazioni, -16,2% con misura terminale, -11,7% reproject; output byte-identici, zero fallback. Sensibile alle condizioni host (dichiarato in ADR-0012); R4.6.3 non tocca i percorsi misurati."
     },
     "coverage": {
-      "revision": "c941bb28dae12b7278e4d32466c5ec3c1e882c5f",
-      "note": "92,43% di righe (47.151/51.010), artifact identificato per SHA in target/tmp/coverage; da rigenerare su HEAD per la RC (BLOCK-04)."
+      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
+      "note": "93,26% di righe (50.008/53.623), artifact target/tmp/lcov.info (+ lcov-full.info per-linea); residui dichiarati in BLOCK-04 chiuso."
     },
     "fuzz": {
       "note": "CI notturna (.github/workflows/fuzz.yml) con sanitizer su toolchain nightly — deroga DER-001 registrata in docs/deroghe.md con condizione di rientro."
