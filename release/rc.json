@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0-rc1",
-  "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
+  "revision": "3cb2c6a3a84732ea83be1c4ad1e4b16b8509b44f",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -67,12 +67,12 @@
   ],
   "evidence": {
     "test_suite": {
-      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
+      "revision": "3cb2c6a3a84732ea83be1c4ad1e4b16b8509b44f",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "1018 passed, 0 failed; +487 passed con --features full-backends (plenora-engine + plenora-cli)"
+      "result": "1047 passed, 0 failed; +487 con --features full-backends (engine+cli)"
     },
     "lint_gate": {
-      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
+      "revision": "3cb2c6a3a84732ea83be1c4ad1e4b16b8509b44f",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
@@ -86,8 +86,8 @@
       "result": "delta fuso/non fuso: -20,2% catena trasformazioni, -16,2% con misura terminale, -11,7% reproject; output byte-identici, zero fallback. Sensibile alle condizioni host (dichiarato in ADR-0012); R4.6.3 non tocca i percorsi misurati."
     },
     "coverage": {
-      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
-      "note": "93,28% di righe (50.718/54.372) su HEAD, artifact target/tmp/lcov.info. Moduli storici deboli: cli 89,71%, prepare 91,31%, publish 81,28% (residuo publish dichiarato in BLOCK-04: backend PROJ, mount NFS/SMB, fallimenti non producibili senza hook)."
+      "revision": "3cb2c6a3a84732ea83be1c4ad1e4b16b8509b44f",
+      "note": "93,98% di righe (51.956/55.282) su HEAD, artifact target/tmp/lcov.info. Ex moduli deboli: cli 89,7%, prepare 91,3%, publish 81,3% (residuo dichiarato), error.rs 90,2%, analyze/config 100%, formula 96,5%, aggregate 84,3%, equality 99,8%, quality 99,2%, schema 98,0%."
     },
     "fuzz": {
       "note": "CI notturna (.github/workflows/fuzz.yml) con sanitizer su toolchain nightly — deroga DER-001 registrata in docs/deroghe.md con condizione di rientro."
