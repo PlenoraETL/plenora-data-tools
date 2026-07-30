@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0",
-  "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
+  "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -30,14 +30,15 @@
       "id": "BLOCK-07",
       "title": "plenora.field_id cross-processo: semantica da chiarire (ICD)",
       "detail": "R2 lo da' facoltativo (non emetterlo e' lecito) e R2.4 impone di propagarlo invariato se ricevuto — attuato. Il chiarimento sul significato di un field_id assegnato da un altro processo e' materia ICD, proposta da inoltrare all'owner."
-    },
-    {
-      "id": "BLOCK-08",
-      "title": "declared_unresolved senza decisione nel piano (R4.6.3)",
-      "detail": "R4.6.3 richiede una decisione esplicita nel piano per risolvere un'incoerenza dichiarata; oggi la discovery risolve una definizione risolvibile ed emette `resolved` (comportamento preesistente). Modellare la decisione di piano e' follow-up dichiarato in ADR-0009 (decisione 7)."
     }
   ],
   "closed_blocks": [
+    {
+      "id": "BLOCK-08",
+      "title": "declared_unresolved senza decisione nel piano (R4.6.3)",
+      "closed_by": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
+      "note": "ContractCrs::DeclaredUnresolved con le dichiarazioni originali (crs_id, definition+format); discovery che preserva declared_unresolved e i conflitti decidibili (crs_id vs srid, crs_id+definition co-presenti) invece di risolvere in silenzio; decisione esplicita nel piano v4 (campo crs_decisions, validata e in plan_hash; su Missing/Resolved errore) che produce ResolvedByDecision — risolto per le op, con sostituzione delle dichiarazioni della sorgente in emissione (strip_decided_crs_declarations); gate geo con messaggio distinto; emissione declared_unresolved + dichiarazioni originali con eccezione R2.6 dichiarata (resolved -> declared_unresolved, una sola direzione); fingerprint a tre stati. ADR-0009 decisione 7 completata. Chiuso il 2026-07-30."
+    },
     {
       "id": "BLOCK-04",
       "title": "Copertura sotto soglia su tre moduli",
@@ -65,12 +66,12 @@
   ],
   "evidence": {
     "test_suite": {
-      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
+      "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "994 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
+      "result": "1011 passed, 0 failed; +382 passed con --features full-backends (plenora-engine); +87 con proj-backend (plenora-cli)"
     },
     "lint_gate": {
-      "revision": "c257958bd0d5cd451ac94f6aebae74694032cfbb",
+      "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
