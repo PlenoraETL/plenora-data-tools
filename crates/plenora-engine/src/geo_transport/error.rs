@@ -169,3 +169,89 @@ impl From<PlenoraError> for ArrowTransportError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::ErrorPhase;
+
+    use super::*;
+
+    #[test]
+    fn le_varianti_di_contratto_diventano_geometry_con_il_payload_esatto() {
+        // InvalidPlan/Unsupported/Schema portano nel payload la stringa
+        // ESATTA dell'errore originale: Geometry la preserva verbatim, senza
+        // il prefisso di Display di PlenoraError.
+        for source in [
+            PlenoraError::InvalidPlan("contratto violato".into()),
+            PlenoraError::Unsupported("operazione assente".into()),
+            PlenoraError::Schema("schema incoerente".into()),
+        ] {
+            let payload = match &source {
+                PlenoraError::InvalidPlan(message)
+                | PlenoraError::Unsupported(message)
+                | PlenoraError::Schema(message) => message.clone(),
+                other => panic!("variante inattesa: {other:?}"),
+            };
+            let converted = ArrowTransportError::from(source);
+            let ArrowTransportError::Geometry(message) = &converted else {
+                panic!("atteso Geometry, ottenuto {converted:?}");
+            };
+            assert_eq!(message, &payload);
+        }
+    }
+
+    #[test]
+    fn io_e_preservato_come_errore_io_tipizzato() {
+        let source = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe chiusa");
+        let converted = ArrowTransportError::from(PlenoraError::Io(source));
+        let ArrowTransportError::Io(error) = &converted else {
+            panic!("atteso Io, ottenuto {converted:?}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn il_wrapper_di_fase_e_attraversato_fino_alla_variante_interna() {
+        // Tagged su una variante di contratto: la conversione vede la
+        // variante interna (Geometry), esattamente come senza tag.
+        let source =
+            PlenoraError::Schema("schema incoerente".into()).with_phase(ErrorPhase::Read);
+        let converted = ArrowTransportError::from(source);
+        let ArrowTransportError::Geometry(message) = &converted else {
+            panic!("atteso Geometry, ottenuto {converted:?}");
+        };
+        assert_eq!(message, "schema incoerente");
+        // Tagged su una variante senza controparte: stessa traversata, Arrow
+        // con il testo Display completo della variante interna.
+        let source =
+            PlenoraError::Crs("crs irrisolvibile".into()).with_phase(ErrorPhase::Validate);
+        let converted = ArrowTransportError::from(source);
+        let ArrowTransportError::Arrow(message) = &converted else {
+            panic!("atteso Arrow, ottenuto {converted:?}");
+        };
+        assert_eq!(message, "CRS error: crs irrisolvibile");
+    }
+
+    #[test]
+    fn le_varianti_senza_controparte_diventano_arrow_con_testo_completo() {
+        // DataMapping/Crs/Execution non si presentano nel flusso del
+        // trasporto: mappate su Arrow mantenendo il testo completo.
+        for source in [
+            PlenoraError::DataMapping("valore fuori dominio".into()),
+            PlenoraError::Crs("crs irrisolvibile".into()),
+            PlenoraError::Execution {
+                node: "n1".into(),
+                operation: "geo.buffer".into(),
+                execution_id: String::new(),
+                reason: "kernel fallito".into(),
+            },
+        ] {
+            let expected = source.to_string();
+            let converted = ArrowTransportError::from(source);
+            let ArrowTransportError::Arrow(message) = &converted else {
+                panic!("atteso Arrow, ottenuto {converted:?}");
+            };
+            assert_eq!(message, &expected);
+        }
+    }
+}

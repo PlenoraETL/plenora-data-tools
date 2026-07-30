@@ -822,3 +822,327 @@ pub struct TransformArrowSummary {
     pub output_rows: u64,
     pub checksum: [u8; 32],
 }
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::catalog::find_operation;
+
+    use super::*;
+
+    /// Schema base valido per `operation`: tutti i parametri opzionali
+    /// assenti; i singoli test attivano solo quelli rilevanti.
+    fn base(operation: ArrowOperation) -> TransformArrowSchema {
+        TransformArrowSchema {
+            schema_version: TransformArrowSchema::VERSION,
+            operation,
+            row_count: 0,
+            crs: None,
+            geometry_column: None,
+            distance: None,
+            cap: None,
+            tolerance: None,
+            simplify_policy: None,
+            target_crs: None,
+            max_output_rows: None,
+            max_points: None,
+            x_column: None,
+            y_column: None,
+            snap_tolerance: None,
+            remove_overlaps: None,
+            fill_gaps: None,
+            coefficients: None,
+            x_offset: None,
+            y_offset: None,
+            x_factor: None,
+            y_factor: None,
+            degrees: None,
+            x_origin: None,
+            y_origin: None,
+            concavity: None,
+            length_threshold: None,
+            max_segment_length: None,
+            grid_size: None,
+            start_ratio: None,
+            end_ratio: None,
+            ratio: None,
+            node_input: None,
+            require_complete: None,
+        }
+    }
+
+    #[test]
+    fn ogni_operazione_ha_un_nome_di_catalogo_risolubile() {
+        // Contratto reale di `catalog_name`: publish.rs lo risolve con
+        // `find_operation` e rifiuta fail-closed se assente. Nessuna
+        // operazione del trasporto puo' restare senza voce di catalogo.
+        for operation in ArrowOperation::ALL {
+            assert!(
+                find_operation(operation.catalog_name()).is_some(),
+                "{}: voce di catalogo {} assente",
+                operation.name(),
+                operation.catalog_name()
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_kernel_solo_per_le_tre_operazioni_del_kernel_dedicato() {
+        assert_eq!(
+            ArrowOperation::Centroid.geometry_kernel(),
+            Some(Operation::Centroid)
+        );
+        assert_eq!(
+            ArrowOperation::ConvexHull.geometry_kernel(),
+            Some(Operation::ConvexHull)
+        );
+        assert_eq!(
+            ArrowOperation::Envelope.geometry_kernel(),
+            Some(Operation::Envelope)
+        );
+        for operation in ArrowOperation::ALL {
+            if matches!(
+                operation,
+                ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope
+            ) {
+                continue;
+            }
+            assert_eq!(operation.geometry_kernel(), None, "{}", operation.name());
+        }
+    }
+
+    #[test]
+    fn reproject_richiede_target_crs() {
+        let schema = base(ArrowOperation::Reproject);
+        let Err(ArrowTransportError::MissingParameter { name, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso MissingParameter per target_crs assente");
+        };
+        assert_eq!(name, "target_crs");
+    }
+
+    #[test]
+    fn reproject_rifiuta_target_crs_vuoto_o_oltre_il_limite() {
+        let schema = TransformArrowSchema {
+            target_crs: Some("   ".into()),
+            ..base(ArrowOperation::Reproject)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per target_crs vuoto");
+        };
+        assert_eq!(name, "target_crs");
+        assert!(reason.contains("vuoto"), "{reason}");
+
+        let schema = TransformArrowSchema {
+            target_crs: Some("x".repeat(MAX_CRS_DEFINITION_BYTES + 1)),
+            ..base(ArrowOperation::Reproject)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per target_crs oltre il limite");
+        };
+        assert_eq!(name, "target_crs");
+        assert!(reason.contains("limite"), "{reason}");
+    }
+
+    #[test]
+    fn i_parametri_non_previsti_sono_rifiutati_prima_dei_dati() {
+        // Ogni parametro estensione presente fuori dalla tabella dell'
+        // operazione e' un UnexpectedParameter che nomina il parametro.
+        for (operation, patch, expected) in [
+            // x_offset non previsto da centroid (tabella vuota).
+            (ArrowOperation::Centroid, "x_offset", "x_offset"),
+            // x_origin/y_origin non previsti da translate.
+            (ArrowOperation::Translate, "x_origin", "x_origin"),
+            (ArrowOperation::Translate, "y_origin", "y_origin"),
+            // concavity non prevista da scale.
+            (ArrowOperation::Scale, "concavity", "concavity"),
+            // length_threshold non prevista da densify.
+            (ArrowOperation::Densify, "length_threshold", "length_threshold"),
+            // node_input/require_complete solo per polygonize.
+            (ArrowOperation::Centroid, "node_input", "node_input"),
+            (ArrowOperation::Centroid, "require_complete", "require_complete"),
+        ] {
+            let mut schema = base(operation);
+            match patch {
+                "x_offset" => schema.x_offset = Some(1.0),
+                "x_origin" => schema.x_origin = Some(0.0),
+                "y_origin" => schema.y_origin = Some(0.0),
+                "concavity" => schema.concavity = Some(2.0),
+                "length_threshold" => schema.length_threshold = Some(1.0),
+                "node_input" => schema.node_input = Some(true),
+                "require_complete" => schema.require_complete = Some(true),
+                other => panic!("patch non gestita: {other}"),
+            }
+            let Err(ArrowTransportError::UnexpectedParameter { name, .. }) =
+                schema.validate_parameters()
+            else {
+                panic!("{}: atteso UnexpectedParameter per {patch}", operation.name());
+            };
+            assert_eq!(name, expected);
+        }
+    }
+
+    #[test]
+    fn i_parametri_f64_non_finiti_sono_rifiutati() {
+        // translate: x_offset NaN / y_offset infinito.
+        let schema = TransformArrowSchema {
+            x_offset: Some(f64::NAN),
+            y_offset: Some(1.0),
+            ..base(ArrowOperation::Translate)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per x_offset NaN");
+        };
+        assert_eq!(name, "x_offset");
+        assert!(reason.contains("finito"), "{reason}");
+        let schema = TransformArrowSchema {
+            x_offset: Some(1.0),
+            y_offset: Some(f64::INFINITY),
+            ..base(ArrowOperation::Translate)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "y_offset", .. })
+        ));
+        // scale: origini opzionali, ma se presenti devono essere finite.
+        let schema = TransformArrowSchema {
+            x_factor: Some(1.0),
+            y_factor: Some(1.0),
+            x_origin: Some(f64::NAN),
+            ..base(ArrowOperation::Scale)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "x_origin", .. })
+        ));
+        let schema = TransformArrowSchema {
+            x_factor: Some(1.0),
+            y_factor: Some(1.0),
+            y_origin: Some(f64::NEG_INFINITY),
+            ..base(ArrowOperation::Scale)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "y_origin", .. })
+        ));
+        // rotate: stesse origini opzionali.
+        let schema = TransformArrowSchema {
+            degrees: Some(90.0),
+            x_origin: Some(f64::NAN),
+            ..base(ArrowOperation::Rotate)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "x_origin", .. })
+        ));
+        let schema = TransformArrowSchema {
+            degrees: Some(90.0),
+            y_origin: Some(f64::INFINITY),
+            ..base(ArrowOperation::Rotate)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "y_origin", .. })
+        ));
+        // densify: max_segment_length non finita.
+        let schema = TransformArrowSchema {
+            max_segment_length: Some(f64::NAN),
+            ..base(ArrowOperation::Densify)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "max_segment_length", .. })
+        ));
+        // line_substring: start_ratio fuori [0, 1].
+        let schema = TransformArrowSchema {
+            start_ratio: Some(1.5),
+            end_ratio: Some(1.0),
+            ..base(ArrowOperation::LineSubstring)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per start_ratio fuori range");
+        };
+        assert_eq!(name, "start_ratio");
+        assert!(reason.contains("zero e uno"), "{reason}");
+    }
+
+    #[test]
+    fn from_coords_rifiuta_nomi_colonna_vuoti() {
+        for (x_column, y_column) in [(Some("  "), None), (None, Some(" "))] {
+            let schema = TransformArrowSchema {
+                x_column: x_column.map(str::to_owned),
+                y_column: y_column.map(str::to_owned),
+                ..base(ArrowOperation::FromCoords)
+            };
+            let Err(ArrowTransportError::InvalidParameter { reason, .. }) =
+                schema.validate_parameters()
+            else {
+                panic!("atteso InvalidParameter per nome colonna vuoto");
+            };
+            assert!(reason.contains("vuoto"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn affine_transform_rifiuta_coefficienti_non_finiti() {
+        let schema = TransformArrowSchema {
+            coefficients: Some(vec![1.0, 0.0, 0.0, 1.0, f64::NAN, 0.0]),
+            ..base(ArrowOperation::AffineTransform)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per coefficienti non finiti");
+        };
+        assert_eq!(name, "coefficients");
+        assert!(reason.contains("finiti"), "{reason}");
+    }
+
+    #[test]
+    fn concave_hull_rifiuta_length_threshold_negativa_o_non_finita() {
+        let schema = TransformArrowSchema {
+            concavity: Some(2.0),
+            length_threshold: Some(-1.0),
+            ..base(ArrowOperation::ConcaveHull)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per length_threshold negativa");
+        };
+        assert_eq!(name, "length_threshold");
+        assert!(reason.contains("non negativa"), "{reason}");
+        let schema = TransformArrowSchema {
+            concavity: Some(2.0),
+            length_threshold: Some(f64::NAN),
+            ..base(ArrowOperation::ConcaveHull)
+        };
+        assert!(matches!(
+            schema.validate_parameters(),
+            Err(ArrowTransportError::InvalidParameter { name: "length_threshold", .. })
+        ));
+    }
+
+    #[test]
+    fn max_output_rows_oltre_il_limite_del_trasporto_e_rifiutato() {
+        let schema = TransformArrowSchema {
+            max_output_rows: Some(MAX_ROWS + 1),
+            ..base(ArrowOperation::Centroid)
+        };
+        let Err(ArrowTransportError::InvalidParameter { name, reason, .. }) =
+            schema.validate_parameters()
+        else {
+            panic!("atteso InvalidParameter per max_output_rows oltre il limite");
+        };
+        assert_eq!(name, "max_output_rows");
+        assert!(reason.contains("limite"), "{reason}");
+    }
+}

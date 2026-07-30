@@ -888,6 +888,139 @@ mod tests {
         aggregate(&batch, &config).expect("bordi 0 e 1 validi");
     }
 
+    #[test]
+    fn quantile_senza_parametro_rifiutato_in_riduzione() {
+        // Il range e' validato a monte solo se il parametro e' presente;
+        // `quantile` assente e' rifiutato fail-closed dalla riduzione.
+        let batch = numeric_batch(&[Some(1.0), Some(2.0), Some(3.0)]);
+        let config = Aggregate {
+            group_by: vec!["id".into()],
+            aggregations: vec![agg("num", AggFunction::Quantile)],
+        };
+        let result = aggregate(&batch, &config);
+        let Err(PlenoraError::InvalidPlan(message)) = &result else {
+            panic!("atteso rifiuto per quantile senza parametro, ottenuto {result:?}");
+        };
+        assert!(
+            message.contains("richiede il parametro quantile"),
+            "messaggio inatteso: {message}"
+        );
+    }
+
+    #[test]
+    fn aggregate_distinct_su_tutte_le_riduzioni_numeriche_materializzate() {
+        // `distinct` (e `quantile`) percorrono la riduzione materializzata:
+        // parita' bit-a-bit con l'oracolo per ogni funzione numerica.
+        let batch = mixed_fixture();
+        let distinct = |function| Aggregation {
+            distinct: true,
+            ..agg("num", function)
+        };
+        let config = Aggregate {
+            group_by: vec!["g".into()],
+            aggregations: vec![
+                Aggregation {
+                    alias: "d_avg".into(),
+                    ..distinct(AggFunction::Avg)
+                },
+                Aggregation {
+                    alias: "d_mean".into(),
+                    ..distinct(AggFunction::Mean)
+                },
+                Aggregation {
+                    alias: "d_min".into(),
+                    ..distinct(AggFunction::Min)
+                },
+                Aggregation {
+                    alias: "d_max".into(),
+                    ..distinct(AggFunction::Max)
+                },
+                Aggregation {
+                    alias: "d_variance".into(),
+                    ..distinct(AggFunction::Variance)
+                },
+                Aggregation {
+                    alias: "d_stddev".into(),
+                    ..distinct(AggFunction::Stddev)
+                },
+            ],
+        };
+        assert_aggregate_parity(&batch, &config);
+        // Gruppo con un solo valore distinto: len <= ddof -> null
+        // (varianza campionaria non definita), come l'oracolo.
+        let batch = numeric_batch(&[Some(7.0), Some(7.0), Some(7.0)]);
+        let single = Aggregate {
+            group_by: vec!["id".into()],
+            aggregations: vec![
+                Aggregation {
+                    distinct: true,
+                    alias: "dv".into(),
+                    ..agg("num", AggFunction::Variance)
+                },
+                Aggregation {
+                    distinct: true,
+                    alias: "ds".into(),
+                    ..agg("num", AggFunction::Stddev)
+                },
+                Aggregation {
+                    alias: "v".into(),
+                    ..agg("num", AggFunction::Variance)
+                },
+                Aggregation {
+                    alias: "s".into(),
+                    ..agg("num", AggFunction::Stddev)
+                },
+            ],
+        };
+        assert_aggregate_parity(&batch, &single);
+    }
+
+    #[test]
+    fn aggregate_chiave_uint64_singola_usa_il_fast_path_nativo() {
+        // Chiave di gruppo UInt64 (valori oltre i64::MAX e null): fast path
+        // nativo con ordine u64, parita' con l'oracolo testuale.
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("u", DataType::UInt64, true),
+                Field::new("num", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(UInt64Array::from(vec![
+                    Some(u64::MAX),
+                    Some(10),
+                    None,
+                    Some(9),
+                    Some(u64::MAX),
+                    None,
+                    Some(10),
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(1.5),
+                    Some(2.0),
+                    Some(3.0),
+                    Some(4.0),
+                    None,
+                    Some(5.0),
+                    Some(6.0),
+                ])),
+            ],
+        )
+        .expect("fixture uint64");
+        let config = Aggregate {
+            group_by: vec!["u".into()],
+            aggregations: vec![
+                agg("num", AggFunction::Sum),
+                agg("num", AggFunction::Count),
+                agg("num", AggFunction::Nunique),
+                Aggregation {
+                    quantile: Some(0.5),
+                    ..agg("num", AggFunction::Quantile)
+                },
+            ],
+        };
+        assert_aggregate_parity(&batch, &config);
+    }
+
     /// Batteria completa di aggregazioni su `num`/`val`/`txt`, con duplicati
     /// di colonna (nomi `{colonna}_{funzione}`) e varianti `skip_null`/`distinct`.
     fn full_aggregations() -> Vec<Aggregation> {

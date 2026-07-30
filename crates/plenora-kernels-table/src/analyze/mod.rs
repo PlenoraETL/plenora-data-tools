@@ -1611,6 +1611,272 @@ mod tests {
             .to_string()
             .contains("timezone-aware")
         );
+        // Valore letterale null: tipo Any -> Utf8 in auto, come il kernel.
+        let null_source = ok(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {
+                    "kind": "function",
+                    "name": "date_trunc",
+                    "args": [{"kind": "literal", "value": "day"}, {"kind": "literal", "value": Value::Null}]
+                }
+            }),
+        );
+        assert_field(&null_source, "e", &DataType::Utf8, true);
+        // Valore non temporale (letterale numerico): rifiutato a secco.
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({
+                    "output_column": "e",
+                    "expression": {
+                        "kind": "function",
+                        "name": "date_trunc",
+                        "args": [{"kind": "literal", "value": "day"}, {"kind": "literal", "value": 5}]
+                    }
+                })
+            )
+            .to_string()
+            .contains("colonna temporale")
+        );
+        // Annidamento: sub-day su un date_trunc che produce Date32.
+        assert!(
+            err(
+                "table.expression",
+                &[temporal_contract()],
+                json!({
+                    "output_column": "e",
+                    "expression": {
+                        "kind": "function",
+                        "name": "date_trunc",
+                        "args": [{"kind": "literal", "value": "hour"}, date_trunc("month", "d")]
+                    }
+                })
+            )
+            .to_string()
+            .contains("sub-day")
+        );
+    }
+
+    #[test]
+    fn formula_rifiuta_colonne_con_tipo_non_valutabile() {
+        // Il lookup di tipo dell'analisi rifiuta le colonne fuori dal
+        // profilo scalare (qui List), prima di qualunque dato.
+        let error = err(
+            "table.formula",
+            &[tabular_contract()],
+            json!({"new_column": "f", "formula": "lst + 1"}),
+        );
+        assert!(error.to_string().contains("non valutabile"), "{error}");
+    }
+
+    // Batteria lineare: un caso per ramo dell'inferenza statica dell'AST.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn expression_inferenza_statica_per_tutti_i_rami_dell_ast() {
+        let infer = |expression: Value| {
+            ok(
+                "table.expression",
+                &[tabular_contract()],
+                json!({"output_column": "e", "expression": expression}),
+            )
+        };
+        let infer_err = |expression: Value| {
+            err(
+                "table.expression",
+                &[tabular_contract()],
+                json!({"output_column": "e", "expression": expression}),
+            )
+        };
+        let col = |name: &str| json!({"kind": "column", "name": name});
+        let lit = |value: Value| json!({"kind": "literal", "value": value});
+        let func = |name: &str, args: Vec<Value>| {
+            json!({"kind": "function", "name": name, "args": args})
+        };
+
+        // Colonne: Boolean resta Boolean; i tipi fuori profilo sono errori.
+        assert_field(&infer(col("flag")), "e", &DataType::Boolean, true);
+        assert!(infer_err(col("lst")).to_string().contains("non valutabile"));
+        assert!(infer_err(col("st")).to_string().contains("non valutabile"));
+
+        // Letterali scalari: null -> Any (Utf8 in auto), bool, numero, testo.
+        assert_field(&infer(lit(Value::Null)), "e", &DataType::Utf8, true);
+        assert_field(&infer(lit(json!(true))), "e", &DataType::Boolean, true);
+        assert_field(&infer(lit(json!(42))), "e", &DataType::Float64, true);
+        assert_field(&infer(lit(json!("x"))), "e", &DataType::Utf8, true);
+
+        // Unari: not/negate richiedono Boolean/Number; is_null e' Boolean.
+        let unary = |op: &str, value: Value| json!({"kind": "unary", "op": op, "value": value});
+        assert_field(&infer(unary("not", col("flag"))), "e", &DataType::Boolean, true);
+        assert_field(&infer(unary("negate", col("value"))), "e", &DataType::Float64, true);
+        assert_field(&infer(unary("is_null", col("name"))), "e", &DataType::Boolean, true);
+        assert_field(&infer(unary("is_not_null", col("value"))), "e", &DataType::Boolean, true);
+        assert!(infer_err(unary("not", col("value"))).to_string().contains("operando Boolean"));
+        assert!(infer_err(unary("negate", col("name"))).to_string().contains("operando Number"));
+
+        // Binari: logici su Boolean, confronti su tipi omogenei -> Boolean.
+        let binary = |op: &str, left: Value, right: Value| {
+            json!({"kind": "binary", "op": op, "left": left, "right": right})
+        };
+        assert_field(
+            &infer(binary("and", col("flag"), lit(json!(true)))),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert_field(
+            &infer(binary("or", col("flag"), unary("not", col("flag")))),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert!(infer_err(binary("and", col("value"), lit(json!(1)))).to_string().contains("operando Boolean"));
+        assert!(infer_err(binary("or", col("flag"), col("name"))).to_string().contains("operando Boolean"));
+        for op in ["equal", "not_equal", "greater", "greater_equal", "less", "less_equal"] {
+            assert_field(
+                &infer(binary(op, col("value"), lit(json!(1)))),
+                "e",
+                &DataType::Boolean,
+                true,
+            );
+        }
+
+        // `in`: membership su lista di letterali -> Boolean.
+        assert_field(
+            &infer(func("in", vec![col("value"), lit(json!([1, 2, 3]))])),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+
+        // Funzioni testuali: argomenti Text obbligatori.
+        assert_field(&infer(func("lower", vec![col("name")])), "e", &DataType::Utf8, true);
+        assert_field(&infer(func("upper", vec![col("name")])), "e", &DataType::Utf8, true);
+        assert_field(&infer(func("trim", vec![col("name")])), "e", &DataType::Utf8, true);
+        assert!(infer_err(func("lower", vec![col("value")])).to_string().contains("operando Text"));
+        assert_field(
+            &infer(func("concat", vec![col("name"), lit(json!("-")), col("name")])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert_field(&infer(func("length", vec![col("name")])), "e", &DataType::Float64, true);
+        assert!(infer_err(func("length", vec![col("value")])).to_string().contains("operando Text"));
+        for name in ["contains", "starts_with", "ends_with"] {
+            assert_field(
+                &infer(func(name, vec![col("name"), lit(json!("a"))])),
+                "e",
+                &DataType::Boolean,
+                true,
+            );
+        }
+        assert!(infer_err(func("contains", vec![col("name"), lit(json!(1))])).to_string().contains("operando Text"));
+
+        // Funzioni numeriche: argomenti Number obbligatori.
+        for name in ["abs", "round", "floor", "ceil"] {
+            assert_field(
+                &infer(func(name, vec![col("value")])),
+                "e",
+                &DataType::Float64,
+                true,
+            );
+        }
+        // `year` legge le colonne temporali come Number (come il kernel).
+        assert_field(&infer(func("year", vec![col("d")])), "e", &DataType::Float64, true);
+        assert_field(
+            &infer(func("power", vec![col("value"), lit(json!(2))])),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+        assert!(infer_err(func("abs", vec![col("name")])).to_string().contains("operando Number"));
+
+        // substring: (testo, numero, numero?) -> testo.
+        assert_field(
+            &infer(func("substring", vec![col("name"), lit(json!(0)), lit(json!(2))])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert_field(
+            &infer(func("substring", vec![col("name"), lit(json!(1))])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        // Senza argomenti non c'e' nulla da controllare: il tipo resta Text.
+        assert_field(&infer(func("substring", vec![])), "e", &DataType::Utf8, true);
+        assert!(infer_err(func("substring", vec![col("value"), lit(json!(0))])).to_string().contains("operando Text"));
+        assert!(infer_err(func("substring", vec![col("name"), col("name")])).to_string().contains("operando Number"));
+
+        // regex_replace: tutti gli argomenti testuali -> testo.
+        assert_field(
+            &infer(func("regex_replace", vec![col("name"), lit(json!("a")), lit(json!("b"))])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert!(infer_err(func("regex_replace", vec![col("name"), lit(json!(1)), lit(json!("b"))])).to_string().contains("operando Text"));
+
+        // between: omogeneita' come i confronti -> Boolean.
+        assert_field(
+            &infer(func("between", vec![col("value"), lit(json!(0)), lit(json!(1))])),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert!(infer_err(func("between", vec![col("value"), lit(json!(0)), col("name")])).to_string().contains("eterogenei"));
+
+        // greatest/least: tipo comune degli argomenti.
+        assert_field(
+            &infer(func("greatest", vec![col("value"), col("id")])),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+        assert_field(
+            &infer(func("least", vec![col("value"), lit(json!(1))])),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+
+        // case: tipo comune dei rami e dell'else; eterogeneo -> errore.
+        let case = |branches: Vec<Value>, else_value: Value| {
+            json!({"kind": "case", "branches": branches, "else_value": else_value})
+        };
+        assert_field(
+            &infer(case(
+                vec![json!({"when": col("flag"), "then": lit(json!(1))})],
+                lit(json!(2)),
+            )),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+        assert!(infer_err(case(
+            vec![json!({"when": col("flag"), "then": lit(json!(1))})],
+            col("name"),
+        ))
+        .to_string()
+        .contains("eterogenei"));
+
+        // output_type dichiarato: nessuna inferenza, tipo rispettato.
+        let declared_number = ok(
+            "table.expression",
+            &[tabular_contract()],
+            json!({"output_column": "e", "expression": col("flag"), "output_type": "number"}),
+        );
+        assert_field(&declared_number, "e", &DataType::Float64, true);
+        let declared_date = ok(
+            "table.expression",
+            &[tabular_contract()],
+            json!({"output_column": "e", "expression": col("d"), "output_type": "date32"}),
+        );
+        assert_field(&declared_date, "e", &DataType::Date32, true);
     }
 
     // -- quality / governance ----------------------------------------------------
@@ -1678,6 +1944,146 @@ mod tests {
     }
 
     #[test]
+    fn assert_schema_verifica_conteggio_posizione_nome_e_nullability() {
+        // Le 11 colonne della fixture, in ordine: pass-through completo
+        // (copre anche le famiglie list/struct/timestamp/decimal128).
+        let expectations: Vec<Value> = [
+            ("id", "int64"),
+            ("name", "utf8"),
+            ("value", "float64"),
+            ("flag", "boolean"),
+            ("d", "date32"),
+            ("ts", "timestamp_millis"),
+            ("dc", "decimal128"),
+            ("u", "uint64"),
+            ("lst", "list"),
+            ("st", "struct"),
+            ("geom", "binary"),
+        ]
+        .iter()
+        .map(|(name, data_type)| json!({"name": name, "data_type": data_type}))
+        .collect();
+        let passed = ok(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": expectations, "allow_extra": false}),
+        );
+        assert_eq!(passed.schema.fields().len(), base_fields().len());
+
+        // Conteggio diverso senza allow_extra.
+        let error = err(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": [{"name": "id", "data_type": "int64"}]}),
+        );
+        assert!(error.to_string().contains("attese 1 colonne"), "{error}");
+
+        // Ordered + allow_extra: la posizione oltre lo schema e' un errore.
+        let mut beyond = expectations.clone();
+        beyond.push(json!({"name": "extra", "data_type": "utf8"}));
+        let error = err(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": beyond, "allow_extra": true}),
+        );
+        assert!(
+            error.to_string().contains("colonna mancante in posizione 11"),
+            "{error}"
+        );
+
+        // Nome diverso in posizione: la colonna attesa non coincide.
+        let mut renamed = expectations;
+        renamed[0] = json!({"name": "wrong", "data_type": "int64"});
+        let error = err(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": renamed, "allow_extra": true}),
+        );
+        assert!(
+            error.to_string().contains("attesa wrong in posizione 0"),
+            "{error}"
+        );
+
+        // Unordered: colonna assente per nome.
+        let error = err(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": [{"name": "missing", "data_type": "utf8"}], "ordered": false, "allow_extra": true}),
+        );
+        assert!(error.to_string().contains("colonna mancante"), "{error}");
+
+        // Nullability dichiarata diversa dalla colonna (unordered: il
+        // confronto per posizione sarebbe respinto prima del nome).
+        let error = err(
+            "table.assert_schema",
+            &[tabular_contract()],
+            json!({"fields": [{"name": "name", "data_type": "utf8", "nullable": false}], "ordered": false, "allow_extra": true}),
+        );
+        assert!(error.to_string().contains("nullability errata"), "{error}");
+
+        // dictionary_utf8: tipo parametrico con confronto esatto.
+        let dict_contract = DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )])));
+        let passed = ok(
+            "table.assert_schema",
+            &[dict_contract],
+            json!({"fields": [{"name": "dict", "data_type": "dictionary_utf8"}]}),
+        );
+        assert_eq!(passed.schema.fields().len(), 1);
+    }
+
+    #[test]
+    fn validate_rules_rifiuta_regole_malformate_prima_dei_dati() {
+        let rule_err = |rule: Value| {
+            err(
+                "table.validate_rules",
+                &[tabular_contract()],
+                json!({"rules": [rule]}),
+            )
+        };
+        // Nome vuoto (solo spazi).
+        assert!(rule_err(json!({"name": "  ", "operator": "isnull", "column": "id"}))
+            .to_string()
+            .contains("nome regola vuoto"));
+        // Regola senza column.
+        assert!(rule_err(json!({"name": "r", "operator": "isnull"}))
+            .to_string()
+            .contains("senza column"));
+        // eq/ne su tipo non confrontabile (List).
+        assert!(rule_err(json!({"name": "r", "operator": "eq", "column": "lst", "value": 1}))
+            .to_string()
+            .contains("non confrontabile"));
+        // eq numerico con valore non parsabile.
+        assert!(rule_err(json!({"name": "r", "operator": "eq", "column": "id", "value": "abc"}))
+            .to_string()
+            .contains("non numerico"));
+        // Confronto ordinato con valore non numerico.
+        assert!(rule_err(json!({"name": "r", "operator": "ge", "column": "value", "value": "abc"}))
+            .to_string()
+            .contains("valore numerico"));
+        // range su colonna non numerica.
+        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "name", "value": "1,2"}))
+            .to_string()
+            .contains("range richiede colonna numerica"));
+        // range senza la coppia min,max.
+        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "id", "value": "1"}))
+            .to_string()
+            .contains("min,max"));
+        // range con estremi non numerici.
+        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "id", "value": "a,b"}))
+            .to_string()
+            .contains("estremi range non numerici"));
+        // regex oltre il limite di byte.
+        let long_pattern = "a".repeat(Limits::default().max_regex_bytes + 1);
+        assert!(rule_err(json!({"name": "r", "operator": "regex", "column": "name", "value": long_pattern}))
+            .to_string()
+            .contains("max_regex_bytes"));
+    }
+
+    #[test]
     fn assert_cardinality_uses_proven_row_count() {
         assert!(ok(
             "table.assert_cardinality",
@@ -1716,6 +2122,19 @@ mod tests {
         )
         .to_string()
         .contains("metadata"));
+        // Senza allow_extra i metadata oltre `expected` sono rifiutati.
+        let mut input = tabular_contract();
+        input.schema = Arc::new(Schema::new_with_metadata(
+            base_fields(),
+            std::collections::HashMap::from([("source".to_owned(), "test".to_owned())]),
+        ));
+        assert!(err(
+            "table.assert_metadata",
+            &[input],
+            json!({"expected": {}, "allow_extra": false})
+        )
+        .to_string()
+        .contains("metadata extra"));
     }
 
     #[test]

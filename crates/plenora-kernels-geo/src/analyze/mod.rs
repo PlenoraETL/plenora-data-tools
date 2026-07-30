@@ -1646,6 +1646,36 @@ mod tests {
     }
 
     #[test]
+    fn geometry_accessors_tutti_i_campi_seguono_l_ordine_canonico() {
+        // Ogni campo di `AccessorFieldParam` e' selezionato in ordine sparso:
+        // l'indice di `column_index` deve allinearsi ad ACCESSOR_COLUMNS
+        // (nome E tipo), qualunque sia l'ordine della richiesta.
+        let inputs = [geo_contract(projected_crs())];
+        let output = analyze_one(
+            "geo.geometry_accessors",
+            &inputs,
+            &json!({"fields": [
+                "end_point", "num_interior_rings", "is_closed",
+                "start_point", "num_geometries", "geometry_type"
+            ]}),
+            None,
+        )
+        .expect("tutti i campi accessor");
+        let selected: Vec<(&str, &DataType)> = output
+            .schema
+            .fields()
+            .iter()
+            .skip(3)
+            .map(|field| (field.name().as_str(), field.data_type()))
+            .collect();
+        let expected: Vec<(&str, &DataType)> = ACCESSOR_COLUMNS
+            .iter()
+            .map(|(name, data_type)| (*name, data_type))
+            .collect();
+        assert_eq!(selected, expected);
+    }
+
+    #[test]
     fn collect_outputs_group_keys_and_drops_properties() {
         let inputs = [contract_with_properties()];
         let output = analyze_one(

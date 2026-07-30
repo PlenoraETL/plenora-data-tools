@@ -335,7 +335,10 @@ pub fn geo_equals_with_tolerance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, MultiPoint, Point};
+    use geo::{
+        line_string, polygon, GeometryCollection, Line, MultiLineString, MultiPoint, MultiPolygon,
+        Point, Rect, Triangle,
+    };
 
     const EXACT: GeometryComparison = GeometryComparison {
         tolerance: 0.0,
@@ -491,5 +494,196 @@ mod tests {
         let twice = normalize_geometry(&once);
         assert!(geo_equals_with_tolerance(&once, &twice, EXACT));
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn il_builder_dichiara_tolleranza_e_normalizzazione() {
+        let comparison = GeometryComparison::new(0.5).with_normalization(true);
+        assert_eq!(
+            comparison,
+            GeometryComparison {
+                tolerance: 0.5,
+                normalize: true,
+            }
+        );
+        assert_eq!(
+            GeometryComparison::default(),
+            GeometryComparison::new(0.0)
+        );
+    }
+
+    #[test]
+    fn segmenti_rettangoli_e_triangoli_si_confrontano_per_coordinate() {
+        let line_a = Geometry::Line(Line::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }));
+        let line_b = Geometry::Line(Line::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }));
+        let line_far = Geometry::Line(Line::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 9.0, y: 9.0 }));
+        assert!(geo_equals_with_tolerance(&line_a, &line_b, EXACT));
+        assert!(!geo_equals_with_tolerance(&line_a, &line_far, EXACT));
+
+        let rect_a = Geometry::Rect(Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 2.0 }));
+        let rect_b = Geometry::Rect(Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 2.0 }));
+        let rect_far = Geometry::Rect(Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 3.0, y: 3.0 }));
+        assert!(geo_equals_with_tolerance(&rect_a, &rect_b, EXACT));
+        assert!(!geo_equals_with_tolerance(&rect_a, &rect_far, EXACT));
+
+        let triangle_a = Geometry::Triangle(Triangle(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.0, y: 0.0 },
+            Coord { x: 0.0, y: 1.0 },
+        ));
+        let triangle_b = Geometry::Triangle(Triangle(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.0, y: 0.0 },
+            Coord { x: 0.0, y: 1.0 },
+        ));
+        let triangle_far = Geometry::Triangle(Triangle(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.0, y: 0.0 },
+            Coord { x: 5.0, y: 5.0 },
+        ));
+        assert!(geo_equals_with_tolerance(&triangle_a, &triangle_b, EXACT));
+        assert!(!geo_equals_with_tolerance(&triangle_a, &triangle_far, EXACT));
+        // La normalizzazione non riordina Rect/Triangle: vertici permutati
+        // restano diversi.
+        let triangle_permuted = Geometry::Triangle(Triangle(
+            Coord { x: 1.0, y: 0.0 },
+            Coord { x: 0.0, y: 1.0 },
+            Coord { x: 0.0, y: 0.0 },
+        ));
+        assert!(!geo_equals_with_tolerance(
+            &triangle_a,
+            &triangle_permuted,
+            NORMALIZED
+        ));
+    }
+
+    #[test]
+    fn la_direzione_di_linee_e_linestring_e_canonizzata() {
+        // Line: end < start -> ribaltata dalla normalizzazione.
+        let flipped = Geometry::Line(Line::new(Coord { x: 1.0, y: 1.0 }, Coord { x: 0.0, y: 0.0 }));
+        let canonical = Geometry::Line(Line::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }));
+        assert!(!geo_equals_with_tolerance(&flipped, &canonical, EXACT));
+        assert!(geo_equals_with_tolerance(&flipped, &canonical, NORMALIZED));
+        let normalized = normalize_geometry(&flipped);
+        assert_eq!(normalized, canonical);
+
+        // LineString: direzione lessicograficamente minima.
+        let forward = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)]);
+        let backward = Geometry::LineString(line_string![(x: 1.0, y: 1.0), (x: 0.0, y: 0.0)]);
+        assert!(!geo_equals_with_tolerance(&forward, &backward, EXACT));
+        assert!(geo_equals_with_tolerance(&forward, &backward, NORMALIZED));
+    }
+
+    #[test]
+    fn multilinestring_e_multipolygon_sono_ordinati_nella_normalizzazione() {
+        let short = line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)];
+        // Prefisso di `long`: l'ordinamento lessicografico decide sulla
+        // lunghezza solo dopo il prefisso comune.
+        let long = line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0), (x: 2.0, y: 2.0)];
+        let forward = Geometry::MultiLineString(MultiLineString::new(vec![long.clone(), short.clone()]));
+        let backward = Geometry::MultiLineString(MultiLineString::new(vec![short, long]));
+        assert!(!geo_equals_with_tolerance(&forward, &backward, EXACT));
+        assert!(geo_equals_with_tolerance(&forward, &backward, NORMALIZED));
+
+        // MultiPolygon: stessa shell, buchi diversi -> l'ordine canonico
+        // dei poligoni si decide sugli interni (cmp_polygon oltre l'esterno).
+        let shell = || {
+            LineString(vec![
+                Coord { x: 0.0, y: 0.0 },
+                Coord { x: 10.0, y: 0.0 },
+                Coord { x: 10.0, y: 10.0 },
+                Coord { x: 0.0, y: 10.0 },
+                Coord { x: 0.0, y: 0.0 },
+            ])
+        };
+        let hole = |offset: f64| {
+            LineString(vec![
+                Coord { x: offset, y: offset },
+                Coord { x: offset + 1.0, y: offset },
+                Coord { x: offset + 1.0, y: offset + 1.0 },
+                Coord { x: offset, y: offset },
+            ])
+        };
+        let poly_low = Polygon::new(shell(), vec![hole(1.0)]);
+        let poly_high = Polygon::new(shell(), vec![hole(5.0)]);
+        let forward = Geometry::MultiPolygon(MultiPolygon::new(vec![poly_high.clone(), poly_low.clone()]));
+        let backward = Geometry::MultiPolygon(MultiPolygon::new(vec![poly_low, poly_high]));
+        assert!(!geo_equals_with_tolerance(&forward, &backward, EXACT));
+        assert!(geo_equals_with_tolerance(&forward, &backward, NORMALIZED));
+
+        // Buchi in prefisso comune: l'ordine si decide sul numero di buchi
+        // (i primi confrontati risultano uguali, poi vince il piu' corto).
+        let one_hole = Polygon::new(shell(), vec![hole(1.0)]);
+        let two_holes = Polygon::new(shell(), vec![hole(1.0), hole(5.0)]);
+        let unsorted = Geometry::MultiPolygon(MultiPolygon::new(vec![two_holes, one_hole]));
+        let normalized = normalize_geometry(&unsorted);
+        let Geometry::MultiPolygon(polygons) = &normalized else {
+            panic!("atteso MultiPolygon, ottenuto {normalized:?}");
+        };
+        assert_eq!(polygons.0[0].interiors().len(), 1);
+        assert_eq!(polygons.0[1].interiors().len(), 2);
+    }
+
+    #[test]
+    fn l_ordine_dei_figli_della_collection_e_preservato() {
+        let point = Geometry::Point(Point::new(1.0, 1.0));
+        let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 2.0, y: 2.0)]);
+        let forward = Geometry::GeometryCollection(GeometryCollection::from(vec![
+            point.clone(),
+            line.clone(),
+        ]));
+        let backward =
+            Geometry::GeometryCollection(GeometryCollection::from(vec![line, point]));
+        // Eterogenea: i figli NON sono riordinati, la collezione resta diversa.
+        assert!(!geo_equals_with_tolerance(&forward, &backward, NORMALIZED));
+
+        // Ma la normalizzazione scende ricorsivamente nei figli.
+        let rotated_child = Geometry::Polygon(polygon![
+            (x: 2.0, y: 2.0),
+            (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+            (x: 0.0, y: 2.0),
+            (x: 2.0, y: 2.0),
+        ]);
+        let with_rotated =
+            Geometry::GeometryCollection(GeometryCollection::from(vec![rotated_child]));
+        let with_canonical =
+            Geometry::GeometryCollection(GeometryCollection::from(vec![square_cw()]));
+        assert!(!geo_equals_with_tolerance(&with_rotated, &with_canonical, EXACT));
+        assert!(geo_equals_with_tolerance(
+            &with_rotated,
+            &with_canonical,
+            NORMALIZED
+        ));
+    }
+
+    #[test]
+    fn anelli_aperti_e_vuoti_sono_canonizzati_senza_chiusura() {
+        // Anello aperto: la canonizzazione non chiude, ruota e orienta.
+        let open_a = Polygon::new(
+            LineString(vec![
+                Coord { x: 1.0, y: 1.0 },
+                Coord { x: 0.0, y: 0.0 },
+                Coord { x: 2.0, y: 0.0 },
+            ]),
+            Vec::new(),
+        );
+        let open_b = Polygon::new(
+            LineString(vec![
+                Coord { x: 0.0, y: 0.0 },
+                Coord { x: 2.0, y: 0.0 },
+                Coord { x: 1.0, y: 1.0 },
+            ]),
+            Vec::new(),
+        );
+        let a = Geometry::Polygon(open_a);
+        let b = Geometry::Polygon(open_b);
+        assert!(!geo_equals_with_tolerance(&a, &b, EXACT));
+        assert!(geo_equals_with_tolerance(&a, &b, NORMALIZED));
+
+        // Anello vuoto: restato invariato, nessuna rotazione possibile.
+        let empty = Geometry::Polygon(Polygon::new(LineString(Vec::new()), Vec::new()));
+        let normalized = normalize_geometry(&empty);
+        assert_eq!(normalized, empty);
     }
 }
