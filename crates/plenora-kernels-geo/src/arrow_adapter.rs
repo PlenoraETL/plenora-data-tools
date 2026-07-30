@@ -522,30 +522,7 @@ pub fn canonical_geometry_metadata(
         // sorgente avviene a monte, nella fusione dello schema di output
         // ([`strip_decided_crs_declarations`]).
         ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
-            let definition = crs.definition();
-            if matches!(
-                serde_json::from_str::<serde_json::Value>(definition),
-                Ok(serde_json::Value::Object(_))
-            ) {
-                metadata.insert(
-                    PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
-                    definition.to_owned(),
-                );
-                metadata.insert(
-                    PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
-                    CrsDefinitionFormat::Projjson.as_str().to_owned(),
-                );
-            } else {
-                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
-            }
-            let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
-            metadata.insert(
-                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                axis_order.as_str().to_owned(),
-            );
-            if let Some(srid) = details.srid {
-                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
-            }
+            insert_resolved_crs_keys(&mut metadata, crs.definition(), details);
         }
         ContractCrs::DeclaredUnresolved {
             crs_id,
@@ -601,6 +578,103 @@ pub fn canonical_geometry_metadata(
     // significato fuori dal processo. Una chiave `plenora.field_id`
     // RICEVUTA resta propagata invariata dalla lineage (R2.4), mai
     // sovrascritta dal valore di grafo.
+    metadata
+}
+
+/// Chiavi CRS di uno stato `resolved` (R2.2): corpo condiviso fra
+/// [`canonical_geometry_metadata`] (braccio `Resolved`/`ResolvedByDecision`)
+/// e [`canonical_geometry_metadata_for_resolved_definition`] — stessa forma
+/// e stessi byte a parita' di definizione e dettagli.
+///
+/// Una definizione che e' un oggetto JSON (PROJJSON) e' emessa come
+/// `crs_definition` + `crs_definition_format = projjson`; ogni altra come
+/// `crs_id` — la stessa distinzione che [`geo_metadata_json`] applica al
+/// metadato legacy `geo.crs`, cosi' le due rappresentazioni restano coerenti
+/// per costruzione (R2.6). `axis_order` e' sempre emesso (obbligatorio
+/// quando un CRS e' presente): senza dettaglio esplicito vale `unknown`,
+/// valore canonico della tabella §2, non un default al posto dell'assente.
+fn insert_resolved_crs_keys(
+    metadata: &mut HashMap<String, String>,
+    definition: &str,
+    details: &GeometryMetadataDetails,
+) {
+    if matches!(
+        serde_json::from_str::<serde_json::Value>(definition),
+        Ok(serde_json::Value::Object(_))
+    ) {
+        metadata.insert(
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+            definition.to_owned(),
+        );
+        metadata.insert(
+            PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+            CrsDefinitionFormat::Projjson.as_str().to_owned(),
+        );
+    } else {
+        metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
+    }
+    let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
+    metadata.insert(
+        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+        axis_order.as_str().to_owned(),
+    );
+    if let Some(srid) = details.srid {
+        metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
+    }
+}
+
+/// Blocco canonico R2.2 da una definizione CRS gia' risolta al bordo del
+/// produttore, senza un [`ResolvedCrs`].
+///
+/// BLOCK-06 (decisione owner 2026-07-30 — parita' del percorso legacy col
+/// v4, DER-002 estesa): il trasporto legacy `geo_transport` valida il CRS
+/// al livello comandi (risoluzione PROJ obbligatoria in `publish.rs`) e
+/// trasporta la sola definizione; un `ResolvedCrs` richiederebbe una
+/// risoluzione che il trasporto non esegue.
+///
+/// Lo stato emesso e' `resolved` — il CRS dichiarato nell'operazione e'
+/// stato risolto al bordo comandi, ed e' lo stesso che il metadato legacy
+/// `geo.crs` dichiara (coerenza R2.6 per costruzione). La forma e' quella
+/// del braccio `Resolved` di [`canonical_geometry_metadata`] (corpo
+/// condiviso [`insert_resolved_crs_keys`]: byte identici a parita' di
+/// definizione e dettagli). `types`/`types_declaration` NON sono emesse: il
+/// trasporto legacy non dichiara i tipi e inventarli e' vietato (R3.4.1);
+/// `encoding` e' emessa solo se il chiamante la dichiara (R5.2).
+#[must_use]
+pub fn canonical_geometry_metadata_for_resolved_definition(
+    definition: &str,
+    dimensions: GeometryDimensions,
+    encoding: Option<GeometryEncoding>,
+    details: &GeometryMetadataDetails,
+) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    if let Some(encoding) = encoding {
+        metadata.insert(
+            PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+            encoding.as_str().to_owned(),
+        );
+    }
+    metadata.insert(
+        PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+        dimensions.as_str().to_owned(),
+    );
+    metadata.insert(
+        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+        CrsResolution::Resolved.as_str().to_owned(),
+    );
+    insert_resolved_crs_keys(&mut metadata, definition, details);
+    if let Some(semantics) = details.spatial_semantics {
+        metadata.insert(
+            PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY.to_owned(),
+            semantics.as_str().to_owned(),
+        );
+    }
+    if let Some(precision) = details.precision {
+        metadata.insert(
+            PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
+            precision.as_str().to_owned(),
+        );
+    }
     metadata
 }
 

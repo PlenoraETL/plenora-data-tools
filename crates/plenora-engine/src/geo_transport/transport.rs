@@ -324,6 +324,323 @@ mod tests {
         assert_eq!(weights.value(1), 0.5);
     }
 
+    // --- BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' v4) --
+
+    /// Metadati canonici (`plenora.*`) di un campo, come mappa a se' stante.
+    fn canonical_block(field: &Field) -> HashMap<String, String> {
+        field
+            .metadata()
+            .iter()
+            .filter(|(key, _)| key.starts_with("plenora."))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    /// Envelope di un lato pair con metadati di campo e di schema su misura.
+    fn side_envelope_with_metadata(
+        field_metadata: HashMap<String, String>,
+        schema_metadata: HashMap<String, String>,
+        geometries: &[Option<&[u8]>],
+    ) -> Vec<u8> {
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true)
+                .with_metadata(field_metadata)],
+            schema_metadata,
+        ));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(
+                geometries.iter().copied().collect::<BinaryArray>(),
+            )],
+        )
+        .expect("batch");
+        envelope_bytes(&schema, &[batch])
+    }
+
+    fn geoarrow_field_metadata() -> HashMap<String, String> {
+        HashMap::from([(
+            GEOARROW_EXTENSION_KEY.to_owned(),
+            GEOARROW_WKB_EXTENSION.to_owned(),
+        )])
+    }
+
+    #[test]
+    fn transform_arrow_emits_canonical_keys_in_dual_emission() {
+        let square = square_wkb(4.0);
+        let (schema, batch) = fixture_batch(&[Some(&square)]);
+        let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
+        let output = run(&arrow_schema(1, ArrowOperation::Centroid), &input).expect("transform");
+
+        let (out_schema, out_batches) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+        let canonical = canonical_block(field);
+        assert_eq!(
+            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            Some("xy")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            Some("resolved")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.crs_id").map(String::as_str),
+            Some(CRS)
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.axis_order").map(String::as_str),
+            Some("unknown")
+        );
+        // encoding non dichiarato dal trasporto (B1.4) e tipi mai inventati
+        // (R3.4.1): le chiavi restano assenti.
+        assert!(!canonical.contains_key("plenora.geometry.encoding"));
+        assert!(!canonical.contains_key("plenora.geometry.types"));
+        assert!(!canonical.contains_key("plenora.geometry.types_declaration"));
+        // Doppia emissione: le chiavi GeoArrow standard restano invariate.
+        assert_eq!(
+            field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+            Some(GEOARROW_WKB_EXTENSION)
+        );
+        assert!(field.metadata().contains_key(GEO_METADATA_KEY));
+        // Versione di protocollo sullo schema (R2.5) e batch rivestiti.
+        assert_eq!(
+            out_schema
+                .metadata()
+                .get("plenora.contract.version")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(out_batches[0].schema().metadata(), out_schema.metadata());
+    }
+
+    #[test]
+    fn transform_arrow_canonical_block_is_byte_identical_to_v4_form() {
+        use plenora_core::contract::{ContractCrs, FieldId, GeometryColumnContract};
+        use plenora_core::crs::{CrsKind, ResolvedCrs};
+        use plenora_kernels_geo::arrow_adapter::{
+            GeometryMetadataDetails, canonical_geometry_metadata,
+        };
+
+        let square = square_wkb(4.0);
+        let (schema, batch) = fixture_batch(&[Some(&square)]);
+        let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
+        let output = run(&arrow_schema(1, ArrowOperation::Centroid), &input).expect("transform");
+        let (out_schema, _) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+
+        // Forma v4 a parita' di input: stesso contratto che la discovery
+        // costruirebbe per questa colonna (CRS risolto, dimensions xy,
+        // encoding non dichiarato, tipi non dichiarati).
+        let contract = GeometryColumnContract {
+            field_id: FieldId(0),
+            name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                CRS.to_owned(),
+                serde_json::Value::Null,
+                CrsKind::Projected,
+                Some(1.0),
+            )),
+            dimensions: plenora_core::contract::GeometryDimensions::Xy,
+            encoding: None,
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        };
+        let expected = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
+        assert_eq!(canonical_block(field), expected);
+    }
+
+    #[test]
+    fn pair_passthrough_derives_canonical_block_from_geo_metadata() {
+        // Campo geometria propagato invariato (within) con `geo` legacy:
+        // il blocco canonico e' derivato dalle stesse dichiarazioni.
+        let mut field_metadata = geoarrow_field_metadata();
+        field_metadata.insert(
+            GEO_METADATA_KEY.to_owned(),
+            r#"{"crs":"EPSG:3857","dimensions":"xy"}"#.to_owned(),
+        );
+        let left = side_envelope_with_metadata(
+            field_metadata,
+            HashMap::new(),
+            &[Some(&point_wkb(0.5, 0.5))],
+        );
+        let right = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let schema = PairArrowSchema {
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::Within, 1, 1)
+        };
+        let output = run_pair(&schema, &left, &right).expect("within");
+        let (out_schema, _) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+        let canonical = canonical_block(field);
+        assert_eq!(
+            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            Some("xy")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            Some("resolved")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.crs_id").map(String::as_str),
+            Some(CRS)
+        );
+        assert_eq!(
+            out_schema
+                .metadata()
+                .get("plenora.contract.version")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn pair_passthrough_without_crs_declaration_emits_missing() {
+        // R4.6.3: nessuna dichiarazione CRS sul campo propagato →
+        // `crs_resolution = missing` senza chiavi CRS (mai un CRS inventato);
+        // le celle non sono ricodificate → dimensions `unknown` (R3.4).
+        let left = side_envelope_with_metadata(
+            geoarrow_field_metadata(),
+            HashMap::new(),
+            &[Some(&point_wkb(0.5, 0.5))],
+        );
+        let right = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let schema = PairArrowSchema {
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::Within, 1, 1)
+        };
+        let output = run_pair(&schema, &left, &right).expect("within");
+        let (out_schema, _) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+        let canonical = canonical_block(field);
+        assert_eq!(
+            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            Some("missing")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            Some("unknown")
+        );
+        assert!(!canonical.contains_key("plenora.geometry.crs_id"));
+        assert!(!canonical.contains_key("plenora.geometry.crs_definition"));
+        assert!(!canonical.contains_key("plenora.geometry.axis_order"));
+        assert!(!canonical.contains_key("plenora.geometry.srid"));
+    }
+
+    #[test]
+    fn pair_passthrough_propagates_declared_unresolved_unchanged() {
+        // R2.4/R4.6.4: un campo che porta gia' il blocco canonico (output di
+        // una pipeline v4) lo conserva INVARIATO — il trasporto non
+        // interpreta le chiavi canoniche.
+        let mut field_metadata = geoarrow_field_metadata();
+        field_metadata.insert(
+            GEO_METADATA_KEY.to_owned(),
+            r#"{"crs":"EPSG:4326","dimensions":"xy"}"#.to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.dimensions".to_owned(),
+            "xy".to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.crs_resolution".to_owned(),
+            "declared_unresolved".to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.crs_id".to_owned(),
+            "EPSG:4326".to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.crs_definition".to_owned(),
+            "LOCAL_CS[\"fixture\"]".to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.crs_definition_format".to_owned(),
+            "wkt".to_owned(),
+        );
+        field_metadata.insert(
+            "plenora.geometry.axis_order".to_owned(),
+            "lon_lat".to_owned(),
+        );
+        let expected = field_metadata.clone();
+        let schema_metadata =
+            HashMap::from([("plenora.contract.version".to_owned(), "1".to_owned())]);
+        let left = side_envelope_with_metadata(
+            field_metadata,
+            schema_metadata,
+            &[Some(&point_wkb(0.5, 0.5))],
+        );
+        let right = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let schema = PairArrowSchema {
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::Within, 1, 1)
+        };
+        let output = run_pair(&schema, &left, &right).expect("within");
+        let (out_schema, _) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+        assert_eq!(field.metadata(), &expected);
+        assert_eq!(
+            out_schema
+                .metadata()
+                .get("plenora.contract.version")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn pair_output_rejects_divergent_contract_version() {
+        // R2.6/R2.5: una versione di protocollo diversa da quella corrente e'
+        // un errore esplicito, mai una sovrascrittura silenziosa.
+        let left = side_envelope_with_metadata(
+            geoarrow_field_metadata(),
+            HashMap::from([("plenora.contract.version".to_owned(), "2".to_owned())]),
+            &[Some(&point_wkb(0.5, 0.5))],
+        );
+        let right = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let schema = PairArrowSchema {
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::Within, 1, 1)
+        };
+        assert!(matches!(
+            run_pair(&schema, &left, &right),
+            Err(ArrowTransportError::Arrow(..))
+        ));
+    }
+
+    #[test]
+    fn sjoin_lineage_output_has_no_canonical_keys() {
+        // Output derivato senza geometrie (indici di coppia): nessuna chiave
+        // canonica e nessuna versione di protocollo (R2.5).
+        let left = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let right = side_envelope(&[Some(&shifted_square_wkb(1.0, 1.0, 2.0))]);
+        let schema = PairArrowSchema {
+            predicate: Some(JoinPredicate::Intersects),
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::SJoin, 1, 1)
+        };
+        let output = run_pair(&schema, &left, &right).expect("sjoin");
+        let (out_schema, out_batches) = decode_output(&output);
+        assert!(out_schema.metadata().is_empty());
+        assert!(out_schema.fields().iter().all(|field| field
+            .metadata()
+            .keys()
+            .all(|key| !key.starts_with("plenora."))));
+        assert!(out_batches[0].schema().metadata().is_empty());
+    }
+
     #[test]
     fn backend_free_operations_roundtrip_with_null_preservation() {
         let square = square_wkb(2.0);

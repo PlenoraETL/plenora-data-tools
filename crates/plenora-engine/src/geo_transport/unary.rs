@@ -17,7 +17,7 @@ use plenora_kernels_geo::construction::{
     line_from_ordered_points, point_from_lon_lat, polygon_from_ordered_points,
 };
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
-use plenora_core::contract::GeometryDimensions;
+use plenora_core::contract::{CrsResolution, GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use plenora_kernels_geo::extended::{
     affine_transform, concave_hull, geodesic_line_length_m, rotate_about, scale_about, translate,
@@ -54,7 +54,12 @@ use super::schema::{
 };
 use super::transport::{
     CLASS_COLUMN, DEFAULT_MAX_POINTS, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
-    MAX_CELL_BYTES, MAX_CELL_COORDINATES, MAX_CLEAN_VERTICES, PARENT_INDEX_COLUMN, WKT_COLUMN,
+    GEO_METADATA_KEY, MAX_CELL_BYTES, MAX_CELL_COORDINATES, MAX_CLEAN_VERTICES,
+    PARENT_INDEX_COLUMN, WKT_COLUMN,
+};
+use plenora_kernels_geo::arrow_adapter::{
+    canonical_geometry_metadata_for_resolved_definition, GeometryMetadataDetails,
+    PLENORA_CONTRACT_VERSION, PLENORA_CONTRACT_VERSION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
 #[cfg(feature = "geos-backend")]
 use super::transport::MAX_NODING_WORK;
@@ -108,6 +113,10 @@ pub(in crate::geo_transport) fn geometry_output_field(name: &str, crs: &str) -> 
     // Validazione CRS con le varianti strutturate del trasporto; la
     // costruzione del campo (metadati geoarrow.wkb + geo.crs +
     // geo.dimensions) e' unica in `arrow_adapter` (unificazione B1.1).
+    // BLOCK-06: il blocco canonico `plenora.geometry.*` NON e' aggiunto qui
+    // ma nel post-processo centrale `canonical_legacy_output` (entry point
+    // `transform_arrow`/`pair_arrow`), che copre anche i campi propagati
+    // invariati dalle op pass-through.
     geo_metadata_json(crs)?;
     // B1.3: la dimensionalita' dichiarata e' Xy ESPLICITO, non un default
     // silenzioso — ogni output di questo trasporto e' prodotto decodificando
@@ -124,6 +133,175 @@ pub(in crate::geo_transport) fn geometry_output_field(name: &str, crs: &str) -> 
         None,
     )
     .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// BLOCK-06 (decisione owner 2026-07-30 — parita' col percorso v4, DER-002
+// estesa): doppia emissione delle chiavi canoniche `plenora.geometry.*` e
+// `plenora.contract.version` anche sugli output del trasporto legacy.
+// ---------------------------------------------------------------------------
+
+/// Campo di output arricchito del blocco canonico R2.2 (BLOCK-06).
+///
+/// Regole (stesse del post-processo v4 `canonical_output_schema`):
+///
+/// - solo i campi con estensione `geoarrow.wkb` sono colonne geometriche:
+///   ogni altro campo e' restituito invariato;
+/// - un campo che porta GIA' chiavi canoniche (lineage dal produttore, es.
+///   input dal percorso v4 propagato invariato dalle op pass-through come
+///   `within`/`count`) le conserva invariate — R2.4: il trasporto non
+///   interpreta le chiavi canoniche, le propaga; la coerenza R2.6 con il
+///   `geo.crs` era responsabilita' del produttore;
+/// - altrimenti il blocco e' derivato dal metadato legacy `geo` del campo
+///   stesso (la dichiarazione che il trasporto ha sempre emesso/propagato):
+///   `geo.crs` → stato `resolved` con la stessa definizione (forma v4,
+///   [`canonical_geometry_metadata_for_resolved_definition`]), `geo.dimensions`
+///   → `dimensions` (assente → `unknown`, R3.4: i campi pass-through non
+///   ricodificano le celle, dichiarare `xy` sarebbe inventare),
+///   `geo.encoding` → `encoding` solo se dichiarato (R5.2);
+/// - nessuna dichiarazione CRS (`geo.crs` assente o vuota) →
+///   `crs_resolution = missing` senza chiavi CRS (R4.6.3/R4.6.4: lo stato
+///   mancante si propaga invariato, mai un CRS inventato — R4.4);
+/// - i tipi NON sono mai emessi (il trasporto non li dichiara, R3.4.1).
+///
+/// La derivazione non introduce rifiuti nuovi sui metadati di lineage: un
+/// `geo` malformato resta propagato com'e' (la sua lettura fail-closed e'
+/// della discovery v4, non del trasporto legacy).
+fn canonical_legacy_field(field: &Field) -> Field {
+    if field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str)
+        != Some(GEOARROW_WKB_EXTENSION)
+    {
+        return field.clone();
+    }
+    if field
+        .metadata()
+        .keys()
+        .any(|key| key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX))
+    {
+        return field.clone();
+    }
+    let geo = field
+        .metadata()
+        .get(GEO_METADATA_KEY)
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let crs = geo
+        .as_ref()
+        .and_then(|value| value.get("crs"))
+        .and_then(|value| match value {
+            serde_json::Value::String(definition) => Some(definition.clone()),
+            object @ serde_json::Value::Object(_) => serde_json::to_string(object).ok(),
+            _ => None,
+        })
+        .filter(|definition| !definition.trim().is_empty());
+    let dimensions = geo
+        .as_ref()
+        .and_then(|value| value.get("dimensions"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| raw.parse::<GeometryDimensions>().ok())
+        .unwrap_or(GeometryDimensions::Unknown);
+    let encoding = geo
+        .as_ref()
+        .and_then(|value| value.get("encoding"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| raw.parse::<GeometryEncoding>().ok());
+    let canonical = crs.map_or_else(
+        || {
+            // R4.6.3: nessuna dichiarazione CRS → `missing`, nessuna chiave
+            // CRS (R2.2: `missing` non ammette `crs_id`/`crs_definition`/
+            // `srid`/`axis_order`).
+            let mut metadata = std::collections::HashMap::new();
+            if let Some(encoding) = encoding {
+                metadata.insert(
+                    plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+                    encoding.as_str().to_owned(),
+                );
+            }
+            metadata.insert(
+                plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+                dimensions.as_str().to_owned(),
+            );
+            metadata.insert(
+                plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
+                    .to_owned(),
+                CrsResolution::Missing.as_str().to_owned(),
+            );
+            metadata
+        },
+        |definition| {
+            canonical_geometry_metadata_for_resolved_definition(
+                &definition,
+                dimensions,
+                encoding,
+                &GeometryMetadataDetails::default(),
+            )
+        },
+    );
+    let mut metadata = field.metadata().clone();
+    metadata.extend(canonical);
+    field.clone().with_metadata(metadata)
+}
+
+/// Post-processo CENTRALE della doppia emissione BLOCK-06 sugli output del
+/// trasporto legacy: arricchisce ogni campo geometria del blocco canonico
+/// R2.2 ([`canonical_legacy_field`]) e aggiunge la versione di protocollo
+/// R2.5 (`plenora.contract.version`) ai metadati dello schema, poi riveste i
+/// batch col nuovo schema (stesso schema dei batch, mai solo dell'header —
+/// come `canonical_output_schema` nel percorso v4).
+///
+/// Punto unico di applicazione: gli entry point `transform_arrow` e
+/// `pair_arrow`, subito prima di `encode_ipc`. Un output senza colonne
+/// geometriche canoniche (lineage di coppie, `lineage_schema`) e'
+/// restituito invariato, versione compresa (R2.5: la versione accompagna le
+/// chiavi canoniche, mai da sola).
+///
+/// # Errors
+///
+/// `ArrowTransportError::Arrow` se la chiave `plenora.contract.version` e'
+/// gia' presente con un valore diverso da quello corrente (R2.6: il
+/// componente fallisce, non sovrascrive) o se il rivestimento dei batch
+/// fallisce.
+pub(in crate::geo_transport) fn canonical_legacy_output(
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
+    let mut canonical_present = false;
+    let mut fields = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let field = canonical_legacy_field(field);
+        canonical_present |= field
+            .metadata()
+            .keys()
+            .any(|key| key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX));
+        fields.push(field);
+    }
+    if !canonical_present {
+        return Ok((schema, batches));
+    }
+    let mut schema_metadata = schema.metadata().clone();
+    match schema_metadata.get(PLENORA_CONTRACT_VERSION_KEY) {
+        Some(existing) if existing != &PLENORA_CONTRACT_VERSION.to_string() => {
+            return Err(ArrowTransportError::Arrow(format!(
+                "chiave `{PLENORA_CONTRACT_VERSION_KEY}` dello schema gia' presente con un \
+                 valore diverso (R2.6: il componente fallisce, non sovrascrive)"
+            )));
+        }
+        Some(_) => {}
+        None => {
+            schema_metadata.insert(
+                PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+                PLENORA_CONTRACT_VERSION.to_string(),
+            );
+        }
+    }
+    let output_schema = std::sync::Arc::new(Schema::new_with_metadata(fields, schema_metadata));
+    let batches = batches
+        .into_iter()
+        .map(|batch| {
+            RecordBatch::try_new(output_schema.clone(), batch.columns().to_vec())
+                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((output_schema, batches))
 }
 
 /// Risultato per cella di una trasformazione 1:1.
@@ -2137,6 +2315,9 @@ pub fn transform_arrow(
     }
 
     let (output_schema, output_batches) = transform_batches(&input_schema, &batches, schema)?;
+    // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
+    // DER-002 estesa) — post-processo centrale prima della codifica IPC.
+    let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
     let output_rows: u64 = output_batches
         .iter()
         .map(|batch| batch.num_rows() as u64)

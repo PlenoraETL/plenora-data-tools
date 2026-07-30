@@ -53,8 +53,16 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   DER-ICD-002 (tutti e tre i componenti nella stessa condizione).
 - **Ambito:** emissione delle chiavi `plenora.geometry.*` e
   `plenora.contract.version` nel percorso DAG v4 (milestone B/C/D di
-  ADR-0009), in DOPPIA emissione con le chiavi standard GeoArrow — la sola
-  forma compatibile con DER-ICD-002: il percorso legacy resta invariato.
+  ADR-0009) e, dal 2026-07-30 (BLOCK-06, decisione owner: parita', non
+  ritiro), nel percorso LEGACY `geo_transport` — entrambi in DOPPIA
+  emissione con le chiavi standard GeoArrow, la sola forma compatibile con
+  DER-ICD-002. Nel legacy l'emissione e' un post-processo centrale sugli
+  entry point `transform_arrow`/`pair_arrow` (`canonical_legacy_output`):
+  blocco derivato dal metadato `geo` del campo di output (stessa fonte del
+  GeoArrow legacy), chiavi canoniche di lineage propagate invariate (R2.4).
+  Restano fuori i comandi legacy senza schema Arrow in uscita
+  (`transform` v2 a frame WKB, `spatial-join` a coppie di indici): non
+  hanno metadati Arrow a cui appenderle.
 - **Motivo:** il protocollo serve alla cooperazione applicativa ora (la
   catena bordo-centro-bordo); §2 e' `proposta` non ratificata, ma la
   doppia lettura/emissione non rompe i consumatori esistenti.

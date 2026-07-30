@@ -37,8 +37,8 @@ use super::transport::{
 #[cfg(feature = "geos-backend")]
 use super::transport::{MAX_CELL_COORDINATES, MAX_NODING_WORK, MAX_SPLIT_WORK, PARENT_INDEX_COLUMN};
 use super::unary::{
-    batch_geometry_cells, encode_geometry, expect_line_string, expect_point,
-    geometry_column_index, geometry_output_field, spatial_predicate_name,
+    batch_geometry_cells, canonical_legacy_output, encode_geometry, expect_line_string,
+    expect_point, geometry_column_index, geometry_output_field, spatial_predicate_name,
 };
 #[cfg(feature = "geos-backend")]
 use super::unary::geometry_type_name;
@@ -1192,6 +1192,9 @@ pub fn pair_arrow(
         }
     };
 
+    // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
+    // DER-002 estesa) — post-processo centrale prima della codifica IPC.
+    let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
     let output_rows: u64 = output_batches
         .iter()
         .map(|batch| batch.num_rows() as u64)

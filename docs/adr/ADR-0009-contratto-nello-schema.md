@@ -284,6 +284,32 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
     una decisione di design, non un bug: se anche l'output legacy debba
     emettere le chiavi canoniche (oggi solo GeoArrow) o restare
     GeoArrow-only fino al ritiro del percorso.
+  - **Percorso legacy a parita' (attuato, 2026-07-30 — BLOCK-06 di
+    `release/rc.json`, decisione owner: PARITA', non ritiro)**: anche gli
+    output legacy emettono le chiavi canoniche §2 in doppia emissione con
+    quelle GeoArrow (DER-002 estesa al legacy). Forma minima scelta per lo
+    stato CRS: il trasporto legacy non ha un `DataContract` tipizzato e
+    non legge i metadati dell'input (il CRS e' dichiarato nello schema
+    operativo e risolto al livello comandi, `publish.rs`); il blocco e'
+    quindi derivato dal metadato `geo` del campo di OUTPUT — la stessa
+    fonte del GeoArrow legacy, coerenza R2.6 per costruzione — con
+    [`canonical_geometry_metadata_for_resolved_definition`] (corpo CRS
+    condiviso col braccio `Resolved` di `canonical_geometry_metadata`:
+    byte identici a parita' di definizione). Regole: campo riscritto
+    (`geometry_output_field`) → stato `resolved` dalla definizione
+    dichiarata nell'operazione; campo propagato invariato (pass-through,
+    es. `within`/`count`) con chiavi canoniche → propagate invariate
+    (R2.4/R4.6.4: `missing` resta `missing`, `declared_unresolved` resta
+    con le dichiarazioni originali); campo propagato senza dichiarazioni
+    CRS → `crs_resolution = missing` (R4.6.3) e `dimensions = unknown`
+    (R3.4: le celle non sono ricodificate). Punto UNICO di applicazione:
+    post-processo centrale `canonical_legacy_output` sui due entry point
+    `transform_arrow`/`pair_arrow`, prima di `encode_ipc`, con versione
+    R2.5 sullo schema (fail-closed su versione divergente) e rivestimento
+    dei batch. Output senza geometrie (lineage di coppie) invariati. I
+    comandi `transform` (frame WKB v2) e `spatial-join` (protocollo
+    coppie) non hanno uno schema Arrow in uscita: la doppia emissione non
+    e' applicabile, dichiarato qui.
 - **Follow-up dichiarati**: chiave `plenora.field_id` (decisione 3) da
   proporre all'owner ICD; test di catena completa bordo-centro-bordo con
   gli altri due componenti. (Il tagging di fase ai confini era in questa
