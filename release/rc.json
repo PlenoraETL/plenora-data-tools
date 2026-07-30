@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0",
-  "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
+  "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -16,11 +16,6 @@
   "verification_claim": "verified_internally",
   "independent_review": false,
   "open_blocks": [
-    {
-      "id": "BLOCK-03",
-      "title": "Tagging di fase ai confini (assi errore par. 9)",
-      "detail": "Fase ed effetto sono derivati per variante; il tagging ai confini (step_error, at_input, publish) raffinera' le approssimazioni dichiarate in ADR-0009 (DataMapping/Io -> Write; Unsupported publish-target -> Validate invece di Probe). Raffinamento, nessun cambio alla disposizione retry."
-    },
     {
       "id": "BLOCK-04",
       "title": "Copertura sotto soglia su tre moduli",
@@ -49,6 +44,12 @@
   ],
   "closed_blocks": [
     {
+      "id": "BLOCK-03",
+      "title": "Tagging di fase ai confini (assi errore par. 9)",
+      "closed_by": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
+      "note": "Variante wrapper PlenoraError::Tagged (Display e assi category/remote_effect/retry delegati, solo la fase e' esplicita). Confini taggati: lettura input -> Read (Input::read_ipc_*, Network::input_stream, sonde IPC della CLI); publish ADR 7 -> Probe (riconoscimento destinazione, incl. target non supportato: fase pre-fusione ripristinata), Write (tempfile), Finalize (flush/sync), Commit (no-clobber e rename). Disposizione retry invariata per delega; testi Display invariati. ADR-0009 aggiornato. Chiuso il 2026-07-30."
+    },
+    {
       "id": "BLOCK-01",
       "title": "CRS condizionato alle operazioni (R4.6.3)",
       "closed_by": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
@@ -63,12 +64,12 @@
   ],
   "evidence": {
     "test_suite": {
-      "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
+      "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "945 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
+      "result": "958 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
     },
     "lint_gate": {
-      "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
+      "revision": "c54664f8f4a2b61970e28d6645fa81fc7e561b94",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
