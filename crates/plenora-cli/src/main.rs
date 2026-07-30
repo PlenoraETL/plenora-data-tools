@@ -1858,4 +1858,461 @@ mod tests {
         assert_eq!(error.phase(), ErrorPhase::Validate);
         assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
     }
+
+    // -------------------------------------------------------------------
+    // Helper di presentazione e parsing argomenti
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn hex_digest_renders_every_byte_as_two_lowercase_hex_digits() {
+        let mut digest = [0_u8; 32];
+        digest[1] = 0x0f;
+        digest[2] = 0xa5;
+        digest[31] = 0xff;
+        let hex = hex_digest(&digest);
+        assert_eq!(hex.len(), 64);
+        assert!(hex.starts_with("000fa5"), "{hex}");
+        assert!(hex.ends_with("ff"), "{hex}");
+        assert!(hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn argument_value_requires_flag_and_value() {
+        let args: Vec<String> = ["transform", "--input", "in.bin", "--schema", "s.json"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(argument_value(&args, "--schema").expect("presente"), "s.json");
+        let missing = argument_value(&args, "--output").expect_err("flag assente");
+        assert!(missing.to_string().contains("--output"), "{missing}");
+        let dangling: Vec<String> = vec!["--input".to_string()];
+        let error = argument_value(&dangling, "--input").expect_err("valore mancante");
+        assert!(error.to_string().contains("--input"), "{error}");
+    }
+
+    #[test]
+    fn at_input_prefixes_context_and_preserves_the_variant() {
+        let path = Path::new("dati.arrow");
+        let prefixed = at_input("main", path, PlenoraError::InvalidPlan("boom".into()));
+        match prefixed {
+            PlenoraError::InvalidPlan(message) => {
+                assert_eq!(message, "input `main` (dati.arrow): boom");
+            }
+            other => panic!("variante non preservata: {other:?}"),
+        }
+        for make in [
+            PlenoraError::Unsupported as fn(String) -> PlenoraError,
+            PlenoraError::Schema,
+            PlenoraError::Crs,
+        ] {
+            let prefixed = at_input("main", path, make("boom".to_owned()));
+            let message = match &prefixed {
+                PlenoraError::Unsupported(message)
+                | PlenoraError::Schema(message)
+                | PlenoraError::Crs(message) => message,
+                other => panic!("variante non preservata: {other:?}"),
+            };
+            assert_eq!(message, "input `main` (dati.arrow): boom");
+        }
+        // Le altre varianti passano inalterate (testo e tipo).
+        let io = at_input("main", path, PlenoraError::Io(std::io::Error::other("disco")));
+        assert!(matches!(io, PlenoraError::Io(_)));
+        assert_eq!(io.to_string(), "io error: disco");
+    }
+
+    // -------------------------------------------------------------------
+    // Definizione CRS dalle rappresentazioni accettate (R4.x)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crs_definition_from_metadata_accepts_objects_and_rejects_other_types() {
+        // PROJJSON come oggetto: serializzato compatto, mai perso (chiavi in
+        // ordine canonico: `serde_json::Value` le riordina alfabeticamente).
+        let object = r#"{"crs":{"type":"GeographicCRS","name":"WGS 84"}}"#.to_owned();
+        let definition =
+            crs_definition_from_metadata("geometry", Some(&object)).expect("oggetto PROJJSON");
+        assert_eq!(
+            definition.as_deref(),
+            Some(r#"{"name":"WGS 84","type":"GeographicCRS"}"#)
+        );
+        // Tipo non stringa/oggetto: metadato malformato -> errore (R5.1).
+        let invalid = r#"{"crs":32632}"#.to_owned();
+        let result = crs_definition_from_metadata("geometry", Some(&invalid));
+        assert!(
+            matches!(result, Err(PlenoraError::InvalidPlan(_))),
+            "{result:?}"
+        );
+        // Senza chiave `crs` e senza metadato: assenza, non errore (R4.6.3).
+        let bare = "{}".to_owned();
+        assert_eq!(
+            crs_definition_from_metadata("geometry", Some(&bare)).expect("nessun crs"),
+            None
+        );
+        assert_eq!(
+            crs_definition_from_metadata("geometry", None).expect("nessun metadato"),
+            None
+        );
+    }
+
+    #[test]
+    fn crs_definition_from_keys_prefers_the_canonical_forms() {
+        // `crs_definition` (autocontenuta) prevale su `crs_id`.
+        let keys = CanonicalGeometryKeys {
+            crs_definition: Some(r#"{"type":"ProjectedCRS"}"#.to_owned()),
+            crs_id: Some("EPSG:32632".to_owned()),
+            ..CanonicalGeometryKeys::default()
+        };
+        assert_eq!(
+            crs_definition_from_keys("geometry", None, &keys)
+                .expect("definizione")
+                .as_deref(),
+            Some(r#"{"type":"ProjectedCRS"}"#)
+        );
+        // Solo `crs_id`.
+        let keys = CanonicalGeometryKeys {
+            crs_id: Some("EPSG:32632".to_owned()),
+            ..CanonicalGeometryKeys::default()
+        };
+        assert_eq!(
+            crs_definition_from_keys("geometry", None, &keys)
+                .expect("id")
+                .as_deref(),
+            Some("EPSG:32632")
+        );
+        // Fallback legacy `geo.crs` quando nessuna forma canonica dichiara.
+        let legacy = r#"{"crs":"EPSG:32632"}"#.to_owned();
+        let keys = CanonicalGeometryKeys::default();
+        assert_eq!(
+            crs_definition_from_keys("geometry", Some(&legacy), &keys)
+                .expect("legacy")
+                .as_deref(),
+            Some("EPSG:32632")
+        );
+        // Nessuna rappresentazione: assenza (R4.6.3), mai errore.
+        assert_eq!(
+            crs_definition_from_keys("geometry", None, &keys).expect("assente"),
+            None
+        );
+    }
+
+    #[test]
+    fn discovery_rejects_incoherent_geometry_metadata() {
+        // Estensione diversa da `geoarrow.wkb`: rifiuto esplicito.
+        let unknown_extension = Field::new("geometry", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([(
+                GEOARROW_EXTENSION_KEY.to_owned(),
+                "geoarrow.point".to_owned(),
+            )]),
+        );
+        let result = discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(
+            vec![unknown_extension],
+        )));
+        match result {
+            Err(PlenoraError::InvalidPlan(message)) => {
+                assert!(message.contains("non supportata"), "{message}");
+            }
+            other => panic!("atteso rifiuto estensione, ottenuto {other:?}"),
+        }
+        // Metadato `geo` senza estensione: metadati incoerenti.
+        let orphan = Field::new("geometry", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([(GEO_METADATA_KEY.to_owned(), "{}".to_owned())]),
+        );
+        let result =
+            discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(vec![orphan])));
+        match result {
+            Err(PlenoraError::InvalidPlan(message)) => {
+                assert!(message.contains("incoerenti"), "{message}");
+            }
+            other => panic!("attesi metadati incoerenti, ottenuto {other:?}"),
+        }
+    }
+
+    #[test]
+    fn canonical_types_enter_the_contract_as_declared_with_schema_scope() {
+        // Variante proj-indipendente del riconoscimento canonico: la coppia
+        // types_declaration/types entra nel contratto come Declared/Schema.
+        let contract =
+            contract_from_field(&canonical_geometry_field(DataType::Binary)).expect("lettura");
+        assert!(
+            matches!(contract.types.confidence, PropertyConfidence::Declared(_)),
+            "types dichiarati dalla coppia canonica"
+        );
+        assert_eq!(contract.types.scope, PropertyScope::Schema);
+    }
+
+    #[test]
+    fn contract_json_renders_a_resolved_crs_with_kind_and_resolution() {
+        let schema = std::sync::Arc::new(Schema::new(vec![Field::new(
+            "geometry",
+            DataType::Binary,
+            true,
+        )]));
+        let contract = DataContract::new(
+            schema,
+            vec![GeometryColumnContract {
+                field_id: FieldId(0),
+                name: "geometry".to_owned(),
+                crs: ContractCrs::Resolved(projected_crs()),
+                dimensions: GeometryDimensions::Xy,
+                encoding: None,
+                nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
+            }],
+            Some(FieldId(0)),
+            ContractProperties::default(),
+        )
+        .expect("contratto");
+        let summary = contract_json(&contract);
+        assert_eq!(summary["geometry"]["crs"], "EPSG:32632");
+        assert_eq!(summary["geometry"]["crs_kind"], "Projected");
+        assert_eq!(summary["geometry"]["crs_resolution"], "resolved");
+    }
+
+    #[test]
+    fn contract_json_renders_a_missing_crs_as_null() {
+        let schema = std::sync::Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geometry", DataType::Binary, true),
+        ]));
+        let contract = DataContract::new(
+            schema,
+            vec![GeometryColumnContract {
+                field_id: FieldId(0),
+                name: "geometry".to_owned(),
+                crs: ContractCrs::Missing,
+                dimensions: GeometryDimensions::Unknown,
+                encoding: None,
+                nullable: true,
+                types: GeometryColumnContract::undeclared_types(),
+            }],
+            Some(FieldId(0)),
+            ContractProperties::default(),
+        )
+        .expect("contratto");
+        let summary = contract_json(&contract);
+        assert_eq!(summary["geometry"]["crs"], serde_json::Value::Null);
+        assert_eq!(summary["geometry"]["crs_kind"], serde_json::Value::Null);
+        assert_eq!(summary["geometry"]["crs_resolution"], "missing");
+        assert_eq!(summary["fields"][0]["name"], "id");
+        assert_eq!(summary["fields"][0]["data_type"], "Int64");
+        assert_eq!(summary["fields"][0]["nullable"], false);
+        assert_eq!(summary["fields"][1]["nullable"], true);
+    }
+
+    // -------------------------------------------------------------------
+    // Sniffing del framing IPC e input lazy
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ipc_sniffing_treats_short_and_non_magic_files_as_streams() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        // Piu' corto del magic: lettura parziale, nessun errore, non-file.
+        let short = directory.path().join("short.bin");
+        std::fs::write(&short, b"ARR").expect("fixture");
+        assert!(!is_ipc_file_format(&short).expect("sniffing"));
+        // Sei byte ma magic diverso: non e' IPC file format.
+        let other = directory.path().join("other.bin");
+        std::fs::write(&other, b"ARROW2").expect("fixture");
+        assert!(!is_ipc_file_format(&other).expect("sniffing"));
+    }
+
+    #[test]
+    fn open_input_accepts_file_and_stream_ipc_framings() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let schema: SchemaRef = std::sync::Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            std::sync::Arc::clone(&schema),
+            vec![std::sync::Arc::new(
+                plenora_core::arrow::array::Int64Array::from(vec![1, 2]),
+            )],
+        )
+        .expect("batch");
+        // IPC file format.
+        let file_path = directory.path().join("in.arrow");
+        let mut writer =
+            FileWriter::try_new(File::create(&file_path).expect("create"), &schema).expect("writer");
+        writer.write(&batch).expect("write");
+        writer.finish().expect("finish");
+        assert!(is_ipc_file_format(&file_path).expect("sniff"));
+        // IPC stream format.
+        let stream_path = directory.path().join("in.stream");
+        let mut writer = plenora_core::arrow::ipc::writer::StreamWriter::try_new(
+            File::create(&stream_path).expect("create"),
+            &schema,
+        )
+        .expect("writer");
+        writer.write(&batch).expect("write");
+        writer.finish().expect("finish");
+        assert!(!is_ipc_file_format(&stream_path).expect("sniff"));
+        // Entrambi si aprono come input lazy con lo schema dichiarato.
+        for path in [&file_path, &stream_path] {
+            let input = open_input(path).expect("open_input");
+            match input {
+                Input::Stream { schema: declared, .. } => assert_eq!(declared, schema),
+                Input::Batches(_) => panic!("gli input da percorso sono lazy"),
+            }
+        }
+    }
+
+    #[test]
+    fn v4_input_paths_combines_single_and_multiple_flags() {
+        let single: Vec<String> = ["run", "--input", "a.arrow"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            v4_input_paths(&single).expect("paths"),
+            vec![PathBuf::from("a.arrow")]
+        );
+        let multiple: Vec<String> = ["run", "--inputs", "b.arrow", "c.arrow", "--output", "o.arrow"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            v4_input_paths(&multiple).expect("paths"),
+            vec![PathBuf::from("b.arrow"), PathBuf::from("c.arrow")],
+            "i valori si fermano al prossimo flag"
+        );
+        let both: Vec<String> = ["run", "--input", "a.arrow", "--inputs", "b.arrow"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(v4_input_paths(&both).expect("paths").len(), 2);
+        let dangling: Vec<String> = vec!["--input".to_string()];
+        assert!(v4_input_paths(&dangling).is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // Trasporto WKB v2: transform_stream e read_geometry_stream
+    // (i comandi che li invocano richiedono la risoluzione CRS — feature
+    // `proj-backend`; il framing e la trasformazione no)
+    // -------------------------------------------------------------------
+
+    /// POINT (2 3), little-endian OGC WKB.
+    const POINT_WKB: [u8; 21] = [
+        1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64,
+    ];
+
+    /// Scrive `frames` (con null) in framing WKB v2 e restituisce i byte.
+    fn framed_v2(frames: &[Option<&[u8]>]) -> Vec<u8> {
+        let mut writer = FrameWriter::new(Vec::new(), frames.len() as u64).expect("writer");
+        for frame in frames {
+            writer.write_frame(*frame).expect("frame");
+        }
+        writer.finish().expect("finish").0
+    }
+
+    fn centroid_schema(row_count: u64) -> TransformSchema {
+        TransformSchema {
+            schema_version: 2,
+            operation: Operation::Centroid,
+            row_count,
+            crs: None,
+        }
+    }
+
+    #[test]
+    fn transform_stream_rechecks_the_schema_version_fail_closed() {
+        // Difesa in profondita': `execute_transform` verifica la versione
+        // prima della validazione CRS, ma il motore di stream non si fida
+        // del chiamante.
+        let input = framed_v2(&[Some(&POINT_WKB)]);
+        let mut output = Vec::new();
+        let mut schema = centroid_schema(1);
+        schema.schema_version = 3;
+        let result = transform_stream(&mut input.as_slice(), &mut output, &schema);
+        let error = result.expect_err("versione non supportata");
+        assert!(error.to_string().contains("schema_version"), "{error}");
+    }
+
+    #[test]
+    fn transform_stream_transforms_frames_and_preserves_nulls() {
+        let input = framed_v2(&[Some(&POINT_WKB), None, Some(&POINT_WKB)]);
+        let mut output = Vec::new();
+        let summary = transform_stream(&mut input.as_slice(), &mut output, &centroid_schema(3))
+            .expect("transform");
+        assert_eq!(summary.rows, 3);
+        // Il checksum e' quello dello stream prodotto: rileggendolo i frame
+        // sono coerenti (il reader verifica il footer).
+        let mut reader = FrameReader::new(output.as_slice(), 3).expect("reader");
+        let first = reader.next_frame().expect("frame").expect("riga 1");
+        let Frame::Wkb(payload) = first else {
+            panic!("atteso WKB");
+        };
+        // Il centroide di un punto e' il punto stesso.
+        assert_eq!(payload.as_slice(), &POINT_WKB);
+        assert!(
+            matches!(reader.next_frame().expect("frame"), Some(Frame::Null)),
+            "il null e' preservato in posizione"
+        );
+        assert!(reader.next_frame().expect("frame").is_some());
+        assert!(reader.next_frame().expect("fine").is_none());
+    }
+
+    #[test]
+    fn transform_stream_rejects_a_short_stream_against_row_count() {
+        // Il flusso dichiara 3 righe ma ne arrivano 2: errore esplicito, mai
+        // un output pubblicato come completo.
+        let input = framed_v2(&[Some(&POINT_WKB), Some(&POINT_WKB)]);
+        let mut output = Vec::new();
+        let result = transform_stream(&mut input.as_slice(), &mut output, &centroid_schema(3));
+        let error = result.expect_err("row_count non coerente");
+        assert!(error.to_string().contains("row_count non coerente"), "{error}");
+    }
+
+    #[test]
+    fn transform_stream_fails_closed_on_undecodable_wkb() {
+        // Payload WKB corrotto: la trasformazione fallisce, nessun frame
+        // inventato attraversa il confine.
+        let garbage = [0x01, 0x01, 0x00, 0xFF];
+        let input = framed_v2(&[Some(&garbage)]);
+        let mut output = Vec::new();
+        let result = transform_stream(&mut input.as_slice(), &mut output, &centroid_schema(1));
+        assert!(result.is_err(), "WKB corrotto deve fallire");
+    }
+
+    #[test]
+    fn transform_stream_flushes_full_batches_mid_stream() {
+        // Oltre BATCH_ROWS (4096) righe: il flush intermedio e' esercitato e
+        // il conteggio finale resta esatto.
+        const ROWS: u64 = 4097;
+        let frames: Vec<Option<&[u8]>> = (0..ROWS).map(|_| Some(&POINT_WKB[..])).collect();
+        let input = framed_v2(&frames);
+        let mut output = Vec::new();
+        let summary = transform_stream(&mut input.as_slice(), &mut output, &centroid_schema(ROWS))
+            .expect("transform");
+        assert_eq!(summary.rows, ROWS);
+        let mut reader = FrameReader::new(output.as_slice(), ROWS).expect("reader");
+        let mut count = 0_u64;
+        while reader.next_frame().expect("frame").is_some() {
+            count += 1;
+        }
+        assert_eq!(count, ROWS);
+    }
+
+    #[test]
+    fn read_geometry_stream_decodes_payloads_and_nulls() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("geometries.bin");
+        std::fs::write(&path, framed_v2(&[Some(&POINT_WKB), None])).expect("fixture");
+        let geometries = read_geometry_stream(&path, 2).expect("lettura");
+        assert_eq!(geometries.len(), 2);
+        match &geometries[0] {
+            Some(geo::Geometry::Point(point)) => {
+                assert!((point.x() - 2.0).abs() < f64::EPSILON);
+                assert!((point.y() - 3.0).abs() < f64::EPSILON);
+            }
+            other => panic!("atteso Point, ottenuto {other:?}"),
+        }
+        assert!(geometries[1].is_none(), "null preservato");
+        // Payload non decodificabile: errore, mai geometria inventata.
+        let garbage = [0xDE, 0xAD];
+        let bad_path = directory.path().join("garbage.bin");
+        std::fs::write(&bad_path, framed_v2(&[Some(&garbage)])).expect("fixture");
+        assert!(read_geometry_stream(&bad_path, 1).is_err());
+    }
 }

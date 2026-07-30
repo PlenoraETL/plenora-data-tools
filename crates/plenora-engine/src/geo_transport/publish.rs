@@ -810,4 +810,84 @@ mod tests {
         assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
         assert_eq!(error.to_string(), "errore del chiamante");
     }
+
+    // -- Verifica CRS dei comandi (fail-closed senza backend PROJ) --------
+
+    #[cfg(not(feature = "proj-backend"))]
+    #[test]
+    fn transform_arrow_crs_is_required_and_never_trusted_without_backend() {
+        // CRS assente: errore prima ancora della risoluzione.
+        let missing: TransformArrowSchema = serde_json::from_value(serde_json::json!({
+            "schema_version": TransformArrowSchema::VERSION,
+            "operation": "centroid",
+            "row_count": 0
+        }))
+        .expect("schema");
+        let result = validate_transform_arrow_crs(&missing);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+
+        // CRS dichiarato ma nessun backend compilato: la dichiarazione non
+        // viene mai creduta — fail-closed, non validazione ottimistica.
+        let declared: TransformArrowSchema = serde_json::from_value(serde_json::json!({
+            "schema_version": TransformArrowSchema::VERSION,
+            "operation": "centroid",
+            "row_count": 0,
+            "crs": "EPSG:32632"
+        }))
+        .expect("schema");
+        let result = validate_transform_arrow_crs(&declared);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+    }
+
+    #[cfg(not(feature = "proj-backend"))]
+    #[test]
+    fn pair_arrow_crs_are_both_required_and_never_trusted_without_backend() {
+        let base = serde_json::json!({
+            "schema_version": PairArrowSchema::VERSION,
+            "operation": "sjoin",
+            "left_row_count": 0,
+            "right_row_count": 0
+        });
+        // left_crs assente.
+        let schema: PairArrowSchema =
+            serde_json::from_value(base.clone()).expect("schema");
+        let result = validate_pair_arrow_crs(&schema);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+        // right_crs assente (left presente).
+        let mut with_left = base.clone();
+        with_left["left_crs"] = serde_json::json!("EPSG:32632");
+        let schema: PairArrowSchema = serde_json::from_value(with_left).expect("schema");
+        let result = validate_pair_arrow_crs(&schema);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+        // Entrambi dichiarati, nessun backend: fail-closed.
+        let mut both = base;
+        both["left_crs"] = serde_json::json!("EPSG:32632");
+        both["right_crs"] = serde_json::json!("EPSG:32632");
+        let schema: PairArrowSchema = serde_json::from_value(both).expect("schema");
+        let result = validate_pair_arrow_crs(&schema);
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+    }
+
+    // -- Filesystem di destinazione non identificabile (ADR 7) -------------
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unidentifiable_filesystem_is_rejected_fail_closed() {
+        // procfs (f_type 0x9fa0) non e' nella whitelist dei filesystem
+        // locali: in dubbio, rifiutare — prima di creare qualunque tempfile.
+        let destination = Path::new("/proc/plenora-publish-non-deve-esistere.bin");
+        let error = publish_atomic(destination, |writer| {
+            writer.write_all(b"x")?;
+            Ok(())
+        })
+        .expect_err("procfs fuori whitelist");
+        assert_eq!(error.phase(), ErrorPhase::Probe);
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Unsupported);
+        assert!(
+            error.to_string().contains("filesystem non identificabile"),
+            "{error}"
+        );
+        assert!(matches!(error.untag(), PlenoraError::Unsupported(_)));
+        assert!(!destination.exists(), "nessuna pubblicazione parziale");
+    }
 }

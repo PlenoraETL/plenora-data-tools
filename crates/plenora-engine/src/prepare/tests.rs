@@ -763,3 +763,323 @@ fn reproject_joins_fusion_groups() {
     assert_eq!(kernels[0].geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch fail-closed e rivalidazione fisica delle estensioni geo (E1)
+// ---------------------------------------------------------------------------
+//
+// La fase 1 (`planner::validate` via `analyze`) pre-valida le config; le
+// rivalidazioni di `prepare` sono difesa in profondita': qui sono esercitate
+// chiamando direttamente le funzioni interne con contratti da fixture, per
+// verificare che il secondo livello resti fail-closed anche se il primo si
+// allenta. I comportamenti verificati sono quelli del perimetro documentato
+// (dispatch v1, limiti del kernel, coerenza dei contratti).
+
+/// POINT (2 3), little-endian OGC WKB, in esadecimale (convenzione D16).
+const POINT_HEX: &str = "010100000000000000000000400000000000000840";
+
+/// LINESTRING (0 0, 1 1), little-endian OGC WKB, in esadecimale.
+const LINESTRING_HEX: &str =
+    "01020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f";
+
+fn geo_node(op: &str, config: serde_json::Value) -> NodeV4 {
+    NodeV4 {
+        id: "n".to_owned(),
+        op: op.to_owned(),
+        inputs: vec!["main".to_owned()],
+        config,
+    }
+}
+
+fn descriptor_of(op: &str) -> &'static plenora_core::catalog::OperationDescriptor {
+    plenora_core::catalog::find_operation(op).expect("op in catalogo")
+}
+
+#[test]
+fn nary_concat_over_two_inputs_is_rejected_fail_closed() {
+    // `table.concat` e' NAry: il planner accetta piu' di due input, ma
+    // l'executor v1 ne supporta solo due — il rifiuto arriva in `prepare`
+    // (fail-closed a secco), mai a meta' esecuzione.
+    let graph = validate(
+        &json!({
+            "schema_version": 4,
+            "inputs": ["a", "b", "c"],
+            "nodes": [
+                {"id": "cat", "op": "table.concat", "in": ["a", "b", "c"], "config": {}}
+            ],
+            "output": "cat",
+        })
+        .to_string(),
+        &[
+            ("a".to_owned(), table_contract()),
+            ("b".to_owned(), table_contract()),
+            ("c".to_owned(), table_contract()),
+        ],
+    )
+    .expect("il planner accetta concat N-aria");
+    let result = prepare(&graph, &RuntimeContext::default());
+    match result {
+        Err(PlenoraError::Unsupported(message)) => {
+            assert!(message.contains("N-aria"), "{message}");
+            assert!(message.contains("3 input"), "{message}");
+        }
+        other => panic!("atteso Unsupported, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn from_wkt_extension_resolves_column_index_and_error_policy() {
+    let input = DataContract::tabular(Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("wkt", DataType::Utf8, true),
+    ])));
+    // Default `on_error: null`; indice risolto qui, mai nel loop per batch.
+    let node = geo_node("geo.from_wkt", json!({"wkt_column": "wkt"}));
+    let (config, role) =
+        prepare_geo_extension(&node, descriptor_of("geo.from_wkt"), &input, &input)
+            .expect("prepare")
+            .expect("estensione coperta");
+    match config {
+        PreparedConfig::GeoFromWkt {
+            wkt_column_index,
+            on_error,
+        } => {
+            assert_eq!(wkt_column_index, 1);
+            assert_eq!(on_error, OnWktError::Null);
+        }
+        other => panic!("config inattesa: {other:?}"),
+    }
+    assert_eq!(role, GeoRole::ProduceFromText);
+
+    // Politica esplicita `fail`.
+    let node = geo_node(
+        "geo.from_wkt",
+        json!({"wkt_column": "wkt", "on_error": "fail"}),
+    );
+    let (config, _) = prepare_geo_extension(&node, descriptor_of("geo.from_wkt"), &input, &input)
+        .expect("prepare")
+        .expect("estensione coperta");
+    match config {
+        PreparedConfig::GeoFromWkt { on_error, .. } => assert_eq!(on_error, OnWktError::Fail),
+        other => panic!("config inattesa: {other:?}"),
+    }
+
+    // Colonna WKT assente dal contratto di input: errore Schema, mai indice
+    // inventato (difesa in profondita': analyze la pre-valida).
+    let node = geo_node("geo.from_wkt", json!({"wkt_column": "assente"}));
+    let result = prepare_geo_extension(&node, descriptor_of("geo.from_wkt"), &input, &input);
+    match result {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(message.contains("assente"), "{message}");
+        }
+        other => panic!("atteso Schema, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn generate_grid_extension_revalidates_extent_and_cell_size() {
+    let trigger = table_contract();
+    let node = geo_node(
+        "geo.generate_grid",
+        json!({
+            "extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0},
+            "cell_size": 2.5
+        }),
+    );
+    let (config, role) =
+        prepare_geo_extension(&node, descriptor_of("geo.generate_grid"), &trigger, &trigger)
+            .expect("prepare")
+            .expect("estensione coperta");
+    match config {
+        PreparedConfig::GeoGenerateGrid {
+            extent,
+            cell_size,
+            shape,
+        } => {
+            assert_eq!(extent, GridExtent::new(0.0, 0.0, 10.0, 10.0).expect("extent"));
+            assert!((cell_size - 2.5).abs() < f64::EPSILON);
+            assert_eq!(shape, GridShape::Square, "shape di default");
+        }
+        other => panic!("config inattesa: {other:?}"),
+    }
+    assert_eq!(role, GeoRole::WholeTable);
+
+    // Extent degenere e cell_size nulla: rifiutati alla rivalidazione fisica
+    // (analyze li pre-valida; il secondo livello resta fail-closed).
+    let degenerate = geo_node(
+        "geo.generate_grid",
+        json!({
+            "extent": {"xmin": 1.0, "ymin": 0.0, "xmax": 1.0, "ymax": 5.0},
+            "cell_size": 1.0
+        }),
+    );
+    assert!(matches!(
+        prepare_geo_extension(&degenerate, descriptor_of("geo.generate_grid"), &trigger, &trigger),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let zero_cell = geo_node(
+        "geo.generate_grid",
+        json!({
+            "extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0},
+            "cell_size": 0.0
+        }),
+    );
+    assert!(matches!(
+        prepare_geo_extension(&zero_cell, descriptor_of("geo.generate_grid"), &trigger, &trigger),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn wkb_hex_operands_are_decoded_once_and_fail_closed() {
+    // Decodifica una tantum in `prepare` (E1): hex valido -> geometria.
+    let point = decode_wkb_hex("n", "point_wkb", POINT_HEX).expect("point valido");
+    match point {
+        Geometry::Point(point) => {
+            assert!((point.x() - 2.0).abs() < f64::EPSILON);
+            assert!((point.y() - 3.0).abs() < f64::EPSILON);
+        }
+        other => panic!("atteso Point, ottenuto {other:?}"),
+    }
+    // Lunghezza dispari, vuoto, caratteri non hex, WKB non decodificabile:
+    // errore esplicito, mai bytes inventati.
+    for bad in ["", "0", "zz", "0102"] {
+        assert!(
+            decode_wkb_hex("n", "point_wkb", bad).is_err(),
+            "input malformato accettato: {bad:?}"
+        );
+    }
+    // `line_locate_point`: una geometria che non e' un Point e' rifiutata.
+    let node = geo_node("geo.line_locate_point", json!({"point_wkb": LINESTRING_HEX}));
+    let result = prepare_geo_extension(
+        &node,
+        descriptor_of("geo.line_locate_point"),
+        &geo_contract(),
+        &geo_contract(),
+    );
+    match result {
+        Err(PlenoraError::InvalidPlan(message)) => {
+            assert!(message.contains("Point"), "{message}");
+        }
+        other => panic!("atteso InvalidPlan, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn extension_revalidations_stay_fail_closed() {
+    let geo = geo_contract();
+    // `subdivide`: sotto il minimo di vertici di un anello chiuso.
+    let node = geo_node("geo.subdivide", json!({"max_vertices": 3}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.subdivide"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    // `snap`: tolleranza negativa.
+    let node = geo_node(
+        "geo.snap",
+        json!({"reference_wkb": POINT_HEX, "tolerance": -1.0}),
+    );
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.snap"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    // `collect`: colonna chiave assente dal contratto di input.
+    let node = geo_node("geo.collect", json!({"group_by": ["assente"]}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.collect"), &geo, &geo),
+        Err(PlenoraError::Schema(_))
+    ));
+    // `coverage_validate`: tolleranza negativa.
+    let node = geo_node("geo.coverage_validate", json!({"tolerance": -1.0}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.coverage_validate"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    // `shared_paths`: min_length negativa.
+    let node = geo_node("geo.shared_paths", json!({"min_length": -1.0}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.shared_paths"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    // `cluster_dbscan`: eps nullo e min_points nullo.
+    let node = geo_node("geo.cluster_dbscan", json!({"eps": 0.0, "min_points": 1}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.cluster_dbscan"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let node = geo_node("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 0}));
+    assert!(matches!(
+        prepare_geo_extension(&node, descriptor_of("geo.cluster_dbscan"), &geo, &geo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn accessors_extension_revalidates_selection_and_output_contract() {
+    let geo = geo_contract();
+    // Accessorio sconosciuto: rifiuto esplicito (analyze lo pre-valida con
+    // un enum chiuso; il secondo livello non si fida).
+    let node = geo_node("geo.geometry_accessors", json!({"fields": ["bogus"]}));
+    match prepare_geo_extension(&node, descriptor_of("geo.geometry_accessors"), &geo, &geo) {
+        Err(PlenoraError::InvalidPlan(message)) => {
+            assert!(message.contains("bogus"), "{message}");
+        }
+        other => panic!("atteso InvalidPlan, ottenuto {other:?}"),
+    }
+    // Il contratto di output non contiene la colonna accessoria inferita:
+    // incoerenza segnalata, mai accesso per nome a runtime.
+    let node = geo_node("geo.geometry_accessors", json!({"fields": ["geometry_type"]}));
+    match prepare_geo_extension(&node, descriptor_of("geo.geometry_accessors"), &geo, &geo) {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(message.contains("geometry_type"), "{message}");
+        }
+        other => panic!("atteso Schema, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn measure_output_column_requires_exactly_one_added_column() {
+    let input = table_contract();
+    // Nessuna colonna aggiunta: il contratto di output non puo' essere
+    // quello di una misura.
+    match measure_output_column("n", &input, &input, None) {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(message.contains("trovate 0"), "{message}");
+        }
+        other => panic!("atteso Schema, ottenuto {other:?}"),
+    }
+    // Piu' di una colonna aggiunta: ambiguita' rifiutata.
+    let wider = DataContract::tabular(Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("a", DataType::Float64, true),
+        Field::new("b", DataType::Float64, true),
+    ])));
+    match measure_output_column("n", &input, &wider, None) {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(message.contains("trovate 2"), "{message}");
+        }
+        other => panic!("atteso Schema, ottenuto {other:?}"),
+    }
+    // `output_column` dichiarata diversa dalla colonna inferita: la
+    // divergenza e' un errore, la fonte unica resta il contratto.
+    let one = DataContract::tabular(Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("area", DataType::Float64, true),
+    ])));
+    match measure_output_column("n", &input, &one, Some("length")) {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(message.contains("diversa"), "{message}");
+        }
+        other => panic!("atteso Schema, ottenuto {other:?}"),
+    }
+    assert_eq!(
+        measure_output_column("n", &input, &one, Some("area")).expect("coerente"),
+        "area"
+    );
+    assert_eq!(
+        measure_output_column("n", &input, &one, None).expect("inferita"),
+        "area"
+    );
+}

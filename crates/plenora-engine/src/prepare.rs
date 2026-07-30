@@ -40,7 +40,6 @@ use std::path::PathBuf;
 use geo::{Geometry, Point};
 use serde::Deserialize;
 
-use plenora_core::arrow::schema::DataType;
 use plenora_core::catalog::{Arity, ExecutionClass, Family};
 use plenora_core::contract::{DataContract, RuntimeStatistic};
 use plenora_core::limits::Limits;
@@ -248,18 +247,6 @@ pub enum MeasureKind {
     VertexCount,
     /// `geo.to_wkt` → colonna `Utf8`.
     ToWkt,
-}
-
-impl MeasureKind {
-    /// Tipo Arrow della colonna prodotta.
-    #[must_use]
-    pub const fn data_type(self) -> DataType {
-        match self {
-            Self::Area | Self::Length | Self::Perimeter => DataType::Float64,
-            Self::VertexCount => DataType::UInt64,
-            Self::ToWkt => DataType::Utf8,
-        }
-    }
 }
 
 /// Accessore scalare di `geo.geometry_accessors`, in ordine canonico di
