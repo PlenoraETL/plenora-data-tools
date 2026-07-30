@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "component": "plenora-data-tools",
-  "component_version": "0.1.0",
+  "component_version": "0.1.0-rc1",
   "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
   "icd": {
     "repository": "plenora-contracts",
@@ -9,7 +9,7 @@
     "revision": "3598259bbe07d1c853453ff34ca2c1d1d28a0272"
   },
   "claims": {
-    "component_rc": false,
+    "component_rc": true,
     "system_rc": false,
     "avionic_certification": false
   },
@@ -93,5 +93,9 @@
       "note": "CI notturna (.github/workflows/fuzz.yml) con sanitizer su toolchain nightly — deroga DER-001 registrata in docs/deroghe.md con condizione di rientro."
     }
   },
-  "notes": "Manifesto ai sensi di PLENORA-CRITERI-RC.md (C1-C5). component_rc false per i blocchi enumerati (C5.1); nessun blocco e' stato aggirato, le riduzioni sono dichiarate inline e i blocchi chiusi restano tracciati in closed_blocks con la revisione di chiusura. La qualifica di sistema appartiene a plenora-contracts/conformance (C3.2). R0.4: nessun revisore indipendente, claim massimo verified_internally."
+  "notes": "Manifesto ai sensi di PLENORA-CRITERI-RC.md (C1-C5). component_rc TRUE dal tag v0.1.0-rc1: tutti gli 8 blocchi interni in closed_blocks con SHA di chiusura; restano aperti solo i due esterni (BLOCK-05 qualifica di sistema posseduta da plenora-contracts/conformance, BLOCK-07 semantica field_id in chiarimento ICD) che per C3.2 non condizionano la RC di componente. R0.4: nessun revisore indipendente, claim massimo verified_internally. R0.5: avionic_certification false. system_rc false: non dichiarabile da un componente (C3.1).",
+  "release_tag": {
+    "name": "v0.1.0-rc1",
+    "revision": "7d530318760ccfa93b2baa2049e181fd57deed1e"
+  }
 }
