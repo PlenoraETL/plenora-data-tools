@@ -703,7 +703,7 @@ fn dag_v4_misto_geo_end_to_end() {
 }
 
 // ---------------------------------------------------------------------------
-// Test di catena completa (plenora-contracts v2.0-rc4, Appendice A "cosa
+// Test di catena completa (plenora-contracts v2.0-rc10, Appendice A "cosa
 // manca alla catena"): un dataset con coordinate Z, CRS risolto e
 // axis_order dichiarato entra da un bordo, attraversa il centro (DAG v4) ed
 // esce — le chiavi canoniche sopravvivono e i byte Z passano invariati.

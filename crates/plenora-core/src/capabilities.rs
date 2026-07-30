@@ -1,5 +1,5 @@
 //! Capability dichiarative del componente (ICD §10 R10.2, contratti
-//! trasversali v2.0-rc8 — proposta in attesa di ratifica, la forma e'
+//! trasversali v2.0-rc10 — proposta in attesa di ratifica, la forma e'
 //! definita localmente in attesa di una convenzione trasversale).
 //!
 //! Interrogabili PRIMA dell'esecuzione, in forma leggibile da un programma

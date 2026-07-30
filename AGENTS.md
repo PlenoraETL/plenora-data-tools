@@ -38,7 +38,7 @@ agente — segue queste regole. Non sono opzionali.
 - Registro delle deroghe: `docs/deroghe.md` (ICD §16 R16.2) — unico punto
   di raccolta; ogni deroga dichiara regola, motivo, hazard, owner e
   condizione di rientro (R16.1). Fonte normativa citata nelle CIA:
-  `plenora-contracts`, tag `v2.0-rc8` (revisione `62b12e3`).
+  `plenora-contracts`, tag `v2.0-rc10` (revisione `3598259`).
 - `Architetture.md`, `Prestazioni.md` — decisioni (D*) e invarianti (I*, P*).
 - Catalogo operazioni: snapshot test
   (`crates/plenora-engine/tests/catalog_snapshot.snap`) — ogni cambio di

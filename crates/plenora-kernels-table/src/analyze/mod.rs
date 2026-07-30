@@ -28,7 +28,7 @@
 //! `output_columns` esplicito falliscono con `Unsupported` esplicito —
 //! meglio fallire in validazione che indovinare uno schema sbagliato.
 //!
-//! Lineage dei metadata Arrow (R2.4, plenora-contracts v2.0-rc4 par. 2): i
+//! Lineage dei metadata Arrow (R2.4, plenora-contracts v2.0-rc10 par. 2): i
 //! metadata dello schema di input attraversano sempre lo schema di output;
 //! per le op a due sorgenti (join e varianti, `union_distinct`, `table_diff`)
 //! vale la merge-policy — chiave su una sola sorgente o con valore identico

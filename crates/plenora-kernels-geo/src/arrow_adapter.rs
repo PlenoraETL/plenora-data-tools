@@ -409,7 +409,7 @@ fn geo_metadata_value(field: &Field) -> Option<serde_json::Value> {
 
 // ---------------------------------------------------------------------------
 // Milestone B — protocollo delle chiavi canoniche (contratti trasversali
-// v2.0-rc3 §2, proposta in attesa di ratifica): emissione da
+// v2.0-rc10 §2, proposta in attesa di ratifica): emissione da
 // `GeometryColumnContract`, lettura fail-closed per chiave (R5.1), coerenza
 // canonica-vs-legacy (R2.6) e completamento per precedenza (R2.7).
 // ---------------------------------------------------------------------------

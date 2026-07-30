@@ -145,7 +145,7 @@ pub enum PublishOutcome {
 
 impl PublishOutcome {
     /// Effetto dell'esito sull'asse canonico «effetto remoto» (R9.6,
-    /// contratti trasversali v2.0-rc3 §9, milestone D): collegamento
+    /// contratti trasversali v2.0-rc10 §9, milestone D): collegamento
     /// esplicito tra ADR 7 e il modello a quattro assi (R9.1), SENZA
     /// duplicare l'esito in una variante d'errore — l'esito ignoto non e'
     /// una categoria d'errore (R9.3).

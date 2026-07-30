@@ -1,14 +1,14 @@
 # Registro delle deroghe — plenora-data-tools
 
 Unico punto di raccolta delle deroghe attive del componente (ICD §16 R16.2,
-plenora-contracts `v2.0-rc8`). Ogni deroga dichiara: regola, motivo, impatto
+plenora-contracts `v2.0-rc10`). Ogni deroga dichiara: regola, motivo, impatto
 sugli hazard, owner e condizione di rientro (R16.1). Una deroga senza
 condizione di rientro e' permanente e va dichiarata tale. Le deviazioni dai
 contratti documentati restano registrate anche nell'ADR pertinente
 (`docs/adr/`, regola 4 di AGENTS.md).
 
-Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc8`
-(revisione `62b12e3496466d2c908dac3cc098640b99b52e21`).
+Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
+(revisione `3598259bbe07d1c853453ff34ca2c1d1d28a0272`).
 
 ## DER-003 — `max_batch_bytes` sugli archi interni dei gruppi fusi (fusione geo)
 

@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0",
-  "revision": "b5ca08fef6f0af96d6c8d9c4e4f282984c189f5e",
+  "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -17,16 +17,6 @@
   "independent_review": false,
   "open_blocks": [
     {
-      "id": "BLOCK-01",
-      "title": "CRS condizionato alle operazioni (R4.6.3, ICD 2.0-rc10)",
-      "detail": "La discovery CLI risolve il CRS per ogni colonna geometria incondizionatamente: un piano tabellare puro su colonna con CRS mancante e' rifiutato, piu' restrittivo del ruolo. Fix in attuazione (stato: agente in corso su questo stesso albero), include il messaggio d'errore che riportava l'ultimo tentativo invece della causa."
-    },
-    {
-      "id": "BLOCK-02",
-      "title": "Riferimento normativo non riallineato (rc8 -> rc10)",
-      "detail": "Le citazioni in AGENTS.md, docs/deroghe.md e negli ADR indicano v2.0-rc8 (62b12e3); l'ICD e' a v2.0-rc10 (R4.6 colloca il fail-closed sul CRS, decisioni aperte raccolte). Riallineo documentale pianificato insieme a BLOCK-01."
-    },
-    {
       "id": "BLOCK-03",
       "title": "Tagging di fase ai confini (assi errore par. 9)",
       "detail": "Fase ed effetto sono derivati per variante; il tagging ai confini (step_error, at_input, publish) raffinera' le approssimazioni dichiarate in ADR-0009 (DataMapping/Io -> Write; Unsupported publish-target -> Validate invece di Probe). Raffinamento, nessun cambio alla disposizione retry."
@@ -34,12 +24,12 @@
     {
       "id": "BLOCK-04",
       "title": "Copertura sotto soglia su tre moduli",
-      "detail": "Copertura di riga 92,43% (47.151/51.010, report in target/tmp/coverage su revisione c941bb2 — rigenerare su HEAD per la RC). Punti deboli: plenora-cli 59,5%, prepare.rs 75,7%, publish.rs 76,6%. La riduzione di copertura su questi moduli resta dichiarata (C5.2)."
+      "detail": "Copertura di riga 92,43% (47.151/51.010, report in target/tmp/coverage su revisione c941bb28 — rigenerare su HEAD per la RC). Punti deboli: plenora-cli 59,5%, prepare.rs 75,7%, publish.rs 76,6%. La riduzione di copertura su questi moduli resta dichiarata (C5.2)."
     },
     {
       "id": "BLOCK-05",
       "title": "Catena bordo-centro-bordo non qualificata",
-      "detail": "La qualifica di sistema e' posseduta da plenora-contracts/conformance (C3.2): la matrice del 30 luglio e' stata invalidata dal lato harness (features mancanti, falso positivo) e va rieseguita su revisione b5ca08f. Dipendenza esterna, fuori dal controllo di questo componente."
+      "detail": "La qualifica di sistema e' posseduta da plenora-contracts/conformance (C3.2): la matrice del 30 luglio e' stata invalidata dal lato harness (features mancanti, falso positivo) e va rieseguita sulla revisione di questo manifesto. Dipendenza esterna, fuori dal controllo di questo componente."
     },
     {
       "id": "BLOCK-06",
@@ -50,16 +40,35 @@
       "id": "BLOCK-07",
       "title": "plenora.field_id cross-processo: semantica da chiarire (ICD)",
       "detail": "R2 lo da' facoltativo (non emetterlo e' lecito) e R2.4 impone di propagarlo invariato se ricevuto — attuato. Il chiarimento sul significato di un field_id assegnato da un altro processo e' materia ICD, proposta da inoltrare all'owner."
+    },
+    {
+      "id": "BLOCK-08",
+      "title": "declared_unresolved senza decisione nel piano (R4.6.3)",
+      "detail": "R4.6.3 richiede una decisione esplicita nel piano per risolvere un'incoerenza dichiarata; oggi la discovery risolve una definizione risolvibile ed emette `resolved` (comportamento preesistente). Modellare la decisione di piano e' follow-up dichiarato in ADR-0009 (decisione 7)."
+    }
+  ],
+  "closed_blocks": [
+    {
+      "id": "BLOCK-01",
+      "title": "CRS condizionato alle operazioni (R4.6.3)",
+      "closed_by": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
+      "note": "ContractCrs { Resolved, Missing }; il filtro tabellare passa e propaga crs_resolution=missing (R4.6.4), le op geo con CrsRequirement falliscono in analyze con categoria Crs e messaggio-causa. Chiuso il 2026-07-30."
+    },
+    {
+      "id": "BLOCK-02",
+      "title": "Riferimento normativo non riallineato (rc8 -> rc10)",
+      "closed_by": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
+      "note": "Tutte le citazioni normative (AGENTS.md, docs/deroghe.md, error.rs, capabilities.rs, arrow_adapter.rs, publish.rs, analyze) indicano v2.0-rc10 (3598259). Chiuso il 2026-07-30."
     }
   ],
   "evidence": {
     "test_suite": {
-      "revision": "b5ca08fef6f0af96d6c8d9c4e4f282984c189f5e",
+      "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "933 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
+      "result": "945 passed, 0 failed; +358 passed con --features full-backends (plenora-engine)"
     },
     "lint_gate": {
-      "revision": "b5ca08fef6f0af96d6c8d9c4e4f282984c189f5e",
+      "revision": "711f93a7caee8b129a140d23e8e5bc346043d0e9",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
@@ -70,7 +79,7 @@
     "fusion_benchmark": {
       "revision": "b5ca08fef6f0af96d6c8d9c4e4f282984c189f5e",
       "command": "cargo run --release --example bench_geo_fusion -p plenora-engine (con MALLOC_ARENA_MAX=4 MALLOC_MMAP_THRESHOLD_=32768)",
-      "result": "delta fuso/non fuso: -20,2% catena trasformazioni, -16,2% con misura terminale, -11,7% reproject; output byte-identici, zero fallback. Sensibile alle condizioni host (dichiarato in ADR-0012)."
+      "result": "delta fuso/non fuso: -20,2% catena trasformazioni, -16,2% con misura terminale, -11,7% reproject; output byte-identici, zero fallback. Sensibile alle condizioni host (dichiarato in ADR-0012); R4.6.3 non tocca i percorsi misurati."
     },
     "coverage": {
       "revision": "c941bb28dae12b7278e4d32466c5ec3c1e882c5f",
@@ -80,5 +89,5 @@
       "note": "CI notturna (.github/workflows/fuzz.yml) con sanitizer su toolchain nightly — deroga DER-001 registrata in docs/deroghe.md con condizione di rientro."
     }
   },
-  "notes": "Manifesto ai sensi di PLENORA-CRITERI-RC.md (C1-C5). component_rc false per i blocchi enumerati (C5.1); nessun blocco e' stato aggirato, le riduzioni sono dichiarate inline. La qualifica di sistema appartiene a plenora-contracts/conformance (C3.2). R0.4: nessun revisore indipendente, claim massimo verified_internally."
+  "notes": "Manifesto ai sensi di PLENORA-CRITERI-RC.md (C1-C5). component_rc false per i blocchi enumerati (C5.1); nessun blocco e' stato aggirato, le riduzioni sono dichiarate inline e i blocchi chiusi restano tracciati in closed_blocks con la revisione di chiusura. La qualifica di sistema appartiene a plenora-contracts/conformance (C3.2). R0.4: nessun revisore indipendente, claim massimo verified_internally."
 }

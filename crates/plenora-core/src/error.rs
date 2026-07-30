@@ -10,7 +10,7 @@
 //! fuori da un'esecuzione DAG, es. percorso legacy `table_engine` — il
 //! Display lo omette in quel caso).
 //!
-//! Milestone D (contratti trasversali v2.0-rc8 §9, proposta in attesa di
+//! Milestone D (contratti trasversali v2.0-rc10 §9, proposta in attesa di
 //! ratifica — andra' in ADR-0009): l'errore porta i quattro assi
 //! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste da
 //! M1d; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
@@ -32,7 +32,7 @@ use thiserror::Error;
 /// `GeoEngineError` (geo-tools-arrow).
 ///
 /// Nomi delle varianti allineati all'enumerazione canonica §9 (Appendice C,
-/// contratti trasversali v2.0-rc8, R9.5: sottoinsieme ammesso, mai valori
+/// contratti trasversali v2.0-rc10, R9.5: sottoinsieme ammesso, mai valori
 /// propri): `Contract` → `InvalidPlan`, `Step` → `Execution`,
 /// `UnsupportedPublishTarget` → fusa in `Unsupported`, `Json`/`Arrow` →
 /// fuse in `DataMapping`. **I testi `Display` sono invariati** ("contract
@@ -197,7 +197,7 @@ impl ErrorCategory {
 }
 
 /// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
-/// R9.1 (contratti trasversali v2.0-rc3 §9, milestone D).
+/// R9.1 (contratti trasversali v2.0-rc10 §9, milestone D).
 ///
 /// Enumerazione canonica (R9.5): sono ammessi solo questi dieci valori —
 /// data-tools ne usa un sottoinsieme e non ne definisce di propri. Il
@@ -262,7 +262,7 @@ impl fmt::Display for ErrorPhase {
 
 /// Effetto restato sul sistema remoto o sul supporto quando l'operazione
 /// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6
-/// (contratti trasversali v2.0-rc3 §9, milestone D).
+/// (contratti trasversali v2.0-rc10 §9, milestone D).
 ///
 /// L'esito ignoto NON e' una categoria d'errore (R9.3): [`RemoteEffect::Unknown`]
 /// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
@@ -307,7 +307,7 @@ impl fmt::Display for RemoteEffect {
 
 /// Disposizione al ritentativo di un'operazione fallita: asse
 /// «ritentativo» di R9.1, enumerazione canonica R9.7 (contratti trasversali
-/// v2.0-rc8 §9).
+/// v2.0-rc10 §9).
 ///
 /// Sostituisce il booleano `retryable` della 1.x, insufficiente e
 /// pericoloso (R9.7: un timeout in lettura e' ritentabile, lo stesso
