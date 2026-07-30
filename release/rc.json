@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "component": "plenora-data-tools",
   "component_version": "0.1.0",
-  "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
+  "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
   "icd": {
     "repository": "plenora-contracts",
     "tag": "v2.0-rc10",
@@ -22,17 +22,18 @@
       "detail": "La qualifica di sistema e' posseduta da plenora-contracts/conformance (C3.2): la matrice del 30 luglio e' stata invalidata dal lato harness (features mancanti, falso positivo) e va rieseguita sulla revisione di questo manifesto. Dipendenza esterna, fuori dal controllo di questo componente."
     },
     {
-      "id": "BLOCK-06",
-      "title": "Decisione sul percorso legacy (chiavi canoniche par. 2)",
-      "detail": "L'output legacy emette solo le chiavi GeoArrow standard; la doppia emissione canonica e' solo nel percorso v4 (DER-002). Decisione aperta: ritirare il legacy o portarlo a parita' (ADR-0009, stato di attuazione)."
-    },
-    {
       "id": "BLOCK-07",
       "title": "plenora.field_id cross-processo: semantica da chiarire (ICD)",
       "detail": "R2 lo da' facoltativo (non emetterlo e' lecito) e R2.4 impone di propagarlo invariato se ricevuto — attuato. Il chiarimento sul significato di un field_id assegnato da un altro processo e' materia ICD, proposta da inoltrare all'owner."
     }
   ],
   "closed_blocks": [
+    {
+      "id": "BLOCK-06",
+      "title": "Decisione sul percorso legacy (chiavi canoniche par. 2)",
+      "closed_by": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
+      "note": "Decisione owner 2026-07-30: PARITA', non ritiro. Il percorso legacy (geo_transport, comandi transform-arrow/pair-arrow) emette le chiavi canoniche par. 2 in doppia emissione con quelle GeoArrow, stessa forma del v4 (canonical_geometry_metadata_for_resolved_definition, corpo CRS condiviso con canonical_geometry_metadata; plenora.contract.version in Schema::metadata, R2.5). Post-processo centrale unico (canonical_legacy_output) sui due entry point prima di encode_ipc; chiavi canoniche di lineage propagate invariate (R2.4/R4.6.4: missing -> missing, declared_unresolved -> dichiarazioni originali); campi riscritti -> resolved dalla definizione dichiarata nell'operazione (CRS risolto al livello comandi). DER-002 estesa al legacy; ADR-0009 aggiornato. I comandi transform (frame WKB v2) e spatial-join (protocollo coppie) non hanno schema Arrow in uscita: non applicabile, dichiarato. closed_by da sostituire con la revisione del commit di chiusura. Chiuso il 2026-07-30."
+    },
     {
       "id": "BLOCK-08",
       "title": "declared_unresolved senza decisione nel piano (R4.6.3)",
@@ -66,12 +67,12 @@
   ],
   "evidence": {
     "test_suite": {
-      "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
+      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
       "command": "cargo test --workspace --no-fail-fast --locked (container rust:1.92)",
-      "result": "1011 passed, 0 failed; +382 passed con --features full-backends (plenora-engine); +87 con proj-backend (plenora-cli)"
+      "result": "1018 passed, 0 failed; +487 passed con --features full-backends (plenora-engine + plenora-cli)"
     },
     "lint_gate": {
-      "revision": "492247d48e9bcae086519bf8b1ec8cd43a2baa11",
+      "revision": "21aec62e8d70fcc39e4d8e1c3df292cdb3f73f0f",
       "command": "cargo clippy --workspace --all-targets --locked (+ target x86_64-pc-windows-msvc)",
       "result": "zero warning, lint all/pedantic/nursery a deny (workspace.lints)"
     },
