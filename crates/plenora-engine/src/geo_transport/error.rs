@@ -154,7 +154,9 @@ pub enum ArrowTransportError {
 /// variante dedicata in `ArrowTransportError` (nel flusso del trasporto
 /// non si presentano mai: il kernel WKB emette solo errori di
 /// contratto/unsupported): sono mappate su `Arrow` mantenendo il testo
-/// completo dell'errore.
+/// completo dell'errore. Il wrapper di fase `Tagged` (BLOCK-03) e'
+/// attraversato: il tag riguarda l'asse fase, che il trasporto non porta —
+/// la conversione vede la variante interna, esattamente come senza tag.
 impl From<PlenoraError> for ArrowTransportError {
     fn from(error: PlenoraError) -> Self {
         match error {
@@ -162,6 +164,7 @@ impl From<PlenoraError> for ArrowTransportError {
             | PlenoraError::Unsupported(message)
             | PlenoraError::Schema(message) => Self::Geometry(message),
             PlenoraError::Io(error) => Self::Io(error),
+            PlenoraError::Tagged { source, .. } => Self::from(*source),
             other => Self::Arrow(other.to_string()),
         }
     }

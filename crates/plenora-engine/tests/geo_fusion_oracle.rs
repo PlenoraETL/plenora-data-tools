@@ -213,6 +213,15 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
             reason.clone(),
         ),
         PlenoraError::Io(error) => ("Io", None, None, error.to_string()),
+        // Wrapper di fase (BLOCK-03): la firma vede la variante interna;
+        // la fase (taggata) e' letta sotto da `error.phase()`.
+        PlenoraError::Tagged { source, .. } => {
+            let inner = error_signature(source);
+            return ErrorSignature {
+                phase: error.phase(),
+                ..inner
+            };
+        }
     };
     ErrorSignature {
         variant,
@@ -237,6 +246,7 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
         PlenoraError::Internal(_) => "Internal",
+        PlenoraError::Tagged { source, .. } => variant_name(source),
     }
 }
 

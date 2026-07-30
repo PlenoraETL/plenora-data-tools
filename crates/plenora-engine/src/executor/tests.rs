@@ -3240,3 +3240,123 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
         .expect("colonna wkt Utf8");
     assert!(wkt.is_null(2), "null-in -> null-out sulla misura");
 }
+
+// --------------------------------------------------------------------------
+// Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
+// --------------------------------------------------------------------------
+
+#[test]
+fn input_constructor_errors_are_tagged_read() {
+    // File assente: Io nato aprendo la sorgente -> fase Read; testo e
+    // altri assi invariati (delega del wrapper).
+    let error = Input::read_ipc_file(Path::new("input-che-non-esiste.arrow"))
+        .map(|_input| ())
+        .expect_err("file assente");
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert_eq!(error.phase_tag(), Some(ErrorPhase::Read));
+    assert!(error.to_string().starts_with("io error: "), "{error}");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::Io);
+    assert_eq!(
+        error.retry_disposition(),
+        plenora_core::RetryDisposition::Safe
+    );
+
+    // Header IPC malformato: DataMapping nato leggendo la sorgente -> Read.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let garbage = directory.path().join("garbage.arrow");
+    std::fs::write(&garbage, b"non-e-un-flusso-ipc").expect("fixture");
+    let error = Input::read_ipc_file(&garbage)
+        .map(|_input| ())
+        .expect_err("header malformato");
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert!(matches!(error.untag(), PlenoraError::DataMapping(_)));
+}
+
+#[test]
+fn input_stream_source_errors_are_tagged_read_and_keep_their_text() {
+    // Sorgente che fallisce a meta' stream: l'errore emerge al confine
+    // Input con fase Read e testo della sorgente, mai riscritto.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = Inputs::new()
+        .with(
+            "main",
+            Input::from_iter(
+                table_schema(),
+                vec![
+                    Ok(table_batch(&[1], &["a"])),
+                    Err(PlenoraError::DataMapping("lettura sorgente fallita".into())),
+                ]
+                .into_iter(),
+            ),
+        )
+        .expect("inputs");
+    let mut output =
+        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let first = output.next().expect("primo item").expect("batch ok");
+    assert_eq!(first.num_rows(), 1);
+    let error = output
+        .next()
+        .expect("item di errore")
+        .expect_err("la sorgente fallisce");
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert_eq!(error.to_string(), "lettura sorgente fallita");
+}
+
+#[test]
+fn input_batch_schema_mismatch_is_tagged_read() {
+    // Batch con schema diverso dal contratto, rilevato mentre lo stream
+    // dell'input e' tirato: errore di lettura della sorgente (Read), non
+    // validazione del piano (quella resta al check di `execute`, non
+    // taggato — vedi `input_schema_mismatch_is_rejected_before_execution`).
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let wrong = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+        vec![Arc::new(Int64Array::from(vec![1])) as ArrayRef],
+    )
+    .expect("batch fixture");
+    let inputs = Inputs::new()
+        .with(
+            "main",
+            Input::from_iter(table_schema(), vec![Ok(wrong)].into_iter()),
+        )
+        .expect("inputs");
+    let mut output =
+        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let error = output
+        .next()
+        .expect("item di errore")
+        .expect_err("schema diverso dal contratto");
+    assert!(matches!(error, PlenoraError::Tagged { .. }), "{error:?}");
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert!(matches!(error.untag(), PlenoraError::Schema(_)));
+}
+
+#[test]
+fn governor_errors_at_the_input_boundary_keep_the_derived_phase() {
+    // Regressione: il governor (max_input_rows) scatta allo stesso confine
+    // ma resta validazione di vincoli — NESSUN tag, fase derivata Validate
+    // (decisione confermata in ADR-0009).
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_input_rows": 1},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input("main", vec![table_batch(&[1, 2], &["a", "b"])]);
+    let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let error = output.collect_batches().expect_err("limite input");
+    assert!(error.to_string().contains("max_input_rows"), "{error}");
+    assert_eq!(error.phase(), ErrorPhase::Validate);
+    assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
+}

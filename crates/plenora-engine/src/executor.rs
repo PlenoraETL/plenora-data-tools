@@ -156,7 +156,7 @@ use plenora_core::catalog::{
     find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion, CATALOG,
 };
 use plenora_core::contract::{BatchSequence, DataContract, GeometryDimensions};
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{
     batch_geometry_cells, canonical_geometry_metadata, canonical_schema_version_metadata,
     decode_geometry_cell, GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
@@ -254,10 +254,13 @@ impl Input {
     /// # Errors
     ///
     /// `PlenoraError::Io`/`PlenoraError::DataMapping` se il file non si apre o
-    /// l'header IPC non e' valido.
+    /// l'header IPC non e' valido — taggati [`ErrorPhase::Read`] (BLOCK-03:
+    /// nascono leggendo la sorgente).
     pub fn read_ipc_file(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)?;
-        let reader = FileReader::try_new(file, None)?;
+        let file = std::fs::File::open(path)
+            .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
+        let reader = FileReader::try_new(file, None)
+            .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
         let schema = reader.schema();
         Ok(Self::Stream {
             schema,
@@ -275,8 +278,10 @@ impl Input {
     ///
     /// Come [`Input::read_ipc_file`].
     pub fn read_ipc_stream(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)?;
-        let reader = StreamReader::try_new(file, None)?;
+        let file = std::fs::File::open(path)
+            .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
+        let reader = StreamReader::try_new(file, None)
+            .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
         let schema = reader.schema();
         Ok(Self::Stream {
             schema,
@@ -1360,6 +1365,9 @@ impl Network {
     /// Stream di un input del piano: limiti per input, byte per batch e
     /// validazione dinamica WKB per cella (D8) prima del primo nodo.
     ///
+    /// Confine di lettura (BLOCK-03): gli errori della sorgente e della
+    /// coerenza per-batch dello schema sono taggati [`ErrorPhase::Read`].
+    ///
     /// Punto di ingresso nel perimetro governato: qui ogni batch riceve il
     /// lease di memoria (ADR-0002, quota contata UNA volta per arco) e la
     /// sequenza logica (ADR-0001: `source_node` = nome dell'input,
@@ -1420,11 +1428,16 @@ impl Network {
             geometry_column.map_or(GeometryDimensions::Xy, |geometry| geometry.dimensions);
         let mut sequence_number = 0_u64;
         Ok(Box::new(raw.map(move |item| {
-            let batch = item?.batch;
+            // Confine di lettura (BLOCK-03): gli errori della sorgente e la
+            // coerenza per-batch dello schema nascono leggendo l'input —
+            // fase Read. Gli errori di governor e di validazione WKB qui
+            // sotto restano validazione, derivata per variante.
+            let batch = item.map_err(|error| error.with_phase(ErrorPhase::Read))?.batch;
             if batch.schema().as_ref() != expected_schema.as_ref() {
                 return Err(PlenoraError::Schema(format!(
                     "batch dell'input `{edge_name}` con schema diverso dal contratto"
-                )));
+                ))
+                .with_phase(ErrorPhase::Read));
             }
             let bytes = check_batch_bytes(&state, &batch, &edge_name)?;
             if let Some(index) = geometry_index {

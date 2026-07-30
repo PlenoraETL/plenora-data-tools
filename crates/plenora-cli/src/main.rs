@@ -43,7 +43,7 @@ use plenora_core::contract::{
     GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement};
-use plenora_core::PlenoraError;
+use plenora_core::{ErrorPhase, PlenoraError};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
 use plenora_engine::geo_transport::publish::{
@@ -792,29 +792,43 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
 
 /// `true` se il file inizia con il magic dell'Arrow IPC **file format**
 /// (`ARROW1`); altrimenti e' trattato come IPC stream format.
+///
+/// Confine di lettura (BLOCK-03): gli errori I/O dello sniffing nascono
+/// leggendo la sorgente — tag [`ErrorPhase::Read`].
 fn is_ipc_file_format(path: &Path) -> Result<bool, PlenoraError> {
-    const MAGIC: &[u8; 6] = b"ARROW1";
-    let mut file = File::open(path)?;
-    let mut buffer = [0_u8; 6];
-    let mut read = 0_usize;
-    while read < buffer.len() {
-        let count = file.read(&mut buffer[read..])?;
-        if count == 0 {
-            break;
+    let sniffed = (|| -> Result<bool, PlenoraError> {
+        const MAGIC: &[u8; 6] = b"ARROW1";
+        let mut file = File::open(path)?;
+        let mut buffer = [0_u8; 6];
+        let mut read = 0_usize;
+        while read < buffer.len() {
+            let count = file.read(&mut buffer[read..])?;
+            if count == 0 {
+                break;
+            }
+            read += count;
         }
-        read += count;
-    }
-    Ok(read == MAGIC.len() && &buffer == MAGIC)
+        Ok(read == MAGIC.len() && &buffer == MAGIC)
+    })();
+    sniffed.map_err(|error| error.with_phase(ErrorPhase::Read))
 }
 
 /// Schema Arrow dell'header IPC di un input (file o stream format): nessuna
 /// riga di dati letta.
+///
+/// Confine di lettura (BLOCK-03): gli errori `Io`/`DataMapping` di apertura
+/// e parse dell'header nascono leggendo la sorgente — tag
+/// [`ErrorPhase::Read`] (lo sniffing del formato e' gia' taggato da
+/// [`is_ipc_file_format`], il primo tag vince).
 fn ipc_header_schema(path: &Path) -> Result<SchemaRef, PlenoraError> {
-    if is_ipc_file_format(path)? {
-        Ok(FileReader::try_new(File::open(path)?, None)?.schema())
-    } else {
-        Ok(StreamReader::try_new(File::open(path)?, None)?.schema())
-    }
+    let header = (|| -> Result<SchemaRef, PlenoraError> {
+        if is_ipc_file_format(path)? {
+            Ok(FileReader::try_new(File::open(path)?, None)?.schema())
+        } else {
+            Ok(StreamReader::try_new(File::open(path)?, None)?.schema())
+        }
+    })();
+    header.map_err(|error| error.with_phase(ErrorPhase::Read))
 }
 
 /// Input lazy per l'executor: IPC file o stream format, sniffato dal magic.
@@ -1803,5 +1817,45 @@ mod tests {
         let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
         let result = discover_input_contract_from_schema(schema);
         assert!(result.is_err(), "metadato geo malformato -> errore");
+    }
+
+    // -------------------------------------------------------------------
+    // Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ipc_probes_tag_read_errors_at_the_input_boundary() {
+        // File assente: Io dello sniffing -> fase Read; testo invariato.
+        let missing = Path::new("input-che-non-esiste.arrow");
+        let error = is_ipc_file_format(missing).expect_err("file assente");
+        assert_eq!(error.phase(), ErrorPhase::Read);
+        assert_eq!(error.phase_tag(), Some(ErrorPhase::Read));
+        assert!(error.to_string().starts_with("io error: "), "{error}");
+        // Stesso tag dal lato dell'header.
+        let error = ipc_header_schema(missing).expect_err("file assente");
+        assert_eq!(error.phase(), ErrorPhase::Read);
+
+        // Header malformato: DataMapping nato leggendo la sorgente -> Read.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let garbage = directory.path().join("garbage.arrow");
+        std::fs::write(&garbage, b"non-e-un-flusso-ipc").expect("fixture");
+        let error = ipc_header_schema(&garbage).expect_err("header malformato");
+        assert_eq!(error.phase(), ErrorPhase::Read);
+        assert!(matches!(error.untag(), PlenoraError::DataMapping(_)));
+    }
+
+    #[test]
+    fn discovery_contract_errors_keep_the_derived_validate_phase() {
+        // Regressione: gli errori della discovery del contratto (coerenza
+        // dei metadati, R2.6) NON sono taggati — restano validazione
+        // derivata per variante. Il tagging copre solo la lettura fisica.
+        let field = geometry_field(Some(r#"{"crs":"EPSG:32632","dimensions":"xy"}"#));
+        let mut metadata = field.metadata().clone();
+        metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
+        let field = field.with_metadata(metadata);
+        let error = discover_input_contract_from_schema(schema_v1(vec![field]))
+            .expect_err("divergenza R2.6");
+        assert_eq!(error.phase(), ErrorPhase::Validate);
+        assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
     }
 }

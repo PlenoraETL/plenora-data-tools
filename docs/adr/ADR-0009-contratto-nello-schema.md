@@ -74,10 +74,12 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    (stesso stampo di `category()`); R9.5 vieta valori propri. R9.7
    sostituisce il booleano `retryable()` di M1d (rimosso): la disposizione
    e' calcolata da fase, effetto e idempotenza, mai dalla sola categoria.
-   Il tagging di fase ai confini (`step_error`, `at_input`, publish) resta
-   follow-up: raffinera' la fase, non la disposizione — effetto `None` per
-   costruzione e idempotenza della riesecuzione valgono a qualunque fase
-   raffinata, quindi il mapping di `retry_disposition()` non cambia.
+   Il tagging di fase ai confini (lettura input, publish — variante wrapper
+   `PlenoraError::Tagged`, attuato 2026-07-30, vedi "Stato di attuazione")
+   raffina la fase, NON la disposizione: effetto `None` per costruzione e
+   idempotenza della riesecuzione valgono a qualunque fase raffinata,
+   quindi il mapping di `retry_disposition()` non e' cambiato (e'
+   verificato per delega: il wrapper la eredita dalla sorgente).
 6. **`PublishOutcome` mappato sull'asse effetto, non duplicato.**
    `PublishedButDurabilityUnconfirmed` (ADR 7) non e' un errore (R9.3):
    mappa su `RemoteEffect::Committed` — l'effetto esiste ed e'
@@ -127,13 +129,23 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   l'errore nasce e' `Write`. Se l'emendamento §9 proposto all'owner passa
   (fase dedicata alla trasformazione), l'allineamento e' una costante; se
   non passa, questa forzatura resta la decisione documentata.
-- **Fasi ambigue per varianti multi-sito**: `Io`/`Arrow` (lettura e
-  scrittura) dichiarate `Write` (il lato con possibile effetto sul
-  supporto, il solo rilevante per R9.7); `Contract` del governor (scatta a
-  runtime) dichiarata `Validate`; `UnsupportedPublishTarget` → `Probe`
-  (ispezione preliminare della destinazione, ADR 7). Quando R9.7 rendera'
-  la fase operativa per il retry, queste approssimazioni richiederanno
-  override ai confini (`step_error`, `at_input`, publish).
+- **Fasi ambigue per varianti multi-sito** — RAFFINATE dal tagging ai
+  confini (2026-07-30): gli errori `Io`/`DataMapping`/`Schema` che nascono
+  leggendo una sorgente sono taggati `Read` (costruttori
+  `Input::read_ipc_*`, `Network::input_stream`, sonde IPC della CLI); al
+  confine di publish il riconoscimento della destinazione e' taggato
+  `Probe` (la destinazione non supportata torna alla fase che aveva prima
+  della fusione §9), la creazione del tempfile `Write`, flush/sync
+  `Finalize`, check no-clobber e rename `Commit`. Approssimazioni RESIDUE
+  dichiarate: `Io`/`DataMapping` NON taggati (nati nei kernel o nei
+  percorsi legacy, dove nessun confine dichiara il momento) restano
+  `Write` (il lato con possibile effetto sul supporto, il solo rilevante
+  per R9.7); `InvalidPlan` del governor (scatta a runtime) resta
+  `Validate` per decisione confermata — non si tagga; il tee di fan-out
+  (`StoredEdgeError`) declassa qualunque errore d'arco non
+  `Execution`/`Cancelled` a `InvalidPlan` («arco interrotto») come prima
+  del tagging — comportamento preesistente, invariato. La disposizione
+  R9.7 non dipende da nessuno di questi raffinamenti.
 - **SRID 0 accettato** in lettura (lettera della norma: "intero senza
   segno"); database-tools lo rifiuta per i propri piani — irrigidimento di
   dominio suo, non del protocollo.
@@ -211,11 +223,10 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
     una decisione di design, non un bug: se anche l'output legacy debba
     emettere le chiavi canoniche (oggi solo GeoArrow) o restare
     GeoArrow-only fino al ritiro del percorso.
-- **Follow-up dichiarati**: tagging di fase ai confini (`step_error`,
-  `at_input`, publish — raffina le approssimazioni di fase, non la
-  disposizione R9.7, gia' attuata); chiave `plenora.field_id` (decisione
-  3) da proporre all'owner ICD; test di catena completa bordo-centro-bordo
-  con gli altri due componenti.
+- **Follow-up dichiarati**: chiave `plenora.field_id` (decisione 3) da
+  proporre all'owner ICD; test di catena completa bordo-centro-bordo con
+  gli altri due componenti. (Il tagging di fase ai confini era in questa
+  lista: attuato il 2026-07-30, vedi la voce dedicata sotto.)
 - **R4.6.3 CRS condizionato alle op (attuata, 2026-07-29)**: decisione 7 —
   `ContractCrs` in `plenora-core`; discovery CLI che porta `Missing` invece
   di fallire (metadato `geo` malformato e dichiarazioni contraddittorie
@@ -253,6 +264,33 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   `RequiresRecovery` mai prodotti (nessuno stato remoto), `After` mai
   prodotto (nessuna sorgente di backoff tipizzata — backoff e tentativi
   restano al chiamante).
+- **Tagging di fase ai confini (attuato, 2026-07-30 — BLOCK-03 di
+  `release/rc.json`)**: variante wrapper `PlenoraError::Tagged { phase,
+  source }` in `plenora-core` — `Display` DELEGATO alla sorgente (testo
+  byte-identico, nessun consumatore testuale si rompe), `category()`/
+  `remote_effect()`/`retry_disposition()` delegate, solo `phase()` e'
+  raffinato; costruzione via `with_phase` (il primo tag, il piu' vicino
+  all'origine, vince e non si annida), lettura via `phase_tag()`/`untag()`.
+  Alternativa scartata: campo fase opzionale sulle varianti — avrebbe
+  reso strutturate le varianti tuple (`Io(#[from] std::io::Error)`,
+  `DataMapping(String)`), rompendo la conversione `#[from]` e ogni
+  costruzione/match esistente. Confini taggati: lettura input → `Read`
+  (`Input::read_ipc_*`, `Network::input_stream` — errori della sorgente e
+  coerenza per-batch dello schema — sonde `is_ipc_file_format`/
+  `ipc_header_schema` della CLI); publish ADR 7 → `Probe` (riconoscimento
+  destinazione, incluse directory inesistente e destinazione non
+  supportata, che torna alla fase pre-fusione), `Write` (creazione
+  tempfile), `Finalize` (flush/sync), `Commit` (check no-clobber «output
+  gia' esistente» e rename atomico). NON taggati, per scelta: errori
+  della closure di scrittura di publish (nascono nel chiamante; derivati
+  gia' corretti), governor (resta `Validate`), `Execution`/`Cancelled`
+  (restano `Write`, decisione progettuale invariata), `step_error`/
+  `tag_execution`/`with_diagnostics`/`at_input`/`at_node` (attraversano il
+  wrapper per delega di `Display`: testo identico, comportamento
+  invariato). Match che vede attraverso il wrapper per contratto:
+  `From<PlenoraError> for ArrowTransportError` (braccio esplicito, la
+  conversione conserva la variante interna come senza tag). Cleanup:
+  nessun errore prodotto (tempfile ripulito via `Drop`, infallibile).
 
 ## Cambi di comportamento (dichiarati)
 
@@ -281,3 +319,11 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   `output_contract().schema` resta lo schema "plain" di validazione; i
   batch consegnati da `collect_batches`/`Iterator` restano con lo schema
   kernel. Solo il percorso IPC e' arricchito (perimetro della milestone).
+- **`phase()` raffinata ai confini (tagging, 2026-07-30)**: gli errori
+  nati leggendo un input riportano ora `Read` (prima `Write`), quelli del
+  confine di publish `Probe`/`Write`/`Finalize`/`Commit` secondo il punto
+  (prima `Validate`/`Write`). Cambia il SOLO asse fase: testi `Display`,
+  categorie, effetti e disposizioni di retry sono byte-identici a prima
+  (verificato per delega del wrapper e da test dedicati). I consumatori
+  machine-readable della fase ricevono valori piu' precisi; quelli
+  testuali non osservano alcuna differenza.

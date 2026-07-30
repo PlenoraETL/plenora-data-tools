@@ -26,7 +26,7 @@ use std::fs::File;
 
 use plenora_core::catalog::{find_operation, CrsRequirement};
 use plenora_core::crs::{required_definition, validate_requirement};
-use plenora_core::{PlenoraError, RemoteEffect};
+use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
 
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
@@ -265,7 +265,10 @@ fn classify_filesystem(magic: u64) -> FilesystemClass {
 }
 
 /// Riconoscimento fail-closed del filesystem (ADR 7) su Linux: `statfs`
-/// della directory di destinazione e whitelist dei magic locali.
+/// della directory di destinazione e whitelist dei magic locali. Fase
+/// [`ErrorPhase::Probe`] (BLOCK-03): ispezione preliminare della
+/// destinazione — la fase che la variante dedicata aveva prima della
+/// fusione §9 in `Unsupported`.
 #[cfg(target_os = "linux")]
 fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
     let stat = rustix::fs::statfs(parent)
@@ -277,11 +280,13 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
         FilesystemClass::Network(name) => Err(PlenoraError::Unsupported(format!(
             "filesystem di rete {name} (fuori scope v1): {}",
             parent.display()
-        ))),
+        ))
+        .with_phase(ErrorPhase::Probe)),
         FilesystemClass::Unknown => Err(PlenoraError::Unsupported(format!(
             "filesystem non identificabile (f_type={magic:#x}), rifiuto fail-closed: {}",
             parent.display()
-        ))),
+        ))
+        .with_phase(ErrorPhase::Probe)),
     }
 }
 
@@ -297,7 +302,8 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
         return Err(PlenoraError::Unsupported(format!(
             "percorso UNC (filesystem di rete): {}",
             parent.display()
-        )));
+        ))
+        .with_phase(ErrorPhase::Probe));
     }
     Ok(())
 }
@@ -311,7 +317,8 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
         "riconoscimento del filesystem non implementato su questa piattaforma, \
          rifiuto fail-closed: {}",
         parent.display()
-    )))
+    ))
+    .with_phase(ErrorPhase::Probe))
 }
 
 /// `fsync` della directory dopo il persist (profilo
@@ -342,6 +349,13 @@ thread_local! {
     static FAIL_BEFORE_PERSIST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Errore I/O del confine di publish con la fase esplicita (BLOCK-03,
+/// assi §9): la variante `Io` non distingue il momento, il confine si' —
+/// testo, categoria e disposizione di retry invariati per delega.
+fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
+    PlenoraError::Io(error).with_phase(phase)
+}
+
 /// Pubblicazione atomica dell'output con profilo selezionabile (ADR 7).
 ///
 /// Rifiuta un output esistente, verifica il filesystem di destinazione
@@ -351,12 +365,22 @@ thread_local! {
 /// [`PublishProfile::DurableAtomic`] sincronizza anche la directory dopo il
 /// persist e l'esito riflette la conferma della durabilita'.
 ///
+/// Tagging di fase (BLOCK-03, ADR-0009): ogni punto del confine dichiara il
+/// momento esatto — riconoscimento della destinazione [`ErrorPhase::Probe`],
+/// creazione del tempfile [`ErrorPhase::Write`], flush/sync del writer
+/// [`ErrorPhase::Finalize`], check no-clobber e rename atomico
+/// [`ErrorPhase::Commit`]. Gli errori della closure `write` NON sono
+/// taggati (nascono nel chiamante e restano derivati per variante); la
+/// pulizia del tempfile e' via `Drop`, infallibile — nessun errore
+/// [`ErrorPhase::Cleanup`] e' prodotto.
+///
 /// # Errors
-/// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' o la
-/// directory di destinazione non esiste;
+/// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' (tag
+/// `Commit`) o la directory di destinazione non esiste (tag `Probe`);
 /// `PlenoraError::Unsupported` se il filesystem di destinazione
-/// e' di rete o non identificabile; `PlenoraError::Io` per i fallimenti di
-/// scrittura, sync o persist; propaga l'errore della closure `write`.
+/// e' di rete o non identificabile (tag `Probe`); `PlenoraError::Io` per i
+/// fallimenti di scrittura, sync o persist (tag `Write`/`Finalize`/`Commit`);
+/// propaga invariato l'errore della closure `write`.
 ///
 /// # Panics
 ///
@@ -369,30 +393,46 @@ pub fn publish_with_profile<T>(
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, PublishOutcome), PlenoraError> {
     if output_path.exists() {
+        // Check no-clobber al confine di commit (ADR 7/§9): e' la
+        // precondizione del rename atomico, non validazione del piano.
         return Err(PlenoraError::InvalidPlan(format!(
             "output gia' esistente: {}",
             output_path.display()
-        )));
+        ))
+        .with_phase(ErrorPhase::Commit));
     }
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
+        // Riconoscimento preliminare della destinazione: fase Probe.
         return Err(PlenoraError::InvalidPlan(format!(
             "directory output inesistente: {}",
             parent.display()
-        )));
+        ))
+        .with_phase(ErrorPhase::Probe));
     }
+    // Destinazione non supportata: era la fase `Probe` della variante
+    // dedicata prima della fusione §9 in `Unsupported` — il tag (dentro
+    // `ensure_supported_publish_target`) la ripristina.
     ensure_supported_publish_target(parent)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".plenora-geo-")
         .suffix(".partial")
-        .tempfile_in(parent)?;
+        .tempfile_in(parent)
+        .map_err(|error| io_at(ErrorPhase::Write, error))?;
     let result = {
         let mut output_writer = BufWriter::with_capacity(1024 * 1024, temporary.as_file_mut());
+        // Errori della closure: propagati invariati (nascono nel chiamante,
+        // restano derivati per variante — `Write` per Io/DataMapping).
         let result = write(&mut output_writer)?;
-        output_writer.flush()?;
+        output_writer
+            .flush()
+            .map_err(|error| io_at(ErrorPhase::Finalize, error))?;
         result
     };
-    temporary.as_file().sync_all()?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| io_at(ErrorPhase::Finalize, error))?;
     // Hook di iniezione (solo test, ADR 7): fallimento tra scrittura e
     // persist — il tempfile deve essere ripulito dal Drop, nessun output
     // parziale visibile.
@@ -421,7 +461,9 @@ pub fn publish_with_profile<T>(
                 Err(persist_error.error)
             }
         }
-    })?;
+    })
+    // Rename atomico: fase Commit (§9).
+    .map_err(|error| io_at(ErrorPhase::Commit, error))?;
     let outcome = match profile {
         PublishProfile::Atomic => PublishOutcome::Published,
         PublishProfile::DurableAtomic => sync_directory_outcome(parent),
@@ -633,12 +675,15 @@ mod tests {
         assert_eq!(value, 7);
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
 
-        // No-clobber: la seconda pubblicazione sullo stesso path fallisce.
+        // No-clobber: la seconda pubblicazione sullo stesso path fallisce —
+        // variante invariata sotto il tag di fase Commit (BLOCK-03).
         let result = publish_atomic(&destination, |writer| {
             writer.write_all(b"altro")?;
             Ok(())
         });
-        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
+        let error = result.expect_err("no-clobber");
+        assert_eq!(error.phase(), ErrorPhase::Commit);
+        assert!(matches!(error.untag(), PlenoraError::InvalidPlan(_)));
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
     }
 
@@ -663,5 +708,106 @@ mod tests {
             .expect("read_dir")
             .count();
         assert_eq!(leftovers, 0, "il tempfile e' ripulito");
+    }
+
+    // -- Tagging di fase al confine di publish (BLOCK-03, ADR-0009) --------
+
+    #[test]
+    fn io_at_tags_each_publish_phase_without_changing_text_or_axes() {
+        // I punti I/O del confine (creazione tempfile, flush/sync, persist)
+        // portano la fase esatta; testo, categoria e retry attraversano il
+        // wrapper invariati (Io: categoria Io, disposizione Safe).
+        for phase in [ErrorPhase::Write, ErrorPhase::Finalize, ErrorPhase::Commit] {
+            let error = io_at(phase, io::Error::other("disco pieno"));
+            assert_eq!(error.phase(), phase, "{error}");
+            assert_eq!(error.to_string(), "io error: disco pieno");
+            assert_eq!(error.category(), plenora_core::ErrorCategory::Io);
+            assert_eq!(
+                error.retry_disposition(),
+                plenora_core::RetryDisposition::Safe
+            );
+        }
+    }
+
+    #[test]
+    fn existing_output_is_a_commit_phase_error_with_unchanged_text() {
+        // Check no-clobber: precondizione del rename atomico — scatta al
+        // confine di commit (ADR 7/§9), non in validazione del piano.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("output.bin");
+        std::fs::write(&destination, b"vecchio").expect("fixture");
+        let error = publish_atomic(&destination, |writer| {
+            writer.write_all(b"nuovo")?;
+            Ok(())
+        })
+        .expect_err("no-clobber");
+        assert_eq!(error.phase(), ErrorPhase::Commit);
+        assert_eq!(error.phase_tag(), Some(ErrorPhase::Commit));
+        assert_eq!(
+            error.to_string(),
+            format!("contract violation: output gia' esistente: {}", destination.display()),
+            "testo Display invariato"
+        );
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            error.retry_disposition(),
+            plenora_core::RetryDisposition::Never
+        );
+        assert!(matches!(error.untag(), PlenoraError::InvalidPlan(_)));
+    }
+
+    #[test]
+    fn missing_output_directory_is_a_probe_phase_error() {
+        // Riconoscimento preliminare della destinazione: fase Probe.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("assente").join("output.bin");
+        let error = publish_atomic(&destination, |writer| {
+            writer.write_all(b"x")?;
+            Ok(())
+        })
+        .expect_err("directory inesistente");
+        assert_eq!(error.phase(), ErrorPhase::Probe);
+        assert_eq!(error.phase_tag(), Some(ErrorPhase::Probe));
+        assert!(matches!(error.untag(), PlenoraError::InvalidPlan(_)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unc_target_is_a_probe_phase_error() {
+        // Windows: il riconoscimento fail-closed rifiuta i percorsi UNC —
+        // la destinazione non supportata torna Probe, la fase che aveva
+        // come variante dedicata prima della fusione §9 in `Unsupported`.
+        let error = ensure_supported_publish_target(Path::new("//server/share"))
+            .expect_err("UNC rifiutato");
+        assert_eq!(error.phase(), ErrorPhase::Probe);
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Unsupported);
+        assert!(matches!(error.untag(), PlenoraError::Unsupported(_)));
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    #[test]
+    fn unimplemented_target_probe_is_a_probe_phase_error() {
+        // Unix non-Linux: riconoscimento non implementato, rifiuto
+        // fail-closed — stessa fase Probe della destinazione non supportata.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let error = ensure_supported_publish_target(directory.path())
+            .expect_err("riconoscimento non implementato");
+        assert_eq!(error.phase(), ErrorPhase::Probe);
+        assert!(matches!(error.untag(), PlenoraError::Unsupported(_)));
+    }
+
+    #[test]
+    fn write_closure_errors_are_propagated_untagged() {
+        // Regressione: gli errori della closure nascono nel chiamante e
+        // restano derivati per variante (DataMapping -> Write), senza tag.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("output.bin");
+        let error = publish_atomic(&destination, |_writer| -> Result<(), PlenoraError> {
+            Err(PlenoraError::DataMapping("errore del chiamante".into()))
+        })
+        .expect_err("closure fallita");
+        assert_eq!(error.phase(), ErrorPhase::Write);
+        assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
+        assert_eq!(error.to_string(), "errore del chiamante");
     }
 }

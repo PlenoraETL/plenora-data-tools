@@ -22,6 +22,12 @@
 //! pericoloso: un timeout in lettura e' ritentabile, lo stesso timeout
 //! dopo l'invio di un commit non lo e' — con una disposizione calcolata
 //! da fase, effetto e idempotenza, mai dalla sola categoria.
+//!
+//! Tagging di fase ai confini (ADR-0009, BLOCK-03): la fase derivata per
+//! variante e' raffinata nei punti in cui il confine conosce il momento
+//! esatto (lettura input, publish) dalla variante wrapper
+//! [`PlenoraError::Tagged`] — testo `Display` e altri assi invariati per
+//! delega, solo la fase e' esplicita. La disposizione di retry NON cambia.
 
 use std::fmt;
 use std::time::Duration;
@@ -40,8 +46,9 @@ use thiserror::Error;
 /// a livello di variante e categoria machine-readable, non di messaggio —
 /// nessun consumatore testuale si rompe. Approssimazione dichiarata: la
 /// fusione `Json`+`Arrow` in `DataMapping` perde la sorgente tipizzata
-/// (resta nel testo) e la distinzione di fase parse/I-O (vedi
-/// [`PlenoraError::phase`]).
+/// (resta nel testo) e la distinzione di fase parse/I-O A LIVELLO DI
+/// VARIANTE — la distinzione e' recuperata ai confini dal tagging di fase
+/// ([`PlenoraError::Tagged`], vedi [`PlenoraError::phase`]).
 #[derive(Debug, Error)]
 pub enum PlenoraError {
     /// Piano o configurazione di un nodo malformati o incoerenti.
@@ -105,6 +112,25 @@ pub enum PlenoraError {
     /// valori di righe/colonne (regola 8).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Errore con fase esplicita, assegnata al confine che lo ha prodotto
+    /// (tagging di fase ai confini, ADR-0009 — BLOCK-03): la variante non
+    /// distingue il momento (lo stesso `Io` nasce leggendo un input o
+    /// scrivendo l'output), il confine si'. Wrapper trasparente: il
+    /// `Display` e' DELEGATO alla sorgente (testo identico, nessun
+    /// consumatore testuale si rompe) e [`PlenoraError::category`],
+    /// [`PlenoraError::remote_effect`] e [`PlenoraError::retry_disposition`]
+    /// sono delegate; solo [`PlenoraError::phase`] e' raffinato dal tag.
+    /// Costruzione via [`PlenoraError::with_phase`], mai diretta: il primo
+    /// tag (il piu' vicino all'origine) vince e non si annida.
+    #[error("{source}")]
+    Tagged {
+        /// Fase dichiarata dal confine (sovrascrive la derivazione per
+        /// variante).
+        phase: ErrorPhase,
+        /// Errore originale: testo e assi diversi dalla fase invariati.
+        source: Box<Self>,
+    },
 }
 
 impl From<arrow_schema::ArrowError> for PlenoraError {
@@ -366,6 +392,8 @@ impl fmt::Display for RetryDisposition {
 
 impl PlenoraError {
     /// Categoria dell'errore (ADR 3, M1d): mapping dichiarato per variante.
+    /// Per [`PlenoraError::Tagged`] e' delegata alla sorgente: il tag
+    /// raffina solo la fase.
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
@@ -378,6 +406,7 @@ impl PlenoraError {
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
             Self::Io(_) => ErrorCategory::Io,
             Self::Internal(_) => ErrorCategory::Internal,
+            Self::Tagged { source, .. } => source.category(),
         }
     }
 
@@ -414,6 +443,11 @@ impl PlenoraError {
     ///   violate (`Internal`), deterministiche per definizione.
     /// - [`RetryDisposition::After`] non e' mai prodotto: data-tools non ha
     ///   sorgenti di backoff tipizzate.
+    ///
+    /// Il tagging di fase ai confini ([`PlenoraError::Tagged`], ADR-0009)
+    /// NON cambia la disposizione: e' delegata alla sorgente, perche'
+    /// effetto `None` per costruzione e idempotenza della riesecuzione
+    /// valgono a qualunque fase raffinata.
     #[must_use]
     pub const fn retry_disposition(&self) -> RetryDisposition {
         match self {
@@ -426,49 +460,64 @@ impl PlenoraError {
             | Self::Crs(_)
             | Self::Cancelled { .. }
             | Self::Internal(_) => RetryDisposition::Never,
+            Self::Tagged { source, .. } => source.retry_disposition(),
         }
     }
 
     /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1,
-    /// milestone D): mapping dichiarato per variante, stesso stampo di
-    /// [`PlenoraError::category`].
+    /// milestone D): derivazione dichiarata per variante, RAFFINATA dal
+    /// tagging esplicito ai confini ([`PlenoraError::Tagged`], ADR-0009 —
+    /// BLOCK-03). Un errore taggato riporta la fase dichiarata dal confine
+    /// che lo ha prodotto; uno non taggato la fase derivata dalla variante.
     ///
-    /// La derivazione per variante e' sufficiente: NESSUN override ai
-    /// confini di tagging (`step_error`/`tag_execution` in engine,
-    /// `at_input` nella CLI, publish) e' stato introdotto in questa
-    /// milestone. Scelte di mapping (da riportare in ADR-0009):
+    /// Confini che taggano (attuazione 2026-07-30):
+    ///
+    /// - lettura degli input → [`ErrorPhase::Read`]: costruttori
+    ///   `Input::read_ipc_*`, stream d'ingresso dell'executor
+    ///   (`Network::input_stream`) e sonde dell'header IPC nella CLI — gli
+    ///   errori `Io`/`DataMapping`/`Schema` che nascono leggendo una
+    ///   sorgente (prima emergevano come `Write`);
+    /// - publish (ADR 7, `geo_transport::publish`): riconoscimento della
+    ///   destinazione (filesystem non supportato, directory inesistente) →
+    ///   [`ErrorPhase::Probe`]; creazione del tempfile →
+    ///   [`ErrorPhase::Write`]; flush e sync del writer →
+    ///   [`ErrorPhase::Finalize`]; check no-clobber «output gia' esistente»
+    ///   e rename atomico (`persist`) → [`ErrorPhase::Commit`]. La
+    ///   destinazione non supportata torna cosi' a `Probe`, la fase che
+    ///   aveva come variante dedicata prima della fusione §9 in
+    ///   `Unsupported`. Gli errori della closure di scrittura (batch → IPC)
+    ///   NON sono taggati: restano derivati (`Write` per `Io`/`DataMapping`,
+    ///   gia' corretti). Nessun errore di cleanup e' prodotto: il tempfile
+    ///   e' ripulito via `Drop`, infallibile.
+    ///
+    /// Derivazione per variante (errori NON taggati) e approssimazioni
+    /// residue, dichiarate:
     ///
     /// - `InvalidPlan`, `Unsupported`, `Schema`, `Crs` →
     ///   [`ErrorPhase::Validate`]: parse del piano e controlli di contratto,
     ///   schema, CRS, capability e limiti sono validazione per natura, e il
-    ///   canonico non ha una fase «Parse». Approssimazioni dichiarate: i
+    ///   canonico non ha una fase «Parse». Approssimazione residua: i
     ///   controlli del governor (es. `max_expansion_factor`) scattano
-    ///   DURANTE l'esecuzione ma restano validazione di vincoli; il check
-    ///   «output esiste gia'» di publish (ADR 7) avviene al confine di
-    ///   commit; la destinazione di publish non supportata (prima variante
-    ///   dedicata, `Probe`) e' fusa in `Unsupported` dalla rinomina §9 e
-    ///   ricade in `Validate` — la distinzione `Probe`/`Validate` richiede
-    ///   il tagging al confine di publish, follow-up di R9.7. La variante
-    ///   non distingue i momenti: il raffinamento e' follow-up.
+    ///   DURANTE l'esecuzione ma restano validazione di vincoli (decisione
+    ///   confermata: non si taggano).
     /// - `Execution`, `Cancelled` → [`ErrorPhase::Write`]: il canonico non
-    ///   ha una fase «Execute». DECISIONE PROGETTUALE: in data-tools la
-    ///   lettura degli input (fase `Read`) avviene al confine `Input` PRIMA
-    ///   dell'esecuzione del DAG e i suoi errori emergono come
-    ///   `Io`/`DataMapping`/`Schema`, mai come `Execution`; un `Execution`
-    ///   nasce solo mentre un nodo produce il proprio stream di output, e
-    ///   la cancellazione (invariante I8: nessun output pubblicato) e'
-    ///   osservata agli stessi confini cooperativi. La produzione
-    ///   dell'output e' la fase `Write` del ciclo canonico.
-    /// - `DataMapping`, `Io` → [`ErrorPhase::Write`]: le varianti coprono
-    ///   sia la lettura degli input sia la scrittura/publish e non
-    ///   distinguono. Si dichiara `Write` perche' e' il lato con possibile
-    ///   effetto sul supporto, il solo rilevante per la disposizione di
-    ///   retry calcolata da fase ed effetto (R9.7, vedi
-    ///   [`PlenoraError::retry_disposition`]): un errore in lettura resta
-    ///   privo di effetti e altrettanto gestibile.
-    ///   Approssimazione dichiarata (la fusione §9 di `Json`+`Arrow`
-    ///   cancella la distinzione parse/I-O che le due varianti separate
-    ///   portavano).
+    ///   ha una fase «Execute». DECISIONE PROGETTUALE (invariata dal
+    ///   tagging): in data-tools la lettura degli input avviene al confine
+    ///   `Input` PRIMA dell'esecuzione del DAG e i suoi errori emergono
+    ///   come `Io`/`DataMapping`/`Schema` — ora taggati `Read` — mai come
+    ///   `Execution`; un `Execution` nasce solo mentre un nodo produce il
+    ///   proprio stream di output, e la cancellazione (invariante I8:
+    ///   nessun output pubblicato) e' osservata agli stessi confini
+    ///   cooperativi. La produzione dell'output e' la fase `Write` del
+    ///   ciclo canonico.
+    /// - `DataMapping`, `Io` → [`ErrorPhase::Write`] SOLO QUANDO NON
+    ///   TAGGATI: resta il caso degli errori nati nei kernel o nei
+    ///   percorsi legacy (trasporto v3), dove la variante non distingue il
+    ///   momento e nessun confine dichiara la fase. Si dichiara `Write`
+    ///   perche' e' il lato con possibile effetto sul supporto, il solo
+    ///   rilevante per la disposizione di retry (R9.7 — che comunque non
+    ///   dipende dalla fase in data-tools, vedi
+    ///   [`PlenoraError::retry_disposition`]).
     /// - `Internal` → [`ErrorPhase::Write`]: un'invariante interna puo'
     ///   violarsi in qualunque punto; si dichiara `Write` (lato con
     ///   possibile effetto) per la stessa ragione conservativa di
@@ -489,6 +538,46 @@ impl PlenoraError {
             | Self::DataMapping(_)
             | Self::Io(_)
             | Self::Internal(_) => ErrorPhase::Write,
+            // Il tag del confine vince sulla derivazione per variante.
+            Self::Tagged { phase, .. } => *phase,
+        }
+    }
+
+    /// Tag di fase al confine (ADR-0009, BLOCK-03): dichiara la fase esatta
+    /// in cui l'errore e' nato, avvolgendolo in [`PlenoraError::Tagged`].
+    /// Testo `Display`, categoria, effetto e disposizione di retry sono
+    /// invariati (delegati alla sorgente). Se l'errore e' GIA' taggato il
+    /// tag esistente vince — il confine piu' vicino all'origine e' il piu'
+    /// preciso — e non si forma alcun annidamento.
+    #[must_use]
+    pub fn with_phase(self, phase: ErrorPhase) -> Self {
+        match self {
+            Self::Tagged { .. } => self,
+            _ => Self::Tagged {
+                phase,
+                source: Box::new(self),
+            },
+        }
+    }
+
+    /// Il tag di fase esplicito, se il confine lo ha assegnato; `None` per
+    /// un errore la cui fase e' derivata dalla variante.
+    #[must_use]
+    pub const fn phase_tag(&self) -> Option<ErrorPhase> {
+        match self {
+            Self::Tagged { phase, .. } => Some(*phase),
+            _ => None,
+        }
+    }
+
+    /// Rimuove il tag di fase (ricorsivamente, se costruito annidato a mano)
+    /// e restituisce l'errore originale: per i consumatori che fanno match
+    /// sulle varianti canoniche e non portano la nozione di fase.
+    #[must_use]
+    pub fn untag(self) -> Self {
+        match self {
+            Self::Tagged { source, .. } => source.untag(),
+            _ => self,
         }
     }
 
@@ -522,6 +611,9 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::Io(_)
             | Self::Internal(_) => RemoteEffect::None,
+            // Delegato alla sorgente (comunque `None` per costruzione):
+            // il tag raffina solo la fase.
+            Self::Tagged { source, .. } => source.remote_effect(),
         }
     }
 }
@@ -585,6 +677,13 @@ mod tests {
             (
                 PlenoraError::Internal("invariante violata".into()),
                 ErrorCategory::Internal,
+            ),
+            // Wrapper di fase (BLOCK-03): la categoria e' quella della
+            // sorgente (DataMapping non e' Io, quindi il test di retry qui
+            // sotto attende `Never` senza vedere attraverso il wrapper).
+            (
+                PlenoraError::DataMapping("d".into()).with_phase(ErrorPhase::Read),
+                ErrorCategory::DataMapping,
             ),
         ]
     }
@@ -682,6 +781,12 @@ mod tests {
                 ErrorPhase::Write,
             ),
             (PlenoraError::Internal("i".into()), ErrorPhase::Write),
+            // Wrapper di fase (BLOCK-03): la fase e' il tag del confine,
+            // non la derivazione della sorgente (DataMapping → Write).
+            (
+                PlenoraError::DataMapping("d".into()).with_phase(ErrorPhase::Read),
+                ErrorPhase::Read,
+            ),
         ]
     }
 
@@ -691,13 +796,83 @@ mod tests {
             assert_eq!(error.phase(), expected, "{error}");
         }
         // Conversioni `From` esterne: entrambe in `DataMapping` (Write —
-        // la fusione §9 cancella la distinzione parse/I-O, dichiarata).
+        // la fusione §9 cancella la distinzione parse/I-O A LIVELLO DI
+        // VARIANTE; i confini la recuperano col tagging, vedi i test del
+        // wrapper).
         let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
         assert_eq!(arrow.phase(), ErrorPhase::Write);
         let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
             .expect_err("json invalido")
             .into();
         assert_eq!(json.phase(), ErrorPhase::Write);
+    }
+
+    #[test]
+    fn tagged_phase_overrides_derivation_and_display_is_identical() {
+        // BLOCK-03: il tag del confine raffina SOLO la fase. Per ogni fase
+        // canonica: `phase()` riporta il tag, il `Display` e' byte-identico
+        // alla sorgente (nessun consumatore testuale si rompe).
+        let source = || PlenoraError::Io(std::io::Error::other("caduta di rete"));
+        let expected_text = source().to_string();
+        for phase in [
+            ErrorPhase::Validate,
+            ErrorPhase::Connect,
+            ErrorPhase::Probe,
+            ErrorPhase::Prepare,
+            ErrorPhase::Read,
+            ErrorPhase::Write,
+            ErrorPhase::Finalize,
+            ErrorPhase::Commit,
+            ErrorPhase::Rollback,
+            ErrorPhase::Cleanup,
+        ] {
+            let tagged = source().with_phase(phase);
+            assert_eq!(tagged.phase(), phase);
+            assert_eq!(tagged.phase_tag(), Some(phase));
+            assert_eq!(tagged.to_string(), expected_text, "Display delegato");
+        }
+        assert_eq!(source().phase_tag(), None, "non taggato: fase derivata");
+    }
+
+    #[test]
+    fn tagged_axes_are_delegated_to_the_source() {
+        // Gli assi diversi dalla fase attraversano il wrapper invariati:
+        // `Io` taggato resta categoria Io, effetto None, retry `Safe` —
+        // la disposizione NON cambia col raffinamento di fase (ADR-0009).
+        let tagged = PlenoraError::Io(std::io::Error::other("io")).with_phase(ErrorPhase::Read);
+        assert_eq!(tagged.category(), ErrorCategory::Io);
+        assert_eq!(tagged.remote_effect(), RemoteEffect::None);
+        assert_eq!(tagged.retry_disposition(), RetryDisposition::Safe);
+        // Anche una causa deterministica taggata resta `Never`.
+        let tagged_plan = PlenoraError::InvalidPlan("c".into()).with_phase(ErrorPhase::Commit);
+        assert_eq!(tagged_plan.category(), ErrorCategory::InvalidPlan);
+        assert_eq!(tagged_plan.remote_effect(), RemoteEffect::None);
+        assert_eq!(tagged_plan.retry_disposition(), RetryDisposition::Never);
+        // `Error::source()` espone l'errore originale (catena standard).
+        let source = std::error::Error::source(&tagged).expect("sorgente");
+        assert_eq!(source.to_string(), "io error: io");
+    }
+
+    #[test]
+    fn with_phase_keeps_the_first_tag_and_untag_strips_it() {
+        // Il confine piu' vicino all'origine e' il piu' preciso: un secondo
+        // tag non sovrascrive e non annida.
+        let tagged = PlenoraError::DataMapping("d".into())
+            .with_phase(ErrorPhase::Read)
+            .with_phase(ErrorPhase::Write);
+        assert_eq!(tagged.phase(), ErrorPhase::Read);
+        // `untag` restituisce l'errore originale, invariato nel testo.
+        let untagged = tagged.untag();
+        assert!(matches!(untagged, PlenoraError::DataMapping(_)));
+        assert_eq!(untagged.to_string(), "d");
+        assert_eq!(untagged.phase(), ErrorPhase::Write, "derivata, non taggata");
+        // Anche un wrapper annidato a mano e' rimosso ricorsivamente.
+        let nested = PlenoraError::Tagged {
+            phase: ErrorPhase::Commit,
+            source: Box::new(PlenoraError::Schema("s".into()).with_phase(ErrorPhase::Probe)),
+        };
+        assert_eq!(nested.phase(), ErrorPhase::Commit, "il tag esterno vince");
+        assert!(matches!(nested.untag(), PlenoraError::Schema(_)));
     }
 
     #[test]
