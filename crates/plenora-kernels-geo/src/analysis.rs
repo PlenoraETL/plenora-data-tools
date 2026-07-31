@@ -167,6 +167,11 @@ fn minimum_distances_impl(
 /// Exact nearest-neighbour lineage. All equidistant nearest rows are emitted,
 /// matching the duplicate-on-tie behaviour of `GeoPandas` `sjoin_nearest`.
 ///
+/// Matches are returned in stable lexicographic `(left, right)` order —
+/// the canonical pair order of ADR-0014 D14.7, shared by the v3 transport
+/// and the v4 plan executor (identical construction in
+/// `nearest_matches_impl`).
+///
 /// # Errors
 ///
 /// - `InvalidWorkLimit`: `max_comparisons` or `max_results` is zero.

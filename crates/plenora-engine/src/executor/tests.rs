@@ -4043,3 +4043,51 @@ fn geo_binary_output_is_byte_identical_across_runs() {
         assert_eq!(run_once(), run_once(), "{op}: output non deterministico");
     }
 }
+
+/// Caso (e) dell'oracolo ADR-0014 D14.9, nel crate perche' l'hook
+/// `PANIC_AT_NODES` e' `#[cfg(test)]` e privato (stessa nota del caso (g)
+/// dell'oracolo ADR-0012): panic iniettato nel kernel `geo.sjoin` di un
+/// segmento BinaryBlocking geo -> errore `Execution` attribuito al nodo,
+/// fase `Write` derivata, nessun publish dopo panic (D14.5.6). Id di nodo
+/// dedicato: l'hook e' globale e i test girano in parallelo.
+#[test]
+fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["left_in", "right_in"],
+        "nodes": [
+            {"id": "gb_panic", "op": "geo.sjoin", "in": ["left_in", "right_in"],
+             "config": {"predicate": "intersects"}},
+        ],
+        "output": "gb_panic",
+    });
+    let _guard = PanicHookGuard::set("gb_panic");
+    let left = geo_batch(&[0], &[Some(point_wkb(1.0, 1.0))]);
+    let right = geo_batch(&[10], &[Some(polygon_wkb(0.0, 0.0, 2.0, 2.0))]);
+    let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
+    let error = execute(
+        &graph,
+        two_geo_inputs(vec![left], vec![right]),
+        RuntimeContext::default(),
+    )
+    .expect("execute")
+    .collect_batches()
+    .expect_err("panic convertito in errore");
+    match &error {
+        PlenoraError::Execution {
+            node,
+            operation,
+            reason,
+            ..
+        } => {
+            assert_eq!(node, "gb_panic", "attribuzione al nodo in panic");
+            assert_eq!(operation, "geo.sjoin");
+            assert!(
+                reason.contains("panic di test iniettato"),
+                "il motivo riporta il messaggio del panic: {reason}"
+            );
+        }
+        other => panic!("atteso Execution, ottenuto {other}"),
+    }
+    assert_eq!(error.phase(), ErrorPhase::Write, "kernel: fase Write derivata");
+}

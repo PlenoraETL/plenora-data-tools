@@ -588,6 +588,27 @@ Benchmark obbligatori:
 - geometrie molto grandi;
 - dati eterogenei.
 
+**Stato (2026-07-31, ADR-0014 M3):** spatial join e within misurati via
+trasporto `pair-arrow` E via piano v4 (`examples/bench_geo_binary.rs`,
+fixture mista 100k righe/lato — quadrati+punti+null su griglia — mediana
+di 5 run alternate, release, container rust:1.92, mitigazione allocatore
+documentata in `benchmarks/sweep/geo_sweep.md`): sjoin v3 0,0631s vs v4
+0,0548s (**−13,2%**, bande min/max sovrapposte per un outlier di
+cold-cache sulla prima run v4 — accettazione D14.10 «delta entro rumore
+documentato»); within v3 0,1442s vs v4 0,1321s (**−8,4%**, bande NON
+sovrapposte). Oracoli bloccanti veri: output byte-identici tra run della
+stessa modalita' (ADR-0001) e risultati semanticamente identici tra i
+percorsi (49 950 coppie in ordine canonico D14.7; 49 900 flag true —
+conteggi esatti ricalcolati a mano, header del bench). Perimetri
+dichiarati NON identici: il v3 paga envelope+IPC, il v4 governor/
+framing/preflight D14.4 — il v4 risulta comunque piu' veloce su entrambi.
+Controllo di non regressione `table.*` sul guscio condiviso (smistamento
+D14.2): join inner 1:1 su id, 1M righe/lato, mediana 0,2571s contro il
+riferimento storico 0,6361s di `benchmarks/baseline/baseline.md` §1
+(stesso container, host piu' recente — riferimento, non soglia):
+**nessuna regressione** del ramo tabellare. Copre la lacuna «spatial
+join e intersects solo in-process» di `baseline.md` §6.
+
 ---
 
 ### 8.3 Memoria

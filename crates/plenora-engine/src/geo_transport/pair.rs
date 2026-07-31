@@ -425,6 +425,22 @@ pub struct PairArrowSummary {
 /// Lato di una coppia decodificato: schema, batch IPC e geometrie validate.
 type DecodedSide = (SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>);
 
+/// Errore di decodifica di una colonna geometria con posizione strutturata
+/// (ADR-0014 D14.5).
+///
+/// L'indice di riga nella sequenza decodificata e' un CAMPO — `None` per
+/// gli errori senza una riga (limite righe, colonna geometria assente o non
+/// Binary) — mai nel testo del messaggio (regola 8: la posizione va nel
+/// campo, non nella frase). La sorgente e' l'errore del trasporto invariato
+/// nel testo: il percorso v3 lo propaga cosi' com'e'.
+#[derive(Debug)]
+pub struct GeometryDecodeError {
+    /// Riga della cella che ha prodotto l'errore, se applicabile.
+    pub row_index: Option<u64>,
+    /// Errore del trasporto, invariato nel testo e nella variante.
+    pub source: ArrowTransportError,
+}
+
 /// Decodifica un lato (envelope + IPC + colonna geometria) e materializza le
 /// geometrie validate: entrambi i lati sono verificati prima del calcolo.
 /// La decodifica validante e' delegata a [`decode_geometry_batches`] (una
@@ -449,16 +465,20 @@ fn decode_geometry_side(
         });
     }
     let geometry_index = geometry_column_index(&schema, geometry_column)?;
-    let geometries = decode_geometry_batches(&schema, &batches, geometry_index)?;
+    // Trasporto v3 invariato (perimetro ADR-0014): la posizione strutturata
+    // della cella e' scartata qui, l'errore propaga nel testo storico.
+    let geometries = decode_geometry_batches(&schema, &batches, geometry_index)
+        .map_err(|error| error.source)?;
     Ok((schema, batches, geometries))
 }
 
-/// Nucleo della decodifica validante fattorizzato (ADR-0014 D14.2): schema
-/// e batch IPC → geometrie materializzate, con i gate `MAX_ROWS` (righe
-/// totali) e `MAX_CELL_BYTES` (per cella) in un'unica fonte di verita'.
-/// Usata da `pair_arrow` (trasporto v3, via [`decode_geometry_side`]) e dal
-/// ramo geo di `run_binary_blocking` (piano v4): una sola camminata
-/// validante (ADR-0011), totale e mai lazy (D14.3).
+/// Nucleo della decodifica validante fattorizzato (ADR-0014 D14.2).
+///
+/// Schema e batch IPC → geometrie materializzate, con i gate `MAX_ROWS`
+/// (righe totali) e `MAX_CELL_BYTES` (per cella) in un'unica fonte di
+/// verita'. Usata da `pair_arrow` (trasporto v3, via
+/// [`decode_geometry_side`]) e dal ramo geo di `run_binary_blocking` (piano
+/// v4): una sola camminata validante (ADR-0011), totale e mai lazy (D14.3).
 ///
 /// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
 /// per costruzione che autorizza le varianti `*_validated` dei kernel a
@@ -467,41 +487,118 @@ fn decode_geometry_side(
 ///
 /// L'indice della colonna geometria e' risolto dal chiamante (V2); il nome
 /// e' recuperato dallo schema solo per il contesto d'errore.
+///
+/// L'errore porta l'indice di riga della cella come campo strutturato
+/// ([`GeometryDecodeError`], D14.5): il trasporto v3 lo scarta
+/// (`decode_geometry_side`, comportamento invariato), il piano v4 lo
+/// pubblica nel carrier `GeoBinaryStepError`.
+///
+/// # Errors
+///
+/// [`GeometryDecodeError`] con `row_index = None` per righe oltre
+/// `MAX_ROWS`, indice colonna oltre lo schema o colonna non Binary;
+/// `row_index = Some(riga)` per cella oltre `MAX_CELL_BYTES` o rifiutata
+/// dal decoder validante (`geometry_from_wkb`).
 pub fn decode_geometry_batches(
     schema: &Schema,
     batches: &[RecordBatch],
     geometry_index: usize,
-) -> Result<Vec<Option<Geometry<f64>>>, ArrowTransportError> {
+) -> Result<Vec<Option<Geometry<f64>>>, GeometryDecodeError> {
     let rows: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
     if rows > MAX_ROWS {
-        return Err(ArrowTransportError::TooManyRows(rows));
+        return Err(GeometryDecodeError {
+            row_index: None,
+            source: ArrowTransportError::TooManyRows(rows),
+        });
     }
     let geometry_column = schema
         .fields()
         .get(geometry_index)
-        .ok_or(ArrowTransportError::Internal(
-            "indice colonna geometria oltre lo schema",
-        ))?
+        .ok_or(GeometryDecodeError {
+            row_index: None,
+            source: ArrowTransportError::Internal("indice colonna geometria oltre lo schema"),
+        })?
         .name()
         .clone();
     let mut geometries = Vec::with_capacity(
-        usize::try_from(rows).map_err(|_| ArrowTransportError::TooManyRows(rows))?,
+        usize::try_from(rows).map_err(|_| GeometryDecodeError {
+            row_index: None,
+            source: ArrowTransportError::TooManyRows(rows),
+        })?,
     );
+    let mut row_index = 0_u64;
     for batch in batches {
-        let cells = batch_geometry_cells(batch, geometry_index, &geometry_column)?;
+        let cells = batch_geometry_cells(batch, geometry_index, &geometry_column).map_err(
+            |source| GeometryDecodeError {
+                row_index: None,
+                source,
+            },
+        )?;
         for cell in cells {
             match cell {
                 None => geometries.push(None),
                 Some(payload) => {
                     if payload.len() as u64 > MAX_CELL_BYTES {
-                        return Err(ArrowTransportError::CellTooLarge(payload.len() as u64));
+                        return Err(GeometryDecodeError {
+                            row_index: Some(row_index),
+                            source: ArrowTransportError::CellTooLarge(payload.len() as u64),
+                        });
                     }
-                    geometries.push(Some(geometry_from_wkb(payload)?));
+                    geometries.push(Some(geometry_from_wkb(payload).map_err(|error| {
+                        GeometryDecodeError {
+                            row_index: Some(row_index),
+                            source: ArrowTransportError::from(error),
+                        }
+                    })?));
                 }
             }
+            row_index += 1;
         }
     }
     Ok(geometries)
+}
+
+/// Preflight della forma decodificata (ADR-0014 D14.4).
+///
+/// Dimensione in byte della colonna geometria decodificata — slot `Option`
+/// per riga (null inclusi) piu' l'heap di ogni cella via
+/// [`plenora_kernels_geo::decoded_size::decoded_size_xy`] — SENZA
+/// decodificare. Alimenta la reservation del governor prima
+/// dell'allocazione (riservare prima di decodificare, rifiutare prima di
+/// allocare).
+///
+/// Best-effort per costruzione: e' una MISURA, non una validazione. Se la
+/// camminata si interrompe (schema incoerente, colonna non Binary o cella
+/// che il decoder rifiutera'), restituisce il parziale accumulato e il
+/// decode validante ([`decode_geometry_batches`]) riporta l'errore canonico
+/// sulla stessa cella — una sola fonte di verita' sugli errori (D14.3).
+#[must_use]
+pub fn preflight_decoded_bytes(
+    schema: &Schema,
+    batches: &[RecordBatch],
+    geometry_index: usize,
+) -> u64 {
+    let rows: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
+    let mut total = rows.saturating_mul(plenora_kernels_geo::decoded_size::OPTION_SLOT_BYTES);
+    let Some(geometry_column) = schema
+        .fields()
+        .get(geometry_index)
+        .map(|field| field.name().clone())
+    else {
+        return total;
+    };
+    for batch in batches {
+        let Ok(cells) = batch_geometry_cells(batch, geometry_index, &geometry_column) else {
+            return total;
+        };
+        for cell in cells.iter().flatten() {
+            match plenora_kernels_geo::decoded_size::decoded_size_xy(cell) {
+                Ok(size) => total = total.saturating_add(size),
+                Err(_) => return total,
+            }
+        }
+    }
+    total
 }
 
 fn lineage_schema(nullable: bool, with_distance: bool) -> Schema {

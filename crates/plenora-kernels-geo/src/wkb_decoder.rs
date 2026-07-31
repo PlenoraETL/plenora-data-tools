@@ -126,7 +126,12 @@ fn decode_geometry(
             let rings = cursor.read_u32(little_endian)?;
             let rings = checked_count(rings, cursor.remaining(), 4)?;
             let mut exterior: Option<LineString<f64>> = None;
-            let mut interiors: Vec<LineString<f64>> = Vec::new();
+            // Capacita' esatta (un anello e' l'esterno): la forma
+            // decodificata resta densa, invariante del preflight D14.4
+            // (`decoded_size_xy` — il test di conservativita' misura le
+            // capacita' reali).
+            let mut interiors: Vec<LineString<f64>> =
+                Vec::with_capacity(rings.saturating_sub(1));
             for _ in 0..rings {
                 let count = cursor.read_u32(little_endian)?;
                 let count = checked_count(count, cursor.remaining(), stride)?;
@@ -184,42 +189,43 @@ fn decode_geometry(
             }
             let incompatible = || invalid_wkb_structure("tipo figlio incompatibile con multi-geometria");
             match geometry_type {
-                4 => Ok((
-                    4,
-                    Geometry::MultiPoint(MultiPoint::new(
-                        decoded
-                            .into_iter()
-                            .map(|(_, geometry)| match geometry {
-                                Geometry::Point(point) => Ok(point),
-                                _ => Err(incompatible()),
-                            })
-                            .collect::<Result<Vec<_>, PlenoraError>>()?,
-                    )),
-                )),
-                5 => Ok((
-                    5,
-                    Geometry::MultiLineString(MultiLineString::new(
-                        decoded
-                            .into_iter()
-                            .map(|(_, geometry)| match geometry {
-                                Geometry::LineString(line) => Ok(line),
-                                _ => Err(incompatible()),
-                            })
-                            .collect::<Result<Vec<_>, PlenoraError>>()?,
-                    )),
-                )),
-                6 => Ok((
-                    6,
-                    Geometry::MultiPolygon(MultiPolygon::new(
-                        decoded
-                            .into_iter()
-                            .map(|(_, geometry)| match geometry {
-                                Geometry::Polygon(polygon) => Ok(polygon),
-                                _ => Err(incompatible()),
-                            })
-                            .collect::<Result<Vec<_>, PlenoraError>>()?,
-                    )),
-                )),
+                4 => {
+                    // Nessun `collect::<Result<Vec<_>>>`: la raccolta con
+                    // Result lascia capacita' in eccesso (crescita a
+                    // raddoppio) e la forma decodificata non sarebbe densa —
+                    // invariante del preflight D14.4 (`decoded_size_xy`, il
+                    // test di conservativita' misura le capacita' reali).
+                    // Il tipo figlio e' gia' verificato per costruzione nel
+                    // ciclo sopra: il ramo d'errore resta come difesa.
+                    let mut points = Vec::with_capacity(decoded.len());
+                    for (_, geometry) in decoded {
+                        match geometry {
+                            Geometry::Point(point) => points.push(point),
+                            _ => return Err(incompatible()),
+                        }
+                    }
+                    Ok((4, Geometry::MultiPoint(MultiPoint::new(points))))
+                }
+                5 => {
+                    let mut lines = Vec::with_capacity(decoded.len());
+                    for (_, geometry) in decoded {
+                        match geometry {
+                            Geometry::LineString(line) => lines.push(line),
+                            _ => return Err(incompatible()),
+                        }
+                    }
+                    Ok((5, Geometry::MultiLineString(MultiLineString::new(lines))))
+                }
+                6 => {
+                    let mut polygons = Vec::with_capacity(decoded.len());
+                    for (_, geometry) in decoded {
+                        match geometry {
+                            Geometry::Polygon(polygon) => polygons.push(polygon),
+                            _ => return Err(incompatible()),
+                        }
+                    }
+                    Ok((6, Geometry::MultiPolygon(MultiPolygon::new(polygons))))
+                }
                 _ => Ok((
                     7,
                     Geometry::GeometryCollection(GeometryCollection::new_from(

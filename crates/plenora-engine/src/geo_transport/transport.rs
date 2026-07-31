@@ -72,7 +72,10 @@ pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
 pub use super::envelope::{EnvelopeReader, EnvelopeWriter};
 pub use super::error::ArrowTransportError;
 pub use super::ipc::{decode_ipc, encode_ipc};
-pub use super::pair::{PairArrowSchema, PairArrowSummary, PairOperation, pair_arrow};
+pub use super::pair::{
+    GeometryDecodeError, PairArrowSchema, PairArrowSummary, PairOperation,
+    decode_geometry_batches, pair_arrow, preflight_decoded_bytes,
+};
 pub use super::schema::{
     ArrowOperation, ArrowShape, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
     TransformArrowSummary,

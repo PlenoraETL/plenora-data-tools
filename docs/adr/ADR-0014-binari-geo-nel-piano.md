@@ -328,3 +328,73 @@ sovrapposte o delta entro rumore documentato, output byte-identici.
   GeoPandas) come classe di regressione attesa — la risposta corretta e'
   la riproiezione 2D al bordo di lettura (R4.6.1), non il rilassamento
   del centro.
+- 2026-07-31: **M2 attuata** — D14.4: `decoded_size_xy`
+  (`plenora-kernels-geo::decoded_size`, camminata speculare al decoder con
+  sottoinsieme di controlli nello stesso ordine, costanti = `size_of`
+  fisici verificati dal test) e `preflight_decoded_bytes`
+  (`geo_transport::pair`, best-effort: misura, non validazione — l'errore
+  canonico resta del decode, D14.3); sequenza completa in
+  `run_geo_binary_blocking`: per lato, in ordine globale fisso
+  left→right, reservation Arrow → preflight → reservation decodificata →
+  decode; lease Arrow right rilasciato prima del kernel, lease
+  decodificati dopo il lease dell'output; decoder reso denso
+  (`with_capacity` esatta in `wkb_decoder`: invariante presidiata dal
+  test di conservativita', che misura le capacita' reali). D14.5:
+  `GeometryDecodeError` (riga come CAMPO, mai nel testo — regola 8) e
+  carrier `GeoBinaryStepError` (fase `Read` per drenaggio/decode,
+  `Write` per kernel/output; side/riga solo nel dettaglio diagnostico
+  opt-in, canale ADR 3 M1d); primo errore in ordine (side, riga) per
+  costruzione della sequenza (D14.5.3). D14.7: **nessun ordinamento
+  esplicito aggiunto** — la condizione dell'ADR non scatta: i kernel
+  garantiscono gia' l'ordine canonico per costruzione (left-major via
+  collect indicizzato rayon, right-minor via `sort_unstable` per gruppo;
+  within/count allineati per posizione), contrattuale in `spatial_join`
+  («stable lexicographic order») e formalizzato in `nearest_matches`;
+  entrambi i percorsi condividono le varianti `*_validated`, pinned dai
+  test di kernel (riferimento esaustivo ordine-sensibile) e dal caso (a)
+  dell'oracolo. Oracolo D14.9 `tests/geo_binary_oracle.rs`: (a) 4 op su
+  fixture multi-tipo con attesi letterali in ordine canonico, (b) bowtie
+  mai candidata al prefilter su left e su right + primo errore (side,
+  riga), (c) cella oltre 64 MiB su ciascun lato, (d) cancellazione in
+  drenaggio e post-drenaggio, (f) espansione oltre il vincolo, (g)
+  governor che rifiuta la reservation decodificata (budget derivato a
+  runtime, mai costanti); (e) in `executor/tests.rs`, (h) in
+  `decoded_size.rs`. Review da secondo lettore (regola 2) eseguita sul
+  diff completo di M2. **Divergenze registrate** (regola 4; dettaglio
+  nell'header dell'oracolo):
+  1. D14.5.1 emendata: gli errori di `check_join_expansion` (ADR 6) e
+     del governor (`reserve`, ADR-0002) propagano come `InvalidPlan`
+     grezzo (nodo/owner nel testo, fase `Validate` derivata), NON come
+     `Execution { node }` — la conversione nel carrier vale per gli
+     errori del ciclo decode/kernel/output; i vincoli di piano restano
+     nella forma storica del ramo tabellare (stessa forma del test
+     DER-003 di ADR-0012);
+  2. D14.9 (c): il gate `MAX_CELL_BYTES` del nodo e' irraggiungibile
+     dagli archi di input nel v4 — la validazione perimetrale dell'arco
+     rifiuta la cella oltre 64 MiB prima (`InvalidPlan` d'arco, fase
+     `Validate`), contro il `CellTooLarge` del v3; il confronto
+     campo-per-campo della lettera non e' realizzabile, il gate del nodo
+     resta difesa in profondita' (ogni kernel valida il proprio output,
+     D12.3);
+  3. D14.9 (d): gli errori `Cancelled` non sono taggati di fase ai
+     confini di drenaggio — fase `Write` derivata dalla variante.
+  Debito residuo: M3 (benchmark A/B `bench_geo_binary.rs`, chiusura in
+  `Prestazioni.md`).
+- 2026-07-31: **M3 attuata — cantiere chiuso.** `examples/bench_geo_binary.rs`
+  (D14.10): A/B CLI `pair-arrow` vs piano v4 su sjoin e within (fixture
+  mista 100k/lato, mediana di 5 run alternate, mitigazione allocatore
+  documentata), piu' controllo di non regressione `table.join` sul guscio
+  condiviso. Esiti: sjoin −13,2% (bande sovrapposte per un outlier di
+  cold-cache — «delta entro rumore documentato»), within −8,4% (bande non
+  sovrapposte), entrambi a favore del v4; oracoli bloccanti veri
+  (cross-run byte-identici ADR-0001, cross-path semantico — gli schemi
+  differiscono per contratto D14.8, mai confronto byte); conteggi di
+  sanita' ricalcolati a mano esatti (49 950 coppie, 49 900 flag true);
+  `table.join` 1M 0,2571s vs riferimento storico 0,6361s — nessuna
+  regressione. Deviazione di fixture dichiarata nell'header del bench:
+  il lato right di `within` usa quadrati 60x60 (con 20x20 traslati
+  nessun left sarebbe within — oracolo banale). Numeri in
+  `Prestazioni.md` §8.2. Restano i debiti dichiarati FUORI cantiere:
+  clip/overlay/booleane + `geo.dissolve` (secondo cantiere, con il
+  debito `other_wkb` da risolvere prima), `geo.union` senza vincolo di
+  espansione (CIA separata).

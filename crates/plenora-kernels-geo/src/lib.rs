@@ -37,6 +37,7 @@ pub mod arrow_adapter;
 pub mod cluster;
 pub mod construction;
 pub mod crs;
+pub mod decoded_size;
 pub mod equality;
 pub mod extended;
 pub mod extended_algorithms;

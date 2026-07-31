@@ -170,7 +170,9 @@ use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_
 use plenora_kernels_table::spill::SpillMetrics;
 
 use crate::cancellation::CancellationToken;
-use crate::geo_transport::pair::{decode_geometry_batches, PairOperation};
+use crate::geo_transport::pair::{
+    decode_geometry_batches, preflight_decoded_bytes, PairOperation,
+};
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
 use crate::geo_transport::transport::{
     OneToOnePrepared, TransformArrowSchema, one_to_one_batch_prepared, prepare_one_to_one,
@@ -1885,6 +1887,66 @@ fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send
     )
 }
 
+/// Lato di un'operazione binaria geo (campo strutturato del carrier D14.5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeoBinarySide {
+    Left,
+    Right,
+}
+
+impl GeoBinarySide {
+    /// Nome stabile del lato (dettaglio diagnostico, mai nel testo base).
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+/// Carrier degli errori di uno step binario geo prima dell'attribuzione al
+/// nodo (ADR-0014 D14.5.2): sorgente grezza + fase + side + indice di riga
+/// come campi strutturati. La posizione NON entra MAI nel testo base del
+/// messaggio (regola 8): e' pubblicata solo nel dettaglio diagnostico
+/// opt-in (`side=… row=…`, stesso canale di `batch_seq`, ADR 3 M1d).
+struct GeoBinaryStepError {
+    /// Fase del ciclo (D14.5.4): `Read` per drenaggio/decode, `Write` per
+    /// kernel e costruzione dell'output.
+    phase: ErrorPhase,
+    /// Lato che ha prodotto l'errore (decode), se applicabile.
+    side: Option<GeoBinarySide>,
+    /// Riga della cella nella sequenza decodificata, se applicabile.
+    row_index: Option<u64>,
+    /// Sorgente grezza, invariata nel testo.
+    source: PlenoraError,
+}
+
+/// Conversione del carrier D14.5 in errore di nodo: `Execution { node,
+/// operation, execution_id }` via `step_error` (D14.5.1); la fase `Read`
+/// del decode e' taggata al confine (`Write` e' gia' la fase derivata di
+/// `Execution`, D14.5.4); side/riga solo come dettaglio diagnostico opt-in.
+fn geo_binary_step_error(
+    state: &ExecState,
+    kernel: &PreparedKernel,
+    carrier: GeoBinaryStepError,
+) -> PlenoraError {
+    let detail = match (carrier.side, carrier.row_index) {
+        (Some(side), Some(row)) => Some(format!("side={} row={row}", side.as_str())),
+        (Some(side), None) => Some(format!("side={}", side.as_str())),
+        (None, Some(row)) => Some(format!("row={row}")),
+        (None, None) => None,
+    };
+    let error = state.with_diagnostics(step_error(kernel, carrier.source), detail.as_deref());
+    // `tag_execution` prima del tag di fase: il wrapper `Tagged` non
+    // attraversa il riempimento dell'`execution_id` al confine di uscita.
+    let error = state.tag_execution(error);
+    if carrier.phase == ErrorPhase::Write {
+        error
+    } else {
+        error.with_phase(carrier.phase)
+    }
+}
+
 /// Metriche di un'esecuzione di kernel (per nodo e per segmento, E3).
 /// `first`/`last` indicano la posizione del kernel nel segmento (righe e
 /// batch di ingresso contati solo sul primo, di uscita solo sull'ultimo).
@@ -3283,23 +3345,35 @@ fn run_binary_blocking(
     ))
 }
 
-/// Ramo geo di [`run_binary_blocking`] (ADR-0014 M1, D14.2): stesso guscio
-/// del ramo tabellare — drenaggio dei due rami a monte, `concat_batches`,
-/// tetti V7, reservation in ordine globale fisso left→right, cancellazione
-/// post-drenaggio, `catch_unwind`, `check_join_expansion`,
-/// `blocking_output_sequence`, metriche — con il cuore sostituito da
-/// [`execute_geo_binary`] (decode totale D14.3 → kernel `*_validated` →
-/// output secondo il contratto v4).
+/// Ramo geo di [`run_binary_blocking`] (ADR-0014 M1/M2, D14.2): stesso
+/// guscio del ramo tabellare — drenaggio dei due rami a monte,
+/// `concat_batches`, tetti V7, reservation in ordine globale fisso
+/// left→right, cancellazione post-drenaggio, `catch_unwind`,
+/// `check_join_expansion`, `blocking_output_sequence`, metriche — con il
+/// cuore sostituito da decode totale D14.3 → kernel `*_validated` → output
+/// secondo il contratto v4 ([`execute_geo_binary`]).
 ///
 /// Cancellazione `BoundaryOnly` (catalogo, D14.5.5): i confini sono quelli
 /// esistenti (batch in drenaggio + post-drenaggio pre-kernel), nessun check
 /// dentro il kernel — comportamento voluto, non lacuna.
 ///
-/// M1: le reservation coprono i byte Arrow dei due lati (come nel ramo
-/// tabellare); il preflight della forma decodificata (`decoded_size_xy`,
-/// D14.4) e' M2 — la memoria delle geometrie decodificate non e' ancora
-/// contabilizzata al governor e il lease Arrow right non e' rilasciato
-/// prima del kernel (sequenza D14.4 completa in M2).
+/// Contabilita' D14.4 (M2): per ciascun lato, nell'ordine globale fisso
+/// left→right — reservation dei byte Arrow, preflight della forma
+/// decodificata ([`preflight_decoded_bytes`]), reservation della forma
+/// decodificata, decode. Rifiuto fail-closed PRIMA dell'allocazione: una
+/// reservation rifiutata ferma il nodo senza partial state (i lease sono
+/// RAII). Il lease Arrow right e' rilasciato prima del kernel (il left
+/// resta per take/passthrough); i lease decodificati dopo il lease
+/// dell'output.
+///
+/// Errori D14.5 (M2): decode → fase `Read` con side/riga strutturati,
+/// kernel e costruzione output → fase `Write` (carrier
+/// [`GeoBinaryStepError`], conversione [`geo_binary_step_error`]); il primo
+/// errore e' in ordine (side, riga) per costruzione della sequenza.
+// La lunghezza e' data dal guscio ADR-0002 completo (concat, reservation,
+// metriche) piu' la sequenza D14.4 per lato: sequenza lineare, non
+// complessita' logica (stesso criterio di `pair_arrow`).
+#[allow(clippy::too_many_lines)]
 fn run_geo_binary_blocking(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
@@ -3340,12 +3414,64 @@ fn run_geo_binary_blocking(
     // restituiti alimentano le reservation (V2: un solo conteggio).
     let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
     let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
-    // Reservation complete degli intermedi in ordine globale fisso (left,
-    // poi right), poi rilascio dei lease degli input.
-    let left_lease = state.governor.reserve(left_bytes, &kernel.node_id)?;
-    let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
+    // I batch d'ingresso non servono piu' (il concat possiede i nuovi
+    // buffer): i loro lease tornano al governor prima delle reservation.
     drop(left_batches);
     drop(right_batches);
+    // D14.4: per ciascun lato, in ordine globale fisso left→right —
+    // reservation Arrow, preflight della forma decodificata, reservation
+    // decodificata, decode. Il decode left completo precede qualunque
+    // contabilita' del lato right: il primo errore e' in ordine (side,
+    // riga) per costruzione (D14.5.3).
+    let left_lease = state.governor.reserve(left_bytes, &kernel.node_id)?;
+    let left_decoded_bytes =
+        preflight_decoded_bytes(&left.schema(), std::slice::from_ref(&left), geo_plan.left_geometry_index);
+    let left_decoded_lease = state.governor.reserve(left_decoded_bytes, &kernel.node_id)?;
+    let left_geometries = decode_geometry_batches(
+        &left.schema(),
+        std::slice::from_ref(&left),
+        geo_plan.left_geometry_index,
+    )
+    .map_err(|error| {
+        geo_binary_step_error(
+            state,
+            kernel,
+            GeoBinaryStepError {
+                phase: ErrorPhase::Read,
+                side: Some(GeoBinarySide::Left),
+                row_index: error.row_index,
+                source: PlenoraError::InvalidPlan(error.source.to_string()),
+            },
+        )
+    })?;
+    let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
+    let right_decoded_bytes = preflight_decoded_bytes(
+        &right.schema(),
+        std::slice::from_ref(&right),
+        geo_plan.right_geometry_index,
+    );
+    let right_decoded_lease = state.governor.reserve(right_decoded_bytes, &kernel.node_id)?;
+    let right_geometries = decode_geometry_batches(
+        &right.schema(),
+        std::slice::from_ref(&right),
+        geo_plan.right_geometry_index,
+    )
+    .map_err(|error| {
+        geo_binary_step_error(
+            state,
+            kernel,
+            GeoBinaryStepError {
+                phase: ErrorPhase::Read,
+                side: Some(GeoBinarySide::Right),
+                row_index: error.row_index,
+                source: PlenoraError::InvalidPlan(error.source.to_string()),
+            },
+        )
+    })?;
+    // D14.4: lease Arrow RIGHT rilasciato prima del kernel (il left resta
+    // per take/passthrough); il batch right non serve piu'.
+    drop(right_lease);
+    drop(right);
     // ADR 3 / D14.5.5: a fine drenaggio, prima del kernel binario
     // monolitico (come `run_blocking` e il ramo tabellare).
     state.check_cancellation(kernel)?;
@@ -3356,16 +3482,30 @@ fn run_geo_binary_blocking(
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]
         inject_test_panic(&kernel.node_id);
-        execute_geo_binary(kernel, geo_plan, &left, &right)
+        execute_geo_binary(kernel, geo_plan, &left, &left_geometries, &right_geometries)
     }))
     .unwrap_or_else(|payload| Err(panic_step_error(kernel, &*payload)))
-    .map_err(|error| step_error(kernel, error))?;
+    .map_err(|source| {
+        geo_binary_step_error(
+            state,
+            kernel,
+            GeoBinaryStepError {
+                phase: ErrorPhase::Write,
+                side: None,
+                row_index: None,
+                source,
+            },
+        )
+    })?;
     let elapsed = start.elapsed();
     let output_lease = state
         .governor
         .reserve(output.get_array_memory_size() as u64, &kernel.node_id)?;
+    // D14.4: lease decodificati rilasciati dopo il lease dell'output; anche
+    // il lease Arrow left (take/passthrough completati nel kernel).
+    drop(left_decoded_lease);
+    drop(right_decoded_lease);
     drop(left_lease);
-    drop(right_lease);
     let rows_out = output.num_rows() as u64;
     {
         let mut rows = state.node_rows.borrow_mut();
@@ -3418,11 +3558,10 @@ fn run_geo_binary_blocking(
     ))
 }
 
-/// Cuore del ramo geo (D14.2): decode TOTALE dei due lati (D14.3, via
-/// `decode_geometry_batches` — la stessa camminata validante del trasporto
-/// pair, una sola fonte di verita' sui gate), kernel `*_validated`
-/// (ADR-0013: precondizione soddisfatta per costruzione dal decode) e
-/// costruzione dell'output secondo il contratto v4:
+/// Cuore del ramo geo (D14.2): kernel `*_validated` (ADR-0013:
+/// precondizione soddisfatta per costruzione dal decode totale D14.3,
+/// eseguito dal chiamante) e costruzione dell'output secondo il contratto
+/// v4:
 ///
 /// - `sjoin`: `take` delle colonne left sugli indici di coppia + colonna
 ///   `right_index` (non-null per inner join);
@@ -3436,9 +3575,8 @@ fn run_geo_binary_blocking(
 /// (fonte unica di verita', E1) — identico per costruzione allo schema del
 /// contratto analyze v4, verificato dai test di identita'.
 ///
-/// M1: gli errori di decode/kernel propagano come `InvalidPlan` con
-/// attribuzione di nodo via `step_error` al confine; side e riga come campi
-/// strutturati arrivano con `GeoBinaryStepError` in M2 (D14.5.2).
+/// Gli errori propagano come sorgente grezza: fase (`Write`), side e riga
+/// sono aggiunti dal chiamante nel carrier [`GeoBinaryStepError`] (D14.5.2).
 // La lunghezza e' data dalla sequenza lineare dei quattro casi del
 // perimetro M1 (kernel + costruzione output per op), non da complessita'
 // logica (stesso criterio di `pair_arrow`).
@@ -3447,25 +3585,14 @@ fn execute_geo_binary(
     kernel: &PreparedKernel,
     geo_plan: &GeoBinaryPlan,
     left: &RecordBatch,
-    right: &RecordBatch,
+    left_geometries: &[Option<geo::Geometry<f64>>],
+    right_geometries: &[Option<geo::Geometry<f64>>],
 ) -> Result<RecordBatch> {
-    let left_geometries = decode_geometry_batches(
-        &left.schema(),
-        std::slice::from_ref(left),
-        geo_plan.left_geometry_index,
-    )
-    .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
-    let right_geometries = decode_geometry_batches(
-        &right.schema(),
-        std::slice::from_ref(right),
-        geo_plan.right_geometry_index,
-    )
-    .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
     match geo_plan.operation {
         PairOperation::SJoin => {
             let pairs = spatial_join_nullable_validated(
-                &left_geometries,
-                &right_geometries,
+                left_geometries,
+                right_geometries,
                 geo_plan.predicate.ok_or_else(|| {
                     PlenoraError::Internal(
                         "sjoin senza predicato: invariante di prepare violata".into(),
@@ -3491,8 +3618,8 @@ fn execute_geo_binary(
         }
         PairOperation::Nearest => {
             let matches = nearest_matches_validated(
-                &left_geometries,
-                &right_geometries,
+                left_geometries,
+                right_geometries,
                 geo_plan.max_distance,
                 geo_plan.max_comparisons,
                 geo_plan.max_results,
@@ -3518,8 +3645,8 @@ fn execute_geo_binary(
         }
         PairOperation::Within => {
             let indexes = within_indexes_validated(
-                &left_geometries,
-                &right_geometries,
+                left_geometries,
+                right_geometries,
                 geo_plan.max_pairs,
             )
             .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
@@ -3539,8 +3666,8 @@ fn execute_geo_binary(
         PairOperation::CountPointsInPolygons => {
             // Contratto: left = poligoni (output allineato), right = punti.
             let counts = count_points_in_polygons_validated(
-                &left_geometries,
-                &right_geometries,
+                left_geometries,
+                right_geometries,
                 geo_plan.max_pairs,
             )
             .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
