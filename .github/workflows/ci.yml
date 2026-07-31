@@ -75,3 +75,61 @@ jobs:
       # poi il debito lint non puo' piu' accumularsi.
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
+
+  # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
+  # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
+  # rami erano verificati solo localmente — lint pedantic su pair.rs sono
+  # emersi mesi dopo perche' nessuna CI li compilava (M3, ADR-0012).
+  # Solo Linux: e' la piattaforma di riferimento dei backend; le dipendenze
+  # di build (cmake, sqlite3) sono quelle documentate in ADR-0012.
+  backends:
+    name: test full-backends (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dipendenze native (proj-sys bundled, geos static)
+        run: sudo apt-get update && sudo apt-get install -y cmake sqlite3 libsqlite3-dev
+
+      - name: Installa toolchain (baseline ICD R13.1)
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: clippy
+
+      - name: Cache cargo (backends)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Chiave separata: gli artefatti nativi dei backend non sono
+          # riusabili tra feature set diversi.
+          key: cargo-ci-backends-1.92.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-backends-1.92.0-
+
+      - name: Clippy full-backends (gate)
+        run: cargo clippy -p plenora-engine -p plenora-cli --all-targets --locked --features full-backends
+
+      - name: Test full-backends
+        run: cargo test -p plenora-engine -p plenora-cli --locked --features full-backends
+
+  # Gate del manifesto di rilascio (PLENORA-CRITERI-RC, criteri C1-C5):
+  # verifica forma e revisioni di release/*.json con il checker ufficiale,
+  # clonato da plenora-contracts pinnato alla revisione ICD citata dal
+  # manifesto stesso (aggiornare il pin quando il manifesto riallinea).
+  release-manifest:
+    name: gate manifesto di rilascio
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth 0: il checker verifica che le revisioni citate esistano
+      # nella storia (git cat-file).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone plenora-contracts (pin v2.0-rc10)
+        run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
+
+      - name: Verifica manifesto
+        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/rc.json --repo .
