@@ -174,6 +174,38 @@ fissare in M1: tetto assoluto dichiarato in catalogo per op binaria
 posti dove sbagliare»), senza reintrodurre `max_pairs` da config nodo
 stile v3.
 
+**Forma fissata in M1 (2026-07-31): il tetto assoluto per-op e' il tetto
+righe del piano v4 gia' in vigore — NESSUN campo di catalogo nuovo**
+(nessun cambio di snapshot/fingerprint) e nessuna manopola da config
+nodo. Evidenza su cio' che i limiti esistenti coprono gia':
+
+- `max_output_rows` (default 10^7) e' applicato dal wrapper di output su
+  ogni batch consegnato; `max_rows_per_edge` (default 10^7) da
+  `check_edge_counts` su ogni arco intermedio — entrambi assoluti, ma
+  POST-hoc (dopo la materializzazione completa dell'output del nodo);
+- `max_input_rows` copre gli input del piano, `max_rows_per_edge` ogni
+  arco intermedio: ogni lato di un binario e' gia' coperto da uno dei
+  due, quindi il prodotto n×m (lavoro di `nearest`, non espansione) e'
+  coperto per costruzione dal quadrato del maggiore dei due;
+- `check_join_expansion` (ADR 6) resta il vincolo relativo vincolante di
+  catalogo, invariato.
+
+La forma attuata: `prepare` risolve per il nodo il tetto applicabile
+alla posizione del suo arco di output (`max_output_rows` se il nodo
+produce l'output del piano, `max_rows_per_edge` altrimenti) e lo passa
+al kernel come `max_pairs`/`max_results`: il rifiuto avviene DURANTE il
+calcolo, prima della materializzazione completa delle coppie
+(fail-closed, nessun partial state), con la STESSA soglia che i check
+post-hoc riverificherebbero — una sola fonte (i limiti effettivi del
+piano, con default e override per piano), non una seconda politica.
+Vincolo ereditato dalla tabella parametri per-op condivisa col v3
+(D14.2): il tetto risolto non puo' superare `MAX_PAIRS` (10^7, tetto del
+protocollo coppie); un piano con limiti di righe oltre `MAX_PAIRS` e'
+rifiutato in prepare — fail-closed, dichiarato qui come comportamento
+voluto della forma scelta. Se emergera' un caso d'uso con righe oltre
+10^7 la forma andra' riletta (campo di catalogo → snapshot → PR
+esplicita).
+
 ### D14.7 — Ordine canonico delle coppie (decisione owner 3, NON facoltativa)
 
 Se il kernel legacy non garantisce un ordine canonico (left-major,
@@ -263,3 +295,22 @@ sovrapposte o delta entro rumore documentato, output byte-identici.
   separato; D14.3/D14.4 raccomandate dal revisore, ratifica formale
   owner in arrivo). Pin di conformita' sul tag `v0.1.0-rc1`. Dipendenza
   dichiarata dalla forma finale di ADR-0013.
+- 2026-07-31: **M1 attuata** — `GeoBinaryPlan` e braccio in
+  `prepare_geo` per i 4 op del perimetro (clip/overlay/booleane restano
+  `Unsupported`, secondo cantiere); smistamento di `run_binary_blocking`
+  sul `PreparedConfig` con ramo table invariato e ramo geo sullo stesso
+  guscio; `decode_geometry_batches` fattorizzata in
+  `geo_transport::pair` (trasporto v3 ed executor condividono la
+  camminata validante, D14.2/D14.3); tabella parametri per-op estratta
+  in forma pura (`validate_pair_parameters` + `PairParameterValues`) e
+  riusata nella rivalidazione di prepare; kernel `*_validated` wired;
+  output v4 via `take`/append colonna; D14.6 fissata nella forma «tetto
+  righe del piano» (vedi sopra, nessun campo di catalogo); test M1
+  (dispatch prepare, percorso felice per-op, identita' schema vs
+  analyze, `node_rows` esatte, determinismo byte-per-byte). Debiti
+  dichiarati rimandati a M2: memoria delle geometrie decodificate non
+  ancora contabilizzata al governor (preflight `decoded_size_xy`, D14.4)
+  e lease Arrow right non rilasciato prima del kernel; errori senza
+  side/riga strutturati (`GeoBinaryStepError`, D14.5.2 — M1 propaga via
+  `step_error` come il ramo table); oracolo esteso D14.9 e ordinamento
+  canonico D14.7 assenti.

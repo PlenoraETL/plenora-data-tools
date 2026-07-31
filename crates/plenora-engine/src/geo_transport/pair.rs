@@ -204,14 +204,74 @@ impl PairArrowSchema {
     /// non previsto dall'operazione, `ArrowTransportError::MissingParameter`
     /// se ne manca uno obbligatorio, `ArrowTransportError::InvalidParameter`
     /// se un valore e' fuori dominio.
-    // Tabella parametri per operazione intenzionalmente in un'unica funzione;
-    // la scomposizione strutturale e' rimandata a una fase dedicata.
-    #[allow(clippy::too_many_lines)]
     pub fn validate_parameters(&self) -> Result<(), ArrowTransportError> {
-        let operation = self.operation.name();
+        validate_pair_parameters(
+            self.operation,
+            &PairParameterValues {
+                predicate: self.predicate,
+                overlay_mode: self.overlay_mode,
+                max_pairs: self.max_pairs,
+                max_comparisons: self.max_comparisons,
+                max_results: self.max_results,
+                max_distance: self.max_distance,
+                spatial_predicate: self.spatial_predicate,
+                max_coordinate_pairs: self.max_coordinate_pairs,
+                tolerance: self.tolerance,
+            },
+        )?;
+        if let Some(limit) = self.max_output_rows {
+            if limit > MAX_ROWS {
+                return Err(ArrowTransportError::InvalidParameter {
+                    operation: self.operation.name(),
+                    name: "max_output_rows",
+                    reason: "oltre il limite righe del trasporto",
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Vista pura dei parametri pair (ADR-0014 D14.2): i campi portano i nomi di
+/// parametro del protocollo v3. Alimentata dal trasporto
+/// ([`PairArrowSchema::validate_parameters`]) e dalla prepare del piano v4
+/// (`GeoBinaryPlan`), che vi inietta i parametri tipizzati del nodo e i
+/// tetti assoluti risolti dai limiti del piano (D14.6): la tabella per-op
+/// resta un'unica fonte di verita'.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PairParameterValues {
+    pub predicate: Option<JoinPredicate>,
+    pub overlay_mode: Option<OverlayMode>,
+    pub max_pairs: Option<u64>,
+    pub max_comparisons: Option<u64>,
+    pub max_results: Option<u64>,
+    pub max_distance: Option<f64>,
+    pub spatial_predicate: Option<SpatialPredicate>,
+    pub max_coordinate_pairs: Option<u64>,
+    pub tolerance: Option<f64>,
+}
+
+/// Tabella parametri-per-op in forma pura (ADR-0014 D14.2): parametri
+/// ammessi, obbligatori e domini per operazione, senza IO ne' schema di
+/// trasporto. `max_output_rows` resta fuori: e' un limite del trasporto v3,
+/// non un parametro di operazione (nel piano v4 il ruolo e' dei limiti di
+/// righe del piano).
+///
+/// # Errors
+///
+/// Come [`PairArrowSchema::validate_parameters`].
+// Tabella parametri per operazione intenzionalmente in un'unica funzione;
+// la scomposizione strutturale e' rimandata a una fase dedicata.
+#[allow(clippy::too_many_lines)]
+pub fn validate_pair_parameters(
+    operation_kind: PairOperation,
+    values: &PairParameterValues,
+) -> Result<(), ArrowTransportError> {
+    {
+        let operation = operation_kind.name();
         // Parametri ammessi per operazione: tutto il resto e' rifiutato
         // prima di toccare i dati.
-        let allowed: &[&'static str] = match self.operation {
+        let allowed: &[&'static str] = match operation_kind {
             PairOperation::SJoin => &["predicate", "max_pairs"],
             PairOperation::Distance => &["max_comparisons"],
             PairOperation::Nearest => &["max_comparisons", "max_results", "max_distance"],
@@ -233,15 +293,15 @@ impl PairArrowSchema {
             | PairOperation::Bearing => &[],
         };
         let mut present: Vec<(&'static str, bool)> = vec![
-            ("predicate", self.predicate.is_some()),
-            ("overlay_mode", self.overlay_mode.is_some()),
-            ("max_pairs", self.max_pairs.is_some()),
-            ("max_comparisons", self.max_comparisons.is_some()),
-            ("max_results", self.max_results.is_some()),
-            ("max_distance", self.max_distance.is_some()),
-            ("spatial_predicate", self.spatial_predicate.is_some()),
-            ("max_coordinate_pairs", self.max_coordinate_pairs.is_some()),
-            ("tolerance", self.tolerance.is_some()),
+            ("predicate", values.predicate.is_some()),
+            ("overlay_mode", values.overlay_mode.is_some()),
+            ("max_pairs", values.max_pairs.is_some()),
+            ("max_comparisons", values.max_comparisons.is_some()),
+            ("max_results", values.max_results.is_some()),
+            ("max_distance", values.max_distance.is_some()),
+            ("spatial_predicate", values.spatial_predicate.is_some()),
+            ("max_coordinate_pairs", values.max_coordinate_pairs.is_some()),
+            ("tolerance", values.tolerance.is_some()),
         ];
         present.retain(|(_, is_present)| *is_present);
         for (name, _) in &present {
@@ -263,15 +323,15 @@ impl PairArrowSchema {
                 Ok(value)
             }
         };
-        match self.operation {
+        match operation_kind {
             PairOperation::SJoin => {
-                if self.predicate.is_none() {
+                if values.predicate.is_none() {
                     return Err(ArrowTransportError::MissingParameter {
                         operation,
                         name: "predicate",
                     });
                 }
-                let max_pairs = positive("max_pairs", required("max_pairs", self.max_pairs)?)?;
+                let max_pairs = positive("max_pairs", required("max_pairs", values.max_pairs)?)?;
                 if max_pairs > MAX_PAIRS {
                     return Err(ArrowTransportError::InvalidParameter {
                         operation,
@@ -283,16 +343,16 @@ impl PairArrowSchema {
             PairOperation::Distance => {
                 positive(
                     "max_comparisons",
-                    required("max_comparisons", self.max_comparisons)?,
+                    required("max_comparisons", values.max_comparisons)?,
                 )?;
             }
             PairOperation::Nearest => {
                 positive(
                     "max_comparisons",
-                    required("max_comparisons", self.max_comparisons)?,
+                    required("max_comparisons", values.max_comparisons)?,
                 )?;
-                positive("max_results", required("max_results", self.max_results)?)?;
-                if self
+                positive("max_results", required("max_results", values.max_results)?)?;
+                if values
                     .max_distance
                     .is_some_and(|value| !value.is_finite() || value < 0.0)
                 {
@@ -304,16 +364,16 @@ impl PairArrowSchema {
                 }
             }
             PairOperation::Overlay => {
-                if self.overlay_mode.is_none() {
+                if values.overlay_mode.is_none() {
                     return Err(ArrowTransportError::MissingParameter {
                         operation,
                         name: "overlay_mode",
                     });
                 }
-                positive("max_pairs", required("max_pairs", self.max_pairs)?)?;
+                positive("max_pairs", required("max_pairs", values.max_pairs)?)?;
             }
             PairOperation::Within | PairOperation::CountPointsInPolygons => {
-                let max_pairs = positive("max_pairs", required("max_pairs", self.max_pairs)?)?;
+                let max_pairs = positive("max_pairs", required("max_pairs", values.max_pairs)?)?;
                 if max_pairs > MAX_PAIRS {
                     return Err(ArrowTransportError::InvalidParameter {
                         operation,
@@ -323,7 +383,7 @@ impl PairArrowSchema {
                 }
             }
             PairOperation::Predicate => {
-                if self.spatial_predicate.is_none() {
+                if values.spatial_predicate.is_none() {
                     return Err(ArrowTransportError::MissingParameter {
                         operation,
                         name: "spatial_predicate",
@@ -333,11 +393,11 @@ impl PairArrowSchema {
             PairOperation::HausdorffDistance | PairOperation::FrechetDistance => {
                 positive(
                     "max_coordinate_pairs",
-                    required("max_coordinate_pairs", self.max_coordinate_pairs)?,
+                    required("max_coordinate_pairs", values.max_coordinate_pairs)?,
                 )?;
             }
             PairOperation::Split => {
-                if self
+                if values
                     .tolerance
                     .is_some_and(|value| !value.is_finite() || value < 0.0)
                 {
@@ -349,15 +409,6 @@ impl PairArrowSchema {
                 }
             }
             _ => {}
-        }
-        if let Some(limit) = self.max_output_rows {
-            if limit > MAX_ROWS {
-                return Err(ArrowTransportError::InvalidParameter {
-                    operation,
-                    name: "max_output_rows",
-                    reason: "oltre il limite righe del trasporto",
-                });
-            }
         }
         Ok(())
     }
@@ -376,11 +427,8 @@ type DecodedSide = (SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>);
 
 /// Decodifica un lato (envelope + IPC + colonna geometria) e materializza le
 /// geometrie validate: entrambi i lati sono verificati prima del calcolo.
-///
-/// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
-/// per costruzione che autorizza le varianti `*_validated` dei kernel a
-/// valle (R0.1): il gate dei kernel non si ripete perche' e' gia' stato
-/// eseguito qui, geometria per geometria.
+/// La decodifica validante e' delegata a [`decode_geometry_batches`] (una
+/// sola camminata, una sola fonte di verita' sui gate).
 fn decode_geometry_side(
     reader: impl Read,
     expected_rows: u64,
@@ -401,11 +449,46 @@ fn decode_geometry_side(
         });
     }
     let geometry_index = geometry_column_index(&schema, geometry_column)?;
+    let geometries = decode_geometry_batches(&schema, &batches, geometry_index)?;
+    Ok((schema, batches, geometries))
+}
+
+/// Nucleo della decodifica validante fattorizzato (ADR-0014 D14.2): schema
+/// e batch IPC → geometrie materializzate, con i gate `MAX_ROWS` (righe
+/// totali) e `MAX_CELL_BYTES` (per cella) in un'unica fonte di verita'.
+/// Usata da `pair_arrow` (trasporto v3, via [`decode_geometry_side`]) e dal
+/// ramo geo di `run_binary_blocking` (piano v4): una sola camminata
+/// validante (ADR-0011), totale e mai lazy (D14.3).
+///
+/// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
+/// per costruzione che autorizza le varianti `*_validated` dei kernel a
+/// valle (R0.1): il gate dei kernel non si ripete perche' e' gia' stato
+/// eseguito qui, geometria per geometria.
+///
+/// L'indice della colonna geometria e' risolto dal chiamante (V2); il nome
+/// e' recuperato dallo schema solo per il contesto d'errore.
+pub fn decode_geometry_batches(
+    schema: &Schema,
+    batches: &[RecordBatch],
+    geometry_index: usize,
+) -> Result<Vec<Option<Geometry<f64>>>, ArrowTransportError> {
+    let rows: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
+    if rows > MAX_ROWS {
+        return Err(ArrowTransportError::TooManyRows(rows));
+    }
+    let geometry_column = schema
+        .fields()
+        .get(geometry_index)
+        .ok_or(ArrowTransportError::Internal(
+            "indice colonna geometria oltre lo schema",
+        ))?
+        .name()
+        .clone();
     let mut geometries = Vec::with_capacity(
         usize::try_from(rows).map_err(|_| ArrowTransportError::TooManyRows(rows))?,
     );
-    for batch in &batches {
-        let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
+    for batch in batches {
+        let cells = batch_geometry_cells(batch, geometry_index, &geometry_column)?;
         for cell in cells {
             match cell {
                 None => geometries.push(None),
@@ -418,7 +501,7 @@ fn decode_geometry_side(
             }
         }
     }
-    Ok((schema, batches, geometries))
+    Ok(geometries)
 }
 
 fn lineage_schema(nullable: bool, with_distance: bool) -> Schema {

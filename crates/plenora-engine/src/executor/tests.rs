@@ -3713,3 +3713,333 @@ fn governor_errors_at_the_input_boundary_keep_the_derived_phase() {
     assert_eq!(error.phase(), ErrorPhase::Validate);
     assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
 }
+
+// ---------------------------------------------------------------------------
+// Binari geo nel piano (ADR-0014 M1)
+// ---------------------------------------------------------------------------
+
+/// Poligono asse-allineato (fixture multi-tipo insieme a `point_wkb`).
+fn polygon_wkb(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<u8> {
+    Geometry::Polygon(polygon![
+        (x: x0, y: y0), (x: x1, y: y0),
+        (x: x1, y: y1), (x: x0, y: y1),
+        (x: x0, y: y0),
+    ])
+    .to_wkb(CoordDimensions::xy())
+    .expect("wkb fixture")
+}
+
+fn two_geo_inputs(left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> Inputs {
+    Inputs::new()
+        .with("left_in", Input::from_batches(left).expect("left non vuoto"))
+        .expect("input left")
+        .with("right_in", Input::from_batches(right).expect("right non vuoto"))
+        .expect("input right")
+}
+
+fn geo_binary_contracts() -> [(String, DataContract); 2] {
+    [
+        ("left_in".to_owned(), geo_contract()),
+        ("right_in".to_owned(), geo_contract()),
+    ]
+}
+
+fn geo_binary_plan(op: &str, config: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["left_in", "right_in"],
+        "nodes": [
+            {"id": "j", "op": op, "in": ["left_in", "right_in"], "config": config},
+        ],
+        "output": "j",
+    })
+}
+
+/// Serializzazione IPC dei batch (oracolo byte-per-byte del determinismo).
+fn ipc_bytes(batches: &[RecordBatch]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut writer = FileWriter::try_new(&mut bytes, &batches[0].schema()).expect("writer");
+        for batch in batches {
+            writer.write(batch).expect("write");
+        }
+        writer.finish().expect("finish");
+    }
+    bytes
+}
+
+fn int64_cell(batch: &RecordBatch, column: usize, row: usize) -> i64 {
+    batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("colonna Int64")
+        .value(row)
+}
+
+#[test]
+fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
+    let plan = geo_binary_plan("geo.sjoin", &json!({"predicate": "intersects"}));
+    // Multi-tipo: punto, poligono e null a sinistra; due poligoni a destra.
+    let left = geo_batch(
+        &[0, 1, 2],
+        &[
+            Some(point_wkb(1.0, 1.0)),
+            Some(polygon_wkb(10.0, 10.0, 12.0, 12.0)),
+            None,
+        ],
+    );
+    let right = geo_batch(
+        &[10, 11],
+        &[
+            Some(polygon_wkb(0.0, 0.0, 2.0, 2.0)),
+            Some(polygon_wkb(1.0, 1.0, 3.0, 3.0)),
+        ],
+    );
+    let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
+    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let (batches, metrics) = output_rows(
+        execute(
+            &graph,
+            two_geo_inputs(vec![left], vec![right]),
+            RuntimeContext::default(),
+        )
+        .expect("execute"),
+    )
+    .expect("stream ok");
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    // Identita' contratto/schema vs analyze (E1): lo schema del batch e'
+    // quello del contratto inferito dal planner.
+    assert_eq!(batch.schema(), output_contract.schema);
+    // Righe = coppie: il punto (1,1) interseca entrambi i poligoni, il
+    // poligono lontano e il null nessuno -> 2 coppie, ordine left-major.
+    assert_eq!(batch.num_rows(), 2, "due coppie attese");
+    // Colonne left via take: id ripetuto per coppia, geometria passthrough.
+    assert_eq!(int64_cell(batch, 0, 0), 0);
+    assert_eq!(int64_cell(batch, 0, 1), 0);
+    let geometries = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("geom Binary");
+    assert_eq!(geometries.value(0), point_wkb(1.0, 1.0).as_slice());
+    assert_eq!(geometries.value(1), point_wkb(1.0, 1.0).as_slice());
+    // right_index non-null (inner join) e non-nullable nel contratto v4.
+    let right_index = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("right_index UInt64");
+    assert_eq!(right_index.value(0), 0);
+    assert_eq!(right_index.value(1), 1);
+    assert_eq!(right_index.null_count(), 0, "inner join: right_index non-null");
+    let field = output_contract
+        .schema
+        .field_with_name("__right_index")
+        .expect("campo right_index");
+    assert!(!field.is_nullable(), "right_index non-nullable per sjoin");
+    // D14.8: proprieta' di contratto azzerate (righe moltiplicate).
+    assert_eq!(output_contract.properties, ContractProperties::default());
+    // node_rows esatte: 3 left + 2 right in ingresso, 2 in uscita.
+    assert_eq!(metrics.nodes["j"].rows_in, 5);
+    assert_eq!(metrics.nodes["j"].rows_out, 2);
+}
+
+#[test]
+// Uguaglianza esatta sulle distanze: i valori attesi sono esatti per
+// costruzione (distanza (0,0)-(0,2) = sqrt(4) = 2.0 in floating point).
+#[allow(clippy::float_cmp)]
+fn geo_nearest_executes_with_right_index_and_distance() {
+    let plan = geo_binary_plan("geo.nearest", &json!({}));
+    let left = geo_batch(&[0, 1], &[Some(point_wkb(0.0, 0.0)), None]);
+    let right = geo_batch(
+        &[7, 8],
+        &[Some(point_wkb(3.0, 4.0)), Some(point_wkb(0.0, 2.0))],
+    );
+    let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
+    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let (batches, metrics) = output_rows(
+        execute(
+            &graph,
+            two_geo_inputs(vec![left], vec![right]),
+            RuntimeContext::default(),
+        )
+        .expect("execute"),
+    )
+    .expect("stream ok");
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.schema(), output_contract.schema);
+    // Un solo match: left0 -> right1 (distanza 2 < 5); il null non produce righe.
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(int64_cell(batch, 0, 0), 0);
+    let right_index = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("right_index UInt64");
+    assert_eq!(right_index.value(0), 1);
+    let distances = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("distance Float64");
+    assert_eq!(distances.value(0), 2.0);
+    // Contratto v4: right_index e distance nullable (match opzionale per riga).
+    assert!(
+        output_contract
+            .schema
+            .field_with_name("__right_index")
+            .expect("campo")
+            .is_nullable()
+    );
+    assert!(
+        output_contract
+            .schema
+            .field_with_name("distance")
+            .expect("campo")
+            .is_nullable()
+    );
+    assert_eq!(metrics.nodes["j"].rows_in, 4);
+    assert_eq!(metrics.nodes["j"].rows_out, 1);
+}
+
+#[test]
+fn geo_within_executes_with_flag_column_and_custom_name() {
+    let plan = geo_binary_plan("geo.within", &json!({"output_column": "flag"}));
+    let left = geo_batch(
+        &[0, 1, 2],
+        &[Some(point_wkb(1.0, 1.0)), Some(point_wkb(5.0, 5.0)), None],
+    );
+    let right = geo_batch(&[9], &[Some(polygon_wkb(0.0, 0.0, 2.0, 2.0))]);
+    let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
+    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let (batches, metrics) = output_rows(
+        execute(
+            &graph,
+            two_geo_inputs(vec![left], vec![right]),
+            RuntimeContext::default(),
+        )
+        .expect("execute"),
+    )
+    .expect("stream ok");
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.schema(), output_contract.schema);
+    // Left passthrough: righe invariate; colonna flag con il nome da config.
+    assert_eq!(batch.num_rows(), 3);
+    assert_eq!(int64_cell(batch, 0, 2), 2);
+    let flags = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .expect("flag Boolean");
+    assert!(flags.value(0), "punto interno al poligono");
+    assert!(!flags.value(1), "punto esterno");
+    assert!(flags.is_null(2), "geometria null -> flag null");
+    assert!(batch.schema().field_with_name("flag").is_ok());
+    assert!(
+        output_contract
+            .schema
+            .field_with_name("flag")
+            .expect("campo")
+            .is_nullable()
+    );
+    assert_eq!(metrics.nodes["j"].rows_in, 4);
+    assert_eq!(metrics.nodes["j"].rows_out, 3);
+}
+
+#[test]
+fn geo_count_points_in_polygons_executes_with_count_column() {
+    let plan = geo_binary_plan("geo.count_points_in_polygons", &json!({}));
+    // Contratto: left = poligoni (output allineato), right = punti.
+    let left = geo_batch(
+        &[0, 1, 2],
+        &[
+            Some(polygon_wkb(0.0, 0.0, 2.0, 2.0)),
+            Some(polygon_wkb(10.0, 10.0, 12.0, 12.0)),
+            None,
+        ],
+    );
+    let right = geo_batch(
+        &[5, 6, 7],
+        &[
+            Some(point_wkb(1.0, 1.0)),
+            Some(point_wkb(1.5, 1.5)),
+            Some(point_wkb(5.0, 5.0)),
+        ],
+    );
+    let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
+    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let (batches, metrics) = output_rows(
+        execute(
+            &graph,
+            two_geo_inputs(vec![left], vec![right]),
+            RuntimeContext::default(),
+        )
+        .expect("execute"),
+    )
+    .expect("stream ok");
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.schema(), output_contract.schema);
+    assert_eq!(batch.num_rows(), 3);
+    let counts = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("count UInt64");
+    assert_eq!(counts.value(0), 2, "due punti nel primo poligono");
+    assert_eq!(counts.value(1), 0, "nessun punto nel secondo");
+    assert!(counts.is_null(2), "poligono null -> conteggio null");
+    assert!(batch.schema().field_with_name("count").is_ok());
+    assert_eq!(metrics.nodes["j"].rows_in, 6);
+    assert_eq!(metrics.nodes["j"].rows_out, 3);
+}
+
+#[test]
+fn geo_binary_output_is_byte_identical_across_runs() {
+    // ADR-0001/R12: stesso input -> stesso output, byte per byte (ordine
+    // logico delle coppie, mai temporale — i kernel raccolgono per indice).
+    let cases: [(&str, serde_json::Value); 2] = [
+        ("geo.sjoin", json!({"predicate": "intersects"})),
+        ("geo.nearest", json!({})),
+    ];
+    for (op, config) in cases {
+        let run_once = || {
+            let left = geo_batch(
+                &[0, 1, 2],
+                &[
+                    Some(point_wkb(1.0, 1.0)),
+                    Some(polygon_wkb(0.0, 0.0, 4.0, 4.0)),
+                    None,
+                ],
+            );
+            let right = geo_batch(
+                &[10, 11],
+                &[
+                    Some(polygon_wkb(0.0, 0.0, 2.0, 2.0)),
+                    Some(polygon_wkb(1.0, 1.0, 3.0, 3.0)),
+                ],
+            );
+            let graph = validate(&geo_binary_plan(op, &config).to_string(), &geo_binary_contracts())
+                .expect("piano valido");
+            let (batches, _) = output_rows(
+                execute(
+                    &graph,
+                    two_geo_inputs(vec![left], vec![right]),
+                    RuntimeContext::default(),
+                )
+                .expect("execute"),
+            )
+            .expect("stream ok");
+            ipc_bytes(&batches)
+        };
+        assert_eq!(run_once(), run_once(), "{op}: output non deterministico");
+    }
+}

@@ -162,10 +162,15 @@ use plenora_kernels_geo::arrow_adapter::{
     decode_geometry_cell, strip_decided_crs_declarations, GeometryMetadataDetails,
     PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
 };
+use plenora_kernels_geo::analysis::{
+    count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
+};
+use plenora_kernels_geo::spatial_join::spatial_join_nullable_validated;
 use plenora_kernels_geo::{operations, validate_wkb_contract_for_dimensions_with_depth};
 use plenora_kernels_table::spill::SpillMetrics;
 
 use crate::cancellation::CancellationToken;
+use crate::geo_transport::pair::{decode_geometry_batches, PairOperation};
 use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
 use crate::geo_transport::transport::{
     OneToOnePrepared, TransformArrowSchema, one_to_one_batch_prepared, prepare_one_to_one,
@@ -178,7 +183,7 @@ use crate::planner::{
     check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
 };
 use crate::prepare::{
-    prepare, AccessorKind, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig,
+    prepare, AccessorKind, ExecutionPlan, GeoBinaryPlan, MeasureKind, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
 };
 use crate::table_engine;
@@ -2454,6 +2459,10 @@ fn dispatch_kernel(kernel: &PreparedKernel, batch: RecordBatch, state: &ExecStat
             "nodo `{}`: kernel binario in una catena streaming",
             kernel.node_id
         ))),
+        PreparedConfig::GeoBinary(_) => Err(PlenoraError::Internal(format!(
+            "nodo `{}`: kernel binario geo in una catena streaming",
+            kernel.node_id
+        ))),
         PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params, state),
         PreparedConfig::GeoMeasure { measure, .. } => geo_measure_batch(kernel, &batch, *measure),
         PreparedConfig::GeoFromWkt {
@@ -3135,6 +3144,10 @@ fn run_blocking(
 /// ma l'ordine e' gia' quello richiesto al runtime parallelo M3 per evitare
 /// deadlock). Sequenza riassegnata con la regola documentata in
 /// [`blocking_output_sequence`] (scansione seriale left-then-right).
+// La lunghezza e' data dal guscio ADR-0002 completo (concat, reservation,
+// metriche) piu' lo smistamento D14.2: sequenza lineare, non complessita'
+// logica (stesso criterio di `pair_arrow`).
+#[allow(clippy::too_many_lines)]
 fn run_binary_blocking(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
@@ -3146,6 +3159,20 @@ fn run_binary_blocking(
     let kernel = segment.kernels.first().ok_or_else(|| {
         PlenoraError::Internal("segmento binario senza kernel: invariante del planner violata".into())
     })?;
+    // Smistamento ADR-0014 D14.2 sul `PreparedConfig`: il ramo geo ha il
+    // percorso dedicato [`run_geo_binary_blocking`] (stesso guscio, cuore
+    // decode → kernel validated → output v4); il ramo tabellare prosegue
+    // qui sotto, invariato.
+    if let PreparedConfig::GeoBinary(geo_plan) = &kernel.config {
+        return run_geo_binary_blocking(
+            plan,
+            segment_index,
+            state,
+            geo_plan,
+            left_batches,
+            right_batches,
+        );
+    }
     let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
         return Err(PlenoraError::Internal(format!(
             "nodo `{}`: config non binaria in un segmento BinaryBlocking",
@@ -3254,6 +3281,283 @@ fn run_binary_blocking(
         Some(output_lease),
         Some(blocking_output_sequence(kernel)),
     ))
+}
+
+/// Ramo geo di [`run_binary_blocking`] (ADR-0014 M1, D14.2): stesso guscio
+/// del ramo tabellare — drenaggio dei due rami a monte, `concat_batches`,
+/// tetti V7, reservation in ordine globale fisso left→right, cancellazione
+/// post-drenaggio, `catch_unwind`, `check_join_expansion`,
+/// `blocking_output_sequence`, metriche — con il cuore sostituito da
+/// [`execute_geo_binary`] (decode totale D14.3 → kernel `*_validated` →
+/// output secondo il contratto v4).
+///
+/// Cancellazione `BoundaryOnly` (catalogo, D14.5.5): i confini sono quelli
+/// esistenti (batch in drenaggio + post-drenaggio pre-kernel), nessun check
+/// dentro il kernel — comportamento voluto, non lacuna.
+///
+/// M1: le reservation coprono i byte Arrow dei due lati (come nel ramo
+/// tabellare); il preflight della forma decodificata (`decoded_size_xy`,
+/// D14.4) e' M2 — la memoria delle geometrie decodificate non e' ancora
+/// contabilizzata al governor e il lease Arrow right non e' rilasciato
+/// prima del kernel (sequenza D14.4 completa in M2).
+fn run_geo_binary_blocking(
+    plan: &Rc<ExecutionPlan>,
+    segment_index: usize,
+    state: &ExecState,
+    geo_plan: &GeoBinaryPlan,
+    left_batches: Vec<GovernedBatch>,
+    right_batches: Vec<GovernedBatch>,
+) -> Result<GovernedBatch> {
+    let segment = &plan.segments()[segment_index];
+    let kernel = segment.kernels.first().ok_or_else(|| {
+        PlenoraError::Internal("segmento binario senza kernel: invariante del planner violata".into())
+    })?;
+    let left_rows = left_batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
+    let right_rows = right_batches.iter().map(|g| g.batch.num_rows()).sum::<usize>() as u64;
+    let bytes_in = left_batches
+        .iter()
+        .chain(right_batches.iter())
+        .map(GovernedBatch::accounted_bytes)
+        .sum::<u64>();
+    let batches_in = (left_batches.len() + right_batches.len()) as u64;
+    let left_schema = kernel.input_contracts[0].schema.clone();
+    let right_schema = kernel.input_contracts[1].schema.clone();
+    let left = if left_batches.is_empty() {
+        RecordBatch::new_empty(left_schema)
+    } else {
+        let unwrapped: Vec<RecordBatch> = left_batches.iter().map(|g| g.batch.clone()).collect();
+        concat_batches(&left_schema, &unwrapped)
+            .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
+    };
+    let right = if right_batches.is_empty() {
+        RecordBatch::new_empty(right_schema)
+    } else {
+        let unwrapped: Vec<RecordBatch> = right_batches.iter().map(|g| g.batch.clone()).collect();
+        concat_batches(&right_schema, &unwrapped)
+            .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
+    };
+    // Come nel ramo tabellare: tetto duro V7 sui batch concatenati; i byte
+    // restituiti alimentano le reservation (V2: un solo conteggio).
+    let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
+    let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
+    // Reservation complete degli intermedi in ordine globale fisso (left,
+    // poi right), poi rilascio dei lease degli input.
+    let left_lease = state.governor.reserve(left_bytes, &kernel.node_id)?;
+    let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
+    drop(left_batches);
+    drop(right_batches);
+    // ADR 3 / D14.5.5: a fine drenaggio, prima del kernel binario
+    // monolitico (come `run_blocking` e il ramo tabellare).
+    state.check_cancellation(kernel)?;
+    let start = Instant::now();
+    // Confine ADR 3 / D14.5.6 come il ramo tabellare: panic del kernel
+    // convertito in errore `Execution` attribuito al nodo, mai publish
+    // dopo panic; hook `PANIC_AT_NODES` esteso al ramo.
+    let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_test_panic(&kernel.node_id);
+        execute_geo_binary(kernel, geo_plan, &left, &right)
+    }))
+    .unwrap_or_else(|payload| Err(panic_step_error(kernel, &*payload)))
+    .map_err(|error| step_error(kernel, error))?;
+    let elapsed = start.elapsed();
+    let output_lease = state
+        .governor
+        .reserve(output.get_array_memory_size() as u64, &kernel.node_id)?;
+    drop(left_lease);
+    drop(right_lease);
+    let rows_out = output.num_rows() as u64;
+    {
+        let mut rows = state.node_rows.borrow_mut();
+        if let Some(entry) = rows.get_mut(&kernel.node_id) {
+            entry.1 += rows_out;
+        } else {
+            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
+        }
+    }
+    // ADR 6: il vincolo relativo vincolante di catalogo si applica come nel
+    // ramo tabellare; il tetto assoluto D14.6 e' gia' stato fatto rispettare
+    // dal kernel (`max_pairs`/`max_results` risolti in prepare dai limiti
+    // effettivi del piano, prima della materializzazione completa).
+    check_join_expansion(state, kernel, left_rows, right_rows, rows_out)?;
+    if segment.output_edge != plan.output_edge() {
+        check_edge_batch(state, &kernel.node_id, &output)?;
+    }
+    // Metriche per nodo: righe in = left + right, batch in = quelli reali
+    // drenati dai due rami (stesso blocco del ramo tabellare).
+    // ADR 3: heartbeat del TempStore al punto centrale.
+    state.heartbeat();
+    let config = state.plan.metrics_config();
+    let mut metrics = state.metrics.borrow_mut();
+    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`).
+    metrics.total_rows_processed += left_rows + right_rows;
+    if config.per_node {
+        if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
+            node.rows_in += left_rows + right_rows;
+            node.rows_out += rows_out;
+            node.batches_in += batches_in;
+            node.batches_out += 1;
+            node.bytes_in += bytes_in;
+            node.bytes_out += output_lease.bytes();
+            node.wall_time += elapsed;
+        }
+    }
+    if config.per_segment {
+        if let Some(seg) = metrics.segments.get_mut(&segment.id) {
+            seg.rows_in += left_rows + right_rows;
+            seg.rows_out += rows_out;
+            seg.batches_in += batches_in;
+            seg.batches_out += 1;
+            seg.wall_time += elapsed;
+        }
+    }
+    Ok(GovernedBatch::new(
+        output,
+        Some(output_lease),
+        Some(blocking_output_sequence(kernel)),
+    ))
+}
+
+/// Cuore del ramo geo (D14.2): decode TOTALE dei due lati (D14.3, via
+/// `decode_geometry_batches` — la stessa camminata validante del trasporto
+/// pair, una sola fonte di verita' sui gate), kernel `*_validated`
+/// (ADR-0013: precondizione soddisfatta per costruzione dal decode) e
+/// costruzione dell'output secondo il contratto v4:
+///
+/// - `sjoin`: `take` delle colonne left sugli indici di coppia + colonna
+///   `right_index` (non-null per inner join);
+/// - `nearest`: come sjoin + colonna `distance` (una riga per match, gia'
+///   filtrato su `max_distance` dal kernel);
+/// - `within`/`count_points_in_polygons`: left passthrough + colonna
+///   flag/conteggio allineata alle righe left (null dove la geometria left
+///   e' null).
+///
+/// Lo schema di output e' quello del contratto inferito dal planner
+/// (fonte unica di verita', E1) — identico per costruzione allo schema del
+/// contratto analyze v4, verificato dai test di identita'.
+///
+/// M1: gli errori di decode/kernel propagano come `InvalidPlan` con
+/// attribuzione di nodo via `step_error` al confine; side e riga come campi
+/// strutturati arrivano con `GeoBinaryStepError` in M2 (D14.5.2).
+// La lunghezza e' data dalla sequenza lineare dei quattro casi del
+// perimetro M1 (kernel + costruzione output per op), non da complessita'
+// logica (stesso criterio di `pair_arrow`).
+#[allow(clippy::too_many_lines)]
+fn execute_geo_binary(
+    kernel: &PreparedKernel,
+    geo_plan: &GeoBinaryPlan,
+    left: &RecordBatch,
+    right: &RecordBatch,
+) -> Result<RecordBatch> {
+    let left_geometries = decode_geometry_batches(
+        &left.schema(),
+        std::slice::from_ref(left),
+        geo_plan.left_geometry_index,
+    )
+    .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+    let right_geometries = decode_geometry_batches(
+        &right.schema(),
+        std::slice::from_ref(right),
+        geo_plan.right_geometry_index,
+    )
+    .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+    match geo_plan.operation {
+        PairOperation::SJoin => {
+            let pairs = spatial_join_nullable_validated(
+                &left_geometries,
+                &right_geometries,
+                geo_plan.predicate.ok_or_else(|| {
+                    PlenoraError::Internal(
+                        "sjoin senza predicato: invariante di prepare violata".into(),
+                    )
+                })?,
+                geo_plan.max_pairs,
+            )
+            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            let left_indices =
+                UInt64Array::from_iter_values(pairs.iter().map(|pair| pair.left));
+            let mut columns: Vec<ArrayRef> = Vec::with_capacity(left.num_columns() + 1);
+            for column in left.columns() {
+                columns.push(
+                    take(column.as_ref(), &left_indices, None)
+                        .map_err(PlenoraError::from)?,
+                );
+            }
+            columns.push(std::sync::Arc::new(UInt64Array::from_iter_values(
+                pairs.iter().map(|pair| pair.right),
+            )));
+            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+                .map_err(PlenoraError::from)
+        }
+        PairOperation::Nearest => {
+            let matches = nearest_matches_validated(
+                &left_geometries,
+                &right_geometries,
+                geo_plan.max_distance,
+                geo_plan.max_comparisons,
+                geo_plan.max_results,
+            )
+            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            let left_indices =
+                UInt64Array::from_iter_values(matches.iter().map(|m| m.left));
+            let mut columns: Vec<ArrayRef> = Vec::with_capacity(left.num_columns() + 2);
+            for column in left.columns() {
+                columns.push(
+                    take(column.as_ref(), &left_indices, None)
+                        .map_err(PlenoraError::from)?,
+                );
+            }
+            columns.push(std::sync::Arc::new(UInt64Array::from_iter_values(
+                matches.iter().map(|m| m.right),
+            )));
+            columns.push(std::sync::Arc::new(Float64Array::from_iter_values(
+                matches.iter().map(|m| m.distance),
+            )));
+            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+                .map_err(PlenoraError::from)
+        }
+        PairOperation::Within => {
+            let indexes = within_indexes_validated(
+                &left_geometries,
+                &right_geometries,
+                geo_plan.max_pairs,
+            )
+            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            let matched: std::collections::HashSet<u64> = indexes.into_iter().collect();
+            let flags: Vec<Option<bool>> = left_geometries
+                .iter()
+                .enumerate()
+                .map(|(index, geometry)| {
+                    geometry.as_ref().map(|_| matched.contains(&(index as u64)))
+                })
+                .collect();
+            let mut columns = left.columns().to_vec();
+            columns.push(std::sync::Arc::new(BooleanArray::from(flags)));
+            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+                .map_err(PlenoraError::from)
+        }
+        PairOperation::CountPointsInPolygons => {
+            // Contratto: left = poligoni (output allineato), right = punti.
+            let counts = count_points_in_polygons_validated(
+                &left_geometries,
+                &right_geometries,
+                geo_plan.max_pairs,
+            )
+            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            let values: Vec<Option<u64>> = counts
+                .iter()
+                .enumerate()
+                .map(|(index, count)| left_geometries[index].as_ref().map(|_| *count))
+                .collect();
+            let mut columns = left.columns().to_vec();
+            columns.push(std::sync::Arc::new(UInt64Array::from(values)));
+            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
+                .map_err(PlenoraError::from)
+        }
+        _ => Err(PlenoraError::Internal(
+            "op binaria geo fuori perimetro M1: invariante di prepare violata".into(),
+        )),
+    }
 }
 
 #[cfg(test)]

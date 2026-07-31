@@ -1092,3 +1092,193 @@ fn measure_output_column_requires_exactly_one_added_column() {
         "area"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Binari geo nel piano (ADR-0014 M1)
+// ---------------------------------------------------------------------------
+
+/// Piano a due input geo con un nodo binario come output del piano.
+fn geo_binary_graph(op: &str, config: &serde_json::Value) -> ValidatedGraph {
+    geo_binary_graph_with_limits(op, config, &json!({}))
+}
+
+/// Come [`geo_binary_graph`], con limiti di piano espliciti (D14.6).
+fn geo_binary_graph_with_limits(
+    op: &str,
+    config: &serde_json::Value,
+    limits: &serde_json::Value,
+) -> ValidatedGraph {
+    validate(
+        &json!({
+            "schema_version": 4,
+            "limits": limits,
+            "inputs": ["left_in", "right_in"],
+            "nodes": [
+                {"id": "j", "op": op, "in": ["left_in", "right_in"], "config": config},
+            ],
+            "output": "j",
+        })
+        .to_string(),
+        &[
+            ("left_in".to_owned(), geo_contract()),
+            ("right_in".to_owned(), geo_contract()),
+        ],
+    )
+    .expect("piano valido")
+}
+
+/// Config `GeoBinary` del primo kernel del segmento (panico altrimenti).
+fn geo_binary_config(segment: &PhysicalSegment) -> &GeoBinaryPlan {
+    let PreparedConfig::GeoBinary(geo_plan) = &segment.kernels[0].config else {
+        panic!("atteso GeoBinary, ottenuto {:?}", segment.kernels[0].config);
+    };
+    geo_plan
+}
+
+#[test]
+fn geo_binary_m1_ops_prepare_as_geo_binary_with_resolved_plan() {
+    let cases: [(&str, serde_json::Value, PairOperation); 4] = [
+        ("geo.sjoin", json!({"predicate": "intersects"}), PairOperation::SJoin),
+        ("geo.nearest", json!({"max_distance": 1.5}), PairOperation::Nearest),
+        ("geo.within", json!({}), PairOperation::Within),
+        (
+            "geo.count_points_in_polygons",
+            json!({}),
+            PairOperation::CountPointsInPolygons,
+        ),
+    ];
+    let defaults = Limits::default();
+    let ceiling = defaults
+        .rows
+        .max_input_rows
+        .max(defaults.rows.max_rows_per_edge);
+    for (op, config, expected) in cases {
+        let graph = geo_binary_graph(op, &config);
+        let plan = prepare(&graph, &RuntimeContext::default())
+            .unwrap_or_else(|error| panic!("prepare di {op}: {error}"));
+        assert_eq!(plan.segments().len(), 1, "{op}");
+        let segment = &plan.segments()[0];
+        assert_eq!(segment.mode, SegmentMode::BinaryBlocking, "{op}");
+        assert_eq!(
+            segment.input_edges.as_ref(),
+            &["left_in".to_owned(), "right_in".to_owned()],
+            "{op}"
+        );
+        let kernel = &segment.kernels[0];
+        assert_eq!(kernel.geo_role, Some(GeoRole::BinaryBlocking), "{op}");
+        let geo_plan = geo_binary_config(segment);
+        assert_eq!(geo_plan.operation, expected, "{op}");
+        // Indici risolti sui due contratti fixture (`geom` e' la seconda colonna).
+        assert_eq!(geo_plan.left_geometry_index, 1, "{op}");
+        assert_eq!(geo_plan.right_geometry_index, 1, "{op}");
+        assert_eq!(geo_plan.output_crs, "EPSG:32632", "{op}");
+        // D14.6: il nodo e' l'output del piano -> tetto = max_output_rows.
+        assert_eq!(geo_plan.max_pairs, defaults.rows.max_output_rows, "{op}");
+        assert_eq!(geo_plan.max_results, defaults.rows.max_output_rows, "{op}");
+        assert_eq!(geo_plan.max_comparisons, ceiling * ceiling, "{op}");
+    }
+    // Parametri tipizzati rivalidati: predicato del sjoin e max_distance del
+    // nearest arrivano al piano come valori tipizzati (E1, niente JSON a runtime).
+    let graph = geo_binary_graph("geo.sjoin", &json!({"predicate": "within"}));
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    assert_eq!(
+        geo_binary_config(&plan.segments()[0]).predicate,
+        Some(JoinPredicate::Within)
+    );
+    let graph = geo_binary_graph("geo.nearest", &json!({"max_distance": 2.5}));
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    assert_eq!(
+        geo_binary_config(&plan.segments()[0]).max_distance,
+        Some(2.5)
+    );
+}
+
+#[test]
+fn geo_binary_caps_follow_edge_position_and_plan_limits() {
+    // Nodo terminale: tetto = max_output_rows del piano (override esplicito).
+    let graph = geo_binary_graph_with_limits(
+        "geo.sjoin",
+        &json!({"predicate": "intersects"}),
+        &json!({"max_output_rows": 42}),
+    );
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    assert_eq!(geo_binary_config(&plan.segments()[0]).max_pairs, 42);
+
+    // Nodo intermedio (a valle un filter): tetto = max_rows_per_edge.
+    let graph = validate(
+        &json!({
+            "schema_version": 4,
+            "limits": {"max_rows_per_edge": 77},
+            "inputs": ["left_in", "right_in"],
+            "nodes": [
+                {"id": "j", "op": "geo.sjoin", "in": ["left_in", "right_in"],
+                 "config": {"predicate": "intersects"}},
+                {"id": "f", "op": "table.filter", "in": ["j"],
+                 "config": {"column": "id", "operator": ">", "value": 0}},
+            ],
+            "output": "f",
+        })
+        .to_string(),
+        &[
+            ("left_in".to_owned(), geo_contract()),
+            ("right_in".to_owned(), geo_contract()),
+        ],
+    )
+    .expect("piano valido");
+    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    let segment = plan
+        .segments()
+        .iter()
+        .find(|segment| segment.output_edge == "j")
+        .expect("segmento del sjoin");
+    let geo_plan = geo_binary_config(segment);
+    assert_eq!(geo_plan.max_pairs, 77);
+    // Il tetto confronti resta il quadrato del tetto d'ingresso (default 10M).
+    assert_eq!(geo_plan.max_comparisons, 10_000_000_u64 * 10_000_000);
+}
+
+#[test]
+fn geo_binary_prepare_revalidates_resolved_caps() {
+    // max_output_rows = 0: il tetto risolto viola il dominio della tabella
+    // per-op (max_pairs > 0) — rifiuto fail-closed in prepare, mai a meta'
+    // esecuzione (la tabella pura e' la stessa del trasporto v3).
+    let graph = geo_binary_graph_with_limits(
+        "geo.sjoin",
+        &json!({"predicate": "intersects"}),
+        &json!({"max_output_rows": 0}),
+    );
+    match prepare(&graph, &RuntimeContext::default()) {
+        Err(PlenoraError::InvalidPlan(message)) => {
+            assert!(
+                message.contains("rivalidazione fisica dei parametri"),
+                "{message}"
+            );
+        }
+        other => panic!("atteso InvalidPlan, ottenuto {other:?}"),
+    }
+}
+
+#[test]
+fn geo_binary_outside_m1_perimeter_stays_unsupported() {
+    // Secondo cantiere D14.1 (ri-encode): il rifiuto e' invariato.
+    let cases: [(&str, serde_json::Value); 6] = [
+        ("geo.clip", json!({})),
+        ("geo.overlay", json!({"mode": "union"})),
+        ("geo.intersection", json!({})),
+        ("geo.union", json!({})),
+        ("geo.difference", json!({})),
+        ("geo.symmetric_difference", json!({})),
+    ];
+    for (op, config) in cases {
+        let graph = geo_binary_graph(op, &config);
+        match prepare(&graph, &RuntimeContext::default()) {
+            Err(PlenoraError::Unsupported(message)) => {
+                assert!(
+                    message.contains("non e' nel dispatch v1"),
+                    "{op}: {message}"
+                );
+            }
+            other => panic!("{op}: atteso Unsupported, ottenuto {other:?}"),
+        }
+    }
+}

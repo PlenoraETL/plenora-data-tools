@@ -27,12 +27,15 @@
 //!
 //! Limitazioni v1 (fail-closed in `prepare`, mai a meta' esecuzione): il
 //! dispatch copre le trasformazioni geo 1:1 in place, le misure "add
-//! column" e le estensioni geo v1.1-v1.3 (`from_wkt`,
+//! column", le estensioni geo v1.1-v1.3 (`from_wkt`,
 //! `geometry_accessors`, `collect`, `line_locate_point`, `generate_grid`,
 //! `subdivide`, `snap`, `coverage_validate`, `shared_paths`,
-//! `cluster_dbscan`); le altre op geo — es. `geo.dissolve`, `geo.explode`,
-//! predicati, distanze, op binarie geo — e le op tabellari N-arie con piu'
-//! di due input sono rifiutate con `PlenoraError::Unsupported`.
+//! `cluster_dbscan`) e i quattro binari geo del perimetro ADR-0014 M1
+//! (`geo.sjoin`, `geo.nearest`, `geo.within`,
+//! `geo.count_points_in_polygons`); le altre op geo — es. `geo.dissolve`,
+//! `geo.explode`, predicati, distanze, i binari geo con ri-encode (clip,
+//! overlay, booleane pairwise: secondo cantiere D14.1) — e le op tabellari
+//! N-arie con piu' di due input sono rifiutate con `PlenoraError::Unsupported`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -46,8 +49,10 @@ use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::extensions::OnWktError;
 use plenora_kernels_geo::extensions2::{GridExtent, GridShape};
+use plenora_kernels_geo::spatial_join::JoinPredicate;
 
 use crate::cancellation::CancellationToken;
+use crate::geo_transport::pair::{validate_pair_parameters, PairOperation, PairParameterValues};
 use crate::geo_transport::transport::{
     ArrowOperation, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
 };
@@ -232,6 +237,10 @@ pub enum GeoRole {
     /// Op che consuma l'intero input materializzato (segmento `Blocking`):
     /// `collect`, `generate_grid`, `coverage_validate`, `shared_paths`.
     WholeTable,
+    /// Op binaria geo che consuma i due input materializzati (segmento
+    /// `BinaryBlocking`, ADR-0014 M1): `sjoin`, `nearest`, `within`,
+    /// `count_points_in_polygons`. Mai in un gruppo di fusione.
+    BinaryBlocking,
 }
 
 /// Misura geo v1 con semantica "aggiungi colonna" (Fase 2A-4).
@@ -300,6 +309,48 @@ impl AccessorKind {
     }
 }
 
+/// Piano fisico di un binario geo del perimetro ADR-0014 M1 (D14.1/D14.2).
+///
+/// Perimetro: `geo.sjoin`, `geo.nearest`, `geo.within`,
+/// `geo.count_points_in_polygons` — nessuna ri-encode, output via `take`
+/// sulle colonne left (sjoin, nearest) o left passthrough + colonna
+/// scalare (within, count).
+///
+/// I parametri sono tipizzati e rivalidati in `prepare` con la stessa
+/// tabella per-op del trasporto pair estratta in forma pura
+/// (`geo_transport::pair::validate_pair_parameters`, una sola fonte per v3
+/// e v4); gli indici delle colonne geometria sono risolti sui due contratti
+/// (V2: nessuna ricerca per nome a runtime); i tetti assoluti D14.6 sono
+/// risolti qui dai limiti effettivi del piano — nessuna manopola `max_pairs`
+/// da config nodo stile v3.
+#[derive(Debug)]
+pub struct GeoBinaryPlan {
+    /// Operazione binaria (solo le quattro del perimetro M1).
+    pub operation: PairOperation,
+    /// Predicato del join spaziale (`geo.sjoin`; obbligatorio per tabella).
+    pub predicate: Option<JoinPredicate>,
+    /// Distanza massima (`geo.nearest`; finita e non negativa se presente).
+    pub max_distance: Option<f64>,
+    /// Tetto assoluto sulle coppie (D14.6): il tetto righe del piano
+    /// applicabile all'arco di output del nodo (`max_output_rows` se il nodo
+    /// produce l'output del piano, `max_rows_per_edge` altrimenti).
+    pub max_pairs: u64,
+    /// Tetto assoluto sui confronti n×m (`geo.nearest`): quadrato del
+    /// massimo tra `max_input_rows` e `max_rows_per_edge` — ogni lato e'
+    /// coperto da uno dei due limiti, il prodotto per costruzione.
+    pub max_comparisons: u64,
+    /// Tetto assoluto sui risultati (`geo.nearest`): come `max_pairs`.
+    pub max_results: u64,
+    /// Indice della colonna geometria nel contratto left.
+    pub left_geometry_index: usize,
+    /// Indice della colonna geometria nel contratto right.
+    pub right_geometry_index: usize,
+    /// CRS risolto dell'output (geometria left passthrough; M1 non lo
+    /// ri-applica — nessuna ri-encode per D14.1 — ma lo registra nel piano
+    /// per la diagnostica strutturata di M2, D14.5).
+    pub output_crs: String,
+}
+
 /// Configurazione preparata di un kernel (E1): tipizzata, rivalidata in
 /// `prepare`, senza JSON nel percorso per batch.
 #[derive(Debug)]
@@ -312,6 +363,11 @@ pub enum PreparedConfig {
     /// un solo step binario, eseguito una sola volta da
     /// `table_engine::execute_binary` su input materializzati.
     TableBinary(Box<table_engine::ValidatedPlan>),
+    /// Op geo binaria del perimetro ADR-0014 M1 (senza ri-encode, D14.1):
+    /// piano fisico [`GeoBinaryPlan`] con parametri tipizzati rivalidati e
+    /// tetti assoluti D14.6 risolti. Eseguita una sola volta dal ramo geo
+    /// di `run_binary_blocking` sui due input materializzati.
+    GeoBinary(Box<GeoBinaryPlan>),
     /// Trasformazione geo 1:1 in place: parametri tipizzati di
     /// [`TransformArrowSchema`] con CRS e colonna geometria risolti,
     /// `validate_parameters` gia' chiamato. Eseguita per batch da
@@ -647,7 +703,7 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
     let mut kernels_by_id: HashMap<&str, PreparedKernel> = HashMap::with_capacity(plan.nodes.len());
     for node_id in topo {
         let node = nodes_by_id[node_id.as_str()];
-        let kernel = prepare_kernel(graph, node, &limits)?;
+        let kernel = prepare_kernel(graph, node, &limits, plan.output == node.id)?;
         kernels_by_id.insert(node.id.as_str(), kernel);
     }
 
@@ -932,11 +988,14 @@ fn compute_last_consumers<'a>(
 }
 
 /// Prepara il kernel di un nodo: config tipizzata e rivalidata, indice della
-/// colonna geometria e CRS risolti (E1/V2).
+/// colonna geometria e CRS risolti (E1/V2). `is_plan_output` indica se
+/// l'arco di output del nodo e' l'output del piano (serve ai tetti assoluti
+/// D14.6 dei binari geo: `max_output_rows` vs `max_rows_per_edge`).
 fn prepare_kernel(
     graph: &ValidatedGraph,
     node: &NodeV4,
     limits: &Limits,
+    is_plan_output: bool,
 ) -> Result<PreparedKernel> {
     let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
         PlenoraError::Internal(format!(
@@ -989,7 +1048,14 @@ fn prepare_kernel(
     let (config, geo_role) = match descriptor.family {
         Family::Table => (prepare_table(node, descriptor, &legacy_limits)?, None),
         Family::Geo => {
-            let (config, role) = prepare_geo(node, descriptor, &input_contracts[0], &output_contract)?;
+            let (config, role) = prepare_geo(
+                node,
+                descriptor,
+                &input_contracts,
+                &output_contract,
+                limits,
+                is_plan_output,
+            )?;
             (config, Some(role))
         }
     };
@@ -1195,6 +1261,188 @@ struct GeoClusterDbscanConfig {
     output_column: Option<String>,
 }
 
+/// Config serde di `geo.sjoin` (v4): solo il predicato — i tetti sono D14.6
+/// (limiti del piano), mai `max_pairs` da config nodo stile v3.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeoSJoinConfig {
+    predicate: JoinPredicate,
+}
+
+/// Config serde di `geo.nearest` (v4): solo la distanza massima opzionale.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeoNearestConfig {
+    max_distance: Option<f64>,
+}
+
+/// Config serde di `geo.within` / `geo.count_points_in_polygons` (v4): il
+/// nome della colonna prodotta e' semantica di contratto (gia' applicata
+/// dal planner nell'inferenza).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeoBinaryOutputColumnConfig {
+    output_column: Option<String>,
+}
+
+/// Binari geo del perimetro ADR-0014 M1 (D14.1: nessuna ri-encode).
+/// `None` se l'op non e' nel perimetro (clip, overlay, booleane pairwise:
+/// secondo cantiere — restano `Unsupported`).
+///
+/// D14.6 (forma fissata in M1): il tetto assoluto per-op NON e' una manopola
+/// di nodo ne' un campo di catalogo — e' il tetto righe del piano gia' in
+/// vigore sull'arco di output del nodo (`max_output_rows` se il nodo produce
+/// l'output del piano, `max_rows_per_edge` altrimenti), passato al kernel
+/// come `max_pairs`/`max_results` (rifiuto durante il calcolo, prima della
+/// materializzazione completa delle coppie) e riverificato post-hoc dai
+/// check esistenti (`check_join_expansion` ADR 6 + conteggi per arco/output).
+/// Una sola fonte: i limiti effettivi del piano. Per i confronti n×m di
+/// `nearest` (lavoro, non espansione) il tetto e' il quadrato del massimo
+/// tra `max_input_rows` e `max_rows_per_edge`: ogni lato e' coperto da uno
+/// dei due, il prodotto per costruzione.
+///
+/// La rivalidazione passa per la tabella per-op del trasporto pair estratta
+/// in forma pura (D14.2): i parametri del nodo (predicato, `max_distance`) e
+/// i tetti risolti sono verificati insieme, con le stesse regole di dominio
+/// del v3 — incluso il tetto del protocollo coppie (`MAX_PAIRS`): un piano
+/// con limiti di righe oltre quel tetto e' rifiutato qui, fail-closed.
+// La lunghezza e' data dalla sequenza lineare dei casi per op (config
+// tipizzata + vista parametri) e dalla risoluzione documentata dei tetti
+// D14.6, non da complessita' logica.
+#[allow(clippy::too_many_lines)]
+fn prepare_geo_binary(
+    node: &NodeV4,
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+    input_contracts: &[DataContract],
+    output_contract: &DataContract,
+    limits: &Limits,
+    is_plan_output: bool,
+) -> Result<Option<(PreparedConfig, GeoRole)>> {
+    let operation = match descriptor.id {
+        "geo.sjoin" => PairOperation::SJoin,
+        "geo.nearest" => PairOperation::Nearest,
+        "geo.within" => PairOperation::Within,
+        "geo.count_points_in_polygons" => PairOperation::CountPointsInPolygons,
+        _ => return Ok(None),
+    };
+    let row_cap = if is_plan_output {
+        limits.rows.max_output_rows
+    } else {
+        limits.rows.max_rows_per_edge
+    };
+    let input_ceiling = limits
+        .rows
+        .max_input_rows
+        .max(limits.rows.max_rows_per_edge);
+    let max_comparisons = input_ceiling.saturating_mul(input_ceiling);
+    let (predicate, max_distance, values) = match operation {
+        PairOperation::SJoin => {
+            let parsed: GeoSJoinConfig = serde_json::from_value(node.config.clone())?;
+            (
+                Some(parsed.predicate),
+                None,
+                PairParameterValues {
+                    predicate: Some(parsed.predicate),
+                    max_pairs: Some(row_cap),
+                    ..PairParameterValues::default()
+                },
+            )
+        }
+        PairOperation::Nearest => {
+            let parsed: GeoNearestConfig = serde_json::from_value(node.config.clone())?;
+            (
+                None,
+                parsed.max_distance,
+                PairParameterValues {
+                    max_comparisons: Some(max_comparisons),
+                    max_results: Some(row_cap),
+                    max_distance: parsed.max_distance,
+                    ..PairParameterValues::default()
+                },
+            )
+        }
+        PairOperation::Within | PairOperation::CountPointsInPolygons => {
+            let parsed: GeoBinaryOutputColumnConfig = serde_json::from_value(node.config.clone())?;
+            // `output_column` e' semantica di contratto: gia' applicata dal
+            // planner, niente da risolvere a runtime (lo schema di output
+            // e' quello del contratto, fonte unica di verita').
+            let _ = &parsed.output_column;
+            (
+                None,
+                None,
+                PairParameterValues {
+                    max_pairs: Some(row_cap),
+                    ..PairParameterValues::default()
+                },
+            )
+        }
+        _ => {
+            return Err(PlenoraError::Internal(format!(
+                "nodo `{}`: op binaria geo fuori perimetro nel dispatch M1",
+                node.id
+            )))
+        }
+    };
+    validate_pair_parameters(operation, &values).map_err(|error| {
+        PlenoraError::InvalidPlan(format!(
+            "nodo `{}`: rivalidazione fisica dei parametri fallita: {error}",
+            node.id
+        ))
+    })?;
+    // Indici delle colonne geometria sui due contratti (V2): risolti qui,
+    // mai per nome a runtime. L'identificabilita' e' garantita da analyze
+    // (ADR-0009 decisione 8, entrambi gli operandi).
+    let geometry_index = |contract: &DataContract, side: &'static str| -> Result<usize> {
+        let geometry = contract.active_geometry_column().ok_or_else(|| {
+            PlenoraError::Internal(format!(
+                "geometria attiva lato {side} verificata in validazione"
+            ))
+        })?;
+        Ok(contract
+            .schema
+            .column_with_name(&geometry.name)
+            .ok_or_else(|| {
+                PlenoraError::Internal("colonna geometria nel contratto".to_owned())
+            })?
+            .0)
+    };
+    let left_geometry_index = geometry_index(&input_contracts[0], "left")?;
+    let right_contract = input_contracts.get(1).ok_or_else(|| {
+        PlenoraError::Internal(format!(
+            "nodo `{}`: binario geo con un solo contratto di input",
+            node.id
+        ))
+    })?;
+    let right_geometry_index = geometry_index(right_contract, "right")?;
+    // CRS di output = CRS left (geometria passthrough, requisito di
+    // catalogo `SameProjected` gia' verificato da analyze su entrambi).
+    let output_geometry = output_contract.active_geometry_column().ok_or_else(|| {
+        PlenoraError::Internal("binario geo senza geometria attiva in output".to_owned())
+    })?;
+    let output_crs = output_geometry
+        .crs
+        .as_resolved()
+        .ok_or_else(|| {
+            PlenoraError::Internal("binario geo senza CRS risolto dopo la validazione".to_owned())
+        })?
+        .definition()
+        .to_owned();
+    Ok(Some((
+        PreparedConfig::GeoBinary(Box::new(GeoBinaryPlan {
+            operation,
+            predicate,
+            max_distance,
+            max_pairs: row_cap,
+            max_comparisons,
+            max_results: row_cap,
+            left_geometry_index,
+            right_geometry_index,
+            output_crs,
+        })),
+        GeoRole::BinaryBlocking,
+    )))
+}
+
 /// Mapping op geo v4 → [`ArrowOperation`] del trasporto (trasformazioni 1:1
 /// in place coperte dal dispatch v1).
 fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
@@ -1222,13 +1470,25 @@ fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
 }
 
 /// Kernel geo: trasformazioni 1:1 in place via `transform_batches`, misure
-/// "add column" via dispatch dedicato; il resto e' fuori dal dispatch v1.
+/// "add column" via dispatch dedicato, binari del perimetro ADR-0014 M1 via
+/// [`prepare_geo_binary`]; il resto e' fuori dal dispatch v1.
+///
+/// `input_contracts` sono i contratti degli archi di input del nodo (1 per
+/// le unarie, 2 per i binari); `limits` e `is_plan_output` servono solo al
+/// braccio binario (tetti assoluti D14.6).
+// La lunghezza e' data dalla sequenza lineare dei bracci di dispatch
+// (trasformazioni, misure, binari M1, estensioni), non da complessita'
+// logica.
+#[allow(clippy::too_many_lines)]
 fn prepare_geo(
     node: &NodeV4,
     descriptor: &plenora_core::catalog::OperationDescriptor,
-    input_contract: &DataContract,
+    input_contracts: &[DataContract],
     output_contract: &DataContract,
+    limits: &Limits,
+    is_plan_output: bool,
 ) -> Result<(PreparedConfig, GeoRole)> {
+    let input_contract = &input_contracts[0];
     if let Some(operation) = geo_transform_operation(descriptor.id) {
         let parsed: GeoTransformConfig = serde_json::from_value(node.config.clone())?;
         let geometry = input_contract
@@ -1320,6 +1580,17 @@ fn prepare_geo(
         ));
     }
 
+    if let Some(prepared) = prepare_geo_binary(
+        node,
+        descriptor,
+        input_contracts,
+        output_contract,
+        limits,
+        is_plan_output,
+    )? {
+        return Ok(prepared);
+    }
+
     if let Some(prepared) = prepare_geo_extension(node, descriptor, input_contract, output_contract)? {
         return Ok(prepared);
     }
@@ -1327,10 +1598,12 @@ fn prepare_geo(
     Err(PlenoraError::Unsupported(format!(
         "nodo `{}`: {} non e' nel dispatch v1 dell'executor (Fase 2A-4): \
          coperte le trasformazioni geo 1:1 in place, le misure area/length/\
-         perimeter/vertex_count/to_wkt e le estensioni v1.1-v1.3 (from_wkt, \
+         perimeter/vertex_count/to_wkt, le estensioni v1.1-v1.3 (from_wkt, \
          geometry_accessors, collect, line_locate_point, generate_grid, \
-         subdivide, snap, coverage_validate, shared_paths, cluster_dbscan); \
-         il resto e' Fase 2B/2C",
+         subdivide, snap, coverage_validate, shared_paths, cluster_dbscan) e \
+         i binari del perimetro ADR-0014 M1 (sjoin, nearest, within, \
+         count_points_in_polygons); il resto e' Fase 2B/2C (clip, overlay e \
+         booleane pairwise al secondo cantiere D14.1)",
         node.id, descriptor.id
     )))
 }
