@@ -1215,6 +1215,9 @@ fn point_z_wkb(x: f64, y: f64, z: f64) -> Vec<u8> {
 }
 
 #[cfg(feature = "proj-backend")]
+// Lunghezza data dalla sequenza end-to-end CLI (fixture, run, asserzioni
+// sull'output), non da complessita' logica.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     use plenora_kernels_geo::arrow_adapter as adapter;
@@ -1238,7 +1241,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     )
     .expect("plan");
 
-    let cells = vec![
+    let cells = [
         Some(point_z_wkb(1.0, 2.0, 3.0)),
         Some(point_z_wkb(4.0, 5.0, 6.0)),
         Some(point_z_wkb(7.0, 8.0, 9.0)),
@@ -1350,7 +1353,8 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
 // ---------------------------------------------------------------------------
 
 /// Fixture: `id` Int64 + colonna `geometry` GeoArrow-WKB con CRS EPSG:32632 e
-/// chiavi canoniche CRS complete (crs_resolution/crs_id/srid/axis_order).
+/// chiavi canoniche CRS complete (`crs_resolution`/`crs_id`/`srid`/
+/// `axis_order`).
 #[cfg(feature = "proj-backend")]
 fn canonical_crs_schema() -> SchemaRef {
     use plenora_kernels_geo::arrow_adapter as adapter;
@@ -1435,28 +1439,28 @@ fn canonical_only_schema() -> SchemaRef {
 }
 
 #[cfg(feature = "proj-backend")]
-fn write_fixture_batch(path: &std::path::Path, schema: SchemaRef) {
-    let cells = vec![
-        Some(point_wkb_le(500000.0, 4649776.0)),
-        Some(point_wkb_le(500100.0, 4649876.0)),
+fn write_fixture_batch(path: &std::path::Path, schema: &SchemaRef) {
+    let cells = [
+        Some(point_wkb_le(500_000.0, 4_649_776.0)),
+        Some(point_wkb_le(500_100.0, 4_649_876.0)),
     ];
     let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        Arc::clone(schema),
         vec![
             Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
             Arc::new(BinaryArray::from(refs)) as ArrayRef,
         ],
     )
     .expect("batch fixture");
-    write_ipc(path, &schema, &[batch]);
+    write_ipc(path, schema, &[batch]);
 }
 
 #[cfg(feature = "proj-backend")]
 fn run_plan(
     directory: &std::path::Path,
     plan: &serde_json::Value,
-    schema: SchemaRef,
+    schema: &SchemaRef,
 ) -> std::path::PathBuf {
     let plan_path = directory.join("plan.json");
     let input = directory.join("input.arrow");
@@ -1497,7 +1501,7 @@ fn dag_v4_reproject_replaces_canonical_crs_keys() {
         ],
         "output": "p",
     });
-    let output_path = run_plan(directory.path(), &plan, canonical_crs_schema());
+    let output_path = run_plan(directory.path(), &plan, &canonical_crs_schema());
 
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
         .expect("reader");
@@ -1547,7 +1551,7 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
         ],
         "output": "c",
     });
-    let output_path = run_plan(directory.path(), &plan, canonical_only_schema());
+    let output_path = run_plan(directory.path(), &plan, &canonical_only_schema());
 
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
         .expect("reader");

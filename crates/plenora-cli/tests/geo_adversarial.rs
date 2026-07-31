@@ -61,6 +61,10 @@ fn nan_point() -> Geometry<f64> {
     Geometry::Point(Point::new(f64::NAN, 0.0))
 }
 
+// Uguaglianza esatta per costruzione (riga `perimeter == length`): per
+// `geo`, `length` di un poligono e' il suo perimetro — stessa misura,
+// stesso algoritmo.
+#[allow(clippy::float_cmp)]
 #[test]
 fn operations_cover_every_geometry_family_and_fail_closed() {
     let point = Geometry::Point(Point::new(1.0, 2.0));
@@ -498,7 +502,7 @@ fn protocols_reject_bad_headers_trailers_counts_and_frames() {
         read_pairs(bad_pair_magic.as_slice()),
         Err(PairProtocolError::InvalidMagic)
     ));
-    let mut bad_pair_trailer = encoded.clone();
+    let mut bad_pair_trailer = encoded;
     let trailer_offset = 16 + 16;
     bad_pair_trailer[trailer_offset] ^= 1;
     assert!(matches!(
@@ -593,7 +597,11 @@ fn wkb_contract_rejects_malformed_nested_and_extreme_payloads() {
 
     let mut many_components = vec![1_u8];
     many_components.extend_from_slice(&7_u32.to_le_bytes());
-    many_components.extend_from_slice(&((MAX_WKB_COMPONENTS + 1) as u32).to_le_bytes());
+    many_components.extend_from_slice(
+        &u32::try_from(MAX_WKB_COMPONENTS + 1)
+            .expect("conteggio componenti < u32::MAX")
+            .to_le_bytes(),
+    );
     for _ in 0..=MAX_WKB_COMPONENTS {
         many_components.push(1);
         many_components.extend_from_slice(&2_u32.to_le_bytes());

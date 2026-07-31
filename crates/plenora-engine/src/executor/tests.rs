@@ -1355,7 +1355,7 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
         ],
         "output": "p",
     });
-    let cells = [point_wkb(500000.0, 4649776.0)];
+    let cells = [point_wkb(500_000.0, 4_649_776.0)];
     let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| Some(cell.as_slice())).collect();
     let batch = RecordBatch::try_new(
         schema,
@@ -4047,7 +4047,7 @@ fn geo_binary_output_is_byte_identical_across_runs() {
 /// Caso (e) dell'oracolo ADR-0014 D14.9, nel crate perche' l'hook
 /// `PANIC_AT_NODES` e' `#[cfg(test)]` e privato (stessa nota del caso (g)
 /// dell'oracolo ADR-0012): panic iniettato nel kernel `geo.sjoin` di un
-/// segmento BinaryBlocking geo -> errore `Execution` attribuito al nodo,
+/// segmento `BinaryBlocking` geo -> errore `Execution` attribuito al nodo,
 /// fase `Write` derivata, nessun publish dopo panic (D14.5.6). Id di nodo
 /// dedicato: l'hook e' globale e i test girano in parallelo.
 #[test]

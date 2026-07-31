@@ -251,7 +251,7 @@ fn transform_arrow_v3_roundtrip() {
 }
 
 /// BLOCK-06: l'output di `transform-arrow` porta le chiavi canoniche §2 in
-/// doppia emissione con quelle GeoArrow (parita' col percorso v4, DER-002
+/// doppia emissione con quelle `GeoArrow` (parita' col percorso v4, DER-002
 /// estesa), con `plenora.contract.version` nei metadati dello schema (R2.5).
 #[cfg(feature = "proj-backend")]
 #[test]
