@@ -314,3 +314,17 @@ sovrapposte o delta entro rumore documentato, output byte-identici.
   side/riga strutturati (`GeoBinaryStepError`, D14.5.2 — M1 propaga via
   `step_error` come il ramo table); oracolo esteso D14.9 e ordinamento
   canonico D14.7 assenti.
+- 2026-07-30: dalla mappatura Manipola→data-tools
+  (`plenora-contracts/docs/MAPPATURA-MANIPOLA-DATATOOLS.md`, 35/40 op
+  raggiungibili eseguite una per una): **`geo.dissolve` e' priorita' del
+  secondo cantiere** insieme a clip/overlay/booleane — Plenora lo usa e
+  oggi e' fuori dispatch (collettiva ManyToOne, classe diversa dai
+  binari). Registrati nel documento di migrazione: `op_union` come
+  decisione per pipeline (concat/concat_by_name/union_distinct — la
+  scelta cambia il risultato), `op_md5_hash` come gap di catalogo con
+  mapping provvisorio su `table.stable_fingerprint` (differenza
+  dichiarata: un'impronta stabile non e' un MD5); la differenza
+  semantica dimensioni != xy (fail-closed B1.3 vs appiattimento
+  GeoPandas) come classe di regressione attesa — la risposta corretta e'
+  la riproiezione 2D al bordo di lettura (R4.6.1), non il rilassamento
+  del centro.
