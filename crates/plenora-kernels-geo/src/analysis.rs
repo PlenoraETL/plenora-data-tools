@@ -11,7 +11,9 @@ use geo::{CoordsIter, Geometry};
 use rayon::prelude::*;
 use thiserror::Error;
 
-use crate::spatial_join::{spatial_join_nullable, JoinPredicate, SpatialJoinError};
+use crate::spatial_join::{
+    spatial_join_nullable, spatial_join_nullable_validated, JoinPredicate, SpatialJoinError,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NearestMatch {
@@ -90,11 +92,46 @@ pub fn minimum_distances(
     right: &[Option<Geometry<f64>>],
     max_comparisons: u64,
 ) -> Result<Vec<Option<f64>>, AnalysisError> {
+    minimum_distances_impl(left, right, max_comparisons, false)
+}
+
+/// Variante di [`minimum_distances`] SENZA il gate di ingresso (scansione di
+/// finitezza + validazione OGC per geometria).
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Ogni geometria dei due lati deve essere GIA' validata: coordinate finite
+/// e validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
+/// o da un kernel che valida il proprio output. Su input che viola la
+/// precondizione il risultato e' indefinito e nessun errore dedicato e'
+/// garantito: la variante e' per i soli percorsi in cui la validazione e'
+/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
+/// gate resta nella forma pubblica [`minimum_distances`]).
+///
+/// # Errors
+///
+/// Come [`minimum_distances`], eccetto `InvalidGeometry` (gate omesso).
+pub fn minimum_distances_validated(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_comparisons: u64,
+) -> Result<Vec<Option<f64>>, AnalysisError> {
+    minimum_distances_impl(left, right, max_comparisons, true)
+}
+
+fn minimum_distances_impl(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_comparisons: u64,
+    validated: bool,
+) -> Result<Vec<Option<f64>>, AnalysisError> {
     if max_comparisons == 0 {
         return Err(AnalysisError::InvalidWorkLimit);
     }
-    validate_geometries(left, "left")?;
-    validate_geometries(right, "right")?;
+    if !validated {
+        validate_geometries(left, "left")?;
+        validate_geometries(right, "right")?;
+    }
     let usable_right: Vec<_> = right
         .iter()
         .filter_map(Option::as_ref)
@@ -147,14 +184,51 @@ pub fn nearest_matches(
     max_comparisons: u64,
     max_results: u64,
 ) -> Result<Vec<NearestMatch>, AnalysisError> {
+    nearest_matches_impl(
+        left,
+        right,
+        max_distance,
+        max_comparisons,
+        max_results,
+        false,
+    )
+}
+
+/// Variante di [`nearest_matches`] SENZA il gate di ingresso (scansione di
+/// finitezza + validazione OGC per geometria): stessa precondizione e
+/// stesso contratto di [`minimum_distances_validated`].
+///
+/// # Errors
+///
+/// Come [`nearest_matches`], eccetto `InvalidGeometry` (gate omesso).
+pub fn nearest_matches_validated(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_distance: Option<f64>,
+    max_comparisons: u64,
+    max_results: u64,
+) -> Result<Vec<NearestMatch>, AnalysisError> {
+    nearest_matches_impl(left, right, max_distance, max_comparisons, max_results, true)
+}
+
+fn nearest_matches_impl(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_distance: Option<f64>,
+    max_comparisons: u64,
+    max_results: u64,
+    validated: bool,
+) -> Result<Vec<NearestMatch>, AnalysisError> {
     if max_comparisons == 0 || max_results == 0 {
         return Err(AnalysisError::InvalidWorkLimit);
     }
     if max_distance.is_some_and(|value| !value.is_finite() || value < 0.0) {
         return Err(AnalysisError::InvalidMaximumDistance);
     }
-    validate_geometries(left, "left")?;
-    validate_geometries(right, "right")?;
+    if !validated {
+        validate_geometries(left, "left")?;
+        validate_geometries(right, "right")?;
+    }
     let usable_right: Vec<_> = right
         .iter()
         .enumerate()
@@ -251,6 +325,24 @@ pub fn within_indexes(
     Ok(indexes)
 }
 
+/// Variante di [`within_indexes`] SENZA il gate di ingresso (delega a
+/// [`spatial_join_nullable_validated`]): stessa precondizione e stesso
+/// contratto di [`crate::spatial_join::spatial_join_validated`].
+///
+/// # Errors
+///
+/// Come [`within_indexes`], eccetto `InvalidGeometry` (gate omesso).
+pub fn within_indexes_validated(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_pairs: u64,
+) -> Result<Vec<u64>, AnalysisError> {
+    let pairs = spatial_join_nullable_validated(left, right, JoinPredicate::Within, max_pairs)?;
+    let mut indexes: Vec<_> = pairs.into_iter().map(|pair| pair.left).collect();
+    indexes.dedup();
+    Ok(indexes)
+}
+
 /// Counts points strictly within every polygon row. Boundary points are not
 /// counted, matching Manipola's `predicate="within"` contract.
 ///
@@ -266,6 +358,33 @@ pub fn count_points_in_polygons(
     max_pairs: u64,
 ) -> Result<Vec<u64>, AnalysisError> {
     let pairs = spatial_join_nullable(points, polygons, JoinPredicate::Within, max_pairs)?;
+    let mut counts = vec![0_u64; polygons.len()];
+    for pair in pairs {
+        let index = usize::try_from(pair.right).map_err(|_| AnalysisError::IndexOverflow)?;
+        counts[index] = counts[index]
+            .checked_add(1)
+            .ok_or(AnalysisError::IndexOverflow)?;
+    }
+    Ok(counts)
+}
+
+/// Variante di [`count_points_in_polygons`] SENZA il gate OGC di
+/// ingresso.
+///
+/// Delega a [`spatial_join_nullable_validated`]: stessa precondizione e
+/// stesso contratto di [`crate::spatial_join::spatial_join_validated`].
+///
+/// # Errors
+///
+/// Come [`count_points_in_polygons`], eccetto `InvalidGeometry` (gate
+/// omesso).
+pub fn count_points_in_polygons_validated(
+    polygons: &[Option<Geometry<f64>>],
+    points: &[Option<Geometry<f64>>],
+    max_pairs: u64,
+) -> Result<Vec<u64>, AnalysisError> {
+    let pairs =
+        spatial_join_nullable_validated(points, polygons, JoinPredicate::Within, max_pairs)?;
     let mut counts = vec![0_u64; polygons.len()];
     for pair in pairs {
         let index = usize::try_from(pair.right).map_err(|_| AnalysisError::IndexOverflow)?;
@@ -371,6 +490,58 @@ mod tests {
         assert_eq!(
             count_points_in_polygons(&polygons, &points, 10).unwrap(),
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn validated_variants_match_the_gated_path_on_valid_inputs() {
+        let left = vec![point(0.0, 0.0), None, point(3.0, 4.0), square()];
+        let right = vec![point(0.0, 4.0), square(), None];
+        assert_eq!(
+            minimum_distances(&left, &right, 100).unwrap(),
+            minimum_distances_validated(&left, &right, 100).unwrap()
+        );
+        assert_eq!(
+            nearest_matches(&left, &right, None, 100, 100).unwrap(),
+            nearest_matches_validated(&left, &right, None, 100, 100).unwrap()
+        );
+        assert_eq!(
+            nearest_matches(&left, &right, Some(5.0), 100, 100).unwrap(),
+            nearest_matches_validated(&left, &right, Some(5.0), 100, 100).unwrap()
+        );
+        assert_eq!(
+            within_indexes(&left, &right, 100).unwrap(),
+            within_indexes_validated(&left, &right, 100).unwrap()
+        );
+        assert_eq!(
+            count_points_in_polygons(&right, &left, 100).unwrap(),
+            count_points_in_polygons_validated(&right, &left, 100).unwrap()
+        );
+        // I limiti di lavoro restano fail-closed nella variante validated.
+        assert!(matches!(
+            minimum_distances_validated(&left, &right, 1),
+            Err(AnalysisError::WorkLimitExceeded { limit: 1 })
+        ));
+    }
+
+    #[test]
+    fn validated_variants_document_the_caller_precondition() {
+        // Test di documentazione del contratto, NON un nuovo modo di
+        // accettare geometrie invalide in produzione: il percorso gated
+        // rifiuta il bowtie (gate intatto), la variante validated lo prende
+        // perche' la precondizione e' del chiamante — qui violata ad arte.
+        let bowtie = Some(Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+        ]));
+        assert!(matches!(
+            minimum_distances(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10),
+            Err(AnalysisError::InvalidGeometry { side: "left", .. })
+        ));
+        assert!(
+            minimum_distances_validated(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10)
+                .is_ok()
         );
     }
 

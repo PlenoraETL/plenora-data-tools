@@ -72,6 +72,16 @@ fn as_multi_polygon(geometry: &Geometry<f64>) -> Result<MultiPolygon<f64>, Topol
     geometry
         .check_validation()
         .map_err(|error| TopologyError::InvalidGeometry(error.to_string()))?;
+    as_multi_polygon_validated(geometry)
+}
+
+/// Coercizione a `MultiPolygon` di una geometria GIA' VALIDATA (OGC):
+/// nessun controllo di ingresso, la precondizione e' del chiamante (vedi
+/// [`boolean_operation_validated`]). Il gate di tipo resta: non e' una
+/// validazione, e' il contratto dei kernel poligonali.
+fn as_multi_polygon_validated(
+    geometry: &Geometry<f64>,
+) -> Result<MultiPolygon<f64>, TopologyError> {
     match geometry {
         Geometry::Polygon(polygon) => Ok(MultiPolygon::new(vec![polygon.clone()])),
         Geometry::MultiPolygon(polygons) => Ok(polygons.clone()),
@@ -100,11 +110,53 @@ pub fn boolean_operation(
 ) -> Result<Geometry<f64>, TopologyError> {
     let left = as_multi_polygon(left)?;
     let right = as_multi_polygon(right)?;
+    boolean_on_multi_polygons(&left, &right, operation)
+}
+
+/// Variante di [`boolean_operation`] SENZA il gate OGC di ingresso.
+///
+/// La validazione OGC DELL'OUTPUT resta ([`checked_result`]): e' la
+/// garanzia del produttore per i consumatori a valle (regola delle catene,
+/// R0.1). Il rifiuto dei tipi non poligonali resta: e' il contratto del
+/// kernel, non una validazione.
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Entrambi gli input devono essere GIA' validati OGC (e a coordinate
+/// finite), come garantito da [`crate::geometry_from_wkb`] al decode o da
+/// un kernel che valida il proprio output. Su input che viola la
+/// precondizione il risultato e' indefinito e nessun errore dedicato e'
+/// garantito: la variante e' per i soli percorsi in cui la validazione e'
+/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
+/// gate resta nella forma pubblica [`boolean_operation`]).
+///
+/// # Errors
+///
+/// Come [`boolean_operation`], ma `InvalidGeometry` resta raggiungibile
+/// solo dall'output (gate di ingresso omesso).
+pub fn boolean_operation_validated(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    operation: BooleanOperation,
+) -> Result<Geometry<f64>, TopologyError> {
+    let left = as_multi_polygon_validated(left)?;
+    let right = as_multi_polygon_validated(right)?;
+    boolean_on_multi_polygons(&left, &right, operation)
+}
+
+/// Corpo condiviso delle booleane: la validazione OGC dell'output
+/// ([`checked_result`]) e' la garanzia del produttore e resta in entrambe
+/// le forme.
+fn boolean_on_multi_polygons(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    operation: BooleanOperation,
+) -> Result<Geometry<f64>, TopologyError> {
     let result = match operation {
-        BooleanOperation::Intersection => left.intersection(&right),
-        BooleanOperation::Union => left.union(&right),
-        BooleanOperation::Difference => left.difference(&right),
-        BooleanOperation::SymmetricDifference => left.xor(&right),
+        BooleanOperation::Intersection => left.intersection(right),
+        BooleanOperation::Union => left.union(right),
+        BooleanOperation::Difference => left.difference(right),
+        BooleanOperation::SymmetricDifference => left.xor(right),
     };
     checked_result(result)
 }
@@ -118,9 +170,34 @@ pub fn boolean_operation(
 /// - `InvalidGeometry`: an input fails OGC validation, or the dissolved
 ///   result is not valid.
 pub fn dissolve(geometries: &[Geometry<f64>]) -> Result<Geometry<f64>, TopologyError> {
+    dissolve_impl(geometries, false)
+}
+
+/// Variante di [`dissolve`] SENZA il gate OGC di ingresso: stessa
+/// precondizione e stesso contratto di [`boolean_operation_validated`].
+/// La validazione OGC dell'output resta ([`checked_result`]).
+///
+/// # Errors
+///
+/// Come [`dissolve`], ma `InvalidGeometry` resta raggiungibile solo
+/// dall'output (gate di ingresso omesso).
+pub fn dissolve_validated(geometries: &[Geometry<f64>]) -> Result<Geometry<f64>, TopologyError> {
+    dissolve_impl(geometries, true)
+}
+
+fn dissolve_impl(
+    geometries: &[Geometry<f64>],
+    validated: bool,
+) -> Result<Geometry<f64>, TopologyError> {
     let polygons: Vec<MultiPolygon<f64>> = geometries
         .iter()
-        .map(as_multi_polygon)
+        .map(|geometry| {
+            if validated {
+                as_multi_polygon_validated(geometry)
+            } else {
+                as_multi_polygon(geometry)
+            }
+        })
         .collect::<Result<_, _>>()?;
     checked_result(unary_union(&polygons))
 }
@@ -140,14 +217,44 @@ pub fn clip_to_mask(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
 ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
+    clip_to_mask_impl(geometries, masks, false)
+}
+
+/// Variante di [`clip_to_mask`] SENZA il gate OGC di ingresso.
+///
+/// Stessa precondizione e stesso contratto di
+/// [`boolean_operation_validated`] (righe e maschere gia' validate).
+/// Le validazioni OGC degli output (maschera dissolta e ogni pezzo)
+/// restano.
+///
+/// # Errors
+///
+/// Come [`clip_to_mask`], ma `InvalidGeometry` resta raggiungibile solo
+/// dagli output (gate di ingresso omesso).
+pub fn clip_to_mask_validated(
+    geometries: &[Geometry<f64>],
+    masks: &[Geometry<f64>],
+) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
+    clip_to_mask_impl(geometries, masks, true)
+}
+
+fn clip_to_mask_impl(
+    geometries: &[Geometry<f64>],
+    masks: &[Geometry<f64>],
+    validated: bool,
+) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
     if masks.is_empty() {
         return Ok(vec![None; geometries.len()]);
     }
-    let mask = dissolve(masks)?;
+    let mask = dissolve_impl(masks, validated)?;
     geometries
         .iter()
         .map(|geometry| {
-            let clipped = boolean_operation(geometry, &mask, BooleanOperation::Intersection)?;
+            let clipped = if validated {
+                boolean_operation_validated(geometry, &mask, BooleanOperation::Intersection)?
+            } else {
+                boolean_operation(geometry, &mask, BooleanOperation::Intersection)?
+            };
             Ok((!is_empty(&clipped)).then_some(clipped))
         })
         .collect()
@@ -207,6 +314,38 @@ pub fn polygon_overlay(
     max_candidate_pairs: u64,
     max_results: u64,
 ) -> Result<Vec<OverlayPiece>, TopologyError> {
+    polygon_overlay_impl(left, right, mode, max_candidate_pairs, max_results, false)
+}
+
+/// Variante di [`polygon_overlay`] SENZA il gate OGC di ingresso.
+///
+/// Stessa precondizione e stesso contratto di
+/// [`boolean_operation_validated`]; anche il join candidati interno non
+/// rivalida. Le validazioni OGC degli output (maschere dissolte e pezzi)
+/// restano.
+///
+/// # Errors
+///
+/// Come [`polygon_overlay`], ma `InvalidGeometry` resta raggiungibile solo
+/// dagli output (gate di ingresso omesso).
+pub fn polygon_overlay_validated(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    mode: OverlayMode,
+    max_candidate_pairs: u64,
+    max_results: u64,
+) -> Result<Vec<OverlayPiece>, TopologyError> {
+    polygon_overlay_impl(left, right, mode, max_candidate_pairs, max_results, true)
+}
+
+fn polygon_overlay_impl(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    mode: OverlayMode,
+    max_candidate_pairs: u64,
+    max_results: u64,
+    validated: bool,
+) -> Result<Vec<OverlayPiece>, TopologyError> {
     if max_candidate_pairs == 0 || max_results == 0 {
         return Err(TopologyError::InvalidParameter {
             name: "overlay_limits",
@@ -214,15 +353,39 @@ pub fn polygon_overlay(
         });
     }
     for geometry in left.iter().chain(right) {
-        as_multi_polygon(geometry)?;
+        if validated {
+            as_multi_polygon_validated(geometry)?;
+        } else {
+            as_multi_polygon(geometry)?;
+        }
     }
-    let pairs = crate::spatial_join::spatial_join(
-        left,
-        right,
-        crate::spatial_join::JoinPredicate::Intersects,
-        max_candidate_pairs,
-    )
+    // Percorso gated: il join candidati rivalida gli input (comportamento
+    // pubblico invariato, gate intatti). Percorso validated: gli input
+    // sono coperti dalla precondizione, il join non rivalida.
+    let pairs = if validated {
+        crate::spatial_join::spatial_join_validated(
+            left,
+            right,
+            crate::spatial_join::JoinPredicate::Intersects,
+            max_candidate_pairs,
+        )
+    } else {
+        crate::spatial_join::spatial_join(
+            left,
+            right,
+            crate::spatial_join::JoinPredicate::Intersects,
+            max_candidate_pairs,
+        )
+    }
     .map_err(|error| TopologyError::InvalidGeometry(error.to_string()))?;
+    let boolean = |left: &Geometry<f64>, right: &Geometry<f64>, operation| {
+        if validated {
+            boolean_operation_validated(left, right, operation)
+        } else {
+            boolean_operation(left, right, operation)
+        }
+    };
+    let dissolve_side = |geometries: &[Geometry<f64>]| dissolve_impl(geometries, validated);
     let mut pieces = Vec::new();
 
     if matches!(
@@ -234,7 +397,7 @@ pub fn polygon_overlay(
                 usize::try_from(pair.left).map_err(|_| TopologyError::IndexOverflow)?;
             let right_index =
                 usize::try_from(pair.right).map_err(|_| TopologyError::IndexOverflow)?;
-            let geometry = boolean_operation(
+            let geometry = boolean(
                 &left[left_index],
                 &right[right_index],
                 BooleanOperation::Intersection,
@@ -253,10 +416,10 @@ pub fn polygon_overlay(
         mode,
         OverlayMode::Union | OverlayMode::Identity | OverlayMode::SymmetricDifference
     ) {
-        let right_mask = (!right.is_empty()).then(|| dissolve(right)).transpose()?;
+        let right_mask = (!right.is_empty()).then(|| dissolve_side(right)).transpose()?;
         for (index, geometry) in left.iter().enumerate() {
             let remainder = match &right_mask {
-                Some(mask) => boolean_operation(geometry, mask, BooleanOperation::Difference)?,
+                Some(mask) => boolean(geometry, mask, BooleanOperation::Difference)?,
                 None => geometry.clone(),
             };
             push_piece(&mut pieces, remainder, Some(index), None, max_results)?;
@@ -264,10 +427,10 @@ pub fn polygon_overlay(
     }
 
     if matches!(mode, OverlayMode::Union | OverlayMode::SymmetricDifference) {
-        let left_mask = (!left.is_empty()).then(|| dissolve(left)).transpose()?;
+        let left_mask = (!left.is_empty()).then(|| dissolve_side(left)).transpose()?;
         for (index, geometry) in right.iter().enumerate() {
             let remainder = match &left_mask {
-                Some(mask) => boolean_operation(geometry, mask, BooleanOperation::Difference)?,
+                Some(mask) => boolean(geometry, mask, BooleanOperation::Difference)?,
                 None => geometry.clone(),
             };
             push_piece(&mut pieces, remainder, None, Some(index), max_results)?;
@@ -298,6 +461,60 @@ pub fn clean_valid_polygon_topology(
     max_geometries: u64,
     max_vertices: u64,
 ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
+    clean_valid_polygon_topology_impl(
+        geometries,
+        snap_tolerance,
+        remove_overlaps,
+        fill_gaps,
+        max_geometries,
+        max_vertices,
+        false,
+    )
+}
+
+/// Variante di [`clean_valid_polygon_topology`] SENZA il gate OGC di
+/// ingresso.
+///
+/// Stessa precondizione e stesso contratto di
+/// [`boolean_operation_validated`]. Restano SEMPRE validati: l'output di
+/// ogni booleana e la geometria prodotta dalla morfologia `buffer`
+/// (output di kernel che NON garantisce la validita' — la catena di
+/// fiducia non si applica, regola R0.1).
+///
+/// # Errors
+///
+/// Come [`clean_valid_polygon_topology`], ma `InvalidGeometry` resta
+/// raggiungibile solo dagli output intermedi/prodotti (gate di ingresso
+/// omesso).
+pub fn clean_valid_polygon_topology_validated(
+    geometries: &[Geometry<f64>],
+    snap_tolerance: f64,
+    remove_overlaps: bool,
+    fill_gaps: bool,
+    max_geometries: u64,
+    max_vertices: u64,
+) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
+    clean_valid_polygon_topology_impl(
+        geometries,
+        snap_tolerance,
+        remove_overlaps,
+        fill_gaps,
+        max_geometries,
+        max_vertices,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn clean_valid_polygon_topology_impl(
+    geometries: &[Geometry<f64>],
+    snap_tolerance: f64,
+    remove_overlaps: bool,
+    fill_gaps: bool,
+    max_geometries: u64,
+    max_vertices: u64,
+    validated: bool,
+) -> Result<Vec<Option<Geometry<f64>>>, TopologyError> {
     if !snap_tolerance.is_finite() || snap_tolerance < 0.0 {
         return Err(TopologyError::InvalidParameter {
             name: "snap_tolerance",
@@ -315,7 +532,11 @@ pub fn clean_valid_polygon_topology(
     }
     let mut vertices = 0_u64;
     for geometry in geometries {
-        as_multi_polygon(geometry)?;
+        if validated {
+            as_multi_polygon_validated(geometry)?;
+        } else {
+            as_multi_polygon(geometry)?;
+        }
         vertices = vertices
             .checked_add(
                 u64::try_from(geometry.coords_count()).map_err(|_| TopologyError::IndexOverflow)?,
@@ -335,28 +556,34 @@ pub fn clean_valid_polygon_topology(
         for geometry in working.iter_mut().flatten() {
             let expanded = Geometry::MultiPolygon(geometry.buffer(snap_tolerance));
             let closed = Geometry::MultiPolygon(expanded.buffer(-snap_tolerance));
+            // Output di `buffer` (kernel che NON garantisce la validita'):
+            // gate OGC completo in entrambe le forme — nessuna catena di
+            // fiducia su geometrie prodotte senza garanzia.
             *geometry = checked_result(as_multi_polygon(&closed)?)?;
         }
     }
     if remove_overlaps {
+        let boolean = |left: &Geometry<f64>, right: &Geometry<f64>, operation| {
+            if validated {
+                boolean_operation_validated(left, right, operation)
+            } else {
+                boolean_operation(left, right, operation)
+            }
+        };
         let mut accumulated: Option<Geometry<f64>> = None;
         for geometry in &mut working {
             let Some(current) = geometry.take() else {
                 continue;
             };
             let remainder = match &accumulated {
-                Some(previous) => {
-                    boolean_operation(&current, previous, BooleanOperation::Difference)?
-                }
+                Some(previous) => boolean(&current, previous, BooleanOperation::Difference)?,
                 None => current,
             };
             if is_empty(&remainder) {
                 continue;
             }
             accumulated = Some(match accumulated {
-                Some(previous) => {
-                    boolean_operation(&previous, &remainder, BooleanOperation::Union)?
-                }
+                Some(previous) => boolean(&previous, &remainder, BooleanOperation::Union)?,
                 None => remainder.clone(),
             });
             *geometry = Some(remainder);
@@ -595,6 +822,102 @@ mod tests {
         .unwrap();
         assert!(swallowed[0].is_some());
         assert!(swallowed[1].is_none());
+    }
+
+    #[test]
+    fn validated_variants_match_the_gated_path_on_valid_inputs() {
+        let left = vec![square(0.0, 0.0, 2.0), square(10.0, 10.0, 1.0)];
+        let right = vec![square(1.0, 0.0, 2.0), square(20.0, 20.0, 1.0)];
+        for operation in [
+            BooleanOperation::Intersection,
+            BooleanOperation::Union,
+            BooleanOperation::Difference,
+            BooleanOperation::SymmetricDifference,
+        ] {
+            assert_eq!(
+                boolean_operation(&left[0], &right[0], operation).unwrap(),
+                boolean_operation_validated(&left[0], &right[0], operation).unwrap(),
+                "{operation:?}"
+            );
+        }
+        assert_eq!(
+            dissolve(&left).unwrap(),
+            dissolve_validated(&left).unwrap()
+        );
+        assert_eq!(
+            clip_to_mask(&left, &right[..1]).unwrap(),
+            clip_to_mask_validated(&left, &right[..1]).unwrap()
+        );
+        for mode in [
+            OverlayMode::Intersection,
+            OverlayMode::Union,
+            OverlayMode::Identity,
+            OverlayMode::SymmetricDifference,
+        ] {
+            assert_eq!(
+                polygon_overlay(&left, &right, mode, 100, 100).unwrap(),
+                polygon_overlay_validated(&left, &right, mode, 100, 100).unwrap(),
+                "{mode:?}"
+            );
+        }
+        assert_eq!(
+            clean_valid_polygon_topology(&left, 0.1, true, true, 10, 1_000).unwrap(),
+            clean_valid_polygon_topology_validated(&left, 0.1, true, true, 10, 1_000).unwrap()
+        );
+        // Il gate di TIPO resta nella variante validated (contratto dei
+        // kernel poligonali, non una validazione).
+        let point = Geometry::Point(Point::new(0.0, 0.0));
+        assert!(matches!(
+            boolean_operation_validated(&point, &left[0], BooleanOperation::Union),
+            Err(TopologyError::UnsupportedGeometry("Point"))
+        ));
+        assert!(matches!(
+            dissolve_validated(std::slice::from_ref(&point)),
+            Err(TopologyError::UnsupportedGeometry("Point"))
+        ));
+        assert!(matches!(
+            polygon_overlay_validated(&left, &right, OverlayMode::Union, 0, 10),
+            Err(TopologyError::InvalidParameter { .. })
+        ));
+        assert!(matches!(
+            clean_valid_polygon_topology_validated(&left, f64::NAN, true, true, 10, 1_000),
+            Err(TopologyError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn validated_variants_document_the_caller_precondition() {
+        // Test di documentazione del contratto, NON un nuovo modo di
+        // accettare geometrie invalide in produzione: il percorso gated
+        // rifiuta il bowtie in INGRESSO (gate intatto), la variante
+        // validated omette quel gate perche' la precondizione e' del
+        // chiamante — qui violata ad arte. Gli errori ammessi restano solo
+        // quelli dei gate di OUTPUT (`InvalidGeometry` dal risultato) e di
+        // tipo: nessun panic, nessuna accettazione silenziosa garantita.
+        let bowtie = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let valid = square(0.0, 0.0, 2.0);
+        assert!(matches!(
+            boolean_operation(&bowtie, &valid, BooleanOperation::Intersection),
+            Err(TopologyError::InvalidGeometry(_))
+        ));
+        let outcome = boolean_operation_validated(&bowtie, &valid, BooleanOperation::Intersection);
+        assert!(
+            outcome.is_ok() || matches!(outcome, Err(TopologyError::InvalidGeometry(_))),
+            "solo il gate di output puo' fallire: {outcome:?}"
+        );
+        assert!(matches!(
+            dissolve(std::slice::from_ref(&bowtie)),
+            Err(TopologyError::InvalidGeometry(_))
+        ));
+        let outcome = dissolve_validated(std::slice::from_ref(&bowtie));
+        assert!(
+            outcome.is_ok() || matches!(outcome, Err(TopologyError::InvalidGeometry(_))),
+            "solo il gate di output puo' fallire: {outcome:?}"
+        );
     }
 
     proptest! {

@@ -52,15 +52,18 @@ use geo::{
     Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use plenora_kernels_geo::advanced::voronoi_cells;
-use plenora_kernels_geo::analysis::{count_points_in_polygons, nearest_matches, within_indexes};
+use plenora_kernels_geo::analysis::{
+    count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
+};
 use plenora_kernels_geo::arrow_adapter::{decode_geometry_cell, encode_geometry};
 use plenora_kernels_geo::cluster::dbscan_nullable;
 use plenora_kernels_geo::construction::{
     geometry_from_wkt, line_from_ordered_points, point_from_lon_lat, polygon_from_ordered_points,
 };
 use plenora_kernels_geo::extended::{
-    affine_transform, concave_hull, geodesic_distance_m, geodesic_line_length_m,
-    hausdorff_distance, haversine_distance_m, rotate_about, scale_about, translate,
+    affine_transform_validated, concave_hull_validated, geodesic_distance_m,
+    geodesic_line_length_m, hausdorff_distance_validated, haversine_distance_m,
+    rotate_about_validated, scale_about_validated, translate_validated,
 };
 use plenora_kernels_geo::extended_algorithms::{
     delaunay, densify, frechet_distance, geodesic_area_m2, geodesic_bearing_degrees,
@@ -77,11 +80,11 @@ use plenora_kernels_geo::operations::{
     area, boundary, bounds, buffer_with_cap, distance, explode, length, perimeter,
     point_on_surface, simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, SimplifyPolicy,
 };
-use plenora_kernels_geo::predicates::{evaluate as evaluate_predicate, SpatialPredicate};
-use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
+use plenora_kernels_geo::predicates::{evaluate_validated as evaluate_predicate, SpatialPredicate};
+use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
 use plenora_kernels_geo::topology::{
-    boolean_operation, clean_valid_polygon_topology, clip_to_mask, dissolve, polygon_overlay,
-    BooleanOperation, OverlayMode,
+    boolean_operation_validated, clean_valid_polygon_topology_validated, clip_to_mask_validated,
+    dissolve_validated, polygon_overlay_validated, BooleanOperation, OverlayMode,
 };
 use plenora_kernels_geo::{transform_wkb, Operation};
 use rayon::prelude::*;
@@ -1156,17 +1159,17 @@ fn main() {
     }
 
     // --- Estensioni storiche per-cella --------------------------------------
-    let op_affine = |payload: &Vec<u8>| dec(payload).and_then(|g| affine_transform(&g, [1.1, 0.05, 3.0, -0.02, 0.9, 7.0]).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
+    let op_affine = |payload: &Vec<u8>| dec(payload).and_then(|g| affine_transform_validated(&g, [1.1, 0.05, 3.0, -0.02, 0.9, 7.0]).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.affine_transform", "per_cell", "poly_simple", polys_wkb(), true, false, "[1.1,0.05,3,-0.02,0.9,7]", &op_affine);
-    let op_translate = |payload: &Vec<u8>| dec(payload).and_then(|g| translate(&g, 10.0, 20.0).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
+    let op_translate = |payload: &Vec<u8>| dec(payload).and_then(|g| translate_validated(&g, 10.0, 20.0).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.translate", "per_cell", "poly_simple", polys_wkb(), true, false, "dx=10 dy=20", &op_translate);
-    let op_scale = |payload: &Vec<u8>| dec(payload).and_then(|g| scale_about(&g, 1.5, 0.75, Point::new(0.0, 0.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
+    let op_scale = |payload: &Vec<u8>| dec(payload).and_then(|g| scale_about_validated(&g, 1.5, 0.75, Point::new(0.0, 0.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.scale", "per_cell", "poly_simple", polys_wkb(), true, false, "1.5x0.75 su origine", &op_scale);
-    let op_rotate = |payload: &Vec<u8>| dec(payload).and_then(|g| rotate_about(&g, 30.0, Point::new(5_000.0, 5_000.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
+    let op_rotate = |payload: &Vec<u8>| dec(payload).and_then(|g| rotate_about_validated(&g, 30.0, Point::new(5_000.0, 5_000.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.rotate", "per_cell", "poly_simple", polys_wkb(), true, false, "30 gradi", &op_rotate);
-    let op_concave = |payload: &Vec<u8>| dec(payload).and_then(|g| concave_hull(&g, 2.0, 0.0, 10_000_000).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
+    let op_concave = |payload: &Vec<u8>| dec(payload).and_then(|g| concave_hull_validated(&g, 2.0, 0.0, 10_000_000).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
     sweep_cells(&mut results, "geo.concave_hull", "per_cell", "poly_simple", polys_wkb(), true, false, "concavity=2", &op_concave);
-    let op_hausdorff = |payload: &Vec<u8>| dec(payload).and_then(|g| hausdorff_distance(&g, &ref_line_geometry, 1_000_000_000).map(|v| black_box(v).unwrap_or(0.0) as usize).map_err(|e| e.to_string()));
+    let op_hausdorff = |payload: &Vec<u8>| dec(payload).and_then(|g| hausdorff_distance_validated(&g, &ref_line_geometry, 1_000_000_000).map(|v| black_box(v).unwrap_or(0.0) as usize).map_err(|e| e.to_string()));
     sweep_cells(&mut results, "geo.hausdorff_distance", "per_cell", "lines50", lines_wkb(), false, false, "vs linea 50v di riferimento", &op_hausdorff);
     let op_haversine = |payload: &Vec<u8>| dec(payload).and_then(|g| haversine_distance_m(as_point(&g)?, ref_geo_point).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
     sweep_cells(&mut results, "geo.haversine_distance", "per_cell", "geo_points", geo_points_wkb(), false, false, "vs punto di riferimento", &op_haversine);
@@ -1271,7 +1274,7 @@ fn main() {
             left.par_iter()
                 .zip(right.par_iter())
                 .map(|(l, r)| {
-                    boolean_operation(l, r, boolean)
+                    boolean_operation_validated(l, r, boolean)
                         .map_err(|e| e.to_string())
                         .and_then(|out| enc(&out))
                 })
@@ -1291,6 +1294,11 @@ fn main() {
     }
 
     // --- Collettive Manipola-compat ------------------------------------------
+    // Kernel in variante `*_validated`: gli scenari decodificano via `dec`/
+    // `decode_prefix` (= `geometry_from_wkb`, validazione OGC per geometria),
+    // quindi rispecchiano il percorso di produzione dell'engine (`pair.rs`),
+    // dove il gate di ingresso del kernel non si ripete (R0.1: precondizione
+    // dimostrata per costruzione al decode, non inferenza sui chiamanti).
     sweep_collective(
         &mut results,
         "geo.sjoin",
@@ -1301,7 +1309,7 @@ fn main() {
         &|n| {
             let left = as_options(decode_prefix(points_wkb(), n)?);
             let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-            spatial_join_nullable(&left, &right, JoinPredicate::Intersects, MAX_WORK)
+            spatial_join_nullable_validated(&left, &right, JoinPredicate::Intersects, MAX_WORK)
                 .map(|pairs| pairs.len())
                 .map_err(|e| e.to_string())
         },
@@ -1316,7 +1324,7 @@ fn main() {
         &|n| {
             let left = as_options(decode_prefix(points_wkb(), n)?);
             let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-            within_indexes(&left, &right, MAX_WORK)
+            within_indexes_validated(&left, &right, MAX_WORK)
                 .map(|v| v.len())
                 .map_err(|e| e.to_string())
         },
@@ -1331,7 +1339,7 @@ fn main() {
         &|n| {
             let polys = as_options(decode_prefix(grid_wkb(), 10_000)?);
             let points = as_options(decode_prefix(points_wkb(), n)?);
-            count_points_in_polygons(&polys, &points, MAX_WORK)
+            count_points_in_polygons_validated(&polys, &points, MAX_WORK)
                 .map(|v| v.len())
                 .map_err(|e| e.to_string())
         },
@@ -1346,7 +1354,7 @@ fn main() {
         &|n| {
             let left = as_options(decode_prefix(points_wkb(), n)?);
             let right = as_options(decode_prefix(points_wkb(), 10_000)?);
-            nearest_matches(&left, &right, None, MAX_WORK, MAX_WORK)
+            nearest_matches_validated(&left, &right, None, MAX_WORK, MAX_WORK)
                 .map(|v| v.len())
                 .map_err(|e| e.to_string())
         },
@@ -1360,7 +1368,7 @@ fn main() {
         "unary union di rettangoli con overlap jitterati",
         &|n| {
             let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-            dissolve(&geoms)
+            dissolve_validated(&geoms)
                 .map_err(|e| e.to_string())
                 .and_then(|out| enc(&out))
         },
@@ -1375,7 +1383,7 @@ fn main() {
         &|n| {
             let geoms = decode_prefix(polys_wkb(), n)?;
             let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
-            clip_to_mask(&geoms, &masks)
+            clip_to_mask_validated(&geoms, &masks)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
@@ -1394,7 +1402,7 @@ fn main() {
         &|n| {
             let left = decode_prefix(grid_wkb(), n)?;
             let right = decode_prefix(grid_shift_wkb(), n)?;
-            polygon_overlay(&left, &right, OverlayMode::Intersection, MAX_WORK, MAX_WORK)
+            polygon_overlay_validated(&left, &right, OverlayMode::Intersection, MAX_WORK, MAX_WORK)
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
@@ -1428,7 +1436,7 @@ fn main() {
                 ]),
                 Vec::new(),
             ))];
-            clip_to_mask(&geoms, &masks)
+            clip_to_mask_validated(&geoms, &masks)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
@@ -1451,7 +1459,7 @@ fn main() {
         &|n| {
             let left = decode_prefix(grid_wkb(), n)?;
             let right = decode_prefix(grid_far_wkb(), n)?;
-            polygon_overlay(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
+            polygon_overlay_validated(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
@@ -1469,7 +1477,7 @@ fn main() {
         "snap_tolerance=1, remove_overlaps+fill_gaps",
         &|n| {
             let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-            clean_valid_polygon_topology(&geoms, 1.0, true, true, MAX_WORK, MAX_WORK)
+            clean_valid_polygon_topology_validated(&geoms, 1.0, true, true, MAX_WORK, MAX_WORK)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {

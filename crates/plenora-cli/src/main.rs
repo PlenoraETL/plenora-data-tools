@@ -66,7 +66,7 @@ use plenora_kernels_geo::arrow_adapter::{
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
-use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
+use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -599,10 +599,12 @@ fn execute_spatial_join(
     }
 
     // Entrambi gli input con checksum sono verificati per intero prima del
-    // calcolo.
+    // calcolo. `read_geometry_stream` decodifica con `geometry_from_wkb`
+    // (validazione OGC per geometria): precondizione dimostrata per
+    // costruzione della variante `*_validated` del join (R0.1).
     let left = read_geometry_stream(left_path, schema.left_row_count)?;
     let right = read_geometry_stream(right_path, schema.right_row_count)?;
-    let pairs = spatial_join_nullable(&left, &right, schema.predicate, schema.max_pairs)?;
+    let pairs = spatial_join_nullable_validated(&left, &right, schema.predicate, schema.max_pairs)?;
     let pair_count = u64::try_from(pairs.len())
         .map_err(|_| contract("pair_count non rappresentabile"))?;
     let (checksum, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |writer| {

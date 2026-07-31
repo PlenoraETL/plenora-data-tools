@@ -10,20 +10,24 @@ use rayon::prelude::*;
 use serde::Deserialize;
 
 use plenora_kernels_geo::analysis::{
-    count_points_in_polygons, minimum_distances, nearest_matches, within_indexes,
+    count_points_in_polygons_validated, minimum_distances_validated, nearest_matches_validated,
+    within_indexes_validated,
 };
-use plenora_kernels_geo::extended::{geodesic_distance_m, hausdorff_distance, haversine_distance_m};
+use plenora_kernels_geo::extended::{
+    geodesic_distance_m, hausdorff_distance_validated, haversine_distance_m,
+};
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::extended_algorithms::split_line;
 use plenora_kernels_geo::extended_algorithms::{frechet_distance, geodesic_bearing_degrees};
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::geos_backend::split_polygon_by_linework;
 use super::pair_protocol::MAX_PAIRS;
-use plenora_kernels_geo::predicates::{evaluate as evaluate_predicate, SpatialPredicate};
+use plenora_kernels_geo::predicates::{evaluate_validated as evaluate_predicate, SpatialPredicate};
 use super::protocol::MAX_ROWS;
-use plenora_kernels_geo::spatial_join::{spatial_join_nullable, JoinPredicate};
+use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
 use plenora_kernels_geo::topology::{
-    boolean_operation, clip_to_mask, polygon_overlay, BooleanOperation, OverlayMode,
+    boolean_operation_validated, clip_to_mask_validated, polygon_overlay_validated,
+    BooleanOperation, OverlayMode,
 };
 use plenora_kernels_geo::geometry_from_wkb;
 
@@ -372,6 +376,11 @@ type DecodedSide = (SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>);
 
 /// Decodifica un lato (envelope + IPC + colonna geometria) e materializza le
 /// geometrie validate: entrambi i lati sono verificati prima del calcolo.
+///
+/// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
+/// per costruzione che autorizza le varianti `*_validated` dei kernel a
+/// valle (R0.1): il gate dei kernel non si ripete perche' e' gia' stato
+/// eseguito qui, geometria per geometria.
 fn decode_geometry_side(
     reader: impl Read,
     expected_rows: u64,
@@ -593,7 +602,7 @@ pub fn pair_arrow(
 
     let (output_schema, output_batches): (SchemaRef, Vec<RecordBatch>) = match schema.operation {
         PairOperation::SJoin => {
-            let pairs = spatial_join_nullable(
+            let pairs = spatial_join_nullable_validated(
                 &left,
                 &right,
                 schema
@@ -618,7 +627,7 @@ pub fn pair_arrow(
             (out_schema, vec![batch])
         }
         PairOperation::Distance => {
-            let distances = minimum_distances(
+            let distances = minimum_distances_validated(
                 &left,
                 &right,
                 schema
@@ -658,7 +667,7 @@ pub fn pair_arrow(
             (out_schema, out_batches)
         }
         PairOperation::Nearest => {
-            let matches = nearest_matches(
+            let matches = nearest_matches_validated(
                 &left,
                 &right,
                 schema.max_distance,
@@ -693,7 +702,7 @@ pub fn pair_arrow(
                     positions.push(index as u64);
                 }
             }
-            let clipped = clip_to_mask(&left_values, &masks)?;
+            let clipped = clip_to_mask_validated(&left_values, &masks)?;
             if left_rows > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
                     actual: left_rows,
@@ -761,7 +770,7 @@ pub fn pair_arrow(
             };
             let (left_values, left_positions) = filter(&left);
             let (right_values, right_positions) = filter(&right);
-            let pieces = polygon_overlay(
+            let pieces = polygon_overlay_validated(
                 &left_values,
                 &right_values,
                 schema
@@ -825,7 +834,7 @@ pub fn pair_arrow(
             (out_schema, vec![batch])
         }
         PairOperation::Within => {
-            let indexes = within_indexes(
+            let indexes = within_indexes_validated(
                 &left,
                 &right,
                 schema
@@ -855,7 +864,7 @@ pub fn pair_arrow(
         }
         PairOperation::CountPointsInPolygons => {
             // Contratto: left = poligoni (output allineato), right = punti.
-            let counts = count_points_in_polygons(
+            let counts = count_points_in_polygons_validated(
                 &left,
                 &right,
                 schema
@@ -909,7 +918,7 @@ pub fn pair_arrow(
                 .map(|(left_geometry, right_geometry)| {
                     match (left_geometry, right_geometry) {
                         (Some(left_geometry), Some(right_geometry)) => {
-                            let result = boolean_operation(left_geometry, right_geometry, kernel)?;
+                            let result = boolean_operation_validated(left_geometry, right_geometry, kernel)?;
                             // EMPTY -> null, convenzione coerente con `clip`.
                             if result.coords_count() == 0 {
                                 Ok(None)
@@ -1000,7 +1009,7 @@ pub fn pair_arrow(
                     Ok(match (left_geometry, right_geometry) {
                         (Some(left_geometry), Some(right_geometry)) => {
                             if schema.operation == PairOperation::HausdorffDistance {
-                                hausdorff_distance(left_geometry, right_geometry, max_pairs)?
+                                hausdorff_distance_validated(left_geometry, right_geometry, max_pairs)?
                             } else {
                                 let left_line =
                                     expect_line_string(left_geometry, schema.operation.name())?;

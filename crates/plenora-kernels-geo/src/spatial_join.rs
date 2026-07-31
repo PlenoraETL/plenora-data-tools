@@ -79,6 +79,19 @@ fn checked_envelope(
             index,
             reason: error.to_string(),
         })?;
+    envelope_of_validated(geometry, side, index)
+}
+
+/// Envelope di una geometria GIA' VALIDATA (coordinate finite + validita'
+/// OGC): nessuna camminata di controllo sull'input, la precondizione e' del
+/// chiamante (vedi [`spatial_join_validated`]). Il check di finitezza del
+/// bounding box resta: costo nullo (il rect e' gia' calcolato) e chiude in
+/// fail-closed il caso di precondizione violata con coordinate non finite.
+fn envelope_of_validated(
+    geometry: &Geometry<f64>,
+    side: &'static str,
+    index: usize,
+) -> Result<Option<AABB<[f64; 2]>>, SpatialJoinError> {
     let Some(rect) = geometry.bounding_rect() else {
         return Ok(None);
     };
@@ -127,7 +140,36 @@ pub fn spatial_join(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Some).collect();
     let right_refs: Vec<_> = right.iter().map(Some).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs)
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, false)
+}
+
+/// Variante di [`spatial_join`] SENZA il gate di ingresso (scansione di
+/// finitezza + validazione OGC per geometria).
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Ogni geometria dei due lati deve essere GIA' validata: coordinate finite
+/// e validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
+/// o da un kernel che valida il proprio output (es. `checked_result` in
+/// [`crate::topology`]). Su input che viola la precondizione il risultato
+/// e' indefinito e nessun errore dedicato e' garantito: la variante e' per
+/// i soli percorsi in cui la validazione e' dimostrata per costruzione
+/// (R0.1: mai un'inferenza sui chiamanti — il gate resta nella forma
+/// pubblica [`spatial_join`]).
+///
+/// # Errors
+///
+/// Come [`spatial_join`], eccetto `InvalidGeometry` (gate omesso);
+/// `NonFiniteCoordinate` resta solo come difesa sul bounding box.
+pub fn spatial_join_validated(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    predicate: JoinPredicate,
+    max_pairs: u64,
+) -> Result<Vec<JoinPair>, SpatialJoinError> {
+    let left_refs: Vec<_> = left.iter().map(Some).collect();
+    let right_refs: Vec<_> = right.iter().map(Some).collect();
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true)
 }
 
 /// Nullable variant used by framed transports. `None` rows never match, but
@@ -144,7 +186,25 @@ pub fn spatial_join_nullable(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Option::as_ref).collect();
     let right_refs: Vec<_> = right.iter().map(Option::as_ref).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs)
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, false)
+}
+
+/// Variante di [`spatial_join_nullable`] SENZA il gate di ingresso: stessa
+/// precondizione e stesso contratto di [`spatial_join_validated`].
+///
+/// # Errors
+///
+/// Come [`spatial_join_validated`]; le righe `None` non producono errori
+/// ne' coppie.
+pub fn spatial_join_nullable_validated(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    predicate: JoinPredicate,
+    max_pairs: u64,
+) -> Result<Vec<JoinPair>, SpatialJoinError> {
+    let left_refs: Vec<_> = left.iter().map(Option::as_ref).collect();
+    let right_refs: Vec<_> = right.iter().map(Option::as_ref).collect();
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true)
 }
 
 fn spatial_join_refs(
@@ -152,6 +212,7 @@ fn spatial_join_refs(
     right: &[Option<&Geometry<f64>>],
     predicate: JoinPredicate,
     max_pairs: u64,
+    validated: bool,
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     if max_pairs == 0 {
         return Err(SpatialJoinError::InvalidPairLimit);
@@ -166,8 +227,12 @@ fn spatial_join_refs(
             let Some(geometry) = geometry else {
                 return Ok(None);
             };
-            checked_envelope(geometry, "right", index)
-                .map(|envelope| envelope.map(|envelope| IndexedEnvelope { index, envelope }))
+            let envelope = if validated {
+                envelope_of_validated(geometry, "right", index)?
+            } else {
+                checked_envelope(geometry, "right", index)?
+            };
+            Ok(envelope.map(|envelope| IndexedEnvelope { index, envelope }))
         })
         .collect();
     let tree = RTree::bulk_load(right_envelopes?.into_iter().flatten().collect());
@@ -183,7 +248,11 @@ fn spatial_join_refs(
             let Some(left_geometry) = *left_geometry else {
                 return Ok(Vec::new());
             };
-            let Some(envelope) = checked_envelope(left_geometry, "left", left_index)? else {
+            let Some(envelope) = (if validated {
+                envelope_of_validated(left_geometry, "left", left_index)?
+            } else {
+                checked_envelope(left_geometry, "left", left_index)?
+            }) else {
                 return Ok(Vec::new());
             };
             // The pair limit is enforced per confirmed match, before pushing
@@ -420,6 +489,83 @@ mod tests {
             spatial_join_nullable(&left, &right, JoinPredicate::Intersects, 10).unwrap(),
             vec![JoinPair { left: 1, right: 2 }]
         );
+    }
+
+    #[test]
+    fn validated_variants_match_the_gated_path_on_valid_inputs() {
+        let left = vec![
+            Geometry::Point(Point::new(2.0, 2.0)),
+            Geometry::Point(Point::new(0.5, 0.5)),
+            rectangle((5, 5, 3, 3)),
+        ];
+        let right = vec![rectangle((0, 0, 2, 2)), rectangle((1, 1, 8, 8))];
+        for predicate in [
+            JoinPredicate::Intersects,
+            JoinPredicate::Contains,
+            JoinPredicate::Within,
+            JoinPredicate::Crosses,
+            JoinPredicate::Overlaps,
+            JoinPredicate::Touches,
+        ] {
+            assert_eq!(
+                spatial_join(&left, &right, predicate, 1_000).unwrap(),
+                spatial_join_validated(&left, &right, predicate, 1_000).unwrap(),
+                "{predicate:?}"
+            );
+            let left_nullable: Vec<_> = left.iter().cloned().map(Some).collect();
+            let right_nullable: Vec<_> = right.iter().cloned().map(Some).collect();
+            assert_eq!(
+                spatial_join_nullable(&left_nullable, &right_nullable, predicate, 1_000).unwrap(),
+                spatial_join_nullable_validated(&left_nullable, &right_nullable, predicate, 1_000)
+                    .unwrap(),
+                "{predicate:?}"
+            );
+        }
+        // Limiti e righe vuote: stesso comportamento.
+        let points = vec![Geometry::Point(Point::new(1.0, 1.0)); 4];
+        assert!(matches!(
+            spatial_join_validated(&points, &points, JoinPredicate::Intersects, 3),
+            Err(SpatialJoinError::PairLimitExceeded { limit: 3 })
+        ));
+        let empty = Geometry::GeometryCollection(Vec::<Geometry<f64>>::new().into());
+        assert!(spatial_join_validated(
+            std::slice::from_ref(&empty),
+            std::slice::from_ref(&points[0]),
+            JoinPredicate::Intersects,
+            1,
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn validated_variants_document_the_caller_precondition() {
+        // Test di documentazione del contratto, NON un nuovo modo di
+        // accettare geometrie invalide in produzione: il percorso gated
+        // rifiuta il bowtie (gate intatto), la variante validated lo prende
+        // perche' la precondizione e' del chiamante — qui violata ad arte.
+        let bowtie = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let valid = Geometry::Point(Point::new(1.0, 1.0));
+        assert!(matches!(
+            spatial_join(
+                std::slice::from_ref(&bowtie),
+                std::slice::from_ref(&valid),
+                JoinPredicate::Intersects,
+                1,
+            ),
+            Err(SpatialJoinError::InvalidGeometry { side: "left", .. })
+        ));
+        assert!(spatial_join_validated(
+            std::slice::from_ref(&bowtie),
+            std::slice::from_ref(&valid),
+            JoinPredicate::Intersects,
+            1,
+        )
+        .is_ok());
     }
 
     proptest! {

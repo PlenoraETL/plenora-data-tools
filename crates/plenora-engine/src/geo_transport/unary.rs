@@ -20,7 +20,8 @@ use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 use plenora_core::contract::{CrsResolution, GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use plenora_kernels_geo::extended::{
-    affine_transform, concave_hull, geodesic_line_length_m, rotate_about, scale_about, translate,
+    affine_transform_validated, concave_hull_validated, geodesic_line_length_m,
+    rotate_about_validated, scale_about_validated, translate_validated,
 };
 use plenora_kernels_geo::extended_algorithms::{
     delaunay, densify, geodesic_area_m2, geometry_diagnostics, line_interpolate_point, line_merge,
@@ -39,7 +40,7 @@ use plenora_kernels_geo::predicates::SpatialPredicate;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::proj_backend::Reprojector;
 use super::protocol::MAX_ROWS;
-use plenora_kernels_geo::topology::{clean_valid_polygon_topology, dissolve};
+use plenora_kernels_geo::topology::{clean_valid_polygon_topology_validated, dissolve_validated};
 use plenora_kernels_geo::{
     MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, Operation, check_geometry_valid, geometry_from_wkb,
     transform_geometry_canonical, transform_wkb,
@@ -516,6 +517,15 @@ fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform,
 /// per gli output vuoti ammessi (`point_on_surface` di geometria vuota), che
 /// diventano celle null come nel percorso non fuso.
 ///
+/// La geometria in ingresso e' SEMPRE gia' validata OGC (per costruzione:
+/// `geometry_from_wkb` al decode per-cella, ovvero decode iniziale +
+/// validazione inter-passo `check_geometry_valid` nel runner fuso —
+/// l'unica eccezione e' `make_valid`, che ammette input invalido per
+/// contratto e non ha gate): per questo i kernel con gate di ingresso nel
+/// perimetro dello scoping binari sono chiamati nelle varianti
+/// `*_validated` (R0.1), mentre i restanti kernel mantengono il proprio
+/// gate (fuori perimetro, nessuna inferenza).
+///
 /// Per il profilo A l'applicazione include la pipeline di validazione
 /// canonica di `transform_wkb` (OGC in uscita, limite 64 MiB, strutturale):
 /// gli errori sono gia' completi e attribuiti al kernel che la invoca.
@@ -540,21 +550,25 @@ fn apply_transform_cell(
         ResolvedTransform::Boundary => Ok(Some(boundary(geometry)?)),
         ResolvedTransform::PointOnSurface => Ok(point_on_surface(geometry)?),
         ResolvedTransform::AffineTransform { coefficients } => {
-            Ok(Some(affine_transform(geometry, *coefficients)?))
+            Ok(Some(affine_transform_validated(geometry, *coefficients)?))
         }
-        ResolvedTransform::Translate { x, y } => Ok(Some(translate(geometry, *x, *y)?)),
+        ResolvedTransform::Translate { x, y } => {
+            Ok(Some(translate_validated(geometry, *x, *y)?))
+        }
         ResolvedTransform::Scale {
             x_factor,
             y_factor,
             origin,
-        } => Ok(Some(scale_about(geometry, *x_factor, *y_factor, *origin)?)),
+        } => Ok(Some(scale_about_validated(
+            geometry, *x_factor, *y_factor, *origin,
+        )?)),
         ResolvedTransform::Rotate { degrees, origin } => {
-            Ok(Some(rotate_about(geometry, *degrees, *origin)?))
+            Ok(Some(rotate_about_validated(geometry, *degrees, *origin)?))
         }
         ResolvedTransform::ConcaveHull {
             concavity,
             length_threshold,
-        } => Ok(Some(concave_hull(
+        } => Ok(Some(concave_hull_validated(
             geometry,
             *concavity,
             *length_threshold,
@@ -1694,7 +1708,7 @@ fn collect_batches(
             if polygons.is_empty() {
                 None
             } else {
-                Some(dissolve(&polygons)?)
+                Some(dissolve_validated(&polygons)?)
             }
         }
         ArrowOperation::LineBuilder => line_from_ordered_points(&geometries)?,
@@ -1854,7 +1868,7 @@ fn clean_topology_batches(
         }
         row_offset += batch.num_rows() as u64;
     }
-    let cleaned = clean_valid_polygon_topology(
+    let cleaned = clean_valid_polygon_topology_validated(
         &geometries,
         snap_tolerance,
         remove_overlaps,

@@ -36,7 +36,7 @@ use plenora_kernels_geo::advanced::voronoi_cells;
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions2::snap_column;
 use plenora_kernels_geo::geometry_from_wkb;
-use plenora_kernels_geo::topology::{clip_to_mask, polygon_overlay, OverlayMode};
+use plenora_kernels_geo::topology::{clip_to_mask_validated, polygon_overlay_validated, OverlayMode};
 
 const RUNS: usize = 5;
 
@@ -209,7 +209,11 @@ fn main() {
             .iter()
             .map(|cell| geometry_from_wkb(cell.expect("cella non null")).expect("decode"))
             .collect();
-        clip_to_mask(&geometries, std::slice::from_ref(&full_domain_mask))
+        // Variante `*_validated`: rispecchia il percorso di produzione
+        // (engine `pair.rs`), dove la validazione OGC e' gia' avvenuta al
+        // decode (`geometry_from_wkb`, righe sopra) e il kernel non
+        // rivalida — precondizione dimostrata per costruzione (R0.1).
+        clip_to_mask_validated(&geometries, std::slice::from_ref(&full_domain_mask))
             .expect("clip")
             .iter()
             .map(|out| {
@@ -237,7 +241,9 @@ fn main() {
         };
         let left = decode(&overlay_left);
         let right = decode(&overlay_right);
-        polygon_overlay(
+        // Variante `*_validated`: come sopra, rispecchia il percorso engine
+        // (input validati al decode, nessuna rivalidazione nel kernel).
+        polygon_overlay_validated(
             &left,
             &right,
             OverlayMode::Union,

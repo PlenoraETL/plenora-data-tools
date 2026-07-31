@@ -65,6 +65,33 @@ pub fn affine_transform(
     coefficients: [f64; 6],
 ) -> Result<Geometry<f64>, ExtendedError> {
     validate_input(geometry)?;
+    affine_transform_validated(geometry, coefficients)
+}
+
+/// Variante di [`affine_transform`] SENZA il gate OGC di ingresso.
+///
+/// La scansione di finitezza e' coperta dalla stessa precondizione. La
+/// validazione OGC DELL'OUTPUT resta: e' la garanzia del produttore per
+/// i consumatori a valle (regola delle catene, R0.1).
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// La geometria di input deve essere GIA' validata: coordinate finite e
+/// validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
+/// o da un kernel che valida il proprio output. Su input che viola la
+/// precondizione il risultato e' indefinito (tipicamente intercettato dal
+/// gate di output, ma non garantito): la variante e' per i soli percorsi
+/// in cui la validazione e' dimostrata per costruzione (R0.1: mai
+/// un'inferenza sui chiamanti — il gate di ingresso resta nella forma
+/// pubblica [`affine_transform`]).
+///
+/// # Errors
+///
+/// Come [`affine_transform`], eccetto `InvalidInput` (gate omesso).
+pub fn affine_transform_validated(
+    geometry: &Geometry<f64>,
+    coefficients: [f64; 6],
+) -> Result<Geometry<f64>, ExtendedError> {
     if coefficients.iter().any(|value| !value.is_finite()) {
         return Err(ExtendedError::InvalidParameter {
             name: "coefficients",
@@ -89,6 +116,20 @@ pub fn translate(
     affine_transform(geometry, [1.0, 0.0, x_offset, 0.0, 1.0, y_offset])
 }
 
+/// Variante di [`translate`] SENZA il gate di ingresso: stessa
+/// precondizione e stesso contratto di [`affine_transform_validated`].
+///
+/// # Errors
+///
+/// Come [`translate`], eccetto `InvalidInput` (gate omesso).
+pub fn translate_validated(
+    geometry: &Geometry<f64>,
+    x_offset: f64,
+    y_offset: f64,
+) -> Result<Geometry<f64>, ExtendedError> {
+    affine_transform_validated(geometry, [1.0, 0.0, x_offset, 0.0, 1.0, y_offset])
+}
+
 /// Scala di `(x_factor, y_factor)` attorno a `origin` (wrapper di
 /// [`affine_transform`]).
 ///
@@ -106,6 +147,23 @@ pub fn scale_about(
     affine_transform(geometry, [x_factor, 0.0, x_offset, 0.0, y_factor, y_offset])
 }
 
+/// Variante di [`scale_about`] SENZA il gate di ingresso: stessa
+/// precondizione e stesso contratto di [`affine_transform_validated`].
+///
+/// # Errors
+///
+/// Come [`scale_about`], eccetto `InvalidInput` (gate omesso).
+pub fn scale_about_validated(
+    geometry: &Geometry<f64>,
+    x_factor: f64,
+    y_factor: f64,
+    origin: Point<f64>,
+) -> Result<Geometry<f64>, ExtendedError> {
+    let x_offset = origin.x() * (1.0 - x_factor);
+    let y_offset = origin.y() * (1.0 - y_factor);
+    affine_transform_validated(geometry, [x_factor, 0.0, x_offset, 0.0, y_factor, y_offset])
+}
+
 /// Rotazione di `degrees` gradi attorno a `origin` (wrapper di
 /// [`affine_transform`]).
 ///
@@ -119,6 +177,31 @@ pub fn rotate_about(
     degrees: f64,
     origin: Point<f64>,
 ) -> Result<Geometry<f64>, ExtendedError> {
+    let (x_offset, y_offset, cosine, sine) = rotate_coefficients(degrees, origin)?;
+    affine_transform(geometry, [cosine, -sine, x_offset, sine, cosine, y_offset])
+}
+
+/// Variante di [`rotate_about`] SENZA il gate di ingresso: stessa
+/// precondizione e stesso contratto di [`affine_transform_validated`].
+///
+/// # Errors
+///
+/// Come [`rotate_about`], eccetto `InvalidInput` (gate omesso).
+pub fn rotate_about_validated(
+    geometry: &Geometry<f64>,
+    degrees: f64,
+    origin: Point<f64>,
+) -> Result<Geometry<f64>, ExtendedError> {
+    let (x_offset, y_offset, cosine, sine) = rotate_coefficients(degrees, origin)?;
+    affine_transform_validated(geometry, [cosine, -sine, x_offset, sine, cosine, y_offset])
+}
+
+/// Coefficienti della rotazione di `degrees` attorno a `origin`, condivisi
+/// fra [`rotate_about`] e [`rotate_about_validated`].
+fn rotate_coefficients(
+    degrees: f64,
+    origin: Point<f64>,
+) -> Result<(f64, f64, f64, f64), ExtendedError> {
     if !degrees.is_finite() {
         return Err(ExtendedError::InvalidParameter {
             name: "degrees",
@@ -138,7 +221,7 @@ pub fn rotate_about(
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let y_offset = origin.y() - sine * origin.x() - cosine * origin.y();
-    affine_transform(geometry, [cosine, -sine, x_offset, sine, cosine, y_offset])
+    Ok((x_offset, y_offset, cosine, sine))
 }
 
 /// Concave hull delle coordinate dell'input, con parametri e limiti di
@@ -162,6 +245,29 @@ pub fn concave_hull(
     max_coordinates: u64,
 ) -> Result<Geometry<f64>, ExtendedError> {
     validate_input(geometry)?;
+    concave_hull_validated(geometry, concavity, length_threshold, max_coordinates)
+}
+
+/// Variante di [`concave_hull`] SENZA il gate OGC di ingresso.
+///
+/// La scansione di finitezza e' coperta dalla stessa precondizione. La
+/// validazione OGC DELL'OUTPUT resta: e' la garanzia del produttore per
+/// i consumatori a valle.
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Come [`affine_transform_validated`]: input gia' validato (finitezza +
+/// OGC) per costruzione, mai per inferenza sui chiamanti.
+///
+/// # Errors
+///
+/// Come [`concave_hull`], eccetto `InvalidInput` (gate omesso).
+pub fn concave_hull_validated(
+    geometry: &Geometry<f64>,
+    concavity: f64,
+    length_threshold: f64,
+    max_coordinates: u64,
+) -> Result<Geometry<f64>, ExtendedError> {
     if !concavity.is_finite() || concavity <= 0.0 {
         return Err(ExtendedError::InvalidParameter {
             name: "concavity",
@@ -207,6 +313,25 @@ pub fn hausdorff_distance(
 ) -> Result<Option<f64>, ExtendedError> {
     validate_input(left)?;
     validate_input(right)?;
+    hausdorff_distance_validated(left, right, max_coordinate_pairs)
+}
+
+/// Variante di [`hausdorff_distance`] SENZA il gate di ingresso (scansione
+/// di finitezza + validazione OGC su entrambi gli input).
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Come [`affine_transform_validated`]: entrambi gli input gia' validati
+/// (finitezza + OGC) per costruzione, mai per inferenza sui chiamanti.
+///
+/// # Errors
+///
+/// Come [`hausdorff_distance`], eccetto `InvalidInput` (gate omesso).
+pub fn hausdorff_distance_validated(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    max_coordinate_pairs: u64,
+) -> Result<Option<f64>, ExtendedError> {
     let left_count =
         u64::try_from(left.coords_count()).map_err(|_| ExtendedError::IndexOverflow)?;
     let right_count =
@@ -321,6 +446,95 @@ mod tests {
         assert!(matches!(
             hausdorff_distance(&geometry, &geometry, 1),
             Err(ExtendedError::WorkLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn validated_variants_match_the_gated_path_on_valid_inputs() {
+        let geometry = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
+            (x: 2.0, y: 1.0), (x: 0.0, y: 1.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let line = Geometry::LineString(line_string![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
+            (x: 1.5, y: 1.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0),
+        ]);
+        let coefficients = [1.1, 0.05, 3.0, -0.02, 0.9, 7.0];
+        assert_eq!(
+            affine_transform(&geometry, coefficients).unwrap(),
+            affine_transform_validated(&geometry, coefficients).unwrap()
+        );
+        assert_eq!(
+            translate(&geometry, 10.0, -5.0).unwrap(),
+            translate_validated(&geometry, 10.0, -5.0).unwrap()
+        );
+        assert_eq!(
+            scale_about(&geometry, 2.0, 3.0, Point::new(0.0, 0.0)).unwrap(),
+            scale_about_validated(&geometry, 2.0, 3.0, Point::new(0.0, 0.0)).unwrap()
+        );
+        assert_eq!(
+            rotate_about(&geometry, 90.0, Point::new(0.0, 0.0)).unwrap(),
+            rotate_about_validated(&geometry, 90.0, Point::new(0.0, 0.0)).unwrap()
+        );
+        assert_eq!(
+            concave_hull(&line, 1.0, 0.0, 10).unwrap(),
+            concave_hull_validated(&line, 1.0, 0.0, 10).unwrap()
+        );
+        assert_eq!(
+            hausdorff_distance(&line, &geometry, 1_000).unwrap(),
+            hausdorff_distance_validated(&line, &geometry, 1_000).unwrap()
+        );
+        // Parametri e limiti restano fail-closed nella variante validated.
+        assert!(matches!(
+            affine_transform_validated(&geometry, [f64::NAN; 6]),
+            Err(ExtendedError::InvalidParameter {
+                name: "coefficients",
+                ..
+            })
+        ));
+        assert!(matches!(
+            rotate_about_validated(&geometry, f64::INFINITY, Point::new(0.0, 0.0)),
+            Err(ExtendedError::InvalidParameter { name: "degrees", .. })
+        ));
+        assert!(matches!(
+            concave_hull_validated(&line, 1.0, 0.0, 2),
+            Err(ExtendedError::CoordinateLimit { .. })
+        ));
+        assert!(matches!(
+            hausdorff_distance_validated(&line, &line, 1),
+            Err(ExtendedError::WorkLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn validated_variants_document_the_caller_precondition() {
+        // Test di documentazione del contratto, NON un nuovo modo di
+        // accettare geometrie invalide in produzione: il percorso gated
+        // rifiuta il bowtie in INGRESSO (gate intatto), la variante
+        // validated omette quel gate perche' la precondizione e' del
+        // chiamante — qui violata ad arte. Il gate di OUTPUT resta: la
+        // trasformata affine di un bowtie e' ancora un bowtie e viene
+        // rifiutata in uscita.
+        let bowtie = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 3.0, y: 3.0)]);
+        assert!(matches!(
+            hausdorff_distance(&bowtie, &line, 100),
+            Err(ExtendedError::InvalidInput(_))
+        ));
+        assert!(hausdorff_distance_validated(&bowtie, &line, 100).is_ok());
+        assert!(matches!(
+            affine_transform(&bowtie, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            Err(ExtendedError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            affine_transform_validated(&bowtie, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            Err(ExtendedError::InvalidOutput(_))
         ));
     }
 

@@ -59,8 +59,42 @@ pub fn evaluate(
 ) -> Result<bool, PredicateError> {
     validate(left, "left")?;
     validate(right, "right")?;
+    Ok(evaluate_unchecked(left, right, predicate))
+}
+
+/// Variante di [`evaluate`] SENZA il gate di ingresso (scansione di
+/// finitezza + validazione OGC su entrambe le geometrie).
+///
+/// # Precondizione (contratto del chiamante)
+///
+/// Entrambe le geometrie devono essere GIA' validate: coordinate finite e
+/// validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
+/// o da un kernel che valida il proprio output. Su input che viola la
+/// precondizione il risultato e' indefinito e nessun errore dedicato e'
+/// garantito: la variante e' per i soli percorsi in cui la validazione e'
+/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
+/// gate resta nella forma pubblica [`evaluate`]).
+///
+/// # Errors
+///
+/// Infallibile su input che rispetta la precondizione (il `Result` resta
+/// per simmetria con [`evaluate`]); nessuna variante d'errore e'
+/// raggiungibile.
+pub fn evaluate_validated(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    predicate: SpatialPredicate,
+) -> Result<bool, PredicateError> {
+    Ok(evaluate_unchecked(left, right, predicate))
+}
+
+fn evaluate_unchecked(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    predicate: SpatialPredicate,
+) -> bool {
     let matrix = left.relate(right);
-    Ok(match predicate {
+    match predicate {
         SpatialPredicate::Intersects => matrix.is_intersects(),
         SpatialPredicate::Disjoint => matrix.is_disjoint(),
         SpatialPredicate::Contains => matrix.is_contains(),
@@ -72,7 +106,7 @@ pub fn evaluate(
         SpatialPredicate::Touches => matrix.is_touches(),
         SpatialPredicate::Crosses => matrix.is_crosses(),
         SpatialPredicate::Overlaps => matrix.is_overlaps(),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +166,60 @@ mod tests {
             evaluate(&valid, &invalid, SpatialPredicate::Intersects),
             Err(PredicateError::InvalidGeometry { side: "right", .. })
         ));
+    }
+
+    #[test]
+    fn evaluate_validated_matches_the_gated_path_on_valid_inputs() {
+        let area = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
+            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let others = [
+            Geometry::Point(Point::new(1.0, 1.0)),
+            Geometry::Point(Point::new(0.0, 1.0)),
+            Geometry::Point(Point::new(100.0, 100.0)),
+            Geometry::LineString(line_string![(x: -1.0, y: 1.0), (x: 3.0, y: 1.0)]),
+        ];
+        for other in &others {
+            for predicate in [
+                SpatialPredicate::Intersects,
+                SpatialPredicate::Disjoint,
+                SpatialPredicate::Contains,
+                SpatialPredicate::Within,
+                SpatialPredicate::EqualsTopo,
+                SpatialPredicate::Covers,
+                SpatialPredicate::CoveredBy,
+                SpatialPredicate::ContainsProperly,
+                SpatialPredicate::Touches,
+                SpatialPredicate::Crosses,
+                SpatialPredicate::Overlaps,
+            ] {
+                assert_eq!(
+                    evaluate(&area, other, predicate).unwrap(),
+                    evaluate_validated(&area, other, predicate).unwrap(),
+                    "{predicate:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn evaluate_validated_documents_the_caller_precondition() {
+        // Test di documentazione del contratto, NON un nuovo modo di
+        // accettare geometrie invalide in produzione: il percorso gated
+        // rifiuta il bowtie (gate intatto), la variante validated lo prende
+        // perche' la precondizione e' del chiamante — qui violata ad arte.
+        let bowtie = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
+            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
+            (x: 0.0, y: 0.0),
+        ]);
+        let valid = Geometry::Point(Point::new(1.0, 1.0));
+        assert!(matches!(
+            evaluate(&bowtie, &valid, SpatialPredicate::Intersects),
+            Err(PredicateError::InvalidGeometry { side: "left", .. })
+        ));
+        assert!(evaluate_validated(&bowtie, &valid, SpatialPredicate::Intersects).is_ok());
     }
 }
