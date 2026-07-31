@@ -51,7 +51,7 @@ use plenora_core::contract::{
     GeometryDimensions, GeometryEncoding, GeometryPrecision, GeometryTypesProperty,
     SpatialSemantics,
 };
-use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
+use plenora_core::crs::{authority_code_srid, ResolvedCrs, MAX_CRS_DEFINITION_BYTES};
 use plenora_core::PlenoraError;
 use rayon::prelude::*;
 
@@ -444,11 +444,17 @@ fn geo_metadata_value(field: &Field) -> Option<serde_json::Value> {
 /// restano assenti, mai un default al posto dell'assente).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GeometryMetadataDetails {
-    /// Ordine degli assi del CRS; se assente e un CRS e' presente l'emissione
-    /// dichiara `unknown` (valore canonico esplicito, la chiave e'
-    /// obbligatoria quando un CRS e' presente).
+    /// Ordine degli assi del CRS; la chiave e' obbligatoria quando un CRS
+    /// e' presente e l'emissione e' per completamento DELL'ASSENTE (R2.7,
+    /// ADR-0009 emendamento 2026-07-31): questo dettaglio esplicito vince,
+    /// poi la deduzione dalla definizione canonica d'autorita'
+    /// ([`ResolvedCrs::authority_axis_order`]), infine `unknown` quando ne'
+    /// dettaglio ne' deduzione sono possibili.
     pub axis_order: Option<AxisOrder>,
-    /// SRID noto (emesso come intero decimale senza segno).
+    /// SRID noto (emesso come intero decimale senza segno); come sopra, un
+    /// dettaglio assente e' completato dalla deduzione d'autorita'
+    /// ([`ResolvedCrs::authority_srid`], o dalla forma `authority:code` nel
+    /// percorso legacy) e resta assente solo se neanche quella decide.
     pub srid: Option<u32>,
     /// Semantica spaziale della colonna.
     pub spatial_semantics: Option<SpatialSemantics>,
@@ -491,11 +497,18 @@ pub struct GeometryMetadataDetails {
 ///   workspace le definizioni risolte sono oggi authority:code o PROJJSON.
 /// - con un CRS risolto o dichiarato non risolto `axis_order` e' sempre
 ///   emesso (obbligatorio quando un
-///   CRS e' presente): senza dettaglio esplicito vale `unknown`, valore
-///   canonico dichiarato dalla tabella §2 — la chiave qui e' obbligatoria,
-///   non opzionale, e `unknown` non e' un default al posto dell'assente (R5.2
-///   riguarda le chiavi opzionali: `srid`, `spatial_semantics`, `precision`,
-///   `encoding`, che restano assenti se non note).
+///   CRS e' presente) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
+///   ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito, poi la
+///   deduzione dalla definizione canonica d'autorita'
+///   ([`ResolvedCrs::authority_axis_order`] — deduzione da autorita', non
+///   invenzione), infine `unknown` come valore canonico dichiarato dalla
+///   tabella §2 quando ne' dettaglio ne' deduzione sono possibili (la
+///   chiave qui e' obbligatoria, non opzionale, e `unknown` non e' un
+///   default al posto dell'assente — R5.2 riguarda le chiavi opzionali:
+///   `srid`, `spatial_semantics`, `precision`, `encoding`. `srid` segue la
+///   stessa cascata di completamento via
+///   [`ResolvedCrs::authority_srid`] e resta assente se neanche la
+///   deduzione decide).
 /// - `types`/`types_declaration` sono emesse SOLO se il campo `types` porta
 ///   un valore (confidence `Declared`/`Proven`/`Estimated`); confidence
 ///   `Unknown` («proprieta' non dichiarata», R3.4.1) non emette nulla: mai
@@ -544,7 +557,7 @@ pub fn canonical_geometry_metadata(
         // sorgente avviene a monte, nella fusione dello schema di output
         // ([`strip_decided_crs_declarations`]).
         ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
-            insert_resolved_crs_keys(&mut metadata, crs.definition(), details);
+            insert_resolved_crs_keys(&mut metadata, crs.definition(), details, Some(crs));
         }
         ContractCrs::DeclaredUnresolved {
             crs_id,
@@ -555,8 +568,11 @@ pub fn canonical_geometry_metadata(
             // l'incoerenza arriva al bordo di scrittura com'era, mai persa
             // e mai conciliata. `axis_order` e' emesso come per `resolved`
             // (obbligatorio quando una rappresentazione CRS e' presente):
-            // il default `unknown` resta l'assenza di una dichiarazione e
-            // non sovrascrive la lineage (vedi `canonical_output_schema`).
+            // qui NON c'e' un `ResolvedCrs` da cui dedurre (lo stato porta
+            // le dichiarazioni, non una definizione risolta), quindi senza
+            // dettaglio esplicito vale `unknown` — l'assenza di una
+            // dichiarazione, che non sovrascrive la lineage (vedi
+            // `canonical_output_schema`).
             if let Some(crs_id) = crs_id {
                 metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), crs_id.clone());
             }
@@ -604,21 +620,33 @@ pub fn canonical_geometry_metadata(
 }
 
 /// Chiavi CRS di uno stato `resolved` (R2.2): corpo condiviso fra
-/// [`canonical_geometry_metadata`] (braccio `Resolved`/`ResolvedByDecision`)
-/// e [`canonical_geometry_metadata_for_resolved_definition`] — stessa forma
-/// e stessi byte a parita' di definizione e dettagli.
+/// [`canonical_geometry_metadata`] (braccio `Resolved`/`ResolvedByDecision`,
+/// che passa il `ResolvedCrs`) e
+/// [`canonical_geometry_metadata_for_resolved_definition`] (trasporto
+/// legacy, che passa `None` e deduce lo `srid` a monte dalla forma
+/// `authority:code`) — stessa forma e stessi byte a parita' di definizione
+/// e dettagli.
 ///
 /// Una definizione che e' un oggetto JSON (PROJJSON) e' emessa come
 /// `crs_definition` + `crs_definition_format = projjson`; ogni altra come
 /// `crs_id` — la stessa distinzione che [`geo_metadata_json`] applica al
 /// metadato legacy `geo.crs`, cosi' le due rappresentazioni restano coerenti
 /// per costruzione (R2.6). `axis_order` e' sempre emesso (obbligatorio
-/// quando un CRS e' presente): senza dettaglio esplicito vale `unknown`,
-/// valore canonico della tabella §2, non un default al posto dell'assente.
+/// quando un CRS e' presente) con completamento DELL'ASSENTE, mai arbitrato
+/// (R2.7 — ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito
+/// di `details`, poi la deduzione dalla definizione canonica d'autorita'
+/// ([`ResolvedCrs::authority_axis_order`] — deduzione da autorita', non
+/// invenzione), infine `unknown` come valore canonico dichiarato dalla
+/// tabella §2 quando ne' dettaglio ne' deduzione sono possibili (non un
+/// default al posto dell'assente: la chiave qui e' obbligatoria). `srid`
+/// (opzionale R5.2) segue la stessa cascata senza fondo: dettaglio
+/// esplicito, poi deduzione ([`ResolvedCrs::authority_srid`]), altrimenti
+/// chiave assente.
 fn insert_resolved_crs_keys(
     metadata: &mut HashMap<String, String>,
     definition: &str,
     details: &GeometryMetadataDetails,
+    resolved: Option<&ResolvedCrs>,
 ) {
     if matches!(
         serde_json::from_str::<serde_json::Value>(definition),
@@ -635,12 +663,18 @@ fn insert_resolved_crs_keys(
     } else {
         metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
     }
-    let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
+    let axis_order = details
+        .axis_order
+        .or_else(|| resolved.and_then(ResolvedCrs::authority_axis_order))
+        .unwrap_or(AxisOrder::Unknown);
     metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
         axis_order.as_str().to_owned(),
     );
-    if let Some(srid) = details.srid {
+    if let Some(srid) = details
+        .srid
+        .or_else(|| resolved.and_then(ResolvedCrs::authority_srid))
+    {
         metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), srid.to_string());
     }
 }
@@ -662,6 +696,14 @@ fn insert_resolved_crs_keys(
 /// definizione e dettagli). `types`/`types_declaration` NON sono emesse: il
 /// trasporto legacy non dichiara i tipi e inventarli e' vietato (R3.4.1);
 /// `encoding` e' emessa solo se il chiamante la dichiara (R5.2).
+///
+/// Deduzione d'autorita' (ADR-0009, emendamento 2026-07-31): senza un
+/// `ResolvedCrs` la definizione canonica non e' disponibile, quindi lo
+/// `srid` e' dedotto dalla forma `authority:code` della definizione quando
+/// numerica ([`authority_code_srid`] — `EPSG:4326` → 4326), mentre
+/// `axis_order` resta `unknown` — LIMITE DICHIARATO: il trasporto legacy
+/// non risolve la definizione e non puo' dedurre gli assi onestamente
+/// (dedurli dalla stringa sarebbe inventarli).
 #[must_use]
 pub fn canonical_geometry_metadata_for_resolved_definition(
     definition: &str,
@@ -684,7 +726,15 @@ pub fn canonical_geometry_metadata_for_resolved_definition(
         PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
         CrsResolution::Resolved.as_str().to_owned(),
     );
-    insert_resolved_crs_keys(&mut metadata, definition, details);
+    // Legacy: nessun `ResolvedCrs` da passare — lo `srid` e' dedotto qui
+    // dalla forma `authority:code` (completamento dell'assente: un
+    // `details.srid` esplicito vince); `axis_order` resta `unknown` nel
+    // corpo condiviso (limite dichiarato nel doc sopra).
+    let effective_details = &GeometryMetadataDetails {
+        srid: details.srid.or_else(|| authority_code_srid(definition)),
+        ..*details
+    };
+    insert_resolved_crs_keys(&mut metadata, definition, effective_details, None);
     if let Some(semantics) = details.spatial_semantics {
         metadata.insert(
             PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY.to_owned(),
@@ -2067,6 +2117,112 @@ mod tests {
         ] {
             assert_eq!(get(key), None, "{key} deve restare assente");
         }
+    }
+
+    // --- Deduzione axis_order/srid dalla definizione canonica (ADR-0009,
+    // emendamento 2026-07-31) ----------------------------------------------
+
+    /// Contratto `Resolved` con PROJJSON realistico di EPSG:4326 (assi e
+    /// `id` d'autorita' presenti — la forma prodotta dalla risoluzione PROJ).
+    fn epsg_4326_realistic_contract() -> GeometryColumnContract {
+        GeometryColumnContract {
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                "EPSG:4326".to_owned(),
+                serde_json::json!({
+                    "type": "GeographicCRS",
+                    "name": "WGS 84",
+                    "coordinate_system": {
+                        "subtype": "ellipsoidal",
+                        "axis": [
+                            {"name": "Geodetic latitude", "abbreviation": "Lat",
+                             "direction": "north", "unit": "degree"},
+                            {"name": "Geodetic longitude", "abbreviation": "Lon",
+                             "direction": "east", "unit": "degree"},
+                        ],
+                    },
+                    "id": {"authority": "EPSG", "code": 4326},
+                }),
+                CrsKind::Geographic,
+                None,
+            )),
+            types: GeometryColumnContract::undeclared_types(),
+            encoding: None,
+            ..full_contract()
+        }
+    }
+
+    #[test]
+    fn canonical_metadata_deduces_axis_order_and_srid_from_authority() {
+        // Completamento DELL'ASSENTE (R2.7): senza dettagli espliciti,
+        // axis_order e srid sono dedotti dalla definizione canonica
+        // d'autorita' (geographic (north,east) -> lat_lon; id EPSG:4326 ->
+        // 4326) — deduzione, mai invenzione. Lo stub `{"type":"ProjectedCRS"}`
+        // della fixture storica resta coperto da
+        // `canonical_metadata_minimal_omits_everything_not_declared`
+        // (comportamento precedente preservato: `unknown` + niente srid).
+        let metadata = canonical_geometry_metadata(
+            &epsg_4326_realistic_contract(),
+            &GeometryMetadataDetails::default(),
+        );
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("lat_lon"));
+        assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:4326"));
+    }
+
+    #[test]
+    fn canonical_metadata_explicit_details_win_over_authority_deduction() {
+        // R2.7 completa solo l'assente: un dettaglio esplicito vince SEMPRE
+        // sulla deduzione d'autorita', anche se diverge.
+        let details = GeometryMetadataDetails {
+            axis_order: Some(AxisOrder::LonLat),
+            srid: Some(84),
+            ..GeometryMetadataDetails::default()
+        };
+        let metadata = canonical_geometry_metadata(&epsg_4326_realistic_contract(), &details);
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("lon_lat"));
+        assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("84"));
+    }
+
+    #[test]
+    fn legacy_resolved_definition_deduces_srid_but_not_axis_order() {
+        // Trasporto legacy (nessun `ResolvedCrs`): lo `srid` e' dedotto
+        // dalla forma `authority:code` della definizione; `axis_order`
+        // resta `unknown` — limite dichiarato (il trasporto non risolve la
+        // definizione, dedurre gli assi sarebbe inventarli).
+        let metadata = canonical_geometry_metadata_for_resolved_definition(
+            "EPSG:4326",
+            GeometryDimensions::Xy,
+            None,
+            &GeometryMetadataDetails::default(),
+        );
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
+        // Codice non numerico: nessuno srid; dettaglio esplicito vincente.
+        let metadata = canonical_geometry_metadata_for_resolved_definition(
+            "OGC:CRS84",
+            GeometryDimensions::Xy,
+            None,
+            &GeometryMetadataDetails::default(),
+        );
+        assert_eq!(metadata.get(PLENORA_GEOMETRY_SRID_KEY), None);
+        let details = GeometryMetadataDetails {
+            srid: Some(7),
+            ..GeometryMetadataDetails::default()
+        };
+        let metadata = canonical_geometry_metadata_for_resolved_definition(
+            "EPSG:4326",
+            GeometryDimensions::Xy,
+            None,
+            &details,
+        );
+        assert_eq!(
+            metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+            Some("7"),
+            "R2.7: il dettaglio esplicito vince sulla deduzione"
+        );
     }
 
     #[test]

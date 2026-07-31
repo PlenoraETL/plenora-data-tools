@@ -11,6 +11,7 @@
 //! Senza backend [`resolve_crs`] fallisce chiuso, come nel sorgente.
 
 use crate::catalog::CrsRequirement;
+use crate::contract::AxisOrder;
 use crate::error::PlenoraError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -73,6 +74,74 @@ impl ResolvedCrs {
     pub fn semantically_equals(&self, other: &Self) -> bool {
         self.canonical == other.canonical
     }
+
+    /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
+    /// (ADR-0009, emendamento 2026-07-31).
+    ///
+    /// Legge le direzioni dei primi due assi di `coordinate_system` nel
+    /// PROJJSON — lo stesso oggetto con cui il kernel opera — e le combina
+    /// col `kind`: geographic (north,east) → [`AxisOrder::LatLon`],
+    /// geographic (east,north) → [`AxisOrder::LonLat`], projected
+    /// (east,north) → [`AxisOrder::EastingNorthing`], projected (north,east)
+    /// → [`AxisOrder::NorthingEasting`]. La mappa e' solo direzioni+kind →
+    /// variante: NESSUNA tabella di CRS hardcoded — EPSG:4326 → `lat_lon`,
+    /// OGC:CRS84 → `lon_lat`, EPSG:32632 → `easting_northing` escono gratis
+    /// dalla definizione.
+    ///
+    /// Deduzione da autorita', mai invenzione: qualunque altra forma (assi
+    /// assenti, meno di due assi, direzioni non riconosciute per il kind)
+    /// restituisce `None` e l'emissione resta onesta con `unknown`.
+    #[must_use]
+    pub fn authority_axis_order(&self) -> Option<AxisOrder> {
+        let axes = self.canonical.get("coordinate_system")?.get("axis")?.as_array()?;
+        let first = axes.first()?.get("direction")?.as_str()?;
+        let second = axes.get(1)?.get("direction")?.as_str()?;
+        match (self.kind, first, second) {
+            (CrsKind::Geographic, "north", "east") => Some(AxisOrder::LatLon),
+            (CrsKind::Geographic, "east", "north") => Some(AxisOrder::LonLat),
+            (CrsKind::Projected, "east", "north") => Some(AxisOrder::EastingNorthing),
+            (CrsKind::Projected, "north", "east") => Some(AxisOrder::NorthingEasting),
+            _ => None,
+        }
+    }
+
+    /// SRID dedotto dalla definizione canonica d'autorita' (ADR-0009,
+    /// emendamento 2026-07-31).
+    ///
+    /// `id.code` numerico (in PROJJSON il codice puo' essere numero o
+    /// stringa — entrambe le forme sono accettate solo se numeriche) quando
+    /// `id.authority` e' una stringa d'autorita'. Codice non numerico (es.
+    /// `"CRS84"`), oltre `u32`, o `id` assente → `None`: lo `srid` resta
+    /// non emesso (chiave opzionale R5.2), mai indovinato.
+    #[must_use]
+    pub fn authority_srid(&self) -> Option<u32> {
+        let id = self.canonical.get("id")?;
+        id.get("authority")?.as_str()?;
+        let code = match id.get("code")? {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.parse::<u64>().ok(),
+            _ => None,
+        }?;
+        u32::try_from(code).ok()
+    }
+}
+
+/// SRID da un identificatore testuale `authority:code` (es. `EPSG:4326` →
+/// 4326).
+///
+/// La forma usata dal trasporto legacy, che trasporta la sola definizione
+/// senza un [`ResolvedCrs`] (ADR-0009, emendamento 2026-07-31). `None` per
+/// ogni altra forma (autorita' o codice vuoti, codice non numerico, oltre
+/// `u32`) — mai indovinare: lo `srid` non e' decidibile e l'identificatore
+/// resta intero alla risoluzione. Unica fonte di parsing condivisa (era
+/// duplicata in `plenora-cli`).
+#[must_use]
+pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
+    let (authority, code) = crs_id.rsplit_once(':')?;
+    if authority.is_empty() || code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    code.parse().ok()
 }
 
 #[derive(Debug, Error)]
@@ -383,5 +452,165 @@ mod tests {
         let error = PlenoraError::from(CrsError::BackendUnavailable);
         assert!(matches!(error, PlenoraError::Crs(_)));
         assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
+    }
+
+    // --- Deduzione axis_order/srid dalla definizione canonica (ADR-0009,
+    // emendamento 2026-07-31) ---------------------------------------------
+
+    #[test]
+    fn authority_axis_order_and_srid_from_realistic_epsg_4326() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "name": "WGS 84",
+                "datum": {"type": "GeodeticReferenceFrame", "name": "World Geodetic System 1984"},
+                "coordinate_system": {
+                    "subtype": "ellipsoidal",
+                    "axis": [
+                        {"name": "Geodetic latitude", "abbreviation": "Lat",
+                         "direction": "north", "unit": "degree"},
+                        {"name": "Geodetic longitude", "abbreviation": "Lon",
+                         "direction": "east", "unit": "degree"},
+                    ],
+                },
+                "id": {"authority": "EPSG", "code": 4326},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::LatLon));
+        assert_eq!(crs.authority_srid(), Some(4326));
+    }
+
+    #[test]
+    fn authority_axis_order_lon_lat_and_no_srid_for_ogc_crs84() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "OGC:CRS84".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "name": "WGS 84 (CRS84)",
+                "coordinate_system": {
+                    "subtype": "ellipsoidal",
+                    "axis": [
+                        {"name": "Geodetic longitude", "abbreviation": "Lon",
+                         "direction": "east", "unit": "degree"},
+                        {"name": "Geodetic latitude", "abbreviation": "Lat",
+                         "direction": "north", "unit": "degree"},
+                    ],
+                },
+                "id": {"authority": "OGC", "code": "CRS84"},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::LonLat));
+        // Codice non numerico: nessuno srid (mai indovinare).
+        assert_eq!(crs.authority_srid(), None);
+    }
+
+    #[test]
+    fn authority_axis_order_and_srid_from_realistic_epsg_32632() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:32632".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "name": "WGS 84 / UTM zone 32N",
+                "coordinate_system": {
+                    "subtype": "Cartesian",
+                    "axis": [
+                        {"name": "Easting", "abbreviation": "E",
+                         "direction": "east", "unit": "metre"},
+                        {"name": "Northing", "abbreviation": "N",
+                         "direction": "north", "unit": "metre"},
+                    ],
+                },
+                "id": {"authority": "EPSG", "code": 32632},
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::EastingNorthing));
+        assert_eq!(crs.authority_srid(), Some(32632));
+    }
+
+    #[test]
+    fn authority_deduction_without_id_keeps_axes_and_drops_srid() {
+        // CRS custom (nessun `id`): gli assi si deducono comunque dalla
+        // definizione, lo srid no — e la combinazione projected
+        // (north,east) mappa su NorthingEasting.
+        let crs = ResolvedCrs::from_resolved_parts(
+            "CUSTOM:local-grid".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "name": "Local grid",
+                "coordinate_system": {
+                    "subtype": "Cartesian",
+                    "axis": [
+                        {"name": "Northing", "abbreviation": "N",
+                         "direction": "north", "unit": "metre"},
+                        {"name": "Easting", "abbreviation": "E",
+                         "direction": "east", "unit": "metre"},
+                    ],
+                },
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::NorthingEasting));
+        assert_eq!(crs.authority_srid(), None);
+    }
+
+    #[test]
+    fn authority_deduction_is_none_without_coordinate_system() {
+        // Stub senza `coordinate_system` (la forma dei fixture storici):
+        // nessuna deduzione — l'emissione resta onesta con `unknown`.
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({"type": "GeographicCRS", "name": "WGS 84"}),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), None);
+        assert_eq!(crs.authority_srid(), None);
+        // Forme degradate: un solo asse, direzioni non mappabili sul kind
+        // (projected (north,east) sarebbe invece NorthingEasting per
+        // costruzione — la mappa e' direzioni+kind, non una tabella di CRS).
+        let one_axis = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "coordinate_system": {"subtype": "ellipsoidal", "axis": [
+                    {"name": "Geodetic latitude", "direction": "north", "unit": "degree"},
+                ]},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(one_axis.authority_axis_order(), None);
+        let mismatched = ResolvedCrs::from_resolved_parts(
+            "EPSG:32632".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "coordinate_system": {"subtype": "Cartesian", "axis": [
+                    {"name": "Up", "direction": "up", "unit": "metre"},
+                    {"name": "Easting", "direction": "east", "unit": "metre"},
+                ]},
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(mismatched.authority_axis_order(), None);
+    }
+
+    #[test]
+    fn authority_code_srid_parses_only_numeric_authority_code() {
+        assert_eq!(authority_code_srid("EPSG:4326"), Some(4326));
+        assert_eq!(authority_code_srid("OGC:CRS84"), None);
+        assert_eq!(authority_code_srid(":4326"), None);
+        assert_eq!(authority_code_srid("EPSG:"), None);
+        assert_eq!(authority_code_srid("EPSG"), None);
+        assert_eq!(authority_code_srid("EPSG:4326.0"), None);
+        assert_eq!(authority_code_srid("EPSG:99999999999999999999"), None);
     }
 }

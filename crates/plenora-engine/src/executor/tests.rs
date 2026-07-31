@@ -1008,6 +1008,101 @@ fn canonical_output_schema_merges_canonical_keys_idempotently() {
     assert_eq!(remerged, merged);
 }
 
+/// Contratto con geometria `Resolved` da canonical PROJJSON REALISTICO di
+/// EPSG:4326 (assi e `id` d'autorita' — la forma prodotta dalla risoluzione
+/// PROJ; i fixture storici usano lo stub senza assi/id e continuano a
+/// produrre `unknown`).
+fn geo_contract_4326_realistic() -> DataContract {
+    DataContract::new(
+        geo_schema(),
+        vec![GeometryColumnContract {
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                "EPSG:4326".to_owned(),
+                json!({
+                    "type": "GeographicCRS",
+                    "name": "WGS 84",
+                    "coordinate_system": {
+                        "subtype": "ellipsoidal",
+                        "axis": [
+                            {"name": "Geodetic latitude", "abbreviation": "Lat",
+                             "direction": "north", "unit": "degree"},
+                            {"name": "Geodetic longitude", "abbreviation": "Lon",
+                             "direction": "east", "unit": "degree"},
+                        ],
+                    },
+                    "id": {"authority": "EPSG", "code": 4326},
+                }),
+                CrsKind::Geographic,
+                None,
+            )),
+            ..geo_contract().geometries.into_iter().next().expect("una geometria")
+        }],
+        None,
+        ContractProperties::default(),
+    )
+    .expect("contratto 4326 realistico valido")
+}
+
+#[test]
+fn canonical_output_schema_deduces_axis_order_and_srid_from_authority() {
+    // ADR-0009, emendamento 2026-07-31: con un canonical realistico,
+    // `axis_order` e `srid` sono DEDOTTI dalla definizione d'autorita' —
+    // completamento dell'assente su un campo SENZA chiavi di lineage
+    // (EPSG:4326 -> lat_lon + 4326). E' la stessa cascata del caso
+    // reproject: `analyze_reproject` rimuove le chiavi ereditate e il
+    // dedotto riempie l'assente.
+    let contract = geo_contract_4326_realistic();
+    let merged = canonical_output_schema(&contract).expect("fusione canonica");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        Some("lat_lon")
+    );
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str), Some("4326"));
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:4326"));
+}
+
+#[test]
+fn canonical_output_schema_lineage_wins_over_authority_deduction() {
+    // R2.7 mai arbitrato: con chiavi di lineage PRESENTI (`axis_order` e
+    // `srid`) il valore dichiarato dal produttore vince su qualunque valore
+    // emesso dal contratto — anche dedotto dall'autorita' — e la fusione
+    // NON fallisce (la deduzione non diventa mai un falso conflitto R2.6 su
+    // un passthrough).
+    let mut contract = geo_contract_4326_realistic();
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "easting_northing".to_owned(),
+                );
+                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    let merged = canonical_output_schema(&contract).expect("lineage preservata, nessun R2.6");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        Some("easting_northing"),
+        "la lineage presente vince sulla deduzione"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("32632"),
+        "la lineage presente vince sulla deduzione"
+    );
+}
+
 #[test]
 fn canonical_output_schema_rejects_divergent_preexisting_key() {
     // (e) R2.6: chiave canonica gia' presente con valore diverso da quello

@@ -1062,13 +1062,12 @@ fn contract_crs_from_keys(
 
 /// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`
 /// -> 4326); `None` per ogni altra forma — il confronto con `srid` non e'
-/// decidibile e l'identificatore resta intero alla risoluzione.
+/// decidibile e l'identificatore resta intero alla risoluzione. Il parsing
+/// vive in `plenora-core` (unica fonte condivisa, ADR-0009 emendamento
+/// 2026-07-31: lo stesso helper alimenta la deduzione `srid` del percorso
+/// legacy in `arrow_adapter`).
 fn authority_code(crs_id: &str) -> Option<u32> {
-    let (authority, code) = crs_id.rsplit_once(':')?;
-    if authority.is_empty() || code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    code.parse().ok()
+    plenora_core::crs::authority_code_srid(crs_id)
 }
 
 /// Contesto "input `nome` (percorso)" sull'errore, preservando la variante.

@@ -105,7 +105,11 @@ pub(in crate::analyze) fn analyze_geometry_only(
 /// `axis_order`, `crs_resolution`) sono SOSTITUITE, non fuse: rimosse qui e
 /// ri-emesse dal contratto in `executor.rs::canonical_output_schema`, senza
 /// che il guard R2.6 veda mai una divergenza. Il guard resta intatto per
-/// tutte le altre chiavi.
+/// tutte le altre chiavi. Emendamento 2026-07-31: la ri-emissione DEDUCE
+/// `axis_order`/`srid` dal PROJJSON canonico del target risolto (fonte
+/// d'autorita', la stessa usata dal kernel) — la strip e' proprio cio' che
+/// rende la chiave ASSENTE e quindi riempibile dal dedotto (completamento
+/// R2.7, mai arbitrato: una chiave ereditata sopravvissuta vincerebbe).
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,

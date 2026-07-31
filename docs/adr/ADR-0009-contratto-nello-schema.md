@@ -220,6 +220,34 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    ANALISI (`require_identifiable_geometry`, modello B1.3 di
    `require_xy_dimensions` — ADR-0008: mai a meta' esecuzione), col check
    del trasporto ridotto a difesa in profondita'.
+   **Deduzione `axis_order`/`srid` dalla definizione d'autorita'
+   (emendamento 2026-07-31, completamento R4.2/R4.5)**: la nota originaria
+   «`ResolvedCrs` non porta l'ordine degli assi e dichiararlo sarebbe
+   inventarlo» e' superata: il `ResolvedCrs` porta il PROJJSON canonico
+   d'autorita' — lo stesso oggetto con cui il kernel ha riproiettato — e
+   `axis_order`/`srid` sono DEDOTTI da esso
+   (`ResolvedCrs::authority_axis_order`/`authority_srid` in plenora-core;
+   la mappa e' solo direzioni degli assi + `kind` → variante, nessuna
+   tabella di CRS hardcoded). Dedurre da un'autorita' non e' inventare;
+   `unknown` resta l'onesta' quando la definizione non determina gli assi
+   (stub, forme degradate, direzioni non riconosciute). La deduzione e'
+   COMPLETAMENTO DELL'ASSENTE (R2.7), mai arbitrato: la lineage presente
+   vince sempre — il guard R2.6 di `canonical_output_schema` preserva
+   `axis_order`/`srid` di lineage qualunque sia il valore emesso (la
+   deduzione non deve mai trasformarsi in falso conflitto su un
+   passthrough); il caso reproject funziona perche' `analyze_reproject`
+   rimuove le chiavi ereditate e il dedotto riempie l'assente. `reproject`
+   resta l'unico scrittore autorizzato del blocco CRS. La classe e' chiusa
+   nel corpo condiviso `insert_resolved_crs_keys`: `reproject`,
+   `from_coords`, `ResolvedByDecision` e trasporto legacy — quest'ultimo
+   deduce solo `srid` dalla forma `authority:code` (`authority_code_srid`
+   in plenora-core, unica fonte di parsing, gia' duplicata nella CLI) con
+   il limite dichiarato che `axis_order` resta `unknown` (il trasporto non
+   risolve la definizione e non puo' dedurre gli assi onestamente).
+   Classificazione del comportamento precedente: perdita di informazione
+   obbligatoria R4.2 (un `axis_order` deducibile emesso come `unknown`, uno
+   `srid` deducibile omesso), NON un hazard — il dato emesso era onesto,
+   solo incompleto. Posizione owner ratificata 2026-07-31.
 
 ## Forzature note (dichiarate)
 
@@ -275,6 +303,28 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   fingerprint escludeva gia' FieldId e proprieta').
 
 ## Stato di attuazione
+
+- **Deduzione `axis_order`/`srid` dalla definizione canonica d'autorita'
+  (attuata, 2026-07-31 — emendamento alla decisione 8, completamento
+  R4.2/R4.5)**: `ResolvedCrs::authority_axis_order`/`authority_srid` in
+  `plenora-core/src/crs.rs` (direzioni degli assi PROJJSON + `kind` →
+  variante, `id` d'autorita' → codice numerico; nessuna tabella hardcoded);
+  cascata di completamento DELL'ASSENTE in
+  `arrow_adapter::insert_resolved_crs_keys` (dettaglio esplicito →
+  deduzione → `unknown`/assente, R2.7 mai arbitrato); guard R2.6 di
+  `canonical_output_schema` esteso: la lineage presente vince sempre su
+  `axis_order`/`srid`, qualunque sia il valore emesso. Classe chiusa nel
+  corpo condiviso: `reproject` (via strip + riempimento dell'assente),
+  `from_coords`, `ResolvedByDecision` e trasporto legacy
+  (`srid` da `authority_code_srid` — parsing spostato in plenora-core,
+  la CLI delega — con il limite dichiarato `axis_order = unknown`). Il
+  comportamento precedente (`unknown`/`None` su CRS d'autorita') era
+  perdita di informazione obbligatoria R4.2, NON hazard. Test: unit in
+  `crs.rs` (PROJJSON realistici 4326/CRS84/32632, custom senza `id`, senza
+  `coordinate_system`, forme degradate), emissione in `arrow_adapter`
+  (deduzione, dettaglio vincente, stub preservato, legacy con limite),
+  fusione output in `executor/tests.rs` (campo senza lineage → dedotto;
+  lineage presente → preservata senza R2.6).
 
 - **Op che riscrivono fatti canonici (attuata, 2026-07-30 — decisione 8)**:
   mappa tipi di output per-op in `analyze/dispatch.rs`

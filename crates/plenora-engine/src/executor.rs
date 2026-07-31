@@ -160,7 +160,7 @@ use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{
     batch_geometry_cells, canonical_geometry_metadata, canonical_schema_version_metadata,
     decode_geometry_cell, strip_decided_crs_declarations, GeometryMetadataDetails,
-    PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+    PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_SRID_KEY,
 };
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
@@ -900,11 +900,15 @@ impl Iterator for EdgeStream {
 /// - per ogni `GeometryColumnContract` del contratto, le chiavi di
 ///   [`canonical_geometry_metadata`] sono fuse nel metadata del campo
 ///   omonimo. `GeometryMetadataDetails::default()` (nessun dettaglio
-///   opzionale modellato dal contratto) implica `axis_order = unknown`: la
-///   chiave e' obbligatoria quando un CRS e' presente e `unknown` e' il
-///   valore canonico dichiarato dalla tabella §2 — `ResolvedCrs` non porta
-///   l'ordine degli assi e dichiararlo sarebbe inventarlo (R5.2 riguarda le
-///   chiavi opzionali, che restano assenti);
+///   opzionale modellato dal contratto) attiva la cascata di completamento
+///   DELL'ASSENTE (R2.7, ADR-0009 emendamento 2026-07-31): `axis_order` e
+///   `srid` sono DEDOTTI dalla definizione canonica d'autorita'
+///   ([`ResolvedCrs::authority_axis_order`]/[`ResolvedCrs::authority_srid`]
+///   — lo stesso oggetto con cui il kernel ha operato; deduzione da
+///   autorita', non invenzione) e `axis_order` vale `unknown` solo quando
+///   neanche la definizione determina gli assi — `unknown` resta l'onesta',
+///   non il default pigro (R5.2 riguarda le chiavi opzionali, che restano
+///   assenti);
 /// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
 ///   schema) con valore DIVERSO da quello imposto dal contratto e' un
 ///   errore, mai una sovrascrittura silenziosa; valore uguale e'
@@ -916,10 +920,13 @@ impl Iterator for EdgeStream {
 ///   (`analyze_reproject` / `with_geometry_types` rimuovono le chiavi
 ///   ereditate), e qui sono ri-emesse dal contratto come ogni altra. Per
 ///   tutte le chiavi non riscritte il guard resta intatto. Eccezioni
-///   dichiarate: `axis_order = unknown` non e' una
-///   dichiarazione ma l'assenza di una (il `DataContract` non modella
-///   l'ordine degli assi, ADR-0009) — una chiave `axis_order` gia'
-///   presente e' informazione della lineage (R2.4/R2.7) e resta;
+///   dichiarate: `axis_order` e `srid` sono
+///   per completamento dell'assente (R2.7, mai arbitrato) — una chiave
+///   di lineage PRESENTE vince sempre, qualunque sia il valore emesso dal
+///   contratto (anche un valore dedotto dall'autorita': la deduzione non
+///   deve mai trasformarsi in conflitto R2.6 su un passthrough; prima
+///   dell'emendamento 2026-07-31 lo skip copriva solo `axis_order =
+///   unknown`, l'unico valore emesso possibile allora);
 ///   `crs_resolution = resolved` preesistente e' corretta in
 ///   `declared_unresolved` quando il contratto porta un'incoerenza rilevata
 ///   (R4.6.4: mai silenziarla propagando la dichiarazione `resolved` che
@@ -968,13 +975,17 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
         for (key, value) in &canonical {
             match metadata.get(key) {
                 Some(existing) if existing != value => {
-                    // `axis_order = unknown` non e' una dichiarazione ma
-                    // l'ASSENZA di una (il DataContract non modella
-                    // l'ordine degli assi, ADR-0009): una chiave gia'
-                    // presente e' informazione della lineage (R2.4), non
-                    // una divergenza — R2.7 completa solo l'assente, mai
-                    // arbitra. Resta il valore dichiarato dall'ingresso.
-                    if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY && value == "unknown" {
+                    // `axis_order` e `srid` sono per completamento DELL'ASSENTE
+                    // (R2.7), mai per arbitrato: una chiave di lineage
+                    // PRESENTE vince sempre, qualunque sia il valore emesso —
+                    // anche un valore dedotto dalla definizione d'autorita'
+                    // (ADR-0009, emendamento 2026-07-31): la deduzione riempie
+                    // solo le chiavi assenti e non deve mai trasformarsi in
+                    // un falso conflitto R2.6 su un passthrough (R2.4: la
+                    // dichiarazione del produttore resta). Prima
+                    // dell'emendamento lo skip copriva solo
+                    // `axis_order = unknown`, allora unico valore possibile.
+                    if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY || key == PLENORA_GEOMETRY_SRID_KEY {
                         continue;
                     }
                     // R4.6.4: un centro che ha rilevato un'incoerenza CRS la

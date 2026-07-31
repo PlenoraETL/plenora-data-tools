@@ -438,13 +438,26 @@ mod tests {
 
         // Forma v4 a parita' di input: stesso contratto che la discovery
         // costruirebbe per questa colonna (CRS risolto, dimensions xy,
-        // encoding non dichiarato, tipi non dichiarati).
+        // encoding non dichiarato, tipi non dichiarati). Il canonical porta
+        // l'`id` d'autorita' (forma della risoluzione PROJ): la deduzione
+        // `srid` (ADR-0009, emendamento 2026-07-31) produce 3857 su
+        // ENTRAMBI i percorsi — legacy dalla forma `authority:code` della
+        // definizione, v4 dall'`id` del canonical — e l'identita' regge.
+        // Senza `coordinate_system` anche `axis_order` coincide (`unknown`):
+        // con gli assi presenti il v4 dedurrebbe mentre il legacy resta
+        // `unknown` — LIMITE DICHIARATO del trasporto legacy (coperto dai
+        // test di `arrow_adapter`), per questo la forma di questo fixture
+        // non porta gli assi.
         let contract = GeometryColumnContract {
             field_id: FieldId(0),
             name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
             crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
                 CRS.to_owned(),
-                serde_json::Value::Null,
+                serde_json::json!({
+                    "type": "ProjectedCRS",
+                    "name": "WGS 84 / Pseudo-Mercator",
+                    "id": {"authority": "EPSG", "code": 3857},
+                }),
                 CrsKind::Projected,
                 Some(1.0),
             )),
