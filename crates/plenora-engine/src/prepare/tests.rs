@@ -35,11 +35,20 @@ fn table_contract() -> DataContract {
     ])))
 }
 
+/// Come in `planner::tests`: il marcatore `geoarrow.wkb` rende la colonna
+/// identificabile dal check di analyze (ADR-0009, decisione 8).
+fn wkb_geometry_field(name: &str) -> Field {
+    Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
+        plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+        plenora_kernels_geo::arrow_adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+    )]))
+}
+
 fn geo_contract() -> DataContract {
     DataContract::new(
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("geom", DataType::Binary, true),
+            wkb_geometry_field("geom"),
         ])),
         vec![GeometryColumnContract {
             field_id: FieldId(3),

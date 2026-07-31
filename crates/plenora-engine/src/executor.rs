@@ -901,7 +901,15 @@ impl Iterator for EdgeStream {
 /// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
 ///   schema) con valore DIVERSO da quello imposto dal contratto e' un
 ///   errore, mai una sovrascrittura silenziosa; valore uguale e'
-///   idempotente. Eccezioni dichiarate: `axis_order = unknown` non e' una
+///   idempotente. Le chiavi che l'operazione RISCRIVE di mestiere (ADR-0009,
+///   decisione 8 — il blocco CRS per `reproject`, `types`/
+///   `types_declaration` per le trasformazioni che cambiano il tipo
+///   geometrico) non passano MAI di qui come divergenze: la sostituzione
+///   avviene a monte, nel contratto prodotto dall'analisi
+///   (`analyze_reproject` / `with_geometry_types` rimuovono le chiavi
+///   ereditate), e qui sono ri-emesse dal contratto come ogni altra. Per
+///   tutte le chiavi non riscritte il guard resta intatto. Eccezioni
+///   dichiarate: `axis_order = unknown` non e' una
 ///   dichiarazione ma l'assenza di una (il `DataContract` non modella
 ///   l'ordine degli assi, ADR-0009) — una chiave `axis_order` gia'
 ///   presente e' informazione della lineage (R2.4/R2.7) e resta;

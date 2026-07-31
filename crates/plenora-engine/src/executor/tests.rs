@@ -11,8 +11,9 @@ use serde_json::json;
 use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions, GeometryEncoding,
+    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
+    GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
+    GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -25,6 +26,7 @@ use plenora_kernels_geo::arrow_adapter::{
     PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
     PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
+    PLENORA_GEOMETRY_TYPES_KEY,
 };
 
 use super::*;
@@ -1173,6 +1175,225 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
     if let Some(geo) = metadata.get(GEO_METADATA_KEY) {
         assert!(!geo.contains("crs"), "geo.crs della sorgente rimosso: {geo}");
     }
+}
+
+#[test]
+fn canonical_output_schema_emits_rewritten_types_from_contract() {
+    // ADR-0009 decisione 8: il contratto di un type-changer (es. centroid)
+    // dichiara i tipi dell'OUTPUT; la fusione li emette dal contratto.
+    let mut contract = geo_contract();
+    contract.geometries[0].types = ContractProperty::new(
+        PropertyConfidence::Declared(
+            GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point])
+                .expect("coerenza R3.4.1"),
+        ),
+        PropertyScope::Schema,
+    );
+    let merged = canonical_output_schema(&contract).expect("fusione canonica");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY).map(String::as_str),
+        Some("exact")
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
+        Some("point")
+    );
+}
+
+#[test]
+fn canonical_output_schema_stays_fail_closed_on_divergent_types_key() {
+    // Regressione R2.6: la sostituzione delle chiavi riscritte avviene a
+    // monte (analyze); una chiave `types` preesistente DIVERGENTE dal
+    // contratto resta un errore, mai una sovrascrittura silenziosa.
+    let mut contract = geo_contract();
+    contract.geometries[0].types = ContractProperty::new(
+        PropertyConfidence::Declared(
+            GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
+                .expect("coerenza R3.4.1"),
+        ),
+        PropertyScope::Schema,
+    );
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+                    "exact".to_owned(),
+                );
+                metadata.insert(PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "point".to_owned());
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    assert!(matches!(
+        canonical_output_schema(&contract),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn canonical_only_input_geometry_executes_and_emits_output_types() {
+    // Minori 1+2 + reperto 1, end-to-end: la colonna geometria si dichiara
+    // con le SOLE chiavi canoniche (niente `ARROW:extension:name`, niente
+    // metadato `geo`) — accettata in validazione (mai un rifiuto a meta'
+    // esecuzione), eseguita, e l'output dichiara i tipi dell'operazione
+    // (`centroid` -> `point`/`exact`).
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("geom", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([
+                (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
+                (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+                (
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    "resolved".to_owned(),
+                ),
+                (PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned()),
+                (
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "unknown".to_owned(),
+                ),
+            ]),
+        ),
+    ]));
+    let mut contract = geo_contract();
+    contract.schema = schema.clone();
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "c", "op": "geo.centroid", "in": ["main"], "config": {}},
+        ],
+        "output": "c",
+    });
+    let cells = [point_wkb(1.0, 2.0), point_wkb(3.0, 4.0)];
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| Some(cell.as_slice())).collect();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch canonica-only");
+    let inputs = single_input("main", vec![batch]);
+    let output = run(&plan, inputs, &[("main".to_owned(), contract)]).expect("execute");
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    output.write_ipc_file(&destination).expect("publish");
+
+    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
+        .expect("lettore IPC");
+    let out_schema = reader.schema();
+    let metadata = out_schema
+        .field_with_name("geom")
+        .expect("geom")
+        .metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY).map(String::as_str),
+        Some("exact"),
+        "i tipi dell'output sono quelli dell'operazione, non dell'input"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
+        Some("point")
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:32632"),
+        "CRS preservato dal centroid"
+    );
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn reproject_replaces_canonical_crs_keys_end_to_end() {
+    // Reperto 2, end-to-end: il campo di input porta le chiavi canoniche
+    // della SORGENTE (`crs_id=EPSG:32632`, `srid`, `axis_order`); il
+    // contratto validato dice il target. Prima del fix il guard R2.6
+    // rifiutava l'output; ora la sostituzione avviene nel contratto
+    // (analyze) e l'esecuzione arriva in fondo.
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        geometry_output_field("geom", "EPSG:32632")
+            .expect("campo geometria")
+            .with_metadata({
+                let mut metadata = geometry_output_field("geom", "EPSG:32632")
+                    .expect("campo geometria")
+                    .metadata()
+                    .clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    "resolved".to_owned(),
+                );
+                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned());
+                metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "easting_northing".to_owned(),
+                );
+                metadata
+            }),
+    ]));
+    let mut contract = geo_contract();
+    contract.schema = schema.clone();
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "p", "op": "geo.reproject", "in": ["main"],
+             "config": {"target_crs": "EPSG:4326"}},
+        ],
+        "output": "p",
+    });
+    let cells = [point_wkb(500000.0, 4649776.0)];
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| Some(cell.as_slice())).collect();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch reproject");
+    let inputs = single_input("main", vec![batch]);
+    let output = run(&plan, inputs, &[("main".to_owned(), contract)]).expect("execute");
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    output.write_ipc_file(&destination).expect("publish");
+
+    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
+        .expect("lettore IPC");
+    let out_schema = reader.schema();
+    let metadata = out_schema
+        .field_with_name("geom")
+        .expect("geom")
+        .metadata();
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        Some("EPSG:4326"),
+        "il CRS emesso e' il target, non la sorgente"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    assert!(
+        !metadata.contains_key(PLENORA_GEOMETRY_SRID_KEY),
+        "srid della sorgente sostituito, non propagato"
+    );
+    let geo = metadata.get(GEO_METADATA_KEY).expect("geo metadata");
+    assert!(geo.contains("EPSG:4326"), "geo.crs legacy al target: {geo}");
 }
 
 #[test]

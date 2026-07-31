@@ -1308,3 +1308,238 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     assert_eq!(out_cells.value(0), cells[1].as_deref().expect("cella 1"));
     assert_eq!(out_cells.value(1), cells[2].as_deref().expect("cella 2"));
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0009 decisione 8: op che riscrivono fatti canonici (CRS di `reproject`,
+// tipi geometrici dei type-changer) — sostituzione, mai conflitto R2.6.
+// Minore 1/2: colonna geometria identificata dalle sole chiavi canoniche.
+// ---------------------------------------------------------------------------
+
+/// Fixture: `id` Int64 + colonna `geometry` GeoArrow-WKB con CRS EPSG:32632 e
+/// chiavi canoniche CRS complete (crs_resolution/crs_id/srid/axis_order).
+#[cfg(feature = "proj-backend")]
+fn canonical_crs_schema() -> SchemaRef {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let metadata = std::collections::HashMap::from([
+        (
+            adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+            adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+        ),
+        (
+            adapter::GEO_METADATA_KEY.to_owned(),
+            r#"{"crs":"EPSG:32632","dimensions":"xy"}"#.to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+            "xy".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+            "resolved".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+            "EPSG:32632".to_owned(),
+        ),
+        (adapter::PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned()),
+        (
+            adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+            "easting_northing".to_owned(),
+        ),
+    ]);
+    let schema_metadata = std::collections::HashMap::from([(
+        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+        "1".to_owned(),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+        ],
+        schema_metadata,
+    ))
+}
+
+/// Fixture: `id` Int64 + colonna `geometry` identificata dalle SOLE chiavi
+/// canoniche (niente `ARROW:extension:name`, niente metadato `geo`).
+#[cfg(feature = "proj-backend")]
+fn canonical_only_schema() -> SchemaRef {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let metadata = std::collections::HashMap::from([
+        (
+            adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+            "xy".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+            "wkb".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+            "resolved".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+            "EPSG:32632".to_owned(),
+        ),
+        (
+            adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+            "unknown".to_owned(),
+        ),
+    ]);
+    let schema_metadata = std::collections::HashMap::from([(
+        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
+        "1".to_owned(),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+        ],
+        schema_metadata,
+    ))
+}
+
+#[cfg(feature = "proj-backend")]
+fn write_fixture_batch(path: &std::path::Path, schema: SchemaRef) {
+    let cells = vec![
+        Some(point_wkb_le(500000.0, 4649776.0)),
+        Some(point_wkb_le(500100.0, 4649876.0)),
+    ];
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch fixture");
+    write_ipc(path, &schema, &[batch]);
+}
+
+#[cfg(feature = "proj-backend")]
+fn run_plan(
+    directory: &std::path::Path,
+    plan: &serde_json::Value,
+    schema: SchemaRef,
+) -> std::path::PathBuf {
+    let plan_path = directory.join("plan.json");
+    let input = directory.join("input.arrow");
+    let output_path = directory.join("output.arrow");
+    std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
+    write_fixture_batch(&input, schema);
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan_path)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    output_path
+}
+
+/// Reperto 2, end-to-end: `geo.reproject` con chiavi canoniche della sorgente
+/// sul campo — il contratto dice il target e l'esecuzione arriva in fondo
+/// (prima il guard R2.6 rifiutava l'output).
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_reproject_replaces_canonical_crs_keys() {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "p", "op": "geo.reproject", "in": ["main"],
+             "config": {"target_crs": "EPSG:4326"}},
+        ],
+        "output": "p",
+    });
+    let output_path = run_plan(directory.path(), &plan, canonical_crs_schema());
+
+    let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
+        .expect("reader");
+    let out_schema = reader.schema();
+    let (_, geometry_field) = out_schema
+        .column_with_name("geometry")
+        .expect("colonna geometria");
+    let metadata = geometry_field.metadata();
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY),
+        Some(&"EPSG:4326".to_owned()),
+        "il CRS emesso e' il target"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
+        Some(&"resolved".to_owned())
+    );
+    assert!(
+        !metadata.contains_key(adapter::PLENORA_GEOMETRY_SRID_KEY),
+        "srid della sorgente sostituito, non propagato"
+    );
+    assert!(
+        !metadata.contains_key(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            || metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+                == Some(&"unknown".to_owned()),
+        "axis_order della sorgente non sopravvive"
+    );
+    let geo = metadata
+        .get(adapter::GEO_METADATA_KEY)
+        .expect("geo metadata");
+    assert!(geo.contains("EPSG:4326"), "geo.crs legacy al target: {geo}");
+}
+
+/// Minori 1+2 + reperto 1, end-to-end: tabella la cui colonna geometria si
+/// dichiara con le sole chiavi canoniche — accettata (estensione ammessa,
+/// non richiesta), eseguita, e l'output dichiara i tipi dell'operazione.
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "c", "op": "geo.centroid", "in": ["main"], "config": {}},
+        ],
+        "output": "c",
+    });
+    let output_path = run_plan(directory.path(), &plan, canonical_only_schema());
+
+    let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
+        .expect("reader");
+    let out_schema = reader.schema();
+    let (_, geometry_field) = out_schema
+        .column_with_name("geometry")
+        .expect("colonna geometria");
+    let metadata = geometry_field.metadata();
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+        Some(&"exact".to_owned()),
+        "i tipi emessi sono quelli dell'operazione"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_TYPES_KEY),
+        Some(&"point".to_owned()),
+        "centroid -> point"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY),
+        Some(&"EPSG:32632".to_owned()),
+        "CRS preservato"
+    );
+    // Le righe ci sono tutte (esecuzione completata, mai un rifiuto a meta').
+    let rows: usize = reader
+        .map(|batch| batch.expect("batch").num_rows())
+        .sum();
+    assert_eq!(rows, 2);
+}

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::contract::{
-    ContractProperties, DataContract, GeometryColumnContract, GeometryDimensions, GeometryEncoding,
+    ContractProperties, ContractProperty, DataContract, GeometryColumnContract, GeometryDimensions,
+    GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -118,6 +119,89 @@ pub(in crate::analyze) fn single_geometry<'a>(op: &str, input: &'a DataContract)
         )));
     }
     Ok(&input.geometries[0])
+}
+
+/// Identificazione della colonna geometria sul campo dello schema
+/// (ADR-0009, decisione 8).
+///
+/// Estensione `geoarrow.wkb` OPPURE sole chiavi canoniche
+/// (`plenora.geometry.*`), lo stesso criterio del trasporto
+/// ([`crate::arrow_adapter::field_declares_wkb_geometry`]). Il rifiuto vive
+/// QUI, in analisi del piano — il modello e' il rifiuto dimensionale B1.3 di
+/// [`require_xy_dimensions`]: una colonna che il trasporto non saprebbe
+/// identificare e' fermata a compile-plan, mai scoperta a meta' esecuzione
+/// (ADR-0008).
+pub(in crate::analyze) fn require_identifiable_geometry(
+    op: &str,
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+) -> Result<()> {
+    let field = input
+        .schema
+        .field_with_name(&geometry.name)
+        .map_err(|_| {
+            PlenoraError::Schema(format!(
+                "{op}: colonna geometria `{}` assente dallo schema",
+                geometry.name
+            ))
+        })?;
+    if crate::arrow_adapter::field_declares_wkb_geometry(field) {
+        return Ok(());
+    }
+    Err(PlenoraError::Schema(format!(
+        "{op}: colonna geometria `{}` non identificabile come geometria WKB: mancano \
+         sia l'estensione `geoarrow.wkb` sia le chiavi canoniche `plenora.geometry.*`",
+        geometry.name
+    )))
+}
+
+/// Contratto di output di un'operazione che RISCRIVE i tipi geometrici
+/// della colonna (ADR-0009, decisione 8).
+///
+/// La proprieta' `types` dichiara i tipi dell'OUTPUT e le chiavi canoniche
+/// `types`/`types_declaration` ereditate dal campo di input sono rimosse —
+/// l'emissione (`executor.rs::canonical_output_schema`) le ri-emette dal
+/// contratto, senza conflitto R2.6 con la lineage. Tutto il resto e'
+/// preservato (stessi campi, stesso `FieldId`: trasformazione in place).
+pub(in crate::analyze) fn with_geometry_types(
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+    types: GeometryTypesProperty,
+) -> Result<DataContract> {
+    let fields: Vec<Field> = input
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == &geometry.name {
+                let mut metadata = field.metadata().clone();
+                crate::arrow_adapter::strip_rewritten_types_declarations(&mut metadata);
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    let mut geometries = input.geometries.clone();
+    let Some(target) = geometries
+        .iter_mut()
+        .find(|candidate| candidate.field_id == geometry.field_id)
+    else {
+        return Err(PlenoraError::Internal(format!(
+            "colonna geometria `{}` assente dal contratto",
+            geometry.name
+        )));
+    };
+    target.types = ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema);
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        )),
+        geometries,
+        input.active_geometry,
+        input.properties.clone(),
+    )
 }
 
 pub(in crate::analyze) fn output_fields(input: &DataContract) -> Vec<Field> {

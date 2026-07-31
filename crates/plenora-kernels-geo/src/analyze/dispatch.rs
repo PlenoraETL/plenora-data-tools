@@ -6,6 +6,7 @@ use plenora_core::arrow::{DataType, Field};
 use plenora_core::catalog::OperationDescriptor;
 use plenora_core::contract::{
     ContractCrs, ContractProperties, DataContract, FieldAllocator, GeometryColumnContract,
+    GeometryType, GeometryTypesProperty, TypesDeclaration,
 };
 use plenora_core::crs::{validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -20,7 +21,8 @@ use super::config::{
 use super::helpers::{
     ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive, ensure_ratio,
     invalid_param, merge_schema_metadata, output_fields, output_name, parse_config, rebuild,
-    require_xy_dimensions, short_id, single_geometry, validate_other_wkb, with_schema_metadata,
+    require_identifiable_geometry, require_xy_dimensions, short_id, single_geometry,
+    validate_other_wkb, with_geometry_types, with_schema_metadata,
 };
 use super::measures::{
     analyze_bounds, analyze_diagnostics, analyze_geometry_accessors, analyze_line_locate_point,
@@ -176,6 +178,76 @@ pub(in crate::analyze) fn analyze_unary_pair(op: &str, input: &DataContract, con
     analyze_add_column(op, input, name, data_type)
 }
 
+/// Proprieta' `exact` della mappa tipi di output: le liste della mappa sono
+/// statiche e note rispettare R3.4.1; un fallimento di costruzione e' una
+/// invariante interna violata, mai un errore dell'utente.
+fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
+    GeometryTypesProperty::new(TypesDeclaration::Exact, types).map_err(|error| {
+        PlenoraError::Internal(format!("mappa tipi di output incoerente: {error}"))
+    })
+}
+
+/// Tipi geometrici dell'output delle trasformazioni 1:1 in place (mappa
+/// per-op, ADR-0009 decisione 8).
+///
+/// Un op che cambia il tipo dichiara i tipi dell'OUTPUT, mai quelli
+/// dell'input: `Some` per le op che cambiano il tipo, `None` per quelle a
+/// tipo preservato (propagazione identity-preserving, corretta com'e').
+/// Insiemi verificati contro i kernel:
+///
+/// - `centroid`, `point_on_surface`, `line_interpolate_point`: sempre
+///   `Point` (il vuoto e' errore o cella null, mai un altro tipo);
+/// - `convex_hull`: sempre `Polygon` (il kernel avvolge il risultato in
+///   `Geometry::Polygon`, anche degenere/vuoto);
+/// - `concave_hull`: sempre `Polygon` (NON tipo-preservato: l'hull delle
+///   coordinate e' costruito come poligono);
+/// - `envelope`: `Point` (degenere su un punto), `LineString` (degenere su
+///   una coordinata) o `Polygon`;
+/// - `line_substring`: `Point` (frazioni coincidenti o linea di lunghezza
+///   zero) o `LineString`;
+/// - `buffer`: sempre `MultiPolygon` (forma unica del kernel);
+/// - `boundary`: `MultiPoint` (estremi di linee), `MultiLineString`
+///   (anelli di poligoni) o `GeometryCollection` (punti, collezioni);
+/// - `make_valid`: `mixed` senza elenco — l'output dipende dalla
+///   riparazione GEOS cella-per-cella (un input valido passa invariato, uno
+///   invalido puo' cambiare tipo anche con `keep_collapsed`): l'insieme non
+///   e' enumerabile a secco e la colonna ammette tipi diversi PER
+///   DICHIARAZIONE (R3.4.1), che e' informazione onesta, non `unresolved`.
+fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
+    match op {
+        "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
+            exact_types(vec![GeometryType::Point]).map(Some)
+        }
+        "geo.convex_hull" | "geo.concave_hull" => exact_types(vec![GeometryType::Polygon]).map(Some),
+        "geo.envelope" => exact_types(vec![
+            GeometryType::Point,
+            GeometryType::LineString,
+            GeometryType::Polygon,
+        ])
+        .map(Some),
+        "geo.line_substring" => {
+            exact_types(vec![GeometryType::Point, GeometryType::LineString]).map(Some)
+        }
+        "geo.buffer" => exact_types(vec![GeometryType::MultiPolygon]).map(Some),
+        "geo.boundary" => exact_types(vec![
+            GeometryType::MultiPoint,
+            GeometryType::MultiLineString,
+            GeometryType::GeometryCollection,
+        ])
+        .map(Some),
+        "geo.make_valid" => GeometryTypesProperty::new(TypesDeclaration::Mixed, Vec::new())
+            .map(Some)
+            .map_err(|error| {
+                PlenoraError::Internal(format!("mappa tipi di output incoerente: {error}"))
+            }),
+        "geo.simplify" | "geo.affine_transform" | "geo.translate" | "geo.scale" | "geo.rotate"
+        | "geo.densify" | "geo.snap_to_grid" => Ok(None),
+        _ => Err(PlenoraError::Internal(format!(
+            "transform_output_types: `{op}` non e' una trasformazione 1:1"
+        ))),
+    }
+}
+
 /// Inferenza per le operazioni unarie (tutto tranne `from_coords` e le
 /// binarie, gestite altrove). `fields` alloca i `FieldId` delle op v1.3 che
 /// creano una nuova colonna geometria.
@@ -191,6 +263,10 @@ pub(in crate::analyze) fn analyze_unary(
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let geometry = single_geometry(op, input)?;
+    // ADR-0009 decisione 8: la colonna deve essere identificabile dal
+    // trasporto (estensione `geoarrow.wkb` o sole chiavi canoniche) —
+    // rifiuto a compile-plan, mai a meta' esecuzione (ADR-0008).
+    require_identifiable_geometry(op, input, geometry)?;
     // B1.3: ogni op unaria che consuma una geometria la decodifica in XY —
     // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
     require_xy_dimensions(op, geometry)?;
@@ -198,7 +274,9 @@ pub(in crate::analyze) fn analyze_unary(
         PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
     })?;
     match op {
-        // Trasformazioni 1:1 in place: schema e FieldId invariati.
+        // Trasformazioni 1:1 in place: schema e FieldId invariati; le op
+        // che CAMBIANO il tipo geometrico dichiarano i tipi dell'output
+        // (ADR-0009 decisione 8, `transform_output_types`).
         "geo.centroid" | "geo.convex_hull" | "geo.envelope" | "geo.boundary"
         | "geo.point_on_surface" | "geo.make_valid" | "geo.buffer" | "geo.simplify"
         | "geo.affine_transform" | "geo.translate" | "geo.scale" | "geo.rotate"
@@ -206,7 +284,10 @@ pub(in crate::analyze) fn analyze_unary(
         | "geo.line_interpolate_point" => {
             validate_transform_params(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            Ok(input.clone())
+            transform_output_types(op)?.map_or_else(
+                || Ok(input.clone()),
+                |types| with_geometry_types(input, geometry, types),
+            )
         }
         "geo.reproject" => analyze_reproject(op, input, geometry, config, plan_crs),
         "geo.area" | "geo.length" | "geo.perimeter" | "geo.geodesic_line_length"
@@ -258,14 +339,23 @@ pub(in crate::analyze) fn analyze_unary(
                 }
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            Ok(input.clone())
+            // ADR-0009 decisione 8: le celle di Voronoi sono sempre poligoni
+            // (l'input puntuale non e' il tipo dell'output).
+            with_geometry_types(input, geometry, exact_types(vec![GeometryType::Polygon])?)
         }
         "geo.clean_topology" => {
             let parsed: CleanTopologyConfig = parse_config(op, config)?;
             ensure_non_negative(op, "snap_tolerance", parsed.snap_tolerance)?;
             let _ = (&parsed.remove_overlaps, &parsed.fill_gaps);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            Ok(input.clone())
+            // ADR-0009 decisione 8: input poligonale, output poligonale — ma
+            // la rimozione degli overlap (differenza) puo' spezzare un
+            // `Polygon` in `MultiPolygon`: insieme noto, dichiarazione exact.
+            with_geometry_types(
+                input,
+                geometry,
+                exact_types(vec![GeometryType::Polygon, GeometryType::MultiPolygon])?,
+            )
         }
         "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder" | "geo.line_merge" => {
             let _: EmptyConfig = parse_config(op, config)?;
@@ -340,6 +430,10 @@ pub(in crate::analyze) fn analyze_binary(
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
+    // ADR-0009 decisione 8 (come per le unarie): identificabilita' della
+    // colonna verificata a compile-plan su entrambi gli operandi.
+    require_identifiable_geometry(op, left, left_geometry)?;
+    require_identifiable_geometry(op, right, right_geometry)?;
     // B1.3: come per le unarie — entrambi gli operandi devono essere XY.
     require_xy_dimensions(op, left_geometry)?;
     require_xy_dimensions(op, right_geometry)?;
@@ -356,10 +450,12 @@ pub(in crate::analyze) fn analyze_binary(
     let output = match op {
         // Schema left invariato, geometria sostituita in place; righe
         // allineate a left nel protocollo legacy: proprieta' preservate.
+        // ADR-0009 decisione 8: le booleane poligonali producono sempre
+        // `MultiPolygon` (forma unica del kernel), non il tipo di left.
         "geo.clip" | "geo.intersection" | "geo.union" | "geo.difference"
         | "geo.symmetric_difference" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            Ok(left.clone())
+            with_geometry_types(left, left_geometry, exact_types(vec![GeometryType::MultiPolygon])?)
         }
         "geo.within" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;

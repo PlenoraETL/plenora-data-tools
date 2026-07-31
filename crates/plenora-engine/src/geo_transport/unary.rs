@@ -58,8 +58,9 @@ use super::transport::{
     PARENT_INDEX_COLUMN, WKT_COLUMN,
 };
 use plenora_kernels_geo::arrow_adapter::{
-    canonical_geometry_metadata_for_resolved_definition, GeometryMetadataDetails,
-    PLENORA_CONTRACT_VERSION, PLENORA_CONTRACT_VERSION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
+    canonical_geometry_metadata_for_resolved_definition, field_declares_wkb_geometry,
+    GeometryMetadataDetails, PLENORA_CONTRACT_VERSION, PLENORA_CONTRACT_VERSION_KEY,
+    PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
 #[cfg(feature = "geos-backend")]
 use super::transport::MAX_NODING_WORK;
@@ -82,8 +83,12 @@ pub(in crate::geo_transport) fn geometry_column_index(schema: &Schema, name: &st
             actual: field.data_type().to_string(),
         });
     }
-    let extension = field.metadata().get(GEOARROW_EXTENSION_KEY);
-    if extension.map(String::as_str) != Some(GEOARROW_WKB_EXTENSION) {
+    // ADR-0009 decisione 8: estensione `geoarrow.wkb` OPPURE sole chiavi
+    // canoniche — criterio condiviso con analyze (stessa funzione), cosi' il
+    // rifiuto a compile-plan e l'accettazione a esecuzione non possono
+    // divergere. Piani validati non arrivano mai qui con una colonna non
+    // identificabile: il check resta come difesa in profondita'.
+    if !field_declares_wkb_geometry(field) {
         return Err(ArrowTransportError::MissingGeoArrowMetadata(
             name.to_owned(),
         ));
@@ -2429,6 +2434,38 @@ mod tests {
             .iter()
             .map(|cell| cell.as_deref())
             .collect::<BinaryArray>()
+    }
+
+    /// Minore 1 (ADR-0009 decisione 8): la colonna si identifica anche con
+    /// le sole chiavi canoniche — l'estensione `geoarrow.wkb` e' ammessa,
+    /// non richiesta. Difesa in profondita': i piani validati non arrivano
+    /// qui con colonne non identificabili (il rifiuto e' in analyze).
+    #[test]
+    fn geometry_column_index_accepts_canonical_only_and_rejects_unmarked() {
+        let canonical_only = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geom", DataType::Binary, true).with_metadata(
+                std::collections::HashMap::from([
+                    (
+                        plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY
+                            .to_owned(),
+                        "xy".to_owned(),
+                    ),
+                    (
+                        plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_ENCODING_KEY
+                            .to_owned(),
+                        "wkb".to_owned(),
+                    ),
+                ]),
+            ),
+        ]);
+        assert_eq!(geometry_column_index(&canonical_only, "geom").expect("canonica-only"), 1);
+
+        let bare = Schema::new(vec![Field::new("geom", DataType::Binary, true)]);
+        assert!(matches!(
+            geometry_column_index(&bare, "geom"),
+            Err(ArrowTransportError::MissingGeoArrowMetadata(_))
+        ));
     }
 
     /// Riferimento non fuso: `transform_cells` in sequenza, nodo per nodo.

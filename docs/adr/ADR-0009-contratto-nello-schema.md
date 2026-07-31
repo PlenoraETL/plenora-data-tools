@@ -162,6 +162,64 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    chiave, una sola direzione (la direzione opposta non passa di qui: con
    una decisione del piano le dichiarazioni sono gia' state sostituite
    dalla strip).
+8. **Operazioni che riscrivono un fatto canonico: sostituzione a monte,
+   guard R2.6 intatto (attuata 2026-07-30).** R2.6 riguarda descrizioni
+   divergenti DELLO STESSO FATTO; alcune operazioni CAMBIANO il fatto —
+   `geo.reproject` cambia il CRS della colonna, le trasformazioni
+   geometriche possono cambiare il tipo (`geo.centroid` di un poligono
+   produce un punto). Per queste chiavi il contratto validato e'
+   l'autorita' e la chiave ereditata si SOSTITUISCE, non si fonde: la strip
+   avviene a monte, nel contratto di output prodotto dall'analisi
+   (`analyze_reproject` rimuove il blocco CRS canonico della sorgente —
+   `crs_id`, `crs_definition`+formato, `srid`, `axis_order`,
+   `crs_resolution` — con `strip_rewritten_crs_keys`, stesso meccanismo di
+   `strip_decided_crs_declarations`; `with_geometry_types` rimuove
+   `types`/`types_declaration` con `strip_rewritten_types_declarations`), e
+   `canonical_output_schema` le ri-emette dal contratto come ogni altra
+   chiave. Il guard R2.6 NON e' indebolito: su qualunque altra chiave
+   divergente continua a fallire (test di regressione dedicati), e una
+   chiave riscritta che arrivasse comunque divergente (contratto costruito
+   a mano) fallirebbe come prima. Alternativa scartata: marcare nel
+   contratto le chiavi riscritte e insegnare al guard a saltarle — la
+   sostituzione diventava un'eccezione nel punto di controllo invece che un
+   fatto del contratto, e il punto esatto del conflitto (il campo
+   pass-through riusato dall'analisi) restava tale. **Mappa dei tipi di
+   output** (`transform_output_types` in `analyze/dispatch.rs`, verificata
+   contro i kernel): `centroid`/`point_on_surface`/
+   `line_interpolate_point` → `exact [point]`; `convex_hull`/
+   `concave_hull` → `exact [polygon]` (entrambi avvolgono il risultato in
+   `Geometry::Polygon`: `concave_hull` NON e' tipo-preservato); `envelope`
+   → `exact [point,linestring,polygon]` (degeneri); `line_substring` →
+   `exact [point,linestring]`; `buffer` → `exact [multipolygon]` (forma
+   unica del kernel); `boundary` → `exact [multipoint,multilinestring,
+   geometrycollection]`; `make_valid` → `mixed` senza elenco (l'output
+   dipende dalla riparazione GEOS cella-per-cella: la colonna ammette tipi
+   diversi PER DICHIARAZIONE, R3.4.1 — non `unresolved`, che significherebbe
+   «byte non ispezionati» e per costruzione vieta l'elenco); `voronoi` →
+   `exact [polygon]`; `clean_topology` → `exact [polygon,multipolygon]`;
+   le booleane binarie (`clip`/`intersection`/`union`/`difference`/
+   `symmetric_difference`) → `exact [multipolygon]`. Tipo preservato,
+   propagazione invariata: `simplify`, `translate`, `scale`, `rotate`,
+   `affine_transform`, `densify`, `snap_to_grid` (coordinate trasformate,
+   variante geometrica inalterata). **Residuo dichiarato della classe**:
+   le op che aggregano o espandono la geometria (`dissolve`/`collect`/
+   builder/`explode`/`delaunay`/`split`/`subdivide`/`overlay`/`polygonize`/
+   `line_merge`) clonano ancora la dichiarazione tipi dell'input nel
+   contratto di output — il loro insieme di output e' funzione
+   dell'input (espansioni) o dell'aggregazione, non coperto da questo
+   intervento; il meccanismo (`with_geometry_types`) e' pronto per
+   l'estensione. **Identificazione della colonna geometria**: l'estensione
+   `ARROW:extension:name = geoarrow.wkb` e' ammessa, non richiesta — la
+   forma a sole chiavi canoniche (`plenora.geometry.encoding` +
+   `plenora.geometry.dimensions` bastano; criterio: almeno una chiave
+   `plenora.geometry.*`, come in discovery) identifica la colonna
+   (`field_declares_wkb_geometry`, predicato UNICO condiviso da
+   `arrow_adapter::geometry_column_index`, dal trasporto e dal check di
+   analyze, cosi' accettazione a esecuzione e rifiuto a compile-plan non
+   possono divergere); una colonna non identificabile e' rifiutata in
+   ANALISI (`require_identifiable_geometry`, modello B1.3 di
+   `require_xy_dimensions` — ADR-0008: mai a meta' esecuzione), col check
+   del trasporto ridotto a difesa in profondita'.
 
 ## Forzature note (dichiarate)
 
@@ -217,6 +275,21 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   fingerprint escludeva gia' FieldId e proprieta').
 
 ## Stato di attuazione
+
+- **Op che riscrivono fatti canonici (attuata, 2026-07-30 — decisione 8)**:
+  mappa tipi di output per-op in `analyze/dispatch.rs`
+  (`transform_output_types`) con strip delle chiavi ereditate
+  (`with_geometry_types`, `strip_rewritten_types_declarations`),
+  sostituzione delle chiavi CRS in `analyze_reproject`
+  (`strip_rewritten_crs_keys`), predicato di identificazione condiviso
+  (`field_declares_wkb_geometry`: estensione `geoarrow.wkb` o sole chiavi
+  canoniche) e rifiuto in analyze (`require_identifiable_geometry`). Test:
+  sweep su tutte le 75 op (dichiarazione attesa per op), sostituzione su
+  input con tipi dichiarati, preservazione per le op a tipo preservato,
+  strip CRS di `reproject`, rifiuto in analisi vs accettazione
+  canonica-only, regressione R2.6 su chiave divergente, end-to-end
+  (executor: centroid su input canonica-only; executor+CLI con
+  `proj-backend`: `reproject` con chiavi canoniche di sorgente).
 
 - **`DeclaredUnresolved` e decisione nel piano (attuati, 2026-07-30 —
   BLOCK-08 di `release/rc.json`, decisione 7)**: variante
@@ -447,3 +520,26 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   (verificato per delega del wrapper e da test dedicati). I consumatori
   machine-readable della fase ricevono valori piu' precisi; quelli
   testuali non osservano alcuna differenza.
+- **Tipi geometrici dichiarati dalle op che li cambiano (decisione 8,
+  2026-07-30)**. Prima il contratto di output delle trasformazioni 1:1 era
+  `input.clone()`: un `geo.centroid` su `types=polygon/exact` produceva
+  byte `Point` con contratto `polygon/exact` (e la stessa forma ereditata
+  faceva sparare il guard R2.6 in emissione). Ora il contratto dichiara i
+  tipi dell'OUTPUT (mappa per-op verificata contro i kernel, decisione 8)
+  e le chiavi `types`/`types_declaration` ereditate sono sostituite.
+  Conseguenza misurabile: gli output IPC dei type-changer emettono ora
+  `plenora.geometry.types`/`types_declaration` coerenti coi byte (prima:
+  assenti o ereditati).
+- **`geo.reproject` con chiavi canoniche CRS di sorgente: da rifiuto R2.6
+  a sostituzione (decisione 8)**. Prima un campo con `crs_id` (e
+  `srid`/`axis_order`) della sorgente faceva fallire l'emissione (il
+  contratto dice il target). Ora le chiavi CRS ereditate sono sostituite
+  nel contratto di output dell'analisi e ri-emesse dal contratto: il
+  piano esegue e l'output dichiara il target. R2.6 e' invariato per ogni
+  altra chiave.
+- **Colonna geometria a sole chiavi canoniche: da rifiuto a esecuzione ad
+  accettata (decisione 8)**. Prima il trasporto identificava la colonna
+  solo via `ARROW:extension:name` e il rifiuto arrivava a meta'
+  esecuzione; ora la forma canonica-only e' accettata ovunque e una
+  colonna davvero non identificabile e' rifiutata in validazione del
+  piano (analyze), mai a meta' stream (ADR-0008).

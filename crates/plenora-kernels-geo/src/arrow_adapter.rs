@@ -164,13 +164,36 @@ fn cell_too_large(bytes: u64) -> PlenoraError {
     ))
 }
 
-/// Indice della colonna geometria: deve esistere, essere `Binary` e portare
-/// i metadati di estensione `geoarrow.wkb`.
+/// Il campo si dichiara colonna geometria WKB?
+///
+/// Identificazione ammessa (ADR-0009, decisione 8): l'estensione
+/// `GeoArrow` `ARROW:extension:name = geoarrow.wkb` OPPURE la forma a sole
+/// chiavi canoniche — almeno una chiave `plenora.geometry.*`, autosufficiente
+/// come in discovery (`plenora.geometry.encoding` +
+/// `plenora.geometry.dimensions` bastano: l'estensione e' ammessa, non
+/// richiesta). Un nome di estensione DIVERSO da `geoarrow.wkb` dichiara un
+/// altro framing: mai accettato, anche in presenza di chiavi canoniche.
+#[must_use]
+pub fn field_declares_wkb_geometry(field: &Field) -> bool {
+    field.metadata().get(GEOARROW_EXTENSION_KEY).map_or_else(
+        || {
+            field
+                .metadata()
+                .keys()
+                .any(|key| key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX))
+        },
+        |extension| extension == GEOARROW_WKB_EXTENSION,
+    )
+}
+
+/// Indice della colonna geometria: deve esistere, essere `Binary` e
+/// identificarsi come geometria WKB (estensione `geoarrow.wkb` o sole
+/// chiavi canoniche — [`field_declares_wkb_geometry`]).
 ///
 /// # Errors
 ///
 /// `PlenoraError::Schema` se la colonna `name` e' assente, non e' di tipo
-/// `Binary` o non porta i metadati di estensione `geoarrow.wkb`.
+/// `Binary` o non si identifica come geometria WKB.
 pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, PlenoraError> {
     let (index, field) = schema
         .column_with_name(name)
@@ -178,8 +201,7 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
     if field.data_type() != &DataType::Binary {
         return Err(geometry_column_not_binary(name, field.data_type()));
     }
-    let extension = field.metadata().get(GEOARROW_EXTENSION_KEY);
-    if extension.map(String::as_str) != Some(GEOARROW_WKB_EXTENSION) {
+    if !field_declares_wkb_geometry(field) {
         return Err(missing_geoarrow_metadata(name));
     }
     Ok(index)
@@ -704,6 +726,48 @@ pub const CRS_KEYS_REPLACED_BY_DECISION: [&str; 6] = [
     PLENORA_GEOMETRY_AXIS_ORDER_KEY,
     PLENORA_GEOMETRY_SRID_KEY,
 ];
+
+/// Chiavi canoniche dei tipi geometrici riscritte dalle trasformazioni che
+/// CAMBIANO il tipo della colonna (ADR-0009, decisione 8).
+///
+/// Il contratto di output prodotto dall'analisi dichiara i tipi
+/// dell'output; le chiavi ereditate dal campo di input descriverebbero il
+/// fatto prima della trasformazione.
+pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
+    PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
+    PLENORA_GEOMETRY_TYPES_KEY,
+];
+
+/// Rimuove le chiavi canoniche dei tipi dai metadati di un campo geometria.
+///
+/// Usata dall'analisi delle trasformazioni che cambiano il tipo geometrico
+/// (ADR-0009, decisione 8): il contratto dichiara i tipi dell'output e il
+/// blocco canonico li ri-emette da li' — la dichiarazione ereditata non
+/// deve sopravvivere accanto (un consumatore a valle leggerebbe il tipo di
+/// prima della trasformazione) ne' provocare un conflitto R2.6.
+pub fn strip_rewritten_types_declarations<S: std::hash::BuildHasher>(
+    metadata: &mut HashMap<String, String, S>,
+) {
+    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
+        metadata.remove(key);
+    }
+}
+
+/// Rimuove le chiavi canoniche del CRS dai metadati di un campo geometria,
+/// SENZA toccare il metadato legacy `geo` (gia' riscritto dall'operazione
+/// col CRS di output).
+///
+/// Usata dall'analisi di `geo.reproject` (ADR-0009, decisione 8): la
+/// riproiezione CAMBIA il fatto (il CRS della colonna), non ne descrive uno
+/// diverso — le chiavi della sorgente sono sostituite e il blocco canonico
+/// ri-emette il target dal contratto, senza conflitto R2.6 con la lineage.
+pub fn strip_rewritten_crs_keys<S: std::hash::BuildHasher>(
+    metadata: &mut HashMap<String, String, S>,
+) {
+    for key in CRS_KEYS_REPLACED_BY_DECISION {
+        metadata.remove(key);
+    }
+}
 
 /// Rimuove le dichiarazioni CRS dai metadati di un campo geometria.
 ///
@@ -1740,6 +1804,55 @@ mod tests {
         )]);
         assert!(matches!(
             geometry_column_index(&no_metadata, DEFAULT_GEOMETRY_COLUMN),
+            Err(PlenoraError::Schema(_))
+        ));
+    }
+
+    #[test]
+    fn geometry_column_index_accepts_the_canonical_only_form() {
+        // ADR-0009 decisione 8 (minore 1): la forma a sole chiavi canoniche
+        // (`plenora.geometry.encoding` + `plenora.geometry.dimensions`
+        // bastano) identifica la colonna — l'estensione `geoarrow.wkb` e'
+        // ammessa, non richiesta.
+        let canonical_only = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
+                HashMap::from([
+                    (
+                        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+                        "wkb".to_owned(),
+                    ),
+                    (
+                        PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+                        "xy".to_owned(),
+                    ),
+                ]),
+            ),
+        ]);
+        assert_eq!(
+            geometry_column_index(&canonical_only, DEFAULT_GEOMETRY_COLUMN).unwrap(),
+            1
+        );
+
+        // Un nome di estensione DIVERSO dichiara un altro framing: rifiutato
+        // anche in presenza di chiavi canoniche.
+        let foreign_extension = Schema::new(vec![Field::new(
+            DEFAULT_GEOMETRY_COLUMN,
+            DataType::Binary,
+            true,
+        )
+        .with_metadata(HashMap::from([
+            (
+                GEOARROW_EXTENSION_KEY.to_owned(),
+                "geoarrow.point".to_owned(),
+            ),
+            (
+                PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+                "xy".to_owned(),
+            ),
+        ]))]);
+        assert!(matches!(
+            geometry_column_index(&foreign_extension, DEFAULT_GEOMETRY_COLUMN),
             Err(PlenoraError::Schema(_))
         ));
     }

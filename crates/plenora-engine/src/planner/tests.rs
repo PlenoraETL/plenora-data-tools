@@ -41,6 +41,17 @@ fn geographic_crs() -> ResolvedCrs {
     )
 }
 
+/// Campo geometria WKB delle fixture: il marcatore di estensione
+/// `geoarrow.wkb` rende la colonna identificabile dal trasporto (ADR-0009,
+/// decisione 8 — il check vive in analyze, quindi anche le fixture dei
+/// contratti devono essere realistiche).
+fn wkb_geometry_field(name: &str) -> Field {
+    Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
+        plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+        plenora_kernels_geo::arrow_adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+    )]))
+}
+
 fn table_contract() -> DataContract {
     DataContract::tabular(Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -59,7 +70,7 @@ fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
     DataContract::new(
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("geom", DataType::Binary, true),
+            wkb_geometry_field("geom"),
         ])),
         vec![GeometryColumnContract {
             field_id: FieldId(field_id),
@@ -307,7 +318,7 @@ fn geo_contract_missing_crs(field_id: u32) -> DataContract {
     DataContract::new(
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("geom", DataType::Binary, true),
+            wkb_geometry_field("geom"),
         ])),
         vec![GeometryColumnContract {
             field_id: FieldId(field_id),
@@ -351,7 +362,7 @@ fn geo_contract_declared_unresolved_crs(field_id: u32) -> DataContract {
     DataContract::new(
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("geom", DataType::Binary, true),
+            wkb_geometry_field("geom"),
         ])),
         vec![GeometryColumnContract {
             field_id: FieldId(field_id),

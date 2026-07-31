@@ -24,7 +24,10 @@
 //! # Convenzioni di output (v1)
 //!
 //! - trasformazioni 1:1 (centroid, buffer, simplify, ...): schema invariato,
-//!   geometria trasformata in place con lo stesso `FieldId`;
+//!   geometria trasformata in place con lo stesso `FieldId`; le op che
+//!   CAMBIANO il tipo geometrico dichiarano i tipi dell'output nella
+//!   proprieta' `types` del contratto e sostituiscono le chiavi canoniche
+//!   `types`/`types_declaration` ereditate (ADR-0009, decisione 8);
 //! - misure/predicati: la geometria resta e si **aggiunge** una colonna
 //!   (`Float64` aree/lunghezze/distanze, `Boolean` predicati, `UInt64`
 //!   `vertex_count`/`count`, `Utf8` `to_wkt`); nome da `output_column` o
@@ -48,7 +51,9 @@
 //! - `within`/`count_points_in_polygons`: schema left + colonna scalare
 //!   (`within` Boolean, `count` `UInt64`), allineate alle righe left;
 //! - `reproject`: schema invariato, `GeometryColumnContract.crs` e metadato
-//!   `geo.crs` aggiornati al target (unico step che modifica il CRS);
+//!   `geo.crs` aggiornati al target (unico step che modifica il CRS); le
+//!   chiavi canoniche CRS ereditate dalla sorgente sono sostituite
+//!   (ADR-0009, decisione 8);
 //! - `from_coords`: aggiunge la colonna geometria (nuovo `FieldId`,
 //!   `nullable=false` da specifica: coordinate null sono errore a runtime,
 //!   non geometria null);
@@ -110,6 +115,9 @@
 //! - op presente nel catalogo e di famiglia geo, arieta' rispettata;
 //! - ogni input ha esattamente una colonna geometria attiva (v1), salvo
 //!   `from_coords` che ne richiede zero;
+//! - la colonna geometria e' identificabile dal trasporto (estensione
+//!   `geoarrow.wkb` o sole chiavi canoniche — ADR-0009 decisione 8, mai un
+//!   rifiuto a meta' esecuzione);
 //! - `crs_requirement` del descriptor verificato con
 //!   [`plenora_core::crs::validate_requirement`] sui CRS dei contratti
 //!   (per `reproject`: sorgente + target; per `from_coords`: CRS di output);
@@ -261,8 +269,10 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 ///
 /// Fallisce (fail-closed, in validazione) se: l'op non e' nel catalogo o non
 /// e' geo; l'arieta' non e' rispettata; un input non ha esattamente una
-/// colonna geometria attiva (v1); la geometria di input non e' `Xy` per un
-/// kernel che la elabora (B1.3); il `crs_requirement` non e' soddisfatto;
+/// colonna geometria attiva (v1); la colonna geometria non e' identificabile
+/// dal trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche,
+/// ADR-0009 decisione 8); la geometria di input non e' `Xy` per un kernel
+/// che la elabora (B1.3); il `crs_requirement` non e' soddisfatto;
 /// la config non supera deserializzazione stretta o domini dei parametri;
 /// una colonna prodotta collide con una esistente; il CRS di output non e'
 /// risolvibile.
@@ -337,8 +347,8 @@ mod tests {
     use plenora_core::catalog::{find_operation, CATALOG, CrsRequirement, Family};
     use plenora_core::contract::{
         ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
-        GeometryColumnContract, GeometryDimensions, GeometryEncoding, PropertyConfidence,
-        PropertyScope,
+        GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
+        GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
     };
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use plenora_core::{PlenoraError, Result};
@@ -348,7 +358,11 @@ mod tests {
     use super::*;
     use crate::arrow_adapter::{
         geo_metadata_json_with_dimensions, DEFAULT_GEOMETRY_COLUMN, GEO_METADATA_KEY,
-        GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
+        GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+        PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+        PLENORA_GEOMETRY_CRS_ID_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+        PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY,
+        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
     };
 
     /// Il CRS risolto di un contratto di colonna (i test di analyze lavorano
@@ -2229,12 +2243,24 @@ mod tests {
     // lo usano — il gate vive qui, in analyze (compile-plan).
     // -------------------------------------------------------------------
 
+    /// Campo geometria con la sola estensione `geoarrow.wkb` (colonna
+    /// identificabile dal trasporto, ADR-0009 decisione 8) e nessun
+    /// metadato `geo`: la forma delle fixture senza CRS dichiarato.
+    fn extension_only_geometry_field() -> Field {
+        Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
+            HashMap::from([(
+                GEOARROW_EXTENSION_KEY.to_owned(),
+                GEOARROW_WKB_EXTENSION.to_owned(),
+            )]),
+        )
+    }
+
     /// Contratto con geometria SENZA CRS dichiarato (`ContractCrs::Missing`).
     fn geo_contract_missing_crs() -> DataContract {
         DataContract::new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
-                Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
+                extension_only_geometry_field(),
             ])),
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
@@ -2316,7 +2342,7 @@ mod tests {
         DataContract::new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
-                Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
+                extension_only_geometry_field(),
             ])),
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
@@ -2369,5 +2395,329 @@ mod tests {
                 ),
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0009 decisione 8: le op che riscrivono un fatto canonico (tipo
+    // geometrico, CRS) dichiarano il fatto dell'OUTPUT; le chiavi ereditate
+    // sono sostituite. Identificabilita' della colonna a compile-plan.
+    // -----------------------------------------------------------------------
+
+    /// (op, dichiarazione attesa, lista canonica attesa) per le operazioni
+    /// che CAMBIANO il tipo geometrico: i tipi dichiarati sono quelli
+    /// dell'OUTPUT, verificati contro i kernel (`transform_output_types`).
+    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 17] = [
+        ("geo.centroid", TypesDeclaration::Exact, "point"),
+        ("geo.point_on_surface", TypesDeclaration::Exact, "point"),
+        ("geo.line_interpolate_point", TypesDeclaration::Exact, "point"),
+        ("geo.convex_hull", TypesDeclaration::Exact, "polygon"),
+        ("geo.concave_hull", TypesDeclaration::Exact, "polygon"),
+        ("geo.envelope", TypesDeclaration::Exact, "point,linestring,polygon"),
+        ("geo.line_substring", TypesDeclaration::Exact, "point,linestring"),
+        ("geo.buffer", TypesDeclaration::Exact, "multipolygon"),
+        (
+            "geo.boundary",
+            TypesDeclaration::Exact,
+            "multipoint,multilinestring,geometrycollection",
+        ),
+        ("geo.make_valid", TypesDeclaration::Mixed, ""),
+        ("geo.voronoi", TypesDeclaration::Exact, "polygon"),
+        ("geo.clean_topology", TypesDeclaration::Exact, "polygon,multipolygon"),
+        ("geo.clip", TypesDeclaration::Exact, "multipolygon"),
+        ("geo.intersection", TypesDeclaration::Exact, "multipolygon"),
+        ("geo.union", TypesDeclaration::Exact, "multipolygon"),
+        ("geo.difference", TypesDeclaration::Exact, "multipolygon"),
+        ("geo.symmetric_difference", TypesDeclaration::Exact, "multipolygon"),
+    ];
+
+    fn expected_types_of(op: &str) -> Option<(TypesDeclaration, &'static str)> {
+        TYPE_CHANGERS
+            .iter()
+            .find(|(id, _, _)| *id == op)
+            .map(|(_, declaration, list)| (*declaration, *list))
+    }
+
+    /// Sweep su OGNI op del catalogo (tabella `cases()`): le op che
+    /// cambiano il tipo dichiarano i tipi dell'output, tutte le altre non
+    /// inventano una dichiarazione (l'input della fixture e' undeclared).
+    #[test]
+    fn output_types_declaration_for_every_geo_op() {
+        for case in cases() {
+            let (output, _, _) = run_case(&case);
+            let Some(geometry) = output.active_geometry_column() else {
+                continue; // output non geometrico (diagnostiche)
+            };
+            match expected_types_of(case.op) {
+                Some((declaration, list)) => {
+                    let types = geometry
+                        .types
+                        .value()
+                        .unwrap_or_else(|| panic!("{}: tipi dell'output non dichiarati", case.op));
+                    assert_eq!(types.declaration(), declaration, "{}: dichiarazione", case.op);
+                    assert_eq!(types.to_canonical_list(), list, "{}: lista canonica", case.op);
+                }
+                None => {
+                    assert!(
+                        geometry.types.value().is_none(),
+                        "{}: op a tipo preservato non deve inventare una dichiarazione",
+                        case.op
+                    );
+                }
+            }
+        }
+    }
+
+    /// Contratto con tipi dichiarati (`exact`/`polygon`) e chiavi canoniche
+    /// `types`/`types_declaration` sul campo, come prodotto dalla discovery.
+    fn geo_contract_with_declared_types() -> DataContract {
+        let mut contract = geo_contract(projected_crs());
+        contract.geometries[0].types = ContractProperty::new(
+            PropertyConfidence::Declared(
+                GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
+                    .expect("coerenza R3.4.1"),
+            ),
+            PropertyScope::Schema,
+        );
+        let fields: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    metadata.insert(
+                        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+                        "exact".to_owned(),
+                    );
+                    metadata.insert(PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "polygon".to_owned());
+                    field.as_ref().clone().with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        contract.schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            contract.schema.metadata().clone(),
+        ));
+        contract
+    }
+
+    #[test]
+    fn type_changers_replace_preexisting_types_type_preservers_keep_it() {
+        // Type-changer: la dichiarazione di input (`polygon`) e' SOSTITUITA
+        // da quella dell'output e le chiavi ereditate sono rimosse (mai un
+        // conflitto R2.6 a valle).
+        for case in cases() {
+            let Some((declaration, list)) = expected_types_of(case.op) else {
+                continue;
+            };
+            let mut inputs = vec![geo_contract_with_declared_types()];
+            if case.binary {
+                inputs.push(geo_contract(projected_crs()));
+            }
+            let output = analyze_geo_contract(
+                case.op,
+                &inputs,
+                &case.config,
+                Some(&projected_crs()),
+                &mut FieldAllocator::new(100),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", case.op));
+            let geometry = output.active_geometry_column().expect("geometria in output");
+            let types = geometry.types.value().expect("tipi riscritti");
+            assert_eq!(types.declaration(), declaration, "{}: dichiarazione", case.op);
+            assert_eq!(
+                types.to_canonical_list(),
+                list,
+                "{}: la dichiarazione di input non sopravvive",
+                case.op
+            );
+            let field = output
+                .schema
+                .field_with_name(&geometry.name)
+                .expect("campo geometria");
+            assert!(
+                !field.metadata().contains_key(PLENORA_GEOMETRY_TYPES_KEY)
+                    && !field.metadata().contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+                "{}: chiavi types ereditate rimosse (sostituzione)",
+                case.op
+            );
+        }
+        // Tipo preservato: la dichiarazione di input attraversa invariata,
+        // chiavi del campo comprese (identity-preserving).
+        for op in [
+            "geo.simplify",
+            "geo.affine_transform",
+            "geo.translate",
+            "geo.scale",
+            "geo.rotate",
+            "geo.densify",
+            "geo.snap_to_grid",
+            "geo.snap",
+        ] {
+            let case = cases()
+                .into_iter()
+                .find(|case| case.op == op)
+                .unwrap_or_else(|| panic!("{op}: caso in tabella"));
+            let output = analyze_geo_contract(
+                op,
+                &[geo_contract_with_declared_types()],
+                &case.config,
+                Some(&projected_crs()),
+                &mut FieldAllocator::new(100),
+            )
+            .unwrap_or_else(|error| panic!("{op}: {error}"));
+            let geometry = output.active_geometry_column().expect("geometria in output");
+            let types = geometry.types.value().expect("tipi preservati");
+            assert_eq!(types.declaration(), TypesDeclaration::Exact, "{op}: dichiarazione");
+            assert_eq!(
+                types.to_canonical_list(),
+                "polygon",
+                "{op}: dichiarazione di input preservata"
+            );
+            let field = output
+                .schema
+                .field_with_name(&geometry.name)
+                .expect("campo geometria");
+            assert_eq!(
+                field.metadata().get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
+                Some("polygon"),
+                "{op}: chiavi ereditate intatte"
+            );
+        }
+    }
+
+    /// Contratto con le chiavi canoniche CRS sul campo (oltre all'estensione
+    /// e al `geo` legacy), come prodotto dalla discovery.
+    fn geo_contract_with_canonical_crs_keys() -> DataContract {
+        let mut contract = geo_contract(projected_crs());
+        let fields: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    metadata.insert(
+                        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                        "resolved".to_owned(),
+                    );
+                    metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned());
+                    metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
+                    metadata.insert(
+                        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                        "easting_northing".to_owned(),
+                    );
+                    field.as_ref().clone().with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        contract.schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            contract.schema.metadata().clone(),
+        ));
+        contract
+    }
+
+    #[test]
+    fn reproject_replaces_preexisting_canonical_crs_keys() {
+        // ADR-0009 decisione 8: la riproiezione cambia il FATTO (il CRS),
+        // quindi le chiavi canoniche della sorgente sono sostituite — rimosse
+        // dal campo del contratto di output e ri-emesse a valle dal
+        // contratto stesso. Il metadato legacy `geo.crs` e' quello del target.
+        let input = geo_contract_with_canonical_crs_keys();
+        let output = analyze_one(
+            "geo.reproject",
+            &[input],
+            &json!({"target_crs": "EPSG:3857"}),
+            Some(&other_projected_crs()),
+        )
+        .expect("reproject");
+        let field = output
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria");
+        let metadata = field.metadata();
+        for key in [
+            PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+            PLENORA_GEOMETRY_CRS_ID_KEY,
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+            PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+            PLENORA_GEOMETRY_SRID_KEY,
+        ] {
+            assert!(
+                !metadata.contains_key(key),
+                "{key}: chiave della sorgente sostituita, non fusa"
+            );
+        }
+        let geo: Value = serde_json::from_str(metadata.get(GEO_METADATA_KEY).expect("geo metadata"))
+            .expect("geo JSON");
+        assert_eq!(
+            geo.get("crs").and_then(Value::as_str),
+            Some("EPSG:3857"),
+            "geo.crs legacy aggiornato al target"
+        );
+        assert_eq!(
+            resolved_crs_of(output.active_geometry_column().expect("geometria")).definition(),
+            "EPSG:3857"
+        );
+    }
+
+    #[test]
+    fn unidentifiable_geometry_column_is_rejected_in_analysis() {
+        // Minore 2 / ADR-0008: una colonna geometria che il trasporto non
+        // saprebbe identificare (ne' estensione `geoarrow.wkb` ne' chiavi
+        // canoniche) e' rifiutata QUI, in analisi del piano — mai scoperta
+        // a meta' esecuzione.
+        let mut contract = geo_contract(projected_crs());
+        contract.schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
+        ]));
+        let result = analyze_one("geo.centroid", std::slice::from_ref(&contract), &json!({}), None);
+        match result {
+            Err(PlenoraError::Schema(message)) => {
+                assert!(
+                    message.contains("non identificabile"),
+                    "geo.centroid: {message}"
+                );
+            }
+            other => panic!("geo.centroid: atteso rifiuto in analisi, ottenuto {other:?}"),
+        }
+        // Binaria: il gate scatta anche sul secondo operando.
+        let identifiable = geo_contract(projected_crs());
+        let result = analyze_one("geo.union", &[identifiable, contract], &json!({}), None);
+        assert!(
+            matches!(result, Err(PlenoraError::Schema(_))),
+            "geo.union: atteso rifiuto in analisi, ottenuto {result:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_only_geometry_column_is_accepted_in_analysis() {
+        // Minore 1: la forma a sole chiavi canoniche (estensione ammessa,
+        // non richiesta) identifica la colonna.
+        let mut contract = geo_contract(projected_crs());
+        contract.schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
+                HashMap::from([
+                    (
+                        PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
+                        "xy".to_owned(),
+                    ),
+                    (
+                        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+                        "wkb".to_owned(),
+                    ),
+                ]),
+            ),
+        ]));
+        analyze_one("geo.centroid", std::slice::from_ref(&contract), &json!({}), None)
+            .expect("forma canonica-only accettata");
     }
 }

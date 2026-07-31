@@ -98,6 +98,14 @@ pub(in crate::analyze) fn analyze_geometry_only(
 /// `reproject`: schema invariato, CRS del contratto e metadato `geo.crs`
 /// aggiornati al target risolto. La sorgente DEVE avere un CRS risolto
 /// (R4.6.3: il requisito e' dell'operazione, gate in analyze).
+///
+/// ADR-0009 decisione 8: la riproiezione CAMBIA il fatto (il CRS della
+/// colonna), non ne descrive uno diverso — le chiavi canoniche CRS ereditate
+/// dal campo di input (`crs_id`, `crs_definition`+formato, `srid`,
+/// `axis_order`, `crs_resolution`) sono SOSTITUITE, non fuse: rimosse qui e
+/// ri-emesse dal contratto in `executor.rs::canonical_output_schema`, senza
+/// che il guard R2.6 veda mai una divergenza. Il guard resta intatto per
+/// tutte le altre chiavi.
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
@@ -114,6 +122,13 @@ pub(in crate::analyze) fn analyze_reproject(
     validate_requirement(CrsRequirement::Reprojection, &[source, &target])?;
     let mut fields = output_fields(input);
     set_geometry_crs(&mut fields, geometry, &target)?;
+    for field in &mut fields {
+        if field.name() == &geometry.name {
+            let mut metadata = field.metadata().clone();
+            crate::arrow_adapter::strip_rewritten_crs_keys(&mut metadata);
+            *field = field.clone().with_metadata(metadata);
+        }
+    }
     let reprojected = GeometryColumnContract {
         crs: ContractCrs::Resolved(target),
         ..geometry.clone()
