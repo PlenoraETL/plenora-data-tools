@@ -201,6 +201,36 @@ fn run_v4_senza_inputs_fallisce() {
     assert!(!output_path.exists(), "nessun output parziale");
 }
 
+/// Envelope §9 (R9.1/R9.2): l'uscita CLI di un errore e' JSON parsabile
+/// con i quattro assi espliciti — categoria, fase, effetto, retry — mai
+/// da dedurre dal messaggio.
+#[test]
+fn errore_cli_emette_envelope_a_quattro_assi() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, _input) = write_table_fixture(directory.path());
+    let output_path = directory.path().join("output.arrow");
+
+    let result = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(!result.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stderr)
+        .expect("stderr deve essere l'envelope JSON par. 9");
+    assert_eq!(envelope["status"], "error");
+    assert_eq!(envelope["protocol_version"], 1);
+    for axis in ["category", "phase", "remote_effect", "retry", "message"] {
+        assert!(
+            envelope["error"].get(axis).is_some_and(serde_json::Value::is_string),
+            "asse `{axis}` presente e testuale: {envelope}"
+        );
+    }
+    assert_eq!(envelope["error"]["remote_effect"], "none");
+}
+
 #[test]
 fn run_v4_schema_mismatch_fallisce_in_validazione() {
     let directory = tempfile::tempdir().expect("tempdir");

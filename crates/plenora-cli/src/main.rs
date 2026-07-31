@@ -1614,16 +1614,77 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if let Err(error) = run_with_args(&args) {
-        // Cancellazione cooperativa (ADR 3, M1c): messaggio pulito ed exit
-        // code dedicato; il publish atomico garantisce che nessun output
-        // parziale sia stato pubblicato.
-        if let Some(PlenoraError::Cancelled { .. }) = error.downcast_ref::<PlenoraError>() {
-            eprintln!("plenora-data-tools: esecuzione annullata: {error}");
-            std::process::exit(EXIT_CANCELLED);
-        }
-        eprintln!("plenora-data-tools: {error}");
-        std::process::exit(2);
+        // Cancellazione cooperativa (ADR 3, M1c): exit code dedicato; il
+        // publish atomico garantisce che nessun output parziale sia stato
+        // pubblicato. Envelope §9 anche per la cancellazione (categoria
+        // dedicata, fase/effetto/retry dagli assi).
+        let cancelled =
+            matches!(error.downcast_ref::<PlenoraError>(), Some(PlenoraError::Cancelled { .. }));
+        eprintln!("{}", error_envelope(error.as_ref(), cancelled));
+        std::process::exit(if cancelled { EXIT_CANCELLED } else { 2 });
     }
+}
+
+/// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1): l'uscita
+/// CLI riporta categoria, fase, effetto remoto e disposizione di retry
+/// espliciti — mai dedotti dal messaggio (R9.2). Una riga JSON su stderr;
+/// `message` porta il testo dell'errore invariato. `context` (presente
+/// solo per errori nati in un'esecuzione DAG) riporta nodo, operazione ed
+/// `execution_id` — la risposta a «quale step ha rotto» senza parsare il
+/// messaggio. Gli exit code restano 2 (errore) e 130 (cancellazione).
+///
+/// Mapping dichiarato: `PlenoraError` -> i quattro assi del tipo; errori
+/// I/O nudi (lettura piano/argomenti) -> `io`/`read`/`none`/`safe`;
+/// errori di parse JSON del piano -> `data_mapping`/`validate`/`none`/
+/// `never`; qualunque altro tipo -> `internal`/`validate`/`none`/`never`.
+fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
+    let (category, phase, remote_effect, retry) = error.downcast_ref::<PlenoraError>().map_or_else(
+        || {
+            if error.downcast_ref::<std::io::Error>().is_some() {
+                ("io", "read", "none", "safe")
+            } else if error.downcast_ref::<serde_json::Error>().is_some() {
+                ("data_mapping", "validate", "none", "never")
+            } else {
+                ("internal", "validate", "none", "never")
+            }
+        },
+        |plenora| {
+            (
+                plenora.category().as_str(),
+                plenora.phase().as_str(),
+                plenora.remote_effect().as_str(),
+                plenora.retry_disposition().as_str(),
+            )
+        },
+    );
+    let message = if cancelled {
+        format!("esecuzione annullata: {error}")
+    } else {
+        error.to_string()
+    };
+    let mut body = serde_json::json!({
+        "category": category,
+        "phase": phase,
+        "remote_effect": remote_effect,
+        "retry": retry,
+        "message": message,
+    });
+    if let Some(
+        PlenoraError::Execution { node, operation, execution_id, .. }
+        | PlenoraError::Cancelled { node, operation, execution_id, .. },
+    ) = error.downcast_ref::<PlenoraError>()
+    {
+        let mut context = serde_json::json!({ "node": node, "operation": operation });
+        if !execution_id.is_empty() {
+            context["execution_id"] = serde_json::Value::String(execution_id.clone());
+        }
+        body["context"] = context;
+    }
+    serde_json::json!({
+        "status": "error",
+        "protocol_version": 1,
+        "error": body,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1647,6 +1708,90 @@ mod tests {
     };
 
     use super::*;
+
+    /// Envelope §9: gli assi di un `PlenoraError` arrivano in uscita
+    /// espliciti (R9.2), il contesto DAG solo quando presente.
+    #[test]
+    fn error_envelope_carries_the_four_axes_and_dag_context() {
+        let error = PlenoraError::Execution {
+            node: "t".to_owned(),
+            operation: "geo.centroid".to_owned(),
+            execution_id: "exec-1".to_owned(),
+            reason: "boom".to_owned(),
+        };
+        let envelope = error_envelope(&error, false);
+        assert_eq!(envelope["status"], "error");
+        assert_eq!(envelope["protocol_version"], 1);
+        assert_eq!(envelope["error"]["category"], "execution");
+        assert_eq!(envelope["error"]["phase"], "write");
+        assert_eq!(envelope["error"]["remote_effect"], "none");
+        assert_eq!(envelope["error"]["retry"], "never");
+        assert_eq!(envelope["error"]["context"]["node"], "t");
+        assert_eq!(envelope["error"]["context"]["operation"], "geo.centroid");
+        assert_eq!(envelope["error"]["context"]["execution_id"], "exec-1");
+        assert!(
+            envelope["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("step failed at node `t`"),
+            "il testo Display resta in message: {envelope}"
+        );
+    }
+
+    #[test]
+    fn error_envelope_omits_context_and_empty_execution_id() {
+        let contract = PlenoraError::Unsupported("operazione sconosciuta".to_owned());
+        let envelope = error_envelope(&contract, false);
+        assert_eq!(envelope["error"]["category"], "unsupported");
+        assert_eq!(envelope["error"]["phase"], "validate");
+        assert_eq!(envelope["error"]["retry"], "never");
+        assert!(envelope["error"].get("context").is_none());
+
+        let legacy_step = PlenoraError::Execution {
+            node: "n".to_owned(),
+            operation: "table.filter".to_owned(),
+            execution_id: String::new(),
+            reason: "boom".to_owned(),
+        };
+        let legacy = error_envelope(&legacy_step, false);
+        assert!(legacy["error"]["context"].get("execution_id").is_none());
+    }
+
+    #[test]
+    fn error_envelope_maps_io_json_and_unknown_errors() {
+        let io = std::io::Error::other("disco pieno");
+        let envelope = error_envelope(&io, false);
+        assert_eq!(envelope["error"]["category"], "io");
+        assert_eq!(envelope["error"]["phase"], "read");
+        assert_eq!(envelope["error"]["retry"], "safe");
+
+        let json = serde_json::from_str::<u32>("\"non-un-numero\"").expect_err("json invalido");
+        let envelope = error_envelope(&json, false);
+        assert_eq!(envelope["error"]["category"], "data_mapping");
+        assert_eq!(envelope["error"]["phase"], "validate");
+        assert_eq!(envelope["error"]["retry"], "never");
+    }
+
+    #[test]
+    fn error_envelope_cancelled_keeps_dedicated_message_and_axes() {
+        let error = PlenoraError::Cancelled {
+            node: "t".to_owned(),
+            operation: "table.filter".to_owned(),
+            execution_id: "exec-9".to_owned(),
+            reason: "cancellazione richiesta".to_owned(),
+        };
+        let envelope = error_envelope(&error, true);
+        assert_eq!(envelope["error"]["category"], "cancelled");
+        assert_eq!(envelope["error"]["retry"], "never");
+        assert!(
+            envelope["error"]["message"]
+                .as_str()
+                .expect("message")
+                .starts_with("esecuzione annullata: "),
+            "messaggio dedicato preservato: {envelope}"
+        );
+        assert_eq!(envelope["error"]["context"]["execution_id"], "exec-9");
+    }
 
     fn projected_crs() -> ResolvedCrs {
         ResolvedCrs::from_resolved_parts(
