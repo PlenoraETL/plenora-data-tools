@@ -222,12 +222,16 @@ fn errore_cli_emette_envelope_a_quattro_assi() {
         .expect("stderr deve essere l'envelope JSON par. 9");
     assert_eq!(envelope["status"], "error");
     assert_eq!(envelope["protocol_version"], 1);
-    for axis in ["category", "phase", "remote_effect", "retry", "message"] {
+    for axis in ["category", "phase", "remote_effect", "message"] {
         assert!(
             envelope["error"].get(axis).is_some_and(serde_json::Value::is_string),
             "asse `{axis}` presente e testuale: {envelope}"
         );
     }
+    assert!(
+        envelope["error"]["retry"]["kind"].is_string(),
+        "retry in forma taggata con `kind` testuale: {envelope}"
+    );
     assert_eq!(envelope["error"]["remote_effect"], "none");
 }
 

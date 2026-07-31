@@ -43,7 +43,7 @@ use plenora_core::contract::{
     GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement};
-use plenora_core::{ErrorPhase, PlenoraError};
+use plenora_core::{ErrorPhase, PlenoraError, RetryDisposition};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
 use plenora_engine::geo_transport::publish::{
@@ -1628,7 +1628,9 @@ fn main() {
 /// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1): l'uscita
 /// CLI riporta categoria, fase, effetto remoto e disposizione di retry
 /// espliciti — mai dedotti dal messaggio (R9.2). Una riga JSON su stderr;
-/// `message` porta il testo dell'errore invariato. `context` (presente
+/// `message` porta il testo dell'errore invariato. `retry` e' nella forma
+/// taggata condivisa (conformance/components.json): `{"kind": ...}` piu'
+/// `delay_ms` solo per `after(durata)`. `context` (presente
 /// solo per errori nati in un'esecuzione DAG) riporta nodo, operazione ed
 /// `execution_id` — la risposta a «quale step ha rotto» senza parsare il
 /// messaggio. Gli exit code restano 2 (errore) e 130 (cancellazione).
@@ -1638,14 +1640,14 @@ fn main() {
 /// errori di parse JSON del piano -> `data_mapping`/`validate`/`none`/
 /// `never`; qualunque altro tipo -> `internal`/`validate`/`none`/`never`.
 fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
-    let (category, phase, remote_effect, retry) = error.downcast_ref::<PlenoraError>().map_or_else(
+    let (category, phase, remote_effect, disposition) = error.downcast_ref::<PlenoraError>().map_or_else(
         || {
             if error.downcast_ref::<std::io::Error>().is_some() {
-                ("io", "read", "none", "safe")
+                ("io", "read", "none", RetryDisposition::Safe)
             } else if error.downcast_ref::<serde_json::Error>().is_some() {
-                ("data_mapping", "validate", "none", "never")
+                ("data_mapping", "validate", "none", RetryDisposition::Never)
             } else {
-                ("internal", "validate", "none", "never")
+                ("internal", "validate", "none", RetryDisposition::Never)
             }
         },
         |plenora| {
@@ -1653,10 +1655,19 @@ fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json:
                 plenora.category().as_str(),
                 plenora.phase().as_str(),
                 plenora.remote_effect().as_str(),
-                plenora.retry_disposition().as_str(),
+                plenora.retry_disposition(),
             )
         },
     );
+    // Forma taggata fissata in conformance/components.json
+    // (required_capability_shared): {"kind": ...} e, solo per
+    // `after(durata)`, "delay_ms" — altrimenti il chiamante saprebbe DI
+    // riprovare piu' tardi senza sapere QUANDO (R9.2/R9.7).
+    let mut retry = serde_json::json!({ "kind": disposition.as_str() });
+    if let Some(delay) = disposition.delay() {
+        retry["delay_ms"] =
+            serde_json::Value::from(u64::try_from(delay.as_millis()).map_or(u64::MAX, |v| v));
+    }
     let message = if cancelled {
         format!("esecuzione annullata: {error}")
     } else {
@@ -1725,7 +1736,7 @@ mod tests {
         assert_eq!(envelope["error"]["category"], "execution");
         assert_eq!(envelope["error"]["phase"], "write");
         assert_eq!(envelope["error"]["remote_effect"], "none");
-        assert_eq!(envelope["error"]["retry"], "never");
+        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
         assert_eq!(envelope["error"]["context"]["node"], "t");
         assert_eq!(envelope["error"]["context"]["operation"], "geo.centroid");
         assert_eq!(envelope["error"]["context"]["execution_id"], "exec-1");
@@ -1744,7 +1755,7 @@ mod tests {
         let envelope = error_envelope(&contract, false);
         assert_eq!(envelope["error"]["category"], "unsupported");
         assert_eq!(envelope["error"]["phase"], "validate");
-        assert_eq!(envelope["error"]["retry"], "never");
+        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
         assert!(envelope["error"].get("context").is_none());
 
         let legacy_step = PlenoraError::Execution {
@@ -1763,13 +1774,29 @@ mod tests {
         let envelope = error_envelope(&io, false);
         assert_eq!(envelope["error"]["category"], "io");
         assert_eq!(envelope["error"]["phase"], "read");
-        assert_eq!(envelope["error"]["retry"], "safe");
+        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "safe"}));
 
         let json = serde_json::from_str::<u32>("\"non-un-numero\"").expect_err("json invalido");
         let envelope = error_envelope(&json, false);
         assert_eq!(envelope["error"]["category"], "data_mapping");
         assert_eq!(envelope["error"]["phase"], "validate");
-        assert_eq!(envelope["error"]["retry"], "never");
+        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
+    }
+
+    #[test]
+    fn error_envelope_retry_after_carries_delay_ms() {
+        // La forma taggata di conformance/components.json: senza delay_ms
+        // il chiamante saprebbe DI riprovare piu' tardi, non QUANDO.
+        let retry = RetryDisposition::After(std::time::Duration::from_millis(5000));
+        let mut serialized = serde_json::json!({ "kind": retry.as_str() });
+        if let Some(delay) = retry.delay() {
+            serialized["delay_ms"] =
+                serde_json::Value::from(u64::try_from(delay.as_millis()).map_or(u64::MAX, |v| v));
+        }
+        assert_eq!(
+            serialized,
+            serde_json::json!({"kind": "after", "delay_ms": 5000})
+        );
     }
 
     #[test]
@@ -1782,7 +1809,7 @@ mod tests {
         };
         let envelope = error_envelope(&error, true);
         assert_eq!(envelope["error"]["category"], "cancelled");
-        assert_eq!(envelope["error"]["retry"], "never");
+        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
         assert!(
             envelope["error"]["message"]
                 .as_str()
