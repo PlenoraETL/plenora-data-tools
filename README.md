@@ -5,9 +5,9 @@ tabellare e geografica. Valida integralmente il piano e i contratti prima
 dell'esecuzione, applica limiti di risorsa e pubblica gli output in modo
 atomico.
 
-> Stato: candidato alla release stabile `1.0.0`. La versione e le evidenze
-> effettivamente qualificate sono registrate nel manifesto sotto `release/`;
-> questo README non sostituisce il gate di release.
+> Stato: metadata candidate `1.0.0` in preparazione, senza tag né pubblicazione.
+> La versione e le evidenze effettivamente qualificate sono registrate nei
+> manifesti sotto `release/`; questo README non sostituisce il gate di release.
 
 ## Ruolo nell'ecosistema Plenora
 
