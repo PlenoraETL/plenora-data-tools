@@ -75,6 +75,17 @@ impl ResolvedCrs {
         self.canonical == other.canonical
     }
 
+    /// Nodo CRS da cui dedurre identita', assi e autorita'. Un `BoundCRS`
+    /// conserva l'operazione nel canonical completo, ma queste proprieta'
+    /// appartengono al suo `source_crs`.
+    fn identity_canonical(&self) -> Option<&Value> {
+        if self.canonical.get("type").and_then(Value::as_str) == Some("BoundCRS") {
+            self.canonical.get("source_crs")
+        } else {
+            Some(&self.canonical)
+        }
+    }
+
     /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
     /// (ADR-0009, emendamento 2026-07-31).
     ///
@@ -93,7 +104,11 @@ impl ResolvedCrs {
     /// combinazioni canoniche producono [`AxisOrder::Other`].
     #[must_use]
     pub fn authority_axis_order(&self) -> Option<AxisOrder> {
-        let axes = self.canonical.get("coordinate_system")?.get("axis")?.as_array()?;
+        let axes = self
+            .identity_canonical()?
+            .get("coordinate_system")?
+            .get("axis")?
+            .as_array()?;
         let first = axes.first()?.get("direction")?.as_str()?;
         let second = axes.get(1)?.get("direction")?.as_str()?;
         match (self.kind, first, second) {
@@ -140,7 +155,7 @@ impl ResolvedCrs {
     /// numerico non identifica un CRS senza la sua autorita'.
     #[must_use]
     pub fn authority_identifier(&self) -> Option<(&str, u32)> {
-        let id = self.canonical.get("id")?;
+        let id = self.identity_canonical()?.get("id")?;
         let authority = id.get("authority")?.as_str()?;
         let code = match id.get("code")? {
             Value::Number(number) => number.as_u64(),

@@ -124,10 +124,14 @@ jobs:
           restore-keys: cargo-ci-backends-1.92.0-
 
       - name: Clippy full-backends (gate)
-        run: cargo clippy -p plenora-engine -p plenora-cli --all-targets --locked --features full-backends
+        run: >
+          cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli
+          --all-targets --locked --features full-backends
 
       - name: Test full-backends
-        run: cargo test -p plenora-engine -p plenora-cli --locked --features full-backends
+        run: >
+          cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli
+          --locked --features full-backends
 
   # Gate del manifesto di rilascio (PLENORA-CRITERI-RC, criteri C1-C5):
   # verifica forma e revisioni di release/*.json con il checker ufficiale,
@@ -151,7 +155,10 @@ jobs:
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
 
-      - name: Verifica manifesto candidato 1.0.0
+      - name: Verifica manifesto candidato 1.0.1
+        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.1.json --repo .
+
+      - name: Verifica manifesto storico 1.0.0
         run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.0.json --repo .
 
       - name: Verifica manifesto storico rc1

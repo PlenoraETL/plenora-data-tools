@@ -1,0 +1,86 @@
+{
+  "manifest_version": 1,
+  "component": "plenora-data-tools",
+  "component_version": "1.0.1",
+  "revision": "b6bef251e2009447a4ce8d0d433119f824e94ea2",
+  "icd": {
+    "repository": "plenora-contracts",
+    "tag": "v2.0-rc10",
+    "revision": "3598259bbe07d1c853453ff34ca2c1d1d28a0272",
+    "normative_status": "partially_ratified"
+  },
+  "claims": {
+    "component_rc": true,
+    "system_rc": false,
+    "avionic_certification": false
+  },
+  "release_state": "metadata_candidate_pending_same_sha_ci",
+  "verification_claim": "verified_independently",
+  "independent_review": true,
+  "supersedes": {
+    "manifest": "release/1.0.0.json",
+    "component_version": "1.0.0",
+    "revision": "7a47504482569636b6c0e268477d155010d3b030"
+  },
+  "fix": {
+    "id": "data_bound_crs_towgs84",
+    "affected_release": "v1.0.0",
+    "failure": "CRS_TYPE_UNSUPPORTED: tipo PROJJSON BoundCRS non supportato",
+    "resolution": "Conserva il BoundCRS canonico completo, deduce tipo, unita, assi e autorita dal source_crs e mantiene operation-sensitive l'equivalenza CRS.",
+    "functional_revision": "b6bef251e2009447a4ce8d0d433119f824e94ea2"
+  },
+  "candidate": {
+    "evidence_base_revision": "b6bef251e2009447a4ce8d0d433119f824e94ea2",
+    "evidence_base_result": "passed_locally_and_independently_reviewed",
+    "metadata_delta_requires_new_same_sha_ci": true,
+    "release_tag_created": false,
+    "intended_release_tag": "v1.0.1",
+    "publish": false,
+    "declared_delta": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "fuzz/Cargo.lock",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "release/1.0.1.json"
+    ]
+  },
+  "open_blocks": [
+    {
+      "id": "BLOCK-1.0.1-SAME-SHA-CI",
+      "title": "CI GitHub sulla SHA metadata non ancora eseguita",
+      "detail": "Le verifiche locali e le review non sono trasferibili al futuro commit metadata: tutti i job devono passare sulla sua SHA esatta."
+    },
+    {
+      "id": "BLOCK-05",
+      "title": "Catena bordo-centro-bordo non qualificata",
+      "detail": "La qualifica di sistema resta di proprieta di plenora-contracts/conformance e non e trasferita alla patch candidate 1.0.1."
+    }
+  ],
+  "evidence": {
+    "functional_revision": {
+      "revision": "b6bef251e2009447a4ce8d0d433119f824e94ea2",
+      "local_result": "passed",
+      "gates": [
+        "workspace-tests",
+        "anti-panic-r6",
+        "clippy-workspace-all-targets",
+        "clippy-full-backends",
+        "tests-full-backends-including-plenora-kernels-geo",
+        "bound-crs-neutral-comparator-and-transition-judge"
+      ],
+      "independent_reviewers": [
+        "OpenAI Codex CLI",
+        "Claude Code Opus",
+        "Kimi K3 via Hermes"
+      ],
+      "blocking_findings": 0
+    },
+    "same_sha_ci": {
+      "status": "pending",
+      "required": true,
+      "transferable_from_evidence_base": false
+    }
+  },
+  "notes": "Patch candidate 1.0.1 del solo componente. Il tag v1.0.0 resta immutabile. Nessun tag v1.0.1, merge, publish, system_rc o certificazione e dichiarato. La release richiede una nuova CI same-SHA del commit metadata."
+}
