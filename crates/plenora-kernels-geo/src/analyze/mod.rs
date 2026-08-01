@@ -3152,33 +3152,42 @@ mod tests {
     }
 
     #[test]
-    fn reproject_accepts_normalized_or_undeclared_axis_order() {
-        // Il gate non e' piu' largo del necessario: l'ordine GIS normalizzato
-        // della SORGENTE e' esattamente cio' che il kernel assume, e
-        // `unknown` (R2.7: assenza di dichiarazione, non dichiarazione di
-        // assenza) resta accettato come prima.
-        for declared in ["lon_lat", "unknown"] {
-            let input = geo_contract_with_declared_axis_order(geographic_crs(), declared);
-            let output = analyze_one(
-                "geo.reproject",
-                &[input],
-                &json!({"target_crs": "EPSG:4326"}),
-                Some(&geographic_crs()),
-            )
-            .unwrap_or_else(|error| panic!("{declared}: {error}"));
-            let field = output
-                .schema
-                .field_with_name(DEFAULT_GEOMETRY_COLUMN)
-                .expect("campo geometria");
-            assert_eq!(
-                field
-                    .metadata()
-                    .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-                    .map(String::as_str),
-                Some("lon_lat"),
-                "{declared}: l'ordine emesso resta quello GIS normalizzato"
-            );
-        }
+    fn reproject_accepts_normalized_and_undeclared_but_rejects_unknown_axis_order() {
+        // Il kernel PROJ assume l'ordine GIS normalizzato della sorgente.
+        // `unknown` e' un valore canonico onesto per il trasporto, ma non
+        // dimostra l'ordine fisico richiesto da una trasformazione di coordinate.
+        let normalized = geo_contract_with_declared_axis_order(geographic_crs(), "lon_lat");
+        let output = analyze_one(
+            "geo.reproject",
+            &[normalized],
+            &json!({"target_crs": "EPSG:4326"}),
+            Some(&geographic_crs()),
+        )
+        .expect("ordine GIS normalizzato");
+        let field = output
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria");
+        assert_eq!(
+            field
+                .metadata()
+                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+                .map(String::as_str),
+            Some("lon_lat")
+        );
+
+        let unknown = geo_contract_with_declared_axis_order(geographic_crs(), "unknown");
+        let result = analyze_one(
+            "geo.reproject",
+            &[unknown],
+            &json!({"target_crs": "EPSG:4326"}),
+            Some(&geographic_crs()),
+        );
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "ordine fisico unknown non deve essere reinterpretato: {result:?}"
+        );
+
         // Colonna senza alcuna chiave canonica (solo `geoarrow.wkb` +
         // `geo`): nessuna dichiarazione da contraddire, comportamento
         // storico invariato.

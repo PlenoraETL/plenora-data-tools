@@ -61,7 +61,7 @@ use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
 use geozero::{CoordDimensions, ToWkb};
-use plenora_core::contract::GeometryDimensions;
+use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
 
@@ -371,12 +371,13 @@ fn type_code_without_embedded_srid(
         return Err(unsupported_wkb_dimension());
     };
     let embedded_srid = cursor.read_u32(little_endian)?;
-    if let Some(expected_srid) = expected_srid {
-        if embedded_srid != expected_srid {
-            return Err(PlenoraError::Crs(
-                "SRID EWKB embedded incoerente con lo SRID dichiarato".to_owned(),
-            ));
-        }
+    let expected_srid = expected_srid.ok_or_else(|| {
+        PlenoraError::Crs("SRID EWKB embedded senza autorita' CRS governata".to_owned())
+    })?;
+    if embedded_srid != expected_srid {
+        return Err(PlenoraError::Crs(
+            "SRID EWKB embedded incoerente con lo SRID dichiarato".to_owned(),
+        ));
     }
     Ok(raw_type & !EWKB_SRID_FLAG)
 }
@@ -596,8 +597,8 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
 /// Valida WKB/EWKB al confine di trasporto senza riscrivere le celle.
 ///
 /// A differenza dei decoder dei kernel geometrici, questo gate ammette il
-/// flag SRID EWKB e verifica ogni SRID embedded contro quello dichiarato dal
-/// contratto, quando presente. I decoder elaboranti continuano a rifiutare
+/// flag SRID soltanto per encoding EWKB dichiarato e verifica ogni SRID
+/// embedded contro l'autorita' governata. I decoder elaboranti continuano a rifiutare
 /// lo SRID embedded finche' non possono preservarlo.
 ///
 /// # Errors
@@ -608,6 +609,7 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
 pub fn validate_wkb_transport_for_dimensions_with_depth(
     payload: &[u8],
     dimensions: GeometryDimensions,
+    encoding: GeometryEncoding,
     expected_srid: Option<u32>,
     max_depth: usize,
 ) -> Result<(), PlenoraError> {
@@ -616,13 +618,17 @@ pub fn validate_wkb_transport_for_dimensions_with_depth(
     }
     let mut cursor = WkbCursor::new(payload);
     let mut components = 0_u64;
+    let srid_policy = match encoding {
+        GeometryEncoding::Wkb => EmbeddedSridPolicy::Reject,
+        GeometryEncoding::Ewkb => EmbeddedSridPolicy::Match(expected_srid),
+    };
     validate_wkb_geometry_with_dimensions(
         &mut cursor,
         0,
         max_depth,
         &mut components,
         dimensions,
-        EmbeddedSridPolicy::Match(expected_srid),
+        srid_policy,
     )?;
     if cursor.remaining() != 0 {
         return Err(invalid_wkb_structure("byte residui dopo la geometria"));
@@ -1226,6 +1232,7 @@ mod tests {
         assert!(validate_wkb_transport_for_dimensions_with_depth(
             &payload,
             GeometryDimensions::Xy,
+            GeometryEncoding::Ewkb,
             Some(4326),
             MAX_WKB_DEPTH,
         )
@@ -1234,6 +1241,27 @@ mod tests {
             validate_wkb_transport_for_dimensions_with_depth(
                 &payload,
                 GeometryDimensions::Xy,
+                GeometryEncoding::Wkb,
+                Some(4326),
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::Unsupported(_))
+        ));
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload,
+                GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
+                None,
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::Crs(_))
+        ));
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload,
+                GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
                 Some(32632),
                 MAX_WKB_DEPTH,
             ),
@@ -1247,6 +1275,7 @@ mod tests {
             validate_wkb_transport_for_dimensions_with_depth(
                 &payload[..5],
                 GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
                 Some(4326),
                 MAX_WKB_DEPTH,
             ),

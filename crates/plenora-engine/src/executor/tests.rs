@@ -588,6 +588,53 @@ fn geo_contract_ewkb() -> DataContract {
     contract
 }
 
+fn geo_contract_wkb() -> DataContract {
+    let mut contract = geo_contract();
+    contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
+    contract
+}
+
+fn geo_contract_ewkb_without_authority() -> DataContract {
+    let mut contract = geo_contract_ewkb();
+    let mut fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    let mut metadata = fields[1].metadata().clone();
+    for key in [
+        PLENORA_GEOMETRY_SRID_KEY,
+        PLENORA_GEOMETRY_CRS_ID_KEY,
+        PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+        PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+        PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    ] {
+        metadata.remove(key);
+    }
+    metadata.insert(
+        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+        GeometryEncoding::Ewkb.as_str().to_owned(),
+    );
+    fields[1] = fields[1].clone().with_metadata(metadata);
+    contract.schema = Arc::new(Schema::new(fields));
+    contract.geometries[0].crs = ContractCrs::Missing;
+    contract
+}
+
+fn geo_batch_with_schema(schema: SchemaRef, ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
+    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
+            Arc::new(BinaryArray::from(refs)) as ArrayRef,
+        ],
+    )
+    .expect("batch geometrico con schema esplicito")
+}
+
 #[test]
 fn matching_ewkb_srid_is_byte_identical_through_table_only_plan() {
     let plan = json!({
@@ -656,6 +703,132 @@ fn mismatching_ewkb_srid_fails_with_crs_error() {
         matches!(error, PlenoraError::Crs(_)),
         "errore CRS dedicato: {error}"
     );
+}
+
+#[test]
+fn wkb_encoding_rejects_embedded_srid_even_when_it_matches_authority() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(
+            &[1],
+            &[Some(ewkb_srid_point_wkb(32632, 1.0, 2.0))],
+        )],
+    );
+    let output =
+        run(&plan, inputs, &[("main".to_owned(), geo_contract_wkb())]).expect("costruzione lazy");
+
+    let error = output
+        .collect_batches()
+        .expect_err("WKB puro deve rifiutare il flag SRID EWKB");
+    assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
+    assert!(
+        error.to_string().contains("unsupported operation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn undeclared_legacy_encoding_defaults_to_wkb_and_rejects_embedded_srid() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let output = run(
+        &plan,
+        single_input(
+            "main",
+            vec![geo_batch(
+                &[1],
+                &[Some(ewkb_srid_point_wkb(32632, 1.0, 2.0))],
+            )],
+        ),
+        &[("main".to_owned(), geo_contract())],
+    )
+    .expect("costruzione lazy");
+    let error = output
+        .collect_batches()
+        .expect_err("encoding legacy non dichiarato resta WKB, mai EWKB implicito");
+    assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
+    assert!(
+        error.to_string().contains("unsupported operation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let mut contract = geo_contract_wkb();
+    let mut fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    let mut metadata = fields[1].metadata().clone();
+    metadata.insert(
+        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+        GeometryEncoding::Ewkb.as_str().to_owned(),
+    );
+    fields[1] = fields[1].clone().with_metadata(metadata);
+    contract.schema = Arc::new(Schema::new(fields));
+    let batch = geo_batch_with_schema(
+        Arc::clone(&contract.schema),
+        &[1],
+        &[Some(point_wkb(1.0, 2.0))],
+    );
+
+    let error = match run(
+        &plan,
+        single_input("main", vec![batch]),
+        &[("main".to_owned(), contract)],
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("encoding field/contratto incoerenti accettati"),
+    };
+    assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
+    assert!(error.to_string().contains("encoding field"), "{error}");
+    assert!(error.to_string().contains("encoding contratto"), "{error}");
+}
+
+#[test]
+fn ewkb_embedded_srid_requires_governed_authority() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let contract = geo_contract_ewkb_without_authority();
+    let batch = geo_batch_with_schema(
+        Arc::clone(&contract.schema),
+        &[1],
+        &[Some(ewkb_srid_point_wkb(4326, 1.0, 2.0))],
+    );
+    let output = run(
+        &plan,
+        single_input("main", vec![batch]),
+        &[("main".to_owned(), contract)],
+    )
+    .expect("costruzione lazy");
+    let error = output
+        .collect_batches()
+        .expect_err("EWKB con SRID embedded richiede autorita' governata");
+    assert!(matches!(error, PlenoraError::Crs(_)), "{error}");
+    assert!(error.to_string().contains("senza autorita'"), "{error}");
 }
 
 #[test]

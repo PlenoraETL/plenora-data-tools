@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::contract::{
-    AxisOrder, ContractProperties, ContractProperty, DataContract, GeometryColumnContract,
-    GeometryDimensions, GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
+    ContractProperties, ContractProperty, DataContract, GeometryColumnContract, GeometryDimensions,
+    GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -424,11 +424,11 @@ pub(in crate::analyze) fn require_xy_dimensions(
 ///   dichiarate al contrario verrebbero trasformate come se non lo fossero,
 ///   producendo un risultato sbagliato invece di un errore.
 ///
-/// `unknown` e chiave assente restano accettati: sono l'ASSENZA di una
-/// dichiarazione (R2.7), non la dichiarazione di un ordine diverso, e
-/// l'invariante del centro vale come prima. Riordinare le coordinate non e'
-/// compito di questa op: sarebbe una trasformazione dei dati che nessuno ha
-/// chiesto.
+/// La chiave assente resta accettata per il percorso legacy. `unknown`
+/// esplicito e' invece onesto per il trasporto ma non dimostra l'ordine fisico
+/// necessario a trasformare le coordinate: anche quello fallisce chiuso.
+/// Riordinare le coordinate non e' compito di questa op: sarebbe una
+/// trasformazione dei dati che nessuno ha chiesto.
 pub(in crate::analyze) fn require_normalized_axis_order(
     op: &str,
     input: &DataContract,
@@ -445,7 +445,7 @@ pub(in crate::analyze) fn require_normalized_axis_order(
         return Ok(());
     };
     let normalized = source.normalized_gis_axis_order();
-    if declared == AxisOrder::Unknown || declared == normalized {
+    if declared == normalized {
         return Ok(());
     }
     Err(PlenoraError::Crs(format!(

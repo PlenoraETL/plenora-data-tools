@@ -155,16 +155,18 @@ use plenora_core::arrow::select::take::take;
 use plenora_core::catalog::{
     find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion, CATALOG,
 };
-use plenora_core::contract::{BatchSequence, ContractCrs, DataContract, GeometryDimensions};
+use plenora_core::contract::{
+    BatchSequence, ContractCrs, DataContract, GeometryDimensions, GeometryEncoding,
+};
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
 };
 use plenora_kernels_geo::arrow_adapter::{
-    batch_geometry_cells, canonical_geometry_metadata, canonical_geometry_srid,
-    canonical_schema_version_metadata, decode_geometry_cell, strip_decided_crs_declarations,
-    GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-    PLENORA_GEOMETRY_SRID_KEY,
+    batch_geometry_cells, canonical_geometry_encoding, canonical_geometry_metadata,
+    canonical_geometry_srid, canonical_schema_version_metadata, decode_geometry_cell,
+    strip_decided_crs_declarations, GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_SRID_KEY,
 };
 use plenora_kernels_geo::spatial_join::spatial_join_nullable_validated;
 use plenora_kernels_geo::{operations, validate_wkb_transport_for_dimensions_with_depth};
@@ -1465,7 +1467,7 @@ impl Network {
         let state = Rc::clone(&self.state);
         let edge_name = edge.to_owned();
         let expected_schema = contract.schema.clone();
-        let (geometry_index, geometry_dimensions, geometry_srid) =
+        let (geometry_index, geometry_dimensions, geometry_encoding, geometry_srid) =
             geometry_input_requirements(&contract)?;
         let mut sequence_number = 0_u64;
         Ok(Box::new(raw.map(move |item| {
@@ -1490,6 +1492,7 @@ impl Network {
                     index,
                     &edge_name,
                     geometry_dimensions,
+                    geometry_encoding,
                     geometry_srid,
                 )?;
             }
@@ -1664,6 +1667,7 @@ fn validate_wkb_cells(
     geometry_index: usize,
     edge: &str,
     dimensions: GeometryDimensions,
+    encoding: GeometryEncoding,
     expected_srid: Option<u32>,
 ) -> Result<()> {
     let cells = batch_geometry_cells(batch, geometry_index, "geometry")?;
@@ -1690,6 +1694,7 @@ fn validate_wkb_cells(
         validate_wkb_transport_for_dimensions_with_depth(
             payload,
             dimensions,
+            encoding,
             expected_srid,
             max_depth,
         )
@@ -1708,7 +1713,12 @@ fn validate_wkb_cells(
 
 fn geometry_input_requirements(
     contract: &DataContract,
-) -> Result<(Option<usize>, GeometryDimensions, Option<u32>)> {
+) -> Result<(
+    Option<usize>,
+    GeometryDimensions,
+    GeometryEncoding,
+    Option<u32>,
+)> {
     let geometry = contract.active_geometry_column();
     let index = geometry
         .map(|geometry| {
@@ -1725,6 +1735,25 @@ fn geometry_input_requirements(
         })
         .transpose()?;
     let dimensions = geometry.map_or(GeometryDimensions::Xy, |geometry| geometry.dimensions);
+    let declared_encoding = index
+        .map(|index| canonical_geometry_encoding(contract.schema.field(index)))
+        .transpose()?
+        .flatten();
+    let contract_encoding = geometry.and_then(|geometry| geometry.encoding);
+    if let Some((declared, governed)) = declared_encoding
+        .zip(contract_encoding)
+        .filter(|(declared, governed)| declared != governed)
+    {
+        let column = geometry.map_or("<assente>", |geometry| geometry.name.as_str());
+        return Err(PlenoraError::Schema(format!(
+            "colonna geometria `{column}`: encoding field `{}` incoerente con encoding contratto `{}`",
+            declared.as_str(),
+            governed.as_str()
+        )));
+    }
+    let encoding = contract_encoding
+        .or(declared_encoding)
+        .unwrap_or(GeometryEncoding::Wkb);
     let declared_srid = index
         .map(|index| canonical_geometry_srid(contract.schema.field(index)))
         .transpose()?
@@ -1744,7 +1773,7 @@ fn geometry_input_requirements(
         ));
     }
     let srid = resolved_srid.or(declared_srid);
-    Ok((index, dimensions, srid))
+    Ok((index, dimensions, encoding, srid))
 }
 
 /// Contatori e limiti dell'arco intermedio prodotto da un kernel
