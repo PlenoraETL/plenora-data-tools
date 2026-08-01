@@ -88,9 +88,9 @@ impl ResolvedCrs {
     /// OGC:CRS84 → `lon_lat`, EPSG:32632 → `easting_northing` escono gratis
     /// dalla definizione.
     ///
-    /// Deduzione da autorita', mai invenzione: qualunque altra forma (assi
-    /// assenti, meno di due assi, direzioni non riconosciute per il kind)
-    /// restituisce `None` e l'emissione resta onesta con `unknown`.
+    /// Deduzione da autorita', mai invenzione: assi assenti o meno di due assi
+    /// restituiscono `None`; due direzioni presenti ma fuori dalle quattro
+    /// combinazioni canoniche producono [`AxisOrder::Other`].
     #[must_use]
     pub fn authority_axis_order(&self) -> Option<AxisOrder> {
         let axes = self.canonical.get("coordinate_system")?.get("axis")?.as_array()?;
@@ -101,7 +101,23 @@ impl ResolvedCrs {
             (CrsKind::Geographic, "east", "north") => Some(AxisOrder::LonLat),
             (CrsKind::Projected, "east", "north") => Some(AxisOrder::EastingNorthing),
             (CrsKind::Projected, "north", "east") => Some(AxisOrder::NorthingEasting),
-            _ => None,
+            _ => Some(AxisOrder::Other),
+        }
+    }
+
+    /// Ordine delle coordinate usato dalle pipeline PROJ normalizzate per
+    /// visualizzazione GIS, distinto dall'ordine nativo dell'autorita'.
+    ///
+    /// `proj_backend` costruisce le trasformazioni con `Proj::new_known_crs`
+    /// e produce sempre x/y normalizzato: longitudine/latitudine per un CRS
+    /// geografico, easting/northing per uno proiettato. Questo valore descrive
+    /// quindi i byte di output dell'esecuzione; [`Self::authority_axis_order`]
+    /// resta disponibile separatamente come metadato della definizione CRS.
+    #[must_use]
+    pub const fn normalized_gis_axis_order(&self) -> AxisOrder {
+        match self.kind {
+            CrsKind::Geographic => AxisOrder::LonLat,
+            CrsKind::Projected => AxisOrder::EastingNorthing,
         }
     }
 
@@ -115,14 +131,23 @@ impl ResolvedCrs {
     /// non emesso (chiave opzionale R5.2), mai indovinato.
     #[must_use]
     pub fn authority_srid(&self) -> Option<u32> {
+        self.authority_identifier().map(|(_, code)| code)
+    }
+
+    /// Coppia autorita' e codice numerico della definizione canonica.
+    ///
+    /// Serve ai confronti di coerenza tra rappresentazioni: il solo codice
+    /// numerico non identifica un CRS senza la sua autorita'.
+    #[must_use]
+    pub fn authority_identifier(&self) -> Option<(&str, u32)> {
         let id = self.canonical.get("id")?;
-        id.get("authority")?.as_str()?;
+        let authority = id.get("authority")?.as_str()?;
         let code = match id.get("code")? {
             Value::Number(number) => number.as_u64(),
             Value::String(text) => text.parse::<u64>().ok(),
             _ => None,
         }?;
-        u32::try_from(code).ok()
+        Some((authority, u32::try_from(code).ok()?))
     }
 }
 
@@ -142,6 +167,136 @@ pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
         return None;
     }
     code.parse().ok()
+}
+
+/// Coppia `authority:code` semplice, con codice numerico.
+///
+/// Le forme multi-segmento come gli URN non vengono reinterpretate: il
+/// chiamante che dispone di PROJ puo' risolverle semanticamente.
+#[must_use]
+pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
+    let (authority, code) = crs_id.rsplit_once(':')?;
+    if authority.is_empty()
+        || authority.contains(':')
+        || code.is_empty()
+        || !code.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((authority, code.parse().ok()?))
+}
+
+/// Forma testuale di una definizione CRS (ADR-0009, emendamento 2026-07-31
+/// — classe B, emissione).
+///
+/// Classifica la SOLA stringa, senza backend e senza indovinare: serve
+/// all'emissione del blocco canonico R2.2 per scegliere fra
+/// `crs_id` (identificatore) e `crs_definition`+`crs_definition_format`
+/// (definizione testuale nel formato riconosciuto) — un passthrough
+/// idempotente contro la lineage, mai una riscrittura.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DefinitionForm {
+    /// Identificatore d'autorita': UNA SOLA coppia `auth:code` senza spazi,
+    /// entrambe le parti non vuote e codice qualunque (anche non numerico —
+    /// `OGC:CRS84` e' un identificatore valido; la numerita' conta solo per
+    /// lo `srid`, [`authority_code_srid`]). Cattura per costruzione anche
+    /// gli URN OGC (`urn:ogc:def:crs:...`): la coppia e' valutata
+    /// sull'ULTIMO `:` (rsplit), come in [`authority_code_srid`].
+    AuthorityCode,
+    /// Oggetto JSON (PROJJSON): stesso sniff dell'emissione storica (il
+    /// testo si analizza come JSON e produce un oggetto).
+    Projjson,
+    /// WKT1: inizia (dopo trim) con una parola chiave WKT1 seguita da `[` o
+    /// `(` (`PROJCS`, `GEOGCS`, `COMPD_CS`, `GEOCCS`, `VERT_CS`, `LOCAL_CS`,
+    /// `FITTED_CS`).
+    Wkt,
+    /// WKT2: come sopra con parole chiave WKT2 corte e alias long-form
+    /// (`PROJCRS`/`PROJECTEDCRS`, `GEODCRS`/`GEODETICCRS`,
+    /// `GEOGCRS`/`GEOGRAPHICCRS`, `VERTCRS`/`VERTICALCRS`,
+    /// `ENGCRS`/`ENGINEERINGCRS`) e le altre radici esplicitamente elencate
+    /// in [`WKT2_KEYWORDS`].
+    Wkt2,
+    /// Qualunque altra forma (es. proj-string `+proj=...`): in emissione
+    /// conserva il comportamento storico (`crs_id`) — limite documentato
+    /// preesistente: la tabella §2 non ha un formato proj.
+    Other,
+}
+
+/// Parole chiave WKT1 riconosciute da [`definition_form`] (seguite da `[` o
+/// `(`).
+const WKT1_KEYWORDS: [&str; 7] = [
+    "PROJCS",
+    "GEOGCS",
+    "COMPD_CS",
+    "GEOCCS",
+    "VERT_CS",
+    "LOCAL_CS",
+    "FITTED_CS",
+];
+
+/// Parole chiave CRS top-level WKT2 riconosciute da [`definition_form`]
+/// (seguite da `[` o `(`).
+const WKT2_KEYWORDS: [&str; 15] = [
+    "PROJCRS",
+    "PROJECTEDCRS",
+    "DERIVEDPROJCRS",
+    "GEODCRS",
+    "GEODETICCRS",
+    "GEOGCRS",
+    "GEOGRAPHICCRS",
+    "BOUNDCRS",
+    "VERTCRS",
+    "VERTICALCRS",
+    "ENGCRS",
+    "ENGINEERINGCRS",
+    "PARAMETRICCRS",
+    "TIMECRS",
+    "COMPOUNDCRS",
+];
+
+/// La stringa (gia' trimmata a sinistra) inizia con una parola chiave WKT
+/// seguita da `[` o `(` — il delimitatore rende il riconoscimento
+/// strutturale, non lessicale (nessun falso positivo su identificatori
+/// omonimi).
+fn starts_with_wkt_keyword(trimmed: &str, keywords: &[&str]) -> bool {
+    let Some(delimiter) = trimmed.find(['[', '(']) else {
+        return false;
+    };
+    let candidate = trimmed[..delimiter].trim_end();
+    keywords
+        .iter()
+        .any(|keyword| candidate.eq_ignore_ascii_case(keyword))
+}
+
+/// Classifica una definizione CRS testuale (vedi [`DefinitionForm`]).
+///
+/// Funzione pura della stringa: nessun backend, mai un errore — le forme
+/// non riconosciute cadono in [`DefinitionForm::Other`], che preserva il
+/// comportamento storico.
+#[must_use]
+pub fn definition_form(definition: &str) -> DefinitionForm {
+    if let Ok(value) = serde_json::from_str::<Value>(definition) {
+        return if value.is_object() {
+            DefinitionForm::Projjson
+        } else {
+            DefinitionForm::Other
+        };
+    }
+    let trimmed = definition.trim_start();
+    if starts_with_wkt_keyword(trimmed, &WKT2_KEYWORDS) {
+        return DefinitionForm::Wkt2;
+    }
+    if starts_with_wkt_keyword(trimmed, &WKT1_KEYWORDS) {
+        return DefinitionForm::Wkt;
+    }
+    if !trimmed.contains(char::is_whitespace)
+        && trimmed
+            .rsplit_once(':')
+            .is_some_and(|(authority, code)| !authority.is_empty() && !code.is_empty())
+    {
+        return DefinitionForm::AuthorityCode;
+    }
+    DefinitionForm::Other
 }
 
 #[derive(Debug, Error)]
@@ -562,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn authority_deduction_is_none_without_coordinate_system() {
+    fn authority_deduction_distinguishes_missing_and_other_axis_order() {
         // Stub senza `coordinate_system` (la forma dei fixture storici):
         // nessuna deduzione — l'emissione resta onesta con `unknown`.
         let crs = ResolvedCrs::from_resolved_parts(
@@ -573,9 +728,7 @@ mod tests {
         );
         assert_eq!(crs.authority_axis_order(), None);
         assert_eq!(crs.authority_srid(), None);
-        // Forme degradate: un solo asse, direzioni non mappabili sul kind
-        // (projected (north,east) sarebbe invece NorthingEasting per
-        // costruzione — la mappa e' direzioni+kind, non una tabella di CRS).
+        // Un solo asse non permette alcuna deduzione.
         let one_axis = ResolvedCrs::from_resolved_parts(
             "EPSG:4326".to_owned(),
             serde_json::json!({
@@ -588,7 +741,10 @@ mod tests {
             None,
         );
         assert_eq!(one_axis.authority_axis_order(), None);
-        let mismatched = ResolvedCrs::from_resolved_parts(
+        // Due direzioni presenti ma fuori dalle quattro combinazioni
+        // canoniche sono un ordine noto non canonico: `other`, non
+        // `unknown` (R4.2/R4.3.3).
+        let non_canonical = ResolvedCrs::from_resolved_parts(
             "EPSG:32632".to_owned(),
             serde_json::json!({
                 "type": "ProjectedCRS",
@@ -600,7 +756,7 @@ mod tests {
             CrsKind::Projected,
             Some(1.0),
         );
-        assert_eq!(mismatched.authority_axis_order(), None);
+        assert_eq!(non_canonical.authority_axis_order(), Some(AxisOrder::Other));
     }
 
     #[test]
@@ -612,5 +768,122 @@ mod tests {
         assert_eq!(authority_code_srid("EPSG"), None);
         assert_eq!(authority_code_srid("EPSG:4326.0"), None);
         assert_eq!(authority_code_srid("EPSG:99999999999999999999"), None);
+        assert_eq!(authority_code_identifier("EPSG:4326"), Some(("EPSG", 4326)));
+        assert_eq!(authority_code_identifier("epsg:4326"), Some(("epsg", 4326)));
+        assert_eq!(authority_code_identifier("FOO:3003"), Some(("FOO", 3003)));
+        assert_eq!(authority_code_identifier("urn:ogc:def:crs:EPSG::4326"), None);
+    }
+
+    #[test]
+    fn definition_form_recognizes_parenthesized_wkt() {
+        // ISO 19162 ammette sia parentesi quadre sia tonde come delimitatori
+        // WKT: una definizione valida non deve degradare a `crs_id`.
+        assert_eq!(
+            definition_form(r#"GEOGCS("WGS 84",DATUM("WGS_1984"))"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"GEODCRS("WGS 84",DATUM("World Geodetic System 1984"))"#),
+            DefinitionForm::Wkt2
+        );
+    }
+
+    #[test]
+    fn definition_form_recognizes_all_supported_wkt_root_aliases_and_delimiters() {
+        let wkt1 = [
+            "PROJCS", "GEOGCS", "COMPD_CS", "GEOCCS", "VERT_CS", "LOCAL_CS", "FITTED_CS",
+        ];
+        let wkt2 = [
+            "PROJCRS",
+            "PROJECTEDCRS",
+            "DERIVEDPROJCRS",
+            "GEODCRS",
+            "GEODETICCRS",
+            "GEOGCRS",
+            "GEOGRAPHICCRS",
+            "BOUNDCRS",
+            "VERTCRS",
+            "VERTICALCRS",
+            "ENGCRS",
+            "ENGINEERINGCRS",
+            "PARAMETRICCRS",
+            "TIMECRS",
+            "COMPOUNDCRS",
+        ];
+        for delimiter in ['[', '('] {
+            let closing = if delimiter == '[' { ']' } else { ')' };
+            for root in wkt1 {
+                let definition = format!("{root}{delimiter}\"test\"{closing}");
+                assert_eq!(definition_form(&definition), DefinitionForm::Wkt, "{definition}");
+            }
+            for root in wkt2 {
+                let definition = format!("{root}{delimiter}\"test\"{closing}");
+                assert_eq!(definition_form(&definition), DefinitionForm::Wkt2, "{definition}");
+            }
+        }
+
+        for invalid in ["GEODETICCRSISH[\"test\"]", "FITTED_CS_EXTRA(\"test\")"] {
+            assert_eq!(definition_form(invalid), DefinitionForm::Other, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn definition_form_classifies_authority_code_projjson_wkt_and_other() {
+        // AuthorityCode: codice numerico e non (OGC:CRS84 e' un
+        // identificatore valido), URN OGC catturati per costruzione.
+        assert_eq!(definition_form("EPSG:4326"), DefinitionForm::AuthorityCode);
+        assert_eq!(definition_form("OGC:CRS84"), DefinitionForm::AuthorityCode);
+        assert_eq!(
+            definition_form("urn:ogc:def:crs:OGC:1.3:CRS84"),
+            DefinitionForm::AuthorityCode
+        );
+        // PROJJSON: oggetto JSON (come lo sniff storico dell'emissione).
+        assert_eq!(
+            definition_form(r#"{"type":"GeographicCRS","name":"WGS 84"}"#),
+            DefinitionForm::Projjson
+        );
+        // WKT1 (Monte Mario, la forma del caso owner) e WKT2.
+        assert_eq!(
+            definition_form(r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario"]]"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"  GEOGCS["Monte Mario",DATUM["Monte_Mario"]]"#),
+            DefinitionForm::Wkt,
+            "il trim a sinistra non cambia la classifica"
+        );
+        assert_eq!(
+            definition_form(r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#),
+            DefinitionForm::Wkt2
+        );
+        assert_eq!(
+            definition_form(r#"GEODCRS["WGS 84",DATUM["World Geodetic System 1984"]]"#),
+            DefinitionForm::Wkt2
+        );
+        assert_eq!(definition_form(r#"projcs["lowercase"]"#), DefinitionForm::Wkt);
+        assert_eq!(definition_form(r#"GeOdCrS["mixed case"]"#), DefinitionForm::Wkt2);
+        for definition in [
+            r#"COMPOUNDCRS["compound"]"#,
+            r#"PARAMETRICCRS["parametric"]"#,
+            r#"TIMECRS["temporal"]"#,
+            r#"DERIVEDPROJCRS["derived"]"#,
+        ] {
+            assert_eq!(definition_form(definition), DefinitionForm::Wkt2, "{definition}");
+        }
+        // proj-string e forme degeneri: Other (comportamento storico,
+        // `crs_id` — la tabella §2 non ha formato proj).
+        assert_eq!(
+            definition_form("+proj=longlat +datum=WGS84 +no_defs"),
+            DefinitionForm::Other
+        );
+        assert_eq!(definition_form(""), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG:"), DefinitionForm::Other);
+        assert_eq!(definition_form(":4326"), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG"), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG: 4326"), DefinitionForm::Other);
+        assert_eq!(definition_form("not a crs at all"), DefinitionForm::Other);
+        // Un JSON non-oggetto non e' PROJJSON ne' un identificatore; una keyword senza `[` non e' WKT.
+        assert_eq!(definition_form(r#""EPSG:4326""#), DefinitionForm::Other);
+        assert_eq!(definition_form("PROJCS"), DefinitionForm::Other);
     }
 }

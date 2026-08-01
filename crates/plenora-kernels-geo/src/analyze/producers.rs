@@ -18,14 +18,14 @@ use serde_json::Value;
 use crate::arrow_adapter::DEFAULT_GEOMETRY_COLUMN;
 
 use super::config::{
-    CollectConfig, FromCoordsConfig, FromWktConfig, GenerateGridConfig, ReprojectConfig, SnapConfig,
-    SubdivideConfig,
+    CollectConfig, FromCoordsConfig, FromWktConfig, GenerateGridConfig, ReprojectConfig,
+    SnapConfig, SubdivideConfig,
 };
 use super::dispatch::require_resolved_crs;
 use super::helpers::{
     ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
-    new_geometry_field, output_fields, parse_config, rebuild, resolve_definition,
-    set_geometry_crs, validate_wkb_hex,
+    new_geometry_field, output_fields, parse_config, rebuild, require_normalized_axis_order,
+    resolve_definition, set_geometry_crs, validate_wkb_hex,
 };
 use super::{
     CELL_I_COLUMN, CELL_J_COLUMN, CENTROID_X_COLUMN, CENTROID_Y_COLUMN, DEFAULT_X_COLUMN,
@@ -105,11 +105,17 @@ pub(in crate::analyze) fn analyze_geometry_only(
 /// `axis_order`, `crs_resolution`) sono SOSTITUITE, non fuse: rimosse qui e
 /// ri-emesse dal contratto in `executor.rs::canonical_output_schema`, senza
 /// che il guard R2.6 veda mai una divergenza. Il guard resta intatto per
-/// tutte le altre chiavi. Emendamento 2026-07-31: la ri-emissione DEDUCE
-/// `axis_order`/`srid` dal PROJJSON canonico del target risolto (fonte
-/// d'autorita', la stessa usata dal kernel) — la strip e' proprio cio' che
-/// rende la chiave ASSENTE e quindi riempibile dal dedotto (completamento
-/// R2.7, mai arbitrato: una chiave ereditata sopravvissuta vincerebbe).
+/// tutte le altre chiavi. `srid` resta metadato d'autorita'; `axis_order`
+/// descrive invece le coordinate di OUTPUT del backend e viene fissato qui
+/// all'ordine GIS normalizzato (`lon_lat` o `easting_northing`), separato
+/// dall'ordine nativo della definizione d'autorita' (per esempio EPSG:4326
+/// e' authority `lat_lon`, ma PROJ produce x=longitudine/y=latitudine).
+///
+/// Quell'affermazione vale solo se le coordinate ENTRANO nell'ordine GIS
+/// normalizzato: [`require_normalized_axis_order`] lo impone fail-closed
+/// prima di riscrivere la chiave. Senza il gate, con source == target il
+/// backend restituirebbe i byte invariati (nessuna pipeline PROJ) e
+/// l'`axis_order` riscritto contraddirebbe le coordinate che descrive.
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
@@ -122,6 +128,10 @@ pub(in crate::analyze) fn analyze_reproject(
     // `Missing` ferma l'op con lo stesso errore a prescindere dal backend
     // compilato (determinismo del fallimento).
     let source = require_resolved_crs(op, geometry)?;
+    // Gate dell'ordine assi PRIMA della risoluzione del target, come quello
+    // R4.6.3 sopra: dipende dalla sola sorgente e fallisce identico a
+    // prescindere dal backend compilato (determinismo del fallimento).
+    require_normalized_axis_order(op, input, geometry, source)?;
     let target = resolve_definition(&parsed.target_crs, plan_crs)?;
     validate_requirement(CrsRequirement::Reprojection, &[source, &target])?;
     let mut fields = output_fields(input);
@@ -130,6 +140,10 @@ pub(in crate::analyze) fn analyze_reproject(
         if field.name() == &geometry.name {
             let mut metadata = field.metadata().clone();
             crate::arrow_adapter::strip_rewritten_crs_keys(&mut metadata);
+            metadata.insert(
+                crate::arrow_adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                target.normalized_gis_axis_order().as_str().to_owned(),
+            );
             *field = field.clone().with_metadata(metadata);
         }
     }
@@ -186,7 +200,11 @@ pub(in crate::analyze) fn analyze_from_coords(
         }
     }
     if !ensure_name(name) {
-        return Err(invalid_param(op, "geometry_column", "non deve essere vuoto"));
+        return Err(invalid_param(
+            op,
+            "geometry_column",
+            "non deve essere vuoto",
+        ));
     }
     let crs = match &parsed.crs {
         Some(definition) => resolve_definition(definition, plan_crs)?,
@@ -199,7 +217,13 @@ pub(in crate::analyze) fn analyze_from_coords(
     validate_requirement(requirement, &[&crs])?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
-    fields.push(new_geometry_field(name, &crs, GeometryDimensions::Xy, None, false)?);
+    fields.push(new_geometry_field(
+        name,
+        &crs,
+        GeometryDimensions::Xy,
+        None,
+        false,
+    )?);
     let field_id = fields_allocator.alloc();
     let geometry = GeometryColumnContract {
         field_id,
@@ -270,13 +294,21 @@ pub(in crate::analyze) fn analyze_from_wkt(
     let crs = match &parsed.crs {
         Some(definition) => resolve_definition(definition, plan_crs)?,
         None => plan_crs.cloned().ok_or_else(|| {
-            PlenoraError::Crs(format!("{op}: CRS obbligatorio (config `crs` o CRS di piano)"))
+            PlenoraError::Crs(format!(
+                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
+            ))
         })?,
     };
     validate_requirement(requirement, &[&crs])?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
-    fields.push(new_geometry_field(name, &crs, GeometryDimensions::Xy, None, true)?);
+    fields.push(new_geometry_field(
+        name,
+        &crs,
+        GeometryDimensions::Xy,
+        None,
+        true,
+    )?);
     let field_id = fields_allocator.alloc();
     let geometry = GeometryColumnContract {
         field_id,
@@ -366,13 +398,17 @@ pub(in crate::analyze) fn analyze_generate_grid(
         parsed.extent.ymax,
     )
     .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
-    let shape = parsed.shape.unwrap_or(crate::extensions2::GridShape::Square);
+    let shape = parsed
+        .shape
+        .unwrap_or(crate::extensions2::GridShape::Square);
     let cells = crate::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     let crs = match &parsed.crs {
         Some(definition) => resolve_definition(definition, plan_crs)?,
         None => plan_crs.cloned().ok_or_else(|| {
-            PlenoraError::Crs(format!("{op}: CRS obbligatorio (config `crs` o CRS di piano)"))
+            PlenoraError::Crs(format!(
+                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
+            ))
         })?,
     };
     validate_requirement(requirement, &[&crs])?;
@@ -475,7 +511,11 @@ pub(in crate::analyze) fn analyze_subdivide(
 
 /// `snap` (v1.2): 1:1 in place; `reference_wkb` validato strutturalmente e
 /// decodificato in analisi, `tolerance` finita e non negativa.
-pub(in crate::analyze) fn analyze_snap(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_snap(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+) -> Result<DataContract> {
     let parsed: SnapConfig = parse_config(op, config)?;
     let bytes = validate_wkb_hex(op, "reference_wkb", &parsed.reference_wkb)?;
     crate::geometry_from_wkb(&bytes)

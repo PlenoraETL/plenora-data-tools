@@ -18,7 +18,11 @@ use super::producers::analyze_add_column;
 use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};
 
 /// `bounds_extractor`: quattro colonne `{geometria}_minx/miny/maxx/maxy`.
-pub(in crate::analyze) fn analyze_bounds(op: &str, input: &DataContract, geometry: &GeometryColumnContract) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_bounds(
+    op: &str,
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+) -> Result<DataContract> {
     let mut fields = output_fields(input);
     for suffix in ["minx", "miny", "maxx", "maxy"] {
         let name = format!("{}_{suffix}", geometry.name);
@@ -131,7 +135,11 @@ pub(in crate::analyze) fn analyze_line_locate_point(
 }
 
 /// Misure con colonna scalare aggiunta (`area`, `length`, ...).
-pub(in crate::analyze) fn analyze_measure(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_measure(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+) -> Result<DataContract> {
     let parsed: OutputColumnConfig = parse_config(op, config)?;
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
     analyze_add_column(op, input, name, DataType::Float64)

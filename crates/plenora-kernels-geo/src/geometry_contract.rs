@@ -233,15 +233,18 @@ fn check_ring(ring: &LineString<f64>) -> Result<(), PlenoraError> {
 #[cfg(test)]
 mod tests {
     use geo::{
-        GeometryCollection, Line, MultiLineString, MultiPoint, MultiPolygon, Point, Rect, Triangle,
-        line_string, polygon,
+        line_string, polygon, GeometryCollection, Line, MultiLineString, MultiPoint, MultiPolygon,
+        Point, Rect, Triangle,
     };
     use geozero::{CoordDimensions, ToWkb};
 
     use super::*;
-    use crate::{MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, wkb_decoder};
+    use crate::{wkb_decoder, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH};
 
     /// Batteria di geometrie valide usata da entrambe le parita'.
+    // La fixture enumera intenzionalmente tutte le famiglie OGC in un unico
+    // oracolo condiviso; dividerla renderebbe meno evidente la parita' coperta.
+    #[allow(clippy::too_many_lines)]
     fn valid_fixtures() -> Vec<(&'static str, Geometry<f64>)> {
         let triangle = Geometry::Polygon(polygon![
             (x: 0.0, y: 0.0),
@@ -268,11 +271,16 @@ mod tests {
             ("point", Geometry::Point(Point::new(1.5, -2.5))),
             (
                 "line",
-                Geometry::Line(Line::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 3.0, y: 4.0 })),
+                Geometry::Line(Line::new(
+                    Coord { x: 0.0, y: 0.0 },
+                    Coord { x: 3.0, y: 4.0 },
+                )),
             ),
             (
                 "linestring",
-                Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0), (x: 2.0, y: 0.5)]),
+                Geometry::LineString(
+                    line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0), (x: 2.0, y: 0.5)],
+                ),
             ),
             (
                 "linestring vuota",
@@ -282,7 +290,10 @@ mod tests {
             ("polygon con buco", holed.clone()),
             (
                 "multipoint",
-                Geometry::MultiPoint(MultiPoint::new(vec![Point::new(0.0, 0.0), Point::new(3.0, 4.0)])),
+                Geometry::MultiPoint(MultiPoint::new(vec![
+                    Point::new(0.0, 0.0),
+                    Point::new(3.0, 4.0),
+                ])),
             ),
             (
                 "multipoint vuota",
@@ -310,7 +321,10 @@ mod tests {
             ),
             (
                 "rect",
-                Geometry::Rect(Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 })),
+                Geometry::Rect(Rect::new(
+                    Coord { x: 0.0, y: 0.0 },
+                    Coord { x: 2.0, y: 1.0 },
+                )),
             ),
             (
                 "triangle",
@@ -343,7 +357,9 @@ mod tests {
     #[test]
     fn wkb_size_xy_matches_canonical_encoder() {
         for (label, geometry) in valid_fixtures() {
-            let encoded = geometry.to_wkb(CoordDimensions::xy()).expect("encode fixture");
+            let encoded = geometry
+                .to_wkb(CoordDimensions::xy())
+                .expect("encode fixture");
             assert_eq!(
                 wkb_size_xy(&geometry),
                 encoded.len() as u64,
@@ -372,8 +388,7 @@ mod tests {
             .to_wkb(CoordDimensions::xy())
             .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))
             .and_then(|payload| wkb_decoder::decode_validated(&payload).map(|_| ()));
-        let validated =
-            validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS);
+        let validated = validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS);
         match (&reference, &validated) {
             (Ok(()), Ok(())) => {}
             (Err(expected), Err(actual)) => assert_eq!(
@@ -428,7 +443,10 @@ mod tests {
                     Vec::new(),
                 )),
             ),
-            ("anello aperto chiuso da Polygon::new", auto_closed_polygon()),
+            (
+                "anello aperto chiuso da Polygon::new",
+                auto_closed_polygon(),
+            ),
             (
                 "anello interno aperto chiuso da Polygon::new",
                 Geometry::Polygon(polygon!(
@@ -470,12 +488,7 @@ mod tests {
             (
                 "NaN in figlio di multipolygon",
                 Geometry::MultiPolygon(MultiPolygon::new(vec![Polygon::new(
-                    LineString::from(vec![
-                        (0.0, 0.0),
-                        (f64::NAN, 0.0),
-                        (1.0, 1.0),
-                        (0.0, 0.0),
-                    ]),
+                    LineString::from(vec![(0.0, 0.0), (f64::NAN, 0.0), (1.0, 1.0), (0.0, 0.0)]),
                     Vec::new(),
                 )])),
             ),
@@ -483,7 +496,10 @@ mod tests {
                 "line con infinito",
                 Geometry::Line(Line::new(
                     Coord { x: 0.0, y: 0.0 },
-                    Coord { x: f64::INFINITY, y: 0.0 },
+                    Coord {
+                        x: f64::INFINITY,
+                        y: 0.0,
+                    },
                 )),
             ),
         ];
@@ -509,11 +525,12 @@ mod tests {
         // Al limite esatto entrambi accettano; un livello oltre rifiutano.
         for (levels, max_depth, expected_ok) in [(2_usize, 2_usize, true), (3, 2, false)] {
             let geometry = nested_collection(levels);
-            let payload = geometry.to_wkb(CoordDimensions::xy()).expect("encode fixture");
+            let payload = geometry
+                .to_wkb(CoordDimensions::xy())
+                .expect("encode fixture");
             let reference =
                 wkb_decoder::decode_validated_with_depth(&payload, max_depth).map(|_| ());
-            let validated =
-                validate_geometry_structural(&geometry, max_depth, MAX_WKB_COMPONENTS);
+            let validated = validate_geometry_structural(&geometry, max_depth, MAX_WKB_COMPONENTS);
             assert_eq!(
                 reference.is_ok(),
                 validated.is_ok(),
@@ -547,9 +564,7 @@ mod tests {
                 if reason == "struttura WKB non valida: conteggio componenti oltre il limite"
         ));
         // Il limite di default e' quello del decoder (MAX_WKB_COMPONENTS).
-        assert!(
-            validate_geometry_structural(&geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS).is_ok()
-        );
+        assert!(validate_geometry_structural(&geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS).is_ok());
     }
 
     #[test]

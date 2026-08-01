@@ -1463,11 +1463,10 @@ mod tests {
         let pieces = split_line(&source, &polygon, 0.0, 100, 1_000, 10, 100).unwrap();
         assert_eq!(pieces.len(), 3);
 
-        let multi_polygon =
-            Geometry::MultiPolygon(geo::MultiPolygon(vec![match polygon {
-                Geometry::Polygon(value) => value,
-                _ => unreachable!(),
-            }]));
+        let multi_polygon = Geometry::MultiPolygon(geo::MultiPolygon(vec![match polygon {
+            Geometry::Polygon(value) => value,
+            _ => unreachable!(),
+        }]));
         assert_eq!(
             split_line(&source, &multi_polygon, 0.0, 100, 1_000, 10, 100)
                 .unwrap()

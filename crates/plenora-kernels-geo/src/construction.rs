@@ -88,14 +88,11 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
     let srid = head
         .get(..5)
         .is_some_and(|start| start.eq_ignore_ascii_case("SRID="));
-    let dimensional = prefix
-        .split_whitespace()
-        .skip(1)
-        .any(|token| {
-            ["Z", "M", "ZM"]
-                .iter()
-                .any(|suffix| token.eq_ignore_ascii_case(suffix))
-        });
+    let dimensional = prefix.split_whitespace().skip(1).any(|token| {
+        ["Z", "M", "ZM"]
+            .iter()
+            .any(|suffix| token.eq_ignore_ascii_case(suffix))
+    });
     if srid || dimensional {
         return Err(ConstructionError::UnsupportedWktDimension);
     }

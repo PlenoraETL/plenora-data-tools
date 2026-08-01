@@ -15,8 +15,8 @@ use serde_json::Value;
 use super::config::{
     AffineTransformConfig, BufferConfig, CleanTopologyConfig, ConcaveHullConfig, DensifyConfig,
     EmptyConfig, LineInterpolatePointConfig, LineSubstringConfig, NearestConfig, OtherWkbConfig,
-    OutputColumnConfig, OverlayConfig, PolygonizeConfig, RotateConfig, ScaleConfig, SimplifyConfig,
-    SJoinConfig, SnapToGridConfig, SplitConfig, TranslateConfig, VoronoiConfig,
+    OutputColumnConfig, OverlayConfig, PolygonizeConfig, RotateConfig, SJoinConfig, ScaleConfig,
+    SimplifyConfig, SnapToGridConfig, SplitConfig, TranslateConfig, VoronoiConfig,
 };
 use super::helpers::{
     ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive, ensure_ratio,
@@ -100,7 +100,11 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
         "geo.affine_transform" => {
             let parsed: AffineTransformConfig = parse_config(op, config)?;
             if parsed.coefficients.len() != 6 {
-                return Err(invalid_param(op, "coefficients", "devono essere esattamente 6 coefficienti"));
+                return Err(invalid_param(
+                    op,
+                    "coefficients",
+                    "devono essere esattamente 6 coefficienti",
+                ));
             }
             if parsed.coefficients.iter().any(|value| !value.is_finite()) {
                 return Err(invalid_param(op, "coefficients", "devono essere finiti"));
@@ -171,7 +175,12 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
 }
 
 /// Predicati e distanze "unari" con secondo operando da config (`other_wkb`).
-pub(in crate::analyze) fn analyze_unary_pair(op: &str, input: &DataContract, config: &Value, data_type: DataType) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_unary_pair(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+    data_type: DataType,
+) -> Result<DataContract> {
     let parsed: OtherWkbConfig = parse_config(op, config)?;
     validate_other_wkb(op, &parsed.other_wkb)?;
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
@@ -218,7 +227,9 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
             exact_types(vec![GeometryType::Point]).map(Some)
         }
-        "geo.convex_hull" | "geo.concave_hull" => exact_types(vec![GeometryType::Polygon]).map(Some),
+        "geo.convex_hull" | "geo.concave_hull" => {
+            exact_types(vec![GeometryType::Polygon]).map(Some)
+        }
         "geo.envelope" => exact_types(vec![
             GeometryType::Point,
             GeometryType::LineString,
@@ -240,8 +251,13 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
             .map_err(|error| {
                 PlenoraError::Internal(format!("mappa tipi di output incoerente: {error}"))
             }),
-        "geo.simplify" | "geo.affine_transform" | "geo.translate" | "geo.scale" | "geo.rotate"
-        | "geo.densify" | "geo.snap_to_grid" => Ok(None),
+        "geo.simplify"
+        | "geo.affine_transform"
+        | "geo.translate"
+        | "geo.scale"
+        | "geo.rotate"
+        | "geo.densify"
+        | "geo.snap_to_grid" => Ok(None),
         _ => Err(PlenoraError::Internal(format!(
             "transform_output_types: `{op}` non e' una trasformazione 1:1"
         ))),
@@ -277,10 +293,22 @@ pub(in crate::analyze) fn analyze_unary(
         // Trasformazioni 1:1 in place: schema e FieldId invariati; le op
         // che CAMBIANO il tipo geometrico dichiarano i tipi dell'output
         // (ADR-0009 decisione 8, `transform_output_types`).
-        "geo.centroid" | "geo.convex_hull" | "geo.envelope" | "geo.boundary"
-        | "geo.point_on_surface" | "geo.make_valid" | "geo.buffer" | "geo.simplify"
-        | "geo.affine_transform" | "geo.translate" | "geo.scale" | "geo.rotate"
-        | "geo.concave_hull" | "geo.densify" | "geo.snap_to_grid" | "geo.line_substring"
+        "geo.centroid"
+        | "geo.convex_hull"
+        | "geo.envelope"
+        | "geo.boundary"
+        | "geo.point_on_surface"
+        | "geo.make_valid"
+        | "geo.buffer"
+        | "geo.simplify"
+        | "geo.affine_transform"
+        | "geo.translate"
+        | "geo.scale"
+        | "geo.rotate"
+        | "geo.concave_hull"
+        | "geo.densify"
+        | "geo.snap_to_grid"
+        | "geo.line_substring"
         | "geo.line_interpolate_point" => {
             validate_transform_params(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
@@ -290,7 +318,10 @@ pub(in crate::analyze) fn analyze_unary(
             )
         }
         "geo.reproject" => analyze_reproject(op, input, geometry, config, plan_crs),
-        "geo.area" | "geo.length" | "geo.perimeter" | "geo.geodesic_line_length"
+        "geo.area"
+        | "geo.length"
+        | "geo.perimeter"
+        | "geo.geodesic_line_length"
         | "geo.geodesic_area" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_measure(op, input, config)
@@ -398,10 +429,18 @@ pub(in crate::analyze) fn analyze_unary(
             let parsed: PolygonizeConfig = parse_config(op, config)?;
             let _ = (&parsed.node_input, &parsed.require_complete);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_geometry_only(input, geometry, &[Field::new(CLASS_COLUMN, DataType::Utf8, false)])
+            analyze_geometry_only(
+                input,
+                geometry,
+                &[Field::new(CLASS_COLUMN, DataType::Utf8, false)],
+            )
         }
-        "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
-        | "geo.haversine_distance" | "geo.geodesic_distance" | "geo.bearing" => {
+        "geo.distance"
+        | "geo.hausdorff_distance"
+        | "geo.frechet_distance"
+        | "geo.haversine_distance"
+        | "geo.geodesic_distance"
+        | "geo.bearing" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_unary_pair(op, input, config, DataType::Float64)
         }
@@ -452,10 +491,17 @@ pub(in crate::analyze) fn analyze_binary(
         // allineate a left nel protocollo legacy: proprieta' preservate.
         // ADR-0009 decisione 8: le booleane poligonali producono sempre
         // `MultiPolygon` (forma unica del kernel), non il tipo di left.
-        "geo.clip" | "geo.intersection" | "geo.union" | "geo.difference"
+        "geo.clip"
+        | "geo.intersection"
+        | "geo.union"
+        | "geo.difference"
         | "geo.symmetric_difference" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            with_geometry_types(left, left_geometry, exact_types(vec![GeometryType::MultiPolygon])?)
+            with_geometry_types(
+                left,
+                left_geometry,
+                exact_types(vec![GeometryType::MultiPolygon])?,
+            )
         }
         "geo.within" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;

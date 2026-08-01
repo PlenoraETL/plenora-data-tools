@@ -93,7 +93,7 @@ fn polygon_body_bytes(polygon: &geo::Polygon<f64>) -> u64 {
 /// per la memoria nativa delle geometrie (formula nel doc-comment di
 /// modulo). Va esposta nelle metriche come "stimata", separata da memoria
 /// riservata e osservata.
-#[must_use] 
+#[must_use]
 pub fn estimate_geometry_native_bytes(geometry: &Geometry<f64>) -> u64 {
     let node = STRUCT_OVERHEAD_BYTES;
     match geometry {
@@ -109,19 +109,22 @@ pub fn estimate_geometry_native_bytes(geometry: &Geometry<f64>) -> u64 {
             let children = lines.0.iter().fold(0_u64, |total, line| {
                 total.saturating_add(coord_vec_bytes(0, line.0.len()))
             });
-            node.saturating_add(VEC_OVERHEAD_BYTES).saturating_add(children)
+            node.saturating_add(VEC_OVERHEAD_BYTES)
+                .saturating_add(children)
         }
         Geometry::MultiPolygon(polygons) => {
             let children = polygons.0.iter().fold(0_u64, |total, polygon| {
                 total.saturating_add(polygon_body_bytes(polygon))
             });
-            node.saturating_add(VEC_OVERHEAD_BYTES).saturating_add(children)
+            node.saturating_add(VEC_OVERHEAD_BYTES)
+                .saturating_add(children)
         }
         Geometry::GeometryCollection(collection) => {
             let children = collection.0.iter().fold(0_u64, |total, child| {
                 total.saturating_add(estimate_geometry_native_bytes(child))
             });
-            node.saturating_add(VEC_OVERHEAD_BYTES).saturating_add(children)
+            node.saturating_add(VEC_OVERHEAD_BYTES)
+                .saturating_add(children)
         }
     }
 }
@@ -242,13 +245,17 @@ mod tests {
     fn estimate_is_monotonic_in_the_coordinate_count() {
         let short = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
         let long = Geometry::LineString(LineString::from(
-            (0..10).map(|index| (f64::from(index), f64::from(index))).collect::<Vec<_>>(),
+            (0..10)
+                .map(|index| (f64::from(index), f64::from(index)))
+                .collect::<Vec<_>>(),
         ));
         assert!(estimate_geometry_native_bytes(&long) > estimate_geometry_native_bytes(&short));
 
         let single = Geometry::MultiPoint(geo::MultiPoint::new(vec![Point::new(0.0, 0.0)]));
         let many = Geometry::MultiPoint(geo::MultiPoint::new(
-            (0..5).map(|index| Point::new(f64::from(index), 0.0)).collect(),
+            (0..5)
+                .map(|index| Point::new(f64::from(index), 0.0))
+                .collect(),
         ));
         assert!(estimate_geometry_native_bytes(&many) > estimate_geometry_native_bytes(&single));
     }

@@ -51,7 +51,9 @@ use plenora_core::contract::{
     GeometryDimensions, GeometryEncoding, GeometryPrecision, GeometryTypesProperty,
     SpatialSemantics,
 };
-use plenora_core::crs::{authority_code_srid, ResolvedCrs, MAX_CRS_DEFINITION_BYTES};
+use plenora_core::crs::{
+    authority_code_srid, definition_form, DefinitionForm, ResolvedCrs, MAX_CRS_DEFINITION_BYTES,
+};
 use plenora_core::PlenoraError;
 use rayon::prelude::*;
 
@@ -447,9 +449,9 @@ pub struct GeometryMetadataDetails {
     /// Ordine degli assi del CRS; la chiave e' obbligatoria quando un CRS
     /// e' presente e l'emissione e' per completamento DELL'ASSENTE (R2.7,
     /// ADR-0009 emendamento 2026-07-31): questo dettaglio esplicito vince,
-    /// poi la deduzione dalla definizione canonica d'autorita'
-    /// ([`ResolvedCrs::authority_axis_order`]), infine `unknown` quando ne'
-    /// dettaglio ne' deduzione sono possibili.
+    /// poi l'ordine GIS normalizzato quando la definizione canonica permette
+    /// di stabilire gli assi. La chiave descrive l'ordine fisico x/y dei
+    /// byte, non l'ordine nativo dell'autorita'.
     pub axis_order: Option<AxisOrder>,
     /// SRID noto (emesso come intero decimale senza segno); come sopra, un
     /// dettaglio assente e' completato dalla deduzione d'autorita'
@@ -484,25 +486,25 @@ pub struct GeometryMetadataDetails {
 /// - con `missing` NON sono emesse `crs_id`/`crs_definition`/
 ///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
 ///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
-/// - la definizione CRS che e' un oggetto JSON (PROJJSON) e' emessa come
-///   `crs_definition` + `crs_definition_format = projjson`; ogni altra
-///   definizione e' emessa come `crs_id` (identificatore di autorita', es.
-///   `EPSG:4326`). E' la stessa distinzione che [`geo_metadata_json`]
-///   applica al metadato legacy `geo.crs` (oggetto JSON incorporato vs
-///   stringa authority:code), cosi' le due rappresentazioni sono coerenti
-///   per costruzione (R2.6); e' anche la forma emessa da
-///   plenora-database-tools (`crs_id` = `EPSG:xxxx`). Limite dichiarato: una
-///   definizione WKT testuale non e' distinguibile da un identificatore di
-///   autorita' senza un hint di formato, che `ResolvedCrs` non porta; nel
-///   workspace le definizioni risolte sono oggi authority:code o PROJJSON.
+/// - la forma della definizione CRS decide la chiave
+///   ([`definition_form`], ADR-0009 emendamento 2026-07-31): un oggetto
+///   JSON (PROJJSON) e' emesso come `crs_definition` + `projjson`, un testo
+///   WKT1/WKT2 come `crs_definition` + `wkt`/`wkt2`, un identificatore di
+///   autorita' (es. `EPSG:4326`) come `crs_id`. E' la stessa distinzione che
+///   [`geo_metadata_json`] applica al metadato legacy `geo.crs` (oggetto
+///   JSON incorporato vs stringa authority:code), cosi' le due
+///   rappresentazioni sono coerenti per costruzione (R2.6); e' anche la
+///   forma emessa da plenora-database-tools (`crs_id` = `EPSG:xxxx`).
+///   Limite preesistente invariato: una proj-string (`+proj=...`) non ha
+///   formato nella tabella §2 e resta in `crs_id`
+///   ([`DefinitionForm::Other`]).
 /// - con un CRS risolto o dichiarato non risolto `axis_order` e' sempre
 ///   emesso (obbligatorio quando un
 ///   CRS e' presente) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
-///   ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito, poi la
-///   deduzione dalla definizione canonica d'autorita'
-///   ([`ResolvedCrs::authority_axis_order`] — deduzione da autorita', non
-///   invenzione), infine `unknown` come valore canonico dichiarato dalla
-///   tabella §2 quando ne' dettaglio ne' deduzione sono possibili (la
+///   ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito, poi
+///   l'ordine GIS normalizzato quando la definizione canonica permette di
+///   stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai
+///   kernel; `unknown` resta il fallback quando gli assi non sono deducibili (la
 ///   chiave qui e' obbligatoria, non opzionale, e `unknown` non e' un
 ///   default al posto dell'assente — R5.2 riguarda le chiavi opzionali:
 ///   `srid`, `spatial_semantics`, `precision`, `encoding`. `srid` segue la
@@ -627,17 +629,27 @@ pub fn canonical_geometry_metadata(
 /// `authority:code`) — stessa forma e stessi byte a parita' di definizione
 /// e dettagli.
 ///
-/// Una definizione che e' un oggetto JSON (PROJJSON) e' emessa come
-/// `crs_definition` + `crs_definition_format = projjson`; ogni altra come
-/// `crs_id` — la stessa distinzione che [`geo_metadata_json`] applica al
-/// metadato legacy `geo.crs`, cosi' le due rappresentazioni restano coerenti
-/// per costruzione (R2.6). `axis_order` e' sempre emesso (obbligatorio
-/// quando un CRS e' presente) con completamento DELL'ASSENTE, mai arbitrato
-/// (R2.7 — ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito
-/// di `details`, poi la deduzione dalla definizione canonica d'autorita'
-/// ([`ResolvedCrs::authority_axis_order`] — deduzione da autorita', non
-/// invenzione), infine `unknown` come valore canonico dichiarato dalla
-/// tabella §2 quando ne' dettaglio ne' deduzione sono possibili (non un
+/// La FORMA della definizione decide la chiave ([`definition_form`],
+/// ADR-0009 emendamento 2026-07-31 — classe B): oggetto JSON (PROJJSON) →
+/// `crs_definition` + `crs_definition_format = projjson`; testo WKT1/WKT2
+/// → `crs_definition` (byte originali) + `wkt`/`wkt2` (etichetta derivata
+/// dalla stringa stessa: passthrough idempotente contro la lineage, nessuno
+/// stato nuovo in `ResolvedCrs`); identificatore d'autorita' e ogni altra
+/// forma → `crs_id`. E' la stessa distinzione che [`geo_metadata_json`]
+/// applica al metadato legacy `geo.crs` (oggetto JSON incorporato vs
+/// stringa authority:code), cosi' le due rappresentazioni restano coerenti
+/// per costruzione (R2.6); prima dell'emendamento ogni testo non-JSON
+/// finiva in `crs_id` — sbagliato per WKT, che avrebbe rotto il
+/// passthrough R2.6 contro una lineage `crs_definition = wkt`. Limite
+/// preesistente invariato: una proj-string non ha formato nella tabella §2
+/// e resta in `crs_id` ([`DefinitionForm::Other`]).
+///
+/// `axis_order` e' sempre emesso (obbligatorio quando un CRS e' presente)
+/// con completamento DELL'ASSENTE, mai arbitrato (R2.7 — ADR-0009,
+/// emendamento 2026-07-31): vince il dettaglio esplicito di `details`, poi
+/// l'ordine GIS normalizzato quando la definizione canonica permette di
+/// stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai kernel;
+/// `unknown` resta il fallback quando gli assi non sono deducibili (non un
 /// default al posto dell'assente: la chiave qui e' obbligatoria). `srid`
 /// (opzionale R5.2) segue la stessa cascata senza fondo: dettaglio
 /// esplicito, poi deduzione ([`ResolvedCrs::authority_srid`]), altrimenti
@@ -648,24 +660,38 @@ fn insert_resolved_crs_keys(
     details: &GeometryMetadataDetails,
     resolved: Option<&ResolvedCrs>,
 ) {
-    if matches!(
-        serde_json::from_str::<serde_json::Value>(definition),
-        Ok(serde_json::Value::Object(_))
-    ) {
-        metadata.insert(
-            PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
-            definition.to_owned(),
-        );
+    let (key, definition_format) = match definition_form(definition) {
+        DefinitionForm::Projjson => (
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            Some(CrsDefinitionFormat::Projjson),
+        ),
+        DefinitionForm::Wkt => (
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            Some(CrsDefinitionFormat::Wkt),
+        ),
+        DefinitionForm::Wkt2 => (
+            PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            Some(CrsDefinitionFormat::Wkt2),
+        ),
+        DefinitionForm::AuthorityCode | DefinitionForm::Other => {
+            (PLENORA_GEOMETRY_CRS_ID_KEY, None)
+        }
+    };
+    metadata.insert(key.to_owned(), definition.to_owned());
+    if let Some(format) = definition_format {
         metadata.insert(
             PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
-            CrsDefinitionFormat::Projjson.as_str().to_owned(),
+            format.as_str().to_owned(),
         );
-    } else {
-        metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.to_owned());
     }
     let axis_order = details
         .axis_order
-        .or_else(|| resolved.and_then(ResolvedCrs::authority_axis_order))
+        .or_else(|| {
+            resolved.and_then(|crs| {
+                crs.authority_axis_order()
+                    .map(|_| crs.normalized_gis_axis_order())
+            })
+        })
         .unwrap_or(AxisOrder::Unknown);
     metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
@@ -895,7 +921,9 @@ fn parse_canonical_u32(raw: Option<&String>, key: &str) -> Result<Option<u32>, P
 ///
 /// `PlenoraError::InvalidPlan` se la chiave e' presente ma fuori dall'enum
 /// chiuso R3.5 (`wkb` | `ewkb`).
-pub fn canonical_geometry_encoding(field: &Field) -> Result<Option<GeometryEncoding>, PlenoraError> {
+pub fn canonical_geometry_encoding(
+    field: &Field,
+) -> Result<Option<GeometryEncoding>, PlenoraError> {
     parse_canonical_enum(
         field.metadata().get(PLENORA_GEOMETRY_ENCODING_KEY),
         PLENORA_GEOMETRY_ENCODING_KEY,
@@ -1008,22 +1036,23 @@ pub fn canonical_geometry_crs_resolution(
 /// Definizione CRS testuale e suo formato (R2.2).
 ///
 /// Le due chiavi devono essere presenti insieme, la definizione rispetta i
-/// limiti testuali di [`MAX_CRS_DEFINITION_BYTES`] e, se dichiarata
-/// `projjson`, deve essere un oggetto JSON (R5.1: una definizione che non
-/// rispetta il formato dichiarato e' un valore non canonico, mai
-/// reinterpretato).
+/// limiti testuali di [`MAX_CRS_DEFINITION_BYTES`] e la sua forma deve
+/// corrispondere al formato dichiarato (R5.1: una definizione incoerente non
+/// viene mai reinterpretata).
 ///
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` se una sola delle due chiavi e' presente, se il
 /// formato non e' canonico, se la definizione e' vuota/oltre il limite o se
-/// dichiara `projjson` senza essere un oggetto JSON.
+/// il contenuto non corrisponde al formato dichiarato.
 pub fn canonical_geometry_crs_definition(
     field: &Field,
 ) -> Result<Option<(String, CrsDefinitionFormat)>, PlenoraError> {
     let definition = field.metadata().get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY);
     let format = parse_canonical_enum::<CrsDefinitionFormat>(
-        field.metadata().get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
+        field
+            .metadata()
+            .get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
         PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
     )?;
     match (definition, format) {
@@ -1042,15 +1071,16 @@ pub fn canonical_geometry_crs_definition(
                      (non vuota, entro {MAX_CRS_DEFINITION_BYTES} byte, senza NUL)"
                 )));
             }
-            if format == CrsDefinitionFormat::Projjson
-                && !matches!(
-                    serde_json::from_str::<serde_json::Value>(definition),
-                    Ok(serde_json::Value::Object(_))
-                )
-            {
+            let actual_format = match definition_form(definition) {
+                DefinitionForm::Projjson => Some(CrsDefinitionFormat::Projjson),
+                DefinitionForm::Wkt => Some(CrsDefinitionFormat::Wkt),
+                DefinitionForm::Wkt2 => Some(CrsDefinitionFormat::Wkt2),
+                DefinitionForm::AuthorityCode | DefinitionForm::Other => None,
+            };
+            if actual_format != Some(format) {
                 return Err(PlenoraError::InvalidPlan(format!(
-                    "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: dichiara `projjson` \
-                     ma non e' un oggetto JSON (R5.1)"
+                    "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: il contenuto non \
+                     corrisponde al formato `{format}` dichiarato (R5.1)"
                 )));
             }
             Ok(Some((definition.clone(), format)))
@@ -1106,8 +1136,11 @@ pub fn canonical_geometry_precision(
 /// `PlenoraError::InvalidPlan` se la chiave e' presente ma non e' un intero
 /// decimale senza segno rappresentabile in `u32`.
 pub fn canonical_field_id(field: &Field) -> Result<Option<FieldId>, PlenoraError> {
-    Ok(parse_canonical_u32(field.metadata().get(PLENORA_FIELD_ID_KEY), PLENORA_FIELD_ID_KEY)?
-        .map(FieldId))
+    Ok(parse_canonical_u32(
+        field.metadata().get(PLENORA_FIELD_ID_KEY),
+        PLENORA_FIELD_ID_KEY,
+    )?
+    .map(FieldId))
 }
 
 /// Versione del protocollo dei metadati dichiarata dallo schema, con il
@@ -1205,11 +1238,15 @@ pub struct CanonicalGeometryKeys {
     pub field_id: Option<FieldId>,
 }
 
-/// CRS letto dal metadato legacy `geo`: stringa authority:code oppure
-/// oggetto PROJJSON incorporato (la distinzione di [`geo_metadata_json`]).
+/// CRS letto dal metadato legacy `geo`: identificatore testuale, definizione
+/// WKT/WKT2 testuale oppure oggetto PROJJSON incorporato.
 enum LegacyCrs {
     Id(String),
     Definition(serde_json::Value),
+    TextDefinition {
+        text: String,
+        format: CrsDefinitionFormat,
+    },
 }
 
 /// Le nozioni trasportate dal metadato legacy `geo` (crs, dimensions,
@@ -1241,7 +1278,19 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
                     "metadato legacy `geo`: chiave `crs` vuota".to_owned(),
                 ));
             }
-            Some(LegacyCrs::Id(text.clone()))
+            match definition_form(text) {
+                DefinitionForm::Wkt => Some(LegacyCrs::TextDefinition {
+                    text: text.clone(),
+                    format: CrsDefinitionFormat::Wkt,
+                }),
+                DefinitionForm::Wkt2 => Some(LegacyCrs::TextDefinition {
+                    text: text.clone(),
+                    format: CrsDefinitionFormat::Wkt2,
+                }),
+                DefinitionForm::Projjson
+                | DefinitionForm::AuthorityCode
+                | DefinitionForm::Other => Some(LegacyCrs::Id(text.clone())),
+            }
         }
         Some(object @ serde_json::Value::Object(_)) => Some(LegacyCrs::Definition(object.clone())),
         Some(_) => {
@@ -1276,6 +1325,27 @@ fn divergent_geometry_keys(notion: &str) -> PlenoraError {
         "nozione `{notion}` divergente fra chiavi canoniche e metadato legacy `geo` \
          (R2.6: il componente fallisce, non sceglie)"
     ))
+}
+
+fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> bool {
+    match legacy {
+        LegacyCrs::Id(legacy_id) => keys.crs_id.as_ref() == Some(legacy_id),
+        LegacyCrs::Definition(legacy_value) => {
+            keys.crs_definition_format == Some(CrsDefinitionFormat::Projjson)
+                && keys
+                    .crs_definition
+                    .as_deref()
+                    .and_then(|definition| {
+                        serde_json::from_str::<serde_json::Value>(definition).ok()
+                    })
+                    .as_ref()
+                    == Some(legacy_value)
+        }
+        LegacyCrs::TextDefinition { text, format } => {
+            keys.crs_definition_format == Some(*format)
+                && keys.crs_definition.as_ref() == Some(text)
+        }
+    }
 }
 
 /// Lettura di contratto di un campo geometria.
@@ -1319,11 +1389,10 @@ fn divergent_geometry_keys(notion: &str) -> PlenoraError {
 /// `PlenoraError::Unsupported` per un encoding legacy non rappresentabile
 /// (R3.5, come [`geometry_encoding_from_metadata_strict`]).
 pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKeys, PlenoraError> {
-    let (crs_definition, crs_definition_format) =
-        match canonical_geometry_crs_definition(field)? {
-            Some((definition, format)) => (Some(definition), Some(format)),
-            None => (None, None),
-        };
+    let (crs_definition, crs_definition_format) = match canonical_geometry_crs_definition(field)? {
+        Some((definition, format)) => (Some(definition), Some(format)),
+        None => (None, None),
+    };
     let mut keys = CanonicalGeometryKeys {
         encoding: canonical_geometry_encoding(field)?,
         dimensions: canonical_geometry_dimensions(field)?,
@@ -1373,7 +1442,10 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
         keys.encoding = legacy.encoding;
     }
     if keys.encoding.is_none()
-        && field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str)
+        && field
+            .metadata()
+            .get(GEOARROW_EXTENSION_KEY)
+            .map(String::as_str)
             == Some(GEOARROW_WKB_EXTENSION)
     {
         // Standard esterno (R2.7, ultimo rango): il nome di estensione
@@ -1404,25 +1476,13 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
                     keys.crs_definition = Some(value.to_string());
                     keys.crs_definition_format = Some(CrsDefinitionFormat::Projjson);
                 }
-            }
-        } else {
-            let coherent = match &legacy_crs {
-                LegacyCrs::Id(legacy_id) => keys.crs_id.as_ref() == Some(legacy_id),
-                LegacyCrs::Definition(legacy_value) => {
-                    keys.crs_definition_format == Some(CrsDefinitionFormat::Projjson)
-                        && keys
-                            .crs_definition
-                            .as_deref()
-                            .and_then(|definition| {
-                                serde_json::from_str::<serde_json::Value>(definition).ok()
-                            })
-                            .as_ref()
-                            == Some(legacy_value)
+                LegacyCrs::TextDefinition { text, format } => {
+                    keys.crs_definition = Some(text);
+                    keys.crs_definition_format = Some(format);
                 }
-            };
-            if !coherent {
-                return Err(divergent_geometry_keys("crs"));
             }
+        } else if !legacy_crs_is_coherent(&keys, &legacy_crs) {
+            return Err(divergent_geometry_keys("crs"));
         }
     }
 
@@ -1446,10 +1506,7 @@ pub fn batch_geometry_cells<'a>(
         .as_any()
         .downcast_ref::<BinaryArray>()
         .ok_or_else(|| {
-            geometry_column_not_binary(
-                geometry_column,
-                batch.column(geometry_index).data_type(),
-            )
+            geometry_column_not_binary(geometry_column, batch.column(geometry_index).data_type())
         })
 }
 
@@ -1476,9 +1533,9 @@ pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraErro
 /// `PlenoraError::InvalidPlan` se la serializzazione WKB della geometria
 /// fallisce o se il payload prodotto supera [`MAX_CELL_BYTES`].
 pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError> {
-    let payload = geometry
-        .to_wkb(CoordDimensions::xy())
-        .map_err(|error| PlenoraError::InvalidPlan(format!("geometria prodotta non valida: {error}")))?;
+    let payload = geometry.to_wkb(CoordDimensions::xy()).map_err(|error| {
+        PlenoraError::InvalidPlan(format!("geometria prodotta non valida: {error}"))
+    })?;
     if payload.len() as u64 > MAX_CELL_BYTES {
         return Err(cell_too_large(payload.len() as u64));
     }
@@ -1536,7 +1593,8 @@ pub fn map_nullable<T: Send>(
 /// ([`MAX_CELL_BYTES`] e contratto WKB strutturale del kernel).
 pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, PlenoraError> {
     let estimates = map_nullable(cells, |payload| {
-        decode_geometry_cell(payload).map(|geometry| Some(estimate_geometry_native_bytes(&geometry)))
+        decode_geometry_cell(payload)
+            .map(|geometry| Some(estimate_geometry_native_bytes(&geometry)))
     })?;
     Ok(estimates
         .iter()
@@ -1620,10 +1678,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&embedded).unwrap();
         assert_eq!(parsed["crs"]["type"], "ProjectedCRS");
 
-        assert!(matches!(
-            geo_metadata_json("  "),
-            Err(PlenoraError::Crs(_))
-        ));
+        assert!(matches!(geo_metadata_json("  "), Err(PlenoraError::Crs(_))));
         let oversized = "X".repeat(MAX_CRS_DEFINITION_BYTES + 1);
         assert!(matches!(
             geo_metadata_json(&oversized),
@@ -1649,7 +1704,10 @@ mod tests {
                 .expect("geo metadata"),
         )
         .expect("geo JSON");
-        assert_eq!(geo.get("crs").and_then(serde_json::Value::as_str), Some(CRS));
+        assert_eq!(
+            geo.get("crs").and_then(serde_json::Value::as_str),
+            Some(CRS)
+        );
         // B1.1: la scrittura dichiara sempre la dimensionalita' (Xy dai
         // costruttori attuali; la propagazione reale e' B1.3).
         assert_eq!(
@@ -1811,24 +1869,39 @@ mod tests {
         // Encoding rappresentabili -> Ok(Some); assente o metadato rotto ->
         // Ok(None) (come il reader leniente).
         for (raw, expected) in [
-            (r#"{"crs":"EPSG:3857","encoding":"wkb"}"#, Some(GeometryEncoding::Wkb)),
-            (r#"{"crs":"EPSG:3857","encoding":"ewkb"}"#, Some(GeometryEncoding::Ewkb)),
+            (
+                r#"{"crs":"EPSG:3857","encoding":"wkb"}"#,
+                Some(GeometryEncoding::Wkb),
+            ),
+            (
+                r#"{"crs":"EPSG:3857","encoding":"ewkb"}"#,
+                Some(GeometryEncoding::Ewkb),
+            ),
         ] {
             let mut metadata = HashMap::new();
             metadata.insert(GEO_METADATA_KEY.to_owned(), raw.to_owned());
             let field = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
-            assert_eq!(geometry_encoding_from_metadata_strict(&field).unwrap(), expected);
+            assert_eq!(
+                geometry_encoding_from_metadata_strict(&field).unwrap(),
+                expected
+            );
         }
         let bare = Field::new("geom", DataType::Binary, true);
         assert_eq!(geometry_encoding_from_metadata_strict(&bare).unwrap(), None);
         let mut metadata = HashMap::new();
         metadata.insert(GEO_METADATA_KEY.to_owned(), "non json".to_owned());
         let broken = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
-        assert_eq!(geometry_encoding_from_metadata_strict(&broken).unwrap(), None);
+        assert_eq!(
+            geometry_encoding_from_metadata_strict(&broken).unwrap(),
+            None
+        );
         let mut metadata = HashMap::new();
         metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(CRS).unwrap());
         let crs_only = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
-        assert_eq!(geometry_encoding_from_metadata_strict(&crs_only).unwrap(), None);
+        assert_eq!(
+            geometry_encoding_from_metadata_strict(&crs_only).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -1868,14 +1941,8 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
                 HashMap::from([
-                    (
-                        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
-                        "wkb".to_owned(),
-                    ),
-                    (
-                        PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-                        "xy".to_owned(),
-                    ),
+                    (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
+                    (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
                 ]),
             ),
         ]);
@@ -1896,10 +1963,7 @@ mod tests {
                 GEOARROW_EXTENSION_KEY.to_owned(),
                 "geoarrow.point".to_owned(),
             ),
-            (
-                PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-                "xy".to_owned(),
-            ),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
         ]))]);
         assert!(matches!(
             geometry_column_index(&foreign_extension, DEFAULT_GEOMETRY_COLUMN),
@@ -1923,10 +1987,8 @@ mod tests {
         assert!(decoded[1].is_none());
         assert_eq!(decoded[2].as_deref(), Some(square.as_slice()));
 
-        let oversized = vec![
-            0_u8;
-            usize::try_from(MAX_CELL_BYTES + 1).expect("64 MiB + 1 entra in usize")
-        ];
+        let oversized =
+            vec![0_u8; usize::try_from(MAX_CELL_BYTES + 1).expect("64 MiB + 1 entra in usize")];
         let cells = BinaryArray::from_iter([Some(oversized.as_slice())]);
         assert!(matches!(
             map_nullable(&cells, |payload| decode_geometry_cell(payload).map(Some)),
@@ -1992,8 +2054,8 @@ mod tests {
         ];
         let cells: BinaryArray = cells_payload.iter().map(|cell| cell.as_deref()).collect();
 
-        let expected = estimate_geometry_native_bytes(&square)
-            + estimate_geometry_native_bytes(&point);
+        let expected =
+            estimate_geometry_native_bytes(&square) + estimate_geometry_native_bytes(&point);
         assert_eq!(
             estimate_decoded_cells_native_bytes(&cells).expect("estimate"),
             expected
@@ -2076,9 +2138,15 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY), None);
         assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY), None);
-        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("easting_northing"));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_AXIS_ORDER_KEY),
+            Some("easting_northing")
+        );
         assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("3857"));
-        assert_eq!(get(PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY), Some("geometry"));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY),
+            Some("geometry")
+        );
         assert_eq!(get(PLENORA_GEOMETRY_PRECISION_KEY), Some("float64"));
         // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
         // ha significato fuori dal processo, ADR-0009 decisione 3).
@@ -2095,8 +2163,7 @@ mod tests {
         let metadata = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
         let get = |key: &str| metadata.get(key).map(String::as_str);
         // Obbligatorie e oneste: dimensions, crs_resolution, crs_id,
-        // axis_order = `unknown` (valore canonico, la chiave e' obbligatoria
-        // quando un CRS e' presente).
+        // axis_order = `unknown` perche' lo stub non dichiara gli assi.
         assert_eq!(get(PLENORA_GEOMETRY_DIMENSIONS_KEY), Some("xyz"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY), Some("resolved"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
@@ -2119,8 +2186,8 @@ mod tests {
         }
     }
 
-    // --- Deduzione axis_order/srid dalla definizione canonica (ADR-0009,
-    // emendamento 2026-07-31) ----------------------------------------------
+    // --- Ordine fisico normalizzato + SRID d'autorita' (ADR-0009,
+    // emendamento 2026-08-01) ----------------------------------------------
 
     /// Contratto `Resolved` con PROJJSON realistico di EPSG:4326 (assi e
     /// `id` d'autorita' presenti — la forma prodotta dalla risoluzione PROJ).
@@ -2152,11 +2219,11 @@ mod tests {
     }
 
     #[test]
-    fn canonical_metadata_deduces_axis_order_and_srid_from_authority() {
+    fn canonical_metadata_uses_normalized_axis_order_and_authority_srid() {
         // Completamento DELL'ASSENTE (R2.7): senza dettagli espliciti,
-        // axis_order e srid sono dedotti dalla definizione canonica
-        // d'autorita' (geographic (north,east) -> lat_lon; id EPSG:4326 ->
-        // 4326) — deduzione, mai invenzione. Lo stub `{"type":"ProjectedCRS"}`
+        // axis_order descrive i byte x/y normalizzati (EPSG:4326 -> lon_lat),
+        // mentre lo srid resta dedotto dall'autorita' (id EPSG:4326 -> 4326).
+        // Lo stub `{"type":"ProjectedCRS"}`
         // della fixture storica resta coperto da
         // `canonical_metadata_minimal_omits_everything_not_declared`
         // (comportamento precedente preservato: `unknown` + niente srid).
@@ -2165,7 +2232,7 @@ mod tests {
             &GeometryMetadataDetails::default(),
         );
         let get = |key: &str| metadata.get(key).map(String::as_str);
-        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("lat_lon"));
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("lon_lat"));
         assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:4326"));
     }
@@ -2223,6 +2290,176 @@ mod tests {
             Some("7"),
             "R2.7: il dettaglio esplicito vince sulla deduzione"
         );
+    }
+
+    // --- Emissione da definizione WKT (ADR-0009, emendamento 2026-07-31 —
+    // classe B) ----------------------------------------------------------
+
+    /// WKT1 realistico di Monte Mario / Italy zone 1 (EPSG:3003), la forma
+    /// del caso owner (shapefile catastale con nodo `AUTHORITY`; SENZA
+    /// `TOWGS84`, che farebbe risolvere il CRS come `BoundCRS` — limite
+    /// preesistente del resolver, fuori perimetro qui).
+    const MONTE_MARIO_WKT: &str = concat!(
+        r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
+        r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297]],"#,
+        r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
+        r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
+        r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
+        r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
+        r#"UNIT["metre",1],AUTHORITY["EPSG","3003"]]"#
+    );
+
+    /// Contratto `Resolved` la cui definizione e' WKT (il kernel ha
+    /// risolto il testo WKT contro PROJ; il canonical porta assi e `id`).
+    fn monte_mario_wkt_contract() -> GeometryColumnContract {
+        GeometryColumnContract {
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                MONTE_MARIO_WKT.to_owned(),
+                serde_json::json!({
+                    "type": "ProjectedCRS",
+                    "name": "Monte Mario / Italy zone 1",
+                    "coordinate_system": {
+                        "subtype": "Cartesian",
+                        "axis": [
+                            {"name": "Easting", "abbreviation": "E",
+                             "direction": "east", "unit": "metre"},
+                            {"name": "Northing", "abbreviation": "N",
+                             "direction": "north", "unit": "metre"},
+                        ],
+                    },
+                    "id": {"authority": "EPSG", "code": 3003},
+                }),
+                CrsKind::Projected,
+                Some(1.0),
+            )),
+            types: GeometryColumnContract::undeclared_types(),
+            encoding: None,
+            ..full_contract()
+        }
+    }
+
+    #[test]
+    fn canonical_metadata_from_wkt_definition_emits_definition_and_wkt_format() {
+        // Classe B: una definizione WKT e' emessa come `crs_definition`
+        // (byte originali) + `crs_definition_format = wkt`, MAI in
+        // `crs_id` (passthrough R2.6 contro la lineage WKT); deduzione
+        // d'autorita' dal canonical realistico (assi + id) gratis.
+        let metadata = canonical_geometry_metadata(
+            &monte_mario_wkt_contract(),
+            &GeometryMetadataDetails::default(),
+        );
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY),
+            Some(MONTE_MARIO_WKT)
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY), Some("wkt"));
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
+        assert_eq!(
+            get(PLENORA_GEOMETRY_AXIS_ORDER_KEY),
+            Some("easting_northing")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("3003"));
+    }
+
+    #[test]
+    fn wkt_definition_is_coherent_with_identical_legacy_geo_crs() {
+        let mut metadata = canonical_geometry_metadata(
+            &monte_mario_wkt_contract(),
+            &GeometryMetadataDetails::default(),
+        );
+        metadata.insert(
+            GEO_METADATA_KEY.to_owned(),
+            serde_json::json!({"crs": MONTE_MARIO_WKT}).to_string(),
+        );
+        let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+
+        let keys = read_geometry_contract_keys(&field)
+            .expect("lo stesso WKT canonico e legacy descrive un CRS coerente");
+        assert_eq!(keys.crs_definition.as_deref(), Some(MONTE_MARIO_WKT));
+        assert_eq!(keys.crs_definition_format, Some(CrsDefinitionFormat::Wkt));
+        assert_eq!(keys.crs_id, None);
+    }
+
+    #[test]
+    fn canonical_metadata_from_wkt2_definition_emits_wkt2_format() {
+        let wkt2 = r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#;
+        let contract = GeometryColumnContract {
+            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                wkt2.to_owned(),
+                serde_json::json!({"type": "ProjectedCRS"}),
+                CrsKind::Projected,
+                Some(1.0),
+            )),
+            types: GeometryColumnContract::undeclared_types(),
+            encoding: None,
+            ..full_contract()
+        };
+        let metadata = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY), Some(wkt2));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
+            Some("wkt2")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
+        // Canonical stub senza assi: il valore onesto resta `unknown`.
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
+        assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), None);
+    }
+
+    #[test]
+    fn wkt_root_aliases_are_accepted_and_emitted_as_definitions() {
+        let cases = [
+            ("FITTED_CS", CrsDefinitionFormat::Wkt),
+            ("GEODETICCRS", CrsDefinitionFormat::Wkt2),
+            ("GEOGRAPHICCRS", CrsDefinitionFormat::Wkt2),
+            ("PROJECTEDCRS", CrsDefinitionFormat::Wkt2),
+            ("VERTICALCRS", CrsDefinitionFormat::Wkt2),
+            ("ENGINEERINGCRS", CrsDefinitionFormat::Wkt2),
+        ];
+        for delimiter in ['[', '('] {
+            let closing = if delimiter == '[' { ']' } else { ')' };
+            for (root, format) in cases {
+                let definition = format!("{root}{delimiter}\"test\"{closing}");
+                let field = field_with_pairs(&[
+                    (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, definition.as_str()),
+                    (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, format.as_str()),
+                    (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+                ]);
+                assert_eq!(
+                    canonical_geometry_crs_definition(&field).expect("definizione valida"),
+                    Some((definition.clone(), format)),
+                    "{definition}"
+                );
+
+                let contract = GeometryColumnContract {
+                    crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+                        definition.clone(),
+                        serde_json::json!({"type": "GeographicCRS"}),
+                        CrsKind::Geographic,
+                        None,
+                    )),
+                    types: GeometryColumnContract::undeclared_types(),
+                    encoding: None,
+                    ..full_contract()
+                };
+                let metadata =
+                    canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
+                assert_eq!(
+                    metadata.get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY),
+                    Some(&definition),
+                    "{definition} non deve finire in crs_id"
+                );
+                assert_eq!(
+                    metadata
+                        .get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY)
+                        .map(String::as_str),
+                    Some(format.as_str())
+                );
+                assert!(!metadata.contains_key(PLENORA_GEOMETRY_CRS_ID_KEY));
+            }
+        }
     }
 
     #[test]
@@ -2344,14 +2581,18 @@ mod tests {
         let metadata = canonical_geometry_metadata(&contract, &full_details());
         let get = |key: &str| metadata.get(key).map(String::as_str);
         assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY), Some(projjson));
-        assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY), Some("projjson"));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
+            Some("projjson")
+        );
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
     }
 
     #[test]
     fn contract_keys_roundtrip_emit_then_read() {
-        let field = Field::new("geom", DataType::Binary, true)
-            .with_metadata(canonical_geometry_metadata(&full_contract(), &full_details()));
+        let field = Field::new("geom", DataType::Binary, true).with_metadata(
+            canonical_geometry_metadata(&full_contract(), &full_details()),
+        );
         let keys = read_geometry_contract_keys(&field).expect("read");
         assert_eq!(keys.encoding, Some(GeometryEncoding::Wkb));
         assert_eq!(keys.dimensions, Some(GeometryDimensions::Xyz));
@@ -2370,7 +2611,10 @@ mod tests {
         assert_eq!(keys.field_id, None);
         // ...ma una chiave RICEVUTA e' propagata invariata (R2.4).
         let mut received = Field::new("geom", DataType::Binary, true)
-            .with_metadata(canonical_geometry_metadata(&full_contract(), &full_details()))
+            .with_metadata(canonical_geometry_metadata(
+                &full_contract(),
+                &full_details(),
+            ))
             .metadata()
             .clone();
         received.insert(PLENORA_FIELD_ID_KEY.to_owned(), "7".to_owned());
@@ -2380,18 +2624,20 @@ mod tests {
 
         // Round-trip PROJJSON: la definizione sopravvive byte-per-byte.
         let projjson = r#"{"type":"ProjectedCRS","name":"demo"}"#;
-        let field = Field::new("geom", DataType::Binary, true).with_metadata(
-            canonical_geometry_metadata(
+        let field =
+            Field::new("geom", DataType::Binary, true).with_metadata(canonical_geometry_metadata(
                 &GeometryColumnContract {
                     crs: ContractCrs::Resolved(resolved_crs(projjson)),
                     ..full_contract()
                 },
                 &full_details(),
-            ),
-        );
+            ));
         let keys = read_geometry_contract_keys(&field).expect("read projjson");
         assert_eq!(keys.crs_definition.as_deref(), Some(projjson));
-        assert_eq!(keys.crs_definition_format, Some(CrsDefinitionFormat::Projjson));
+        assert_eq!(
+            keys.crs_definition_format,
+            Some(CrsDefinitionFormat::Projjson)
+        );
         assert_eq!(keys.crs_id, None);
     }
 
@@ -2430,6 +2676,21 @@ mod tests {
             &[
                 (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "EPSG:4326"),
                 (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
+            ][..],
+            &[
+                (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "EPSG:4326"),
+                (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
+                (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+            ][..],
+            &[
+                (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "PROJCS[demo]"),
+                (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt2"),
+                (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+            ][..],
+            &[
+                (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "PROJCRS[demo]"),
+                (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
+                (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
             ][..],
         ] {
             let field = field_with_pairs(pairs);
@@ -2571,7 +2832,10 @@ mod tests {
         // (R2.6: il componente fallisce, non sceglie).
         let divergent_dimensions = field_with_pairs(&[
             (PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
-            (GEO_METADATA_KEY, r#"{"crs":"EPSG:3857","dimensions":"xyz"}"#),
+            (
+                GEO_METADATA_KEY,
+                r#"{"crs":"EPSG:3857","dimensions":"xyz"}"#,
+            ),
         ]);
         assert!(matches!(
             read_geometry_contract_keys(&divergent_dimensions),
@@ -2599,15 +2863,24 @@ mod tests {
         let incomparable = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
-            (GEO_METADATA_KEY, r#"{"crs":{"type":"GeographicCRS","name":"WGS 84"}}"#),
+            (
+                GEO_METADATA_KEY,
+                r#"{"crs":{"type":"GeographicCRS","name":"WGS 84"}}"#,
+            ),
         ]);
         assert!(read_geometry_contract_keys(&incomparable).is_err());
         // PROJJSON canonico vs oggetto legacy diverso -> divergenza.
         let divergent_projjson = field_with_pairs(&[
-            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, r#"{"type":"ProjectedCRS","name":"a"}"#),
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+                r#"{"type":"ProjectedCRS","name":"a"}"#,
+            ),
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
-            (GEO_METADATA_KEY, r#"{"crs":{"type":"ProjectedCRS","name":"b"}}"#),
+            (
+                GEO_METADATA_KEY,
+                r#"{"crs":{"type":"ProjectedCRS","name":"b"}}"#,
+            ),
         ]);
         assert!(read_geometry_contract_keys(&divergent_projjson).is_err());
     }
@@ -2630,7 +2903,10 @@ mod tests {
             r#"{"crs":{"type":"GeographicCRS","name":"WGS 84"}}"#,
         )]);
         let keys = read_geometry_contract_keys(&legacy_object).expect("legacy object");
-        assert_eq!(keys.crs_definition_format, Some(CrsDefinitionFormat::Projjson));
+        assert_eq!(
+            keys.crs_definition_format,
+            Some(CrsDefinitionFormat::Projjson)
+        );
         let definition = keys.crs_definition.as_deref().expect("definition");
         let parsed: serde_json::Value = serde_json::from_str(definition).expect("json");
         assert_eq!(parsed["type"], "GeographicCRS");
@@ -2639,7 +2915,10 @@ mod tests {
         // Entrambe presenti e coerenti: ok; l'ordine delle chiavi PROJJSON
         // diverso non conta (confronto per valore JSON, non per stringa).
         let coherent = field_with_pairs(&[
-            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, r#"{"name":"a","type":"ProjectedCRS"}"#),
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+                r#"{"name":"a","type":"ProjectedCRS"}"#,
+            ),
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
             (PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),

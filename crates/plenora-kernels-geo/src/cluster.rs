@@ -136,7 +136,11 @@ impl PointDistance for IndexedPoint {
 
 /// DBSCAN su punti gia' validati. Deterministico: visita per indice di riga,
 /// vicini ordinati per indice, cluster numerati in ordine di scoperta.
-fn dbscan_core(points: &[[f64; 2]], eps: f64, min_points: usize) -> Result<Vec<Option<u64>>, ClusterError> {
+fn dbscan_core(
+    points: &[[f64; 2]],
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, ClusterError> {
     let tree = RTree::bulk_load(
         points
             .iter()
@@ -209,9 +213,7 @@ type PreparedPoints = (Vec<Option<usize>>, Vec<[f64; 2]>);
 
 /// Estrae e valida i punti dalle geometrie nullable: solo Point con
 /// coordinate finite e geometria valida; i `None` non partecipano.
-fn prepare_points(
-    geometries: &[Option<Geometry<f64>>],
-) -> Result<PreparedPoints, ClusterError> {
+fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints, ClusterError> {
     let mut row_of_point = Vec::with_capacity(geometries.len());
     let mut points = Vec::with_capacity(geometries.len());
     for (index, geometry) in geometries.iter().enumerate() {
@@ -322,10 +324,7 @@ mod tests {
     use plenora_core::arrow::array::BinaryArray;
 
     fn points(coords: &[(f64, f64)]) -> Vec<Point<f64>> {
-        coords
-            .iter()
-            .map(|&(x, y)| Point::new(x, y))
-            .collect()
+        coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
     }
 
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
@@ -555,12 +554,16 @@ mod tests {
         // 1000 punti sparsi con un LCG deterministico.
         let mut state = 0x2545_F491_4F6C_DD1D_u64;
         for _ in 0..1_000 {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             // state >> 11 e' < 2^53 e (1 << 53) == 2^53: entrambi esatti in
             // f64; schema standard per un double uniforme in [0, 1).
             #[allow(clippy::cast_precision_loss)]
             let x = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             #[allow(clippy::cast_precision_loss)]
             let y = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
             coords.push((x, y));

@@ -639,7 +639,8 @@ mod tests {
         ]));
         let pieces = split_polygon_by_linework(&source, &splitter, 100, 10_000, 10, 100).unwrap();
         assert_eq!(pieces.len(), 2);
-        assert_eq!(pieces.iter().map(Area::unsigned_area).sum::<f64>(), 100.0);
+        let total_area = pieces.iter().map(Area::unsigned_area).sum::<f64>();
+        assert!((total_area - 100.0).abs() < f64::EPSILON);
         assert!(matches!(
             split_polygon_by_linework(&source, &splitter, 100, 10_000, 1, 100),
             Err(GeosBackendError::OutputLimit { .. })

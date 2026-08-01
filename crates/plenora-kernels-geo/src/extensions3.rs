@@ -192,10 +192,7 @@ fn prepare_element(
     };
     Ok(Some(CoverageElement {
         polygons,
-        envelope: AABB::from_corners(
-            [rect.min().x, rect.min().y],
-            [rect.max().x, rect.max().y],
-        ),
+        envelope: AABB::from_corners([rect.min().x, rect.min().y], [rect.max().x, rect.max().y]),
     }))
 }
 
@@ -255,7 +252,7 @@ pub enum CoverageIssueType {
 }
 
 impl CoverageIssueType {
-    #[must_use] 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Overlap => "overlap",
@@ -651,7 +648,11 @@ mod tests {
     fn wkb_cells(geometries: &[Option<Geometry<f64>>]) -> ArrowBinaryArray {
         let encoded: Vec<Option<Vec<u8>>> = geometries
             .iter()
-            .map(|geometry| geometry.as_ref().map(|g| encode_geometry(g).expect("encode")))
+            .map(|geometry| {
+                geometry
+                    .as_ref()
+                    .map(|g| encode_geometry(g).expect("encode"))
+            })
             .collect();
         encoded
             .iter()

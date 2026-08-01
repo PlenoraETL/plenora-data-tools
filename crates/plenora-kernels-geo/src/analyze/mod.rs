@@ -310,7 +310,14 @@ pub fn analyze_geo_contract(
         let requirement = descriptor.crs_requirement.ok_or_else(|| {
             PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
         })?;
-        return analyze_from_coords(descriptor.id, &inputs[0], config, plan_crs, requirement, fields);
+        return analyze_from_coords(
+            descriptor.id,
+            &inputs[0],
+            config,
+            plan_crs,
+            requirement,
+            fields,
+        );
     }
     if descriptor.id == "geo.from_wkt" {
         let op = descriptor.id;
@@ -344,7 +351,7 @@ mod tests {
     use geo::{Geometry, Point};
     use geozero::{CoordDimensions, ToWkb};
     use plenora_core::arrow::{DataType, Field, Schema};
-    use plenora_core::catalog::{find_operation, CATALOG, CrsRequirement, Family};
+    use plenora_core::catalog::{find_operation, CrsRequirement, Family, CATALOG};
     use plenora_core::contract::{
         ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
         GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
@@ -357,11 +364,12 @@ mod tests {
     use super::helpers::short_id;
     use super::*;
     use crate::arrow_adapter::{
-        geo_metadata_json_with_dimensions, DEFAULT_GEOMETRY_COLUMN, GEO_METADATA_KEY,
-        GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
-        PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
-        PLENORA_GEOMETRY_CRS_ID_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-        PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY,
+        canonical_geometry_metadata, geo_metadata_json_with_dimensions, GeometryMetadataDetails,
+        DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+        PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+        PLENORA_GEOMETRY_CRS_DEFINITION_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
+        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
+        PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY,
         PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
     };
 
@@ -521,7 +529,11 @@ mod tests {
         };
         let unchanged = |op: &'static str, config: Value| unary(op, config, Expect::Unchanged);
         let float_measure = |op: &'static str| {
-            unary(op, json!({}), Expect::Appended(vec![float_column(short_id(op))]))
+            unary(
+                op,
+                json!({}),
+                Expect::Appended(vec![float_column(short_id(op))]),
+            )
         };
         let float_pair = |op: &'static str| {
             unary(
@@ -540,14 +552,20 @@ mod tests {
             unchanged("geo.make_valid", json!({})),
             unchanged("geo.buffer", json!({"distance": 100.0})),
             unchanged("geo.simplify", json!({"tolerance": 0.5})),
-            unchanged("geo.affine_transform", json!({"coefficients": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]})),
+            unchanged(
+                "geo.affine_transform",
+                json!({"coefficients": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]}),
+            ),
             unchanged("geo.translate", json!({"x_offset": 1.0, "y_offset": 2.0})),
             unchanged("geo.scale", json!({"x_factor": 2.0, "y_factor": 2.0})),
             unchanged("geo.rotate", json!({"degrees": 90.0})),
             unchanged("geo.concave_hull", json!({"concavity": 2.0})),
             unchanged("geo.densify", json!({"max_segment_length": 10.0})),
             unchanged("geo.snap_to_grid", json!({"grid_size": 1.0})),
-            unchanged("geo.line_substring", json!({"start_ratio": 0.1, "end_ratio": 0.9})),
+            unchanged(
+                "geo.line_substring",
+                json!({"start_ratio": 0.1, "end_ratio": 0.9}),
+            ),
             unchanged("geo.line_interpolate_point", json!({"ratio": 0.5})),
             unchanged("geo.voronoi", json!({})),
             unchanged("geo.clean_topology", json!({"snap_tolerance": 0.01})),
@@ -652,7 +670,11 @@ mod tests {
             // --- Aggregazioni a sole geometrie ------------------------------
             unary("geo.dissolve", json!({}), Expect::GeometryOnly(vec![])),
             unary("geo.line_builder", json!({}), Expect::GeometryOnly(vec![])),
-            unary("geo.polygon_builder", json!({}), Expect::GeometryOnly(vec![])),
+            unary(
+                "geo.polygon_builder",
+                json!({}),
+                Expect::GeometryOnly(vec![]),
+            ),
             unary("geo.line_merge", json!({}), Expect::GeometryOnly(vec![])),
             unary(
                 "geo.collect",
@@ -726,7 +748,11 @@ mod tests {
             unary(
                 "geo.predicate_contains_properly",
                 other_wkb_config(),
-                Expect::Appended(vec![("predicate_contains_properly", DataType::Boolean, true)]),
+                Expect::Appended(vec![(
+                    "predicate_contains_properly",
+                    DataType::Boolean,
+                    true,
+                )]),
             ),
             unary(
                 "geo.predicate_touches",
@@ -813,8 +839,14 @@ mod tests {
         }
         let plan_crs = projected_crs();
         let mut allocator = FieldAllocator::new(100);
-        let output = analyze_geo_contract(case.op, &inputs, &case.config, Some(&plan_crs), &mut allocator)
-            .unwrap_or_else(|error| panic!("{}: {error}", case.op));
+        let output = analyze_geo_contract(
+            case.op,
+            &inputs,
+            &case.config,
+            Some(&plan_crs),
+            &mut allocator,
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", case.op));
         (output, input, allocator)
     }
 
@@ -835,7 +867,11 @@ mod tests {
             .collect()
     }
 
-    fn assert_appended(output: &DataContract, input: &DataContract, extra: &[(&str, DataType, bool)]) {
+    fn assert_appended(
+        output: &DataContract,
+        input: &DataContract,
+        extra: &[(&str, DataType, bool)],
+    ) {
         let output_signatures = signatures(output);
         let input_signatures = signatures(input);
         assert_eq!(
@@ -860,7 +896,10 @@ mod tests {
         let output_geometry = output
             .active_geometry_column()
             .expect("geometria attiva in output");
-        assert_eq!(output_geometry.field_id, input_geometry.field_id, "FieldId preservato");
+        assert_eq!(
+            output_geometry.field_id, input_geometry.field_id,
+            "FieldId preservato"
+        );
         assert_eq!(output_geometry.name, input_geometry.name);
     }
 
@@ -934,8 +973,10 @@ mod tests {
                 GeometryDimensions::Xyzm,
                 GeometryDimensions::Unknown,
             ] {
-                let mut inputs =
-                    vec![geo_contract_with_dimensions(input_crs_for(case.op), dimensions)];
+                let mut inputs = vec![geo_contract_with_dimensions(
+                    input_crs_for(case.op),
+                    dimensions,
+                )];
                 if case.binary {
                     inputs.push(geo_contract_with_dimensions(projected_crs(), dimensions));
                 }
@@ -961,7 +1002,10 @@ mod tests {
                         );
                     }
                     Err(other) => {
-                        panic!("{}: atteso Unsupported con {dimensions}, trovato {other:?}", case.op)
+                        panic!(
+                            "{}: atteso Unsupported con {dimensions}, trovato {other:?}",
+                            case.op
+                        )
                     }
                     Ok(_) => panic!(
                         "{}: input {dimensions} accettato: xy silenzioso (B1.3 violata)",
@@ -984,7 +1028,12 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{}: contratto non valido: {error}", case.op));
             match &case.expected {
                 Expect::Unchanged => {
-                    assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
+                    assert_eq!(
+                        signatures(&output),
+                        signatures(&input),
+                        "{}: schema",
+                        case.op
+                    );
                     assert_geometry_preserved(&output, &input);
                     assert_eq!(
                         resolved_crs_of(output.active_geometry_column().unwrap()).definition(),
@@ -1001,12 +1050,27 @@ mod tests {
                     let mut expected = vec![(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true)];
                     expected.extend(extra.iter().cloned());
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
-                    let geometry = output.active_geometry_column().expect("geometria in output");
-                    assert_eq!(geometry.field_id, FieldId(2), "{}: FieldId preservato", case.op);
-                    assert!(geometry.nullable, "{}: geometria aggregata nullable", case.op);
+                    let geometry = output
+                        .active_geometry_column()
+                        .expect("geometria in output");
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(2),
+                        "{}: FieldId preservato",
+                        case.op
+                    );
+                    assert!(
+                        geometry.nullable,
+                        "{}: geometria aggregata nullable",
+                        case.op
+                    );
                 }
                 Expect::Diagnostics => {
-                    assert!(output.geometries.is_empty(), "{}: niente geometria", case.op);
+                    assert!(
+                        output.geometries.is_empty(),
+                        "{}: niente geometria",
+                        case.op
+                    );
                     assert_eq!(output.active_geometry, None);
                     let expected: Vec<(&str, DataType, bool)> = [
                         vec![
@@ -1026,7 +1090,12 @@ mod tests {
                     expected.push((DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false));
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
-                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(100),
+                        "{}: FieldId allocato",
+                        case.op
+                    );
                     assert!(!geometry.nullable, "{}: geometria non null", case.op);
                     assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
@@ -1035,11 +1104,17 @@ mod tests {
                         .field_with_name(DEFAULT_GEOMETRY_COLUMN)
                         .expect("campo geometria");
                     assert_eq!(
-                        field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+                        field
+                            .metadata()
+                            .get(GEOARROW_EXTENSION_KEY)
+                            .map(String::as_str),
                         Some(GEOARROW_WKB_EXTENSION)
                     );
                     let geo: Value = serde_json::from_str(
-                        field.metadata().get(GEO_METADATA_KEY).expect("geo metadata"),
+                        field
+                            .metadata()
+                            .get(GEO_METADATA_KEY)
+                            .expect("geo metadata"),
                     )
                     .expect("geo JSON");
                     assert_eq!(geo.get("crs").and_then(Value::as_str), Some("EPSG:32632"));
@@ -1049,7 +1124,12 @@ mod tests {
                     expected.push((DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true));
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
-                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(100),
+                        "{}: FieldId allocato",
+                        case.op
+                    );
                     assert!(geometry.nullable, "{}: geometria nullable", case.op);
                     assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
@@ -1058,11 +1138,17 @@ mod tests {
                         .field_with_name(DEFAULT_GEOMETRY_COLUMN)
                         .expect("campo geometria");
                     assert_eq!(
-                        field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+                        field
+                            .metadata()
+                            .get(GEOARROW_EXTENSION_KEY)
+                            .map(String::as_str),
                         Some(GEOARROW_WKB_EXTENSION)
                     );
                     let geo: Value = serde_json::from_str(
-                        field.metadata().get(GEO_METADATA_KEY).expect("geo metadata"),
+                        field
+                            .metadata()
+                            .get(GEO_METADATA_KEY)
+                            .expect("geo metadata"),
                     )
                     .expect("geo JSON");
                     assert_eq!(geo.get("crs").and_then(Value::as_str), Some("EPSG:32632"));
@@ -1079,8 +1165,17 @@ mod tests {
                     }
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
-                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
-                    assert!(!geometry.nullable, "{}: geometria di griglia non null", case.op);
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(100),
+                        "{}: FieldId allocato",
+                        case.op
+                    );
+                    assert!(
+                        !geometry.nullable,
+                        "{}: geometria di griglia non null",
+                        case.op
+                    );
                     assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632");
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     // Il numero di celle (2x2 con cell_size 5 su extent 10x10)
@@ -1095,7 +1190,12 @@ mod tests {
                 Expect::CoverageRows(expected) => {
                     assert_eq!(signatures(&output), *expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
-                    assert_eq!(geometry.field_id, FieldId(100), "{}: FieldId allocato", case.op);
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(100),
+                        "{}: FieldId allocato",
+                        case.op
+                    );
                     assert!(!geometry.nullable, "{}: geometria non null", case.op);
                     assert_eq!(geometry.dimensions, GeometryDimensions::Xy);
                     assert_eq!(
@@ -1104,20 +1204,48 @@ mod tests {
                         "{}: CRS dell'input",
                         case.op
                     );
-                    assert!(output.properties.sorted_by.is_none(), "{}: proprieta' azzerate", case.op);
-                    assert!(output.properties.row_count.is_none(), "{}: proprieta' azzerate", case.op);
+                    assert!(
+                        output.properties.sorted_by.is_none(),
+                        "{}: proprieta' azzerate",
+                        case.op
+                    );
+                    assert!(
+                        output.properties.row_count.is_none(),
+                        "{}: proprieta' azzerate",
+                        case.op
+                    );
                 }
                 Expect::Reprojected => {
-                    assert_eq!(signatures(&output), signatures(&input), "{}: schema", case.op);
-                    let geometry = output.active_geometry_column().expect("geometria in output");
-                    assert_eq!(geometry.field_id, FieldId(2), "{}: FieldId preservato", case.op);
-                    assert_eq!(resolved_crs_of(geometry).definition(), "EPSG:32632", "{}: CRS target", case.op);
+                    assert_eq!(
+                        signatures(&output),
+                        signatures(&input),
+                        "{}: schema",
+                        case.op
+                    );
+                    let geometry = output
+                        .active_geometry_column()
+                        .expect("geometria in output");
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(2),
+                        "{}: FieldId preservato",
+                        case.op
+                    );
+                    assert_eq!(
+                        resolved_crs_of(geometry).definition(),
+                        "EPSG:32632",
+                        "{}: CRS target",
+                        case.op
+                    );
                     let field = output
                         .schema
                         .field_with_name(DEFAULT_GEOMETRY_COLUMN)
                         .expect("campo geometria");
                     let geo: Value = serde_json::from_str(
-                        field.metadata().get(GEO_METADATA_KEY).expect("geo metadata"),
+                        field
+                            .metadata()
+                            .get(GEO_METADATA_KEY)
+                            .expect("geo metadata"),
                     )
                     .expect("geo JSON");
                     assert_eq!(
@@ -1137,7 +1265,12 @@ mod tests {
                     | "geo.coverage_validate"
                     | "geo.shared_paths"
             ) {
-                assert_eq!(allocator.peek(), FieldId(100), "{}: allocatore intatto", case.op);
+                assert_eq!(
+                    allocator.peek(),
+                    FieldId(100),
+                    "{}: allocatore intatto",
+                    case.op
+                );
             }
         }
     }
@@ -1150,7 +1283,10 @@ mod tests {
     fn every_geo_op_rejects_an_input_without_geometry() {
         for case in cases() {
             let mut allocator = FieldAllocator::new(0);
-            let result = if matches!(case.op, "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid") {
+            let result = if matches!(
+                case.op,
+                "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+            ) {
                 // from_coords, from_wkt e generate_grid richiedono zero
                 // geometrie: un input gia' geometrico deve fallire.
                 analyze_geo_contract(
@@ -1167,21 +1303,35 @@ mod tests {
                 }
                 analyze_geo_contract(case.op, &inputs, &case.config, None, &mut allocator)
             };
-            assert!(result.is_err(), "{}: input non geometrico accettato", case.op);
+            assert!(
+                result.is_err(),
+                "{}: input non geometrico accettato",
+                case.op
+            );
         }
     }
 
     #[test]
     fn binary_ops_reject_a_second_input_without_geometry() {
-        for op in ["geo.sjoin", "geo.clip", "geo.overlay", "geo.nearest", "geo.within"] {
+        for op in [
+            "geo.sjoin",
+            "geo.clip",
+            "geo.overlay",
+            "geo.nearest",
+            "geo.within",
+        ] {
             let config = match op {
                 "geo.sjoin" => json!({"predicate": "intersects"}),
                 "geo.overlay" => json!({"mode": "union"}),
                 _ => json!({}),
             };
             let inputs = [geo_contract(projected_crs()), tabular_contract()];
-            let result = analyze_geo_contract(op, &inputs, &config, None, &mut FieldAllocator::new(0));
-            assert!(result.is_err(), "{op}: secondo input non geometrico accettato");
+            let result =
+                analyze_geo_contract(op, &inputs, &config, None, &mut FieldAllocator::new(0));
+            assert!(
+                result.is_err(),
+                "{op}: secondo input non geometrico accettato"
+            );
         }
     }
 
@@ -1211,7 +1361,8 @@ mod tests {
     fn unknown_or_non_geo_ops_are_unsupported() {
         let inputs = [geo_contract(projected_crs())];
         for op in ["geo.nope", "table.filter", "nonsense"] {
-            let result = analyze_geo_contract(op, &inputs, &json!({}), None, &mut FieldAllocator::new(0));
+            let result =
+                analyze_geo_contract(op, &inputs, &json!({}), None, &mut FieldAllocator::new(0));
             assert!(
                 matches!(result, Err(PlenoraError::Unsupported(_))),
                 "{op}: atteso Unsupported"
@@ -1223,13 +1374,24 @@ mod tests {
     // Copertura dei 5 CrsRequirement.
     // -----------------------------------------------------------------------
 
-    fn analyze_one(op: &str, inputs: &[DataContract], config: &Value, plan_crs: Option<&ResolvedCrs>) -> Result<DataContract> {
+    fn analyze_one(
+        op: &str,
+        inputs: &[DataContract],
+        config: &Value,
+        plan_crs: Option<&ResolvedCrs>,
+    ) -> Result<DataContract> {
         analyze_geo_contract(op, inputs, config, plan_crs, &mut FieldAllocator::new(0))
     }
 
     #[test]
     fn known_requirement_accepts_any_resolved_crs() {
-        for op in ["geo.explode", "geo.to_wkt", "geo.vertex_count", "geo.geometry_diagnostics", "geo.make_valid"] {
+        for op in [
+            "geo.explode",
+            "geo.to_wkt",
+            "geo.vertex_count",
+            "geo.geometry_diagnostics",
+            "geo.make_valid",
+        ] {
             let inputs = [geo_contract(geographic_crs())];
             analyze_one(op, &inputs, &json!({}), None)
                 .unwrap_or_else(|error| panic!("{op} su CRS geografico: {error}"));
@@ -1238,7 +1400,13 @@ mod tests {
 
     #[test]
     fn projected_requirement_rejects_geographic_input() {
-        for op in ["geo.buffer", "geo.area", "geo.simplify", "geo.voronoi", "geo.dissolve"] {
+        for op in [
+            "geo.buffer",
+            "geo.area",
+            "geo.simplify",
+            "geo.voronoi",
+            "geo.dissolve",
+        ] {
             let config = match op {
                 "geo.buffer" => json!({"distance": 1.0}),
                 "geo.simplify" => json!({"tolerance": 1.0}),
@@ -1246,7 +1414,10 @@ mod tests {
             };
             let inputs = [geo_contract(geographic_crs())];
             let result = analyze_one(op, &inputs, &config, None);
-            assert!(matches!(result, Err(PlenoraError::Crs(_))), "{op}: CRS geografico accettato");
+            assert!(
+                matches!(result, Err(PlenoraError::Crs(_))),
+                "{op}: CRS geografico accettato"
+            );
         }
     }
 
@@ -1255,7 +1426,10 @@ mod tests {
         for op in ["geo.geodesic_area", "geo.geodesic_line_length"] {
             let inputs = [geo_contract(projected_crs())];
             let result = analyze_one(op, &inputs, &json!({}), None);
-            assert!(matches!(result, Err(PlenoraError::Crs(_))), "{op}: CRS proiettato accettato");
+            assert!(
+                matches!(result, Err(PlenoraError::Crs(_))),
+                "{op}: CRS proiettato accettato"
+            );
         }
         // Anche le distanze geodetiche "unary" con other_wkb.
         let inputs = [geo_contract(projected_crs())];
@@ -1269,13 +1443,25 @@ mod tests {
         let matching = [geo_contract(projected_crs()), geo_contract(projected_crs())];
         analyze_one("geo.sjoin", &matching, &config, None).expect("stesso CRS proiettato");
 
-        let different = [geo_contract(projected_crs()), geo_contract(other_projected_crs())];
+        let different = [
+            geo_contract(projected_crs()),
+            geo_contract(other_projected_crs()),
+        ];
         let result = analyze_one("geo.sjoin", &different, &config, None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS diversi accettati");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "CRS diversi accettati"
+        );
 
-        let geographic_right = [geo_contract(projected_crs()), geo_contract(geographic_crs())];
+        let geographic_right = [
+            geo_contract(projected_crs()),
+            geo_contract(geographic_crs()),
+        ];
         let result = analyze_one("geo.sjoin", &geographic_right, &config, None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "right geografico accettato");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "right geografico accettato"
+        );
 
         // Variante unaria (other_wkb): il CRS dell'input deve essere proiettato.
         let inputs = [geo_contract(geographic_crs())];
@@ -1307,7 +1493,10 @@ mod tests {
                 &json!({"target_crs": "EPSG:32632"}),
                 None,
             );
-            assert!(result.is_err(), "target non risolvibile senza piano/backend");
+            assert!(
+                result.is_err(),
+                "target non risolvibile senza piano/backend"
+            );
         }
     }
 
@@ -1378,7 +1567,10 @@ mod tests {
             &json!({"target_crs": "EPSG:3857"}),
             Some(&plan),
         );
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "definizione non verificata accettata");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "definizione non verificata accettata"
+        );
     }
 
     #[cfg(feature = "proj-backend")]
@@ -1404,8 +1596,16 @@ mod tests {
         // geografico e' rifiutato.
         let inputs = [tabular_contract()];
         let geographic_plan = geographic_crs();
-        let result = analyze_one("geo.from_coords", &inputs, &json!({}), Some(&geographic_plan));
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS geografico accettato");
+        let result = analyze_one(
+            "geo.from_coords",
+            &inputs,
+            &json!({}),
+            Some(&geographic_plan),
+        );
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "CRS geografico accettato"
+        );
 
         // Senza config `crs` ne' CRS di piano: obbligatorio.
         let result = analyze_one("geo.from_coords", &inputs, &json!({}), None);
@@ -1434,46 +1634,70 @@ mod tests {
     fn configs_are_strictly_validated() {
         let inputs = [geo_contract(projected_crs())];
         let bad_configs: [(&str, Value); 40] = [
-            ("geo.buffer", json!({})),                                  // distance mancante
-            ("geo.buffer", json!({"distance": 1.0, "bogus": 1})),       // campo sconosciuto
-            ("geo.buffer", json!({"distance": "molto"})),               // tipo errato
+            ("geo.buffer", json!({})),                            // distance mancante
+            ("geo.buffer", json!({"distance": 1.0, "bogus": 1})), // campo sconosciuto
+            ("geo.buffer", json!({"distance": "molto"})),         // tipo errato
             ("geo.simplify", json!({"tolerance": -1.0})),
             ("geo.affine_transform", json!({"coefficients": [1.0, 2.0]})),
-            ("geo.translate", json!({"x_offset": 1.0})),                // y_offset mancante
+            ("geo.translate", json!({"x_offset": 1.0})), // y_offset mancante
             ("geo.concave_hull", json!({"concavity": 0.0})),
             ("geo.densify", json!({"max_segment_length": 0.0})),
             ("geo.snap_to_grid", json!({"grid_size": -1.0})),
-            ("geo.line_substring", json!({"start_ratio": 0.9, "end_ratio": 0.1})),
+            (
+                "geo.line_substring",
+                json!({"start_ratio": 0.9, "end_ratio": 0.1}),
+            ),
             ("geo.line_interpolate_point", json!({"ratio": 1.5})),
-            ("geo.clean_topology", json!({})),                          // snap_tolerance mancante
+            ("geo.clean_topology", json!({})), // snap_tolerance mancante
             ("geo.voronoi", json!({"max_points": 1})),
-            ("geo.distance", json!({"other_wkb": "zz"})),               // hex non valido
-            ("geo.geometry_accessors", json!({"fields": []})),          // selezione vuota
-            ("geo.geometry_accessors", json!({"fields": ["geometry_type", "geometry_type"]})),
-            ("geo.geometry_accessors", json!({"fields": ["bogus"]})),   // campo sconosciuto
-            ("geo.collect", json!({"group_by": []})),                   // nessuna chiave
-            ("geo.collect", json!({"group_by": ["assente"]})),          // chiave non in schema
-            ("geo.collect", json!({"group_by": ["geometry"]})),         // geometria come chiave
-            ("geo.line_locate_point", json!({})),                       // point_wkb mancante
-            ("geo.line_locate_point", json!({"point_wkb": "zz"})),      // hex non valido
-            ("geo.generate_grid", json!({})),                           // extent mancante
-            ("geo.generate_grid", json!({"extent": {"xmin": 5.0, "ymin": 0.0, "xmax": 5.0, "ymax": 1.0}, "cell_size": 1.0})), // extent degenere
-            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 0.0})), // cell_size nulla
-            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "shape": "triangle"})), // forma sconosciuta
-            ("geo.generate_grid", json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "bogus": 1})), // campo sconosciuto
-            ("geo.subdivide", json!({})),                               // max_vertices mancante
-            ("geo.subdivide", json!({"max_vertices": 3})),              // sotto il minimo 4
-            ("geo.snap", json!({"tolerance": 0.5})),                    // reference_wkb mancante
-            ("geo.snap", json!({"reference_wkb": point_wkb_hex(), "tolerance": -1.0})), // tolleranza negativa
-            ("geo.coverage_validate", json!({"tolerance": -1.0})),      // tolleranza negativa
-            ("geo.coverage_validate", json!({"max_issues": 0})),        // limite nullo
-            ("geo.coverage_validate", json!({"bogus": 1})),             // campo sconosciuto
-            ("geo.shared_paths", json!({"min_length": -1.0})),          // lunghezza negativa
+            ("geo.distance", json!({"other_wkb": "zz"})), // hex non valido
+            ("geo.geometry_accessors", json!({"fields": []})), // selezione vuota
+            (
+                "geo.geometry_accessors",
+                json!({"fields": ["geometry_type", "geometry_type"]}),
+            ),
+            ("geo.geometry_accessors", json!({"fields": ["bogus"]})), // campo sconosciuto
+            ("geo.collect", json!({"group_by": []})),                 // nessuna chiave
+            ("geo.collect", json!({"group_by": ["assente"]})),        // chiave non in schema
+            ("geo.collect", json!({"group_by": ["geometry"]})),       // geometria come chiave
+            ("geo.line_locate_point", json!({})),                     // point_wkb mancante
+            ("geo.line_locate_point", json!({"point_wkb": "zz"})),    // hex non valido
+            ("geo.generate_grid", json!({})),                         // extent mancante
+            (
+                "geo.generate_grid",
+                json!({"extent": {"xmin": 5.0, "ymin": 0.0, "xmax": 5.0, "ymax": 1.0}, "cell_size": 1.0}),
+            ), // extent degenere
+            (
+                "geo.generate_grid",
+                json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 0.0}),
+            ), // cell_size nulla
+            (
+                "geo.generate_grid",
+                json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "shape": "triangle"}),
+            ), // forma sconosciuta
+            (
+                "geo.generate_grid",
+                json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "bogus": 1}),
+            ), // campo sconosciuto
+            ("geo.subdivide", json!({})),                             // max_vertices mancante
+            ("geo.subdivide", json!({"max_vertices": 3})),            // sotto il minimo 4
+            ("geo.snap", json!({"tolerance": 0.5})),                  // reference_wkb mancante
+            (
+                "geo.snap",
+                json!({"reference_wkb": point_wkb_hex(), "tolerance": -1.0}),
+            ), // tolleranza negativa
+            ("geo.coverage_validate", json!({"tolerance": -1.0})),    // tolleranza negativa
+            ("geo.coverage_validate", json!({"max_issues": 0})),      // limite nullo
+            ("geo.coverage_validate", json!({"bogus": 1})),           // campo sconosciuto
+            ("geo.shared_paths", json!({"min_length": -1.0})),        // lunghezza negativa
             ("geo.shared_paths", json!({"tolerance": 1.0, "bogus": true})), // campo sconosciuto
-            ("geo.cluster_dbscan", json!({"min_points": 3})),           // eps mancante
+            ("geo.cluster_dbscan", json!({"min_points": 3})),         // eps mancante
             ("geo.cluster_dbscan", json!({"eps": 0.0, "min_points": 3})), // eps nulla
             ("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 0})), // min_points nullo
-            ("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 3, "bogus": 1})), // campo sconosciuto
+            (
+                "geo.cluster_dbscan",
+                json!({"eps": 1.0, "min_points": 3, "bogus": 1}),
+            ), // campo sconosciuto
         ];
         for (op, config) in bad_configs {
             let result = analyze_one(op, &inputs, &config, None);
@@ -1483,7 +1707,12 @@ mod tests {
         // other_wkb esadecimale ma con byte residui dopo la geometria.
         let mut trailing = point_wkb_hex();
         trailing.push_str("00");
-        let result = analyze_one("geo.distance", &inputs, &json!({"other_wkb": trailing}), None);
+        let result = analyze_one(
+            "geo.distance",
+            &inputs,
+            &json!({"other_wkb": trailing}),
+            None,
+        );
         assert!(result.is_err(), "WKB con byte residui accettato");
 
         // Config non oggetto.
@@ -1495,9 +1724,9 @@ mod tests {
     fn binary_configs_are_strictly_validated() {
         let inputs = [geo_contract(projected_crs()), geo_contract(projected_crs())];
         let bad_configs: [(&str, Value); 5] = [
-            ("geo.sjoin", json!({})),                          // predicate mancante
-            ("geo.sjoin", json!({"predicate": "nope"})),       // predicato sconosciuto
-            ("geo.overlay", json!({})),                        // mode mancante
+            ("geo.sjoin", json!({})),                    // predicate mancante
+            ("geo.sjoin", json!({"predicate": "nope"})), // predicato sconosciuto
+            ("geo.overlay", json!({})),                  // mode mancante
             ("geo.overlay", json!({"mode": "intersection", "x": 1})),
             ("geo.nearest", json!({"max_distance": -1.0})),
         ];
@@ -1552,9 +1781,21 @@ mod tests {
         let inputs = [wkt_tabular_contract()];
 
         // Colonna WKT assente dallo schema o di tipo non-Utf8.
-        assert!(analyze_one("geo.from_wkt", &inputs, &json!({"wkt_column": "geom_text"}), Some(&plan)).is_err());
+        assert!(analyze_one(
+            "geo.from_wkt",
+            &inputs,
+            &json!({"wkt_column": "geom_text"}),
+            Some(&plan)
+        )
+        .is_err());
         let numeric = [tabular_contract()];
-        assert!(analyze_one("geo.from_wkt", &numeric, &json!({"wkt_column": "x"}), Some(&plan)).is_err());
+        assert!(analyze_one(
+            "geo.from_wkt",
+            &numeric,
+            &json!({"wkt_column": "x"}),
+            Some(&plan)
+        )
+        .is_err());
 
         // Nome di output di default e override; collisione con colonna esistente.
         let output = analyze_one(
@@ -1582,7 +1823,10 @@ mod tests {
 
         // CRS obbligatorio: senza config `crs` ne' CRS di piano fallisce.
         let result = analyze_one("geo.from_wkt", &inputs, &json!({"wkt_column": "wkt"}), None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS mancante accettato");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "CRS mancante accettato"
+        );
         // Config `crs` coincidente col piano: riuso senza backend.
         let output = analyze_one(
             "geo.from_wkt",
@@ -1591,7 +1835,10 @@ mod tests {
             Some(&plan),
         )
         .expect("crs da config = piano");
-        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
+        assert_eq!(
+            resolved_crs_of(&output.geometries[0]).definition(),
+            "EPSG:32632"
+        );
         assert!(output.geometries[0].nullable, "geometria da WKT nullable");
     }
 
@@ -1625,7 +1872,12 @@ mod tests {
         )
         .expect("prefisso");
         assert_eq!(
-            output.schema.fields().last().expect("ultima colonna").name(),
+            output
+                .schema
+                .fields()
+                .last()
+                .expect("ultima colonna")
+                .name(),
             "acc_is_closed"
         );
 
@@ -1649,7 +1901,13 @@ mod tests {
             ContractProperties::default(),
         )
         .expect("contratto valido");
-        assert!(analyze_one("geo.geometry_accessors", &[with_accessor_column], &json!({}), None).is_err());
+        assert!(analyze_one(
+            "geo.geometry_accessors",
+            &[with_accessor_column],
+            &json!({}),
+            None
+        )
+        .is_err());
 
         // 1:1 sulle righe: proprieta' preservate.
         let inputs = [contract_with_properties()];
@@ -1706,8 +1964,14 @@ mod tests {
         ];
         assert_eq!(signatures(&output), expected);
         assert!(output.geometries[0].nullable, "collezione nullable");
-        assert!(output.properties.sorted_by.is_none(), "aggregazione: sorted_by declassato");
-        assert!(output.properties.row_count.is_none(), "aggregazione: row_count declassato");
+        assert!(
+            output.properties.sorted_by.is_none(),
+            "aggregazione: sorted_by declassato"
+        );
+        assert!(
+            output.properties.row_count.is_none(),
+            "aggregazione: row_count declassato"
+        );
 
         // Chiavi duplicate rifiutate.
         assert!(analyze_one(
@@ -1741,7 +2005,10 @@ mod tests {
             &json!({"point_wkb": line_hex}),
             None,
         );
-        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "LineString accettata");
+        assert!(
+            matches!(result, Err(PlenoraError::InvalidPlan(_))),
+            "LineString accettata"
+        );
 
         // Override del nome colonna; proprieta' preservate (1:1 streaming).
         let output = analyze_one(
@@ -1752,7 +2019,12 @@ mod tests {
         )
         .expect("override nome colonna");
         assert_eq!(
-            output.schema.fields().last().expect("ultima colonna").name(),
+            output
+                .schema
+                .fields()
+                .last()
+                .expect("ultima colonna")
+                .name(),
             "frac"
         );
         assert!(output.properties.sorted_by.is_some());
@@ -1767,7 +2039,10 @@ mod tests {
 
         // CRS obbligatorio: senza config `crs` ne' CRS di piano fallisce.
         let result = analyze_one("geo.generate_grid", &inputs, &extent, None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "CRS mancante accettato");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "CRS mancante accettato"
+        );
 
         // include_centroid: due colonne Float64 non null in coda; shape hex.
         let mut config = extent;
@@ -1784,12 +2059,18 @@ mod tests {
             (CENTROID_Y_COLUMN, DataType::Float64, false),
         ];
         assert_eq!(signatures(&output), expected);
-        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
+        assert_eq!(
+            resolved_crs_of(&output.geometries[0]).definition(),
+            "EPSG:32632"
+        );
 
         // Limite celle: extent enorme con celle piccole fallisce in analisi.
         let over_limit = json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1e6, "ymax": 1e6}, "cell_size": 1.0});
         let result = analyze_one("geo.generate_grid", &inputs, &over_limit, Some(&plan));
-        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "limite celle non applicato");
+        assert!(
+            matches!(result, Err(PlenoraError::InvalidPlan(_))),
+            "limite celle non applicato"
+        );
 
         // Extent con span che overflowa il conteggio celle (coordinate finite
         // ma prodotto colonne x righe non rappresentabile).
@@ -1800,18 +2081,18 @@ mod tests {
     #[test]
     fn subdivide_expands_like_explode_and_can_rename_the_geometry() {
         let inputs = [contract_with_properties()];
-        let output = analyze_one(
-            "geo.subdivide",
-            &inputs,
-            &json!({"max_vertices": 16}),
-            None,
-        )
-        .expect("subdivide");
+        let output = analyze_one("geo.subdivide", &inputs, &json!({"max_vertices": 16}), None)
+            .expect("subdivide");
         // Espansione stabile: sorted_by preservato, row_count eliminato.
         assert!(output.properties.sorted_by.is_some());
         assert!(output.properties.row_count.is_none());
         assert_eq!(
-            output.schema.fields().last().expect("ultima colonna").name(),
+            output
+                .schema
+                .fields()
+                .last()
+                .expect("ultima colonna")
+                .name(),
             PARENT_INDEX_COLUMN
         );
         // FieldId preservato (geometria in place).
@@ -1880,7 +2161,10 @@ mod tests {
             &json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
             None,
         );
-        assert!(matches!(result, Err(PlenoraError::Crs(_))), "input geografico accettato");
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "input geografico accettato"
+        );
     }
 
     #[test]
@@ -1898,9 +2182,16 @@ mod tests {
             (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
         ];
         assert_eq!(signatures(&output), expected);
-        assert_eq!(output.geometries[0].field_id, FieldId(0), "allocatore da zero");
+        assert_eq!(
+            output.geometries[0].field_id,
+            FieldId(0),
+            "allocatore da zero"
+        );
         assert!(!output.geometries[0].nullable);
-        assert_eq!(resolved_crs_of(&output.geometries[0]).definition(), "EPSG:32632");
+        assert_eq!(
+            resolved_crs_of(&output.geometries[0]).definition(),
+            "EPSG:32632"
+        );
         assert!(output.properties.sorted_by.is_none());
         assert!(output.properties.row_count.is_none());
         let field = output
@@ -1908,7 +2199,10 @@ mod tests {
             .field_with_name(DEFAULT_GEOMETRY_COLUMN)
             .expect("campo geometria");
         assert_eq!(
-            field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+            field
+                .metadata()
+                .get(GEOARROW_EXTENSION_KEY)
+                .map(String::as_str),
             Some(GEOARROW_WKB_EXTENSION)
         );
 
@@ -1936,7 +2230,10 @@ mod tests {
         let geographic = [geo_contract(geographic_crs())];
         for op in ["geo.coverage_validate", "geo.shared_paths"] {
             let result = analyze_one(op, &geographic, &json!({}), None);
-            assert!(matches!(result, Err(PlenoraError::Crs(_))), "{op}: CRS geografico accettato");
+            assert!(
+                matches!(result, Err(PlenoraError::Crs(_))),
+                "{op}: CRS geografico accettato"
+            );
         }
     }
 
@@ -1981,7 +2278,12 @@ mod tests {
         )
         .expect("override del nome colonna");
         assert_eq!(
-            output.schema.fields().last().expect("ultima colonna").name(),
+            output
+                .schema
+                .fields()
+                .last()
+                .expect("ultima colonna")
+                .name(),
             "geom_wkt"
         );
     }
@@ -2017,8 +2319,14 @@ mod tests {
             let plan = projected_crs();
             let output = analyze_one(op, &inputs, &config, Some(&plan))
                 .unwrap_or_else(|error| panic!("{op}: {error}"));
-            assert!(output.properties.sorted_by.is_some(), "{op}: sorted_by perso");
-            assert!(output.properties.row_count.is_some(), "{op}: row_count perso");
+            assert!(
+                output.properties.sorted_by.is_some(),
+                "{op}: sorted_by perso"
+            );
+            assert!(
+                output.properties.row_count.is_some(),
+                "{op}: row_count perso"
+            );
         }
     }
 
@@ -2026,8 +2334,14 @@ mod tests {
     fn expand_preserves_sort_but_drops_row_count() {
         let inputs = [contract_with_properties()];
         let output = analyze_one("geo.explode", &inputs, &json!({}), None).expect("explode");
-        assert!(output.properties.sorted_by.is_some(), "espansione stabile preserva l'ordine");
-        assert!(output.properties.row_count.is_none(), "righe in uscita non note a secco");
+        assert!(
+            output.properties.sorted_by.is_some(),
+            "espansione stabile preserva l'ordine"
+        );
+        assert!(
+            output.properties.row_count.is_none(),
+            "righe in uscita non note a secco"
+        );
     }
 
     #[test]
@@ -2186,12 +2500,22 @@ mod tests {
 
         // Chiave in entrambe con valori diversi -> errore di contratto che
         // nomina la chiave e MAI i valori (errori senza dati).
-        let left = attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "alpha")]);
-        let right = attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "omega")]);
-        let result = analyze_one("geo.overlay", &[left, right], &json!({"mode": "union"}), None);
+        let left =
+            attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "alpha")]);
+        let right =
+            attach_schema_metadata(&geo_contract(projected_crs()), &[("shared.key", "omega")]);
+        let result = analyze_one(
+            "geo.overlay",
+            &[left, right],
+            &json!({"mode": "union"}),
+            None,
+        );
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
-                assert!(message.contains("shared.key"), "l'errore nomina la chiave: {message}");
+                assert!(
+                    message.contains("shared.key"),
+                    "l'errore nomina la chiave: {message}"
+                );
                 assert!(
                     !message.contains("alpha") && !message.contains("omega"),
                     "l'errore non contiene mai i valori: {message}"
@@ -2247,12 +2571,12 @@ mod tests {
     /// identificabile dal trasporto, ADR-0009 decisione 8) e nessun
     /// metadato `geo`: la forma delle fixture senza CRS dichiarato.
     fn extension_only_geometry_field() -> Field {
-        Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
-            HashMap::from([(
+        Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(HashMap::from([
+            (
                 GEOARROW_EXTENSION_KEY.to_owned(),
                 GEOARROW_WKB_EXTENSION.to_owned(),
-            )]),
-        )
+            ),
+        ]))
     }
 
     /// Contratto con geometria SENZA CRS dichiarato (`ContractCrs::Missing`).
@@ -2312,9 +2636,8 @@ mod tests {
             match result {
                 Err(PlenoraError::Crs(message)) => {
                     assert!(
-                        message.contains(
-                            "nessun CRS dichiarato in alcuna rappresentazione accettata"
-                        ),
+                        message
+                            .contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
                         "{op}: {message}"
                     );
                 }
@@ -2327,8 +2650,7 @@ mod tests {
         match result {
             Err(PlenoraError::Crs(message)) => {
                 assert!(
-                    message
-                        .contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+                    message.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
                     "{message}"
                 );
             }
@@ -2409,11 +2731,23 @@ mod tests {
     const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 17] = [
         ("geo.centroid", TypesDeclaration::Exact, "point"),
         ("geo.point_on_surface", TypesDeclaration::Exact, "point"),
-        ("geo.line_interpolate_point", TypesDeclaration::Exact, "point"),
+        (
+            "geo.line_interpolate_point",
+            TypesDeclaration::Exact,
+            "point",
+        ),
         ("geo.convex_hull", TypesDeclaration::Exact, "polygon"),
         ("geo.concave_hull", TypesDeclaration::Exact, "polygon"),
-        ("geo.envelope", TypesDeclaration::Exact, "point,linestring,polygon"),
-        ("geo.line_substring", TypesDeclaration::Exact, "point,linestring"),
+        (
+            "geo.envelope",
+            TypesDeclaration::Exact,
+            "point,linestring,polygon",
+        ),
+        (
+            "geo.line_substring",
+            TypesDeclaration::Exact,
+            "point,linestring",
+        ),
         ("geo.buffer", TypesDeclaration::Exact, "multipolygon"),
         (
             "geo.boundary",
@@ -2422,12 +2756,20 @@ mod tests {
         ),
         ("geo.make_valid", TypesDeclaration::Mixed, ""),
         ("geo.voronoi", TypesDeclaration::Exact, "polygon"),
-        ("geo.clean_topology", TypesDeclaration::Exact, "polygon,multipolygon"),
+        (
+            "geo.clean_topology",
+            TypesDeclaration::Exact,
+            "polygon,multipolygon",
+        ),
         ("geo.clip", TypesDeclaration::Exact, "multipolygon"),
         ("geo.intersection", TypesDeclaration::Exact, "multipolygon"),
         ("geo.union", TypesDeclaration::Exact, "multipolygon"),
         ("geo.difference", TypesDeclaration::Exact, "multipolygon"),
-        ("geo.symmetric_difference", TypesDeclaration::Exact, "multipolygon"),
+        (
+            "geo.symmetric_difference",
+            TypesDeclaration::Exact,
+            "multipolygon",
+        ),
     ];
 
     fn expected_types_of(op: &str) -> Option<(TypesDeclaration, &'static str)> {
@@ -2453,8 +2795,18 @@ mod tests {
                         .types
                         .value()
                         .unwrap_or_else(|| panic!("{}: tipi dell'output non dichiarati", case.op));
-                    assert_eq!(types.declaration(), declaration, "{}: dichiarazione", case.op);
-                    assert_eq!(types.to_canonical_list(), list, "{}: lista canonica", case.op);
+                    assert_eq!(
+                        types.declaration(),
+                        declaration,
+                        "{}: dichiarazione",
+                        case.op
+                    );
+                    assert_eq!(
+                        types.to_canonical_list(),
+                        list,
+                        "{}: lista canonica",
+                        case.op
+                    );
                 }
                 None => {
                     assert!(
@@ -2524,9 +2876,16 @@ mod tests {
                 &mut FieldAllocator::new(100),
             )
             .unwrap_or_else(|error| panic!("{}: {error}", case.op));
-            let geometry = output.active_geometry_column().expect("geometria in output");
+            let geometry = output
+                .active_geometry_column()
+                .expect("geometria in output");
             let types = geometry.types.value().expect("tipi riscritti");
-            assert_eq!(types.declaration(), declaration, "{}: dichiarazione", case.op);
+            assert_eq!(
+                types.declaration(),
+                declaration,
+                "{}: dichiarazione",
+                case.op
+            );
             assert_eq!(
                 types.to_canonical_list(),
                 list,
@@ -2539,7 +2898,9 @@ mod tests {
                 .expect("campo geometria");
             assert!(
                 !field.metadata().contains_key(PLENORA_GEOMETRY_TYPES_KEY)
-                    && !field.metadata().contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+                    && !field
+                        .metadata()
+                        .contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
                 "{}: chiavi types ereditate rimosse (sostituzione)",
                 case.op
             );
@@ -2568,9 +2929,15 @@ mod tests {
                 &mut FieldAllocator::new(100),
             )
             .unwrap_or_else(|error| panic!("{op}: {error}"));
-            let geometry = output.active_geometry_column().expect("geometria in output");
+            let geometry = output
+                .active_geometry_column()
+                .expect("geometria in output");
             let types = geometry.types.value().expect("tipi preservati");
-            assert_eq!(types.declaration(), TypesDeclaration::Exact, "{op}: dichiarazione");
+            assert_eq!(
+                types.declaration(),
+                TypesDeclaration::Exact,
+                "{op}: dichiarazione"
+            );
             assert_eq!(
                 types.to_canonical_list(),
                 "polygon",
@@ -2581,7 +2948,10 @@ mod tests {
                 .field_with_name(&geometry.name)
                 .expect("campo geometria");
             assert_eq!(
-                field.metadata().get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
+                field
+                    .metadata()
+                    .get(PLENORA_GEOMETRY_TYPES_KEY)
+                    .map(String::as_str),
                 Some("polygon"),
                 "{op}: chiavi ereditate intatte"
             );
@@ -2603,7 +2973,10 @@ mod tests {
                         PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
                         "resolved".to_owned(),
                     );
-                    metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned());
+                    metadata.insert(
+                        PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                        "EPSG:32632".to_owned(),
+                    );
                     metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
                     metadata.insert(
                         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
@@ -2646,7 +3019,6 @@ mod tests {
             PLENORA_GEOMETRY_CRS_ID_KEY,
             PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
             PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
-            PLENORA_GEOMETRY_AXIS_ORDER_KEY,
             PLENORA_GEOMETRY_SRID_KEY,
         ] {
             assert!(
@@ -2654,8 +3026,16 @@ mod tests {
                 "{key}: chiave della sorgente sostituita, non fusa"
             );
         }
-        let geo: Value = serde_json::from_str(metadata.get(GEO_METADATA_KEY).expect("geo metadata"))
-            .expect("geo JSON");
+        assert_eq!(
+            metadata
+                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+                .map(String::as_str),
+            Some("easting_northing"),
+            "axis_order descrive l'output GIS normalizzato del target"
+        );
+        let geo: Value =
+            serde_json::from_str(metadata.get(GEO_METADATA_KEY).expect("geo metadata"))
+                .expect("geo JSON");
         assert_eq!(
             geo.get("crs").and_then(Value::as_str),
             Some("EPSG:3857"),
@@ -2665,6 +3045,209 @@ mod tests {
             resolved_crs_of(output.active_geometry_column().expect("geometria")).definition(),
             "EPSG:3857"
         );
+    }
+
+    /// Contratto geometrico la cui colonna DICHIARA `axis_order` fra le
+    /// chiavi canoniche, coerente col CRS della colonna: la dichiarazione
+    /// descrive l'ordine dei byte realmente presenti nella colonna, non
+    /// l'ordine nativo dell'autorita'.
+    fn geo_contract_with_declared_axis_order(crs: ResolvedCrs, axis_order: &str) -> DataContract {
+        let definition = crs.definition().to_owned();
+        let mut contract = geo_contract(crs);
+        let fields: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    metadata.insert(
+                        GEO_METADATA_KEY.to_owned(),
+                        geo_metadata_json_with_dimensions(&definition, GeometryDimensions::Xy)
+                            .expect("geo metadata"),
+                    );
+                    metadata.insert(
+                        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                        "resolved".to_owned(),
+                    );
+                    metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.clone());
+                    metadata.insert(
+                        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                        axis_order.to_owned(),
+                    );
+                    field.as_ref().clone().with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        contract.schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            contract.schema.metadata().clone(),
+        ));
+        contract
+    }
+
+    #[test]
+    fn reproject_identity_never_relabels_untouched_coordinates() {
+        // P1 (review indipendente): con source == target il backend PROJ non
+        // costruisce alcuna pipeline e restituisce la geometria di input byte
+        // per byte (`proj_backend::Reprojector::new` /
+        // `identical_crs_is_an_exact_noop`). Una colonna che DICHIARA
+        // `axis_order = lat_lon` uscirebbe quindi con le STESSE coordinate ma
+        // etichettata `lon_lat` (l'ordine GIS normalizzato del target): il
+        // metadato contraddirebbe i byte e un consumatore a valle leggerebbe
+        // la latitudine come longitudine. Fail-closed: rifiuto in analisi.
+        let input = geo_contract_with_declared_axis_order(geographic_crs(), "lat_lon");
+        let result = analyze_one(
+            "geo.reproject",
+            &[input],
+            &json!({"target_crs": "EPSG:4326"}),
+            Some(&geographic_crs()),
+        );
+        match result {
+            Err(PlenoraError::Crs(message)) => {
+                assert!(
+                    message.contains("axis_order"),
+                    "il messaggio nomina la chiave in conflitto: {message}"
+                );
+            }
+            other => panic!(
+                "identity reproject su `lat_lon` dichiarato: atteso rifiuto, ottenuto {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn reproject_rejects_declared_non_normalized_axis_order_on_every_path() {
+        // Stessa classe sul percorso NON identity (il gemello del P1): la
+        // pipeline PROJ e' normalizzata per la visualizzazione GIS e legge
+        // x=longitudine/easting — coordinate dichiarate `lat_lon` (o
+        // `northing_easting`, o `other`) sarebbero lette al contrario e il
+        // risultato sarebbe silenziosamente sbagliato, non un errore.
+        let geographic = geo_contract_with_declared_axis_order(geographic_crs(), "lat_lon");
+        let result = analyze_one(
+            "geo.reproject",
+            &[geographic],
+            &json!({"target_crs": "EPSG:32632"}),
+            Some(&projected_crs()),
+        );
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "reproject 4326 -> 32632 su `lat_lon` dichiarato: {result:?}"
+        );
+        for declared in ["northing_easting", "other"] {
+            let projected = geo_contract_with_declared_axis_order(projected_crs(), declared);
+            let result = analyze_one(
+                "geo.reproject",
+                &[projected],
+                &json!({"target_crs": "EPSG:3857"}),
+                Some(&other_projected_crs()),
+            );
+            assert!(
+                matches!(result, Err(PlenoraError::Crs(_))),
+                "{declared}: ordine non normalizzato accettato: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reproject_accepts_normalized_and_undeclared_but_rejects_unknown_axis_order() {
+        // Il kernel PROJ assume l'ordine GIS normalizzato della sorgente.
+        // `unknown` e' un valore canonico onesto per il trasporto, ma non
+        // dimostra l'ordine fisico richiesto da una trasformazione di coordinate.
+        let normalized = geo_contract_with_declared_axis_order(geographic_crs(), "lon_lat");
+        let output = analyze_one(
+            "geo.reproject",
+            &[normalized],
+            &json!({"target_crs": "EPSG:4326"}),
+            Some(&geographic_crs()),
+        )
+        .expect("ordine GIS normalizzato");
+        let field = output
+            .schema
+            .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("campo geometria");
+        assert_eq!(
+            field
+                .metadata()
+                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+                .map(String::as_str),
+            Some("lon_lat")
+        );
+
+        let unknown = geo_contract_with_declared_axis_order(geographic_crs(), "unknown");
+        let result = analyze_one(
+            "geo.reproject",
+            &[unknown],
+            &json!({"target_crs": "EPSG:4326"}),
+            Some(&geographic_crs()),
+        );
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "ordine fisico unknown non deve essere reinterpretato: {result:?}"
+        );
+
+        // Colonna senza alcuna chiave canonica (solo `geoarrow.wkb` +
+        // `geo`): nessuna dichiarazione da contraddire, comportamento
+        // storico invariato.
+        analyze_one(
+            "geo.reproject",
+            &[geo_contract(projected_crs())],
+            &json!({"target_crs": "EPSG:3857"}),
+            Some(&other_projected_crs()),
+        )
+        .expect("colonna senza chiavi canoniche");
+    }
+
+    #[test]
+    fn canonicalized_geographic_output_remains_reprojectable() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            json!({
+                "type": "GeographicCRS",
+                "coordinate_system": {
+                    "axis": [
+                        {"direction": "north"},
+                        {"direction": "east"}
+                    ]
+                },
+                "id": {"authority": "EPSG", "code": 4326}
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        let mut input = geo_contract(crs);
+        let canonical = canonical_geometry_metadata(
+            input.active_geometry_column().expect("geometria"),
+            &GeometryMetadataDetails::default(),
+        );
+        let fields: Vec<Field> = input
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    metadata.extend(canonical.clone());
+                    field.as_ref().clone().with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        input.schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        ));
+
+        analyze_one(
+            "geo.reproject",
+            &[input],
+            &json!({"target_crs": "EPSG:3857"}),
+            Some(&other_projected_crs()),
+        )
+        .expect("un artifact EPSG:4326 prodotto dal centro deve restare riproiettabile");
     }
 
     #[test]
@@ -2678,7 +3261,12 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true),
         ]));
-        let result = analyze_one("geo.centroid", std::slice::from_ref(&contract), &json!({}), None);
+        let result = analyze_one(
+            "geo.centroid",
+            std::slice::from_ref(&contract),
+            &json!({}),
+            None,
+        );
         match result {
             Err(PlenoraError::Schema(message)) => {
                 assert!(
@@ -2706,18 +3294,17 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
                 HashMap::from([
-                    (
-                        PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-                        "xy".to_owned(),
-                    ),
-                    (
-                        PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
-                        "wkb".to_owned(),
-                    ),
+                    (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
+                    (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
                 ]),
             ),
         ]));
-        analyze_one("geo.centroid", std::slice::from_ref(&contract), &json!({}), None)
-            .expect("forma canonica-only accettata");
+        analyze_one(
+            "geo.centroid",
+            std::slice::from_ref(&contract),
+            &json!({}),
+            None,
+        )
+        .expect("forma canonica-only accettata");
     }
 }

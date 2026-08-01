@@ -44,9 +44,9 @@ pub mod extended_algorithms;
 pub mod extensions;
 pub mod extensions2;
 pub mod extensions3;
+pub mod geometry_contract;
 #[cfg(feature = "geos-backend")]
 pub mod geos_backend;
-pub mod geometry_contract;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
@@ -61,7 +61,7 @@ use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
 use geozero::{CoordDimensions, ToWkb};
-use plenora_core::contract::GeometryDimensions;
+use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
 
@@ -89,9 +89,7 @@ impl Operation {
 /// Mappatura delle varianti `GeoEngineError` del sorgente su `PlenoraError`
 /// (messaggi invariati).
 fn empty_geometry(operation: &'static str) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!(
-        "geometria vuota non supportata da {operation}"
-    ))
+    PlenoraError::InvalidPlan(format!("geometria vuota non supportata da {operation}"))
 }
 
 fn wkb_serialization(error: impl std::fmt::Display) -> PlenoraError {
@@ -350,7 +348,38 @@ fn validate_wkb_geometry(
         max_depth,
         components,
         GeometryDimensions::Xy,
+        EmbeddedSridPolicy::Reject,
     )
+}
+
+#[derive(Clone, Copy)]
+enum EmbeddedSridPolicy {
+    Reject,
+    Match(Option<u32>),
+}
+
+fn type_code_without_embedded_srid(
+    cursor: &mut WkbCursor<'_>,
+    little_endian: bool,
+    raw_type: u32,
+    policy: EmbeddedSridPolicy,
+) -> Result<u32, PlenoraError> {
+    if raw_type & EWKB_SRID_FLAG == 0 {
+        return Ok(raw_type);
+    }
+    let EmbeddedSridPolicy::Match(expected_srid) = policy else {
+        return Err(unsupported_wkb_dimension());
+    };
+    let embedded_srid = cursor.read_u32(little_endian)?;
+    let expected_srid = expected_srid.ok_or_else(|| {
+        PlenoraError::Crs("SRID EWKB embedded senza autorita' CRS governata".to_owned())
+    })?;
+    if embedded_srid != expected_srid {
+        return Err(PlenoraError::Crs(
+            "SRID EWKB embedded incoerente con lo SRID dichiarato".to_owned(),
+        ));
+    }
+    Ok(raw_type & !EWKB_SRID_FLAG)
 }
 
 /// Validatore strutturale stride-aware (B1.2): annidamento, conteggi, bound
@@ -368,6 +397,7 @@ fn validate_wkb_geometry_with_dimensions(
     max_depth: usize,
     components: &mut u64,
     expected: GeometryDimensions,
+    srid_policy: EmbeddedSridPolicy,
 ) -> Result<u32, PlenoraError> {
     if depth > max_depth {
         return Err(invalid_wkb_structure(
@@ -389,6 +419,7 @@ fn validate_wkb_geometry_with_dimensions(
         _ => return Err(invalid_wkb_structure("byte order non valido")),
     };
     let raw_type = cursor.read_u32(little_endian)?;
+    let raw_type = type_code_without_embedded_srid(cursor, little_endian, raw_type, srid_policy)?;
     let (geometry_type, stride) = parse_wkb_type_code(raw_type, expected)?;
     match geometry_type {
         1 => {
@@ -437,6 +468,7 @@ fn validate_wkb_geometry_with_dimensions(
                     max_depth,
                     components,
                     expected,
+                    srid_policy,
                 )?;
                 let valid_child = match geometry_type {
                     4 => child_type == 1,
@@ -444,9 +476,7 @@ fn validate_wkb_geometry_with_dimensions(
                     6 => child_type == 3,
                     7 => true,
                     _ => {
-                        return Err(invalid_wkb_structure(
-                            "tipo geometria non supportato",
-                        ));
+                        return Err(invalid_wkb_structure("tipo geometria non supportato"));
                     }
                 };
                 if !valid_child {
@@ -489,7 +519,10 @@ pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
 ///
 /// Come [`validate_wkb_contract`]; in piu' `PlenoraError::InvalidPlan` se
 /// l'annidamento delle geometrie supera `max_depth`.
-pub fn validate_wkb_contract_with_depth(payload: &[u8], max_depth: usize) -> Result<(), PlenoraError> {
+pub fn validate_wkb_contract_with_depth(
+    payload: &[u8],
+    max_depth: usize,
+) -> Result<(), PlenoraError> {
     if payload.len() > MAX_WKB_BYTES {
         return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
     }
@@ -547,7 +580,56 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
     }
     let mut cursor = WkbCursor::new(payload);
     let mut components = 0_u64;
-    validate_wkb_geometry_with_dimensions(&mut cursor, 0, max_depth, &mut components, dimensions)?;
+    validate_wkb_geometry_with_dimensions(
+        &mut cursor,
+        0,
+        max_depth,
+        &mut components,
+        dimensions,
+        EmbeddedSridPolicy::Reject,
+    )?;
+    if cursor.remaining() != 0 {
+        return Err(invalid_wkb_structure("byte residui dopo la geometria"));
+    }
+    Ok(())
+}
+
+/// Valida WKB/EWKB al confine di trasporto senza riscrivere le celle.
+///
+/// A differenza dei decoder dei kernel geometrici, questo gate ammette il
+/// flag SRID soltanto per encoding EWKB dichiarato e verifica ogni SRID
+/// embedded contro l'autorita' governata. I decoder elaboranti continuano a rifiutare
+/// lo SRID embedded finche' non possono preservarlo.
+///
+/// # Errors
+///
+/// `PlenoraError::Crs` se uno SRID embedded diverge da `expected_srid`; le
+/// altre varianti coincidono con
+/// [`validate_wkb_contract_for_dimensions_with_depth`].
+pub fn validate_wkb_transport_for_dimensions_with_depth(
+    payload: &[u8],
+    dimensions: GeometryDimensions,
+    encoding: GeometryEncoding,
+    expected_srid: Option<u32>,
+    max_depth: usize,
+) -> Result<(), PlenoraError> {
+    if payload.len() > MAX_WKB_BYTES {
+        return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
+    }
+    let mut cursor = WkbCursor::new(payload);
+    let mut components = 0_u64;
+    let srid_policy = match encoding {
+        GeometryEncoding::Wkb => EmbeddedSridPolicy::Reject,
+        GeometryEncoding::Ewkb => EmbeddedSridPolicy::Match(expected_srid),
+    };
+    validate_wkb_geometry_with_dimensions(
+        &mut cursor,
+        0,
+        max_depth,
+        &mut components,
+        dimensions,
+        srid_policy,
+    )?;
     if cursor.remaining() != 0 {
         return Err(invalid_wkb_structure("byte residui dopo la geometria"));
     }
@@ -951,7 +1033,12 @@ mod tests {
     fn dimensional_wkb_validates_with_matching_expected_dimensions() {
         // Punto ISO ed EWKB nelle tre dimensionalita' estese.
         for (iso_type, ewkb_type, expected, extra) in [
-            (1001_u32, 0x8000_0001, GeometryDimensions::Xyz, &[7.0_f64][..]),
+            (
+                1001_u32,
+                0x8000_0001,
+                GeometryDimensions::Xyz,
+                &[7.0_f64][..],
+            ),
             (2001, 0x4000_0001, GeometryDimensions::Xym, &[8.0][..]),
             (3001, 0xC000_0001, GeometryDimensions::Xyzm, &[7.0, 8.0][..]),
         ] {
@@ -1131,6 +1218,68 @@ mod tests {
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&payload_z, GeometryDimensions::Unknown),
             Err(PlenoraError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn transport_gate_matches_big_endian_srid_without_weakening_kernel_gate() {
+        let mut payload = vec![0_u8];
+        payload.extend_from_slice(&0x2000_0001_u32.to_be_bytes());
+        payload.extend_from_slice(&4326_u32.to_be_bytes());
+        payload.extend_from_slice(&1.0_f64.to_be_bytes());
+        payload.extend_from_slice(&2.0_f64.to_be_bytes());
+
+        assert!(validate_wkb_transport_for_dimensions_with_depth(
+            &payload,
+            GeometryDimensions::Xy,
+            GeometryEncoding::Ewkb,
+            Some(4326),
+            MAX_WKB_DEPTH,
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload,
+                GeometryDimensions::Xy,
+                GeometryEncoding::Wkb,
+                Some(4326),
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::Unsupported(_))
+        ));
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload,
+                GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
+                None,
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::Crs(_))
+        ));
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload,
+                GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
+                Some(32632),
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::Crs(_))
+        ));
+        assert!(matches!(
+            validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xy),
+            Err(PlenoraError::Unsupported(_))
+        ));
+        assert!(matches!(
+            validate_wkb_transport_for_dimensions_with_depth(
+                &payload[..5],
+                GeometryDimensions::Xy,
+                GeometryEncoding::Ewkb,
+                Some(4326),
+                MAX_WKB_DEPTH,
+            ),
+            Err(PlenoraError::InvalidPlan(_))
         ));
     }
 

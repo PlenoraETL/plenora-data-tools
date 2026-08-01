@@ -162,6 +162,38 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    chiave, una sola direzione (la direzione opposta non passa di qui: con
    una decisione del piano le dichiarazioni sono gia' state sostituite
    dalla strip).
+   **Dichiarazione `resolved` e conflitti decidibili (emendamento
+   2026-07-31 — classe A, caso owner shapefile catastale EPSG:3003)**: la
+   co-presenza `crs_id`+`crs_definition` non degrada automaticamente un
+   input che dichiara `resolved`: il CRS viene risolto e la coerenza viene
+   verificata sull'intera coppia authority+code dei canonical, mai sul solo
+   numero, cosi' il caso owner coerente resta `Resolved` senza confondere
+   autorita' diverse. Un conflitto numerico gia' decidibile senza
+   backend fra `crs_id=authority:code` e `srid` resta invece sempre
+   `DeclaredUnresolved`, anche se il produttore dichiara `resolved`: la
+   dichiarazione non puo' nascondere H-06. Le rappresentazioni originali
+   vengono preservate, mai conciliate. Cambio no-backend
+   dichiarato: senza `proj-backend` un input `resolved` con doppia
+   rappresentazione prima passava come `DeclaredUnresolved` (la (2a)
+   scattava senza risoluzione), ora fallisce `Crs` (risoluzione
+   impossibile) — coerente col `resolved` a rappresentazione singola: era
+   la (2a) l'anomalia. Classificazione del comportamento precedente:
+   rovesciamento di una dichiarazione esplicita, NON hazard — lo stato
+   `declared_unresolved` era onesto verso valle, solo sbagliato. Classe B
+   collegata (emissione): la forma della definizione decide la chiave
+   ([`definition_form`] in plenora-core, keyword ASCII case-insensitive e
+   delimitatori WKT `[`/`(` con radici CRS top-level enumerate: WKT1 include
+   `FITTED_CS`; WKT2 include le forme corte gia' supportate e gli alias
+   long-form `GEODETICCRS`, `GEOGRAPHICCRS`, `PROJECTEDCRS`, `VERTICALCRS`,
+   `ENGINEERINGCRS`, senza matching per prefisso) — WKT1/WKT2 →
+   `crs_definition` +
+   `wkt`/`wkt2` (byte originali), mai testo WKT in `crs_id` (rompeva il
+   passthrough R2.6 contro la lineage WKT); il reader legacy applica la
+   stessa classificazione, quindi una stringa WKT identica in `geo.crs` e'
+   confrontata con `crs_definition`, non con `crs_id`. Il reader canonico
+   rifiuta inoltre un contenuto la cui forma non corrisponde a
+   `crs_definition_format` (R5.1). Authority:code e proj-string restano in
+   `crs_id` come prima.
 8. **Operazioni che riscrivono un fatto canonico: sostituzione a monte,
    guard R2.6 intatto (attuata 2026-07-30).** R2.6 riguarda descrizioni
    divergenti DELLO STESSO FATTO; alcune operazioni CAMBIANO il fatto —
@@ -172,11 +204,17 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    avviene a monte, nel contratto di output prodotto dall'analisi
    (`analyze_reproject` rimuove il blocco CRS canonico della sorgente —
    `crs_id`, `crs_definition`+formato, `srid`, `axis_order`,
-   `crs_resolution` — con `strip_rewritten_crs_keys`, stesso meccanismo di
-   `strip_decided_crs_declarations`; `with_geometry_types` rimuove
-   `types`/`types_declaration` con `strip_rewritten_types_declarations`), e
-   `canonical_output_schema` le ri-emette dal contratto come ogni altra
-   chiave. Il guard R2.6 NON e' indebolito: su qualunque altra chiave
+   `crs_resolution` — con `strip_rewritten_crs_keys`, quindi inserisce
+   `axis_order` nell'ordine GIS normalizzato realmente prodotto da PROJ:
+   `lon_lat` per target geografici, `easting_northing` per target proiettati;
+   l'ordine nativo dell'autorita' resta metadato separato in
+   `ResolvedCrs::authority_axis_order`, quindi EPSG:4326 non viene emesso
+   erroneamente `lat_lon` accanto a coordinate x=longitudine/y=latitudine;
+   stesso meccanismo di sostituzione di `strip_decided_crs_declarations`;
+   `with_geometry_types` rimuove `types`/`types_declaration` con
+   `strip_rewritten_types_declarations`), e `canonical_output_schema`
+   ri-emette le altre chiavi dal contratto. Il guard R2.6 NON e' indebolito:
+   su qualunque altra chiave
    divergente continua a fallire (test di regressione dedicati), e una
    chiave riscritta che arrivasse comunque divergente (contratto costruito
    a mano) fallirebbe come prima. Alternativa scartata: marcare nel
@@ -220,24 +258,25 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
    ANALISI (`require_identifiable_geometry`, modello B1.3 di
    `require_xy_dimensions` — ADR-0008: mai a meta' esecuzione), col check
    del trasporto ridotto a difesa in profondita'.
-   **Deduzione `axis_order`/`srid` dalla definizione d'autorita'
-   (emendamento 2026-07-31, completamento R4.2/R4.5)**: la nota originaria
+   **Ordine fisico `axis_order` e deduzione `srid` dalla definizione
+   d'autorita' (emendamento 2026-08-01, completamento R4.2/R4.5)**: la nota originaria
    «`ResolvedCrs` non porta l'ordine degli assi e dichiararlo sarebbe
    inventarlo» e' superata: il `ResolvedCrs` porta il PROJJSON canonico
    d'autorita' — lo stesso oggetto con cui il kernel ha riproiettato — e
-   `axis_order`/`srid` sono DEDOTTI da esso
-   (`ResolvedCrs::authority_axis_order`/`authority_srid` in plenora-core;
-   la mappa e' solo direzioni degli assi + `kind` → variante, nessuna
-   tabella di CRS hardcoded). Dedurre da un'autorita' non e' inventare;
-   `unknown` resta l'onesta' quando la definizione non determina gli assi
-   (stub, forme degradate, direzioni non riconosciute). La deduzione e'
+   lo `srid` e' dedotto da esso (`ResolvedCrs::authority_srid`), mentre
+   `axis_order` descrive sempre l'ordine fisico x/y letto e scritto dai
+   kernel ed e' completato con `ResolvedCrs::normalized_gis_axis_order`
+   quando la definizione canonica permette di stabilire gli assi.
+   L'ordine nativo resta disponibile separatamente come
+   `ResolvedCrs::authority_axis_order`, ma non puo' etichettare byte
+   normalizzati: EPSG:4326 e' quindi `lon_lat`, non `lat_lon`. `unknown`
+   resta l'onesta' quando gli assi non sono deducibili. Il completamento e'
    COMPLETAMENTO DELL'ASSENTE (R2.7), mai arbitrato: la lineage presente
    vince sempre — il guard R2.6 di `canonical_output_schema` preserva
    `axis_order`/`srid` di lineage qualunque sia il valore emesso (la
    deduzione non deve mai trasformarsi in falso conflitto su un
-   passthrough); il caso reproject funziona perche' `analyze_reproject`
-   rimuove le chiavi ereditate e il dedotto riempie l'assente. `reproject`
-   resta l'unico scrittore autorizzato del blocco CRS. La classe e' chiusa
+   passthrough); `analyze_reproject` rimuove le chiavi ereditate e inserisce
+   esplicitamente lo stesso ordine normalizzato. La classe e' chiusa
    nel corpo condiviso `insert_resolved_crs_keys`: `reproject`,
    `from_coords`, `ResolvedByDecision` e trasporto legacy — quest'ultimo
    deduce solo `srid` dalla forma `authority:code` (`authority_code_srid`
@@ -283,10 +322,13 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   dominio suo, non del protocollo.
 - **Versione 0 accettata**: R2.5 impone il fallimento solo per versioni
   successive alla nota.
-- **CRS WKT come `crs_id`**: `ResolvedCrs` non porta hint di formato; una
-  definizione non-JSON e' emessa come `crs_id` (stessa euristica del
-  legacy `geo.crs`). Se serviranno definizioni WKT, `ResolvedCrs` dovra'
-  portare il formato.
+- **Definizioni non-JSON senza formato nella tabella §2**: una proj-string
+  (`+proj=...`) non ha un `crs_definition_format` e resta emessa come
+  `crs_id` ([`DefinitionForm::Other`]). WKT1/WKT2 invece sono riconosciuti
+  (emendamento 2026-07-31, classe B): la forma testuale decide la chiave
+  (`definition_form` in plenora-core) e WKT va in `crs_definition` +
+  `wkt`/`wkt2` — prima una definizione WKT finiva in `crs_id` perche'
+  `ResolvedCrs` non portava hint di formato.
 
 ## Conseguenze
 
@@ -304,27 +346,63 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
 
 ## Stato di attuazione
 
-- **Deduzione `axis_order`/`srid` dalla definizione canonica d'autorita'
-  (attuata, 2026-07-31 — emendamento alla decisione 8, completamento
-  R4.2/R4.5)**: `ResolvedCrs::authority_axis_order`/`authority_srid` in
+- **`resolved` dichiarato con doppia rappresentazione onorato; emissione
+  WKT (attuata, 2026-07-31 — emendamento alla decisione 7, classi A+B,
+  caso owner shapefile catastale EPSG:3003 → pipeline filtra→riproietta)**:
+  classe A (discovery, `contract_crs_from_keys` in plenora-cli) — la
+  co-presenza `crs_id` + `crs_definition` (2a) scatta SOLO per input senza
+  `crs_resolution`; il conflitto numerico `crs_id`/`srid` (2b) resta sempre
+  bloccante, anche con `resolved`; una doppia rappresentazione `resolved`
+  dichiarata va alla risoluzione + verifica di
+  coerenza decidibile post-risoluzione (`authority_code_srid` di `crs_id`
+  contro `ResolvedCrs::authority_srid` del canonical: coerenza → `Resolved`,
+  mismatch o non decidibile → `DeclaredUnresolved` con le dichiarazioni
+  originali); cambio no-backend dichiarato (`resolved` con doppia
+  rappresentazione ora fallisce `Crs` invece di passare come
+  `DeclaredUnresolved`). Classe B (emissione) — `definition_form` in
+  plenora-core (`AuthorityCode`/`Projjson`/`Wkt`/`Wkt2`/`Other`) decide la
+  chiave in `insert_resolved_crs_keys`: WKT1/WKT2 → `crs_definition` +
+  `wkt`/`wkt2` byte-identici (passthrough R2.6 contro la lineage WKT), il
+  legacy condivide la forma gratis; residuo dichiarato: proj-string resta
+  in `crs_id`. Test: unit `definition_form` (core); discovery (coerenza
+  3003 → `Resolved` con `authority_srid`, mismatch 4326 →
+  `DeclaredUnresolved`, regressione sulla co-presenza per input non
+  dichiarati, conflitto numerico `crs_id`/`srid` anche con `resolved`,
+  confronto authority+code (mai il solo numero) per la doppia
+  rappresentazione `resolved`, errore `Crs` no-backend); emissione
+  WKT/WKT2 (arrow_adapter);
+  passthrough idempotente WKT (executor); integrazione CLI con
+  `proj-backend` (reproducer owner: `table.filter` su input
+  resolved+doppia rappresentazione WKT → output `resolved` con
+  `crs_definition` WKT e `srid` 3003 dedotto).
+
+- **Ordine assi fisico separato dall'autorita'; normalizzazione di
+  `axis_order` e deduzione dello `srid` (attuata, 2026-08-01 — emendamento
+  alla decisione 8, completamento R4.2/R4.5)**:
+  `ResolvedCrs::authority_axis_order`/`authority_srid` in
   `plenora-core/src/crs.rs` (direzioni degli assi PROJJSON + `kind` →
   variante, `id` d'autorita' → codice numerico; nessuna tabella hardcoded);
   cascata di completamento DELL'ASSENTE in
-  `arrow_adapter::insert_resolved_crs_keys` (dettaglio esplicito →
-  deduzione → `unknown`/assente, R2.7 mai arbitrato); guard R2.6 di
+  `arrow_adapter::insert_resolved_crs_keys` (dettaglio esplicito → ordine
+  GIS normalizzato quando gli assi canonici sono deducibili → `unknown`
+  altrimenti, R2.7 mai arbitrato); guard R2.6 di
   `canonical_output_schema` esteso: la lineage presente vince sempre su
-  `axis_order`/`srid`, qualunque sia il valore emesso. Classe chiusa nel
-  corpo condiviso: `reproject` (via strip + riempimento dell'assente),
-  `from_coords`, `ResolvedByDecision` e trasporto legacy
+  `axis_order`/`srid`, qualunque sia il valore emesso. Questo vale per i
+  passthrough (`from_coords`, `ResolvedByDecision`) e per il trasporto legacy
   (`srid` da `authority_code_srid` — parsing spostato in plenora-core,
-  la CLI delega — con il limite dichiarato `axis_order = unknown`). Il
-  comportamento precedente (`unknown`/`None` su CRS d'autorita') era
-  perdita di informazione obbligatoria R4.2, NON hazard. Test: unit in
-  `crs.rs` (PROJJSON realistici 4326/CRS84/32632, custom senza `id`, senza
-  `coordinate_system`, forme degradate), emissione in `arrow_adapter`
-  (deduzione, dettaglio vincente, stub preservato, legacy con limite),
-  fusione output in `executor/tests.rs` (campo senza lineage → dedotto;
-  lineage presente → preservata senza R2.6).
+  la CLI delega — con il limite dichiarato `axis_order = unknown`).
+  `reproject`, dopo la strip, inserisce esplicitamente lo stesso ordine delle
+  coordinate realmente emesse dal backend; un target EPSG:4326 produce
+  `lon_lat`, non il nativo authority `lat_lon`.
+  Lo `srid` resta dedotto dall'autorita'. Il comportamento precedente
+  (`unknown`/`None` su CRS d'autorita', e `lat_lon` su output normalizzato
+  EPSG:4326) perdeva o dichiarava male informazione obbligatoria R4.2; il
+  secondo caso era H-06. Test: unit in `crs.rs` (PROJJSON realistici
+  4326/CRS84/32632, custom senza `id`, senza `coordinate_system`, forme
+  degradate), emissione in `arrow_adapter` (deduzione, dettaglio vincente,
+  stub preservato, legacy con limite), fusione output in `executor/tests.rs`
+  (campo senza lineage → dedotto; lineage presente → preservata senza R2.6;
+  reprojection EPSG:4326 → `lon_lat`) e adapter CLI end-to-end.
 
 - **Op che riscrivono fatti canonici (attuata, 2026-07-30 — decisione 8)**:
   mappa tipi di output per-op in `analyze/dispatch.rs`
@@ -523,7 +601,13 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   errore (R4.6.1: il centro non e' il bordo di scrittura; attesa del corpus
   `conflicting_crs`: `transformation_core = preserve`), non scelta. La
   risoluzione resta possibile solo con una decisione esplicita nel piano
-  (`crs_decisions`).
+  `crs_decisions`). **Ambito precisato (emendamento 2026-07-31, classe A)**:
+  la sola co-presenza `crs_id`+`crs_definition` non rovescia un `resolved`
+  dichiarato: si risolve e si verifica la coerenza decidibile del canonical
+  (coerenza → `resolved`, mismatch → `declared_unresolved`; senza
+  `proj-backend` fallisce `Crs`). Un conflitto numerico gia' decidibile
+  senza backend tra `crs_id=authority:code` e `srid` resta invece sempre
+  `declared_unresolved`, anche quando il produttore dichiara `resolved`.
 - **Emissione con incoerenza rilevata: `crs_resolution` corretta a
   `declared_unresolved` (R4.6.4)**. Un produttore che dichiara `resolved`
   con rappresentazioni in conflitto e' smentito dalle sue stesse chiavi:

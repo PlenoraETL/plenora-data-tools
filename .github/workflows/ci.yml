@@ -17,6 +17,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   test:
     name: test ${{ matrix.os }}
@@ -27,6 +30,12 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Installa toolchain (baseline ICD R13.1)
         # Versione esatta fissata anche in rust-toolchain.toml per lo
@@ -87,6 +96,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Dipendenze native (proj-sys bundled, geos static)
         run: sudo apt-get update && sudo apt-get install -y cmake sqlite3 libsqlite3-dev
@@ -126,10 +141,18 @@ jobs:
       # nella storia (git cat-file).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
 
-      - name: Verifica manifesto
+      - name: Verifica manifesto candidato 1.0.0
+        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.0.json --repo .
+
+      - name: Verifica manifesto storico rc1
         run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/rc.json --repo .

@@ -1,0 +1,73 @@
+{
+  "manifest_version": 1,
+  "component": "plenora-data-tools",
+  "component_version": "1.0.0",
+  "revision": "a5c327944a7f3559aef89a83b47486a8241551c8",
+  "icd": {
+    "repository": "plenora-contracts",
+    "tag": "v2.0-rc10",
+    "revision": "3598259bbe07d1c853453ff34ca2c1d1d28a0272",
+    "normative_status": "partially_ratified"
+  },
+  "claims": {
+    "component_rc": true,
+    "system_rc": false,
+    "avionic_certification": false
+  },
+  "release_state": "metadata_candidate_pending_post_diff_ci",
+  "verification_claim": "verified_internally",
+  "independent_review": false,
+  "supersedes": {
+    "manifest": "release/rc.json",
+    "component_version": "0.1.0-rc1",
+    "revision": "7d530318760ccfa93b2baa2049e181fd57deed1e"
+  },
+  "candidate": {
+    "evidence_base_revision": "a5c327944a7f3559aef89a83b47486a8241551c8",
+    "evidence_base_ci_run": 30693372026,
+    "evidence_base_ci_url": "https://github.com/PlenoraETL/plenora-data-tools/actions/runs/30693372026",
+    "evidence_base_result": "passed",
+    "metadata_delta_requires_new_same_sha_ci": true,
+    "release_tag_created": false,
+    "intended_release_tag": "v1.0.0",
+    "publish": false,
+    "declared_delta": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "fuzz/Cargo.lock",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "release/1.0.0.json"
+    ]
+  },
+  "open_blocks": [
+    {
+      "id": "BLOCK-05",
+      "title": "Catena bordo-centro-bordo non qualificata",
+      "detail": "La qualifica di sistema resta di proprieta di plenora-contracts/conformance e non e trasferita alla candidate metadata 1.0.0."
+    },
+    {
+      "id": "BLOCK-07",
+      "title": "plenora.field_id cross-processo: semantica da chiarire (ICD)",
+      "detail": "La propagazione implementata resta nel perimetro componente; il chiarimento normativo resta esterno."
+    }
+  ],
+  "evidence": {
+    "same_sha_ci": {
+      "revision": "a5c327944a7f3559aef89a83b47486a8241551c8",
+      "run_id": 30693372026,
+      "result": "passed",
+      "jobs": [
+        "release-manifest",
+        "ubuntu-latest",
+        "windows-latest",
+        "full-backends-linux"
+      ]
+    },
+    "metadata_candidate": {
+      "status": "pending_post_diff_ci",
+      "transferable_from_evidence_base": false
+    }
+  },
+  "notes": "Candidato metadata 1.0.0 del solo componente. Nessun tag, merge, publish, system_rc o certificazione e dichiarato. La release stabile resta subordinata ai criteri non automatizzati del README e a una nuova CI same-SHA del commit metadata."
+}

@@ -146,6 +146,16 @@ fn informational_commands_and_argument_errors_are_stable() {
         table_operations
     );
 
+    for argument in ["--help", "-h"] {
+        let help = Command::new(executable())
+            .arg(argument)
+            .output()
+            .expect("help");
+        assert!(help.status.success(), "{argument} deve terminare con successo");
+        assert!(help.stderr.is_empty(), "{argument} non deve emettere errori");
+        assert!(String::from_utf8_lossy(&help.stdout).contains("plenora-data-tools catalog"));
+    }
+
     for argument in ["self-test", "--version", "-V"] {
         assert!(Command::new(executable())
             .arg(argument)

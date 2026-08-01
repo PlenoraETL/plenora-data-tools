@@ -39,10 +39,11 @@ use plenora_core::arrow::schema::{DataType, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, Family, OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, CrsResolution, DataContract, FieldId,
-    GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
+    ContractCrs, ContractProperties, ContractProperty, CrsDefinitionFormat, CrsResolution,
+    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, PropertyConfidence,
+    PropertyScope,
 };
-use plenora_core::crs::{required_definition, validate_requirement};
+use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
 use plenora_core::{ErrorPhase, PlenoraError, RetryDisposition};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
@@ -976,7 +977,11 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
 /// dichiarazioni originali, mai un errore (non e' il bordo di scrittura) e
 /// mai una scelta silenziosa.
 ///
-/// Regole, in ordine:
+/// Regole, in ordine (emendamento 2026-07-31 — classe A: la co-presenza
+/// `crs_id` + `crs_definition` della regola (2a) vale SOLO per input NON
+/// dichiarati; il conflitto numerico `crs_id`/`srid` della regola (2b) resta
+/// sempre bloccante; un `resolved` dichiarato con doppia rappresentazione si
+/// onora con risoluzione + verifica di coerenza):
 ///
 /// 1. `crs_resolution = declared_unresolved` con almeno una
 ///    rappresentazione: il produttore dichiara l'incoerenza — preservata
@@ -984,19 +989,36 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
 ///    dichiarato: prima una definizione risolvibile era risolta ed emessa
 ///    come `resolved`; nessuna chiamata al backend, quindi nessun
 ///    `BackendUnavailable`);
-/// 2. conflitto DECIDIBILE senza backend: `crs_id` e `crs_definition`
-///    co-presenti (l'accordo non e' decidibile testualmente — R2.7: mai
-///    arbitrato sul dato; prima vinceva `crs_definition`, scelta
-///    silenziosa) oppure `crs_id` nella forma `authority:code` con codice
-///    numerico discordante da `srid` (R4.3.1; prima lo `srid` era ignorato
-///    e l'identificatore risolto — conciliazione silenziosa): lo stato
-///    diventa `DeclaredUnresolved` con le dichiarazioni;
-/// 3. una sola rappresentazione (canonica o legacy `geo.crs`): risoluzione
-///    contro il backend PROJ, come sempre — un fallimento di risoluzione
-///    resta un errore `Crs`, NON diventa `DeclaredUnresolved` (limite
-///    dichiarato: il produttore che sa di non poter garantire la
-///    risoluzione dichiara `declared_unresolved` esplicitamente, come nel
-///    corpus di conformita');
+/// 2. conflitti DECIDIBILI senza backend: (2a) SOLO per input NON dichiarati
+///    (`crs_resolution` assente — il caso per cui la regola e' nata, la
+///    doppia rappresentazione `GeoArrow` legacy), `crs_id` e
+///    `crs_definition` co-presenti (l'accordo non e' decidibile
+///    testualmente — R2.7: mai arbitrato sul dato; prima vinceva
+///    `crs_definition`, scelta silenziosa); (2b) SEMPRE, anche con
+///    `crs_resolution = resolved`, `crs_id` nella forma `authority:code` con
+///    codice numerico discordante da `srid` (R4.3.1; prima lo `srid` era
+///    ignorato e l'identificatore risolto — conciliazione silenziosa). Lo
+///    stato diventa `DeclaredUnresolved` con le dichiarazioni. Prima
+///    dell'emendamento la sola (2a) scattava anche con `crs_resolution`
+///    esplicitamente dichiarato, rovesciando la dichiarazione del produttore
+///    (bug del caso owner: shapefile EPSG:3003 con WKT coerente degradato a
+///    `declared_unresolved`);
+/// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
+///    dichiarato: risoluzione contro il backend PROJ, come sempre — un
+///    fallimento di risoluzione resta un errore `Crs`, NON diventa
+///    `DeclaredUnresolved` (limite dichiarato: il produttore che sa di non
+///    poter garantire la risoluzione dichiara `declared_unresolved`
+///    esplicitamente, come nel corpus di conformita'). Con `resolved`
+///    dichiarato ED ENTRAMBE `crs_id` e `crs_definition`, alla risoluzione
+///    riuscita segue la verifica di coerenza decidibile
+///    ([`verify_declared_coherence`]): coerenza → `Resolved`; mismatch o
+///    confronto non decidibile → `DeclaredUnresolved` con le dichiarazioni
+///    originali (mai un rovesciamento silenzioso). Effetto collaterale
+///    DICHIARATO: senza `proj-backend`, un input `resolved` con doppia
+///    rappresentazione prima passava come `DeclaredUnresolved` (la (2a)
+///    scattava senza backend), ora fallisce con errore `Crs` (risoluzione
+///    impossibile) — coerente col comportamento per `resolved` a
+///    rappresentazione singola di questa regola: era la (2a) l'anomalia;
 /// 4. nessuna rappresentazione: [`ContractCrs::Missing`] (R4.4: mai un CRS
 ///    inventato), salvo la contraddizione R4.1 — `resolved`/
 ///    `declared_unresolved` senza alcuna rappresentazione — che resta
@@ -1018,34 +1040,53 @@ fn contract_crs_from_keys(
             definition_format: keys.crs_definition_format,
         });
     }
-    // (2a) Due rappresentazioni risolvibili co-presenti: accordo non
-    // decidibile, il centro non sceglie.
-    if crs_id.is_some() && definition.is_some() {
-        return Ok(ContractCrs::DeclaredUnresolved {
-            crs_id,
-            definition,
-            definition_format: keys.crs_definition_format,
-        });
-    }
-    // (2b) Identificatore con codice numerico contro SRID discordante.
+    // (2) Un conflitto numerico decidibile fra identificatore e SRID non puo'
+    // essere nascosto da una dichiarazione `resolved`: si preservano tutte
+    // le rappresentazioni originali e non si invoca il backend CRS.
     if let (Some(id), Some(srid)) = (&crs_id, keys.srid) {
         if authority_code(id).is_some_and(|code| code != srid) {
             return Ok(ContractCrs::DeclaredUnresolved {
                 crs_id,
-                definition: None,
-                definition_format: None,
+                definition,
+                definition_format: keys.crs_definition_format,
             });
         }
     }
-    // (3) La rappresentazione completata (canonica o legacy) alimenta la
-    // stessa risoluzione di sempre.
-    if let Some(definition) = definition.or(crs_id) {
-        return Ok(ContractCrs::Resolved(resolve_crs(&definition, "crs")?));
+    // (3) La co-presenza di due rappresentazioni risolvibili resta
+    // indecidibile per gli input che non dichiarano uno stato.
+    if keys.crs_resolution.is_none() {
+        // Due rappresentazioni risolvibili co-presenti: accordo non
+        // decidibile, il centro non sceglie.
+        if crs_id.is_some() && definition.is_some() {
+            return Ok(ContractCrs::DeclaredUnresolved {
+                crs_id,
+                definition,
+                definition_format: keys.crs_definition_format,
+            });
+        }
+    }
+    // (4) La rappresentazione completata (canonica o legacy) alimenta la
+    // stessa risoluzione di sempre; la verifica di coerenza post-risoluzione
+    // riguarda il solo caso `resolved` dichiarato con doppia
+    // rappresentazione.
+    if let Some(definition_text) = definition.as_deref().or(crs_id.as_deref()) {
+        let resolved = resolve_crs(definition_text, "crs")?;
+        if keys.crs_resolution == Some(CrsResolution::Resolved) {
+            if let (Some(id), Some(text)) = (crs_id.as_deref(), definition.as_deref()) {
+                return Ok(verify_declared_coherence(
+                    resolved,
+                    id,
+                    text,
+                    keys.crs_definition_format,
+                ));
+            }
+        }
+        return Ok(ContractCrs::Resolved(resolved));
     }
     if let Some(definition) = crs_definition_from_metadata(field_name, geo_metadata)? {
         return Ok(ContractCrs::Resolved(resolve_crs(&definition, "crs")?));
     }
-    // (4) R4.1: mai collassare una dichiarazione esplicita su `missing` —
+    // (5) R4.1: mai collassare una dichiarazione esplicita su `missing` —
     // `resolved`/`declared_unresolved` senza alcuna rappresentazione e' una
     // contraddizione, non un'assenza.
     if let Some(resolution) = keys.crs_resolution {
@@ -1058,6 +1099,54 @@ fn contract_crs_from_keys(
         }
     }
     Ok(ContractCrs::Missing)
+}
+
+/// Verifica di coerenza DECIDIBILE dopo la risoluzione, per un input
+/// `resolved` con doppia rappresentazione (ADR-0009, emendamento 2026-07-31
+/// — classe A): risolve anche `crs_id` e confronta l'intera coppia
+/// autorita'+codice dedotta dai due canonical.
+///
+/// - entrambi decidibili e UGUALI: la doppia dichiarazione e' coerente →
+///   `Resolved` (il caso owner: WKT Monte Mario risolve a id EPSG:3003);
+/// - entrambi decidibili e DIVERSI: la dichiarazione `resolved` e'
+///   dimostrabilmente falsa → `DeclaredUnresolved` con le dichiarazioni
+///   originali (forma identica al braccio (1)): non passa e nulla si perde;
+/// - confronto NON decidibile (identificatore non risolvibile, codice non
+///   numerico o canonical senza `id`): mai arbitrato (R2.7) — la co-presenza
+///   non verificabile resta un'incoerenza dichiarabile →
+///   `DeclaredUnresolved`.
+fn verify_declared_coherence(
+    resolved: ResolvedCrs,
+    crs_id: &str,
+    definition: &str,
+    definition_format: Option<CrsDefinitionFormat>,
+) -> ContractCrs {
+    let resolved_identifier = resolved.authority_identifier();
+    let simple_identifier = plenora_core::crs::authority_code_identifier(crs_id);
+    let coherent = simple_identifier.map_or_else(
+        || {
+            resolve_crs(crs_id, "crs").ok().is_some_and(|declared| {
+                matches!(
+                    (declared.authority_identifier(), resolved_identifier),
+                    (Some(left), Some(right))
+                        if left.0.eq_ignore_ascii_case(right.0) && left.1 == right.1
+                )
+            })
+        },
+        |declared| {
+            resolved_identifier.is_some_and(|canonical| {
+                declared.0.eq_ignore_ascii_case(canonical.0) && declared.1 == canonical.1
+            })
+        },
+    );
+    if coherent {
+        return ContractCrs::Resolved(resolved);
+    }
+    ContractCrs::DeclaredUnresolved {
+        crs_id: Some(crs_id.to_owned()),
+        definition: Some(definition.to_owned()),
+        definition_format,
+    }
 }
 
 /// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`
@@ -1495,11 +1584,15 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-fn print_help() {
-    eprintln!(
+fn help_text() -> String {
+    format!(
         "plenora-data-tools {}\n\n  plenora-data-tools catalog [--family table|geo]\n  plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow... [--no-geo-fusion]\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow   (piani legacy, schema_version <= 3)\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v4: percorsi nell'ordine degli input dichiarati)\n  plenora-data-tools capabilities\n  plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools self-test [--output RESULT.bin]\n  plenora-data-tools --version",
         env!("CARGO_PKG_VERSION")
-    );
+    )
+}
+
+fn print_help() {
+    eprintln!("{}", help_text());
 }
 
 // Dispatch unico dei sottocomandi: la lunghezza e' data dalla sequenza
@@ -1509,6 +1602,10 @@ fn print_help() {
 #[allow(clippy::too_many_lines)]
 fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args.first().map(String::as_str) {
+        Some("--help" | "-h") => {
+            println!("{}", help_text());
+            Ok(())
+        }
         Some("--version" | "-V") => {
             println!("plenora-data-tools {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -2203,10 +2300,11 @@ mod tests {
         // crs_id=EPSG:4326 con srid=3003 (R4.3.1). Il centro PRESERVA
         // (expect_by_role: transformation_core = preserve): niente errore,
         // niente scelta silenziosa — lo stato diventa DeclaredUnresolved
-        // con la dichiarazione originale, anche se il produttore dichiara
-        // `resolved` (la contraddizione la dichiara il centro, R4.6.4).
+        // con la dichiarazione originale.
+        // La fixture omette `crs_resolution`; lo stesso conflitto resta
+        // preservato anche quando il produttore dichiara `resolved` (test
+        // successivo): una dichiarazione non puo' nascondere H-06.
         let field = canonical_crs_field(&[
-            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
             (PLENORA_GEOMETRY_SRID_KEY, "3003"),
@@ -2223,13 +2321,41 @@ mod tests {
     }
 
     #[test]
+    fn discovery_declared_resolved_with_conflicting_crs_id_and_srid_stays_unresolved() {
+        // Una dichiarazione `resolved` non puo' nascondere un conflitto
+        // numerico decidibile fra identificatore e SRID (H-06/R4.1).
+        let field = canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
+            (PLENORA_GEOMETRY_SRID_KEY, "3003"),
+        ]);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::DeclaredUnresolved {
+            crs_id, definition, ..
+        } = &contract.geometries[0].crs
+        else {
+            panic!(
+                "atteso DeclaredUnresolved: {:?}",
+                contract.geometries[0].crs
+            );
+        };
+        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
+        assert_eq!(definition, &None);
+    }
+
+    #[test]
     fn discovery_crs_id_and_definition_copresent_become_declared_unresolved() {
         // Due rappresentazioni risolvibili co-presenti: l'accordo non e'
         // decidibile testualmente (R2.7: mai arbitrato sul dato) — prima
         // vinceva `crs_definition` (scelta silenziosa), ora lo stato e'
         // DeclaredUnresolved con ENTRAMBE le dichiarazioni.
+        // Emendamento 2026-07-31 (classe A): la regola (2a) vale SOLO per
+        // input NON dichiarati — la fixture non porta `crs_resolution`
+        // (prima la portava `resolved`: il rovesciamento della
+        // dichiarazione esplicita era il bug del caso owner).
         let field = canonical_crs_field(&[
-            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, r#"{"type":"GeographicCRS"}"#),
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
@@ -2253,6 +2379,120 @@ mod tests {
         assert_eq!(
             definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
             Some("projjson")
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Emendamento 2026-07-31 (classe A): `resolved` dichiarato con doppia
+    // rappresentazione — risoluzione + verifica di coerenza decidibile.
+    // -------------------------------------------------------------------
+
+    /// WKT1 realistico di Monte Mario / Italy zone 1 con nodo `AUTHORITY`
+    /// (EPSG:3003) — la forma dello shapefile catastale del caso owner
+    /// (SENZA `TOWGS84`, che farebbe risolvere il CRS come `BoundCRS` —
+    /// limite preesistente del resolver, fuori perimetro qui).
+    const MONTE_MARIO_WKT: &str = concat!(
+        r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
+        r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297]],"#,
+        r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
+        r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
+        r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
+        r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
+        r#"UNIT["metre",1],AUTHORITY["EPSG","3003"]]"#
+    );
+
+    /// Coppie canoniche del caso owner: `resolved` dichiarato, doppia
+    /// rappresentazione (`crs_id` + definizione WKT) con formato `wkt`.
+    fn monte_mario_resolved_pairs(crs_id: &str) -> Vec<(&'static str, String)> {
+        vec![
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved".to_owned()),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, crs_id.to_owned()),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, MONTE_MARIO_WKT.to_owned()),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt".to_owned()),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing".to_owned()),
+        ]
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn discovery_resolved_with_coherent_wkt_resolves_with_authority_srid() {
+        // Il caso owner: `resolved` + crs_id=EPSG:3003 + WKT Monte Mario
+        // coerente. La (2a) NON rovescia la dichiarazione: il WKT risolve
+        // contro PROJ e la verifica di coerenza (crs_id 3003 == srid del
+        // canonical) conferma — `Resolved`, con `authority_srid` 3003.
+        let pairs = monte_mario_resolved_pairs("EPSG:3003");
+        let pairs_ref: Vec<(&str, &str)> =
+            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let field = canonical_crs_field(&pairs_ref);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::Resolved(resolved) = &contract.geometries[0].crs else {
+            panic!("atteso Resolved: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(resolved.authority_srid(), Some(3003));
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn discovery_resolved_with_divergent_crs_id_becomes_declared_unresolved() {
+        // Stessa fixture ma crs_id=EPSG:4326: il WKT risolve a 3003, il
+        // confronto decidibile smentisce il `resolved` dichiarato —
+        // `DeclaredUnresolved` con le dichiarazioni ORIGINALI preservate
+        // (non passa e nulla si perde).
+        let pairs = monte_mario_resolved_pairs("EPSG:4326");
+        let pairs_ref: Vec<(&str, &str)> =
+            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let field = canonical_crs_field(&pairs_ref);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format,
+        } = &contract.geometries[0].crs
+        else {
+            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+        };
+        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
+        assert_eq!(definition.as_deref(), Some(MONTE_MARIO_WKT));
+        assert_eq!(
+            definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
+            Some("wkt")
+        );
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn discovery_resolved_with_same_code_but_different_authority_stays_unresolved() {
+        let pairs = monte_mario_resolved_pairs("FOO:3003");
+        let pairs_ref: Vec<(&str, &str)> =
+            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let field = canonical_crs_field(&pairs_ref);
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        assert!(
+            matches!(contract.geometries[0].crs, ContractCrs::DeclaredUnresolved { .. }),
+            "un'autorita' diversa non puo' essere certificata dal solo codice numerico"
+        );
+    }
+
+    #[cfg(not(feature = "proj-backend"))]
+    #[test]
+    fn discovery_resolved_with_double_representation_needs_the_backend() {
+        // Effetto collaterale DICHIARATO dell'emendamento 2026-07-31
+        // (classe A): senza `proj-backend` un input `resolved` con doppia
+        // rappresentazione prima passava come `DeclaredUnresolved` (la (2a)
+        // scattava senza backend); ora la dichiarazione si onora con la
+        // regola (3) e la risoluzione impossibile fallisce con errore
+        // `Crs` — coerente col `resolved` a rappresentazione singola.
+        let pairs = monte_mario_resolved_pairs("EPSG:3003");
+        let pairs_ref: Vec<(&str, &str)> =
+            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let field = canonical_crs_field(&pairs_ref);
+        let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "atteso errore Crs senza backend: {result:?}"
         );
     }
 

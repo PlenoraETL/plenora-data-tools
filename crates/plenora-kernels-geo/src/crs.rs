@@ -34,7 +34,9 @@ pub fn validate_geometry_domain(
     crs: &ResolvedCrs,
 ) -> Result<(), CrsError> {
     plenora_core::crs::validate_geometry_domain(
-        geometry.coords_iter().map(|coordinate| (coordinate.x, coordinate.y)),
+        geometry
+            .coords_iter()
+            .map(|coordinate| (coordinate.x, coordinate.y)),
         crs,
     )
 }
@@ -219,7 +221,7 @@ mod tests {
 
         let feet = resolve_crs("EPSG:2230", "crs").unwrap();
         assert_eq!(feet.kind(), CrsKind::Projected);
-        assert!((feet.horizontal_unit_to_metre().unwrap() - 0.304800609601219).abs() < 1e-12);
+        assert!((feet.horizontal_unit_to_metre().unwrap() - 0.304_800_609_601_219).abs() < 1e-12);
 
         assert!(matches!(
             resolve_crs("EPSG:4978", "crs"),

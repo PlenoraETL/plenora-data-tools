@@ -123,7 +123,9 @@ pub fn voronoi_cells(
                 .iter()
                 .zip(&cell_bounds)
                 .find(|(cell, bounds)| {
-                    bounds.as_ref().is_some_and(|bounds| bounds.intersects(point))
+                    bounds
+                        .as_ref()
+                        .is_some_and(|bounds| bounds.intersects(point))
                         && cell.intersects(point)
                 })
                 .map(|(cell, _)| cell.clone())
