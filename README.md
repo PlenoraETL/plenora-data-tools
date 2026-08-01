@@ -5,7 +5,7 @@ tabellare e geografica. Valida integralmente il piano e i contratti prima
 dell'esecuzione, applica limiti di risorsa e pubblica gli output in modo
 atomico.
 
-> Stato: metadata candidate `1.0.0` in preparazione, senza tag né pubblicazione.
+> Stato: patch candidate `1.0.1` in preparazione, senza tag né pubblicazione.
 > La versione e le evidenze effettivamente qualificate sono registrate nei
 > manifesti sotto `release/`; questo README non sostituisce il gate di release.
 

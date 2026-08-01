@@ -155,7 +155,10 @@ jobs:
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
 
-      - name: Verifica manifesto candidato 1.0.0
+      - name: Verifica manifesto candidato 1.0.1
+        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.1.json --repo .
+
+      - name: Verifica manifesto storico 1.0.0
         run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.0.json --repo .
 
       - name: Verifica manifesto storico rc1
