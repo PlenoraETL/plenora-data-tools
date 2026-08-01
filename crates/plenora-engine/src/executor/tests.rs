@@ -791,6 +791,9 @@ fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
         &[Some(point_wkb(1.0, 2.0))],
     );
 
+    // `Output` non implementa `Debug`, quindi `expect_err` non e' disponibile;
+    // il match esplicito mantiene non vacua l'asserzione sul ramo `Ok`.
+    #[allow(clippy::manual_let_else)]
     let error = match run(
         &plan,
         single_input("main", vec![batch]),

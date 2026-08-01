@@ -2375,6 +2375,10 @@ impl FusedAttempt<'_> {
 /// kernel non misura del gruppo non e' `GeoTransform` (invariante di
 /// `prepare`).
 #[allow(clippy::too_many_arguments)]
+// Il dispatcher mantiene nello stesso confine transazionale validazione,
+// budget e publish del segmento; estrarne frammenti separerebbe invarianti che
+// devono fallire insieme. L'eccezione resta locale e verificata dalla CI.
+#[allow(clippy::too_many_lines)]
 fn try_run_fused_group(
     segment: &PhysicalSegment,
     state: &ExecState,
