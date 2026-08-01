@@ -261,7 +261,7 @@ mod tests {
         let decoded = decode_validated(payload);
         match (&reference, &decoded) {
             (Ok(expected), Ok(actual)) => {
-                assert_eq!(expected, actual, "{label}: geometrie diverse")
+                assert_eq!(expected, actual, "{label}: geometrie diverse");
             }
             (Err(_), Err(_)) => {}
             (Ok(_), Err(error)) => panic!("{label}: riferimento Ok, decoder Err: {error}"),

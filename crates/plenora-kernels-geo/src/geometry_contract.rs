@@ -242,6 +242,9 @@ mod tests {
     use crate::{wkb_decoder, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH};
 
     /// Batteria di geometrie valide usata da entrambe le parita'.
+    // La fixture enumera intenzionalmente tutte le famiglie OGC in un unico
+    // oracolo condiviso; dividerla renderebbe meno evidente la parita' coperta.
+    #[allow(clippy::too_many_lines)]
     fn valid_fixtures() -> Vec<(&'static str, Geometry<f64>)> {
         let triangle = Geometry::Polygon(polygon![
             (x: 0.0, y: 0.0),
