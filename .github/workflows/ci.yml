@@ -124,10 +124,14 @@ jobs:
           restore-keys: cargo-ci-backends-1.92.0-
 
       - name: Clippy full-backends (gate)
-        run: cargo clippy -p plenora-engine -p plenora-cli --all-targets --locked --features full-backends
+        run: >
+          cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli
+          --all-targets --locked --features full-backends
 
       - name: Test full-backends
-        run: cargo test -p plenora-engine -p plenora-cli --locked --features full-backends
+        run: >
+          cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli
+          --locked --features full-backends
 
   # Gate del manifesto di rilascio (PLENORA-CRITERI-RC, criteri C1-C5):
   # verifica forma e revisioni di release/*.json con il checker ufficiale,

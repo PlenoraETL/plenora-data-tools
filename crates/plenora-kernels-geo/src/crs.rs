@@ -44,7 +44,9 @@ pub fn validate_geometry_domain(
 /// Risolve una definizione CRS contro il database PROJ bundled.
 ///
 /// Produce il [`ResolvedCrs`] canonico: PROJJSON, classificazione
-/// geographic/projected e unita' lineare orizzontale in metri.
+/// geographic/projected e unita' lineare orizzontale in metri. Per un
+/// `BoundCRS`, tipo e proprieta' d'identita' sono dedotti dal `source_crs`;
+/// canonical completo e definizione originale conservano l'operazione.
 ///
 /// # Errors
 ///
@@ -78,12 +80,23 @@ pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, 
             name,
             reason: format!("PROJJSON non valido prodotto da PROJ: {error}"),
         })?;
-    let crs_type = canonical
+    let root_type = canonical
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| CrsError::UnsupportedType("mancante".to_owned()))?;
+    let canonical_crs = if root_type == "BoundCRS" {
+        canonical
+            .get("source_crs")
+            .ok_or_else(|| CrsError::UnsupportedType("BoundCRS senza source_crs".to_owned()))?
+    } else {
+        &canonical
+    };
+    let crs_type = canonical_crs
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CrsError::UnsupportedType(format!("{root_type} senza tipo sorgente")))?;
     let kind = match crs_type {
-        "GeographicCRS" if has_two_horizontal_axes(&canonical) => CrsKind::Geographic,
+        "GeographicCRS" if has_two_horizontal_axes(canonical_crs) => CrsKind::Geographic,
         "GeographicCRS" => {
             return Err(CrsError::UnsupportedType(
                 "GeographicCRS non bidimensionale".to_owned(),
@@ -94,7 +107,7 @@ pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, 
     };
     let horizontal_unit_to_metre = match kind {
         CrsKind::Geographic => None,
-        CrsKind::Projected => Some(projected_linear_unit(&canonical)?),
+        CrsKind::Projected => Some(projected_linear_unit(canonical_crs)?),
     };
     Ok(ResolvedCrs::from_resolved_parts(
         definition.to_owned(),
@@ -231,6 +244,54 @@ mod tests {
             resolve_crs("EPSG:4979", "crs"),
             Err(CrsError::UnsupportedType(_))
         ));
+    }
+
+    #[cfg(feature = "proj-backend")]
+    #[test]
+    fn bound_crs_uses_its_source_crs_without_losing_the_bound_definition() {
+        use plenora_core::contract::AxisOrder;
+
+        const MONTE_MARIO_WKT_TOWGS84: &str = concat!(
+            r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
+            r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297],"#,
+            r#"TOWGS84[-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68]],"#,
+            r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
+            r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
+            r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
+            r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
+            r#"UNIT["metre",1],AXIS["Easting",EAST],AXIS["Northing",NORTH],"#,
+            r#"AUTHORITY["EPSG","3003"]]"#,
+        );
+
+        let bound = resolve_crs(MONTE_MARIO_WKT_TOWGS84, "crs").unwrap();
+        assert_eq!(bound.definition(), MONTE_MARIO_WKT_TOWGS84);
+        assert_eq!(bound.kind(), CrsKind::Projected);
+        assert!((bound.horizontal_unit_to_metre().unwrap() - 1.0).abs() < 1e-15);
+        assert_eq!(bound.authority_identifier(), Some(("EPSG", 3003)));
+        assert_eq!(
+            bound.authority_axis_order(),
+            Some(AxisOrder::EastingNorthing)
+        );
+
+        let Geometry::Point(reprojected) = crate::proj_backend::reproject_geometry(
+            &Geometry::Point(geo::Point::new(1_500_000.0, 5_030_000.0)),
+            MONTE_MARIO_WKT_TOWGS84,
+            "EPSG:4326",
+            1,
+        )
+        .unwrap()
+        else {
+            panic!("point expected")
+        };
+        // Oracolo PROJ bundled 9.6.2, ordine GIS normalizzato lon/lat. La
+        // tolleranza di circa un centimetro resta molto sotto lo shift datum.
+        assert!((reprojected.x() - 8.999_646_005_468).abs() < 1e-7);
+        assert!((reprojected.y() - 45.423_341_342_810).abs() < 1e-7);
+
+        let alternative_definition =
+            MONTE_MARIO_WKT_TOWGS84.replace("-104.1,-49.1,-9.9", "0,0,0");
+        let alternative = resolve_crs(&alternative_definition, "crs").unwrap();
+        assert!(!bound.semantically_equals(&alternative));
     }
 
     #[cfg(feature = "proj-backend")]
