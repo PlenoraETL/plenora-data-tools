@@ -213,7 +213,14 @@ pub fn nearest_matches_validated(
     max_comparisons: u64,
     max_results: u64,
 ) -> Result<Vec<NearestMatch>, AnalysisError> {
-    nearest_matches_impl(left, right, max_distance, max_comparisons, max_results, true)
+    nearest_matches_impl(
+        left,
+        right,
+        max_distance,
+        max_comparisons,
+        max_results,
+        true,
+    )
 }
 
 fn nearest_matches_impl(

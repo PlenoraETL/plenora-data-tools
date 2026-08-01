@@ -53,8 +53,8 @@ use geo::Geometry;
 use plenora_core::PlenoraError;
 
 use crate::{
-    GeometryDimensions, MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, WkbCursor, checked_count,
-    invalid_wkb_structure, parse_wkb_type_code,
+    checked_count, invalid_wkb_structure, parse_wkb_type_code, GeometryDimensions, WkbCursor,
+    MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,
 };
 
 /// Byte di una coordinata XY decodificata (`size_of::<Coord<f64>>()`).
@@ -240,9 +240,7 @@ mod tests {
     fn measured_heap(geometry: &Geometry<f64>) -> u64 {
         let vec_heap = |capacity: usize, element: u64| (capacity as u64) * element;
         match geometry {
-            Geometry::Point(_) | Geometry::Line(_) | Geometry::Rect(_) | Geometry::Triangle(_) => {
-                0
-            }
+            Geometry::Point(_) | Geometry::Line(_) | Geometry::Rect(_) | Geometry::Triangle(_) => 0,
             Geometry::LineString(line) => vec_heap(line.0.capacity(), COORD_BYTES),
             Geometry::Polygon(polygon) => polygon_heap(polygon),
             Geometry::MultiPoint(multi) => vec_heap(multi.0.capacity(), POINT_BYTES),
@@ -282,7 +280,9 @@ mod tests {
     }
 
     fn to_wkb(geometry: &Geometry<f64>) -> Vec<u8> {
-        geometry.to_wkb(CoordDimensions::xy()).expect("encode fixture")
+        geometry
+            .to_wkb(CoordDimensions::xy())
+            .expect("encode fixture")
     }
 
     /// Corpus multi-tipo (stessa batteria di `geometry_contract`): punti,
@@ -312,13 +312,12 @@ mod tests {
             ("point", Geometry::Point(Point::new(1.5, -2.5))),
             (
                 "linestring",
-                Geometry::LineString(LineString::from(vec![
-                    (0.0, 0.0),
-                    (1.0, 1.0),
-                    (2.0, 0.5),
-                ])),
+                Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)])),
             ),
-            ("linestring vuota", Geometry::LineString(LineString::from(Vec::<(f64, f64)>::new()))),
+            (
+                "linestring vuota",
+                Geometry::LineString(LineString::from(Vec::<(f64, f64)>::new())),
+            ),
             ("polygon semplice", triangle.clone()),
             ("polygon con buco", holed.clone()),
             (
@@ -328,7 +327,10 @@ mod tests {
                     Point::new(3.0, 4.0),
                 ])),
             ),
-            ("multipoint vuota", Geometry::MultiPoint(MultiPoint::new(Vec::new()))),
+            (
+                "multipoint vuota",
+                Geometry::MultiPoint(MultiPoint::new(Vec::new())),
+            ),
             (
                 "multilinestring",
                 Geometry::MultiLineString(MultiLineString::new(vec![
@@ -427,9 +429,9 @@ mod tests {
     #[test]
     fn structural_errors_match_the_decoder_on_the_same_cells() {
         let cases: Vec<Vec<u8>> = vec![
-            Vec::new(),                    // byte mancante
-            vec![1, 2],                    // type code troncato
-            vec![2],                       // byte order non valido
+            Vec::new(), // byte mancante
+            vec![1, 2], // type code troncato
+            vec![2],    // byte order non valido
             {
                 // linestring da una coordinata
                 let mut p = vec![1_u8];
@@ -490,7 +492,10 @@ mod tests {
             payload.extend_from_slice(&x.to_be_bytes());
             payload.extend_from_slice(&y.to_be_bytes());
         }
-        assert_eq!(decoded_size_xy(&payload).expect("big-endian"), 2 * COORD_BYTES);
+        assert_eq!(
+            decoded_size_xy(&payload).expect("big-endian"),
+            2 * COORD_BYTES
+        );
     }
 
     /// Fixture usata dai test di conservativita' con un tipo composto

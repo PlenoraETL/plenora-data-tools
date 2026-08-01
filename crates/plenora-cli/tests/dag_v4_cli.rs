@@ -662,14 +662,15 @@ fn crs_unresolved_pairs() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Coppie canoniche del caso `conflicting_crs` del corpus: il produttore
-/// dichiara `resolved` ma `crs_id` e `srid` discordano (R4.3.1).
+/// Coppie canoniche del caso `conflicting_crs` del corpus: `crs_id` e
+/// `srid` discordano (R4.3.1). La fixture non dichiara `crs_resolution`, ma
+/// il conflitto numerico viene preservato anche quando il produttore dichiara
+/// `resolved`: una dichiarazione esplicita non puo' nascondere H-06.
 fn conflicting_crs_pairs() -> Vec<(&'static str, &'static str)> {
     use plenora_kernels_geo::arrow_adapter as adapter;
     vec![
         (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
         (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
-        (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
         (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
         (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
         (adapter::PLENORA_GEOMETRY_SRID_KEY, "3003"),
@@ -790,7 +791,7 @@ fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
     assert_eq!(
         metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
         Some("declared_unresolved"),
-        "l'incoerenza e' dichiarata, non silenziata dietro il `resolved` del produttore"
+        "input non dichiarato con conflitto decidibile: l'incoerenza e' preservata e dichiarata"
     );
     assert_eq!(
         metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
@@ -801,6 +802,114 @@ fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
         metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
         Some("3003"),
         "srid originale preservato (lineage R2.4)"
+    );
+}
+
+/// WKT1 realistico di Monte Mario / Italy zone 1 con nodo `AUTHORITY`
+/// (EPSG:3003) — la forma dello shapefile catastale del caso owner (SENZA
+/// `TOWGS84`, che farebbe risolvere il CRS come `BoundCRS` — limite
+/// preesistente del resolver, fuori perimetro qui).
+#[cfg(feature = "proj-backend")]
+const MONTE_MARIO_WKT: &str = concat!(
+    r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
+    r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297]],"#,
+    r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
+    r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
+    r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
+    r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
+    r#"UNIT["metre",1],AUTHORITY["EPSG","3003"]]"#
+);
+
+/// Coppie canoniche del caso owner: input `resolved` con doppia
+/// rappresentazione coerente — `crs_id` EPSG:3003 + definizione WKT Monte
+/// Mario (`wkt`) + `axis_order` `easting_northing`.
+#[cfg(feature = "proj-backend")]
+fn monte_mario_resolved_pairs() -> Vec<(&'static str, &'static str)> {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    vec![
+        (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+        (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+        (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+        (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:3003"),
+        (adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY, MONTE_MARIO_WKT),
+        (adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
+        (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
+    ]
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
+    // REPRODUCER del caso owner (shapefile catastale EPSG:3003): input
+    // `resolved` con doppia rappresentazione WKT coerente + `table.filter`
+    // su colonna numerica. Prima dell'emendamento 2026-07-31 (classe A) la
+    // discovery rovesciava il `resolved` in `declared_unresolved` (regola
+    // (2a) non condizionata) e R4.6.3 bloccava la riproiezione a valle;
+    // ora la risoluzione + la verifica di coerenza confermano il `resolved`
+    // e l'output ri-emette la definizione WKT col suo formato (classe B:
+    // passthrough, mai WKT in `crs_id`).
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) =
+        canonical_crs_fixture(directory.path(), &filter_only_plan(), &monte_mario_resolved_pairs());
+
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        validate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
+    assert_eq!(
+        summary["edges"][0]["contract"]["geometry"]["crs_resolution"],
+        "resolved",
+        "la doppia rappresentazione coerente resta resolved"
+    );
+
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let metadata = geometry_metadata_of(&output_path);
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY).map(String::as_str),
+        Some(MONTE_MARIO_WKT),
+        "definizione WKT ri-emessa byte-per-byte (classe B)"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY).map(String::as_str),
+        Some("wkt")
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("3003"),
+        "srid dedotto dal canonical del risolto riempie l'assente"
+    );
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        Some("easting_northing"),
+        "lineage preservata (R2.7: mai arbitrato)"
     );
 }
 
@@ -912,9 +1021,11 @@ fn dag_v4_crs_decision_resolves_declared_unresolved() {
         .or_else(|| metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY))
         .map(String::as_str);
     assert_eq!(declared, Some("EPSG:32632"));
-    assert!(
-        !metadata.contains_key(adapter::PLENORA_GEOMETRY_SRID_KEY),
-        "nessuna dichiarazione superstite dalla sorgente"
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("32632"),
+        "srid del CRS DECISO dedotto dalla definizione d'autorita' (emendamento \
+         2026-07-31), non una dichiarazione superstite dalla sorgente"
     );
 }
 
@@ -1519,15 +1630,16 @@ fn dag_v4_reproject_replaces_canonical_crs_keys() {
         metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some(&"resolved".to_owned())
     );
-    assert!(
-        !metadata.contains_key(adapter::PLENORA_GEOMETRY_SRID_KEY),
-        "srid della sorgente sostituito, non propagato"
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY),
+        Some(&"4326".to_owned()),
+        "srid del TARGET dedotto dalla definizione d'autorita' (emendamento 2026-07-31), \
+         non quello della sorgente"
     );
-    assert!(
-        !metadata.contains_key(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            || metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-                == Some(&"unknown".to_owned()),
-        "axis_order della sorgente non sopravvive"
+    assert_eq!(
+        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY),
+        Some(&"lon_lat".to_owned()),
+        "axis_order delle coordinate GIS normalizzate emesse dal backend, non l'ordine authority del target"
     );
     let geo = metadata
         .get(adapter::GEO_METADATA_KEY)

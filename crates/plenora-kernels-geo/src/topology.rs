@@ -416,7 +416,9 @@ fn polygon_overlay_impl(
         mode,
         OverlayMode::Union | OverlayMode::Identity | OverlayMode::SymmetricDifference
     ) {
-        let right_mask = (!right.is_empty()).then(|| dissolve_side(right)).transpose()?;
+        let right_mask = (!right.is_empty())
+            .then(|| dissolve_side(right))
+            .transpose()?;
         for (index, geometry) in left.iter().enumerate() {
             let remainder = match &right_mask {
                 Some(mask) => boolean(geometry, mask, BooleanOperation::Difference)?,
@@ -427,7 +429,9 @@ fn polygon_overlay_impl(
     }
 
     if matches!(mode, OverlayMode::Union | OverlayMode::SymmetricDifference) {
-        let left_mask = (!left.is_empty()).then(|| dissolve_side(left)).transpose()?;
+        let left_mask = (!left.is_empty())
+            .then(|| dissolve_side(left))
+            .transpose()?;
         for (index, geometry) in right.iter().enumerate() {
             let remainder = match &left_mask {
                 Some(mask) => boolean(geometry, mask, BooleanOperation::Difference)?,
@@ -840,10 +844,7 @@ mod tests {
                 "{operation:?}"
             );
         }
-        assert_eq!(
-            dissolve(&left).unwrap(),
-            dissolve_validated(&left).unwrap()
-        );
+        assert_eq!(dissolve(&left).unwrap(), dissolve_validated(&left).unwrap());
         assert_eq!(
             clip_to_mask(&left, &right[..1]).unwrap(),
             clip_to_mask_validated(&left, &right[..1]).unwrap()

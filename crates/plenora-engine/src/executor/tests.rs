@@ -21,12 +21,14 @@ use plenora_core::{PlenoraError, Result};
 use geo::{polygon, Geometry, Point};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_kernels_geo::arrow_adapter::{
-    geometry_dimensions_from_metadata, geometry_output_field, geometry_output_field_with_dimensions,
-    GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY, PLENORA_CONTRACT_VERSION_KEY,
-    PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
+    geometry_dimensions_from_metadata, geometry_output_field,
+    geometry_output_field_with_dimensions, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
+    GEO_METADATA_KEY, PLENORA_CONTRACT_VERSION_KEY, PLENORA_FIELD_ID_KEY,
+    PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+    PLENORA_GEOMETRY_CRS_DEFINITION_KEY, PLENORA_GEOMETRY_CRS_ID_KEY,
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
-    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
-    PLENORA_GEOMETRY_TYPES_KEY,
+    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY,
+    PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
 };
 
 use super::*;
@@ -108,7 +110,11 @@ fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
     .expect("batch geo fixture valido")
 }
 
-fn run(plan: &serde_json::Value, inputs: Inputs, contracts: &[(String, DataContract)]) -> Result<Output> {
+fn run(
+    plan: &serde_json::Value,
+    inputs: Inputs,
+    contracts: &[(String, DataContract)],
+) -> Result<Output> {
     let graph = validate(&plan.to_string(), contracts)?;
     execute(&graph, inputs, RuntimeContext::default())
 }
@@ -149,10 +155,9 @@ fn linear_table_chain_executes_with_coherent_per_node_metrics() {
             table_batch(&[2, 3], &["c", "d"]),
         ],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(total_rows, 3, "filter id>0 lascia 3 gruppi");
@@ -201,10 +206,9 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
             ],
         )],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
@@ -259,13 +263,15 @@ fn fan_out_fan_in_join_executes() {
             table_batch(&[2, 3], &["c", "d"]),
         ],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-    assert_eq!(total_rows, 2, "join interno su id: [0,1,2] x [1,2,3] -> 2 righe");
+    assert_eq!(
+        total_rows, 2,
+        "join interno su id: [0,1,2] x [1,2,3] -> 2 righe"
+    );
     assert_eq!(metrics.nodes["j"].rows_out, 2);
     assert_eq!(metrics.nodes["l"].rows_in, 4);
     assert_eq!(metrics.nodes["r"].rows_in, 4);
@@ -293,16 +299,14 @@ impl Iterator for CountingInput {
         self.emitted += 1;
         self.pulled.set(self.pulled.get() + 1);
         let offset = i64::try_from(self.emitted).expect("pochi batch") * 100;
-        Some(Ok(
-            RecordBatch::try_new(
-                self.schema.clone(),
-                vec![
-                    Arc::new(Int64Array::from(vec![offset, offset + 1])) as ArrayRef,
-                    Arc::new(StringArray::from(vec![Some("x"), Some("y")])) as ArrayRef,
-                ],
-            )
-            .expect("batch valido"),
-        ))
+        Some(Ok(RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![offset, offset + 1])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("x"), Some("y")])) as ArrayRef,
+            ],
+        )
+        .expect("batch valido")))
     }
 }
 
@@ -332,7 +336,11 @@ fn streaming_segment_flows_batch_by_batch_without_full_materialization() {
     let inputs = Inputs::new().with("main", input).expect("input");
     let mut output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
 
-    assert_eq!(pulled.get(), 0, "l'esecuzione e' lazy: nessun batch prima della pull");
+    assert_eq!(
+        pulled.get(),
+        0,
+        "l'esecuzione e' lazy: nessun batch prima della pull"
+    );
     let first = output.next().expect("primo batch").expect("batch ok");
     assert_eq!(first.num_rows(), 2);
     assert_eq!(
@@ -408,7 +416,9 @@ fn error_mid_stream_publishes_nothing() {
         table_schema(),
         vec![
             Ok(table_batch(&[1], &["a"])),
-            Err(PlenoraError::InvalidPlan("lettura fallita a meta' stream".into())),
+            Err(PlenoraError::InvalidPlan(
+                "lettura fallita a meta' stream".into(),
+            )),
         ]
         .into_iter(),
     );
@@ -503,8 +513,7 @@ fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
         "main",
         vec![geo_batch_xyz(&[1], &[Some(point_wkb(1.0, 2.0))])],
     );
-    let output =
-        run(&plan, inputs, &[("main".to_owned(), geo_contract_xyz())]).expect("execute");
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract_xyz())]).expect("execute");
     let error = output
         .collect_batches()
         .expect_err("type code incoerente col contratto");
@@ -543,7 +552,11 @@ fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
     .expect("collect");
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 2, "il filtro scarta solo la riga con id 1");
+    assert_eq!(
+        batch.num_rows(),
+        2,
+        "il filtro scarta solo la riga con id 1"
+    );
     let cells = batch
         .column(1)
         .as_any()
@@ -576,11 +589,52 @@ fn geo_contract_ewkb() -> DataContract {
 }
 
 #[test]
-fn ewkb_srid_cell_fails_at_the_gate_even_with_declared_ewkb_encoding() {
-    // (f) B1.4: il flag SRID EWKB non e' preservabile — rifiutato dal
-    // validatore celle al gate di lettura per qualunque dimensionalita'
-    // dichiarata, anche con `encoding: ewkb` nel contratto. L'input fallisce
-    // prima di qualunque output.
+fn matching_ewkb_srid_is_byte_identical_through_table_only_plan() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 1}},
+            {"id": "r", "op": "table.rename", "in": ["f"],
+             "config": {"renames": [{"old_name": "id", "new_name": "event_id"}]}},
+        ],
+        "output": "r",
+    });
+    let kept = ewkb_srid_point_wkb(32632, 1.0, 2.0);
+    let dropped = ewkb_srid_point_wkb(32632, 3.0, 4.0);
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(&[2, 1], &[Some(kept.clone()), Some(dropped)])],
+    );
+    let input_metadata = geo_schema().field(1).metadata().clone();
+    let (batches, _) = output_rows(
+        run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute"),
+    )
+    .expect("EWKB coerente attraversa il piano tabellare");
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+    let cells = batch
+        .column_by_name("geom")
+        .expect("geom preservata")
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("geometria binaria");
+    assert_eq!(cells.value(0), kept.as_slice(), "EWKB byte-per-byte");
+    assert_eq!(
+        batch
+            .schema()
+            .field_with_name("geom")
+            .expect("field geom")
+            .metadata(),
+        &input_metadata,
+        "metadata geometry preservati"
+    );
+}
+
+#[test]
+fn mismatching_ewkb_srid_fails_with_crs_error() {
     let plan = json!({
         "schema_version": 4,
         "inputs": ["main"],
@@ -589,15 +643,74 @@ fn ewkb_srid_cell_fails_at_the_gate_even_with_declared_ewkb_encoding() {
     });
     let inputs = single_input(
         "main",
-        vec![geo_batch(&[1], &[Some(ewkb_srid_point_wkb(4326, 1.0, 2.0))])],
+        vec![geo_batch(
+            &[1],
+            &[Some(ewkb_srid_point_wkb(4326, 1.0, 2.0))],
+        )],
     );
     let output = run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute");
     let error = output
         .collect_batches()
-        .expect_err("flag SRID EWKB rifiutato al gate");
+        .expect_err("SRID incoerente rifiutato");
     assert!(
-        error.to_string().contains("SRID"),
-        "errore esplicito sullo SRID non preservabile: {error}"
+        matches!(error, PlenoraError::Crs(_)),
+        "errore CRS dedicato: {error}"
+    );
+}
+
+#[test]
+fn resolved_contract_srid_conflict_fails_before_cell_validation() {
+    let mut contract = geo_contract_ewkb();
+    let mut fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    let mut metadata = fields[1].metadata().clone();
+    metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
+    fields[1] = fields[1].clone().with_metadata(metadata);
+    contract.schema = Arc::new(Schema::new(fields));
+    contract.geometries[0].crs = ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+        "EPSG:4326".to_owned(),
+        json!({
+            "type": "GeographicCRS",
+            "id": {"authority": "EPSG", "code": 4326}
+        }),
+        CrsKind::Geographic,
+        Some(1.0),
+    ));
+
+    let error = geometry_input_requirements(&contract)
+        .expect_err("SRID del field e CRS risolto divergenti");
+    assert!(matches!(error, PlenoraError::Crs(_)));
+}
+
+#[test]
+fn matching_ewkb_srid_still_fails_at_geometry_kernel_decode() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "a", "op": "geo.area", "in": ["main"], "config": {}},
+        ],
+        "output": "a",
+    });
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(
+            &[1],
+            &[Some(ewkb_srid_point_wkb(32632, 1.0, 2.0))],
+        )],
+    );
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("kernel geometrico non deve perdere SRID embedded");
+    assert!(matches!(error, PlenoraError::Execution { .. }));
+    assert!(
+        error.to_string().contains("unsupported operation"),
+        "causa Unsupported preservata nell'envelope del kernel: {error}"
     );
 }
 
@@ -638,15 +751,11 @@ fn pass_through_plan_streams_input_to_output() {
     });
     let inputs = single_input(
         "main",
-        vec![
-            table_batch(&[1, 2], &["a", "b"]),
-            table_batch(&[3], &["c"]),
-        ],
+        vec![table_batch(&[1, 2], &["a", "b"]), table_batch(&[3], &["c"])],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(total_rows, 3);
     assert_eq!(metrics.output_rows, 3);
@@ -715,7 +824,10 @@ fn expansion_factor_triggers_on_join() {
         "output": "j",
     });
     let inputs = Inputs::new()
-        .with("left_in", Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"))
+        .with(
+            "left_in",
+            Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"),
+        )
         .and_then(|inputs| {
             inputs.with(
                 "right_in",
@@ -732,7 +844,9 @@ fn expansion_factor_triggers_on_join() {
         ],
     )
     .expect("execute");
-    let error = output.collect_batches().expect_err("espansione oltre il fattore 1.0");
+    let error = output
+        .collect_batches()
+        .expect_err("espansione oltre il fattore 1.0");
     assert!(
         error.to_string().contains("max_expansion_factor"),
         "{error}"
@@ -755,7 +869,10 @@ fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
         "output": "j",
     });
     let inputs = Inputs::new()
-        .with("left_in", Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"))
+        .with(
+            "left_in",
+            Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"),
+        )
         .and_then(|inputs| {
             inputs.with(
                 "right_in",
@@ -846,7 +963,10 @@ fn expansion_constraint_sum_relative_on_union_distinct() {
         "output": "u",
     });
     let inputs = Inputs::new()
-        .with("left_in", Input::from_batches(vec![table_batch(&[1, 2], &["a", "b"])]).expect("input"))
+        .with(
+            "left_in",
+            Input::from_batches(vec![table_batch(&[1, 2], &["a", "b"])]).expect("input"),
+        )
         .and_then(|inputs| {
             inputs.with(
                 "right_in",
@@ -887,10 +1007,9 @@ fn total_rows_processed_counts_rows_through_all_nodes() {
         "output": "r",
     });
     let inputs = single_input("main", vec![table_batch(&[1, 2, 3], &["a", "b", "c"])]);
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(total_rows, 3);
     assert_eq!(metrics.total_rows_processed, 6);
@@ -931,10 +1050,7 @@ fn ipc_roundtrip_through_publish_atomic() {
     });
     let inputs = single_input(
         "main",
-        vec![
-            table_batch(&[1, 2], &["a", "b"]),
-            table_batch(&[3], &["c"]),
-        ],
+        vec![table_batch(&[1, 2], &["a", "b"]), table_batch(&[3], &["c"])],
     );
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
 
@@ -947,10 +1063,9 @@ fn ipc_roundtrip_through_publish_atomic() {
     // Rilettura: lo stesso piano pass-through sul file pubblicato.
     let input = Input::read_ipc_file(&destination).expect("lettore IPC");
     let inputs = Inputs::new().with("main", input).expect("input");
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(total_rows, 3);
 }
@@ -973,24 +1088,41 @@ fn canonical_output_schema_merges_canonical_keys_idempotently() {
     let contract = geo_contract();
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     assert_eq!(
-        merged.metadata().get(PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        merged
+            .metadata()
+            .get(PLENORA_CONTRACT_VERSION_KEY)
+            .map(String::as_str),
         Some("1"),
         "R2.5: la versione accompagna le chiavi canoniche"
     );
-    let metadata = merged
-        .field_with_name("geom")
-        .expect("geom")
-        .metadata();
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str), Some("xy"));
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
+            .map(String::as_str),
+        Some("xy")
+    );
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:32632"));
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
+        Some("EPSG:32632")
+    );
     // `GeometryMetadataDetails::default()`: axis_order obbligatorio con CRS
     // -> valore canonico `unknown` (mai inventato), encoding e types non
     // dichiarati dal contratto -> chiavi assenti (R5.2).
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str), Some("unknown"));
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
+        Some("unknown")
+    );
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_ENCODING_KEY));
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY));
     // Le chiavi GeoArrow legacy RESTANO (R2.6: coesistenza coerente).
@@ -1035,7 +1167,11 @@ fn geo_contract_4326_realistic() -> DataContract {
                 CrsKind::Geographic,
                 None,
             )),
-            ..geo_contract().geometries.into_iter().next().expect("una geometria")
+            ..geo_contract()
+                .geometries
+                .into_iter()
+                .next()
+                .expect("una geometria")
         }],
         None,
         ContractProperties::default(),
@@ -1044,22 +1180,30 @@ fn geo_contract_4326_realistic() -> DataContract {
 }
 
 #[test]
-fn canonical_output_schema_deduces_axis_order_and_srid_from_authority() {
-    // ADR-0009, emendamento 2026-07-31: con un canonical realistico,
-    // `axis_order` e `srid` sono DEDOTTI dalla definizione d'autorita' —
-    // completamento dell'assente su un campo SENZA chiavi di lineage
-    // (EPSG:4326 -> lat_lon + 4326). E' la stessa cascata del caso
-    // reproject: `analyze_reproject` rimuove le chiavi ereditate e il
-    // dedotto riempie l'assente.
+fn canonical_output_schema_normalizes_axis_order_and_deduces_srid() {
+    // ADR-0009, emendamento 2026-08-01: con un canonical realistico,
+    // `axis_order` descrive l'ordine fisico normalizzato mentre `srid` e'
+    // dedotto dall'autorita' — completamento dell'assente su un campo SENZA
+    // chiavi di lineage (EPSG:4326 -> lon_lat + 4326).
     let contract = geo_contract_4326_realistic();
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
-        Some("lat_lon")
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
+        Some("lon_lat")
     );
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str), Some("4326"));
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:4326"));
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("4326")
+    );
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
+        Some("EPSG:4326")
+    );
 }
 
 #[test]
@@ -1092,7 +1236,9 @@ fn canonical_output_schema_lineage_wins_over_authority_deduction() {
     let merged = canonical_output_schema(&contract).expect("lineage preservata, nessun R2.6");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
         Some("easting_northing"),
         "la lineage presente vince sulla deduzione"
     );
@@ -1100,6 +1246,102 @@ fn canonical_output_schema_lineage_wins_over_authority_deduction() {
         metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
         Some("32632"),
         "la lineage presente vince sulla deduzione"
+    );
+}
+
+/// WKT1 realistico di Monte Mario / Italy zone 1 (EPSG:3003) — la forma
+/// del caso owner (shapefile catastale con nodo `AUTHORITY`).
+const MONTE_MARIO_WKT: &str = concat!(
+    r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
+    r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297],"#,
+    r#"TOWGS84[-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68]],"#,
+    r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
+    r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
+    r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
+    r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
+    r#"UNIT["metre",1],AUTHORITY["EPSG","3003"]]"#
+);
+
+#[test]
+fn canonical_output_schema_passthrough_wkt_definition_is_idempotent() {
+    // ADR-0009, emendamento 2026-07-31 (classe B): contratto `Resolved` da
+    // definizione WKT + lineage `crs_definition = WKT`/`wkt` — la fusione
+    // NON fallisce (R2.6): l'emissione WKT e' byte-identica alla lineage
+    // (prima dell'emendamento il testo WKT sarebbe finito in `crs_id`,
+    // rompendo il passthrough). `srid` assente e' riempito dalla deduzione
+    // d'autorita' (id EPSG:3003 del canonical).
+    let mut contract = geo_contract();
+    contract.geometries[0].crs = ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
+        MONTE_MARIO_WKT.to_owned(),
+        json!({
+            "type": "ProjectedCRS",
+            "name": "Monte Mario / Italy zone 1",
+            "coordinate_system": {
+                "subtype": "Cartesian",
+                "axis": [
+                    {"name": "Easting", "abbreviation": "E",
+                     "direction": "east", "unit": "metre"},
+                    {"name": "Northing", "abbreviation": "N",
+                     "direction": "north", "unit": "metre"},
+                ],
+            },
+            "id": {"authority": "EPSG", "code": 3003},
+        }),
+        CrsKind::Projected,
+        Some(1.0),
+    ));
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == "geom" {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+                    MONTE_MARIO_WKT.to_owned(),
+                );
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+                    "wkt".to_owned(),
+                );
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "easting_northing".to_owned(),
+                );
+                field.as_ref().clone().with_metadata(metadata)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    contract.schema = Arc::new(Schema::new(fields));
+    let merged = canonical_output_schema(&contract).expect("passthrough WKT idempotente");
+    let metadata = merged.field_with_name("geom").expect("geom").metadata();
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY)
+            .map(String::as_str),
+        Some(MONTE_MARIO_WKT),
+        "definizione WKT preservata byte-per-byte"
+    );
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY)
+            .map(String::as_str),
+        Some("wkt")
+    );
+    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
+        Some("easting_northing")
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("3003"),
+        "srid dedotto dall'autorita' riempie l'assente"
     );
 }
 
@@ -1161,9 +1403,14 @@ fn canonical_output_schema_corrects_false_resolved_into_declared_unresolved() {
         .map(|field| {
             if field.name() == "geom" {
                 let mut metadata = field.metadata().clone();
-                metadata
-                    .insert(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(), "resolved".to_owned());
-                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:4326".to_owned());
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                    "resolved".to_owned(),
+                );
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                    "EPSG:4326".to_owned(),
+                );
                 metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "3003".to_owned());
                 field.as_ref().clone().with_metadata(metadata)
             } else {
@@ -1175,12 +1422,16 @@ fn canonical_output_schema_corrects_false_resolved_into_declared_unresolved() {
     let merged = canonical_output_schema(&contract).expect("correzione dichiarata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("declared_unresolved"),
         "l'incoerenza e' dichiarata, non silenziata"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:4326"),
         "dichiarazione originale preservata"
     );
@@ -1242,9 +1493,15 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
                     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
                     "declared_unresolved".to_owned(),
                 );
-                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:99999".to_owned());
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                    "EPSG:99999".to_owned(),
+                );
                 metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "99999".to_owned());
-                metadata.insert(PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(), "unknown".to_owned());
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "unknown".to_owned(),
+                );
                 field.as_ref().clone().with_metadata(metadata)
             } else {
                 field.as_ref().clone()
@@ -1255,11 +1512,15 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
     let merged = canonical_output_schema(&contract).expect("decisione applicata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:32632"),
         "il CRS deciso sostituisce la dichiarazione della sorgente"
     );
@@ -1268,7 +1529,10 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
         "srid della sorgente rimosso"
     );
     if let Some(geo) = metadata.get(GEO_METADATA_KEY) {
-        assert!(!geo.contains("crs"), "geo.crs della sorgente rimosso: {geo}");
+        assert!(
+            !geo.contains("crs"),
+            "geo.crs della sorgente rimosso: {geo}"
+        );
     }
 }
 
@@ -1287,7 +1551,9 @@ fn canonical_output_schema_emits_rewritten_types_from_contract() {
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
+            .map(String::as_str),
         Some("exact")
     );
     assert_eq!(
@@ -1343,21 +1609,24 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
     // (`centroid` -> `point`/`exact`).
     let schema: SchemaRef = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
-        Field::new("geom", DataType::Binary, true).with_metadata(
-            std::collections::HashMap::from([
+        Field::new("geom", DataType::Binary, true).with_metadata(std::collections::HashMap::from(
+            [
                 (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
                 (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
                 (
                     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
                     "resolved".to_owned(),
                 ),
-                (PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned()),
+                (
+                    PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                    "EPSG:32632".to_owned(),
+                ),
                 (
                     PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
                     "unknown".to_owned(),
                 ),
-            ]),
-        ),
+            ],
+        )),
     ]));
     let mut contract = geo_contract();
     contract.schema = schema.clone();
@@ -1386,15 +1655,14 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
     let destination = directory.path().join("output.arrow");
     output.write_ipc_file(&destination).expect("publish");
 
-    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
-        .expect("lettore IPC");
+    let reader =
+        FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
     let out_schema = reader.schema();
-    let metadata = out_schema
-        .field_with_name("geom")
-        .expect("geom")
-        .metadata();
+    let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
+            .map(String::as_str),
         Some("exact"),
         "i tipi dell'output sono quelli dell'operazione, non dell'input"
     );
@@ -1403,7 +1671,9 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
         Some("point")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:32632"),
         "CRS preservato dal centroid"
     );
@@ -1430,7 +1700,10 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
                     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
                     "resolved".to_owned(),
                 );
-                metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), "EPSG:32632".to_owned());
+                metadata.insert(
+                    PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                    "EPSG:32632".to_owned(),
+                );
                 metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
                 metadata.insert(
                     PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
@@ -1467,25 +1740,34 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
     let destination = directory.path().join("output.arrow");
     output.write_ipc_file(&destination).expect("publish");
 
-    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
-        .expect("lettore IPC");
+    let reader =
+        FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
     let out_schema = reader.schema();
-    let metadata = out_schema
-        .field_with_name("geom")
-        .expect("geom")
-        .metadata();
+    let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:4326"),
         "il CRS emesso e' il target, non la sorgente"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
-    assert!(
-        !metadata.contains_key(PLENORA_GEOMETRY_SRID_KEY),
-        "srid della sorgente sostituito, non propagato"
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        Some("4326"),
+        "srid del TARGET dedotto dalla definizione d'autorita' (emendamento 2026-07-31: \
+         la strip rimuove la chiave ereditata e la deduzione riempie l'assente — \
+         non lo srid della sorgente)"
+    );
+    assert_eq!(
+        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        Some("lon_lat"),
+        "l'ordine descrive le coordinate GIS normalizzate prodotte dal backend, non gli assi authority"
     );
     let geo = metadata.get(GEO_METADATA_KEY).expect("geo metadata");
     assert!(geo.contains("EPSG:4326"), "geo.crs legacy al target: {geo}");
@@ -1509,21 +1791,41 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
     let destination = directory.path().join("output.arrow");
     output.write_ipc_file(&destination).expect("publish");
 
-    let reader = FileReader::try_new(File::open(&destination).expect("open"), None)
-        .expect("lettore IPC");
+    let reader =
+        FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
     let schema = reader.schema();
     assert_eq!(
-        schema.metadata().get(PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        schema
+            .metadata()
+            .get(PLENORA_CONTRACT_VERSION_KEY)
+            .map(String::as_str),
         Some("1")
     );
     let metadata = schema.field_with_name("geom").expect("geom").metadata();
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str), Some("xy"));
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
+            .map(String::as_str),
+        Some("xy")
+    );
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str), Some("EPSG:32632"));
-    assert_eq!(metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str), Some("unknown"));
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
+        Some("EPSG:32632")
+    );
+    assert_eq!(
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
+        Some("unknown")
+    );
     // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non ha
     // significato fuori dal processo, ADR-0009 decisione 3).
     assert!(!metadata.contains_key(PLENORA_FIELD_ID_KEY));
@@ -1639,10 +1941,9 @@ fn geo_snap_subdivide_length_chain_expands_rows() {
         "main",
         vec![geo_batch(&[0, 1], &[Some(line_wkb(&perturbed)), None])],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
@@ -1652,8 +1953,16 @@ fn geo_snap_subdivide_length_chain_expands_rows() {
     let parents = u64_column(batch, "__parent_index");
     assert_eq!(parents.values(), &[0, 0, 1]);
     let lengths = f64_column(batch, "length");
-    assert!((lengths.value(0) - 12.0).abs() < 1e-9, "{}", lengths.value(0));
-    assert!((lengths.value(1) - 12.0).abs() < 1e-9, "{}", lengths.value(1));
+    assert!(
+        (lengths.value(0) - 12.0).abs() < 1e-9,
+        "{}",
+        lengths.value(0)
+    );
+    assert!(
+        (lengths.value(1) - 12.0).abs() < 1e-9,
+        "{}",
+        lengths.value(1)
+    );
     assert!(lengths.is_null(2), "null in -> null out");
     // Il vertice perturbato e' stato agganciato alla referenza.
     let geom_index = batch.schema().column_with_name("geom").expect("geom").0;
@@ -1697,10 +2006,9 @@ fn geo_geometry_accessors_adds_canonical_and_prefixed_columns() {
             ],
         )],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 3);
@@ -1755,13 +2063,16 @@ fn geo_line_locate_point_adds_fraction() {
             ],
         )],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let fractions = f64_column(&batches[0], "fraction");
-    assert!((fractions.value(0) - 0.5).abs() < 1e-12, "{}", fractions.value(0));
+    assert!(
+        (fractions.value(0) - 0.5).abs() < 1e-12,
+        "{}",
+        fractions.value(0)
+    );
     assert!(fractions.is_null(1), "non-linea -> null");
     assert!(fractions.is_null(2), "null -> null");
 }
@@ -1780,14 +2091,16 @@ fn geo_collect_groups_geometries_by_key() {
     let inputs = single_input(
         "main",
         vec![
-            geo_batch(&[2, 1], &[Some(point_wkb(9.0, 9.0)), Some(point_wkb(0.0, 0.0))]),
+            geo_batch(
+                &[2, 1],
+                &[Some(point_wkb(9.0, 9.0)), Some(point_wkb(0.0, 0.0))],
+            ),
             geo_batch(&[1, 2], &[Some(point_wkb(1.0, 1.0)), None]),
         ],
     );
-    let (batches, metrics) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, metrics) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     assert_eq!(batches.len(), 1, "segmento blocking: un solo batch");
     let batch = &batches[0];
@@ -1805,7 +2118,11 @@ fn geo_collect_groups_geometries_by_key() {
     let Geometry::MultiPoint(points) = first else {
         panic!("gruppo omogeneo di punti -> MultiPoint: {first:?}");
     };
-    assert_eq!(points.0.len(), 2, "due punti nel gruppo id=1 (null saltato)");
+    assert_eq!(
+        points.0.len(),
+        2,
+        "due punti nel gruppo id=1 (null saltato)"
+    );
     let second = plenora_kernels_geo::geometry_from_wkb(cells.value(1)).expect("decode");
     assert_eq!(second, Geometry::Point(Point::new(9.0, 9.0)));
     assert_eq!(metrics.nodes["c"].rows_in, 4);
@@ -1833,10 +2150,9 @@ fn geo_coverage_validate_reports_known_overlap() {
             ],
         )],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 1, "un solo overlap (0,1)");
@@ -1869,17 +2185,20 @@ fn geo_shared_paths_finds_shared_border() {
             ],
         )],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 1, "un solo confine condiviso (0,1)");
     assert_eq!(u64_column(batch, "index_a").value(0), 0);
     assert_eq!(u64_column(batch, "index_b").value(0), 1);
     let lengths = f64_column(batch, "shared_length");
-    assert!((lengths.value(0) - 4.0).abs() < 1e-9, "{}", lengths.value(0));
+    assert!(
+        (lengths.value(0) - 4.0).abs() < 1e-9,
+        "{}",
+        lengths.value(0)
+    );
 }
 
 #[test]
@@ -1908,10 +2227,9 @@ fn geo_cluster_dbscan_labels_known_points() {
             ],
         )],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 7, "output allineato alle righe");
@@ -1939,14 +2257,10 @@ fn table_select_limit_fingerprint_chain_executes() {
         ],
         "output": "f",
     });
-    let inputs = single_input(
-        "main",
-        vec![table_batch(&[1, 2, 3], &["a", "b", "c"])],
-    );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let inputs = single_input("main", vec![table_batch(&[1, 2, 3], &["a", "b", "c"])]);
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 2, "limit a 2 righe");
@@ -1968,15 +2282,11 @@ fn table_top_n_selects_highest_rows() {
     });
     let inputs = single_input(
         "main",
-        vec![
-            table_batch(&[1, 5], &["a", "b"]),
-            table_batch(&[3], &["c"]),
-        ],
+        vec![table_batch(&[1, 5], &["a", "b"]), table_batch(&[3], &["c"])],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 2);
@@ -2018,7 +2328,10 @@ fn table_align_schema_then_concat_by_name_executes() {
             Input::from_batches(vec![table_batch(&[1, 2], &["a", "b"])]).expect("input"),
         )
         .and_then(|inputs| {
-            inputs.with("right_in", Input::from_batches(vec![right_batch]).expect("input"))
+            inputs.with(
+                "right_in",
+                Input::from_batches(vec![right_batch]).expect("input"),
+            )
         })
         .expect("inputs");
     let (batches, _) = output_rows(
@@ -2054,14 +2367,10 @@ fn table_validate_rules_annotates_rows() {
         ],
         "output": "v",
     });
-    let inputs = single_input(
-        "main",
-        vec![table_batch(&[1, 2], &["a", "b"])],
-    );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let inputs = single_input("main", vec![table_batch(&[1, 2], &["a", "b"])]);
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     let valid_index = batch.schema().column_with_name("_valid").expect("_valid").0;
@@ -2087,14 +2396,10 @@ fn table_hmac_sha256_uses_key_from_env() {
         ],
         "output": "h",
     });
-    let inputs = single_input(
-        "main",
-        vec![table_batch(&[1, 2], &["a", "b"])],
-    );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let inputs = single_input("main", vec![table_batch(&[1, 2], &["a", "b"])]);
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let hmacs = string_column(&batches[0], "hmac");
     assert_eq!(hmacs.value(0).len(), 64, "hmac sha-256 esadecimale");
@@ -2124,7 +2429,8 @@ fn table_fuzzy_join_matches_similar_names() {
         .and_then(|inputs| {
             inputs.with(
                 "right_in",
-                Input::from_batches(vec![table_batch(&[1, 2], &["milano", "torino"])]).expect("input"),
+                Input::from_batches(vec![table_batch(&[1, 2], &["milano", "torino"])])
+                    .expect("input"),
             )
         })
         .expect("inputs");
@@ -2173,10 +2479,9 @@ fn geo_from_wkt_snap_subdivide_length_chain_executes() {
         "main",
         vec![table_batch(&[0, 1, 2], &[wkt, "NON E WKT", "POINT(1 1)"])],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     // Riga 0: 2 parti; riga 1 (WKT invalido): null; riga 2 (punto): 1 parte.
@@ -2187,12 +2492,18 @@ fn geo_from_wkt_snap_subdivide_length_chain_executes() {
     assert!((lengths.value(0) - 12.0).abs() < 1e-9);
     assert!((lengths.value(1) - 12.0).abs() < 1e-9);
     assert!(lengths.is_null(2), "WKT invalido con on_error null -> null");
-    assert!((lengths.value(3) - 0.0).abs() < 1e-12, "lunghezza di un punto");
+    assert!(
+        (lengths.value(3) - 0.0).abs() < 1e-12,
+        "lunghezza di un punto"
+    );
     // La colonna geometria prodotta ha i metadati GeoArrow del contratto.
     let schema = batch.schema();
     let field = schema.field_with_name("geometry").expect("geometry");
     assert_eq!(
-        field.metadata().get("ARROW:extension:name").map(String::as_str),
+        field
+            .metadata()
+            .get("ARROW:extension:name")
+            .map(String::as_str),
         Some("geoarrow.wkb")
     );
 }
@@ -2216,10 +2527,9 @@ fn geo_generate_grid_then_collect_executes() {
         "output": "c",
     });
     let inputs = single_input("main", vec![table_batch(&[1], &["trigger"])]);
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("stream ok");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("stream ok");
 
     let batch = &batches[0];
     // Un gruppo per cella: 4 righe, geometria singola per gruppo (le celle
@@ -2300,10 +2610,9 @@ fn whole_to_many_ops_are_exempt_from_expansion_factor() {
     });
     let cells: Vec<Option<Vec<u8>>> = (0..5).map(|_| Some(rect_wkb(0.0, 0.0, 4.0, 4.0))).collect();
     let inputs = single_input("main", vec![geo_batch(&[0, 1, 2, 3, 4], &cells)]);
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("op WholeToMany esente dal fattore di espansione");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("op WholeToMany esente dal fattore di espansione");
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(rows, 10, "un overlap per coppia");
 }
@@ -2331,10 +2640,9 @@ fn generate_grid_expansion_exempt_with_small_trigger() {
         "main",
         vec![table_batch(&[1, 2, 3, 4, 5], &["a", "b", "c", "d", "e"])],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("op generativa esente dal fattore di espansione");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("op generativa esente dal fattore di espansione");
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(rows, 10_000);
 }
@@ -2356,7 +2664,9 @@ fn payload_bytes_limit_triggers_cumulatively_on_input() {
     });
     let inputs = single_input("main", vec![first, second]);
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
-    let error = output.collect_batches().expect_err("payload oltre il limite");
+    let error = output
+        .collect_batches()
+        .expect_err("payload oltre il limite");
     assert!(error.to_string().contains("max_payload_bytes"), "{error}");
 
     // Budget sufficiente per l'intero payload: passa.
@@ -2371,10 +2681,9 @@ fn payload_bytes_limit_triggers_cumulatively_on_input() {
         "main",
         vec![table_batch(&[1, 2], &["a", "b"]), table_batch(&[3], &["c"])],
     );
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"),
-    )
-    .expect("payload entro il limite");
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
+            .expect("payload entro il limite");
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(rows, 3);
 }
@@ -2386,7 +2695,9 @@ fn nested_collection_wkb(depth: usize) -> Vec<u8> {
     for _ in 0..depth {
         geometry = Geometry::GeometryCollection(geo::GeometryCollection(vec![geometry]));
     }
-    geometry.to_wkb(CoordDimensions::xy()).expect("wkb annidato")
+    geometry
+        .to_wkb(CoordDimensions::xy())
+        .expect("wkb annidato")
 }
 
 #[test]
@@ -2400,9 +2711,14 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
         "nodes": [],
         "output": "main",
     });
-    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])]);
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])],
+    );
     let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
-    let error = output.collect_batches().expect_err("annidamento oltre il limite");
+    let error = output
+        .collect_batches()
+        .expect_err("annidamento oltre il limite");
     assert!(error.to_string().contains("annidamento"), "{error}");
 
     let plan = json!({
@@ -2412,11 +2728,13 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
         "nodes": [],
         "output": "main",
     });
-    let inputs = single_input("main", vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])]);
-    let (batches, _) = output_rows(
-        run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"),
-    )
-    .expect("annidamento entro il limite");
+    let inputs = single_input(
+        "main",
+        vec![geo_batch(&[1], &[Some(nested_collection_wkb(2))])],
+    );
+    let (batches, _) =
+        output_rows(run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute"))
+            .expect("annidamento entro il limite");
     assert_eq!(batches[0].num_rows(), 1);
 }
 
@@ -2699,7 +3017,9 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
         &[("main".to_owned(), table_contract())],
     )
     .expect("execute");
-    let error = output.collect_batches().expect_err("panic convertito in errore");
+    let error = output
+        .collect_batches()
+        .expect_err("panic convertito in errore");
     match error {
         PlenoraError::Execution {
             node,
@@ -2707,7 +3027,10 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
             reason,
             ..
         } => {
-            assert_eq!(node, "boom_stream", "attribuzione al nodo che e' andato in panic");
+            assert_eq!(
+                node, "boom_stream",
+                "attribuzione al nodo che e' andato in panic"
+            );
             assert_eq!(operation, "table.filter");
             assert!(
                 reason.contains("panic di test iniettato"),
@@ -2732,7 +3055,9 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     });
     let inputs = single_input("main", vec![table_batch(&[1, 2], &["a", "b"])]);
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
-    let error = output.collect_batches().expect_err("panic convertito in errore");
+    let error = output
+        .collect_batches()
+        .expect_err("panic convertito in errore");
     match error {
         PlenoraError::Execution {
             node,
@@ -2761,7 +3086,10 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
         "output": "boom_join",
     });
     let inputs = Inputs::new()
-        .with("left", Input::from_batches(vec![table_batch(&[1], &["a"])]).expect("left"))
+        .with(
+            "left",
+            Input::from_batches(vec![table_batch(&[1], &["a"])]).expect("left"),
+        )
         .expect("inputs")
         .with(
             "right",
@@ -2773,7 +3101,9 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
         ("right".to_owned(), table_contract()),
     ];
     let output = run(&plan, inputs, &contracts).expect("execute");
-    let error = output.collect_batches().expect_err("panic convertito in errore");
+    let error = output
+        .collect_batches()
+        .expect_err("panic convertito in errore");
     match error {
         PlenoraError::Execution {
             node,
@@ -2781,7 +3111,10 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
             reason,
             ..
         } => {
-            assert_eq!(node, "boom_join", "attribuzione anche per i segmenti BinaryBlocking");
+            assert_eq!(
+                node, "boom_join",
+                "attribuzione anche per i segmenti BinaryBlocking"
+            );
             assert_eq!(operation, "table.join");
             assert!(reason.contains("panic di test iniettato"), "{reason}");
         }
@@ -2838,16 +3171,14 @@ impl Iterator for CancellingInput {
             self.token.cancel();
         }
         let offset = i64::try_from(self.emitted).expect("pochi batch") * 100;
-        Some(Ok(
-            RecordBatch::try_new(
-                self.schema.clone(),
-                vec![
-                    Arc::new(Int64Array::from(vec![offset, offset + 1])) as ArrayRef,
-                    Arc::new(StringArray::from(vec![Some("x"), Some("y")])) as ArrayRef,
-                ],
-            )
-            .expect("batch valido"),
-        ))
+        Some(Ok(RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![offset, offset + 1])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("x"), Some("y")])) as ArrayRef,
+            ],
+        )
+        .expect("batch valido")))
     }
 }
 
@@ -2971,7 +3302,9 @@ fn cancel_during_blocking_drain() {
     // e il check tra batch (BoundaryOnly: durante il drenaggio) ferma il
     // segmento prima del kernel monolitico.
     match output.next() {
-        Some(Err(PlenoraError::Cancelled { node, operation, .. })) => {
+        Some(Err(PlenoraError::Cancelled {
+            node, operation, ..
+        })) => {
             assert_eq!(node, "g");
             assert_eq!(operation, "table.aggregate");
         }
@@ -3002,8 +3335,8 @@ fn non_interruptible_op_is_never_interrupted() {
     let _guard_f = CancelBehaviorGuard::set("ni_f", CancellationBehavior::NonInterruptible);
     let _guard_r = CancelBehaviorGuard::set("ni_r", CancellationBehavior::NonInterruptible);
     let token = CancellationToken::new();
-    let mut output = execute_with_token(&plan, cancelling_input(5, 1, &token), token)
-        .expect("execute");
+    let mut output =
+        execute_with_token(&plan, cancelling_input(5, 1, &token), token).expect("execute");
 
     output.next().expect("primo batch").expect("batch ok");
     // Il secondo batch attraversa comunque entrambi i kernel
@@ -3011,7 +3344,9 @@ fn non_interruptible_op_is_never_interrupted() {
     // di piano, prima della consegna (ADR 3: nessuna nuova attivita' dopo
     // la cancellazione).
     match output.next() {
-        Some(Err(PlenoraError::Cancelled { node, operation, .. })) => {
+        Some(Err(PlenoraError::Cancelled {
+            node, operation, ..
+        })) => {
             assert_eq!(node, "ni_r", "confine di output del piano");
             assert_eq!(operation, "output");
         }
@@ -3089,8 +3424,12 @@ fn execute_creates_temp_store_and_cleans_it_up() {
         temp_root: Some(root.path().to_owned()),
         ..RuntimeContext::default()
     };
-    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
-        .expect("execute");
+    let output = execute(
+        &graph,
+        single_input("main", vec![table_batch(&[1], &["a"])]),
+        runtime,
+    )
+    .expect("execute");
     let store_dir = root
         .path()
         .read_dir()
@@ -3148,8 +3487,12 @@ fn execute_scavenges_stale_temp_dirs_at_startup() {
         temp_root: Some(root.path().to_owned()),
         ..RuntimeContext::default()
     };
-    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
-        .expect("execute");
+    let output = execute(
+        &graph,
+        single_input("main", vec![table_batch(&[1], &["a"])]),
+        runtime,
+    )
+    .expect("execute");
     assert!(!stale.exists(), "scavenging all'avvio: orfana rimossa");
     assert!(other.exists(), "fuori pattern: mai toccata");
     drop(output.collect_batches().expect("stream ok"));
@@ -3198,8 +3541,12 @@ fn diagnostics_on_enriches_step_error_with_batch_index() {
         diagnostics: true,
         ..RuntimeContext::default()
     };
-    let output = execute(&graph, single_input("main", vec![table_batch(&[1], &["a"])]), runtime)
-        .expect("execute");
+    let output = execute(
+        &graph,
+        single_input("main", vec![table_batch(&[1], &["a"])]),
+        runtime,
+    )
+    .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito");
     match error {
         PlenoraError::Execution { reason, .. } => {
@@ -3230,7 +3577,10 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
         };
         execute(
             &graph,
-            single_input("main", vec![geo_batch(&[1], &[Some(b"non-e-wkb".to_vec())])]),
+            single_input(
+                "main",
+                vec![geo_batch(&[1], &[Some(b"non-e-wkb".to_vec())])],
+            ),
             runtime,
         )
         .expect("execute")
@@ -3336,7 +3686,11 @@ fn distinct_spills_end_to_end_into_shared_temp_store() {
     let spill_dir = store_dir.join("spill");
     if spill_dir.exists() {
         assert!(
-            spill_dir.read_dir().expect("read_dir spill").next().is_none(),
+            spill_dir
+                .read_dir()
+                .expect("read_dir spill")
+                .next()
+                .is_none(),
             "nessun file di spill residuo durante l'esecuzione"
         );
     }
@@ -3350,7 +3704,11 @@ fn distinct_spills_end_to_end_into_shared_temp_store() {
     assert!(metrics.spill.files > 0, "{:?}", metrics.spill);
     // Cleanup RAII completo: nessun residuo nella temp root iniettata.
     assert!(
-        root.path().read_dir().expect("read_dir root").next().is_none(),
+        root.path()
+            .read_dir()
+            .expect("read_dir root")
+            .next()
+            .is_none(),
         "TempStore rimosso al Drop: nessun residuo"
     );
 
@@ -3365,7 +3723,10 @@ fn distinct_spills_end_to_end_into_shared_temp_store() {
     .expect("execute");
     let (expected, oracle_metrics) = output.collect_batches().expect("stream ok");
     assert_eq!(oracle_metrics.spill, SpillMetrics::default());
-    assert_eq!(spilled, expected, "output spilled identico al percorso in memoria");
+    assert_eq!(
+        spilled, expected,
+        "output spilled identico al percorso in memoria"
+    );
 }
 
 #[test]
@@ -3392,7 +3753,11 @@ fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
     // Nessun residuo anche sul percorso di errore (Drop del workspace +
     // Drop RAII del TempStore).
     assert!(
-        root.path().read_dir().expect("read_dir root").next().is_none(),
+        root.path()
+            .read_dir()
+            .expect("read_dir root")
+            .next()
+            .is_none(),
         "nessun residuo nella temp root dopo l'errore"
     );
 }
@@ -3472,7 +3837,10 @@ fn fused_geo_group_matches_unfused_output_and_keeps_per_node_metrics() {
     let (plain_batches, plain_metrics) =
         run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
 
-    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    assert_eq!(
+        fused_batches, plain_batches,
+        "output fuso diverso dal non fuso"
+    );
 
     for node in ["b", "s", "c"] {
         let fused_node = &fused_metrics.nodes[node];
@@ -3480,8 +3848,14 @@ fn fused_geo_group_matches_unfused_output_and_keeps_per_node_metrics() {
         assert_eq!(fused_node.rows_in, 5, "{node}: righe in ingresso 1:1");
         assert_eq!(fused_node.rows_out, 5, "{node}: righe prodotte 1:1");
         assert_eq!(fused_node.batches_in, 2, "{node}: batch in ingresso");
-        assert_eq!(fused_node.rows_in, plain_node.rows_in, "{node}: righe in A/B");
-        assert_eq!(fused_node.rows_out, plain_node.rows_out, "{node}: righe out A/B");
+        assert_eq!(
+            fused_node.rows_in, plain_node.rows_in,
+            "{node}: righe in A/B"
+        );
+        assert_eq!(
+            fused_node.rows_out, plain_node.rows_out,
+            "{node}: righe out A/B"
+        );
     }
     assert_eq!(fused_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
@@ -3537,7 +3911,10 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
     let (plain_batches, plain_metrics) =
         run_geo_fusion(&plan, vec![geo_batch(&[0, 1], &cells())], false).expect("non fuso");
 
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 1, "un batch -> un fallback");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 1,
+        "un batch -> un fallback"
+    );
     assert_eq!(fused_batches, plain_batches, "output diverso dal non fuso");
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
 }
@@ -3561,16 +3938,20 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     });
     let _guard = PanicHookGuard::set("g_s");
     let run = |geo_fusion: bool| {
-        let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
-            .expect("validate");
+        let graph =
+            validate(&plan.to_string(), &[("main".to_owned(), geo_contract())]).expect("validate");
         let runtime = RuntimeContext {
             geo_fusion,
             ..RuntimeContext::default()
         };
-        execute(&graph, single_input("main", fusion_fixture_batches()), runtime)
-            .expect("execute")
-            .collect_batches()
-            .expect_err("panic convertito in errore")
+        execute(
+            &graph,
+            single_input("main", fusion_fixture_batches()),
+            runtime,
+        )
+        .expect("execute")
+        .collect_batches()
+        .expect_err("panic convertito in errore")
     };
     let fused_error = run(true);
     let plain_error = run(false);
@@ -3622,7 +4003,10 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
     let (plain_batches, plain_metrics) =
         run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
 
-    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    assert_eq!(
+        fused_batches, plain_batches,
+        "output fuso diverso dal non fuso"
+    );
     for node in ["t", "s", "a"] {
         let fused_node = &fused_metrics.nodes[node];
         let plain_node = &plain_metrics.nodes[node];
@@ -3632,13 +4016,24 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
             "{node}: righe 1:1 in A/B"
         );
     }
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     // Schema [id, geom, area]: la geometria sopravvive (Binary) e la misura
     // e' null esattamente dove la geometria e' null (riga 2 del batch 0).
     let batch = &fused_batches[0];
-    assert_eq!(batch.schema().fields().len(), 3, "misura appesa in coda allo schema");
-    assert_eq!(batch.column(1).data_type(), &DataType::Binary, "geometria sopravvive");
+    assert_eq!(
+        batch.schema().fields().len(),
+        3,
+        "misura appesa in coda allo schema"
+    );
+    assert_eq!(
+        batch.column(1).data_type(),
+        &DataType::Binary,
+        "geometria sopravvive"
+    );
     let area = batch
         .column(2)
         .as_any()
@@ -3667,7 +4062,10 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
     let (plain_batches, plain_metrics) =
         run_geo_fusion(&plan, fusion_fixture_batches(), false).expect("non fuso");
 
-    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    assert_eq!(
+        fused_batches, plain_batches,
+        "output fuso diverso dal non fuso"
+    );
     for node in ["t", "w"] {
         let fused_node = &fused_metrics.nodes[node];
         let plain_node = &plain_metrics.nodes[node];
@@ -3677,10 +4075,17 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
             "{node}: righe 1:1 in A/B"
         );
     }
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let batch = &fused_batches[0];
-    assert_eq!(batch.schema().fields().len(), 3, "misura appesa in coda allo schema");
+    assert_eq!(
+        batch.schema().fields().len(),
+        3,
+        "misura appesa in coda allo schema"
+    );
     let wkt = batch
         .column(2)
         .as_any()
@@ -3743,8 +4148,7 @@ fn input_stream_source_errors_are_tagged_read_and_keep_their_text() {
             ),
         )
         .expect("inputs");
-    let mut output =
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let mut output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
     let first = output.next().expect("primo item").expect("batch ok");
     assert_eq!(first.num_rows(), 1);
     let error = output
@@ -3778,8 +4182,7 @@ fn input_batch_schema_mismatch_is_tagged_read() {
             Input::from_iter(table_schema(), vec![Ok(wrong)].into_iter()),
         )
         .expect("inputs");
-    let mut output =
-        run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let mut output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
     let error = output
         .next()
         .expect("item di errore")
@@ -3826,9 +4229,15 @@ fn polygon_wkb(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<u8> {
 
 fn two_geo_inputs(left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
-        .with("left_in", Input::from_batches(left).expect("left non vuoto"))
+        .with(
+            "left_in",
+            Input::from_batches(left).expect("left non vuoto"),
+        )
         .expect("input left")
-        .with("right_in", Input::from_batches(right).expect("right non vuoto"))
+        .with(
+            "right_in",
+            Input::from_batches(right).expect("right non vuoto"),
+        )
         .expect("input right")
 }
 
@@ -3892,7 +4301,10 @@ fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
         ],
     );
     let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
-    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let output_contract = graph
+        .output_contract()
+        .expect("contratto di output")
+        .clone();
     let (batches, metrics) = output_rows(
         execute(
             &graph,
@@ -3929,7 +4341,11 @@ fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
         .expect("right_index UInt64");
     assert_eq!(right_index.value(0), 0);
     assert_eq!(right_index.value(1), 1);
-    assert_eq!(right_index.null_count(), 0, "inner join: right_index non-null");
+    assert_eq!(
+        right_index.null_count(),
+        0,
+        "inner join: right_index non-null"
+    );
     let field = output_contract
         .schema
         .field_with_name("__right_index")
@@ -3954,7 +4370,10 @@ fn geo_nearest_executes_with_right_index_and_distance() {
         &[Some(point_wkb(3.0, 4.0)), Some(point_wkb(0.0, 2.0))],
     );
     let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
-    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let output_contract = graph
+        .output_contract()
+        .expect("contratto di output")
+        .clone();
     let (batches, metrics) = output_rows(
         execute(
             &graph,
@@ -3984,20 +4403,16 @@ fn geo_nearest_executes_with_right_index_and_distance() {
         .expect("distance Float64");
     assert_eq!(distances.value(0), 2.0);
     // Contratto v4: right_index e distance nullable (match opzionale per riga).
-    assert!(
-        output_contract
-            .schema
-            .field_with_name("__right_index")
-            .expect("campo")
-            .is_nullable()
-    );
-    assert!(
-        output_contract
-            .schema
-            .field_with_name("distance")
-            .expect("campo")
-            .is_nullable()
-    );
+    assert!(output_contract
+        .schema
+        .field_with_name("__right_index")
+        .expect("campo")
+        .is_nullable());
+    assert!(output_contract
+        .schema
+        .field_with_name("distance")
+        .expect("campo")
+        .is_nullable());
     assert_eq!(metrics.nodes["j"].rows_in, 4);
     assert_eq!(metrics.nodes["j"].rows_out, 1);
 }
@@ -4011,7 +4426,10 @@ fn geo_within_executes_with_flag_column_and_custom_name() {
     );
     let right = geo_batch(&[9], &[Some(polygon_wkb(0.0, 0.0, 2.0, 2.0))]);
     let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
-    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let output_contract = graph
+        .output_contract()
+        .expect("contratto di output")
+        .clone();
     let (batches, metrics) = output_rows(
         execute(
             &graph,
@@ -4037,13 +4455,11 @@ fn geo_within_executes_with_flag_column_and_custom_name() {
     assert!(!flags.value(1), "punto esterno");
     assert!(flags.is_null(2), "geometria null -> flag null");
     assert!(batch.schema().field_with_name("flag").is_ok());
-    assert!(
-        output_contract
-            .schema
-            .field_with_name("flag")
-            .expect("campo")
-            .is_nullable()
-    );
+    assert!(output_contract
+        .schema
+        .field_with_name("flag")
+        .expect("campo")
+        .is_nullable());
     assert_eq!(metrics.nodes["j"].rows_in, 4);
     assert_eq!(metrics.nodes["j"].rows_out, 3);
 }
@@ -4069,7 +4485,10 @@ fn geo_count_points_in_polygons_executes_with_count_column() {
         ],
     );
     let graph = validate(&plan.to_string(), &geo_binary_contracts()).expect("piano valido");
-    let output_contract = graph.output_contract().expect("contratto di output").clone();
+    let output_contract = graph
+        .output_contract()
+        .expect("contratto di output")
+        .clone();
     let (batches, metrics) = output_rows(
         execute(
             &graph,
@@ -4122,8 +4541,11 @@ fn geo_binary_output_is_byte_identical_across_runs() {
                     Some(polygon_wkb(1.0, 1.0, 3.0, 3.0)),
                 ],
             );
-            let graph = validate(&geo_binary_plan(op, &config).to_string(), &geo_binary_contracts())
-                .expect("piano valido");
+            let graph = validate(
+                &geo_binary_plan(op, &config).to_string(),
+                &geo_binary_contracts(),
+            )
+            .expect("piano valido");
             let (batches, _) = output_rows(
                 execute(
                     &graph,
@@ -4184,5 +4606,9 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
         }
         other => panic!("atteso Execution, ottenuto {other}"),
     }
-    assert_eq!(error.phase(), ErrorPhase::Write, "kernel: fase Write derivata");
+    assert_eq!(
+        error.phase(),
+        ErrorPhase::Write,
+        "kernel: fase Write derivata"
+    );
 }

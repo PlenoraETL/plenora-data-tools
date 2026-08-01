@@ -1,9 +1,9 @@
 //! PROJ-backed CRS transformations using the bundled CRS database.
 
 use crate::crs::{resolve_crs, validate_geometry_domain, validate_requirement, CrsError};
-use plenora_core::catalog::CrsRequirement;
 use geo::algorithm::validation::Validation;
 use geo::{CoordsIter, Geometry, MapCoords};
+use plenora_core::catalog::CrsRequirement;
 use proj::Proj;
 use thiserror::Error;
 
@@ -190,6 +190,36 @@ mod tests {
             reproject_geometry(&input, "EPSG:4326", "epsg:4326", 10).unwrap(),
             input
         );
+    }
+
+    #[test]
+    fn no_transformation_ever_reorders_the_axes() {
+        // Perche' `analyze_reproject` deve rifiutare una colonna che dichiara
+        // un `axis_order` diverso da quello GIS normalizzato (P1 della review
+        // indipendente): il backend non riordina MAI le coordinate, quindi
+        // nessun percorso puo' rendere vera a posteriori l'etichetta
+        // `lon_lat`/`easting_northing` che l'analisi riscrive.
+        //
+        // Una coppia (latitudine, longitudine) e' indistinguibile da una
+        // (longitudine, latitudine) valida: cade nel dominio lon/lat e
+        // `validate_geometry_domain` non puo' rifiutarla.
+        let swapped = Geometry::Point(Point::new(44.4949, 11.3426));
+        // 1) source == target: nessuna pipeline, byte identici.
+        assert_eq!(
+            reproject_geometry(&swapped, "EPSG:4326", "EPSG:4326", 10).unwrap(),
+            swapped
+        );
+        // 2) pipeline REALE fra un CRS authority `lat_lon` (EPSG:4326) e uno
+        //    authority `lon_lat` (OGC:CRS84): PROJ e' normalizzato per la
+        //    visualizzazione e assume gia' x=longitudine su ENTRAMBI i lati,
+        //    quindi non scambia nulla — l'ordine dei numeri non cambia.
+        let Geometry::Point(through_pipeline) =
+            reproject_geometry(&swapped, "EPSG:4326", "OGC:CRS84", 10).unwrap()
+        else {
+            panic!("point expected")
+        };
+        assert!((through_pipeline.x() - 44.4949).abs() < 1e-12);
+        assert!((through_pipeline.y() - 11.3426).abs() < 1e-12);
     }
 
     #[test]

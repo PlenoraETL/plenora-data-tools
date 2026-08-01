@@ -15,13 +15,16 @@
 //! X/Y finite, anelli chiusi (confronto esatto first == last), annidamento
 //! limitato, tipi figli delle multi-geometrie, nessun byte residuo.
 
-use geo::{Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+use geo::{
+    Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
+    Polygon,
+};
 
 use plenora_core::PlenoraError;
 
 use crate::{
-    GeometryDimensions, MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, WkbCursor,
-    checked_count, invalid_wkb_structure, parse_wkb_type_code,
+    checked_count, invalid_wkb_structure, parse_wkb_type_code, GeometryDimensions, WkbCursor,
+    MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,
 };
 
 /// Decodifica e valida un payload WKB in una sola passata (ADR-0011).
@@ -130,8 +133,7 @@ fn decode_geometry(
             // decodificata resta densa, invariante del preflight D14.4
             // (`decoded_size_xy` — il test di conservativita' misura le
             // capacita' reali).
-            let mut interiors: Vec<LineString<f64>> =
-                Vec::with_capacity(rings.saturating_sub(1));
+            let mut interiors: Vec<LineString<f64>> = Vec::with_capacity(rings.saturating_sub(1));
             for _ in 0..rings {
                 let count = cursor.read_u32(little_endian)?;
                 let count = checked_count(count, cursor.remaining(), stride)?;
@@ -187,7 +189,8 @@ fn decode_geometry(
                 }
                 decoded.push(child);
             }
-            let incompatible = || invalid_wkb_structure("tipo figlio incompatibile con multi-geometria");
+            let incompatible =
+                || invalid_wkb_structure("tipo figlio incompatibile con multi-geometria");
             match geometry_type {
                 4 => {
                     // Nessun `collect::<Result<Vec<_>>>`: la raccolta con
@@ -240,7 +243,7 @@ fn decode_geometry(
 
 #[cfg(test)]
 mod tests {
-    use geozero::{ToGeo, wkb::Wkb};
+    use geozero::{wkb::Wkb, ToGeo};
 
     use super::*;
     use crate::validate_wkb_contract;
@@ -257,7 +260,9 @@ mod tests {
         });
         let decoded = decode_validated(payload);
         match (&reference, &decoded) {
-            (Ok(expected), Ok(actual)) => assert_eq!(expected, actual, "{label}: geometrie diverse"),
+            (Ok(expected), Ok(actual)) => {
+                assert_eq!(expected, actual, "{label}: geometrie diverse")
+            }
             (Err(_), Err(_)) => {}
             (Ok(_), Err(error)) => panic!("{label}: riferimento Ok, decoder Err: {error}"),
             (Err(error), Ok(_)) => panic!("{label}: riferimento Err ({error}), decoder Ok"),
@@ -275,7 +280,11 @@ mod tests {
     fn linestring_wkb_le(points: &[(f64, f64)]) -> Vec<u8> {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&2_u32.to_le_bytes());
-        payload.extend_from_slice(&u32::try_from(points.len()).expect("fixture entro u32").to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(points.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
         for (x, y) in points {
             payload.extend_from_slice(&x.to_le_bytes());
             payload.extend_from_slice(&y.to_le_bytes());
@@ -287,7 +296,11 @@ mod tests {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&3_u32.to_le_bytes());
         payload.extend_from_slice(&1_u32.to_le_bytes());
-        payload.extend_from_slice(&u32::try_from(ring.len()).expect("fixture entro u32").to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(ring.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
         for (x, y) in ring {
             payload.extend_from_slice(&x.to_le_bytes());
             payload.extend_from_slice(&y.to_le_bytes());
@@ -297,7 +310,10 @@ mod tests {
 
     /// Poligono con anelli interni (la parita' multi-anello e' la classe del
     /// bug 2026-07-29: l'esterno andava perso con un secondo anello).
-    fn polygon_with_interiors_wkb_le(exterior: &[(f64, f64)], interiors: &[&[(f64, f64)]]) -> Vec<u8> {
+    fn polygon_with_interiors_wkb_le(
+        exterior: &[(f64, f64)],
+        interiors: &[&[(f64, f64)]],
+    ) -> Vec<u8> {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&3_u32.to_le_bytes());
         payload.extend_from_slice(
@@ -336,7 +352,11 @@ mod tests {
     fn multipoint_wkb_le(points: &[(f64, f64)]) -> Vec<u8> {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&4_u32.to_le_bytes());
-        payload.extend_from_slice(&u32::try_from(points.len()).expect("fixture entro u32").to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(points.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
         for (x, y) in points {
             payload.extend(point_wkb_le(*x, *y));
         }
@@ -346,7 +366,11 @@ mod tests {
     fn collection_wkb_le(parts: &[Vec<u8>]) -> Vec<u8> {
         let mut payload = vec![1_u8];
         payload.extend_from_slice(&7_u32.to_le_bytes());
-        payload.extend_from_slice(&u32::try_from(parts.len()).expect("fixture entro u32").to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(parts.len())
+                .expect("fixture entro u32")
+                .to_le_bytes(),
+        );
         for part in parts {
             payload.extend_from_slice(part);
         }
@@ -356,15 +380,15 @@ mod tests {
     #[test]
     fn parity_on_valid_geometries() {
         assert_parity(&point_wkb_le(1.5, -2.5), "point");
-        assert_parity(&linestring_wkb_le(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)]), "linestring");
+        assert_parity(
+            &linestring_wkb_le(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)]),
+            "linestring",
+        );
         assert_parity(
             &polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]),
             "polygon aperto in coda chiuso",
         );
-        assert_parity(
-            &multipoint_wkb_le(&[(0.0, 0.0), (3.0, 4.0)]),
-            "multipoint",
-        );
+        assert_parity(&multipoint_wkb_le(&[(0.0, 0.0), (3.0, 4.0)]), "multipoint");
         assert_parity(
             &collection_wkb_le(&[
                 point_wkb_le(0.0, 0.0),
@@ -375,7 +399,13 @@ mod tests {
         );
         // Poligoni multi-anello (classe del bug 2026-07-29: l'oracolo
         // copriva solo poligoni a un anello e l'esterno andava perso).
-        let exterior = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)];
+        let exterior = [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ];
         let hole_a = [(2.0, 2.0), (4.0, 2.0), (2.0, 4.0), (2.0, 2.0)];
         let hole_b = [(6.0, 6.0), (8.0, 6.0), (6.0, 8.0), (6.0, 6.0)];
         assert_parity(

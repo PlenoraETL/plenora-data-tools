@@ -212,10 +212,12 @@ fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionV2Error
 fn square_dimensions(extent: &GridExtent, cell_size: f64) -> Result<(u64, u64), ExtensionV2Error> {
     let columns = checked_axis_cells(extent.width(), cell_size)?;
     let rows = checked_axis_cells(extent.height(), cell_size)?;
-    let total = columns.checked_mul(rows).ok_or(ExtensionV2Error::CellLimit {
-        actual: u64::MAX,
-        limit: MAX_GRID_CELLS,
-    })?;
+    let total = columns
+        .checked_mul(rows)
+        .ok_or(ExtensionV2Error::CellLimit {
+            actual: u64::MAX,
+            limit: MAX_GRID_CELLS,
+        })?;
     if total > MAX_GRID_CELLS {
         return Err(ExtensionV2Error::CellLimit {
             actual: total,
@@ -342,13 +344,7 @@ fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) ->
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let y0 = extent.ymin + cell_j as f64 * cell_size;
     let y1 = (y0 + cell_size).min(extent.ymax);
-    let ring = LineString::from(vec![
-        (x0, y0),
-        (x1, y0),
-        (x1, y1),
-        (x0, y1),
-        (x0, y0),
-    ]);
+    let ring = LineString::from(vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]);
     GridCell {
         cell_i,
         cell_j,
@@ -521,9 +517,9 @@ fn subdivide_polygon(
             limit: MAX_SUBDIVIDE_DEPTH,
         });
     }
-    let rect = polygon.bounding_rect().ok_or_else(|| {
-        ExtensionV2Error::InvalidInput("poligono senza envelope".to_owned())
-    })?;
+    let rect = polygon
+        .bounding_rect()
+        .ok_or_else(|| ExtensionV2Error::InvalidInput("poligono senza envelope".to_owned()))?;
     let min = rect.min();
     let max = rect.max();
     let halves = if max.x - min.x >= max.y - min.y {
@@ -652,8 +648,8 @@ fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
 pub fn subdivide_wkb(payload: &[u8], max_vertices: usize) -> Result<Vec<Vec<u8>>, PlenoraError> {
     check_max_vertices(max_vertices).map_err(|error| subdivide_error(&error))?;
     let geometry = decode_geometry_cell(payload)?;
-    let parts = subdivide_validated(&geometry, max_vertices)
-        .map_err(|error| subdivide_error(&error))?;
+    let parts =
+        subdivide_validated(&geometry, max_vertices).map_err(|error| subdivide_error(&error))?;
     parts.iter().map(encode_geometry).collect()
 }
 
@@ -822,13 +818,7 @@ mod tests {
         assert_eq!((first.cell_i, first.cell_j), (0, 0));
         assert_eq!(
             coords(&first.geometry),
-            vec![
-                (0.0, 0.0),
-                (5.0, 0.0),
-                (5.0, 5.0),
-                (0.0, 5.0),
-                (0.0, 0.0)
-            ]
+            vec![(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0), (0.0, 0.0)]
         );
         assert_eq!((first.centroid_x, first.centroid_y), (2.5, 2.5));
         assert_eq!((cells[3].cell_i, cells[3].cell_j), (1, 1));
@@ -850,7 +840,10 @@ mod tests {
         assert_eq!(rect.max().x, 10.0);
         assert_close(rect.max().x - rect.min().x, 1.0);
         assert_close(last_column[0].centroid_x, 9.5);
-        assert_eq!(grid_cell_count(&extent(), 3.0, GridShape::Square).unwrap(), 16);
+        assert_eq!(
+            grid_cell_count(&extent(), 3.0, GridShape::Square).unwrap(),
+            16
+        );
     }
 
     #[test]
@@ -977,11 +970,12 @@ mod tests {
     #[test]
     fn subdivide_chunks_linestrings_with_a_shared_vertex() {
         let line = Geometry::LineString(LineString::new(
-            (0..10).map(|index| Coord {
-                x: f64::from(index),
-                y: 0.0,
-            })
-            .collect(),
+            (0..10)
+                .map(|index| Coord {
+                    x: f64::from(index),
+                    y: 0.0,
+                })
+                .collect(),
         ));
         let parts = subdivide(&line, 4).expect("parti");
         assert_eq!(parts.len(), 3);
@@ -993,10 +987,7 @@ mod tests {
             .iter()
             .map(|part| *coords(part).last().expect("fine"))
             .collect();
-        let starts: Vec<(f64, f64)> = parts
-            .iter()
-            .map(|part| coords(part)[0])
-            .collect();
+        let starts: Vec<(f64, f64)> = parts.iter().map(|part| coords(part)[0]).collect();
         assert_eq!(ends[0], starts[1]);
         assert_eq!(ends[1], starts[2]);
         assert_eq!(starts[0], (0.0, 0.0));
@@ -1112,7 +1103,9 @@ mod tests {
         let parts = subdivide(&lines, 4).expect("parti");
         // 2 linee corte passate come parti singole + 3 chunk della lunga.
         assert_eq!(parts.len(), 5);
-        assert!(parts.iter().all(|part| matches!(part, Geometry::LineString(_))));
+        assert!(parts
+            .iter()
+            .all(|part| matches!(part, Geometry::LineString(_))));
 
         let collection = Geometry::GeometryCollection(GeometryCollection(vec![
             Geometry::Point(Point::new(0.0, 0.0)),
@@ -1177,11 +1170,11 @@ mod tests {
             (x: 9.9, y: 0.4),   // distanza ~0.412 da (10,0): snappato
         ]);
         let snapped = snap(&input, &reference_line(), 0.5).expect("snap");
-        assert_eq!(
-            coords(&snapped),
-            vec![(0.0, 0.0), (5.0, 3.0), (10.0, 0.0)]
+        assert_eq!(coords(&snapped), vec![(0.0, 0.0), (5.0, 3.0), (10.0, 0.0)]);
+        assert!(
+            matches!(snapped, Geometry::LineString(_)),
+            "tipo preservato"
         );
-        assert!(matches!(snapped, Geometry::LineString(_)), "tipo preservato");
     }
 
     #[test]
@@ -1298,11 +1291,7 @@ mod tests {
         let far = Geometry::Point(Point::new(50.0, 50.0))
             .to_wkb(CoordDimensions::xy())
             .expect("encode");
-        let cells = BinaryArray::from_iter([
-            Some(near.as_slice()),
-            None,
-            Some(far.as_slice()),
-        ]);
+        let cells = BinaryArray::from_iter([Some(near.as_slice()), None, Some(far.as_slice())]);
         let snapped = snap_column(&cells, &reference_line(), 0.5).expect("colonna");
         assert_eq!(snapped.len(), 3);
         assert!(snapped[1].is_none());

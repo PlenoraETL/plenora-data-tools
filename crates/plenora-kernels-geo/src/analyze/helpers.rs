@@ -6,27 +6,34 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::contract::{
-    ContractProperties, ContractProperty, DataContract, GeometryColumnContract, GeometryDimensions,
-    GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
+    AxisOrder, ContractProperties, ContractProperty, DataContract, GeometryColumnContract,
+    GeometryDimensions, GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use crate::arrow_adapter::{
-    geo_metadata_json_with_encoding, GEO_METADATA_KEY, GEOARROW_EXTENSION_KEY,
-    GEOARROW_WKB_EXTENSION,
+    geo_metadata_json_with_encoding, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
+    GEO_METADATA_KEY,
 };
 
 // ---------------------------------------------------------------------------
 // Errori e validazioni di dominio (messaggi coerenti col protocollo legacy).
 // ---------------------------------------------------------------------------
 
-pub(in crate::analyze) fn invalid_param(op: &str, name: &'static str, reason: &'static str) -> PlenoraError {
+pub(in crate::analyze) fn invalid_param(
+    op: &str,
+    name: &'static str,
+    reason: &'static str,
+) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("{op}: parametro `{name}` non valido: {reason}"))
 }
 
-pub(in crate::analyze) fn parse_config<T: serde::de::DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
+pub(in crate::analyze) fn parse_config<T: serde::de::DeserializeOwned>(
+    op: &str,
+    config: &Value,
+) -> Result<T> {
     serde_json::from_value(config.clone())
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
 }
@@ -39,7 +46,11 @@ pub(in crate::analyze) fn ensure_finite(op: &str, name: &'static str, value: f64
     }
 }
 
-pub(in crate::analyze) fn ensure_non_negative(op: &str, name: &'static str, value: f64) -> Result<()> {
+pub(in crate::analyze) fn ensure_non_negative(
+    op: &str,
+    name: &'static str,
+    value: f64,
+) -> Result<()> {
     ensure_finite(op, name, value)?;
     if value < 0.0 {
         return Err(invalid_param(op, name, "deve essere non negativo"));
@@ -72,7 +83,11 @@ pub(in crate::analyze) fn ensure_name(name: &str) -> bool {
 
 /// Nome della colonna aggiunta: `output_column` da config o default
 /// documentato; vuoto rifiutato.
-pub(in crate::analyze) fn output_name<'a>(op: &str, configured: Option<&'a str>, default: &'a str) -> Result<&'a str> {
+pub(in crate::analyze) fn output_name<'a>(
+    op: &str,
+    configured: Option<&'a str>,
+    default: &'a str,
+) -> Result<&'a str> {
     let name = configured.unwrap_or(default);
     if ensure_name(name) {
         Ok(name)
@@ -88,7 +103,11 @@ pub(in crate::analyze) fn short_id(op: &str) -> &str {
 }
 
 /// Decodifica e valida strutturalmente un WKB esadecimale da config.
-pub(in crate::analyze) fn validate_wkb_hex(op: &str, name: &'static str, hex: &str) -> Result<Vec<u8>> {
+pub(in crate::analyze) fn validate_wkb_hex(
+    op: &str,
+    name: &'static str,
+    hex: &str,
+) -> Result<Vec<u8>> {
     if !hex.len().is_multiple_of(2) || hex.is_empty() {
         return Err(invalid_param(op, name, "WKB esadecimale non valido"));
     }
@@ -111,7 +130,10 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
 // ---------------------------------------------------------------------------
 
 /// v1: esattamente una colonna geometria attiva per input (D16).
-pub(in crate::analyze) fn single_geometry<'a>(op: &str, input: &'a DataContract) -> Result<&'a GeometryColumnContract> {
+pub(in crate::analyze) fn single_geometry<'a>(
+    op: &str,
+    input: &'a DataContract,
+) -> Result<&'a GeometryColumnContract> {
     if input.geometries.len() != 1 {
         return Err(PlenoraError::Schema(format!(
             "{op}: l'input deve avere esattamente una colonna geometria attiva (v1), trovate {}",
@@ -136,15 +158,12 @@ pub(in crate::analyze) fn require_identifiable_geometry(
     input: &DataContract,
     geometry: &GeometryColumnContract,
 ) -> Result<()> {
-    let field = input
-        .schema
-        .field_with_name(&geometry.name)
-        .map_err(|_| {
-            PlenoraError::Schema(format!(
-                "{op}: colonna geometria `{}` assente dallo schema",
-                geometry.name
-            ))
-        })?;
+    let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
+        PlenoraError::Schema(format!(
+            "{op}: colonna geometria `{}` assente dallo schema",
+            geometry.name
+        ))
+    })?;
     if crate::arrow_adapter::field_declares_wkb_geometry(field) {
         return Ok(());
     }
@@ -192,7 +211,8 @@ pub(in crate::analyze) fn with_geometry_types(
             geometry.name
         )));
     };
-    target.types = ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema);
+    target.types =
+        ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema);
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
             fields,
@@ -222,7 +242,11 @@ pub(in crate::analyze) fn ensure_name_free(op: &str, fields: &[Field], name: &st
     Ok(())
 }
 
-pub(in crate::analyze) fn rebuild(input: &DataContract, fields: Vec<Field>, properties: ContractProperties) -> Result<DataContract> {
+pub(in crate::analyze) fn rebuild(
+    input: &DataContract,
+    fields: Vec<Field>,
+    properties: ContractProperties,
+) -> Result<DataContract> {
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
             fields,
@@ -267,7 +291,10 @@ pub(in crate::analyze) fn merge_schema_metadata(
 
 /// Sostituisce i metadati di SCHEMA del contratto (campi, geometrie e
 /// proprieta' invariati): usato dalle op binarie per applicare il merge R2.4.
-pub(in crate::analyze) fn with_schema_metadata(contract: &DataContract, metadata: HashMap<String, String>) -> Result<DataContract> {
+pub(in crate::analyze) fn with_schema_metadata(
+    contract: &DataContract,
+    metadata: HashMap<String, String>,
+) -> Result<DataContract> {
     DataContract::new(
         Arc::new(Schema::new_with_metadata(output_fields(contract), metadata)),
         contract.geometries.clone(),
@@ -284,18 +311,21 @@ pub(in crate::analyze) fn with_schema_metadata(contract: &DataContract, metadata
 /// input — perche' il campo geometria sopravvive invariato (stesso nome,
 /// stessi byte); l'emissione canonica resta centralizzata a valle
 /// (`executor.rs::canonical_output_schema`), qui non si aggiunge nulla.
-pub(in crate::analyze) fn geometry_field(input: &DataContract, geometry: &GeometryColumnContract, nullable: bool) -> Result<Field> {
-    let field = input
-        .schema
-        .field_with_name(&geometry.name)
-        .map_err(|_| {
-            PlenoraError::Schema(format!(
-                "colonna geometria `{}` assente dallo schema",
-                geometry.name
-            ))
-        })?;
-    Ok(Field::new(geometry.name.clone(), DataType::Binary, nullable)
-        .with_metadata(field.metadata().clone()))
+pub(in crate::analyze) fn geometry_field(
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+    nullable: bool,
+) -> Result<Field> {
+    let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
+        PlenoraError::Schema(format!(
+            "colonna geometria `{}` assente dallo schema",
+            geometry.name
+        ))
+    })?;
+    Ok(
+        Field::new(geometry.name.clone(), DataType::Binary, nullable)
+            .with_metadata(field.metadata().clone()),
+    )
 }
 
 /// Nuovo campo geometria con metadati di estensione `geoarrow.wkb` +
@@ -326,7 +356,11 @@ pub(in crate::analyze) fn new_geometry_field(
 /// preservando dimensionalita' ed encoding dichiarati dal contratto (B1.3 /
 /// B1.4: il metadato riscritto resta coerente col contratto — un encoding
 /// dichiarato non si perde attraversando il kernel).
-pub(in crate::analyze) fn set_geometry_crs(fields: &mut [Field], geometry: &GeometryColumnContract, crs: &ResolvedCrs) -> Result<()> {
+pub(in crate::analyze) fn set_geometry_crs(
+    fields: &mut [Field],
+    geometry: &GeometryColumnContract,
+    crs: &ResolvedCrs,
+) -> Result<()> {
     for field in fields.iter_mut() {
         if field.name() == &geometry.name {
             let mut metadata = field.metadata().clone();
@@ -354,7 +388,10 @@ pub(in crate::analyze) fn set_geometry_crs(fields: &mut [Field], geometry: &Geom
 /// rifiutata qui, in validazione del piano, mai scoperta a meta' esecuzione
 /// (il decode fallirebbe a runtime sulla prima cella Z/M). Il trasporto dei
 /// byte Z/M resta possibile con le op tabellari, che li propagano invariati.
-pub(in crate::analyze) fn require_xy_dimensions(op: &str, geometry: &GeometryColumnContract) -> Result<()> {
+pub(in crate::analyze) fn require_xy_dimensions(
+    op: &str,
+    geometry: &GeometryColumnContract,
+) -> Result<()> {
     if geometry.dimensions == GeometryDimensions::Xy {
         return Ok(());
     }
@@ -365,9 +402,67 @@ pub(in crate::analyze) fn require_xy_dimensions(op: &str, geometry: &GeometryCol
     )))
 }
 
+/// Rifiuto a compile-plan per `geo.reproject`: le coordinate della colonna
+/// devono gia' essere nell'ordine GIS normalizzato del CRS SORGENTE
+/// (x=longitudine/easting, y=latitudine/northing).
+///
+/// E' l'invariante che tutto il centro assume — la stessa dichiarata da
+/// [`plenora_core::crs::validate_geometry_domain`], che pero' puo' solo
+/// verificare i domini e non l'ordine (una coppia (lat, lon) italiana cade
+/// dentro il dominio lon/lat). L'unico segnale disponibile e' la chiave
+/// canonica `plenora.geometry.axis_order` dichiarata dal produttore, letta
+/// qui fail-closed (R5.1) e finora ignorata. Con una dichiarazione
+/// divergente `geo.reproject` sbaglierebbe in due modi, entrambi silenziosi:
+///
+/// - source == target: il backend non costruisce alcuna pipeline e
+///   restituisce i byte di input invariati
+///   ([`crate::proj_backend::Reprojector::new`]), mentre l'analisi
+///   riscrive `axis_order` con l'ordine GIS normalizzato — il metadato
+///   contraddirebbe le coordinate che descrive;
+/// - source != target: la pipeline PROJ e' normalizzata per la
+///   visualizzazione GIS e legge x=longitudine/easting — coordinate
+///   dichiarate al contrario verrebbero trasformate come se non lo fossero,
+///   producendo un risultato sbagliato invece di un errore.
+///
+/// `unknown` e chiave assente restano accettati: sono l'ASSENZA di una
+/// dichiarazione (R2.7), non la dichiarazione di un ordine diverso, e
+/// l'invariante del centro vale come prima. Riordinare le coordinate non e'
+/// compito di questa op: sarebbe una trasformazione dei dati che nessuno ha
+/// chiesto.
+pub(in crate::analyze) fn require_normalized_axis_order(
+    op: &str,
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+    source: &ResolvedCrs,
+) -> Result<()> {
+    let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
+        PlenoraError::Schema(format!(
+            "{op}: colonna geometria `{}` assente dallo schema",
+            geometry.name
+        ))
+    })?;
+    let Some(declared) = crate::arrow_adapter::canonical_geometry_axis_order(field)? else {
+        return Ok(());
+    };
+    let normalized = source.normalized_gis_axis_order();
+    if declared == AxisOrder::Unknown || declared == normalized {
+        return Ok(());
+    }
+    Err(PlenoraError::Crs(format!(
+        "{op}: colonna geometria `{}`: `axis_order` dichiarato `{declared}`, ma il kernel \
+         legge e riemette le coordinate nell'ordine GIS normalizzato `{normalized}` del CRS \
+         sorgente — riproiettare qui produrrebbe coordinate e metadato in contraddizione, \
+         non un errore. L'ordine va normalizzato a monte, mai in silenzio qui",
+        geometry.name
+    )))
+}
+
 /// Risoluzione CRS in analisi: riuso del CRS di piano se la definizione
 /// coincide, altrimenti backend (fail-closed senza `proj-backend`).
-pub(in crate::analyze) fn resolve_definition(definition: &str, plan_crs: Option<&ResolvedCrs>) -> Result<ResolvedCrs> {
+pub(in crate::analyze) fn resolve_definition(
+    definition: &str,
+    plan_crs: Option<&ResolvedCrs>,
+) -> Result<ResolvedCrs> {
     required_definition(Some(definition), "crs")?;
     if let Some(plan) = plan_crs {
         if plan.definition() == definition {

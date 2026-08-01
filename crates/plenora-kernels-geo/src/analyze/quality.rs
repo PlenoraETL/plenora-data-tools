@@ -95,7 +95,11 @@ pub(in crate::analyze) fn analyze_coverage_validate(
     }
     if let Some(max_issues) = parsed.max_issues {
         if max_issues == 0 {
-            return Err(invalid_param(op, "max_issues", "deve essere maggiore di zero"));
+            return Err(invalid_param(
+                op,
+                "max_issues",
+                "deve essere maggiore di zero",
+            ));
         }
     }
     analyze_coverage_rows(
@@ -142,7 +146,11 @@ pub(in crate::analyze) fn analyze_shared_paths(
 /// `cluster_dbscan` (v1.3): `eps` finito e maggiore di zero, `min_points >=
 /// 1`; aggiunge la colonna etichetta `UInt64` nullable (noise → null). Output
 /// allineato alle righe: le proprieta' dell'input sono preservate.
-pub(in crate::analyze) fn analyze_cluster_dbscan(op: &str, input: &DataContract, config: &Value) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_cluster_dbscan(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+) -> Result<DataContract> {
     let parsed: ClusterDbscanConfig = parse_config(op, config)?;
     ensure_positive(op, "eps", parsed.eps)?;
     if parsed.min_points < 1 {

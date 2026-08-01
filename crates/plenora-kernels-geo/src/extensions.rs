@@ -124,12 +124,14 @@ pub fn from_wkt_column(
         .map(|(row, cell)| {
             cell.map_or_else(
                 || Ok(None),
-                |value| wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
-                    PlenoraError::InvalidPlan(reason) => {
-                        PlenoraError::InvalidPlan(format!("riga {row}: {reason}"))
-                    }
-                    other => other,
-                }),
+                |value| {
+                    wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
+                        PlenoraError::InvalidPlan(reason) => {
+                            PlenoraError::InvalidPlan(format!("riga {row}: {reason}"))
+                        }
+                        other => other,
+                    })
+                },
             )
         })
         .collect();
@@ -174,9 +176,7 @@ fn point_wkt(point: Point<f64>) -> String {
 ///   validazione OGC;
 /// - `ExtensionError::IndexOverflow`: un conteggio (parti o anelli
 ///   interni) non e' rappresentabile come `u64`.
-pub fn geometry_accessors(
-    geometry: &Geometry<f64>,
-) -> Result<GeometryAccessors, ExtensionError> {
+pub fn geometry_accessors(geometry: &Geometry<f64>) -> Result<GeometryAccessors, ExtensionError> {
     ensure_valid(geometry)?;
     let num_geometries = match geometry {
         Geometry::MultiPoint(values) => u64_len(values.0.len())?,
@@ -481,10 +481,8 @@ mod tests {
         ]));
         assert_eq!(geometry_accessors(&multi).unwrap().num_geometries, 2);
 
-        let collection = Geometry::GeometryCollection(GeometryCollection(vec![
-            point(0.0, 0.0),
-            square(),
-        ]));
+        let collection =
+            Geometry::GeometryCollection(GeometryCollection(vec![point(0.0, 0.0), square()]));
         let accessors = geometry_accessors(&collection).expect("accessors");
         assert_eq!(accessors.geometry_type, "GeometryCollection");
         assert_eq!(accessors.num_geometries, 2);
@@ -510,12 +508,9 @@ mod tests {
 
     #[test]
     fn collect_promotes_homogeneous_groups_to_multi_geometries() {
-        let points = collect_geometries(&[
-            Some(point(0.0, 0.0)),
-            Some(point(1.0, 1.0)),
-        ])
-        .unwrap()
-        .expect("gruppo");
+        let points = collect_geometries(&[Some(point(0.0, 0.0)), Some(point(1.0, 1.0))])
+            .unwrap()
+            .expect("gruppo");
         assert_eq!(
             points,
             Geometry::MultiPoint(MultiPoint::new(vec![
@@ -525,8 +520,12 @@ mod tests {
         );
 
         let lines = collect_geometries(&[
-            Some(Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 0.0)])),
-            Some(Geometry::LineString(line_string![(x: 2.0, y: 0.0), (x: 3.0, y: 0.0)])),
+            Some(Geometry::LineString(
+                line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 0.0)],
+            )),
+            Some(Geometry::LineString(
+                line_string![(x: 2.0, y: 0.0), (x: 3.0, y: 0.0)],
+            )),
         ])
         .unwrap()
         .expect("gruppo");

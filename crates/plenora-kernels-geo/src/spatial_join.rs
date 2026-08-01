@@ -260,10 +260,9 @@ fn spatial_join_refs(
             // matches must fail without materializing them all first.
             let mut right_indexes: Vec<usize> = Vec::new();
             for candidate in tree.locate_in_envelope_intersecting(&envelope) {
-                let right_geometry = right[candidate.index]
-                    .ok_or(SpatialJoinError::Internal(
-                        "R-tree contains only non-null right geometries",
-                    ))?;
+                let right_geometry = right[candidate.index].ok_or(SpatialJoinError::Internal(
+                    "R-tree contains only non-null right geometries",
+                ))?;
                 if exact_match(left_geometry, right_geometry, predicate) {
                     pair_count
                         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

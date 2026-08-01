@@ -496,7 +496,10 @@ mod tests {
         ));
         assert!(matches!(
             rotate_about_validated(&geometry, f64::INFINITY, Point::new(0.0, 0.0)),
-            Err(ExtendedError::InvalidParameter { name: "degrees", .. })
+            Err(ExtendedError::InvalidParameter {
+                name: "degrees",
+                ..
+            })
         ));
         assert!(matches!(
             concave_hull_validated(&line, 1.0, 0.0, 2),
