@@ -37,10 +37,13 @@ la propagazione) e un modello a due vie.
 4. **`GeometryEncoding` enum chiuso** (`Wkb`, `Ewkb`; §3.5): dichiarato nel
    contratto come `Option` (chiave omessa se assente → fingerprint invariati)
    e nei metadati solo quando dichiarato. Framing non rappresentabili
-   (GeoPackage header, TWKB) rifiutati in discovery. Flag SRID EWKB rifiutato
-   sempre (non preservabile). **EWKB puro-XY è byte-identico a ISO** e passa i
-   gate come `xy`: comportamento accettato e qui dichiarato — la validazione è
-   sui type code, mai sulla chiave `encoding`.
+   (GeoPackage header, TWKB) rifiutati in discovery. Il gate di trasporto legge
+   lo SRID embedded EWKB e lo confronta con lo SRID del contratto: match → byte
+   e metadati invariati nei percorsi passthrough; mismatch → errore `Crs` prima
+   dell'output. I decoder dei kernel elaboranti continuano a rifiutare lo SRID
+   embedded finché non possono preservarlo. **EWKB puro-XY è byte-identico a
+   ISO** e passa i gate come `xy`: la validazione è sui type code e sulla
+   coerenza SRID, mai sulla sola chiave `encoding`.
 5. **Produttori** (`from_wkt`, `from_coords`, `generate_grid`, output
    ricodificati) dichiarano sempre `Xy`; la riproiezione preserva
    dimensionalità ed encoding dichiarati nei metadati riscritti.
