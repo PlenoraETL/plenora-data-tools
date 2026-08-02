@@ -1,0 +1,78 @@
+{
+  "manifest_version": 1,
+  "component": "plenora-data-tools",
+  "component_version": "1.0.2",
+  "revision": "c28b3298187bd2922b9ea7fb06b7fa43c117c3e8",
+  "icd": {
+    "repository": "plenora-contracts",
+    "tag": "v2.0-rc10",
+    "revision": "3598259bbe07d1c853453ff34ca2c1d1d28a0272",
+    "normative_status": "partially_ratified"
+  },
+  "claims": {
+    "component_rc": true,
+    "system_rc": false,
+    "avionic_certification": false
+  },
+  "release_state": "metadata_candidate_pending_same_sha_ci",
+  "verification_claim": "verified_independently",
+  "independent_review": true,
+  "supersedes": {
+    "manifest": "release/1.0.1.json",
+    "component_version": "1.0.1",
+    "revision": "aab8152902a209955b2ea657dfeaeea10408f866"
+  },
+  "candidate": {
+    "evidence_base_revision": "c28b3298187bd2922b9ea7fb06b7fa43c117c3e8",
+    "evidence_base_ci_run": 30742403011,
+    "evidence_base_ci_url": "https://github.com/PlenoraETL/plenora-data-tools/actions/runs/30742403011",
+    "evidence_base_result": "passed",
+    "metadata_delta_requires_new_same_sha_ci": true,
+    "release_tag_created": false,
+    "intended_release_tag": "v1.0.2",
+    "publish": false,
+    "declared_delta": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "fuzz/Cargo.lock",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "release/1.0.2.json"
+    ]
+  },
+  "open_blocks": [
+    {
+      "id": "BLOCK-1.0.2-SAME-SHA-CI",
+      "title": "CI GitHub sulla SHA metadata non ancora eseguita",
+      "detail": "Le verifiche e review della revisione funzionale non sono trasferibili al futuro commit metadata: tutti i job devono passare sulla sua SHA esatta."
+    },
+    {
+      "id": "BLOCK-05",
+      "title": "Catena bordo-centro-bordo da rieseguire sulle nuove release",
+      "detail": "La qualifica di sistema resta di proprieta di plenora-contracts/conformance e deve essere rieseguita con le nuove release Data, IO e Database Tools."
+    }
+  ],
+  "evidence": {
+    "functional_revision": {
+      "revision": "c28b3298187bd2922b9ea7fb06b7fa43c117c3e8",
+      "same_sha_ci_run": 30742403011,
+      "result": "passed",
+      "gates": [
+        "release-manifest",
+        "ubuntu-latest",
+        "windows-latest",
+        "full-backends-linux"
+      ],
+      "independent_reviewers": [
+        "Claude Code Opus",
+        "Kimi K3 via Hermes"
+      ],
+      "blocking_findings": 0
+    },
+    "metadata_candidate": {
+      "status": "pending_same_sha_ci",
+      "transferable_from_evidence_base": false
+    }
+  },
+  "notes": "Patch candidate 1.0.2 del solo componente. Il tag v1.0.1 resta immutabile. Nessun tag v1.0.2, publish, system RC o certificazione e dichiarato. La release richiede CI same-SHA del commit metadata e nuova qualifica cross-library."
+}
