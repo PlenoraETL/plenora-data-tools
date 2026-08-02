@@ -19,12 +19,8 @@ md-5.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
-# rayon: dipendenza di workspace gia' pinnata (=1.12.0, decisione D0), usata
-# per il merge sort parallelo stabile di `table.sort` (Fase post-2A).
+# Stable parallel merge sort for `table.sort`.
 rayon.workspace = true
-
-[dev-dependencies]
-proptest.workspace = true
 
 [lints]
 workspace = true

@@ -26,7 +26,6 @@
 //! Float64, `vertex_count` `UInt64`, `bounds` quattro colonne Float64
 //! `<geometry_column>_minx/miny/maxx/maxy`, `to_wkt` Utf8.
 
-
 pub const ENVELOPE_MAGIC: &[u8; 8] = b"PLNGEO3\0";
 pub const ENVELOPE_TRAILER_MAGIC: &[u8; 8] = b"GEOEND3\0";
 // Costanti dei metadati GeoArrow: casa unica in `arrow_adapter`
@@ -73,26 +72,28 @@ pub use super::envelope::{EnvelopeReader, EnvelopeWriter};
 pub use super::error::ArrowTransportError;
 pub use super::ipc::{decode_ipc, encode_ipc};
 pub use super::pair::{
-    GeometryDecodeError, PairArrowSchema, PairArrowSummary, PairOperation,
-    decode_geometry_batches, pair_arrow, preflight_decoded_bytes,
+    decode_geometry_batches, pair_arrow, preflight_decoded_bytes, GeometryDecodeError,
+    PairArrowSchema, PairArrowSummary, PairOperation,
 };
 pub use super::schema::{
     ArrowOperation, ArrowShape, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
     TransformArrowSummary,
 };
 pub use super::unary::{
-    OneToOnePrepared, one_to_one_batch_prepared, prepare_one_to_one, transform_arrow,
-    transform_batches,
+    one_to_one_batch_prepared, prepare_one_to_one, transform_arrow, transform_batches,
+    OneToOnePrepared,
 };
 
+#[cfg(test)]
+use super::protocol::MAX_ROWS;
+#[cfg(test)]
+use geozero::{CoordDimensions, ToWkb};
 #[cfg(test)]
 use plenora_core::arrow::array::{
     Array, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 #[cfg(test)]
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-#[cfg(test)]
-use geozero::{CoordDimensions, ToWkb};
 #[cfg(test)]
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 #[cfg(test)]
@@ -104,9 +105,7 @@ use plenora_kernels_geo::spatial_join::JoinPredicate;
 #[cfg(test)]
 use plenora_kernels_geo::topology::OverlayMode;
 #[cfg(test)]
-use plenora_kernels_geo::{Operation, geometry_from_wkb, transform_wkb};
-#[cfg(test)]
-use super::protocol::MAX_ROWS;
+use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
@@ -114,10 +113,10 @@ use super::protocol::MAX_ROWS;
 // confronto per bit e' il contratto verificato, non un'approssimazione.
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::*;
     use super::super::unary::{geo_metadata_json, geometry_output_field};
-    use plenora_core::arrow::array::Int64Array;
+    use super::*;
     use geo::{line_string, polygon, Area, CoordsIter, Geometry, Point};
+    use plenora_core::arrow::array::Int64Array;
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::Arc;
@@ -381,11 +380,15 @@ mod tests {
             .1;
         let canonical = canonical_block(field);
         assert_eq!(
-            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            canonical
+                .get("plenora.geometry.dimensions")
+                .map(String::as_str),
             Some("xy")
         );
         assert_eq!(
-            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            canonical
+                .get("plenora.geometry.crs_resolution")
+                .map(String::as_str),
             Some("resolved")
         );
         assert_eq!(
@@ -393,7 +396,9 @@ mod tests {
             Some(CRS)
         );
         assert_eq!(
-            canonical.get("plenora.geometry.axis_order").map(String::as_str),
+            canonical
+                .get("plenora.geometry.axis_order")
+                .map(String::as_str),
             Some("unknown")
         );
         // encoding non dichiarato dal trasporto (B1.4) e tipi mai inventati
@@ -403,7 +408,10 @@ mod tests {
         assert!(!canonical.contains_key("plenora.geometry.types_declaration"));
         // Doppia emissione: le chiavi GeoArrow standard restano invariate.
         assert_eq!(
-            field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+            field
+                .metadata()
+                .get(GEOARROW_EXTENSION_KEY)
+                .map(String::as_str),
             Some(GEOARROW_WKB_EXTENSION)
         );
         assert!(field.metadata().contains_key(GEO_METADATA_KEY));
@@ -423,7 +431,7 @@ mod tests {
         use plenora_core::contract::{ContractCrs, FieldId, GeometryColumnContract};
         use plenora_core::crs::{CrsKind, ResolvedCrs};
         use plenora_kernels_geo::arrow_adapter::{
-            GeometryMetadataDetails, canonical_geometry_metadata,
+            canonical_geometry_metadata, GeometryMetadataDetails,
         };
 
         let square = square_wkb(4.0);
@@ -497,11 +505,15 @@ mod tests {
             .1;
         let canonical = canonical_block(field);
         assert_eq!(
-            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            canonical
+                .get("plenora.geometry.dimensions")
+                .map(String::as_str),
             Some("xy")
         );
         assert_eq!(
-            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            canonical
+                .get("plenora.geometry.crs_resolution")
+                .map(String::as_str),
             Some("resolved")
         );
         assert_eq!(
@@ -540,11 +552,15 @@ mod tests {
             .1;
         let canonical = canonical_block(field);
         assert_eq!(
-            canonical.get("plenora.geometry.crs_resolution").map(String::as_str),
+            canonical
+                .get("plenora.geometry.crs_resolution")
+                .map(String::as_str),
             Some("missing")
         );
         assert_eq!(
-            canonical.get("plenora.geometry.dimensions").map(String::as_str),
+            canonical
+                .get("plenora.geometry.dimensions")
+                .map(String::as_str),
             Some("unknown")
         );
         assert!(!canonical.contains_key("plenora.geometry.crs_id"));
@@ -563,18 +579,12 @@ mod tests {
             GEO_METADATA_KEY.to_owned(),
             r#"{"crs":"EPSG:4326","dimensions":"xy"}"#.to_owned(),
         );
-        field_metadata.insert(
-            "plenora.geometry.dimensions".to_owned(),
-            "xy".to_owned(),
-        );
+        field_metadata.insert("plenora.geometry.dimensions".to_owned(), "xy".to_owned());
         field_metadata.insert(
             "plenora.geometry.crs_resolution".to_owned(),
             "declared_unresolved".to_owned(),
         );
-        field_metadata.insert(
-            "plenora.geometry.crs_id".to_owned(),
-            "EPSG:4326".to_owned(),
-        );
+        field_metadata.insert("plenora.geometry.crs_id".to_owned(), "EPSG:4326".to_owned());
         field_metadata.insert(
             "plenora.geometry.crs_definition".to_owned(),
             "LOCAL_CS[\"fixture\"]".to_owned(),
@@ -912,8 +922,8 @@ mod tests {
             (ArrowOperation::Length, 7.0),
             (ArrowOperation::Perimeter, 7.0),
         ] {
-            let output =
-                run(&arrow_schema(2, operation), &input).unwrap_or_else(|_| panic!("{}", operation.name()));
+            let output = run(&arrow_schema(2, operation), &input)
+                .unwrap_or_else(|_| panic!("{}", operation.name()));
             let (_, batch, index) = single_cell_output(&output, operation.name());
             let values = batch
                 .column(index)
@@ -1393,7 +1403,10 @@ mod tests {
         // Il campo di output dichiara anche la dimensionalita' (B1.1).
         let field = geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("field");
         let geo: serde_json::Value = serde_json::from_str(
-            field.metadata().get(GEO_METADATA_KEY).expect("geo metadata"),
+            field
+                .metadata()
+                .get(GEO_METADATA_KEY)
+                .expect("geo metadata"),
         )
         .expect("geo JSON");
         assert_eq!(
@@ -1402,14 +1415,11 @@ mod tests {
         );
         assert_eq!(
             field.metadata().get(GEO_METADATA_KEY).map(String::as_str),
-            plenora_kernels_geo::arrow_adapter::geometry_output_field(
-                DEFAULT_GEOMETRY_COLUMN,
-                CRS
-            )
-            .expect("adapter field")
-            .metadata()
-            .get(GEO_METADATA_KEY)
-            .map(String::as_str)
+            plenora_kernels_geo::arrow_adapter::geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS)
+                .expect("adapter field")
+                .metadata()
+                .get(GEO_METADATA_KEY)
+                .map(String::as_str)
         );
     }
 
@@ -2419,8 +2429,8 @@ mod tests {
 
         let run_op = |operation: PairOperation| {
             let schema = pair_schema(operation, 4, 4);
-            let output = run_pair(&schema, &left, &right)
-                .unwrap_or_else(|_| panic!("{}", operation.name()));
+            let output =
+                run_pair(&schema, &left, &right).unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
             let cells = batches[0]
                 .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
@@ -2465,7 +2475,8 @@ mod tests {
 
         // row_count non allineati: fail-closed.
         let mismatched_right = side_envelope(&[Some(&overlapping_b)]);
-        let schema = pair_schema(PairOperation::Intersection, 4, 1);
+        let mut schema = pair_schema(PairOperation::Intersection, 4, 1);
+        schema.max_output_rows = Some(0);
         assert!(matches!(
             run_pair(&schema, &left, &mismatched_right),
             Err(ArrowTransportError::SideLengthMismatch { left: 4, right: 1 })
@@ -2981,7 +2992,9 @@ mod tests {
             collection.push(1);
             collection.extend_from_slice(&2_u32.to_le_bytes());
             collection.extend_from_slice(
-                &u32::try_from(ring.len()).expect("fixture: anello sotto u32::MAX").to_le_bytes(),
+                &u32::try_from(ring.len())
+                    .expect("fixture: anello sotto u32::MAX")
+                    .to_le_bytes(),
             );
             for (x, y) in ring {
                 collection.extend_from_slice(&x.to_le_bytes());
@@ -3154,8 +3167,8 @@ mod tests {
             (PairOperation::Bearing, "bearing", 332.2, 0.05),
         ] {
             let schema = pair_schema(operation, 2, 2);
-            let output = run_pair(&schema, &left, &right)
-                .unwrap_or_else(|_| panic!("{}", operation.name()));
+            let output =
+                run_pair(&schema, &left, &right).unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
             let values = batches[0]
                 .column(out_schema.index_of(column).unwrap())

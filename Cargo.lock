@@ -994,7 +994,6 @@ dependencies = [
  "rstar",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.19",
  "wkt",
 ]
@@ -1008,7 +1007,6 @@ dependencies = [
  "md-5",
  "num-traits",
  "plenora-core",
- "proptest",
  "rayon",
  "regex",
  "serde",

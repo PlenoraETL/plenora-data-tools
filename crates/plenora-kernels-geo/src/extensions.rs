@@ -53,20 +53,7 @@ fn u64_len(len: usize) -> Result<u64, ExtensionError> {
 }
 
 /// Nome OGC del tipo, come esposto da `geometry_accessors`.
-const fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
-    match geometry {
-        Geometry::Point(_) => "Point",
-        Geometry::Line(_) => "Line",
-        Geometry::LineString(_) => "LineString",
-        Geometry::Polygon(_) => "Polygon",
-        Geometry::MultiPoint(_) => "MultiPoint",
-        Geometry::MultiLineString(_) => "MultiLineString",
-        Geometry::MultiPolygon(_) => "MultiPolygon",
-        Geometry::GeometryCollection(_) => "GeometryCollection",
-        Geometry::Rect(_) => "Rect",
-        Geometry::Triangle(_) => "Triangle",
-    }
-}
+use crate::geometry_type_name;
 
 // ---------------------------------------------------------------------------
 // geo.from_wkt

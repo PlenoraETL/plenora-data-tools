@@ -580,6 +580,17 @@ impl ExecState {
         total.files = total.files.saturating_add(delta.files);
     }
 
+    /// Accumula le righe prodotte da un nodo senza clonare la chiave dopo il
+    /// primo batch. Il conteggio input viene aggiornato da `check_expansion`.
+    fn add_node_rows_out(&self, node_id: &str, rows_out: u64) {
+        let mut rows = self.node_rows.borrow_mut();
+        if let Some(entry) = rows.get_mut(node_id) {
+            entry.1 += rows_out;
+        } else {
+            rows.entry(node_id.to_owned()).or_insert((0, 0)).1 += rows_out;
+        }
+    }
+
     /// Un batch e' ricaduto dal runner fuso geo al percorso non fuso
     /// (ADR-0012 D12.7): contatore dedicato, mai silenzioso — nessun errore
     /// nuovo, il risultato resta identico.
@@ -1796,9 +1807,7 @@ fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
         entry.0 += rows;
         entry.1 += 1;
     } else {
-        let entry = counts.entry(edge.to_owned()).or_insert((0, 0));
-        entry.0 += rows;
-        entry.1 += 1;
+        counts.insert(edge.to_owned(), (rows, 1));
     }
     let entry = &counts[edge];
     let limits = &state.plan.limits();
@@ -2183,14 +2192,7 @@ fn run_streaming_chain(
         } else {
             0
         };
-        {
-            let mut rows = state.node_rows.borrow_mut();
-            if let Some(entry) = rows.get_mut(&kernel.node_id) {
-                entry.1 += rows_out;
-            } else {
-                rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
-            }
-        }
+        state.add_node_rows_out(&kernel.node_id, rows_out);
         check_expansion(state, kernel, rows_in)?;
         // Limiti d'arco sugli archi interni e sull'arco di uscita del
         // segmento, a meno che non sia l'output del piano (li valgono
@@ -2307,14 +2309,7 @@ impl FusedAttempt<'_> {
                 || finished.saturating_duration_since(edges[index]),
                 |next| next.saturating_duration_since(edges[index]),
             );
-            {
-                let mut node_rows = self.state.node_rows.borrow_mut();
-                if let Some(entry) = node_rows.get_mut(&kernel.node_id) {
-                    entry.1 += self.rows;
-                } else {
-                    node_rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += self.rows;
-                }
-            }
+            self.state.add_node_rows_out(&kernel.node_id, self.rows);
             check_expansion(self.state, kernel, self.rows)?;
             match materialized {
                 Some(batch) => {
@@ -3300,14 +3295,7 @@ fn run_blocking(
         .reserve(output.get_array_memory_size() as u64, &kernel.node_id)?;
     drop(full_lease);
     let rows_out = output.num_rows() as u64;
-    {
-        let mut rows = state.node_rows.borrow_mut();
-        if let Some(entry) = rows.get_mut(&kernel.node_id) {
-            entry.1 += rows_out;
-        } else {
-            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
-        }
-    }
+    state.add_node_rows_out(&kernel.node_id, rows_out);
     check_expansion(state, kernel, rows_in)?;
     if segment.output_edge != plan.output_edge() {
         check_edge_batch(state, &kernel.node_id, &output)?;
@@ -3429,14 +3417,7 @@ fn run_binary_blocking(
     drop(left_lease);
     drop(right_lease);
     let rows_out = output.num_rows() as u64;
-    {
-        let mut rows = state.node_rows.borrow_mut();
-        if let Some(entry) = rows.get_mut(&kernel.node_id) {
-            entry.1 += rows_out;
-        } else {
-            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
-        }
-    }
+    state.add_node_rows_out(&kernel.node_id, rows_out);
     // ADR 6: per le operazioni binarie il runtime calcola tutte le metriche
     // di espansione e applica il vincolo vincolante dichiarato in catalogo.
     check_join_expansion(state, kernel, left_rows, right_rows, rows_out)?;
@@ -3656,14 +3637,7 @@ fn run_geo_binary_blocking(
     drop(right_decoded_lease);
     drop(left_lease);
     let rows_out = output.num_rows() as u64;
-    {
-        let mut rows = state.node_rows.borrow_mut();
-        if let Some(entry) = rows.get_mut(&kernel.node_id) {
-            entry.1 += rows_out;
-        } else {
-            rows.entry(kernel.node_id.clone()).or_insert((0, 0)).1 += rows_out;
-        }
-    }
+    state.add_node_rows_out(&kernel.node_id, rows_out);
     // ADR 6: il vincolo relativo vincolante di catalogo si applica come nel
     // ramo tabellare; il tetto assoluto D14.6 e' gia' stato fatto rispettare
     // dal kernel (`max_pairs`/`max_results` risolti in prepare dai limiti

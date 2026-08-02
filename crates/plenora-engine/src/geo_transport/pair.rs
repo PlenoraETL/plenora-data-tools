@@ -3,12 +3,14 @@
 
 use std::io::{Read, Write};
 
+use geo::{CoordsIter, Geometry};
 use plenora_core::arrow::array::{BinaryArray, Float64Array, RecordBatch, UInt64Array};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use geo::{CoordsIter, Geometry};
 use rayon::prelude::*;
 use serde::Deserialize;
 
+use super::pair_protocol::MAX_PAIRS;
+use super::protocol::MAX_ROWS;
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, minimum_distances_validated, nearest_matches_validated,
     within_indexes_validated,
@@ -19,17 +21,15 @@ use plenora_kernels_geo::extended::{
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::extended_algorithms::split_line;
 use plenora_kernels_geo::extended_algorithms::{frechet_distance, geodesic_bearing_degrees};
+use plenora_kernels_geo::geometry_from_wkb;
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::geos_backend::split_polygon_by_linework;
-use super::pair_protocol::MAX_PAIRS;
 use plenora_kernels_geo::predicates::{evaluate_validated as evaluate_predicate, SpatialPredicate};
-use super::protocol::MAX_ROWS;
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
 use plenora_kernels_geo::topology::{
     boolean_operation_validated, clip_to_mask_validated, polygon_overlay_validated,
     BooleanOperation, OverlayMode,
 };
-use plenora_kernels_geo::geometry_from_wkb;
 
 use super::envelope::{EnvelopeReader, EnvelopeWriter};
 use super::error::ArrowTransportError;
@@ -39,13 +39,15 @@ use super::transport::{
     RIGHT_INDEX_COLUMN, WITHIN_COLUMN,
 };
 #[cfg(feature = "geos-backend")]
-use super::transport::{MAX_CELL_COORDINATES, MAX_NODING_WORK, MAX_SPLIT_WORK, PARENT_INDEX_COLUMN};
+use super::transport::{
+    MAX_CELL_COORDINATES, MAX_NODING_WORK, MAX_SPLIT_WORK, PARENT_INDEX_COLUMN,
+};
+#[cfg(feature = "geos-backend")]
+use super::unary::geometry_type_name;
 use super::unary::{
     batch_geometry_cells, canonical_legacy_output, encode_geometry, expect_line_string,
     expect_point, geometry_column_index, geometry_output_field, spatial_predicate_name,
 };
-#[cfg(feature = "geos-backend")]
-use super::unary::geometry_type_name;
 
 // --- Forma binary + lineage (Fase C) ---------------------------------------
 
@@ -300,7 +302,10 @@ pub fn validate_pair_parameters(
             ("max_results", values.max_results.is_some()),
             ("max_distance", values.max_distance.is_some()),
             ("spatial_predicate", values.spatial_predicate.is_some()),
-            ("max_coordinate_pairs", values.max_coordinate_pairs.is_some()),
+            (
+                "max_coordinate_pairs",
+                values.max_coordinate_pairs.is_some(),
+            ),
             ("tolerance", values.tolerance.is_some()),
         ];
         present.retain(|(_, is_present)| *is_present);
@@ -425,6 +430,26 @@ pub struct PairArrowSummary {
 /// Lato di una coppia decodificato: schema, batch IPC e geometrie validate.
 type DecodedSide = (SchemaRef, Vec<RecordBatch>, Vec<Option<Geometry<f64>>>);
 
+const fn validate_aligned_pair_rows(
+    left_rows: u64,
+    right_rows: u64,
+    limit: u64,
+) -> Result<(), ArrowTransportError> {
+    if left_rows != right_rows {
+        return Err(ArrowTransportError::SideLengthMismatch {
+            left: left_rows,
+            right: right_rows,
+        });
+    }
+    if left_rows > limit {
+        return Err(ArrowTransportError::OutputRowsExceeded {
+            actual: left_rows,
+            limit,
+        });
+    }
+    Ok(())
+}
+
 /// Errore di decodifica di una colonna geometria con posizione strutturata
 /// (ADR-0014 D14.5).
 ///
@@ -467,8 +492,8 @@ fn decode_geometry_side(
     let geometry_index = geometry_column_index(&schema, geometry_column)?;
     // Trasporto v3 invariato (perimetro ADR-0014): la posizione strutturata
     // della cella e' scartata qui, l'errore propaga nel testo storico.
-    let geometries = decode_geometry_batches(&schema, &batches, geometry_index)
-        .map_err(|error| error.source)?;
+    let geometries =
+        decode_geometry_batches(&schema, &batches, geometry_index).map_err(|error| error.source)?;
     Ok((schema, batches, geometries))
 }
 
@@ -520,20 +545,20 @@ pub fn decode_geometry_batches(
         })?
         .name()
         .clone();
-    let mut geometries = Vec::with_capacity(
-        usize::try_from(rows).map_err(|_| GeometryDecodeError {
+    let mut geometries =
+        Vec::with_capacity(usize::try_from(rows).map_err(|_| GeometryDecodeError {
             row_index: None,
             source: ArrowTransportError::TooManyRows(rows),
-        })?,
-    );
+        })?);
     let mut row_index = 0_u64;
     for batch in batches {
-        let cells = batch_geometry_cells(batch, geometry_index, &geometry_column).map_err(
-            |source| GeometryDecodeError {
-                row_index: None,
-                source,
-            },
-        )?;
+        let cells =
+            batch_geometry_cells(batch, geometry_index, &geometry_column).map_err(|source| {
+                GeometryDecodeError {
+                    row_index: None,
+                    source,
+                }
+            })?;
         for cell in cells {
             match cell {
                 None => geometries.push(None),
@@ -810,9 +835,9 @@ pub fn pair_arrow(
             let distances = minimum_distances_validated(
                 &left,
                 &right,
-                schema
-                    .max_comparisons
-                    .ok_or(ArrowTransportError::Internal("max_comparisons validato assente"))?,
+                schema.max_comparisons.ok_or(ArrowTransportError::Internal(
+                    "max_comparisons validato assente",
+                ))?,
             )?;
             if left_rows > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
@@ -851,12 +876,12 @@ pub fn pair_arrow(
                 &left,
                 &right,
                 schema.max_distance,
-                schema
-                    .max_comparisons
-                    .ok_or(ArrowTransportError::Internal("max_comparisons validato assente"))?,
-                schema
-                    .max_results
-                    .ok_or(ArrowTransportError::Internal("max_results validato assente"))?,
+                schema.max_comparisons.ok_or(ArrowTransportError::Internal(
+                    "max_comparisons validato assente",
+                ))?,
+                schema.max_results.ok_or(ArrowTransportError::Internal(
+                    "max_results validato assente",
+                ))?,
             )?;
             if matches.len() as u64 > limit {
                 return Err(ArrowTransportError::OutputRowsExceeded {
@@ -906,12 +931,7 @@ pub fn pair_arrow(
             ));
             let mut encoded: Vec<Option<Vec<u8>>> = Vec::with_capacity(clipped.len());
             for geometry in &clipped {
-                encoded.push(
-                    geometry
-                        .as_ref()
-                        .map(encode_geometry)
-                        .transpose()?,
-                );
+                encoded.push(geometry.as_ref().map(encode_geometry).transpose()?);
             }
             let mut out_batches = Vec::with_capacity(left_batches.len());
             let mut cursor = 0_usize;
@@ -953,9 +973,9 @@ pub fn pair_arrow(
             let pieces = polygon_overlay_validated(
                 &left_values,
                 &right_values,
-                schema
-                    .overlay_mode
-                    .ok_or(ArrowTransportError::Internal("overlay_mode validato assente"))?,
+                schema.overlay_mode.ok_or(ArrowTransportError::Internal(
+                    "overlay_mode validato assente",
+                ))?,
                 schema
                     .max_pairs
                     .ok_or(ArrowTransportError::Internal("max_pairs validato assente"))?,
@@ -985,15 +1005,19 @@ pub fn pair_arrow(
                 // totale; un u64 che non entra in usize (target a 32 bit)
                 // e' un difetto del kernel, non un valore da troncare.
                 left_index.push(match piece.left {
-                    Some(index) => Some(left_positions[usize::try_from(index).map_err(
-                        |_| ArrowTransportError::Internal("indice overlay left oltre usize"),
-                    )?]),
+                    Some(index) => Some(
+                        left_positions[usize::try_from(index).map_err(|_| {
+                            ArrowTransportError::Internal("indice overlay left oltre usize")
+                        })?],
+                    ),
                     None => None,
                 });
                 right_index.push(match piece.right {
-                    Some(index) => Some(right_positions[usize::try_from(index).map_err(
-                        |_| ArrowTransportError::Internal("indice overlay right oltre usize"),
-                    )?]),
+                    Some(index) => Some(
+                        right_positions[usize::try_from(index).map_err(|_| {
+                            ArrowTransportError::Internal("indice overlay right oltre usize")
+                        })?],
+                    ),
                     None => None,
                 });
             }
@@ -1073,21 +1097,12 @@ pub fn pair_arrow(
         | PairOperation::Union
         | PairOperation::Difference
         | PairOperation::SymmetricDifference) => {
-            if left_rows != right_rows {
-                return Err(ArrowTransportError::SideLengthMismatch {
-                    left: left_rows,
-                    right: right_rows,
-                });
-            }
-            if left_rows > limit {
-                return Err(ArrowTransportError::OutputRowsExceeded {
-                    actual: left_rows,
-                    limit,
-                });
-            }
+            validate_aligned_pair_rows(left_rows, right_rows, limit)?;
             let kernel = operation
                 .boolean_kernel()
-                .ok_or(ArrowTransportError::Internal("booleana pairwise senza kernel"))?;
+                .ok_or(ArrowTransportError::Internal(
+                    "booleana pairwise senza kernel",
+                ))?;
             // righe indipendenti: parallelo con ordine deterministico.
             // ADR-0001: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato), mai la
@@ -1098,7 +1113,8 @@ pub fn pair_arrow(
                 .map(|(left_geometry, right_geometry)| {
                     match (left_geometry, right_geometry) {
                         (Some(left_geometry), Some(right_geometry)) => {
-                            let result = boolean_operation_validated(left_geometry, right_geometry, kernel)?;
+                            let result =
+                                boolean_operation_validated(left_geometry, right_geometry, kernel)?;
                             // EMPTY -> null, convenzione coerente con `clip`.
                             if result.coords_count() == 0 {
                                 Ok(None)
@@ -1110,8 +1126,9 @@ pub fn pair_arrow(
                     }
                 })
                 .collect();
-            let values: Vec<Option<Vec<u8>>> =
-                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
+            let values: Vec<Option<Vec<u8>>> = results
+                .into_iter()
+                .collect::<Result<_, ArrowTransportError>>()?;
             let output_crs = schema
                 .left_crs
                 .as_deref()
@@ -1125,37 +1142,29 @@ pub fn pair_arrow(
             )?
         }
         PairOperation::Predicate => {
-            if left_rows != right_rows {
-                return Err(ArrowTransportError::SideLengthMismatch {
-                    left: left_rows,
-                    right: right_rows,
-                });
-            }
-            if left_rows > limit {
-                return Err(ArrowTransportError::OutputRowsExceeded {
-                    actual: left_rows,
-                    limit,
-                });
-            }
+            validate_aligned_pair_rows(left_rows, right_rows, limit)?;
             let predicate = schema
                 .spatial_predicate
-                .ok_or(ArrowTransportError::Internal("spatial_predicate validato assente"))?;
+                .ok_or(ArrowTransportError::Internal(
+                    "spatial_predicate validato assente",
+                ))?;
             // ADR-0001: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
-            let results: Vec<Result<Option<bool>, ArrowTransportError>> = left
-                .par_iter()
-                .zip(right.par_iter())
-                .map(|(left_geometry, right_geometry)| {
-                    Ok(match (left_geometry, right_geometry) {
-                        (Some(left_geometry), Some(right_geometry)) => Some(
-                            evaluate_predicate(left_geometry, right_geometry, predicate)?,
-                        ),
-                        _ => None,
+            let results: Vec<Result<Option<bool>, ArrowTransportError>> =
+                left.par_iter()
+                    .zip(right.par_iter())
+                    .map(|(left_geometry, right_geometry)| {
+                        Ok(match (left_geometry, right_geometry) {
+                            (Some(left_geometry), Some(right_geometry)) => Some(
+                                evaluate_predicate(left_geometry, right_geometry, predicate)?,
+                            ),
+                            _ => None,
+                        })
                     })
-                })
-                .collect();
-            let flags: Vec<Option<bool>> =
-                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
+                    .collect();
+            let flags: Vec<Option<bool>> = results
+                .into_iter()
+                .collect::<Result<_, ArrowTransportError>>()?;
             let column_name = format!("predicate_{}", spatial_predicate_name(predicate));
             append_column_batches(
                 &left_schema,
@@ -1165,21 +1174,12 @@ pub fn pair_arrow(
             )?
         }
         PairOperation::HausdorffDistance | PairOperation::FrechetDistance => {
-            if left_rows != right_rows {
-                return Err(ArrowTransportError::SideLengthMismatch {
-                    left: left_rows,
-                    right: right_rows,
-                });
-            }
-            if left_rows > limit {
-                return Err(ArrowTransportError::OutputRowsExceeded {
-                    actual: left_rows,
-                    limit,
-                });
-            }
+            validate_aligned_pair_rows(left_rows, right_rows, limit)?;
             let max_pairs = schema
                 .max_coordinate_pairs
-                .ok_or(ArrowTransportError::Internal("max_coordinate_pairs validato assente"))?;
+                .ok_or(ArrowTransportError::Internal(
+                    "max_coordinate_pairs validato assente",
+                ))?;
             // ADR-0001: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
             let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
@@ -1189,7 +1189,11 @@ pub fn pair_arrow(
                     Ok(match (left_geometry, right_geometry) {
                         (Some(left_geometry), Some(right_geometry)) => {
                             if schema.operation == PairOperation::HausdorffDistance {
-                                hausdorff_distance_validated(left_geometry, right_geometry, max_pairs)?
+                                hausdorff_distance_validated(
+                                    left_geometry,
+                                    right_geometry,
+                                    max_pairs,
+                                )?
                             } else {
                                 let left_line =
                                     expect_line_string(left_geometry, schema.operation.name())?;
@@ -1202,8 +1206,9 @@ pub fn pair_arrow(
                     })
                 })
                 .collect();
-            let values: Vec<Option<f64>> =
-                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
+            let values: Vec<Option<f64>> = results
+                .into_iter()
+                .collect::<Result<_, ArrowTransportError>>()?;
             append_column_batches(
                 &left_schema,
                 &left_batches,
@@ -1214,18 +1219,7 @@ pub fn pair_arrow(
         PairOperation::HaversineDistance
         | PairOperation::GeodesicDistance
         | PairOperation::Bearing => {
-            if left_rows != right_rows {
-                return Err(ArrowTransportError::SideLengthMismatch {
-                    left: left_rows,
-                    right: right_rows,
-                });
-            }
-            if left_rows > limit {
-                return Err(ArrowTransportError::OutputRowsExceeded {
-                    actual: left_rows,
-                    limit,
-                });
-            }
+            validate_aligned_pair_rows(left_rows, right_rows, limit)?;
             // ADR-0001: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
             let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
@@ -1251,8 +1245,9 @@ pub fn pair_arrow(
                     })
                 })
                 .collect();
-            let values: Vec<Option<f64>> =
-                results.into_iter().collect::<Result<_, ArrowTransportError>>()?;
+            let values: Vec<Option<f64>> = results
+                .into_iter()
+                .collect::<Result<_, ArrowTransportError>>()?;
             append_column_batches(
                 &left_schema,
                 &left_batches,

@@ -986,6 +986,38 @@ fn row_limits_trigger_on_input_edge_and_output() {
 }
 
 #[test]
+fn edge_row_limit_accumulates_across_batches() {
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_rows_per_edge": 3},
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">=", "value": 0}},
+            {"id": "r", "op": "table.rename", "in": ["f"],
+             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
+        ],
+        "output": "r",
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            table_batch(&[1, 2], &["a", "b"]),
+            table_batch(&[3, 4], &["c", "d"]),
+        ],
+    );
+
+    let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("il secondo batch supera il limite cumulativo dell'arco");
+    let message = error.to_string();
+    assert!(message.contains("max_rows_per_edge"), "{message}");
+    assert!(message.contains("`f`"), "{message}");
+    assert!(message.contains("4 righe > 3"), "{message}");
+}
+
+#[test]
 fn expansion_factor_triggers_on_join() {
     // 3 righe left x 2 righe right con la stessa chiave: 6 righe in uscita,
     // base ADR 6 = left + right = 5 -> 6 > 5 x 1.0 scatta il limite.
@@ -2157,6 +2189,39 @@ fn geo_snap_subdivide_length_chain_expands_rows() {
     assert_eq!(metrics.nodes["s"].rows_out, 2);
     assert_eq!(metrics.nodes["d"].rows_in, 2);
     assert_eq!(metrics.nodes["d"].rows_out, 3);
+}
+
+#[test]
+fn unary_expansion_factor_accumulates_across_streaming_batches() {
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_expansion_factor": 1.4},
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "d", "op": "geo.subdivide", "in": ["main"],
+             "config": {"max_vertices": 4}},
+        ],
+        "output": "d",
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            geo_batch(&[0], &[None]),
+            geo_batch(&[1], &[Some(line_wkb(&reference_line()))]),
+        ],
+    );
+
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+    let error = output
+        .collect_batches()
+        .expect_err("il secondo batch supera il fattore cumulativo");
+    let message = error.to_string();
+    assert!(message.contains("max_expansion_factor"), "{message}");
+    assert!(message.contains("nodo `d`"), "{message}");
+    assert!(
+        message.contains("3 righe output > 1.4 x 2 righe input"),
+        "{message}"
+    );
 }
 
 #[test]
