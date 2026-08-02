@@ -119,6 +119,21 @@ pub(crate) fn invalid_wkb_structure(reason: &'static str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("struttura WKB non valida: {reason}"))
 }
 
+pub(crate) const fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
+    match geometry {
+        Geometry::Point(_) => "Point",
+        Geometry::Line(_) => "Line",
+        Geometry::LineString(_) => "LineString",
+        Geometry::Polygon(_) => "Polygon",
+        Geometry::MultiPoint(_) => "MultiPoint",
+        Geometry::MultiLineString(_) => "MultiLineString",
+        Geometry::MultiPolygon(_) => "MultiPolygon",
+        Geometry::GeometryCollection(_) => "GeometryCollection",
+        Geometry::Rect(_) => "Rect",
+        Geometry::Triangle(_) => "Triangle",
+    }
+}
+
 fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("geometria OGC non valida: {error}"))
 }
@@ -797,6 +812,57 @@ mod tests {
     /// la condizione e' identificata dal messaggio, preservato verbatim.
     fn is_contract_error(result: &Result<Geometry<f64>, PlenoraError>, message: &str) -> bool {
         matches!(result, Err(PlenoraError::InvalidPlan(reason)) if reason == message)
+    }
+
+    #[test]
+    fn geometry_type_name_covers_every_geo_variant() {
+        let variants = [
+            (Geometry::Point(Point::new(0.0, 0.0)), "Point"),
+            (
+                Geometry::Line(geo::Line::new((0.0, 0.0), (1.0, 1.0))),
+                "Line",
+            ),
+            (
+                Geometry::LineString(LineString::new(Vec::new())),
+                "LineString",
+            ),
+            (
+                Geometry::Polygon(geo::Polygon::new(LineString::new(Vec::new()), Vec::new())),
+                "Polygon",
+            ),
+            (
+                Geometry::MultiPoint(geo::MultiPoint::new(Vec::new())),
+                "MultiPoint",
+            ),
+            (
+                Geometry::MultiLineString(geo::MultiLineString::new(Vec::new())),
+                "MultiLineString",
+            ),
+            (
+                Geometry::MultiPolygon(geo::MultiPolygon::new(Vec::new())),
+                "MultiPolygon",
+            ),
+            (
+                Geometry::GeometryCollection(Vec::<Geometry<f64>>::new().into()),
+                "GeometryCollection",
+            ),
+            (
+                Geometry::Rect(geo::Rect::new((0.0, 0.0), (1.0, 1.0))),
+                "Rect",
+            ),
+            (
+                Geometry::Triangle(geo::Triangle::new(
+                    geo::Coord { x: 0.0, y: 0.0 },
+                    geo::Coord { x: 1.0, y: 0.0 },
+                    geo::Coord { x: 0.0, y: 1.0 },
+                )),
+                "Triangle",
+            ),
+        ];
+
+        for (geometry, expected) in variants {
+            assert_eq!(geometry_type_name(&geometry), expected);
+        }
     }
 
     #[test]

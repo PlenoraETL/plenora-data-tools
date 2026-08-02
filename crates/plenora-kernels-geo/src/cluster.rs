@@ -91,20 +91,7 @@ const fn check_min_points(min_points: usize) -> Result<(), ClusterError> {
     Ok(())
 }
 
-const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
-    match geometry {
-        Geometry::Point(_) => "Point",
-        Geometry::Line(_) => "Line",
-        Geometry::LineString(_) => "LineString",
-        Geometry::Polygon(_) => "Polygon",
-        Geometry::MultiPoint(_) => "MultiPoint",
-        Geometry::MultiLineString(_) => "MultiLineString",
-        Geometry::MultiPolygon(_) => "MultiPolygon",
-        Geometry::GeometryCollection(_) => "GeometryCollection",
-        Geometry::Rect(_) => "Rect",
-        Geometry::Triangle(_) => "Triangle",
-    }
-}
+use crate::geometry_type_name as geometry_name;
 
 /// Punto indicizzato per l'R-tree: la posizione originale viaggia con
 /// l'elemento, cosi' le liste di vicini si riordinano per indice.

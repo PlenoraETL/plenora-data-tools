@@ -48,20 +48,7 @@ pub enum ExtendedAlgorithmError {
     Internal(&'static str),
 }
 
-const fn geometry_type(geometry: &Geometry<f64>) -> &'static str {
-    match geometry {
-        Geometry::Point(_) => "Point",
-        Geometry::Line(_) => "Line",
-        Geometry::LineString(_) => "LineString",
-        Geometry::Polygon(_) => "Polygon",
-        Geometry::MultiPoint(_) => "MultiPoint",
-        Geometry::MultiLineString(_) => "MultiLineString",
-        Geometry::MultiPolygon(_) => "MultiPolygon",
-        Geometry::GeometryCollection(_) => "GeometryCollection",
-        Geometry::Rect(_) => "Rect",
-        Geometry::Triangle(_) => "Triangle",
-    }
-}
+use crate::geometry_type_name as geometry_type;
 
 fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedAlgorithmError> {
     if geometry

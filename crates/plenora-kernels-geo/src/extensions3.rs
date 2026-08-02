@@ -124,20 +124,7 @@ fn u64_index(index: usize) -> Result<u64, ExtensionV3Error> {
     u64::try_from(index).map_err(|_| ExtensionV3Error::IndexOverflow)
 }
 
-const fn geometry_name(geometry: &Geometry<f64>) -> &'static str {
-    match geometry {
-        Geometry::Point(_) => "Point",
-        Geometry::Line(_) => "Line",
-        Geometry::LineString(_) => "LineString",
-        Geometry::Polygon(_) => "Polygon",
-        Geometry::MultiPoint(_) => "MultiPoint",
-        Geometry::MultiLineString(_) => "MultiLineString",
-        Geometry::MultiPolygon(_) => "MultiPolygon",
-        Geometry::GeometryCollection(_) => "GeometryCollection",
-        Geometry::Rect(_) => "Rect",
-        Geometry::Triangle(_) => "Triangle",
-    }
-}
+use crate::geometry_type_name as geometry_name;
 
 /// Elemento di copertura preparato: multipoligono validato + envelope.
 struct CoverageElement {
