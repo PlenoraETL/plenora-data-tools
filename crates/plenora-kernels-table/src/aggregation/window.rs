@@ -208,7 +208,9 @@ pub struct WindowFunction {
 ///   `replace_or_append`.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
-        return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "offset deve essere positivo".into(),
+        ));
     }
     if matches!(config.function, WindowKind::Ntile) {
         if config.buckets.is_none_or(|buckets| buckets == 0) {
@@ -254,7 +256,10 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         // effetti osservabili).
         let needs_rank = matches!(
             config.function,
-            WindowKind::Rank | WindowKind::DenseRank | WindowKind::PercentRank | WindowKind::CumeDist
+            WindowKind::Rank
+                | WindowKind::DenseRank
+                | WindowKind::PercentRank
+                | WindowKind::CumeDist
         );
         let mut sorted = Vec::new();
         let mut dense = Vec::new();

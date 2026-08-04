@@ -46,10 +46,9 @@ pub(in crate::analyze) fn analyze_melt(
         .id_columns
         .iter()
         .map(|name| {
-            input
-                .schema
-                .index_of(name)
-                .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
+            input.schema.index_of(name).map_err(|_| {
+                PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}"))
+            })
         })
         .collect::<Result<_>>()?;
     let value_indices: Vec<usize> = if config.value_columns.is_empty() {
@@ -178,7 +177,9 @@ pub(in crate::analyze) fn analyze_explode(
         return contract_error(op, "explode richiede una colonna List");
     };
     let element_type = child.data_type().clone();
-    let output_name = config.output_column.unwrap_or_else(|| config.column.clone());
+    let output_name = config
+        .output_column
+        .unwrap_or_else(|| config.column.clone());
     check_output_name(op, &output_name)?;
     let mut output = analyze_append(input, fields, &[(output_name, element_type, true)])?;
     // Le righe cambiano (una per elemento); l'espansione puo' rompere
@@ -196,10 +197,9 @@ pub(in crate::analyze) fn analyze_unnest(
     let config: reshape::Unnest = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
-    let index = input
-        .schema
-        .index_of(&config.column)
-        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {}", config.column)))?;
+    let index = input.schema.index_of(&config.column).map_err(|_| {
+        PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {}", config.column))
+    })?;
     let field = input.schema.field(index);
     let DataType::Struct(children) = field.data_type() else {
         return contract_error(op, "unnest richiede una colonna Struct");
@@ -231,7 +231,11 @@ pub(in crate::analyze) fn analyze_unnest(
         fields_out.push(child.as_ref().clone().with_name(name).with_nullable(true));
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
@@ -270,9 +274,7 @@ pub(in crate::analyze) fn analyze_table_diff(
             .fields()
             .iter()
             .map(|field| field.name().clone())
-            .filter(|name| {
-                !config.left_keys.contains(name) && right.schema.index_of(name).is_ok()
-            })
+            .filter(|name| !config.left_keys.contains(name) && right.schema.index_of(name).is_ok())
             .collect()
     } else {
         config.compare_columns.clone()
@@ -302,7 +304,9 @@ pub(in crate::analyze) fn analyze_table_diff(
     // delle due sorgenti si fondono invece con la merge-policy dei join.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let emitted = |name: &str| config.left_keys.contains(&name.to_owned()) || compare.iter().any(|c| c == name);
+    let emitted = |name: &str| {
+        config.left_keys.contains(&name.to_owned()) || compare.iter().any(|c| c == name)
+    };
     let left_geometry = left
         .geometries
         .first()
@@ -320,4 +324,3 @@ pub(in crate::analyze) fn analyze_table_diff(
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     finish(schema, geometry, None, ContractProperties::default())
 }
-

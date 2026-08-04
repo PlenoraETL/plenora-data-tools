@@ -193,9 +193,7 @@ fn retryable_persist_error(error: &io::Error) -> bool {
 /// transitori ([`retryable_persist_error`]). La closure e' il punto di
 /// iniezione dei test: in produzione avvolge `persist_noclobber`,
 /// recuperando il tempfile da `PersistError` a ogni tentativo fallito.
-fn persist_with_retry(
-    mut persist: impl FnMut() -> Result<(), io::Error>,
-) -> Result<(), io::Error> {
+fn persist_with_retry(mut persist: impl FnMut() -> Result<(), io::Error>) -> Result<(), io::Error> {
     let mut backoff = PERSIST_INITIAL_BACKOFF;
     let mut attempt = 1;
     loop {
@@ -745,7 +743,10 @@ mod tests {
         assert_eq!(error.phase_tag(), Some(ErrorPhase::Commit));
         assert_eq!(
             error.to_string(),
-            format!("contract violation: output gia' esistente: {}", destination.display()),
+            format!(
+                "contract violation: output gia' esistente: {}",
+                destination.display()
+            ),
             "testo Display invariato"
         );
         assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
@@ -849,8 +850,7 @@ mod tests {
             "right_row_count": 0
         });
         // left_crs assente.
-        let schema: PairArrowSchema =
-            serde_json::from_value(base.clone()).expect("schema");
+        let schema: PairArrowSchema = serde_json::from_value(base.clone()).expect("schema");
         let result = validate_pair_arrow_crs(&schema);
         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
         // right_crs assente (left presente).

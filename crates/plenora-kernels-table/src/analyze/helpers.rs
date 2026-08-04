@@ -27,7 +27,10 @@ pub(in crate::analyze) fn typed<T: DeserializeOwned>(op: &str, config: &Value) -
 }
 
 pub(in crate::analyze) fn contract_error<T>(op: &str, message: impl Into<String>) -> Result<T> {
-    Err(PlenoraError::InvalidPlan(format!("{op}: {}", message.into())))
+    Err(PlenoraError::InvalidPlan(format!(
+        "{op}: {}",
+        message.into()
+    )))
 }
 
 pub(in crate::analyze) fn unsupported<T>(op: &str, message: impl Into<String>) -> Result<T> {
@@ -38,7 +41,11 @@ pub(in crate::analyze) fn unsupported<T>(op: &str, message: impl Into<String>) -
 }
 
 /// Campo per nome, con errore puntuale se assente (replica `column_index`).
-pub(in crate::analyze) fn field_of<'a>(op: &str, input: &'a DataContract, name: &str) -> Result<&'a Field> {
+pub(in crate::analyze) fn field_of<'a>(
+    op: &str,
+    input: &'a DataContract,
+    name: &str,
+) -> Result<&'a Field> {
     input
         .schema
         .field_with_name(name)
@@ -78,7 +85,11 @@ const fn is_numeric(data_type: &DataType) -> bool {
     )
 }
 
-pub(in crate::analyze) fn require_scalar_string(op: &str, input: &DataContract, name: &str) -> Result<()> {
+pub(in crate::analyze) fn require_scalar_string(
+    op: &str,
+    input: &DataContract,
+    name: &str,
+) -> Result<()> {
     let field = field_of(op, input, name)?;
     if is_scalar_string(field.data_type()) {
         Ok(())
@@ -93,7 +104,11 @@ pub(in crate::analyze) fn require_scalar_string(op: &str, input: &DataContract, 
     }
 }
 
-pub(in crate::analyze) fn require_numeric(op: &str, input: &DataContract, name: &str) -> Result<()> {
+pub(in crate::analyze) fn require_numeric(
+    op: &str,
+    input: &DataContract,
+    name: &str,
+) -> Result<()> {
     let field = field_of(op, input, name)?;
     if is_numeric(field.data_type()) {
         Ok(())
@@ -124,7 +139,11 @@ pub(in crate::analyze) fn check_output_name(op: &str, name: &str) -> Result<()> 
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`
 /// (i cast riflettono volutamente la sua semantica).
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 pub(in crate::analyze) fn round_scaled(rows: u64, fraction: f64) -> u64 {
     ((rows as f64) * fraction).round().min(rows as f64) as u64
 }
@@ -259,7 +278,10 @@ pub(in crate::analyze) fn merge_schema_metadata(
 
 /// Merge N-ario per `concat`: come [`merge_schema_metadata`] sulle
 /// sorgenti in ordine di dichiarazione.
-pub(in crate::analyze) fn merge_schema_metadata_many(op: &str, inputs: &[DataContract]) -> Result<HashMap<String, String>> {
+pub(in crate::analyze) fn merge_schema_metadata_many(
+    op: &str,
+    inputs: &[DataContract],
+) -> Result<HashMap<String, String>> {
     let mut merged = HashMap::new();
     for input in inputs {
         merge_metadata_maps(op, &mut merged, input.schema.metadata())?;
@@ -313,7 +335,9 @@ pub(in crate::analyze) fn sorted_only(input: &DataContract) -> ContractPropertie
 
 /// `sorted_by = Proven(chiavi, Stream)`: op blocking che riordina l'intero
 /// stream di output (Architetture.md par. 4.3; `execution_class` Blocking).
-pub(in crate::analyze) const fn proven_sorted(keys: Vec<FieldId>) -> ContractProperty<Vec<FieldId>> {
+pub(in crate::analyze) const fn proven_sorted(
+    keys: Vec<FieldId>,
+) -> ContractProperty<Vec<FieldId>> {
     ContractProperty::new(PropertyConfidence::Proven(keys), PropertyScope::Stream)
 }
 
@@ -375,11 +399,8 @@ pub(in crate::analyze) fn analyze_append(
         input.geometries.first().map(|g| g.name.as_str())
     };
     let geometry = propagate_geometry(input, &schema, preserved);
-    let active = input.active_geometry.filter(|id| {
-        geometry
-            .as_ref()
-            .is_some_and(|g| &g.field_id == id)
-    });
+    let active = input
+        .active_geometry
+        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
     finish(schema, geometry, active, append_props(input, overwritten))
 }
-

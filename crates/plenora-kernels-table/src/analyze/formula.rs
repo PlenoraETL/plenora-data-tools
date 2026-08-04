@@ -39,7 +39,10 @@ pub(in crate::analyze) fn analyze_formula(
         } else {
             contract_error(
                 op,
-                format!("colonna {name}: tipo {:?} non valutabile", field.data_type()),
+                format!(
+                    "colonna {name}: tipo {:?} non valutabile",
+                    field.data_type()
+                ),
             )
         }
     })?;
@@ -130,7 +133,10 @@ fn infer_expression_type(
                 contract_error(op, "literal expression deve essere scalare")
             }
         },
-        Expression::Unary { op: operator, value } => {
+        Expression::Unary {
+            op: operator,
+            value,
+        } => {
             let operand = infer_expression_type(op, input, value)?;
             match operator {
                 UnaryOperator::Not => expect_type(op, operand, StaticType::Boolean, "not"),
@@ -186,9 +192,9 @@ fn infer_expression_type(
                 .map(|argument| infer_expression_type(op, input, argument))
                 .collect::<Result<Vec<_>>>()?;
             let fold = |types: &[StaticType]| {
-                types.iter().try_fold(StaticType::Any, |acc, item| {
-                    meet_types(op, acc, *item)
-                })
+                types
+                    .iter()
+                    .try_fold(StaticType::Any, |acc, item| meet_types(op, acc, *item))
             };
             match name {
                 Function::Coalesce | Function::NullIf => fold(&types),
@@ -375,10 +381,10 @@ fn temporal_static_type(
             }
             Ok(kind)
         }
-        Expression::Literal {
-            value: Value::Null,
-        } => Ok(StaticType::Any),
-        _ => contract_error(op, "date_trunc: il valore deve essere una colonna temporale"),
+        Expression::Literal { value: Value::Null } => Ok(StaticType::Any),
+        _ => contract_error(
+            op,
+            "date_trunc: il valore deve essere una colonna temporale",
+        ),
     }
 }
-

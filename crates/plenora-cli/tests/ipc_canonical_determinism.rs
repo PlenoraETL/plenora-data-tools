@@ -85,7 +85,8 @@ fn stesso_piano_produce_output_ipc_binariamente_identici() {
     let first = std::fs::read(&output_first).expect("read first output");
     let second = std::fs::read(&output_second).expect("read second output");
     assert_eq!(
-        first, second,
+        first,
+        second,
         "livello 2 violato: stessi piano/input/writer ma output IPC non \
          binariamente identici ({} vs {} byte)",
         first.len(),

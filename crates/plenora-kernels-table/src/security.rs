@@ -2,17 +2,20 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use md5::{Digest, Md5};
 use plenora_core::arrow::array::{
     builder::StringBuilder, Array, BooleanArray, Float64Array, Int64Array, RecordBatch,
     StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
-use md5::{Digest, Md5};
 use serde::Deserialize;
 use sha2::Sha256;
 
+use crate::{
+    column_index, reject_rows, replace_or_append, scalar_as_string, validate_output_name,
+    RowRejection,
+};
 use plenora_core::{PlenoraError, Result};
-use crate::{column_index, replace_or_append, scalar_as_string, validate_output_name};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +54,27 @@ const fn default_true() -> bool {
     true
 }
 
+fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usize]) -> Result<()> {
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        if let Some((column, _)) = columns
+            .iter()
+            .zip(indices)
+            .find(|(_, index)| batch.column(**index).is_null(row))
+        {
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.required_value_missing",
+                column: Some(column),
+            });
+        }
+    }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )
+}
+
 /// Colonna con l'hash MD5 (esadecimale) delle colonne di `config.columns`.
 ///
 /// I nomi sono ordinati e deduplicati; i valori sono concatenati con
@@ -59,14 +83,18 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto,
-///   null con `null_policy = error`, valore non rappresentabile come testo
+///   valore non rappresentabile come testo
 ///   (come `scalar_as_string`);
+/// - `DataMapping`: null sorgente con `null_policy` `error`, con row
+///   diagnostics;
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
 ///   scalare.
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
-        return Err(PlenoraError::InvalidPlan("md5_hash richiede colonne".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "md5_hash richiede colonne".into(),
+        ));
     }
     let mut columns = config.columns.clone();
     columns.sort();
@@ -75,6 +103,11 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
+    // P1-3: il pre-rifiuto row-scoped vale solo per null_policy=error;
+    // empty (default) e literal hanno semantica storica dichiarata.
+    if matches!(config.null_policy, HashNullPolicy::Error) {
+        reject_null_hash_rows(batch, &columns, &indices)?;
+    }
     let values = (0..batch.num_rows())
         .map(|row| {
             let parts = indices
@@ -86,9 +119,9 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
                         (None, HashNullPolicy::Empty) => String::new(),
                         (None, HashNullPolicy::Literal) => config.null_literal.clone(),
                         (None, HashNullPolicy::Error) => {
-                            return Err(PlenoraError::InvalidPlan(format!(
-                                "md5_hash: null alla riga {row}"
-                            )))
+                            return Err(PlenoraError::Internal(
+                                "prevalidazione null md5_hash incoerente".into(),
+                            ));
                         }
                     };
                     Ok(if config.normalize {
@@ -146,9 +179,11 @@ fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, null con
-///   `null_policy = error`, valore oltre `u64` nel framing, valore non
+/// - `InvalidPlan`: nome della colonna di output non valido, valore oltre
+///   `u64` nel framing, valore non
 ///   rappresentabile come testo (come `scalar_as_string`);
+/// - `DataMapping`: null sorgente con `null_policy` `error`, con row
+///   diagnostics;
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
 ///   scalare.
 pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
@@ -159,6 +194,10 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
+    // Come `md5_hash`: pre-rifiuto solo per null_policy=error.
+    if matches!(config.null_policy, HashNullPolicy::Error) {
+        reject_null_hash_rows(batch, &names, &indices)?;
+    }
     let values = (0..batch.num_rows())
         .map(|row| {
             let mut digest = Sha256::new();
@@ -194,9 +233,9 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
                         framed_part(&mut digest, literal.as_bytes())?;
                     }
                     (None, HashNullPolicy::Error) => {
-                        return Err(PlenoraError::InvalidPlan(format!(
-                            "sha256_hash: null alla riga {row}"
-                        )))
+                        return Err(PlenoraError::Internal(
+                            "prevalidazione null sha256_hash incoerente".into(),
+                        ));
                     }
                 }
             }
@@ -393,10 +432,8 @@ fn fingerprint_rows<D: Digest>(
         accesses.push(column_access(column.as_ref()));
     }
     let hex_len = <D as Digest>::output_size() * 2;
-    let mut builder = StringBuilder::with_capacity(
-        batch.num_rows(),
-        batch.num_rows().saturating_mul(hex_len),
-    );
+    let mut builder =
+        StringBuilder::with_capacity(batch.num_rows(), batch.num_rows().saturating_mul(hex_len));
     let mut message = Vec::with_capacity(256);
     let mut scratch = String::new();
     let mut hex = String::with_capacity(hex_len);
@@ -486,9 +523,8 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
 
 /// Politica sui null per `hmac_sha256`.
 ///
-/// `empty` = il null contribuisce come stringa vuota (indistinguibile da
-/// ""), `null` = la riga produce un hmac null, `skip` = la colonna null e'
-/// omessa dal framing della riga.
+/// I token legacy restano deserializzabili per compatibilita' dei piani, ma
+/// nessuno autorizza remediation implicita: ogni null sorgente e' rifiutato.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HmacNullPolicy {
@@ -590,11 +626,14 @@ fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
 ///   `columns` vuoto, colonna ripetuta, chiave HMAC non disponibile
 ///   (variabile d'ambiente assente o vuota), valore oltre `u64` nel framing,
 ///   valore non rappresentabile come testo (come `scalar_as_string`);
-/// - `Schema`: colonna assente dal batch.
+/// - `Schema`: colonna assente dal batch;
+/// - `DataMapping`: qualunque null sorgente, con row diagnostics.
 pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
-        return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "hmac_sha256: key_env vuoto".into(),
+        ));
     }
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -615,6 +654,8 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let key = load_hmac_key(&config.key_env)?;
+    // P1-3: hmac non ha null_policy=error; Empty (default), Null e Skip
+    // mantengono l'output storico dichiarato, nessun pre-rifiuto.
     let (inner_base, outer_base) = hmac_sha256_states(&key);
     // Framing costante per colonna e accesso tipizzato ai valori,
     // precomputati una volta per batch come in `fingerprint_rows`: il
@@ -630,10 +671,8 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         headers.push(header);
         accesses.push(column_access(column.as_ref()));
     }
-    let mut builder = StringBuilder::with_capacity(
-        batch.num_rows(),
-        batch.num_rows().saturating_mul(64),
-    );
+    let mut builder =
+        StringBuilder::with_capacity(batch.num_rows(), batch.num_rows().saturating_mul(64));
     let mut message = Vec::with_capacity(256);
     let mut scratch = String::new();
     let mut hex = String::with_capacity(64);
@@ -687,7 +726,8 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MaskType {    Cf,
+pub enum MaskType {
+    Cf,
     Email,
     Phone,
     Iban,
@@ -753,9 +793,8 @@ fn mask_middle(value: &str, start: usize, end: usize, mask: char) -> String {
             .map_or(0, |(index, _)| index)
     };
     let mask_count = char_count - start - end;
-    let mut out = String::with_capacity(
-        start_byte + mask_count * mask.len_utf8() + (value.len() - end_byte),
-    );
+    let mut out =
+        String::with_capacity(start_byte + mask_count * mask.len_utf8() + (value.len() - end_byte));
     out.push_str(&value[..start_byte]);
     out.extend(std::iter::repeat_n(mask, mask_count));
     out.push_str(&value[end_byte..]);
@@ -861,17 +900,10 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
                 .collect::<Result<Vec<_>>>()?;
             Arc::new(StringArray::from(values))
         };
-        result = replace_or_append(
-            &result,
-            &output,
-            DataType::Utf8,
-            true,
-            values,
-        )?;
+        result = replace_or_append(&result, &output, DataType::Utf8, true, values)?;
     }
     Ok(result)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -888,6 +920,151 @@ mod tests {
     };
     use plenora_core::arrow::schema::{Field, Schema};
     use serde_json::json;
+
+    #[test]
+    fn hash_error_policy_rejects_every_null_source_row() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("z")])),
+                Arc::new(StringArray::from(vec![Some("y"), Some("q"), None])),
+            ],
+        )
+        .expect("fixture");
+        let errors = [
+            md5_hash(
+                &batch,
+                &Md5Hash {
+                    columns: vec!["a".into(), "b".into()],
+                    output_column: "digest".into(),
+                    normalize: true,
+                    null_policy: HashNullPolicy::Error,
+                    null_literal: String::new(),
+                },
+            )
+            .expect_err("md5 ha accettato null vietati"),
+            sha256_hash(
+                &batch,
+                &Sha256Hash {
+                    columns: vec!["a".into(), "b".into()],
+                    output_column: "digest".into(),
+                    normalize: true,
+                    null_policy: HashNullPolicy::Error,
+                    null_literal: String::new(),
+                },
+            )
+            .expect_err("sha256 ha accettato null vietati"),
+        ];
+        for error in errors {
+            let report = error
+                .row_diagnostics()
+                .expect("diagnostica hash row-scoped mancante");
+            assert_eq!(report.observed_total, 2);
+            assert_eq!(report.total, Some(2));
+            assert_eq!(
+                report
+                    .examples
+                    .iter()
+                    .map(|example| (example.source_index, example.column.as_deref()))
+                    .collect::<Vec<_>>(),
+                vec![(1, Some("a")), (2, Some("b"))]
+            );
+        }
+    }
+
+    #[test]
+    fn hash_null_policy_empty_and_literal_preserve_historic_output() {
+        // P1-3: il rifiuto row-scoped e' solo per null_policy=error; empty
+        // (default) e literal mantengono l'output storico (sostituzione
+        // dichiarata nel contratto dell'op, mai remediation silenziosa).
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("z")])),
+                Arc::new(StringArray::from(vec![Some("y"), Some("q"), None])),
+            ],
+        )
+        .expect("fixture");
+        let digest_column = |output: &RecordBatch, name: &str| {
+            output
+                .column_by_name(name)
+                .expect("colonna digest")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8")
+                .iter()
+                .map(|cell| cell.map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        // Empty: null -> "" nella concatenazione U+001F.
+        let md5_empty = md5_hash(
+            &batch,
+            &Md5Hash {
+                columns: vec!["a".into(), "b".into()],
+                output_column: "digest".into(),
+                normalize: false,
+                null_policy: HashNullPolicy::Empty,
+                null_literal: String::new(),
+            },
+        )
+        .expect("null_policy=empty non rifiuta (output storico)");
+        let expected_empty: Vec<Option<String>> = ["x\u{1f}y", "\u{1f}q", "z\u{1f}"]
+            .iter()
+            .map(|parts| {
+                let mut digest = Md5::new();
+                digest.update(parts.as_bytes());
+                Some(format!("{:x}", digest.finalize()))
+            })
+            .collect();
+        assert_eq!(digest_column(&md5_empty, "digest"), expected_empty);
+        // Literal: null -> letterale dichiarato. Oracolo: sostituire i null
+        // col letterale in una colonna tutta valida deve dare lo STESSO
+        // digest (la sostituzione e' la semantica storica dichiarata).
+        let sha_literal = sha256_hash(
+            &batch,
+            &Sha256Hash {
+                columns: vec!["a".into(), "b".into()],
+                output_column: "digest".into(),
+                normalize: false,
+                null_policy: HashNullPolicy::Literal,
+                null_literal: "<NULL>".to_owned(),
+            },
+        )
+        .expect("null_policy=literal non rifiuta (output storico)");
+        let substituted = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["x", "<NULL>", "z"])),
+                Arc::new(StringArray::from(vec!["y", "q", "<NULL>"])),
+            ],
+        )
+        .expect("oracolo");
+        let oracle = sha256_hash(
+            &substituted,
+            &Sha256Hash {
+                columns: vec!["a".into(), "b".into()],
+                output_column: "digest".into(),
+                normalize: false,
+                null_policy: HashNullPolicy::Empty,
+                null_literal: String::new(),
+            },
+        )
+        .expect("oracolo senza null");
+        assert_eq!(
+            digest_column(&sha_literal, "digest"),
+            digest_column(&oracle, "digest"),
+            "null->letterale diverso dalla sostituzione storica"
+        );
+    }
 
     /// Copia verbatim di `mask_middle` pre-ottimizzazione.
     fn mask_middle_reference(value: &str, start: usize, end: usize, mask: char) -> String {
@@ -967,7 +1144,9 @@ mod tests {
             let values = (0..result.num_rows())
                 .map(|row| {
                     scalar_as_string(result.column(index).as_ref(), row).and_then(|value| {
-                        value.map(|value| mask_reference(&value, masking)).transpose()
+                        value
+                            .map(|value| mask_reference(&value, masking))
+                            .transpose()
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -992,7 +1171,11 @@ mod tests {
         for index in 0..fast.num_columns() {
             let fast_field = fast_schema.field(index);
             let reference_field = reference_schema.field(index);
-            assert_eq!(fast_field.name(), reference_field.name(), "nome colonna {index}");
+            assert_eq!(
+                fast_field.name(),
+                reference_field.name(),
+                "nome colonna {index}"
+            );
             assert_eq!(
                 fast_field.data_type(),
                 reference_field.data_type(),
@@ -1056,7 +1239,9 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("utf8");
-        (0..column.len()).map(|row| column.value(row).to_owned()).collect()
+        (0..column.len())
+            .map(|row| column.value(row).to_owned())
+            .collect()
     }
 
     fn fingerprint_config(columns: &[&str]) -> StableFingerprint {
@@ -1235,39 +1420,62 @@ mod tests {
 
     #[test]
     fn hmac_sha256_null_policies() {
+        // P1-3: hmac non ha null_policy=error — Empty (default), Null e Skip
+        // mantengono l'output storico dichiarato; nessun rifiuto aggiunto.
         std::env::set_var("PLENORA_HMAC_NULL_KEY", "plenora-hmac-test-key");
         let batch = hmac_fixture();
-        // empty: null -> stringa vuota nel framing (known-answer Python).
-        let values = hmac_values(&batch, &hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY"));
-        assert_eq!(
-            values[1],
-            Some("c863b8595ce5ae9a7b3a05849cdc952b19d26ce2e96201a612c4d2d759cb429d".to_owned())
+        // Empty: il null di riga 1 entra nel framing come campo vuoto.
+        let empty = hmac_values(
+            &batch,
+            &HmacSha256 {
+                null_policy: HmacNullPolicy::Empty,
+                ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
+            },
         );
-        // null: la riga con un null produce hmac null (colonna nullable).
-        let config = HmacSha256 {
-            null_policy: HmacNullPolicy::Null,
-            ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
-        };
-        let output = hmac_sha256(&batch, &config).expect("hmac null policy");
-        assert!(output.schema().field_with_name("hmac").expect("hmac").is_nullable());
-        let values = hmac_values(&batch, &config);
-        assert!(values[0].is_some());
-        assert_eq!(values[1], None);
-        // skip: la colonna null e' omessa dal framing -> digest diverso da
-        // empty, deterministico.
-        let config = HmacSha256 {
-            null_policy: HmacNullPolicy::Skip,
-            ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
-        };
-        let skipped = hmac_values(&batch, &config);
-        assert!(skipped[1].is_some());
-        assert_ne!(skipped[1], values[0]);
+        assert!(
+            empty.iter().all(Option::is_some),
+            "empty policy: digest atteso su ogni riga"
+        );
+        // Null: riga con null -> digest null in output (contratto storico).
+        let nulled = hmac_values(
+            &batch,
+            &HmacSha256 {
+                null_policy: HmacNullPolicy::Null,
+                ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
+            },
+        );
+        assert_eq!(
+            nulled.iter().map(Option::is_some).collect::<Vec<_>>(),
+            vec![true, false]
+        );
+        // Skip: colonna null esclusa dal messaggio, digest presente.
+        let skipped = hmac_values(
+            &batch,
+            &HmacSha256 {
+                null_policy: HmacNullPolicy::Skip,
+                ..hmac_config(&["a"], "PLENORA_HMAC_NULL_KEY")
+            },
+        );
+        assert!(
+            skipped.iter().all(Option::is_some),
+            "skip policy: digest atteso su ogni riga"
+        );
     }
 
     #[test]
     fn hmac_sha256_is_deterministic_and_sensitive() {
         std::env::set_var("PLENORA_HMAC_DET_KEY", "plenora-hmac-test-key");
-        let batch = hmac_fixture();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["x", "y"])),
+                Arc::new(Int64Array::from(vec![42, 7])),
+            ],
+        )
+        .expect("fixture senza null");
         let config = hmac_config(&["a", "b"], "PLENORA_HMAC_DET_KEY");
         let first = hmac_values(&batch, &config);
         let second = hmac_values(&batch, &config);
@@ -1288,15 +1496,18 @@ mod tests {
         // 1. Variabile assente: l'errore non rivela ne' il NOME della
         //    variabile ne' (ovviamente) il valore.
         std::env::remove_var("PLENORA_HMAC_LEAK_MISSING");
-        let error = hmac_sha256(
-            &batch,
-            &hmac_config(&["a"], "PLENORA_HMAC_LEAK_MISSING"),
-        )
-        .expect_err("variabile assente");
+        let error = hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_MISSING"))
+            .expect_err("variabile assente");
         let display = error.to_string();
         let debug = format!("{error:?}");
-        assert!(!display.contains("PLENORA_HMAC_LEAK_MISSING"), "nome variabile in {display}");
-        assert!(!debug.contains("PLENORA_HMAC_LEAK_MISSING"), "nome variabile in {debug}");
+        assert!(
+            !display.contains("PLENORA_HMAC_LEAK_MISSING"),
+            "nome variabile in {display}"
+        );
+        assert!(
+            !debug.contains("PLENORA_HMAC_LEAK_MISSING"),
+            "nome variabile in {debug}"
+        );
         // 2. Variabile vuota: stesso errore generico, niente valore/nome.
         std::env::set_var("PLENORA_HMAC_LEAK_EMPTY", "");
         let error = hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_EMPTY"))
@@ -1332,10 +1543,9 @@ mod tests {
         )
         .is_err());
         // Defaults: output "hmac", null_policy empty.
-        let decoded: HmacSha256 = serde_json::from_value(
-            json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY"}),
-        )
-        .expect("defaults");
+        let decoded: HmacSha256 =
+            serde_json::from_value(json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY"}))
+                .expect("defaults");
         assert_eq!(decoded.output_column, "hmac");
         assert!(matches!(decoded.null_policy, HmacNullPolicy::Empty));
         // Colonne vuote, ripetute, key_env vuoto, nome output non valido.
@@ -1417,7 +1627,12 @@ mod tests {
                     None,
                     Some("x"),
                 ])),
-                Arc::new(Int64Array::from(vec![Some(123_456), None, Some(-7), Some(0)])),
+                Arc::new(Int64Array::from(vec![
+                    Some(123_456),
+                    None,
+                    Some(-7),
+                    Some(0),
+                ])),
             ],
         )
         .expect("fixture");
@@ -1641,7 +1856,9 @@ mod tests {
     fn hmac_sha256_reference(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
         validate_output_name(&config.output_column)?;
         if config.key_env.trim().is_empty() {
-            return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "hmac_sha256: key_env vuoto".into(),
+            ));
         }
         if config.columns.is_empty() {
             return Err(PlenoraError::InvalidPlan(
@@ -1670,10 +1887,7 @@ mod tests {
                     match scalar_as_string(array, row)? {
                         Some(value) => {
                             framed_bytes(&mut message, name.as_bytes())?;
-                            framed_bytes(
-                                &mut message,
-                                array.data_type().to_string().as_bytes(),
-                            )?;
+                            framed_bytes(&mut message, array.data_type().to_string().as_bytes())?;
                             message.push(1);
                             framed_bytes(&mut message, value.as_bytes())?;
                         }
@@ -1802,7 +2016,10 @@ mod tests {
                     &stable_fingerprint_reference(&batch, &config).expect("ref"),
                     "fingerprint",
                 );
-                assert_eq!(fast, reference, "subset {columns:?} algoritmo {algorithm:?}");
+                assert_eq!(
+                    fast, reference,
+                    "subset {columns:?} algoritmo {algorithm:?}"
+                );
             }
         }
         // Default (colonne omesse = tutte, ordine di schema), sha256 e md5.
@@ -1845,8 +2062,9 @@ mod tests {
                     output_column: "hmac".into(),
                     null_policy,
                 };
-                let fast =
-                    output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
+                // P1-3: politiche null storiche — nessun rifiuto; il percorso
+                // veloce deve coincidere con la copia verbatim pre-ottimizzazione.
+                let fast = output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
                 let reference = output_strings(
                     &hmac_sha256_reference(&batch, &config).expect("ref"),
                     "hmac",

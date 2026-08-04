@@ -34,6 +34,24 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::diagnostics::RowDiagnostics;
+
+/// Snapshot degli assi di un errore replayato su un arco fan-out.
+#[derive(Debug)]
+pub struct ReplayedError {
+    pub category: ErrorCategory,
+    pub phase: ErrorPhase,
+    pub remote_effect: RemoteEffect,
+    pub retry: RetryDisposition,
+    pub message: String,
+    pub node: Option<String>,
+    pub operation: Option<String>,
+    pub execution_id: Option<String>,
+    /// Motivo semantico senza prefisso `Display`, usato per rigenerare il
+    /// testo canonico quando l'execution id viene assegnato dopo lo snapshot.
+    pub execution_reason: Option<String>,
+}
+
 /// Errore unico del workspace, fusione di `EngineError` (nogeo-tools) e
 /// `GeoEngineError` (geo-tools-arrow).
 ///
@@ -75,7 +93,10 @@ pub enum PlenoraError {
     /// prodotto l'errore: e' riempito dall'executor al confine di
     /// dispatch/uscita; resta vuoto per errori costruiti fuori da
     /// un'esecuzione DAG (percorso legacy `table_engine`).
-    #[error("step failed at node `{node}` (operation `{operation}`{}): {reason}", execution_suffix(execution_id))]
+    #[error(
+        "step failed at node `{node}` (operation `{operation}`{}): {reason}",
+        execution_suffix(execution_id)
+    )]
     Execution {
         node: String,
         operation: String,
@@ -91,7 +112,10 @@ pub enum PlenoraError {
     /// cancellazione e' stato osservato a un confine cooperativo
     /// dell'executor e nessun output e' stato pubblicato (invariante I8).
     /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
-    #[error("cancelled at node `{node}` (operation `{operation}`{}): {reason}", execution_suffix(execution_id))]
+    #[error(
+        "cancelled at node `{node}` (operation `{operation}`{}): {reason}",
+        execution_suffix(execution_id)
+    )]
     Cancelled {
         node: String,
         operation: String,
@@ -112,6 +136,19 @@ pub enum PlenoraError {
     /// valori di righe/colonne (regola 8).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Snapshot tipizzato di un errore replayato su un arco fan-out.
+    #[error("{}", .0.message)]
+    Replayed(Box<ReplayedError>),
+
+    /// Errore con diagnostica row-scoped conforme al contratto trasversale.
+    #[error("{source}")]
+    RowDiagnostics {
+        /// Causa primaria; testo e assi restano invariati.
+        source: Box<Self>,
+        /// Payload bounded machine-readable.
+        diagnostics: Box<RowDiagnostics>,
+    },
 
     /// Errore con fase esplicita, assegnata al confine che lo ha prodotto
     /// (tagging di fase ai confini, ADR-0009 — BLOCK-03): la variante non
@@ -376,10 +413,9 @@ impl RetryDisposition {
     pub const fn delay(self) -> Option<Duration> {
         match self {
             Self::After(duration) => Some(duration),
-            Self::Never
-            | Self::Safe
-            | Self::RequiresIdempotencyKey
-            | Self::RequiresRecovery => None,
+            Self::Never | Self::Safe | Self::RequiresIdempotencyKey | Self::RequiresRecovery => {
+                None
+            }
         }
     }
 }
@@ -406,7 +442,8 @@ impl PlenoraError {
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
             Self::Io(_) => ErrorCategory::Io,
             Self::Internal(_) => ErrorCategory::Internal,
-            Self::Tagged { source, .. } => source.category(),
+            Self::Replayed(error) => error.category,
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => source.category(),
         }
     }
 
@@ -460,7 +497,10 @@ impl PlenoraError {
             | Self::Crs(_)
             | Self::Cancelled { .. }
             | Self::Internal(_) => RetryDisposition::Never,
-            Self::Tagged { source, .. } => source.retry_disposition(),
+            Self::Replayed(error) => error.retry,
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
+                source.retry_disposition()
+            }
         }
     }
 
@@ -529,17 +569,18 @@ impl PlenoraError {
             // Bracci fusi per fase (stessa decisione documentata sopra per
             // ogni variante): l'esaustivita' e' preservata perche' tutte
             // le varianti restano nominate esplicitamente.
-            Self::InvalidPlan(_)
-            | Self::Unsupported(_)
-            | Self::Schema(_)
-            | Self::Crs(_) => ErrorPhase::Validate,
+            Self::InvalidPlan(_) | Self::Unsupported(_) | Self::Schema(_) | Self::Crs(_) => {
+                ErrorPhase::Validate
+            }
             Self::Execution { .. }
             | Self::Cancelled { .. }
             | Self::DataMapping(_)
             | Self::Io(_)
             | Self::Internal(_) => ErrorPhase::Write,
+            Self::Replayed(error) => error.phase,
             // Il tag del confine vince sulla derivazione per variante.
             Self::Tagged { phase, .. } => *phase,
+            Self::RowDiagnostics { source, .. } => source.phase(),
         }
     }
 
@@ -560,12 +601,168 @@ impl PlenoraError {
         }
     }
 
+    /// Associa un payload row-scoped senza alterare testo o assi dell'errore.
+    #[must_use]
+    pub fn with_row_diagnostics(self, diagnostics: RowDiagnostics) -> Self {
+        if diagnostics.validate_for_emission().is_err() {
+            return Self::Internal("row diagnostics interne non valide".to_owned());
+        }
+        Self::RowDiagnostics {
+            source: Box::new(self),
+            diagnostics: Box::new(diagnostics),
+        }
+    }
+
+    /// Restituisce il payload row-scoped anche attraverso wrapper di fase.
+    #[must_use]
+    pub const fn row_diagnostics(&self) -> Option<&RowDiagnostics> {
+        match self {
+            Self::RowDiagnostics { diagnostics, .. } => Some(diagnostics),
+            Self::Tagged { source, .. } => source.row_diagnostics(),
+            _ => None,
+        }
+    }
+
+    /// Restituisce `true` anche quando la cancellazione è avvolta da tag o
+    /// diagnostica row-scoped.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.category() == ErrorCategory::Cancelled
+    }
+
+    /// Contesto DAG, attraversando i wrapper trasparenti.
+    #[must_use]
+    pub fn execution_context(&self) -> Option<(&str, &str, &str)> {
+        let (node, operation, execution_id) = self.execution_location()?;
+        execution_id.map(|execution_id| (node, operation, execution_id))
+    }
+
+    /// Posizione DAG con `execution_id` opzionale durante la propagazione interna.
+    #[must_use]
+    pub fn execution_location(&self) -> Option<(&str, &str, Option<&str>)> {
+        match self {
+            Self::Execution {
+                node,
+                operation,
+                execution_id,
+                ..
+            }
+            | Self::Cancelled {
+                node,
+                operation,
+                execution_id,
+                ..
+            } => Some((
+                node,
+                operation,
+                (!execution_id.is_empty()).then_some(execution_id.as_str()),
+            )),
+            Self::Replayed(error) => match (error.node.as_deref(), error.operation.as_deref()) {
+                (Some(node), Some(operation)) => Some((
+                    node,
+                    operation,
+                    error.execution_id.as_deref().filter(|id| !id.is_empty()),
+                )),
+                _ => None,
+            },
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
+                source.execution_location()
+            }
+            _ => None,
+        }
+    }
+
+    /// Motivo semantico di esecuzione/cancellazione attraverso i wrapper.
+    #[must_use]
+    pub fn execution_reason(&self) -> Option<&str> {
+        match self {
+            Self::Execution { reason, .. } | Self::Cancelled { reason, .. } => Some(reason),
+            Self::Replayed(error) => error.execution_reason.as_deref(),
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
+                source.execution_reason()
+            }
+            _ => None,
+        }
+    }
+
+    /// Completa l'execution id senza sovrascriverne uno già assegnato.
+    /// Gli snapshot replayati rigenerano anche il testo dagli assi semantici.
+    #[must_use]
+    pub fn with_execution_id(self, execution_id: &str) -> Self {
+        match self {
+            Self::Execution {
+                node,
+                operation,
+                execution_id: current,
+                reason,
+            } => Self::Execution {
+                node,
+                operation,
+                execution_id: if current.is_empty() {
+                    execution_id.to_owned()
+                } else {
+                    current
+                },
+                reason,
+            },
+            Self::Cancelled {
+                node,
+                operation,
+                execution_id: current,
+                reason,
+            } => Self::Cancelled {
+                node,
+                operation,
+                execution_id: if current.is_empty() {
+                    execution_id.to_owned()
+                } else {
+                    current
+                },
+                reason,
+            },
+            Self::Replayed(mut replayed) => {
+                if replayed.execution_id.as_deref().is_none_or(str::is_empty) {
+                    replayed.execution_id = Some(execution_id.to_owned());
+                    if let (Some(node), Some(operation), Some(reason)) = (
+                        replayed.node.as_deref(),
+                        replayed.operation.as_deref(),
+                        replayed.execution_reason.as_deref(),
+                    ) {
+                        replayed.message = match replayed.category {
+                            ErrorCategory::Execution => format!(
+                                "step failed at node `{node}` (operation `{operation}`, execution `{execution_id}`): {reason}"
+                            ),
+                            ErrorCategory::Cancelled => format!(
+                                "cancelled at node `{node}` (operation `{operation}`, execution `{execution_id}`): {reason}"
+                            ),
+                            _ => replayed.message,
+                        };
+                    }
+                }
+                Self::Replayed(replayed)
+            }
+            Self::Tagged { source, phase } => Self::Tagged {
+                source: Box::new(source.with_execution_id(execution_id)),
+                phase,
+            },
+            Self::RowDiagnostics {
+                source,
+                diagnostics,
+            } => Self::RowDiagnostics {
+                source: Box::new(source.with_execution_id(execution_id)),
+                diagnostics,
+            },
+            other => other,
+        }
+    }
+
     /// Il tag di fase esplicito, se il confine lo ha assegnato; `None` per
     /// un errore la cui fase e' derivata dalla variante.
     #[must_use]
     pub const fn phase_tag(&self) -> Option<ErrorPhase> {
         match self {
             Self::Tagged { phase, .. } => Some(*phase),
+            Self::RowDiagnostics { source, .. } => source.phase_tag(),
             _ => None,
         }
     }
@@ -577,6 +774,13 @@ impl PlenoraError {
     pub fn untag(self) -> Self {
         match self {
             Self::Tagged { source, .. } => source.untag(),
+            Self::RowDiagnostics {
+                source,
+                diagnostics,
+            } => Self::RowDiagnostics {
+                source: Box::new(source.untag()),
+                diagnostics,
+            },
             _ => self,
         }
     }
@@ -611,9 +815,12 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::Io(_)
             | Self::Internal(_) => RemoteEffect::None,
+            Self::Replayed(error) => error.remote_effect,
             // Delegato alla sorgente (comunque `None` per costruzione):
             // il tag raffina solo la fase.
-            Self::Tagged { source, .. } => source.remote_effect(),
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
+                source.remote_effect()
+            }
         }
     }
 }
@@ -661,7 +868,10 @@ mod tests {
                 PlenoraError::InvalidPlan("c".into()),
                 ErrorCategory::InvalidPlan,
             ),
-            (PlenoraError::Unsupported("u".into()), ErrorCategory::Unsupported),
+            (
+                PlenoraError::Unsupported("u".into()),
+                ErrorCategory::Unsupported,
+            ),
             (PlenoraError::Schema("s".into()), ErrorCategory::Schema),
             (
                 PlenoraError::DataMapping("d".into()),

@@ -200,7 +200,10 @@ fn run_once(
     geo_fusion: bool,
 ) -> (Vec<RecordBatch>, ExecutionMetrics, f64) {
     let inputs = Inputs::new()
-        .with("main", Input::from_batches(fixture.to_vec()).expect("input non vuoto"))
+        .with(
+            "main",
+            Input::from_batches(fixture.to_vec()).expect("input non vuoto"),
+        )
         .expect("input unico");
     let runtime = RuntimeContext {
         geo_fusion,
@@ -244,8 +247,8 @@ fn run_scenario(label: &str, plan: &serde_json::Value) {
 /// processo) — senza warmup la prima run misurata includerebbe l'init e
 /// sbilancerebbe la mediana della modalita' eseguita per prima.
 fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool) {
-    let graph = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
-        .expect("validate");
+    let graph =
+        validate(&plan.to_string(), &[("main".to_owned(), geo_contract())]).expect("validate");
     let fixture = fixture_batches();
 
     if warmup {
@@ -279,7 +282,10 @@ fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool)
     // test di ADR-0012 (confronto per valore dei RecordBatch di una run).
     let outputs_identical =
         fused_reference.expect("run fusa") == plain_reference.expect("run non fusa");
-    assert!(outputs_identical, "{label}: output fuso diverso dal non fuso");
+    assert!(
+        outputs_identical,
+        "{label}: output fuso diverso dal non fuso"
+    );
 
     let median_fused = report("fused", &mut durations_fused);
     let median_plain = report("unfused", &mut durations_plain);

@@ -36,7 +36,9 @@ use plenora_kernels_geo::advanced::voronoi_cells;
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions2::snap_column;
 use plenora_kernels_geo::geometry_from_wkb;
-use plenora_kernels_geo::topology::{clip_to_mask_validated, polygon_overlay_validated, OverlayMode};
+use plenora_kernels_geo::topology::{
+    clip_to_mask_validated, polygon_overlay_validated, OverlayMode,
+};
 
 const RUNS: usize = 5;
 
@@ -151,7 +153,12 @@ fn main() {
 
     // ref.decode_points: 200k punti (ancora; percorso invariato).
     let points: Vec<Geometry<f64>> = (0..200_000)
-        .map(|_| Geometry::Point(Point::new(rng.range(0.0, 10_000.0), rng.range(0.0, 10_000.0))))
+        .map(|_| {
+            Geometry::Point(Point::new(
+                rng.range(0.0, 10_000.0),
+                rng.range(0.0, 10_000.0),
+            ))
+        })
         .collect();
     let point_cells = cells_of(&points);
     measure("ref.decode_points", 200_000, || {
@@ -217,8 +224,9 @@ fn main() {
             .expect("clip")
             .iter()
             .map(|out| {
-                out.as_ref()
-                    .map_or(0, |geometry| encode_geometry(geometry).expect("encode").len())
+                out.as_ref().map_or(0, |geometry| {
+                    encode_geometry(geometry).expect("encode").len()
+                })
             })
             .sum()
     });

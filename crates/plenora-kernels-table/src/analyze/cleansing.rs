@@ -91,7 +91,11 @@ pub(in crate::analyze) fn analyze_fill_na(
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // La colonna geometrica (Binary) non e' mai un target valido: preservata.
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     // Valori modificati, righe e ordine invariati.
     finish(schema, geometry, input.active_geometry, rows_only(input))
 }
@@ -106,15 +110,22 @@ pub(in crate::analyze) fn analyze_replace(
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
     if config.regex {
-        regex::Regex::new(&config.old_value)
-            .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
+        regex::Regex::new(&config.old_value).map_err(|error| {
+            PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}"))
+        })?;
     }
     // R2.4 type-preserving: Utf8 -> Utf8 (tipo invariato), i metadata del
     // campo sorgente restano validi; `produce` ricostruisce il campo e li
     // azzera, quindi vanno ripristinati dal sorgente.
     let source_metadata = field_of(op, input, &config.column)?.metadata().clone();
     let mut fields_out = clone_fields(input);
-    produce(&mut fields_out, fields, &config.column, DataType::Utf8, true);
+    produce(
+        &mut fields_out,
+        fields,
+        &config.column,
+        DataType::Utf8,
+        true,
+    );
     if let Some(replaced) = fields_out
         .iter_mut()
         .find(|field| field.name() == &config.column)
@@ -122,7 +133,11 @@ pub(in crate::analyze) fn analyze_replace(
         *replaced = replaced.clone().with_metadata(source_metadata);
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     finish(schema, geometry, input.active_geometry, rows_only(input))
 }
 
@@ -136,9 +151,9 @@ pub(in crate::analyze) fn analyze_type_cast(
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
     let target = match config.target_type {
-        cleansing::TargetType::Str | cleansing::TargetType::Date | cleansing::TargetType::Datetime => {
-            DataType::Utf8
-        }
+        cleansing::TargetType::Str
+        | cleansing::TargetType::Date
+        | cleansing::TargetType::Datetime => DataType::Utf8,
         cleansing::TargetType::Int => DataType::Int64,
         cleansing::TargetType::Float => DataType::Float64,
         cleansing::TargetType::Bool => DataType::Boolean,
@@ -155,12 +170,12 @@ pub(in crate::analyze) fn analyze_type_cast(
             )
         }
         cleansing::TargetType::Decimal128 => {
-            let precision = config
-                .precision
-                .ok_or_else(|| PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision")))?;
-            let scale = config
-                .scale
-                .ok_or_else(|| PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale")))?;
+            let precision = config.precision.ok_or_else(|| {
+                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision"))
+            })?;
+            let scale = config.scale.ok_or_else(|| {
+                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale"))
+            })?;
             if precision == 0 || precision > 38 {
                 return contract_error(op, "precision decimal128 fuori da 1..=38");
             }
@@ -168,10 +183,9 @@ pub(in crate::analyze) fn analyze_type_cast(
         }
         cleansing::TargetType::BinaryUtf8 => DataType::Binary,
         cleansing::TargetType::Uint64 => DataType::UInt64,
-        cleansing::TargetType::DictionaryUtf8 => DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        ),
+        cleansing::TargetType::DictionaryUtf8 => {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        }
     };
     // Sostituzione in place: i metadati di campo (geoarrow.wkb inclusi) vanno
     // persi -> se il target e' la colonna geometrica il contratto diventa
@@ -181,4 +195,3 @@ pub(in crate::analyze) fn analyze_type_cast(
     output.properties = rows_only(input);
     Ok(output)
 }
-

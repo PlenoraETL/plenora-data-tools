@@ -117,6 +117,7 @@ mod tests {
     use super::*;
     use geo::{line_string, polygon, Area, CoordsIter, Geometry, Point};
     use plenora_core::arrow::array::Int64Array;
+    use plenora_core::diagnostics::RowDiagnosticsCompleteness;
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::Arc;
@@ -660,10 +661,12 @@ mod tests {
         let output = run_pair(&schema, &left, &right).expect("sjoin");
         let (out_schema, out_batches) = decode_output(&output);
         assert!(out_schema.metadata().is_empty());
-        assert!(out_schema.fields().iter().all(|field| field
-            .metadata()
-            .keys()
-            .all(|key| !key.starts_with("plenora."))));
+        assert!(out_schema.fields().iter().all(|field| {
+            field
+                .metadata()
+                .keys()
+                .all(|key| !key.starts_with("plenora."))
+        }));
         assert!(out_batches[0].schema().metadata().is_empty());
     }
 
@@ -1237,12 +1240,16 @@ mod tests {
         let (schema, batch) = fixture_batch(&[Some(&oversized)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::Centroid), &input),
-            Err(ArrowTransportError::CellTooLarge(_))
+            run(&arrow_schema(1, ArrowOperation::Centroid), &input)
+                .expect_err("cella oltre il limite")
+                .source_error(),
+            ArrowTransportError::CellTooLarge(_)
         ));
         assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::Area), &input),
-            Err(ArrowTransportError::CellTooLarge(_))
+            run(&arrow_schema(1, ArrowOperation::Area), &input)
+                .expect_err("cella oltre il limite")
+                .source_error(),
+            ArrowTransportError::CellTooLarge(_)
         ));
     }
 
@@ -1296,8 +1303,10 @@ mod tests {
         let (schema, batch) = fixture_batch(&[Some(&invalid_wkb)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::Area), &input),
-            Err(ArrowTransportError::Geometry(_))
+            run(&arrow_schema(1, ArrowOperation::Area), &input)
+                .expect_err("WKB invalido")
+                .source_error(),
+            ArrowTransportError::Geometry(_)
         ));
     }
 
@@ -1836,13 +1845,14 @@ mod tests {
             .unwrap();
         assert_eq!(ids.values(), &[0, 1, 2]);
 
-        // coordinate non finite: rifiutate (fail-closed).
+        // coordinate non finite: rifiuto fail-closed row-scoped.
         let (schema, batch) = coords_batch(vec![Some(f64::NAN)], vec![Some(0.0)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
-        assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::FromCoords), &input),
-            Err(ArrowTransportError::Construction(_))
-        ));
+        let error = run(&arrow_schema(1, ArrowOperation::FromCoords), &input)
+            .expect_err("coordinata non finita");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.non_finite_coordinate"], 1);
 
         // colonna assente.
         let (schema, batch) = coords_batch(vec![Some(1.0)], vec![Some(2.0)]);
@@ -1882,6 +1892,279 @@ mod tests {
             run(&arrow_schema(1, ArrowOperation::FromCoords), &input),
             Err(ArrowTransportError::OutputColumnExists(_))
         ));
+    }
+
+    #[test]
+    fn one_to_one_reports_absolute_indices_and_complete_scan_across_batches() {
+        // P0-2: due batch, WKB malformato in ENTRAMBI. Il trasporto deve
+        // scansionare tutti i batch, aggregare con offset assoluti checked
+        // e chiudere fail-closed senza pubblicare output. Copre il choke
+        // point comune delle op 1:1: transform (Centroid), misura (Area),
+        // bounds (Bounds, quattro colonne Float64).
+        let malformed: &[u8] = &[0x01, 0x09, 0x00];
+        let (schema, batch_a) = fixture_batch(&[
+            Some(line_wkb().as_slice()),
+            Some(malformed),
+            Some(line_wkb().as_slice()),
+        ]);
+        let (_, batch_b) = fixture_batch(&[Some(malformed), Some(line_wkb().as_slice())]);
+        let input = envelope_bytes(&schema, &[batch_a, batch_b]);
+        for operation in [
+            ArrowOperation::Centroid,
+            ArrowOperation::Area,
+            ArrowOperation::Bounds,
+        ] {
+            let error = run(&arrow_schema(5, operation), &input)
+                .expect_err("output pubblicato nonostante righe invalide");
+            let report = error
+                .row_diagnostics()
+                .expect("diagnostica row-scoped aggregata");
+            assert_eq!(report.observed_total, 2, "{operation:?}");
+            assert_eq!(report.total, Some(2), "{operation:?}");
+            assert_eq!(report.counts["geometry.invalid_wkb"], 2, "{operation:?}");
+            assert_eq!(
+                report.completeness,
+                RowDiagnosticsCompleteness::Complete,
+                "{operation:?}"
+            );
+            let indices: Vec<u64> = report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect();
+            assert_eq!(indices, vec![1, 3], "{operation:?}");
+            assert!(report.validate_for_emission().is_ok(), "{operation:?}");
+        }
+    }
+
+    #[test]
+    fn one_to_one_invalid_only_in_later_batch_reports_absolute_index() {
+        // P0-2 (controllo): primo batch pulito, WKB malformato solo nel
+        // secondo -> l'indice pubblicato e' assoluto (offset del primo
+        // batch applicato), nessun indice batch-locale spacciato.
+        let malformed: &[u8] = &[0x01, 0x09, 0x00];
+        let (schema, batch_a) =
+            fixture_batch(&[Some(line_wkb().as_slice()), Some(line_wkb().as_slice())]);
+        let (_, batch_b) = fixture_batch(&[Some(line_wkb().as_slice()), Some(malformed)]);
+        let input = envelope_bytes(&schema, &[batch_a, batch_b]);
+        let error = run(&arrow_schema(4, ArrowOperation::Centroid), &input)
+            .expect_err("WKB malformato nel secondo batch");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.total, Some(1));
+        assert_eq!(report.examples[0].source_index, 3);
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+        assert!(report.validate_for_emission().is_ok());
+    }
+
+    #[test]
+    fn one_to_one_late_non_row_scoped_error_preserves_partial_diagnostics() {
+        // P2: il primo batch produce un rifiuto row-scoped (diagnostica gia'
+        // osservata); il secondo un errore NON row-scoped (colonna geometria
+        // non Binary — schema drift tra batch dello stesso stream). L'errore
+        // reale deve propagare CON il report accumulato declassato a Partial
+        // (knowledge limit stabile, `total` sconosciuto) e zero accepted —
+        // mai la perdita silenziosa della diagnostica gia' raccolta.
+        let malformed: &[u8] = &[0x01, 0x09, 0x00];
+        let drift_batch = || {
+            let drift_schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("label", DataType::Utf8, true),
+                Field::new("weight", DataType::Float64, true),
+                Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Utf8, true),
+            ]));
+            RecordBatch::try_new(
+                drift_schema,
+                vec![
+                    Arc::new(Int64Array::from(vec![0_i64])),
+                    Arc::new(StringArray::from(vec![Some("drift")])),
+                    Arc::new(Float64Array::from(vec![Some(0.0)])),
+                    Arc::new(StringArray::from(vec![Some("non-wkb")])),
+                ],
+            )
+            .expect("drift batch")
+        };
+        let (schema, batch_a) = fixture_batch(&[Some(line_wkb().as_slice()), Some(malformed)]);
+        let error = super::super::unary::transform_batches(
+            &schema,
+            &[batch_a, drift_batch()],
+            &arrow_schema(3, ArrowOperation::Centroid),
+        )
+        .expect_err("errore non row-scoped tardivo");
+        assert!(
+            matches!(
+                error.source_error(),
+                ArrowTransportError::GeometryColumnNotBinary { .. }
+            ),
+            "errore reale preservato: {error:?}"
+        );
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica accumulata non persa");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Partial);
+        assert_eq!(report.total, None);
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.invalid_wkb"], 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(
+            report.knowledge_limits,
+            Some(vec!["data_tools.processing_interrupted".to_owned()])
+        );
+        assert!(report.validate_for_emission().is_ok());
+
+        // Controllo: senza diagnostica accumulata l'errore non row-scoped
+        // propaga com'e', senza report (comportamento storico invariato).
+        let (schema, clean) = fixture_batch(&[Some(line_wkb().as_slice())]);
+        let error = super::super::unary::transform_batches(
+            &schema,
+            &[clean, drift_batch()],
+            &arrow_schema(2, ArrowOperation::Centroid),
+        )
+        .expect_err("drift senza diagnostica");
+        assert!(
+            matches!(error, ArrowTransportError::GeometryColumnNotBinary { .. }),
+            "{error:?}"
+        );
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    #[test]
+    fn from_coords_late_non_row_scoped_error_preserves_partial_diagnostics() {
+        // P2 (stessa classe di one_to_one): il primo batch produce una
+        // rejection row-scoped (coordinata NaN); il secondo un errore NON
+        // row-scoped (colonna x non numerica — schema drift). L'errore reale
+        // propaga con il report delle rejection osservate declassato a
+        // Partial, knowledge limit dichiarato, zero accepted.
+        let (schema, batch_a) =
+            coords_batch(vec![Some(1.0), Some(f64::NAN)], vec![Some(2.0), Some(4.0)]);
+        let drift_batch = || {
+            let drift_schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("x", DataType::Utf8, true),
+                Field::new("y", DataType::Float64, true),
+            ]));
+            RecordBatch::try_new(
+                drift_schema,
+                vec![
+                    Arc::new(Int64Array::from(vec![0_i64])),
+                    Arc::new(StringArray::from(vec![Some("non-numerica")])),
+                    Arc::new(Float64Array::from(vec![Some(2.0)])),
+                ],
+            )
+            .expect("drift batch")
+        };
+        let error = super::super::unary::transform_batches(
+            &schema,
+            &[batch_a, drift_batch()],
+            &arrow_schema(3, ArrowOperation::FromCoords),
+        )
+        .expect_err("errore non row-scoped tardivo");
+        assert!(
+            matches!(
+                error.source_error(),
+                ArrowTransportError::ColumnNotNumeric { .. }
+            ),
+            "errore reale preservato: {error:?}"
+        );
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica accumulata non persa");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Partial);
+        assert_eq!(report.total, None);
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.non_finite_coordinate"], 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(report.examples[0].column.as_deref(), Some("x"));
+        assert_eq!(
+            report.knowledge_limits,
+            Some(vec!["data_tools.processing_interrupted".to_owned()])
+        );
+        assert!(report.validate_for_emission().is_ok());
+
+        // Controllo: senza rejection accumulate l'errore propaga com'e'.
+        let (schema, clean) = coords_batch(vec![Some(1.0)], vec![Some(2.0)]);
+        let error = super::super::unary::transform_batches(
+            &schema,
+            &[clean, drift_batch()],
+            &arrow_schema(2, ArrowOperation::FromCoords),
+        )
+        .expect_err("drift senza rejection");
+        assert!(
+            matches!(error, ArrowTransportError::ColumnNotNumeric { .. }),
+            "{error:?}"
+        );
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    #[test]
+    fn from_coords_reports_row_diagnostics_with_absolute_indices() {
+        // Due casi mono-batch per causa, piu' un caso multi-batch omogeneo:
+        // i batch di un envelope devono condividere lo schema logico.
+        let (schema, first) = coords_batch(
+            vec![Some(1.0), Some(f64::NAN), Some(3.0)],
+            vec![Some(2.0), Some(4.0), Some(6.0)],
+        );
+        let input = envelope_bytes(&schema, std::slice::from_ref(&first));
+        let error = run(&arrow_schema(3, ArrowOperation::FromCoords), &input)
+            .expect_err("coordinata non finita");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.total, Some(1));
+        assert_eq!(report.counts["geometry.non_finite_coordinate"], 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(report.examples[0].column.as_deref(), Some("x"));
+        assert!(report.validate_for_emission().is_ok());
+        assert!(matches!(error, ArrowTransportError::RowDiagnostics { .. }));
+
+        // Multi-batch omogeneo: NaN alla riga 1 del primo batch (2 righe) e
+        // alla riga 0 del secondo -> indici assoluti 1 e 2.
+        let (_, batch_a) =
+            coords_batch(vec![Some(1.0), Some(f64::NAN)], vec![Some(2.0), Some(4.0)]);
+        let (_, batch_b) = coords_batch(vec![Some(f64::INFINITY)], vec![Some(2.0)]);
+        let input = envelope_bytes(&schema, &[batch_a, batch_b]);
+        let error = run(&arrow_schema(3, ArrowOperation::FromCoords), &input)
+            .expect_err("coordinate non finite su due batch");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.counts["geometry.non_finite_coordinate"], 2);
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        // Intero oltre 2^53: causa dedicata, colonna nominata, nessun valore.
+        let (schema_big, big) = {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("x", DataType::Int64, true),
+                Field::new("y", DataType::Float64, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![Some(7_i64), Some((1_i64 << 53) + 1)])),
+                    Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0)])),
+                ],
+            )
+            .expect("batch int");
+            (schema, batch)
+        };
+        let renamed = TransformArrowSchema {
+            x_column: Some("x".to_owned()),
+            y_column: Some("y".to_owned()),
+            ..arrow_schema(2, ArrowOperation::FromCoords)
+        };
+        let input = envelope_bytes(&schema_big, std::slice::from_ref(&big));
+        let error = run(&renamed, &input).expect_err("intero oltre 2^53");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.inexact_integer_coordinate"], 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(report.examples[0].column.as_deref(), Some("x"));
+        assert!(report.validate_for_emission().is_ok());
     }
 
     #[test]
@@ -1930,10 +2213,12 @@ mod tests {
         )
         .unwrap();
         let input = envelope_bytes(&schema, &[batch]);
-        assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::FromCoords), &input),
-            Err(ArrowTransportError::IntegerCoordinateTooLarge { .. })
-        ));
+        let error = run(&arrow_schema(1, ArrowOperation::FromCoords), &input)
+            .expect_err("coordinata intera oltre 2^53");
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.inexact_integer_coordinate"], 1);
+        assert_eq!(report.examples[0].source_index, 0);
 
         // Il confine 2^53 e' esattamente rappresentabile: resta accettato.
         let boundary = RecordBatch::try_new(
@@ -2773,10 +3058,15 @@ mod tests {
             ratio: Some(0.5),
             ..arrow_schema(1, ArrowOperation::LineInterpolatePoint)
         };
+        let error = run(&schema, &input).expect_err("tipo geometria errato");
         assert!(matches!(
-            run(&schema, &input),
-            Err(ArrowTransportError::WrongGeometryType { .. })
+            error.source_error(),
+            ArrowTransportError::WrongGeometryType { .. }
         ));
+        // Difetto row-scoped: la riga e' rifiutata con diagnostica completa.
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["geometry.wrong_type"], 1);
 
         let (fixture_schema, batch) = fixture_batch(&[Some(&line)]);
         let input = envelope_bytes(&fixture_schema, std::slice::from_ref(&batch));
@@ -2833,8 +3123,10 @@ mod tests {
         let (fixture_schema, batch) = fixture_batch(&[Some(&square)]);
         let input = envelope_bytes(&fixture_schema, std::slice::from_ref(&batch));
         assert!(matches!(
-            run(&arrow_schema(1, ArrowOperation::GeodesicLineLength), &input),
-            Err(ArrowTransportError::WrongGeometryType { .. })
+            run(&arrow_schema(1, ArrowOperation::GeodesicLineLength), &input)
+                .expect_err("tipo geometria errato")
+                .source_error(),
+            ArrowTransportError::WrongGeometryType { .. }
         ));
     }
 

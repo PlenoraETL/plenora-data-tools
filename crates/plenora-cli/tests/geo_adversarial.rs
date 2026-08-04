@@ -5,6 +5,13 @@ use geo::{
     MultiPoint, MultiPolygon, Point, Rect, Triangle,
 };
 use geozero::{CoordDimensions, ToWkb};
+use plenora_core::PlenoraError;
+use plenora_engine::geo_transport::pair_protocol::{
+    read_pairs, write_pairs, PairProtocolError, MAX_PAIRS,
+};
+use plenora_engine::geo_transport::protocol::{
+    FrameReader, FrameWriter, ProtocolError, MAX_GEOMETRY_BYTES, MAX_ROWS, PROTOCOL_MAGIC,
+};
 use plenora_kernels_geo::advanced::{voronoi_cells, AdvancedError};
 use plenora_kernels_geo::analysis::{minimum_distances, nearest_matches, AnalysisError};
 use plenora_kernels_geo::construction::{
@@ -28,18 +35,13 @@ use plenora_kernels_geo::operations::{
     point_on_surface, simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, OperationError,
     SimplifyPolicy,
 };
-use plenora_engine::geo_transport::pair_protocol::{read_pairs, write_pairs, PairProtocolError, MAX_PAIRS};
 use plenora_kernels_geo::predicates::{evaluate, PredicateError, SpatialPredicate};
 use plenora_kernels_geo::proj_backend::{reproject_geometry, ProjBackendError};
-use plenora_engine::geo_transport::protocol::{
-    FrameReader, FrameWriter, ProtocolError, MAX_GEOMETRY_BYTES, MAX_ROWS, PROTOCOL_MAGIC,
-};
 use plenora_kernels_geo::spatial_join::JoinPair;
 use plenora_kernels_geo::topology::{
     boolean_operation, clean_valid_polygon_topology, clip_to_mask, dissolve, polygon_overlay,
     BooleanOperation, OverlayMode, TopologyError,
 };
-use plenora_core::PlenoraError;
 use plenora_kernels_geo::{
     geometry_from_wkb, transform_geometry, transform_wkb, Operation, MAX_WKB_BYTES,
     MAX_WKB_COMPONENTS,

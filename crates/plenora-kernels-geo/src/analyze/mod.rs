@@ -58,8 +58,8 @@
 //!   `nullable=false` da specifica: coordinate null sono errore a runtime,
 //!   non geometria null);
 //! - `from_wkt`: come `from_coords` (input non geometrico, nuovo `FieldId`),
-//!   ma la colonna geometria e' **nullable** (celle WKT null o invalide con
-//!   `on_error: null` producono geometria null); CRS da config `crs` o di
+//!   ma la colonna geometria e' **nullable** (celle WKT sorgente null restano
+//!   null; WKT invalido rifiuta l'output con diagnostica row-scoped); CRS da config `crs` o di
 //!   piano, requisito `Known`;
 //! - `geometry_accessors`: aggiunge fino a 6 colonne per riga
 //!   (`geometry_type` Utf8, `num_geometries`/`num_interior_rings` `UInt64`,

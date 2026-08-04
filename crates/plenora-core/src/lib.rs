@@ -12,16 +12,15 @@
 //! - [`crs`]: contratto CRS fail-closed (trasloco da `crs.rs` di
 //!   plenora-geo-tools-arrow previsto in Fase 1).
 
-pub mod catalog;
 pub mod capabilities;
+pub mod catalog;
 pub mod contract;
 pub mod crs;
+pub mod diagnostics;
 pub mod error;
 pub mod limits;
 
-pub use error::{
-    ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, RetryDisposition,
-};
+pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, RetryDisposition};
 
 /// Re-export unico di Arrow: tutti i crate del workspace dipendono da Arrow
 /// solo tramite questo modulo.
@@ -51,8 +50,9 @@ mod tests {
     /// di versione nell'identita' dei grafi (ADR 4).
     #[test]
     fn arrow_version_matches_the_workspace_pin() {
-        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
-            .expect("Cargo.toml del workspace leggibile");
+        let manifest =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
+                .expect("Cargo.toml del workspace leggibile");
         let pin = format!("arrow-schema = \"={}\"", super::arrow::VERSION);
         assert!(
             manifest.contains(&pin),

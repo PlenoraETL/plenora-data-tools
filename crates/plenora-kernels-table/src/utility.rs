@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
-use plenora_core::arrow::schema::DataType;
 use chrono::format::{Item, Parsed};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use plenora_core::{PlenoraError, Result};
 use crate::dates::{compile_items, parse_with_items};
-use crate::{column_index, replace_or_append, scalar_as_string, validate_output_name};
+use crate::{
+    column_index, reject_rows, replace_or_append, scalar_as_string, validate_output_name,
+    RowRejection,
+};
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,77 +220,90 @@ fn parse_datetime_default(
 /// Estrae le parti di data/ora richieste in colonne Int64 `<prefix><parte>`.
 ///
 /// Il parsing usa `date_format` se dato, altrimenti il parser deterministico
-/// multi-formato del profilo legacy; i valori non parsabili producono null
-/// oppure errore secondo `config.invalid`.
+/// multi-formato del profilo legacy. Il token `config.invalid` resta
+/// deserializzabile per compatibilita', ma ogni valore non parsabile rifiuta
+/// l'output con diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: valore non parsabile con `invalid = error`, nome di colonna
-///   di output non valido, valore non rappresentabile come testo (come
+/// - `InvalidPlan`: nome di colonna di output non valido, valore non
+///   rappresentabile come testo (come
 ///   `scalar_as_string`, percorso non-Utf8), guardia interna su parser
 ///   compilato singolo;
 /// - `Schema`: colonna assente dal batch.
 // Sequenza lineare (parsing esplicito o multi-formato, poi estrazione delle
 // parti in colonne): lunga per costruzione, uno spezzone artificiale
-// peggiorerebbe solo la leggibilita'.
-#[allow(clippy::too_many_lines)]
+// peggiorerebbe solo la leggibilita'. I due bracci del parser sono blocchi
+// completi: `map_or_else` con closure di queste dimensioni nuocerebbe.
+#[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    let parsed: Vec<Option<NaiveDateTime>> = if let Some(column) =
-        source.as_any().downcast_ref::<StringArray>()
-    {
-        let explicit_items = config.date_format.as_deref().map(compile_items);
-        let default_items = if explicit_items.is_none() {
-            Some((default_datetime_items(), default_date_items()))
-        } else {
-            None
-        };
-        let mut parsed = Vec::with_capacity(column.len());
-        for row in 0..column.len() {
-            if column.is_null(row) {
-                parsed.push(None);
-                continue;
-            }
-            let value = column.value(row);
-            let parsed_value = match (&explicit_items, &default_items) {
-                (Some(items), None) => parse_with_items(value, items),
-                (None, Some((datetime_items, date_items))) => {
-                    parse_datetime_default(value, datetime_items, date_items)
-                }
-                _ => {
-                    return Err(PlenoraError::Internal(
-                        "un solo parser compilato".into(),
-                    ));
-                }
-            };
-            match parsed_value {
-                Some(value) => parsed.push(Some(value)),
-                None if matches!(config.invalid, InvalidDatePolicy::Null) => parsed.push(None),
-                None => {
-                    return Err(PlenoraError::InvalidPlan(format!(
-                        "date_extract: valore non valido alla riga {row}"
-                    )));
-                }
-            }
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        if scalar_as_string(source.as_ref(), row)?
+            .is_some_and(|value| parse_datetime(&value, config.date_format.as_deref()).is_none())
+        {
+            rejections.push(RowRejection {
+                row,
+                cause: "conversion.invalid_datetime",
+                column: Some(&config.column),
+            });
         }
-        parsed
-    } else {
-        (0..batch.num_rows())
-            .map(|row| {
-                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-                    return Ok(None);
-                };
-                match parse_datetime(&value, config.date_format.as_deref()) {
-                    Some(parsed) => Ok(Some(parsed)),
-                    None if matches!(config.invalid, InvalidDatePolicy::Null) => Ok(None),
-                    None => Err(PlenoraError::InvalidPlan(format!(
-                        "date_extract: valore non valido alla riga {row}"
-                    ))),
+    }
+    reject_rows(
+        &rejections,
+        "valori temporali rifiutati; consultare row_diagnostics",
+    )?;
+    let parsed: Vec<Option<NaiveDateTime>> =
+        if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
+            let explicit_items = config.date_format.as_deref().map(compile_items);
+            let default_items = if explicit_items.is_none() {
+                Some((default_datetime_items(), default_date_items()))
+            } else {
+                None
+            };
+            let mut parsed = Vec::with_capacity(column.len());
+            for row in 0..column.len() {
+                if column.is_null(row) {
+                    parsed.push(None);
+                    continue;
                 }
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+                let value = column.value(row);
+                let parsed_value = match (&explicit_items, &default_items) {
+                    (Some(items), None) => parse_with_items(value, items),
+                    (None, Some((datetime_items, date_items))) => {
+                        parse_datetime_default(value, datetime_items, date_items)
+                    }
+                    _ => {
+                        return Err(PlenoraError::Internal("un solo parser compilato".into()));
+                    }
+                };
+                match parsed_value {
+                    Some(value) => parsed.push(Some(value)),
+                    None => {
+                        return Err(PlenoraError::Internal(
+                            "prevalidazione row-scoped incoerente in date_extract".into(),
+                        ))
+                    }
+                }
+            }
+            parsed
+        } else {
+            (0..batch.num_rows())
+                .map(|row| {
+                    let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+                        return Ok(None);
+                    };
+                    match parse_datetime(&value, config.date_format.as_deref()) {
+                        Some(parsed) => Ok(Some(parsed)),
+                        None => Err(PlenoraError::Internal(
+                            "prevalidazione row-scoped incoerente in date_extract".into(),
+                        )),
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
     let prefix = if config.prefix.is_empty() {
         format!("{}_", config.column)
     } else {
@@ -405,6 +421,7 @@ pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<Rec
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
+    use plenora_core::diagnostics::RowDiagnosticsCompleteness;
     use serde_json::json;
 
     use super::*;
@@ -492,8 +509,52 @@ mod tests {
     fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
+            (Err(fast), _) if fast.row_diagnostics().is_some() => {}
             (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
         }
+    }
+
+    #[test]
+    fn date_extract_rejects_every_invalid_source_row() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![
+                Some("2024-01-15"),
+                Some("2024-13-01"),
+                None,
+                Some("non una data"),
+            ]))],
+        )
+        .expect("fixture");
+        let error = date_extract(
+            &batch,
+            &DateExtract {
+                column: "ts".into(),
+                parts: vec![DatePart::Year],
+                prefix: String::new(),
+                date_format: Some("%Y-%m-%d".into()),
+                invalid: InvalidDatePolicy::Null,
+            },
+        )
+        .expect_err("date_extract ha pubblicato null sintetici");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped mancante");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.total, Some(2));
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(report.examples.iter().all(|example| {
+            example.cause == "conversion.invalid_datetime"
+                && example.column.as_deref() == Some("ts")
+        }));
     }
 
     #[test]
@@ -547,7 +608,10 @@ mod tests {
                 .num_rows(),
             0
         );
-        assert_eq!(ids(&limit(&input, &Limit { n: 3, offset: 3 }).expect("tail")), vec![3, 4]);
+        assert_eq!(
+            ids(&limit(&input, &Limit { n: 3, offset: 3 }).expect("tail")),
+            vec![3, 4]
+        );
         // Default serde: offset 0; config strict.
         let decoded: Limit = serde_json::from_value(json!({"n": 1})).expect("default offset");
         assert_eq!(decoded.offset, 0);

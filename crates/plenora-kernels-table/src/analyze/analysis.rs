@@ -183,4 +183,3 @@ pub(in crate::analyze) fn analyze_sample(
     };
     Ok(output)
 }
-

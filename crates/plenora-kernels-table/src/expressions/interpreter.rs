@@ -4,16 +4,16 @@ use std::sync::Arc;
 use chrono::{Datelike, NaiveDate};
 use serde_json::Value;
 
+use super::fast::FastProgram;
+use super::scalar::{binary, boolean, column, compare, literal, number, text, Scalar};
+use super::temporal::{check_date32_unit, date_trunc_generic, in_generic, literal_unit};
+use super::{Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
+use crate::{column_index, replace_or_append, NON_FINITE_RESULT_MESSAGE};
 use plenora_core::arrow::array::{
     BooleanArray, Date32Array, Float64Array, RecordBatch, StringArray, TimestampMillisecondArray,
 };
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
-use crate::{column_index, replace_or_append};
-use super::fast::FastProgram;
-use super::scalar::{binary, boolean, column, compare, literal, number, text, Scalar};
-use super::temporal::{check_date32_unit, date_trunc_generic, in_generic, literal_unit};
-use super::{Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
 
 /// Tipo temporale della radice `date_trunc` ricavato dallo schema del batch.
 ///
@@ -21,7 +21,10 @@ use super::{Expression, ExpressionTransform, Function, OutputType, UnaryOperator
 /// produrre comunque Date32/TimestampMs dal tipo della colonna, MAI Utf8.
 /// Gli errori (unita' non valida, colonna non temporale, timezone-aware)
 /// sono gli stessi del percorso di valutazione.
-pub fn root_temporal_type(expression: &Expression, batch: &RecordBatch) -> Result<Option<OutputType>> {
+pub fn root_temporal_type(
+    expression: &Expression,
+    batch: &RecordBatch,
+) -> Result<Option<OutputType>> {
     let Expression::Function {
         name: Function::DateTrunc,
         args,
@@ -87,9 +90,7 @@ fn temporal_kind(expression: &Expression, batch: &RecordBatch) -> Result<Option<
             }
             Ok(kind)
         }
-        Expression::Literal {
-            value: Value::Null,
-        } => Ok(None),
+        Expression::Literal { value: Value::Null } => Ok(None),
         _ => Err(PlenoraError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
@@ -111,7 +112,9 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
     match name {
         Function::Coalesce => {
             if args.is_empty() {
-                return Err(PlenoraError::InvalidPlan("coalesce richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "coalesce richiede argomenti".into(),
+                ));
             }
             Ok(args
                 .into_iter()
@@ -150,15 +153,16 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 }
                 _ => {
                     return Err(PlenoraError::Internal(
-                        "il ramo unario ammette solo lower/upper/trim/length/year"
-                            .into(),
+                        "il ramo unario ammette solo lower/upper/trim/length/year".into(),
                     ));
                 }
             })
         }
         Function::Concat => {
             if args.is_empty() {
-                return Err(PlenoraError::InvalidPlan("concat richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "concat richiede argomenti".into(),
+                ));
             }
             let mut output = String::new();
             for value in args {
@@ -183,8 +187,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::EndsWith => value.ends_with(&pattern),
                 _ => {
                     return Err(PlenoraError::Internal(
-                        "il ramo testo ammette solo contains/starts_with/ends_with"
-                            .into(),
+                        "il ramo testo ammette solo contains/starts_with/ends_with".into(),
                     ));
                 }
             }))
@@ -230,9 +233,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             if value.is_finite() {
                 Ok(Scalar::Number(value))
             } else {
-                Err(PlenoraError::Schema(
-                    "risultato expression non finito".into(),
-                ))
+                Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
             }
         }
         Function::Substring => {
@@ -321,8 +322,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             Ok(best)
         }
         Function::DateTrunc | Function::In => Err(PlenoraError::Internal(
-            "date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)"
-                .into(),
+            "date_trunc/in sono valutati in evaluate (accesso all'AST degli argomenti)".into(),
         )),
     }
 }
@@ -414,7 +414,9 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
         }
         Expression::Function { name, args } => {
             if args.len() > 64 {
-                return Err(PlenoraError::InvalidPlan("troppi argomenti expression".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "troppi argomenti expression".into(),
+                ));
             }
             // date_trunc: unita' letterale del set chiuso, rifiutata qui.
             if matches!(name, Function::DateTrunc) {
@@ -457,7 +459,9 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
             else_value,
         } => {
             if branches.is_empty() || branches.len() > 64 {
-                return Err(PlenoraError::InvalidPlan("numero rami case non valido".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "numero rami case non valido".into(),
+                ));
             }
             for branch in branches {
                 audit(&branch.when, depth + 1, nodes, max_nodes)?;
@@ -515,9 +519,7 @@ fn scalar_date32(value: &Scalar, context: &str) -> Result<Option<i32>> {
     match value {
         Scalar::Null => Ok(None),
         Scalar::Date32(value) => Ok(Some(*value)),
-        _ => Err(PlenoraError::Schema(format!(
-            "{context} richiede una data"
-        ))),
+        _ => Err(PlenoraError::Schema(format!("{context} richiede una data"))),
     }
 }
 
@@ -551,6 +553,7 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 ///   negativo; unita' di `date_trunc` non valida; invarianti interne
 ///   violate (errore Internal).
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
+    super::reject_literal_zero_divisor(&config.expression)?;
     // Batch vuoto: il generico non valuta mai i nodi (colonne non risolte,
     // letterali non convertiti); si mantiene quel comportamento saltando la
     // compilazione.
@@ -562,10 +565,34 @@ pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<R
 
 /// Percorso generico originale: interprete ricorsivo sull'AST, usato sui
 /// batch vuoti e come oracolo dei test.
-pub fn expression_generic(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
-    let values = (0..batch.num_rows())
-        .map(|row| evaluate(&config.expression, batch, row))
-        .collect::<Result<Vec<_>>>()?;
+pub fn expression_generic(
+    batch: &RecordBatch,
+    config: &ExpressionTransform,
+) -> Result<RecordBatch> {
+    let mut values = Vec::with_capacity(batch.num_rows());
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        match evaluate(&config.expression, batch, row) {
+            Ok(value) => values.push(value),
+            Err(error) => {
+                let Some(cause) = crate::row_eval_failure_cause(&error) else {
+                    return Err(error);
+                };
+                rejections.push(crate::RowRejection {
+                    row,
+                    cause,
+                    column: None,
+                });
+                // Placeholder mai pubblicato: `reject_rows` chiude prima
+                // dell'uso di `values`.
+                values.push(Scalar::Null);
+            }
+        }
+    }
+    crate::reject_rows(
+        &rejections,
+        "valori expression rifiutati; consultare row_diagnostics",
+    )?;
     let mut resolved = resolved_output_type(&values, config.output_type)?;
     // Auto con tutti i valori null (o batch vuoto): una radice date_trunc
     // risolve comunque il tipo temporale dallo schema di input, mai Utf8.

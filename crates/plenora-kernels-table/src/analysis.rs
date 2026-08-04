@@ -1,19 +1,23 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{Float64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::DataType;
-use num_traits::ToPrimitive;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::Limits;
-use plenora_core::{PlenoraError, Result};
 use crate::{
     column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
     validate_output_name,
 };
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,7 +100,9 @@ pub struct Bin {
 
 fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> {
     if !(2..=100).contains(&count) {
-        return Err(PlenoraError::InvalidPlan("bins deve essere tra 2 e 100".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "bins deve essere tra 2 e 100".into(),
+        ));
     }
     let values = numeric
         .iter()
@@ -133,7 +139,9 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
                         let edge = width * position + lower;
                         edge
                     })
-                    .ok_or_else(|| PlenoraError::InvalidPlan("indice bin non rappresentabile".into()))
+                    .ok_or_else(|| {
+                        PlenoraError::InvalidPlan("indice bin non rappresentabile".into())
+                    })
             })
             .collect();
     }
@@ -315,7 +323,9 @@ struct PathColumns {
 
 impl PathColumns {
     fn insert(&mut self, row: usize, path: &str, text: String) {
-        let id = if let Some(&id) = self.index.get(path) { id } else {
+        let id = if let Some(&id) = self.index.get(path) {
+            id
+        } else {
             let id = self.columns.len();
             self.index.insert(path.to_owned(), id);
             self.paths.push(path.to_owned());
@@ -361,7 +371,11 @@ impl RowFlatten<'_> {
         self.cells.push((self.path.clone(), text));
     }
 
-    fn walk_map<'de, A: MapAccess<'de>>(&mut self, mut map: A, depth: usize) -> std::result::Result<(), A::Error> {
+    fn walk_map<'de, A: MapAccess<'de>>(
+        &mut self,
+        mut map: A,
+        depth: usize,
+    ) -> std::result::Result<(), A::Error> {
         if depth > self.max {
             // Oggetto oltre max_level: l'originale lo scarta senza
             // emettere nulla (ma il parser valida comunque il contenuto).
@@ -380,13 +394,13 @@ impl RowFlatten<'_> {
                 self.path.push('.');
             }
             self.path.push_str(&key);
-            let capture = self.targets.is_none_or(|targets| {
-                targets.capture.contains(&self.path[..])
-            });
+            let capture = self
+                .targets
+                .is_none_or(|targets| targets.capture.contains(&self.path[..]));
             let descend = capture
-                || self.targets.is_none_or(|targets| {
-                    targets.ancestors.contains(&self.path[..])
-                });
+                || self
+                    .targets
+                    .is_none_or(|targets| targets.ancestors.contains(&self.path[..]));
             if descend {
                 map.next_value_seed(LeafSeed {
                     row: &mut *self,
@@ -520,7 +534,10 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
         self.row.walk_map(map, 0)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
         while seq.next_element::<IgnoredAny>()?.is_some() {}
         Ok(())
     }
@@ -608,16 +625,77 @@ fn flatten_row(
 ///   atteso;
 /// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
 ///   di `scalar_as_string` (colonne non Utf8) e `replace_or_append`.
+// La raccolta completa per riga (R9.9) rende la funzione una sequenza
+// lineare sopra il limite di linee: nessuna complessita' logica aggiunta.
+#[allow(clippy::too_many_lines)]
 pub fn flatten_json(
     batch: &RecordBatch,
     config: &FlattenJson,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    const EXAMPLES_LIMIT: u64 = 10;
     if config.max_level > 5 {
         return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
     }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    let mut counts = BTreeMap::new();
+    let mut examples = Vec::new();
+    let mut observed_total = 0_u64;
+    for row in 0..batch.num_rows() {
+        let Some(text) = scalar_as_string(source.as_ref(), row)? else {
+            continue;
+        };
+        let cause = match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(_)) => continue,
+            Ok(_) => "json.root_not_object",
+            Err(_) => "json.invalid_syntax",
+        };
+        observed_total = observed_total.checked_add(1).ok_or_else(|| {
+            PlenoraError::Internal("overflow del conteggio diagnostico JSON".into())
+        })?;
+        let count = counts.entry(cause.to_owned()).or_insert(0_u64);
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow del conteggio causa JSON".into()))?;
+        let source_index = u64::try_from(row)
+            .map_err(|_| PlenoraError::Internal("indice sorgente non rappresentabile".into()))?;
+        if u64::try_from(examples.len())
+            .map_err(|_| PlenoraError::Internal("troppi esempi JSON".into()))?
+            < EXAMPLES_LIMIT
+        {
+            examples.push(RowDiagnosticExample {
+                source_index,
+                cause: cause.to_owned(),
+                column: Some(config.column.clone()),
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    if observed_total > 0 {
+        let report = RowDiagnostics {
+            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: RowDiagnosticScope::Read,
+            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: RowDiagnosticsCompleteness::Complete,
+            knowledge_limits: None,
+            observed_total,
+            total: Some(observed_total),
+            input_total: None,
+            counts,
+            examples_limit: EXAMPLES_LIMIT,
+            examples_truncated: observed_total > EXAMPLES_LIMIT,
+            examples,
+            diagnostic_state_counts: None,
+            write_outcome: None,
+        };
+        return Err(PlenoraError::DataMapping(
+            "documenti JSON rifiutati; consultare row_diagnostics".into(),
+        )
+        .with_phase(ErrorPhase::Read)
+        .with_row_diagnostics(report));
+    }
     let prefix = if config.prefix.is_empty() {
         format!("{}_", config.column)
     } else {
@@ -635,13 +713,27 @@ pub fn flatten_json(
         // to_owned di scalar_as_string, compresa la gestione dei null).
         for (row, text) in values.iter().enumerate() {
             if let Some(text) = text {
-                flatten_row(text, config.max_level, targets.as_ref(), row, &mut cells, &mut columns);
+                flatten_row(
+                    text,
+                    config.max_level,
+                    targets.as_ref(),
+                    row,
+                    &mut cells,
+                    &mut columns,
+                );
             }
         }
     } else {
         for row in 0..batch.num_rows() {
             if let Some(text) = scalar_as_string(source.as_ref(), row)? {
-                flatten_row(&text, config.max_level, targets.as_ref(), row, &mut cells, &mut columns);
+                flatten_row(
+                    &text,
+                    config.max_level,
+                    targets.as_ref(),
+                    row,
+                    &mut cells,
+                    &mut columns,
+                );
             }
         }
     }
@@ -652,7 +744,10 @@ pub fn flatten_json(
     let keys: Vec<String> = if config.output_columns.is_empty() {
         let mut paths = columns.paths.clone();
         paths.sort();
-        paths.into_iter().map(|key| format!("{prefix}{key}")).collect()
+        paths
+            .into_iter()
+            .map(|key| format!("{prefix}{key}"))
+            .collect()
     } else {
         config.output_columns.clone()
     };
@@ -790,9 +885,7 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
     {
         (values.len() - 1)
             .to_f64()
-            .map(|denominator| {
-                values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / denominator
-            })
+            .map(|denominator| values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / denominator)
     } else {
         None
     };
@@ -973,7 +1066,9 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
                     * fraction)
                     .floor()
                     .to_usize()
-                    .ok_or_else(|| PlenoraError::InvalidPlan("campione non rappresentabile".into()))?,
+                    .ok_or_else(|| {
+                        PlenoraError::InvalidPlan("campione non rappresentabile".into())
+                    })?,
             }
             .max(1)
             .min(rows.len());
@@ -998,7 +1093,6 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     }
     select_rows(batch, &selected)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1091,7 +1185,9 @@ mod tests {
                         .map(|index| scalar_as_string(batch.column(index).as_ref(), row))
                         .transpose()?
                         .flatten();
-                    Ok(groups.get(&key).and_then(|values| oracle_statistic(values, stat)))
+                    Ok(groups
+                        .get(&key)
+                        .and_then(|values| oracle_statistic(values, stat)))
                 })
                 .collect::<Result<Vec<_>>>()?;
             result = replace_or_append(
@@ -1188,7 +1284,12 @@ mod tests {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .expect("colonna f64");
-                assert_eq!(left.len(), right.len(), "lunghezza colonna {}", field.name());
+                assert_eq!(
+                    left.len(),
+                    right.len(),
+                    "lunghezza colonna {}",
+                    field.name()
+                );
                 for row in 0..left.len() {
                     assert_eq!(
                         left.is_null(row),
@@ -1226,7 +1327,50 @@ mod tests {
     }
 
     fn assert_flatten_equiv(batch: &RecordBatch, config: &FlattenJson, limits: &Limits) {
-        let fast = flatten_json(batch, config, limits).map_err(|err| format!("{err:?}"));
+        let fast = flatten_json(batch, config, limits);
+        if let Err(error) = &fast {
+            if let Some(report) = error.row_diagnostics() {
+                // L'oracolo storico trasformava documenti invalidi in mappe
+                // vuote. Verifichiamo indipendentemente che il rifiuto coincida
+                // esattamente con le righe non-object/non-JSON; sui soli input
+                // conformi resta valido l'oracolo byte-identico sottostante.
+                let index = column_index(batch, &config.column).expect("colonna fixture");
+                let expected = (0..batch.num_rows())
+                    .filter(|row| {
+                        scalar_as_string(batch.column(index).as_ref(), *row)
+                            .expect("profilo scalare fixture")
+                            .is_some_and(|text| {
+                                !matches!(
+                                    serde_json::from_str::<Value>(&text),
+                                    Ok(Value::Object(_))
+                                )
+                            })
+                    })
+                    .map(|row| u64::try_from(row).expect("indice fixture"))
+                    .collect::<Vec<_>>();
+                assert!(
+                    !expected.is_empty(),
+                    "input conforme rifiutato dal fast path"
+                );
+                assert_eq!(
+                    report.observed_total,
+                    u64::try_from(expected.len()).expect("fixture")
+                );
+                assert_eq!(
+                    report
+                        .examples
+                        .iter()
+                        .map(|example| example.source_index)
+                        .collect::<Vec<_>>(),
+                    expected
+                        .into_iter()
+                        .take(report.examples.len())
+                        .collect::<Vec<_>>()
+                );
+                return;
+            }
+        }
+        let fast = fast.map_err(|err| format!("{err:?}"));
         let oracle = oracle_flatten_json(batch, config, limits).map_err(|err| format!("{err:?}"));
         match (fast, oracle) {
             (Ok(fast), Ok(oracle)) => assert_batch_identical(&fast, &oracle),
@@ -1461,17 +1605,17 @@ mod tests {
             Some(r#"{"a":1,"b":{"c":2.5,"d":{"e":"x","f":[1,2,3]}},"g":"s"}"#),
             Some(r#"{"a":null}"#),
             None,
-            Some(r#"{"a":"#),          // JSON invalido
+            Some(r#"{"a":"#),            // JSON invalido
             Some(r#""radice stringa""#), // radice scalare
-            Some("[1,2]"),            // radice array
+            Some("[1,2]"),               // radice array
             Some("42"),
             Some("null"),
-            Some(r#"{"a":1} junk"#),  // trailing garbage
+            Some(r#"{"a":1} junk"#), // trailing garbage
             Some(r#"{"n":1.0,"m":1e2,"big":18446744073709551615,"neg":-0.0,"f":0.1}"#),
             Some(r#"{"s":"a\nbé","t":"\ud83d\ude00"}"#),
             Some(r#"{"a":1,"a":2}"#), // chiave duplicata: vince l'ultima
             Some(r#"{"a.b":1,"a":{"b":2}}"#), // chiave con punto: fallback
-            Some(r#"{"":{"x":1},"y":2}"#),    // chiave vuota: fallback
+            Some(r#"{"":{"x":1},"y":2}"#), // chiave vuota: fallback
             Some(r#"{"arr":[{"k":1,"z":2},{"k":3}]}"#), // oggetti in array
             Some("{}"),
             Some(r#"  { "a" : 1 }  "#),
@@ -1485,20 +1629,32 @@ mod tests {
         }
         for output_columns in [
             vec!["doc_a".to_owned()],
-            vec!["doc_b.d.e".to_owned(), "doc_g".to_owned(), "doc_manca".to_owned()],
-            vec!["doc_b".to_owned()],       // path che punta a un oggetto
-            vec!["doc_arr".to_owned()],     // path che punta a un array
+            vec![
+                "doc_b.d.e".to_owned(),
+                "doc_g".to_owned(),
+                "doc_manca".to_owned(),
+            ],
+            vec!["doc_b".to_owned()],   // path che punta a un oggetto
+            vec!["doc_arr".to_owned()], // path che punta a un array
             vec!["doc_a.a".to_owned(), "doc_a.a.a".to_owned()], // path annidati
             vec!["doc_a".to_owned(), "doc_a".to_owned()], // output duplicati
         ] {
             for max_level in 0..=3 {
-                assert_flatten_equiv(&docs, &flatten_config(max_level, output_columns.clone()), &limits);
+                assert_flatten_equiv(
+                    &docs,
+                    &flatten_config(max_level, output_columns.clone()),
+                    &limits,
+                );
             }
         }
         // batch vuoto, discovery e selettivo
         let empty = docs_batch(vec![]);
         assert_flatten_equiv(&empty, &flatten_config(2, vec![]), &limits);
-        assert_flatten_equiv(&empty, &flatten_config(2, vec!["doc_a".to_owned()]), &limits);
+        assert_flatten_equiv(
+            &empty,
+            &flatten_config(2, vec!["doc_a".to_owned()]),
+            &limits,
+        );
     }
 
     #[test]
@@ -1605,10 +1761,48 @@ mod tests {
         // colonna non utf8 (f64): scalar_as_string la rende testo,
         // il parsing fallisce e la riga e' vuota in entrambe le versioni
         let floats = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("doc", DataType::Float64, true)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "doc",
+                DataType::Float64,
+                true,
+            )])),
             vec![Arc::new(Float64Array::from(vec![Some(1.5), None]))],
         )
         .expect("batch f64");
         assert_flatten_equiv(&floats, &flatten_config(1, vec![]), &limits);
+    }
+
+    #[test]
+    fn flatten_json_rejects_every_invalid_document_with_row_diagnostics() {
+        let docs = docs_batch(vec![
+            Some(r#"{"ok":1}"#),
+            Some(r#"{"broken":"#),
+            Some("[1,2]"),
+            None,
+            Some("42"),
+        ]);
+
+        let error = flatten_json(&docs, &flatten_config(1, vec![]), &Limits::default())
+            .expect_err("documenti JSON invalidi pubblicati come righe accettate");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped mancante");
+        assert_eq!(report.observed_total, 3);
+        assert_eq!(report.total, Some(3));
+        assert_eq!(report.counts["json.invalid_syntax"], 1);
+        assert_eq!(report.counts["json.root_not_object"], 2);
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 4]
+        );
+        assert!(report
+            .examples
+            .iter()
+            .all(|example| example.column.as_deref() == Some("doc")));
+        assert!(!error.to_string().contains("broken"));
     }
 }

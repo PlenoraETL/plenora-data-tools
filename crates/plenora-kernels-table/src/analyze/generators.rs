@@ -104,4 +104,3 @@ pub(in crate::analyze) fn analyze_limit(
     output.properties = sorted_only(input);
     Ok(output)
 }
-

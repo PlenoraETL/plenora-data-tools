@@ -6,7 +6,10 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{
+    execute_batch as execute_batch_local, execute_binary, execute_complete_batch as execute_batch,
+    Limits, Plan, Step, ValidatedPlan,
+};
 use serde_json::{json, Value};
 
 fn batch() -> RecordBatch {
@@ -233,9 +236,17 @@ fn masking_defaults_and_real_formats_have_exact_non_destructive_output() {
     )
     .expect("defaults");
     assert!(defaults.column_by_name("secret_masked").is_some());
+    // Semantica storica (P1-3 review 2026-08-03): con null_policy di default
+    // (Empty) il null e' sostituito da stringa vuota — digest dell'hash
+    // storico della sola colonna, nessun rifiuto. Il rifiuto row-scoped
+    // resta SOLO per null_policy=error (test dedicati in kernels-table).
     let hash = execute_batch(values, &plan("md5_hash", json!({"columns":["secret"]})))
-        .expect("hash defaults");
-    assert_eq!(utf8(&hash, "md5_hash").value(0).len(), 32);
+        .expect("hash default: sostituzione Empty storica");
+    assert_eq!(
+        utf8(&hash, "md5_hash").value(6),
+        "d41d8cd98f00b204e9800998ecf8427e",
+        "null -> md5 di stringa vuota"
+    );
 }
 
 #[test]
@@ -448,6 +459,43 @@ fn stale_pandas_metadata_cannot_override_a_physical_type_cast() {
 }
 
 #[test]
+fn batch_local_api_fails_closed_and_complete_api_preserves_row_diagnostics() {
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "effective_date",
+            DataType::Utf8,
+            true,
+        )])),
+        vec![Arc::new(StringArray::from(vec![
+            Some("2026-08-02"),
+            Some("not-a-date"),
+        ]))],
+    )
+    .expect("date input");
+    let validated = plan(
+        "type_cast",
+        json!({
+            "column":"effective_date",
+            "target_type":"date32",
+            "errors":"coerce"
+        }),
+    );
+    let local = execute_batch_local(input.clone(), &validated)
+        .expect_err("API batch-local ha pubblicato completezza inventata");
+    assert_eq!(local.category(), plenora_core::ErrorCategory::Unsupported);
+    assert!(local.row_diagnostics().is_none());
+
+    let error = plenora_engine::execute_complete_batch(input, &validated)
+        .expect_err("date invalida accettata");
+
+    assert_eq!(error.category(), plenora_core::ErrorCategory::DataMapping);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Read);
+    let diagnostics = error.row_diagnostics().expect("diagnostica persa");
+    assert_eq!(diagnostics.observed_total, 1);
+    assert_eq!(diagnostics.examples[0].source_index, 1);
+}
+
+#[test]
 fn cleansing_fill_variants_and_exact_replacement_cover_every_scalar_type() {
     let cases = [
         ("text", json!(42)),
@@ -492,11 +540,33 @@ fn cleansing_fill_variants_and_exact_replacement_cover_every_scalar_type() {
         json!({"column":"text","old_value":"false","new_value":"no","regex":false}),
     );
     assert_eq!(utf8(&replaced, "text").value(2), "no");
-    let custom = run(
-        "type_cast",
-        json!({"column":"date","target_type":"date","date_format":"%d-%m-%Y","errors":"coerce"}),
-    );
+    let custom_input = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("date", DataType::Utf8, false)])),
+        vec![Arc::new(StringArray::from(vec!["31-12-2026"]))],
+    )
+    .expect("custom date");
+    let custom = execute_batch(
+        custom_input,
+        &plan(
+            "type_cast",
+            json!({"column":"date","target_type":"date","date_format":"%d-%m-%Y","errors":"coerce"}),
+        ),
+    )
+    .expect("custom date cast");
     assert_eq!(utf8(&custom, "date").value(0), "2026-12-31");
+    let invalid_custom = execute_batch(
+        batch(),
+        &plan(
+            "type_cast",
+            json!({"column":"date","target_type":"date","date_format":"%d-%m-%Y","errors":"coerce"}),
+        ),
+    )
+    .expect_err("data fuori formato accettata");
+    let diagnostics = invalid_custom
+        .row_diagnostics()
+        .expect("diagnostica custom date");
+    assert_eq!(diagnostics.observed_total, 1);
+    assert_eq!(diagnostics.examples[0].source_index, 1);
     let custom_datetime = RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)])),
         vec![Arc::new(StringArray::from(vec!["31-12-2026 05:06:07"]))],

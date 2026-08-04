@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
-use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array};
+use plenora_core::arrow::array::{
+    Array, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
@@ -100,8 +102,18 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
                 PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
             })?
         }
-        AggFunction::Min => raw.iter().flatten().copied().reduce(f64::min).unwrap_or_default(),
-        AggFunction::Max => raw.iter().flatten().copied().reduce(f64::max).unwrap_or_default(),
+        AggFunction::Min => raw
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(f64::min)
+            .unwrap_or_default(),
+        AggFunction::Max => raw
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(f64::max)
+            .unwrap_or_default(),
         AggFunction::Variance | AggFunction::Stddev => {
             if len <= aggregation.ddof {
                 return Ok(None);
@@ -193,12 +205,14 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 PlenoraError::InvalidPlan("dimensione quantile non rappresentabile".into())
             })?;
             let position = quantile * last;
-            let lower = position.floor().to_usize().ok_or_else(|| {
-                PlenoraError::InvalidPlan("indice quantile non valido".into())
-            })?;
-            let upper = position.ceil().to_usize().ok_or_else(|| {
-                PlenoraError::InvalidPlan("indice quantile non valido".into())
-            })?;
+            let lower = position
+                .floor()
+                .to_usize()
+                .ok_or_else(|| PlenoraError::InvalidPlan("indice quantile non valido".into()))?;
+            let upper = position
+                .ceil()
+                .to_usize()
+                .ok_or_else(|| PlenoraError::InvalidPlan("indice quantile non valido".into()))?;
             let weight = position - position.floor();
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
             // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
@@ -242,7 +256,9 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if group_indices.is_empty() {
-        return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "aggregate richiede group_by".into(),
+        ));
     }
     // Fail-closed prima dei dati (regola 1): un quantile fuori [0, 1]
     // produrrebbe indici oltre il gruppo ordinato — errore esplicito, mai

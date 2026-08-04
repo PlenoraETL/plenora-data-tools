@@ -86,7 +86,11 @@ fn write_plan(directory: &std::path::Path, plan: &serde_json::Value) -> std::pat
     plan_path
 }
 
-fn run_cli(plan: &std::path::Path, input: &std::path::Path, output: &std::path::Path) -> std::process::Output {
+fn run_cli(
+    plan: &std::path::Path,
+    input: &std::path::Path,
+    output: &std::path::Path,
+) -> std::process::Output {
     cli()
         .args(["run", "--plan"])
         .arg(plan)
@@ -141,8 +145,8 @@ fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
     let run = run_cli(&plan, &input, &output_path);
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metrics: serde_json::Value = serde_json::from_slice(&run.stdout).expect("JSON metriche");
     assert_eq!(metrics["status"], "ok");
@@ -197,7 +201,10 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
     let run = run_cli(&plan, &input, &output_path);
     assert!(!run.status.success(), "input XYZ accettato da geo.buffer");
     let stderr = String::from_utf8_lossy(&run.stderr);
-    assert!(stderr.contains("geo.buffer"), "l'errore cita l'op: {stderr}");
+    assert!(
+        stderr.contains("geo.buffer"),
+        "l'errore cita l'op: {stderr}"
+    );
     assert!(
         stderr.contains("xyz"),
         "l'errore cita la dimensionalita': {stderr}"
@@ -237,10 +244,12 @@ fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
         !run.status.success(),
         "incoerenza metadato/celle passata silenziosamente"
     );
-    let stderr = String::from_utf8_lossy(&run.stderr);
-    assert!(
-        stderr.contains("incoerente"),
-        "errore dedicato di mismatch dimensionale: {stderr}"
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&run.stderr).expect("envelope row diagnostics");
+    assert_eq!(envelope["error"]["category"], "data_mapping");
+    assert_eq!(
+        envelope["error"]["row_diagnostics"]["counts"]["geometry.invalid_wkb"],
+        1
     );
     assert!(
         !output_path.exists(),

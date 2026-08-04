@@ -48,9 +48,7 @@ use std::hint::black_box;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use geo::{
-    Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
-};
+use geo::{Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
 use plenora_kernels_geo::advanced::voronoi_cells;
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
@@ -69,9 +67,7 @@ use plenora_kernels_geo::extended_algorithms::{
     delaunay, densify, frechet_distance, geodesic_area_m2, geodesic_bearing_degrees,
     geometry_diagnostics, line_interpolate_point, line_merge, line_substring, snap_to_grid,
 };
-use plenora_kernels_geo::extensions::{
-    collect_geometries, geometry_accessors, line_locate_point,
-};
+use plenora_kernels_geo::extensions::{collect_geometries, geometry_accessors, line_locate_point};
 use plenora_kernels_geo::extensions2::{
     generate_grid_rows, snap, subdivide_wkb, GridExtent, GridShape,
 };
@@ -190,7 +186,10 @@ fn points_wkb() -> &'static WkbCells {
     static CELLS: OnceLock<WkbCells> = OnceLock::new();
     CELLS.get_or_init(|| {
         build_fixture(1_000_000, |rng, _| {
-            Geometry::Point(Point::new(rng.range(0.0, 10_000.0), rng.range(0.0, 10_000.0)))
+            Geometry::Point(Point::new(
+                rng.range(0.0, 10_000.0),
+                rng.range(0.0, 10_000.0),
+            ))
         })
     })
 }
@@ -389,7 +388,9 @@ fn pairs_wkb() -> (&'static WkbCells, &'static WkbCells) {
             .map(|_| {
                 let cx = rng.range(500.0, 9_500.0);
                 let cy = rng.range(500.0, 9_500.0);
-                enc_cell(&Geometry::Polygon(star_polygon(&mut rng, cx, cy, 50.0, 100)))
+                enc_cell(&Geometry::Polygon(star_polygon(
+                    &mut rng, cx, cy, 50.0, 100,
+                )))
             })
             .collect()
     });
@@ -1020,12 +1021,15 @@ fn write_outputs(results: &[Measurement]) {
             entry.median_seconds,
             entry.geoms_per_second,
             entry
-                .decode_share.map_or_else(|| "-".into(), |share| format!("{share:.2}")),
+                .decode_share
+                .map_or_else(|| "-".into(), |share| format!("{share:.2}")),
             entry.bound_class,
             entry
-                .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
+                .peak_rss_kib
+                .map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry
-                .rss_delta_kib.map_or_else(|| "-".into(), |kib| format!("{}", kib / 1024)),
+                .rss_delta_kib
+                .map_or_else(|| "-".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
         )
         .expect("riga markdown");
@@ -1051,373 +1055,1090 @@ fn main() {
         let _ = std::fs::remove_file(directory.join("geo_sweep.jsonl"));
     }
     if !skip_prefix {
+        // --- Riferimenti adapter (decode/encode puri) ---------------------------
+        let decode_op = |payload: &Vec<u8>| -> Result<usize, String> {
+            dec(payload).map(|geometry| black_box(geometry).coords_count())
+        };
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.points",
+            "ref_decode",
+            "points",
+            points_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.lines50",
+            "ref_decode",
+            "lines50",
+            lines_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.poly_simple",
+            "ref_decode",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.poly_complex",
+            "ref_decode",
+            "poly_complex",
+            polys_complex_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.multipoly",
+            "ref_decode",
+            "multipoly",
+            multipolys_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.hetero",
+            "ref_decode",
+            "hetero",
+            hetero_wkb(),
+            false,
+            true,
+            "solo decode WKB eterogeneo",
+            &decode_op,
+        );
+        sweep_cells(
+            &mut results,
+            "_ref.wkb_decode.geo_points",
+            "ref_decode",
+            "geo_points",
+            geo_points_wkb(),
+            false,
+            true,
+            "solo decode WKB",
+            &decode_op,
+        );
 
-    // --- Riferimenti adapter (decode/encode puri) ---------------------------
-    let decode_op = |payload: &Vec<u8>| -> Result<usize, String> {
-        dec(payload).map(|geometry| black_box(geometry).coords_count())
-    };
-    sweep_cells(&mut results, "_ref.wkb_decode.points", "ref_decode", "points", points_wkb(), false, true, "solo decode WKB", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.lines50", "ref_decode", "lines50", lines_wkb(), false, true, "solo decode WKB", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.poly_simple", "ref_decode", "poly_simple", polys_wkb(), false, true, "solo decode WKB", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.poly_complex", "ref_decode", "poly_complex", polys_complex_wkb(), false, true, "solo decode WKB", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.multipoly", "ref_decode", "multipoly", multipolys_wkb(), false, true, "solo decode WKB", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.hetero", "ref_decode", "hetero", hetero_wkb(), false, true, "solo decode WKB eterogeneo", &decode_op);
-    sweep_cells(&mut results, "_ref.wkb_decode.geo_points", "ref_decode", "geo_points", geo_points_wkb(), false, true, "solo decode WKB", &decode_op);
-
-    let encode_op = |payload: &Vec<u8>| -> Result<usize, String> {
-        dec(payload).and_then(|geometry| enc(&geometry))
-    };
-    let encode_fixtures: [(&str, &str, &WkbCells); 5] = [
-        ("points", "_ref.wkb_encode.points", points_wkb()),
-        ("lines50", "_ref.wkb_encode.lines50", lines_wkb()),
-        ("poly_simple", "_ref.wkb_encode.poly_simple", polys_wkb()),
-        ("poly_complex", "_ref.wkb_encode.poly_complex", polys_complex_wkb()),
-        ("multipoly", "_ref.wkb_encode.multipoly", multipolys_wkb()),
-    ];
-    for &(fixture, op_name, cells) in &encode_fixtures {
-        sweep_cells(&mut results, op_name, "ref_encode", fixture, cells, true, true, "decode + encode WKB (quota encode = misura - ref decode)", &encode_op);
-    }
-    // Registra encode = (decode+encode) - decode per le fixture di riferimento.
-    for &(fixture, op_name, _) in &encode_fixtures {
-        if let Some(entry) = results.iter().find(|entry| entry.op == op_name) {
-            let combined = entry.median_seconds / entry.cells as f64;
-            if let Some((Some(decode), _)) = ref_times_get(fixture) {
-                ref_times_insert(fixture, None, Some((combined - decode).max(0.0)));
+        let encode_op = |payload: &Vec<u8>| -> Result<usize, String> {
+            dec(payload).and_then(|geometry| enc(&geometry))
+        };
+        let encode_fixtures: [(&str, &str, &WkbCells); 5] = [
+            ("points", "_ref.wkb_encode.points", points_wkb()),
+            ("lines50", "_ref.wkb_encode.lines50", lines_wkb()),
+            ("poly_simple", "_ref.wkb_encode.poly_simple", polys_wkb()),
+            (
+                "poly_complex",
+                "_ref.wkb_encode.poly_complex",
+                polys_complex_wkb(),
+            ),
+            ("multipoly", "_ref.wkb_encode.multipoly", multipolys_wkb()),
+        ];
+        for &(fixture, op_name, cells) in &encode_fixtures {
+            sweep_cells(
+                &mut results,
+                op_name,
+                "ref_encode",
+                fixture,
+                cells,
+                true,
+                true,
+                "decode + encode WKB (quota encode = misura - ref decode)",
+                &encode_op,
+            );
+        }
+        // Registra encode = (decode+encode) - decode per le fixture di riferimento.
+        for &(fixture, op_name, _) in &encode_fixtures {
+            if let Some(entry) = results.iter().find(|entry| entry.op == op_name) {
+                let combined = entry.median_seconds / entry.cells as f64;
+                if let Some((Some(decode), _)) = ref_times_get(fixture) {
+                    ref_times_insert(fixture, None, Some((combined - decode).max(0.0)));
+                }
             }
         }
-    }
 
-    // --- Riferimenti geometrici decodificati una volta (config) -------------
-    let ref_poly = dec(&polys_wkb()[0]).expect("ref polygon");
-    let ref_poly = &ref_poly;
-    let ref_line = as_line(&dec(&lines_wkb()[0]).expect("ref line"))
-        .expect("line")
-        .clone();
-    let ref_line_geometry = Geometry::LineString(ref_line.clone());
-    let ref_complex = dec(&polys_complex_wkb()[0]).expect("ref complex");
-    let ref_geo_point = as_point(&dec(&geo_points_wkb()[1]).expect("ref geo point")).expect("pt");
+        // --- Riferimenti geometrici decodificati una volta (config) -------------
+        let ref_poly = dec(&polys_wkb()[0]).expect("ref polygon");
+        let ref_poly = &ref_poly;
+        let ref_line = as_line(&dec(&lines_wkb()[0]).expect("ref line"))
+            .expect("line")
+            .clone();
+        let ref_line_geometry = Geometry::LineString(ref_line.clone());
+        let ref_complex = dec(&polys_complex_wkb()[0]).expect("ref complex");
+        let ref_geo_point =
+            as_point(&dec(&geo_points_wkb()[1]).expect("ref geo point")).expect("pt");
 
-    // --- Manipola-compat per-cella ------------------------------------------
-    let op_centroid = |payload: &Vec<u8>| transform_wkb(Operation::Centroid, payload).map(|w| w.len()).map_err(|e| e.to_string());
-    sweep_cells(&mut results, "geo.centroid", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_centroid);
-    let op_convex = |payload: &Vec<u8>| transform_wkb(Operation::ConvexHull, payload).map(|w| w.len()).map_err(|e| e.to_string());
-    sweep_cells(&mut results, "geo.convex_hull", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_convex);
-    let op_envelope = |payload: &Vec<u8>| transform_wkb(Operation::Envelope, payload).map(|w| w.len()).map_err(|e| e.to_string());
-    sweep_cells(&mut results, "geo.envelope", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_envelope);
-    let op_area = |payload: &Vec<u8>| dec(payload).and_then(|g| area(&g).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.area", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_area);
-    let op_boundary = |payload: &Vec<u8>| dec(payload).and_then(|g| boundary(&g).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.boundary", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_boundary);
-    let op_bounds = |payload: &Vec<u8>| dec(payload).and_then(|g| bounds(&g).map(|v| usize::from(black_box(v).is_some())).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.bounds_extractor", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_bounds);
-    let op_buffer = |payload: &Vec<u8>| dec(payload).and_then(|g| buffer_with_cap(&g, 10.0, BufferCapStyle::Round).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.buffer", "per_cell", "poly_simple", polys_wkb(), true, false, "d=10, cap round", &op_buffer);
-    let op_distance = |payload: &Vec<u8>| dec(payload).and_then(|g| distance(&g, ref_poly).map(|v| black_box(v).unwrap_or(0.0) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.distance", "per_cell", "poly_simple", polys_wkb(), false, false, "vs poligono di riferimento", &op_distance);
-    let op_explode = |payload: &Vec<u8>| dec(payload).and_then(|g| explode(&g).map_err(|e| e.to_string()).and_then(|parts| enc_many(&parts)));
-    sweep_cells(&mut results, "geo.explode", "per_cell", "multipoly", multipolys_wkb(), true, false, "1:N, encode di ogni parte", &op_explode);
-    let op_from_coords = |xy: &(f64, f64)| point_from_lon_lat(xy.0, xy.1).map_err(|e| e.to_string()).and_then(|g| enc(&g));
-    sweep_cells(&mut results, "geo.from_coords", "per_cell", "coords_xy", coords_xy(), true, false, "da colonne x/y (niente decode)", &op_from_coords);
-    let op_length = |payload: &Vec<u8>| dec(payload).and_then(|g| length(&g).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.length", "per_cell", "lines50", lines_wkb(), false, false, "", &op_length);
-    let op_perimeter = |payload: &Vec<u8>| dec(payload).and_then(|g| perimeter(&g).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.perimeter", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_perimeter);
-    let op_pos = |payload: &Vec<u8>| dec(payload).and_then(|g| point_on_surface(&g).map_err(|e| e.to_string()).and_then(|r| enc_opt(r.as_ref())));
-    sweep_cells(&mut results, "geo.point_on_surface", "per_cell", "poly_simple", polys_wkb(), true, false, "", &op_pos);
-    let op_simplify = |payload: &Vec<u8>| dec(payload).and_then(|g| simplify_with_policy(&g, 1.0, SimplifyPolicy::DouglasPeucker).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.simplify", "per_cell", "poly_simple", polys_wkb(), true, false, "tol=1, douglas_peucker", &op_simplify);
-    let op_simplify_vw = |payload: &Vec<u8>| dec(payload).and_then(|g| simplify_with_policy(&g, 1.0, SimplifyPolicy::PreserveTopology).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.simplify[preserve_topology]", "per_cell", "poly_simple", polys_wkb(), true, false, "tol=1, variante VW preserve", &op_simplify_vw);
-    let op_to_wkt = |payload: &Vec<u8>| dec(payload).and_then(|g| to_wkt(&g).map(|s| s.len()).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.to_wkt", "per_cell", "poly_simple", polys_wkb(), false, false, "output WKT (niente encode WKB)", &op_to_wkt);
-    let op_vcount = |payload: &Vec<u8>| dec(payload).and_then(|g| vertex_count(&g).map(|v| v as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.vertex_count", "per_cell", "poly_simple", polys_wkb(), false, false, "", &op_vcount);
-
-    // --- Predicati DE-9IM (11), punti vs poligono di riferimento ------------
-    for (name, predicate) in [
-        ("geo.predicate_intersects", SpatialPredicate::Intersects),
-        ("geo.predicate_disjoint", SpatialPredicate::Disjoint),
-        ("geo.predicate_contains", SpatialPredicate::Contains),
-        ("geo.predicate_within", SpatialPredicate::Within),
-        ("geo.predicate_equals_topo", SpatialPredicate::EqualsTopo),
-        ("geo.predicate_covers", SpatialPredicate::Covers),
-        ("geo.predicate_covered_by", SpatialPredicate::CoveredBy),
-        ("geo.predicate_contains_properly", SpatialPredicate::ContainsProperly),
-        ("geo.predicate_touches", SpatialPredicate::Touches),
-        ("geo.predicate_crosses", SpatialPredicate::Crosses),
-        ("geo.predicate_overlaps", SpatialPredicate::Overlaps),
-    ] {
-        let op = move |payload: &Vec<u8>| {
+        // --- Manipola-compat per-cella ------------------------------------------
+        let op_centroid = |payload: &Vec<u8>| {
+            transform_wkb(Operation::Centroid, payload)
+                .map(|w| w.len())
+                .map_err(|e| e.to_string())
+        };
+        sweep_cells(
+            &mut results,
+            "geo.centroid",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "",
+            &op_centroid,
+        );
+        let op_convex = |payload: &Vec<u8>| {
+            transform_wkb(Operation::ConvexHull, payload)
+                .map(|w| w.len())
+                .map_err(|e| e.to_string())
+        };
+        sweep_cells(
+            &mut results,
+            "geo.convex_hull",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "",
+            &op_convex,
+        );
+        let op_envelope = |payload: &Vec<u8>| {
+            transform_wkb(Operation::Envelope, payload)
+                .map(|w| w.len())
+                .map_err(|e| e.to_string())
+        };
+        sweep_cells(
+            &mut results,
+            "geo.envelope",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "",
+            &op_envelope,
+        );
+        let op_area = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                evaluate_predicate(&g, ref_poly, predicate)
-                    .map(|v| usize::from(black_box(v)))
+                area(&g)
+                    .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })
         };
-        let leaked: &(dyn Fn(&Vec<u8>) -> Result<usize, String> + Sync) = Box::leak(Box::new(op));
-        sweep_cells(&mut results, name, "per_cell", "points", points_wkb(), false, false, "punti vs poligono 100v di riferimento", leaked);
-    }
-
-    // --- Estensioni storiche per-cella --------------------------------------
-    let op_affine = |payload: &Vec<u8>| dec(payload).and_then(|g| affine_transform_validated(&g, [1.1, 0.05, 3.0, -0.02, 0.9, 7.0]).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.affine_transform", "per_cell", "poly_simple", polys_wkb(), true, false, "[1.1,0.05,3,-0.02,0.9,7]", &op_affine);
-    let op_translate = |payload: &Vec<u8>| dec(payload).and_then(|g| translate_validated(&g, 10.0, 20.0).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.translate", "per_cell", "poly_simple", polys_wkb(), true, false, "dx=10 dy=20", &op_translate);
-    let op_scale = |payload: &Vec<u8>| dec(payload).and_then(|g| scale_about_validated(&g, 1.5, 0.75, Point::new(0.0, 0.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.scale", "per_cell", "poly_simple", polys_wkb(), true, false, "1.5x0.75 su origine", &op_scale);
-    let op_rotate = |payload: &Vec<u8>| dec(payload).and_then(|g| rotate_about_validated(&g, 30.0, Point::new(5_000.0, 5_000.0)).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.rotate", "per_cell", "poly_simple", polys_wkb(), true, false, "30 gradi", &op_rotate);
-    let op_concave = |payload: &Vec<u8>| dec(payload).and_then(|g| concave_hull_validated(&g, 2.0, 0.0, 10_000_000).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.concave_hull", "per_cell", "poly_simple", polys_wkb(), true, false, "concavity=2", &op_concave);
-    let op_hausdorff = |payload: &Vec<u8>| dec(payload).and_then(|g| hausdorff_distance_validated(&g, &ref_line_geometry, 1_000_000_000).map(|v| black_box(v).unwrap_or(0.0) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.hausdorff_distance", "per_cell", "lines50", lines_wkb(), false, false, "vs linea 50v di riferimento", &op_hausdorff);
-    let op_haversine = |payload: &Vec<u8>| dec(payload).and_then(|g| haversine_distance_m(as_point(&g)?, ref_geo_point).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.haversine_distance", "per_cell", "geo_points", geo_points_wkb(), false, false, "vs punto di riferimento", &op_haversine);
-    let op_geodesic = |payload: &Vec<u8>| dec(payload).and_then(|g| geodesic_distance_m(as_point(&g)?, ref_geo_point).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.geodesic_distance", "per_cell", "geo_points", geo_points_wkb(), false, false, "vs punto di riferimento", &op_geodesic);
-    let op_geolen = |payload: &Vec<u8>| dec(payload).and_then(|g| geodesic_line_length_m(as_line(&g)?).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.geodesic_line_length", "per_cell", "geo_lines", geo_lines_wkb(), false, false, "", &op_geolen);
-    let op_densify = |payload: &Vec<u8>| dec(payload).and_then(|g| densify(&g, 5.0, 100_000_000).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.densify", "per_cell", "lines50", lines_wkb(), true, false, "max_segment_length=5", &op_densify);
-    let op_snapgrid = |payload: &Vec<u8>| dec(payload).and_then(|g| snap_to_grid(&g, 1.0).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.snap_to_grid", "per_cell", "poly_simple", polys_wkb(), true, false, "grid=1", &op_snapgrid);
-    let op_delaunay = |payload: &Vec<u8>| {
-        dec(payload).and_then(|g| {
-            delaunay(&g, 1_000_000, 10_000_000)
+        sweep_cells(
+            &mut results,
+            "geo.area",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "",
+            &op_area,
+        );
+        let op_boundary = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                boundary(&g)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.boundary",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "",
+            &op_boundary,
+        );
+        let op_bounds = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                bounds(&g)
+                    .map(|v| usize::from(black_box(v).is_some()))
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.bounds_extractor",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "",
+            &op_bounds,
+        );
+        let op_buffer = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                buffer_with_cap(&g, 10.0, BufferCapStyle::Round)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.buffer",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "d=10, cap round",
+            &op_buffer,
+        );
+        let op_distance = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                distance(&g, ref_poly)
+                    .map(|v| black_box(v).unwrap_or(0.0) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.distance",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "vs poligono di riferimento",
+            &op_distance,
+        );
+        let op_explode = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                explode(&g)
+                    .map_err(|e| e.to_string())
+                    .and_then(|parts| enc_many(&parts))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.explode",
+            "per_cell",
+            "multipoly",
+            multipolys_wkb(),
+            true,
+            false,
+            "1:N, encode di ogni parte",
+            &op_explode,
+        );
+        let op_from_coords = |xy: &(f64, f64)| {
+            point_from_lon_lat(xy.0, xy.1)
                 .map_err(|e| e.to_string())
-                .and_then(|triangles| {
-                    triangles
-                        .iter()
-                        .try_fold(0_usize, |total, triangle| {
+                .and_then(|g| enc(&g))
+        };
+        sweep_cells(
+            &mut results,
+            "geo.from_coords",
+            "per_cell",
+            "coords_xy",
+            coords_xy(),
+            true,
+            false,
+            "da colonne x/y (niente decode)",
+            &op_from_coords,
+        );
+        let op_length = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                length(&g)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.length",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            false,
+            false,
+            "",
+            &op_length,
+        );
+        let op_perimeter = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                perimeter(&g)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.perimeter",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "",
+            &op_perimeter,
+        );
+        let op_pos = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                point_on_surface(&g)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc_opt(r.as_ref()))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.point_on_surface",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "",
+            &op_pos,
+        );
+        let op_simplify = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                simplify_with_policy(&g, 1.0, SimplifyPolicy::DouglasPeucker)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.simplify",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "tol=1, douglas_peucker",
+            &op_simplify,
+        );
+        let op_simplify_vw = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                simplify_with_policy(&g, 1.0, SimplifyPolicy::PreserveTopology)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.simplify[preserve_topology]",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "tol=1, variante VW preserve",
+            &op_simplify_vw,
+        );
+        let op_to_wkt = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| to_wkt(&g).map(|s| s.len()).map_err(|e| e.to_string()))
+        };
+        sweep_cells(
+            &mut results,
+            "geo.to_wkt",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "output WKT (niente encode WKB)",
+            &op_to_wkt,
+        );
+        let op_vcount = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                vertex_count(&g)
+                    .map(|v| v as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.vertex_count",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "",
+            &op_vcount,
+        );
+
+        // --- Predicati DE-9IM (11), punti vs poligono di riferimento ------------
+        for (name, predicate) in [
+            ("geo.predicate_intersects", SpatialPredicate::Intersects),
+            ("geo.predicate_disjoint", SpatialPredicate::Disjoint),
+            ("geo.predicate_contains", SpatialPredicate::Contains),
+            ("geo.predicate_within", SpatialPredicate::Within),
+            ("geo.predicate_equals_topo", SpatialPredicate::EqualsTopo),
+            ("geo.predicate_covers", SpatialPredicate::Covers),
+            ("geo.predicate_covered_by", SpatialPredicate::CoveredBy),
+            (
+                "geo.predicate_contains_properly",
+                SpatialPredicate::ContainsProperly,
+            ),
+            ("geo.predicate_touches", SpatialPredicate::Touches),
+            ("geo.predicate_crosses", SpatialPredicate::Crosses),
+            ("geo.predicate_overlaps", SpatialPredicate::Overlaps),
+        ] {
+            let op = move |payload: &Vec<u8>| {
+                dec(payload).and_then(|g| {
+                    evaluate_predicate(&g, ref_poly, predicate)
+                        .map(|v| usize::from(black_box(v)))
+                        .map_err(|e| e.to_string())
+                })
+            };
+            let leaked: &(dyn Fn(&Vec<u8>) -> Result<usize, String> + Sync) =
+                Box::leak(Box::new(op));
+            sweep_cells(
+                &mut results,
+                name,
+                "per_cell",
+                "points",
+                points_wkb(),
+                false,
+                false,
+                "punti vs poligono 100v di riferimento",
+                leaked,
+            );
+        }
+
+        // --- Estensioni storiche per-cella --------------------------------------
+        let op_affine = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                affine_transform_validated(&g, [1.1, 0.05, 3.0, -0.02, 0.9, 7.0])
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.affine_transform",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "[1.1,0.05,3,-0.02,0.9,7]",
+            &op_affine,
+        );
+        let op_translate = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                translate_validated(&g, 10.0, 20.0)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.translate",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "dx=10 dy=20",
+            &op_translate,
+        );
+        let op_scale = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                scale_about_validated(&g, 1.5, 0.75, Point::new(0.0, 0.0))
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.scale",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "1.5x0.75 su origine",
+            &op_scale,
+        );
+        let op_rotate = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                rotate_about_validated(&g, 30.0, Point::new(5_000.0, 5_000.0))
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.rotate",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "30 gradi",
+            &op_rotate,
+        );
+        let op_concave = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                concave_hull_validated(&g, 2.0, 0.0, 10_000_000)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.concave_hull",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "concavity=2",
+            &op_concave,
+        );
+        let op_hausdorff = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                hausdorff_distance_validated(&g, &ref_line_geometry, 1_000_000_000)
+                    .map(|v| black_box(v).unwrap_or(0.0) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.hausdorff_distance",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            false,
+            false,
+            "vs linea 50v di riferimento",
+            &op_hausdorff,
+        );
+        let op_haversine = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                haversine_distance_m(as_point(&g)?, ref_geo_point)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.haversine_distance",
+            "per_cell",
+            "geo_points",
+            geo_points_wkb(),
+            false,
+            false,
+            "vs punto di riferimento",
+            &op_haversine,
+        );
+        let op_geodesic = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geodesic_distance_m(as_point(&g)?, ref_geo_point)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.geodesic_distance",
+            "per_cell",
+            "geo_points",
+            geo_points_wkb(),
+            false,
+            false,
+            "vs punto di riferimento",
+            &op_geodesic,
+        );
+        let op_geolen = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geodesic_line_length_m(as_line(&g)?)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.geodesic_line_length",
+            "per_cell",
+            "geo_lines",
+            geo_lines_wkb(),
+            false,
+            false,
+            "",
+            &op_geolen,
+        );
+        let op_densify = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                densify(&g, 5.0, 100_000_000)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.densify",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            true,
+            false,
+            "max_segment_length=5",
+            &op_densify,
+        );
+        let op_snapgrid = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                snap_to_grid(&g, 1.0)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.snap_to_grid",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "grid=1",
+            &op_snapgrid,
+        );
+        let op_delaunay = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                delaunay(&g, 1_000_000, 10_000_000)
+                    .map_err(|e| e.to_string())
+                    .and_then(|triangles| {
+                        triangles.iter().try_fold(0_usize, |total, triangle| {
                             enc(&Geometry::Polygon(triangle.clone())).map(|len| total + len)
                         })
-                })
-        })
-    };
-    sweep_cells(&mut results, "geo.delaunay", "per_cell", "multipoint50", multipoint50_wkb(), true, false, "multipoint 50 punti, encode triangoli", &op_delaunay);
-    let op_linesub = |payload: &Vec<u8>| dec(payload).and_then(|g| line_substring(as_line(&g)?, 0.2, 0.8).map_err(|e| e.to_string()).and_then(|r| enc_opt(r.as_ref())));
-    sweep_cells(&mut results, "geo.line_substring", "per_cell", "lines50", lines_wkb(), true, false, "[0.2, 0.8]", &op_linesub);
-    let op_lineinterp = |payload: &Vec<u8>| {
-        dec(payload).and_then(|g| {
-            line_interpolate_point(as_line(&g)?, 0.5)
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_or(Ok(0), |p| enc(&Geometry::Point(p))))
-        })
-    };
-    sweep_cells(&mut results, "geo.line_interpolate_point", "per_cell", "lines50", lines_wkb(), true, false, "ratio=0.5", &op_lineinterp);
-    let op_frechet = |payload: &Vec<u8>| dec(payload).and_then(|g| frechet_distance(as_line(&g)?, &ref_line, 1_000_000_000).map(|v| black_box(v).unwrap_or(0.0) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.frechet_distance", "per_cell", "lines50", lines_wkb(), false, false, "vs linea 50v di riferimento", &op_frechet);
-    let op_bearing = |payload: &Vec<u8>| dec(payload).and_then(|g| geodesic_bearing_degrees(ref_geo_point, as_point(&g)?).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.bearing", "per_cell", "geo_points", geo_points_wkb(), false, false, "vs punto di riferimento", &op_bearing);
-    let op_geoarea = |payload: &Vec<u8>| dec(payload).and_then(|g| geodesic_area_m2(&g).map(|v| black_box(v) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.geodesic_area", "per_cell", "geo_polys", geo_polys_wkb(), false, false, "", &op_geoarea);
-    let op_diag = |payload: &Vec<u8>| dec(payload).and_then(|g| geometry_diagnostics(&g).map(|d| black_box(d.coordinate_count) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.geometry_diagnostics", "per_cell", "poly_simple", polys_wkb(), false, false, "struct diagnostico", &op_diag);
-
-    // --- Estensioni v1.1 -----------------------------------------------------
-    let op_from_wkt = |wkt: &String| geometry_from_wkt(wkt).map_err(|e| e.to_string()).and_then(|g| enc(&g));
-    sweep_cells(&mut results, "geo.from_wkt", "per_cell", "wkt_polys", wkt_polys(), true, false, "parse WKT + encode WKB (niente decode)", &op_from_wkt);
-    let op_accessors = |payload: &Vec<u8>| dec(payload).and_then(|g| geometry_accessors(&g).map(|a| black_box(a.num_geometries) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.geometry_accessors", "per_cell", "hetero", hetero_wkb(), false, false, "WKB eterogeneo", &op_accessors);
-    let op_locate = |payload: &Vec<u8>| dec(payload).and_then(|g| line_locate_point(&g, &Point::new(5_000.0, 5_000.0)).map(|v| (black_box(v).unwrap_or(0.0) * 1e6) as usize).map_err(|e| e.to_string()));
-    sweep_cells(&mut results, "geo.line_locate_point", "per_cell", "lines50", lines_wkb(), false, false, "vs punto (5000,5000)", &op_locate);
-
-    // --- Estensioni v1.2 -----------------------------------------------------
-    let op_subdivide = |payload: &Vec<u8>| subdivide_wkb(payload, 500).map(|parts| parts.iter().map(Vec::len).sum()).map_err(|e| e.to_string());
-    sweep_cells(&mut results, "geo.subdivide", "per_cell", "poly_complex", polys_complex_wkb(), true, false, "max_vertices=500 (helper WKB: decode+encode inclusi)", &op_subdivide);
-    let op_snap = |payload: &Vec<u8>| dec(payload).and_then(|g| snap(&g, &ref_complex, 0.5).map_err(|e| e.to_string()).and_then(|r| enc(&r)));
-    sweep_cells(&mut results, "geo.snap", "per_cell", "poly_simple", polys_wkb(), true, false, "tol=0.5, riferimento poligono 2000v (R-tree ricostruito per cella, come snap_column)", &op_snap);
-
-    // --- geo.generate_grid (generativa): extent 1000x1000, cell_size=1 ------
-    {
-        let rss_before = peak_rss_kib();
-        let extent = GridExtent::new(0.0, 0.0, 1_000.0, 1_000.0).expect("extent");
-        let mut durations = Vec::with_capacity(3);
-        let mut output_units = 0_usize;
-        for _ in 0..3 {
-            let start = Instant::now();
-            let rows = generate_grid_rows(&extent, 1.0, GridShape::Square)
-                .map_err(|e| e.to_string())
-                .expect("geo.generate_grid");
-            durations.push(start.elapsed().as_secs_f64());
-            output_units = rows.iter().map(|row| row.wkb.len()).sum();
-            black_box(rows);
-        }
-        durations.sort_by(f64::total_cmp);
-        let median = durations[durations.len() / 2];
-        record(
-            &mut results,
-            "geo.generate_grid",
-            "generative",
-            "extent 1000x1000",
-            1_000_000,
-            3,
-            median,
-            output_units,
-            None,
-            rss_before,
-            "cell_size=1, shape square, encode WKB incluso".to_owned(),
-        );
-    }
-
-    // --- Booleane pairwise (intersection/union/difference/sym_diff) ---------
-    let (pairs_left, pairs_right) = pairs_wkb();
-    for (name, boolean) in [
-        ("geo.intersection", BooleanOperation::Intersection),
-        ("geo.union", BooleanOperation::Union),
-        ("geo.difference", BooleanOperation::Difference),
-        ("geo.symmetric_difference", BooleanOperation::SymmetricDifference),
-    ] {
-        let run = move |n: usize| -> Result<usize, String> {
-            let left = decode_prefix(pairs_left, n)?;
-            let right = decode_prefix(pairs_right, n)?;
-            left.par_iter()
-                .zip(right.par_iter())
-                .map(|(l, r)| {
-                    boolean_operation_validated(l, r, boolean)
-                        .map_err(|e| e.to_string())
-                        .and_then(|out| enc(&out))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(|v| v.iter().sum())
+                    })
+            })
         };
-        let leaked: &(dyn Fn(usize) -> Result<usize, String> + Sync) = Box::leak(Box::new(run));
+        sweep_cells(
+            &mut results,
+            "geo.delaunay",
+            "per_cell",
+            "multipoint50",
+            multipoint50_wkb(),
+            true,
+            false,
+            "multipoint 50 punti, encode triangoli",
+            &op_delaunay,
+        );
+        let op_linesub = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                line_substring(as_line(&g)?, 0.2, 0.8)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc_opt(r.as_ref()))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.line_substring",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            true,
+            false,
+            "[0.2, 0.8]",
+            &op_linesub,
+        );
+        let op_lineinterp = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                line_interpolate_point(as_line(&g)?, 0.5)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_or(Ok(0), |p| enc(&Geometry::Point(p))))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.line_interpolate_point",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            true,
+            false,
+            "ratio=0.5",
+            &op_lineinterp,
+        );
+        let op_frechet = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                frechet_distance(as_line(&g)?, &ref_line, 1_000_000_000)
+                    .map(|v| black_box(v).unwrap_or(0.0) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.frechet_distance",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            false,
+            false,
+            "vs linea 50v di riferimento",
+            &op_frechet,
+        );
+        let op_bearing = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geodesic_bearing_degrees(ref_geo_point, as_point(&g)?)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.bearing",
+            "per_cell",
+            "geo_points",
+            geo_points_wkb(),
+            false,
+            false,
+            "vs punto di riferimento",
+            &op_bearing,
+        );
+        let op_geoarea = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geodesic_area_m2(&g)
+                    .map(|v| black_box(v) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.geodesic_area",
+            "per_cell",
+            "geo_polys",
+            geo_polys_wkb(),
+            false,
+            false,
+            "",
+            &op_geoarea,
+        );
+        let op_diag = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geometry_diagnostics(&g)
+                    .map(|d| black_box(d.coordinate_count) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.geometry_diagnostics",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            false,
+            false,
+            "struct diagnostico",
+            &op_diag,
+        );
+
+        // --- Estensioni v1.1 -----------------------------------------------------
+        let op_from_wkt = |wkt: &String| {
+            geometry_from_wkt(wkt)
+                .map_err(|e| e.to_string())
+                .and_then(|g| enc(&g))
+        };
+        sweep_cells(
+            &mut results,
+            "geo.from_wkt",
+            "per_cell",
+            "wkt_polys",
+            wkt_polys(),
+            true,
+            false,
+            "parse WKT + encode WKB (niente decode)",
+            &op_from_wkt,
+        );
+        let op_accessors = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                geometry_accessors(&g)
+                    .map(|a| black_box(a.num_geometries) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.geometry_accessors",
+            "per_cell",
+            "hetero",
+            hetero_wkb(),
+            false,
+            false,
+            "WKB eterogeneo",
+            &op_accessors,
+        );
+        let op_locate = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                line_locate_point(&g, &Point::new(5_000.0, 5_000.0))
+                    .map(|v| (black_box(v).unwrap_or(0.0) * 1e6) as usize)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.line_locate_point",
+            "per_cell",
+            "lines50",
+            lines_wkb(),
+            false,
+            false,
+            "vs punto (5000,5000)",
+            &op_locate,
+        );
+
+        // --- Estensioni v1.2 -----------------------------------------------------
+        let op_subdivide = |payload: &Vec<u8>| {
+            subdivide_wkb(payload, 500)
+                .map(|parts| parts.iter().map(Vec::len).sum())
+                .map_err(|e| e.to_string())
+        };
+        sweep_cells(
+            &mut results,
+            "geo.subdivide",
+            "per_cell",
+            "poly_complex",
+            polys_complex_wkb(),
+            true,
+            false,
+            "max_vertices=500 (helper WKB: decode+encode inclusi)",
+            &op_subdivide,
+        );
+        let op_snap = |payload: &Vec<u8>| {
+            dec(payload).and_then(|g| {
+                snap(&g, &ref_complex, 0.5)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| enc(&r))
+            })
+        };
+        sweep_cells(
+            &mut results,
+            "geo.snap",
+            "per_cell",
+            "poly_simple",
+            polys_wkb(),
+            true,
+            false,
+            "tol=0.5, riferimento poligono 2000v (R-tree ricostruito per cella, come snap_column)",
+            &op_snap,
+        );
+
+        // --- geo.generate_grid (generativa): extent 1000x1000, cell_size=1 ------
+        {
+            let rss_before = peak_rss_kib();
+            let extent = GridExtent::new(0.0, 0.0, 1_000.0, 1_000.0).expect("extent");
+            let mut durations = Vec::with_capacity(3);
+            let mut output_units = 0_usize;
+            for _ in 0..3 {
+                let start = Instant::now();
+                let rows = generate_grid_rows(&extent, 1.0, GridShape::Square)
+                    .map_err(|e| e.to_string())
+                    .expect("geo.generate_grid");
+                durations.push(start.elapsed().as_secs_f64());
+                output_units = rows.iter().map(|row| row.wkb.len()).sum();
+                black_box(rows);
+            }
+            durations.sort_by(f64::total_cmp);
+            let median = durations[durations.len() / 2];
+            record(
+                &mut results,
+                "geo.generate_grid",
+                "generative",
+                "extent 1000x1000",
+                1_000_000,
+                3,
+                median,
+                output_units,
+                None,
+                rss_before,
+                "cell_size=1, shape square, encode WKB incluso".to_owned(),
+            );
+        }
+
+        // --- Booleane pairwise (intersection/union/difference/sym_diff) ---------
+        let (pairs_left, pairs_right) = pairs_wkb();
+        for (name, boolean) in [
+            ("geo.intersection", BooleanOperation::Intersection),
+            ("geo.union", BooleanOperation::Union),
+            ("geo.difference", BooleanOperation::Difference),
+            (
+                "geo.symmetric_difference",
+                BooleanOperation::SymmetricDifference,
+            ),
+        ] {
+            let run = move |n: usize| -> Result<usize, String> {
+                let left = decode_prefix(pairs_left, n)?;
+                let right = decode_prefix(pairs_right, n)?;
+                left.par_iter()
+                    .zip(right.par_iter())
+                    .map(|(l, r)| {
+                        boolean_operation_validated(l, r, boolean)
+                            .map_err(|e| e.to_string())
+                            .and_then(|out| enc(&out))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|v| v.iter().sum())
+            };
+            let leaked: &(dyn Fn(usize) -> Result<usize, String> + Sync) = Box::leak(Box::new(run));
+            sweep_collective(
+                &mut results,
+                name,
+                "poly_simple pairs (overlap)",
+                &[1_000, 10_000, 20_000],
+                1.5,
+                "coppie di poligoni 100v sovrapposti",
+                leaked,
+            );
+        }
+
+        // --- Collettive Manipola-compat ------------------------------------------
+        // Kernel in variante `*_validated`: gli scenari decodificano via `dec`/
+        // `decode_prefix` (= `geometry_from_wkb`, validazione OGC per geometria),
+        // quindi rispecchiano il percorso di produzione dell'engine (`pair.rs`),
+        // dove il gate di ingresso del kernel non si ripete (R0.1: precondizione
+        // dimostrata per costruzione al decode, non inferenza sui chiamanti).
         sweep_collective(
             &mut results,
-            name,
-            "poly_simple pairs (overlap)",
-            &[1_000, 10_000, 20_000],
-            1.5,
-            "coppie di poligoni 100v sovrapposti",
-            leaked,
+            "geo.sjoin",
+            "points x grid100",
+            &[10_000, 100_000, 1_000_000],
+            1.2,
+            "punti vs griglia 10k rettangoli, predicato intersects (R-tree)",
+            &|n| {
+                let left = as_options(decode_prefix(points_wkb(), n)?);
+                let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
+                spatial_join_nullable_validated(&left, &right, JoinPredicate::Intersects, MAX_WORK)
+                    .map(|pairs| pairs.len())
+                    .map_err(|e| e.to_string())
+            },
         );
-    }
-
-    // --- Collettive Manipola-compat ------------------------------------------
-    // Kernel in variante `*_validated`: gli scenari decodificano via `dec`/
-    // `decode_prefix` (= `geometry_from_wkb`, validazione OGC per geometria),
-    // quindi rispecchiano il percorso di produzione dell'engine (`pair.rs`),
-    // dove il gate di ingresso del kernel non si ripete (R0.1: precondizione
-    // dimostrata per costruzione al decode, non inferenza sui chiamanti).
-    sweep_collective(
-        &mut results,
-        "geo.sjoin",
-        "points x grid100",
-        &[10_000, 100_000, 1_000_000],
-        1.2,
-        "punti vs griglia 10k rettangoli, predicato intersects (R-tree)",
-        &|n| {
-            let left = as_options(decode_prefix(points_wkb(), n)?);
-            let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-            spatial_join_nullable_validated(&left, &right, JoinPredicate::Intersects, MAX_WORK)
-                .map(|pairs| pairs.len())
-                .map_err(|e| e.to_string())
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.within",
-        "points x grid100",
-        &[10_000, 100_000, 1_000_000],
-        1.2,
-        "punti vs griglia 10k rettangoli (within)",
-        &|n| {
-            let left = as_options(decode_prefix(points_wkb(), n)?);
-            let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-            within_indexes_validated(&left, &right, MAX_WORK)
-                .map(|v| v.len())
-                .map_err(|e| e.to_string())
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.count_points_in_polygons",
-        "points x grid100",
-        &[10_000, 100_000, 1_000_000],
-        1.2,
-        "punti vs griglia 10k rettangoli",
-        &|n| {
-            let polys = as_options(decode_prefix(grid_wkb(), 10_000)?);
-            let points = as_options(decode_prefix(points_wkb(), n)?);
-            count_points_in_polygons_validated(&polys, &points, MAX_WORK)
-                .map(|v| v.len())
-                .map_err(|e| e.to_string())
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.nearest",
-        "points x points",
-        &[1_000, 10_000],
-        2.0,
-        "O(n*m) esatto: n punti vs 10k punti, pareggi multipli inclusi",
-        &|n| {
-            let left = as_options(decode_prefix(points_wkb(), n)?);
-            let right = as_options(decode_prefix(points_wkb(), 10_000)?);
-            nearest_matches_validated(&left, &right, None, MAX_WORK, MAX_WORK)
-                .map(|v| v.len())
-                .map_err(|e| e.to_string())
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.dissolve",
-        "grid100 jitter",
-        &[1_000, 10_000],
-        1.5,
-        "unary union di rettangoli con overlap jitterati",
-        &|n| {
-            let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-            dissolve_validated(&geoms)
-                .map_err(|e| e.to_string())
-                .and_then(|out| enc(&out))
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.clip",
-        "poly_simple x mask",
-        &[1_000, 10_000],
-        1.5,
-        "poligoni 100v vs maschera (dissolve di una striscia centrale della griglia)",
-        &|n| {
-            let geoms = decode_prefix(polys_wkb(), n)?;
-            let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
-            clip_to_mask_validated(&geoms, &masks)
-                .map_err(|e| e.to_string())
-                .and_then(|outs| {
-                    outs.iter().try_fold(0_usize, |total, out| {
-                        enc_opt(out.as_ref()).map(|len| total + len)
+        sweep_collective(
+            &mut results,
+            "geo.within",
+            "points x grid100",
+            &[10_000, 100_000, 1_000_000],
+            1.2,
+            "punti vs griglia 10k rettangoli (within)",
+            &|n| {
+                let left = as_options(decode_prefix(points_wkb(), n)?);
+                let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
+                within_indexes_validated(&left, &right, MAX_WORK)
+                    .map(|v| v.len())
+                    .map_err(|e| e.to_string())
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.count_points_in_polygons",
+            "points x grid100",
+            &[10_000, 100_000, 1_000_000],
+            1.2,
+            "punti vs griglia 10k rettangoli",
+            &|n| {
+                let polys = as_options(decode_prefix(grid_wkb(), 10_000)?);
+                let points = as_options(decode_prefix(points_wkb(), n)?);
+                count_points_in_polygons_validated(&polys, &points, MAX_WORK)
+                    .map(|v| v.len())
+                    .map_err(|e| e.to_string())
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.nearest",
+            "points x points",
+            &[1_000, 10_000],
+            2.0,
+            "O(n*m) esatto: n punti vs 10k punti, pareggi multipli inclusi",
+            &|n| {
+                let left = as_options(decode_prefix(points_wkb(), n)?);
+                let right = as_options(decode_prefix(points_wkb(), 10_000)?);
+                nearest_matches_validated(&left, &right, None, MAX_WORK, MAX_WORK)
+                    .map(|v| v.len())
+                    .map_err(|e| e.to_string())
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.dissolve",
+            "grid100 jitter",
+            &[1_000, 10_000],
+            1.5,
+            "unary union di rettangoli con overlap jitterati",
+            &|n| {
+                let geoms = decode_prefix(grid_jitter_wkb(), n)?;
+                dissolve_validated(&geoms)
+                    .map_err(|e| e.to_string())
+                    .and_then(|out| enc(&out))
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.clip",
+            "poly_simple x mask",
+            &[1_000, 10_000],
+            1.5,
+            "poligoni 100v vs maschera (dissolve di una striscia centrale della griglia)",
+            &|n| {
+                let geoms = decode_prefix(polys_wkb(), n)?;
+                let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
+                clip_to_mask_validated(&geoms, &masks)
+                    .map_err(|e| e.to_string())
+                    .and_then(|outs| {
+                        outs.iter().try_fold(0_usize, |total, out| {
+                            enc_opt(out.as_ref()).map(|len| total + len)
+                        })
                     })
-                })
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.overlay",
-        "grid100 x grid100 shift",
-        &[1_000, 10_000],
-        1.5,
-        "mode intersection, griglie sfasate di (50,50)",
-        &|n| {
-            let left = decode_prefix(grid_wkb(), n)?;
-            let right = decode_prefix(grid_shift_wkb(), n)?;
-            polygon_overlay_validated(&left, &right, OverlayMode::Intersection, MAX_WORK, MAX_WORK)
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.overlay",
+            "grid100 x grid100 shift",
+            &[1_000, 10_000],
+            1.5,
+            "mode intersection, griglie sfasate di (50,50)",
+            &|n| {
+                let left = decode_prefix(grid_wkb(), n)?;
+                let right = decode_prefix(grid_shift_wkb(), n)?;
+                polygon_overlay_validated(
+                    &left,
+                    &right,
+                    OverlayMode::Intersection,
+                    MAX_WORK,
+                    MAX_WORK,
+                )
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
                         enc(&piece.geometry).map(|len| total + len)
                     })
                 })
-        },
-    );
-    // geo.clip[inside_mask]: stessa pipeline di geo.clip ma con maschera =
-    // rettangolo su tutto il dominio [0,10000)^2 di polys_wkb: ogni output
-    // e' identico all'input per costruzione, quindi il tempo misura quasi
-    // solo decode+encode — il risparmio potenziale di un passthrough WKB
-    // (riuso del payload di input invece di ri-encode). Solo misura, il
-    // passthrough NON e' implementato.
-    sweep_collective(
+            },
+        );
+        // geo.clip[inside_mask]: stessa pipeline di geo.clip ma con maschera =
+        // rettangolo su tutto il dominio [0,10000)^2 di polys_wkb: ogni output
+        // e' identico all'input per costruzione, quindi il tempo misura quasi
+        // solo decode+encode — il risparmio potenziale di un passthrough WKB
+        // (riuso del payload di input invece di ri-encode). Solo misura, il
+        // passthrough NON e' implementato.
+        sweep_collective(
         &mut results,
         "geo.clip[inside_mask]",
         "poly_simple x mask dominio",
@@ -1445,81 +2166,80 @@ fn main() {
                 })
         },
     );
-    // geo.overlay[union_unchanged]: union di due griglie DISGIUNTE (la
-    // seconda traslata fuori dominio): nessuna intersezione, tutti i pezzi
-    // sono invariati; l'encode di ogni pezzo e' il costo che un passthrough
-    // WKB azzererebbe. Solo misura, il passthrough NON e' implementato.
-    sweep_collective(
-        &mut results,
-        "geo.overlay[union_unchanged]",
-        "grid100 x grid100 far",
-        &[1_000, 10_000],
-        1.5,
-        "mode union, griglie disgiunte (seconda shiftata di 1e6): pezzi invariati",
-        &|n| {
-            let left = decode_prefix(grid_wkb(), n)?;
-            let right = decode_prefix(grid_far_wkb(), n)?;
-            polygon_overlay_validated(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
-                .map_err(|e| e.to_string())
-                .and_then(|pieces| {
-                    pieces.iter().try_fold(0_usize, |total, piece| {
-                        enc(&piece.geometry).map(|len| total + len)
+        // geo.overlay[union_unchanged]: union di due griglie DISGIUNTE (la
+        // seconda traslata fuori dominio): nessuna intersezione, tutti i pezzi
+        // sono invariati; l'encode di ogni pezzo e' il costo che un passthrough
+        // WKB azzererebbe. Solo misura, il passthrough NON e' implementato.
+        sweep_collective(
+            &mut results,
+            "geo.overlay[union_unchanged]",
+            "grid100 x grid100 far",
+            &[1_000, 10_000],
+            1.5,
+            "mode union, griglie disgiunte (seconda shiftata di 1e6): pezzi invariati",
+            &|n| {
+                let left = decode_prefix(grid_wkb(), n)?;
+                let right = decode_prefix(grid_far_wkb(), n)?;
+                polygon_overlay_validated(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
+                    .map_err(|e| e.to_string())
+                    .and_then(|pieces| {
+                        pieces.iter().try_fold(0_usize, |total, piece| {
+                            enc(&piece.geometry).map(|len| total + len)
+                        })
                     })
-                })
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.clean_topology",
-        "grid100 jitter",
-        &[1_000, 10_000],
-        1.5,
-        "snap_tolerance=1, remove_overlaps+fill_gaps",
-        &|n| {
-            let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-            clean_valid_polygon_topology_validated(&geoms, 1.0, true, true, MAX_WORK, MAX_WORK)
-                .map_err(|e| e.to_string())
-                .and_then(|outs| {
-                    outs.iter().try_fold(0_usize, |total, out| {
-                        enc_opt(out.as_ref()).map(|len| total + len)
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.clean_topology",
+            "grid100 jitter",
+            &[1_000, 10_000],
+            1.5,
+            "snap_tolerance=1, remove_overlaps+fill_gaps",
+            &|n| {
+                let geoms = decode_prefix(grid_jitter_wkb(), n)?;
+                clean_valid_polygon_topology_validated(&geoms, 1.0, true, true, MAX_WORK, MAX_WORK)
+                    .map_err(|e| e.to_string())
+                    .and_then(|outs| {
+                        outs.iter().try_fold(0_usize, |total, out| {
+                            enc_opt(out.as_ref()).map(|len| total + len)
+                        })
                     })
-                })
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.voronoi",
-        "points",
-        &[10_000, 100_000],
-        1.2,
-        "celle Voronoi da n punti, encode di ogni cella",
-        &|n| {
-            let geoms = decode_prefix(points_wkb(), n)?;
-            voronoi_cells(&geoms, 100_000)
-                .map_err(|e| e.to_string())
-                .and_then(|cells| enc_many(&cells))
-        },
-    );
-    sweep_collective(
-        &mut results,
-        "geo.line_merge",
-        "chain lines 10x10k",
-        &[10_000, 100_000],
-        1.2,
-        "un MultiLineString di n segmenti in catene da 10",
-        &|n| {
-            let mls = Geometry::MultiLineString(MultiLineString::new(
-                chain_lines()[..n].to_vec(),
-            ));
-            line_merge(&mls, MAX_WORK, MAX_WORK)
-                .map_err(|e| e.to_string())
-                .and_then(|lines| {
-                    lines.iter().try_fold(0_usize, |total, line| {
-                        enc(&Geometry::LineString(line.clone())).map(|len| total + len)
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.voronoi",
+            "points",
+            &[10_000, 100_000],
+            1.2,
+            "celle Voronoi da n punti, encode di ogni cella",
+            &|n| {
+                let geoms = decode_prefix(points_wkb(), n)?;
+                voronoi_cells(&geoms, 100_000)
+                    .map_err(|e| e.to_string())
+                    .and_then(|cells| enc_many(&cells))
+            },
+        );
+        sweep_collective(
+            &mut results,
+            "geo.line_merge",
+            "chain lines 10x10k",
+            &[10_000, 100_000],
+            1.2,
+            "un MultiLineString di n segmenti in catene da 10",
+            &|n| {
+                let mls =
+                    Geometry::MultiLineString(MultiLineString::new(chain_lines()[..n].to_vec()));
+                line_merge(&mls, MAX_WORK, MAX_WORK)
+                    .map_err(|e| e.to_string())
+                    .and_then(|lines| {
+                        lines.iter().try_fold(0_usize, |total, line| {
+                            enc(&Geometry::LineString(line.clone())).map(|len| total + len)
+                        })
                     })
-                })
-        },
-    );
+            },
+        );
     } // fine prefisso saltabile (GEO_SWEEP_SKIP_PREFIX)
 
     sweep_collective(
@@ -1639,11 +2359,30 @@ fn main() {
     );
 
     // --- BackendPending (feature geos/proj non abilitate) ---------------------
-    sweep_skipped(&mut results, "geo.make_valid", "backend `geos` non abilitato (BackendPending)");
-    sweep_skipped(&mut results, "geo.reproject", "backend `proj` non abilitato (BackendPending)");
-    sweep_skipped(&mut results, "geo.polygonize", "backend `geos` non abilitato (BackendPending)");
-    sweep_skipped(&mut results, "geo.split", "backend `geos` non abilitato (BackendPending)");
+    sweep_skipped(
+        &mut results,
+        "geo.make_valid",
+        "backend `geos` non abilitato (BackendPending)",
+    );
+    sweep_skipped(
+        &mut results,
+        "geo.reproject",
+        "backend `proj` non abilitato (BackendPending)",
+    );
+    sweep_skipped(
+        &mut results,
+        "geo.polygonize",
+        "backend `geos` non abilitato (BackendPending)",
+    );
+    sweep_skipped(
+        &mut results,
+        "geo.split",
+        "backend `geos` non abilitato (BackendPending)",
+    );
 
     write_outputs(&results);
-    eprintln!("scritti benchmarks/sweep/geo_sweep.json e geo_sweep.md ({} scenari)", results.len());
+    eprintln!(
+        "scritti benchmarks/sweep/geo_sweep.json e geo_sweep.md ({} scenari)",
+        results.len()
+    );
 }

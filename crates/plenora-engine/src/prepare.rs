@@ -384,11 +384,12 @@ pub enum PreparedConfig {
     },
     /// `geo.from_wkt` (streaming 1:1): colonna WKT `Utf8` → nuova colonna
     /// geometria WKB; indice della colonna WKT e politica d'errore risolti
-    /// qui. Eseguito per batch su `extensions::from_wkt_column`.
+    /// qui. Eseguito per batch su `extensions::from_wkt_column_named`; il
+    /// token `on_error=null` resta parsabile ma non autorizza null sintetici.
     GeoFromWkt {
         /// Indice risolto della colonna WKT nel batch di input (V2).
         wkt_column_index: usize,
-        /// Politica sulle celle WKT invalide (default `null`).
+        /// Token legacy della politica; ogni cella invalida e' fail-closed.
         on_error: OnWktError,
     },
     /// `geo.geometry_accessors` (streaming 1:1): colonne accessorie scelte,
@@ -501,6 +502,12 @@ pub struct PreparedKernel {
     /// Fondibilita' dichiarata in catalogo (ADR-0012 D12.2), risolta in
     /// `prepare` come `cancellation_behavior`.
     pub geo_fusion: plenora_core::catalog::GeoFusion,
+    /// Emissione di diagnostica row-scoped dichiarata dall'autorita' di
+    /// catalogo per la configurazione del nodo (config-sensitive: stessa
+    /// `OperationDescriptor::emits_row_diagnostics` del gate provenance del
+    /// planner e del gate legacy CLI), risolta in `prepare` — nessuno scan
+    /// del catalogo ne' lista duplicata a runtime.
+    pub emits_row_diagnostics: bool,
     /// Gruppo di fusione geo del kernel (ADR-0012): `Some(id)` per i membri
     /// di un run massimale (>= 2) di kernel `GeoTransform` consecutivi
     /// fondibili (capability `TransformInPlace` di entrambi i nodi adiacenti,
@@ -712,10 +719,7 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
         HashMap::with_capacity(plan.nodes.len());
     for node in &plan.nodes {
         let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-            PlenoraError::Internal(format!(
-                "nodo `{}`: op risolta in validazione",
-                node.id
-            ))
+            PlenoraError::Internal(format!("nodo `{}`: op risolta in validazione", node.id))
         })?;
         node_meta.insert(
             node.id.as_str(),
@@ -781,17 +785,12 @@ fn build_chains<'a>(
             // streaming unario.
             loop {
                 let Some(&last) = chain.last() else {
-                    return Err(PlenoraError::Internal(
-                        "catena non vuota".to_owned(),
-                    ));
+                    return Err(PlenoraError::Internal("catena non vuota".to_owned()));
                 };
                 if fan_out[last] != 1 {
                     break;
                 }
-                let next = consumers
-                    .get(last)
-                    .and_then(|list| list.first())
-                    .copied();
+                let next = consumers.get(last).and_then(|list| list.first()).copied();
                 let Some(next) = next else { break };
                 let (next_class, next_arity, _) = node_meta[next];
                 if next_class != ExecutionClass::Streaming || next_arity != Arity::Unary {
@@ -846,7 +845,9 @@ fn build_segments<'a>(
             }
         };
         let parallelism = match mode {
-            SegmentMode::LinearStreaming | SegmentMode::GeoFused => ParallelismStrategy::SerialFused,
+            SegmentMode::LinearStreaming | SegmentMode::GeoFused => {
+                ParallelismStrategy::SerialFused
+            }
             SegmentMode::Blocking | SegmentMode::BinaryBlocking => {
                 ParallelismStrategy::BlockingSingleTask
             }
@@ -882,9 +883,7 @@ fn build_segments<'a>(
             output_contract: graph
                 .edge_contract(last)
                 .ok_or_else(|| {
-                    PlenoraError::Internal(format!(
-                        "arco `{last}` inferito in validazione"
-                    ))
+                    PlenoraError::Internal(format!("arco `{last}` inferito in validazione"))
                 })?
                 .clone(),
             materialize_output: fan_out[last] > 1,
@@ -998,10 +997,7 @@ fn prepare_kernel(
     is_plan_output: bool,
 ) -> Result<PreparedKernel> {
     let descriptor = plenora_core::catalog::find_operation(&node.op).ok_or_else(|| {
-        PlenoraError::Internal(format!(
-            "nodo `{}`: op risolta in validazione",
-            node.id
-        ))
+        PlenoraError::Internal(format!("nodo `{}`: op risolta in validazione", node.id))
     })?;
     let input_contracts: Vec<DataContract> = node
         .inputs
@@ -1010,9 +1006,7 @@ fn prepare_kernel(
             graph
                 .edge_contract(edge)
                 .ok_or_else(|| {
-                    PlenoraError::Internal(format!(
-                        "arco `{edge}` inferito in validazione"
-                    ))
+                    PlenoraError::Internal(format!("arco `{edge}` inferito in validazione"))
                 })
                 .cloned()
         })
@@ -1020,10 +1014,7 @@ fn prepare_kernel(
     let output_contract = graph
         .edge_contract(&node.id)
         .ok_or_else(|| {
-            PlenoraError::Internal(format!(
-                "arco `{}` inferito in validazione",
-                node.id
-            ))
+            PlenoraError::Internal(format!("arco `{}` inferito in validazione", node.id))
         })?
         .clone();
     let geometry_column_index = match input_contracts
@@ -1035,9 +1026,7 @@ fn prepare_kernel(
                 .schema
                 .column_with_name(&geometry.name)
                 .ok_or_else(|| {
-                    PlenoraError::Internal(
-                        "colonna geometria nel contratto".to_owned(),
-                    )
+                    PlenoraError::Internal("colonna geometria nel contratto".to_owned())
                 })?
                 .0,
         ),
@@ -1072,6 +1061,7 @@ fn prepare_kernel(
         cancellation_behavior: descriptor.cancellation_behavior,
         expansion_factor_exempt: descriptor.expansion_factor_exempt,
         geo_fusion: descriptor.geo_fusion,
+        emits_row_diagnostics: descriptor.emits_row_diagnostics(&node.config),
         fusion_group: None,
     })
 }
@@ -1401,9 +1391,7 @@ fn prepare_geo_binary(
         Ok(contract
             .schema
             .column_with_name(&geometry.name)
-            .ok_or_else(|| {
-                PlenoraError::Internal("colonna geometria nel contratto".to_owned())
-            })?
+            .ok_or_else(|| PlenoraError::Internal("colonna geometria nel contratto".to_owned()))?
             .0)
     };
     let left_geometry_index = geometry_index(&input_contracts[0], "left")?;
@@ -1491,13 +1479,9 @@ fn prepare_geo(
     let input_contract = &input_contracts[0];
     if let Some(operation) = geo_transform_operation(descriptor.id) {
         let parsed: GeoTransformConfig = serde_json::from_value(node.config.clone())?;
-        let geometry = input_contract
-            .active_geometry_column()
-            .ok_or_else(|| {
-                PlenoraError::Internal(
-                    "geometria attiva verificata in validazione".to_owned(),
-                )
-            })?;
+        let geometry = input_contract.active_geometry_column().ok_or_else(|| {
+            PlenoraError::Internal("geometria attiva verificata in validazione".to_owned())
+        })?;
         // Invariante di validazione: ogni trasformazione geo dichiara un
         // `CrsRequirement` e il gate R4.6.3 dell'analyze ferma un CRS non
         // risolto (`Missing` o `DeclaredUnresolved`) a compile-plan — qui
@@ -1591,7 +1575,9 @@ fn prepare_geo(
         return Ok(prepared);
     }
 
-    if let Some(prepared) = prepare_geo_extension(node, descriptor, input_contract, output_contract)? {
+    if let Some(prepared) =
+        prepare_geo_extension(node, descriptor, input_contract, output_contract)?
+    {
         return Ok(prepared);
     }
 
@@ -1706,7 +1692,10 @@ fn prepare_geo_extension(
                 parsed.output_column.as_deref(),
             )?;
             (
-                PreparedConfig::GeoLineLocatePoint { point, output_column },
+                PreparedConfig::GeoLineLocatePoint {
+                    point,
+                    output_column,
+                },
                 GeoRole::MeasureAddColumn,
             )
         }
@@ -1749,12 +1738,15 @@ fn prepare_geo_extension(
             let parsed: GeoCollectConfig = serde_json::from_value(node.config.clone())?;
             let mut indices: Vec<usize> = Vec::with_capacity(parsed.group_by.len());
             for name in &parsed.group_by {
-                let (index, _) = input_contract.schema.column_with_name(name).ok_or_else(|| {
-                    PlenoraError::Schema(format!(
-                        "nodo `{}`: colonna chiave `{name}` assente dal contratto di input",
-                        node.id
-                    ))
-                })?;
+                let (index, _) = input_contract
+                    .schema
+                    .column_with_name(name)
+                    .ok_or_else(|| {
+                        PlenoraError::Schema(format!(
+                            "nodo `{}`: colonna chiave `{name}` assente dal contratto di input",
+                            node.id
+                        ))
+                    })?;
                 indices.push(index);
             }
             (
@@ -1775,9 +1767,7 @@ fn prepare_geo_extension(
                 parsed.extent.xmax,
                 parsed.extent.ymax,
             )
-            .map_err(|error| {
-                PlenoraError::InvalidPlan(format!("nodo `{}`: {error}", node.id))
-            })?;
+            .map_err(|error| PlenoraError::InvalidPlan(format!("nodo `{}`: {error}", node.id)))?;
             let shape = parsed.shape.unwrap_or(GridShape::Square);
             // Rivalidazione fisica: cell_size e limite celle (E1).
             plenora_kernels_geo::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)

@@ -92,6 +92,258 @@ fn input(contract: DataContract) -> Vec<(String, DataContract)> {
 }
 
 #[test]
+fn row_diagnostics_reject_expression_after_cardinality_change() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "selected", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+            {"id": "derived", "op": "table.expression", "in": ["selected"],
+             "config": {"output_column": "ratio",
+                        "expression": {"kind": "binary", "op": "divide",
+                                       "left": {"kind": "column", "name": "id"},
+                                       "right": {"kind": "literal", "value": 2}}}}
+        ],
+        "output": "derived"
+    });
+
+    let error = validate(&plan.to_string(), &input(table_contract()))
+        .expect_err("expression dopo filter: provenance row-level non dimostrabile");
+    assert!(matches!(error, PlenoraError::InvalidPlan(_)));
+    assert!(error.to_string().contains("provenance"));
+}
+
+#[test]
+fn row_diagnostics_reject_formula_after_cardinality_change() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "ordered", "op": "table.sort", "in": ["main"],
+             "config": {"columns": ["id"]}},
+            {"id": "derived", "op": "table.formula", "in": ["ordered"],
+             "config": {"new_column": "ratio", "formula": "id / 2"}}
+        ],
+        "output": "derived"
+    });
+
+    let error = validate(&plan.to_string(), &input(table_contract()))
+        .expect_err("formula dopo sort: provenance row-level non dimostrabile");
+    assert!(matches!(error, PlenoraError::InvalidPlan(_)));
+    assert!(error.to_string().contains("provenance"));
+}
+
+#[test]
+fn row_diagnostics_keep_observable_provenance_into_expression_and_formula() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "derived", "op": "table.expression", "in": ["main"],
+             "config": {"output_column": "ratio",
+                        "expression": {"kind": "binary", "op": "divide",
+                                       "left": {"kind": "column", "name": "id"},
+                                       "right": {"kind": "literal", "value": 2}}}},
+            {"id": "again", "op": "table.formula", "in": ["derived"],
+             "config": {"new_column": "twice", "formula": "ratio * 2"}}
+        ],
+        "output": "again"
+    });
+
+    validate(&plan.to_string(), &input(table_contract()))
+        .expect("expression e formula conservano cardinalita' e ordine");
+}
+
+#[test]
+fn row_diagnostics_reject_geo_after_cardinality_change() {
+    // geo.subdivide espande le righe: una misura geo a valle emetterebbe
+    // diagnostica con indici sorgente non osservabili -> piano rifiutato.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "d", "op": "geo.subdivide", "in": ["main"],
+             "config": {"max_vertices": 4}},
+            {"id": "l", "op": "geo.length", "in": ["d"], "config": {}},
+        ],
+        "output": "l",
+    })
+    .to_string();
+    match validate(&plan, &input(geo_contract(1))) {
+        Err(PlenoraError::InvalidPlan(message)) => {
+            assert!(message.contains("geo.length"), "{message}");
+            assert!(message.contains("provenance"), "{message}");
+        }
+        other => panic!("atteso gate provenance, ottenuto {other:?}"),
+    }
+
+    // Stesso vincolo con un nodo tabellare cardinality-changing.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 1.0}},
+        ],
+        "output": "b",
+    })
+    .to_string();
+    match validate(&plan, &input(geo_contract(1))) {
+        Err(PlenoraError::InvalidPlan(message)) => {
+            assert!(message.contains("geo.buffer"), "{message}");
+            assert!(message.contains("provenance"), "{message}");
+        }
+        other => panic!("atteso gate provenance, ottenuto {other:?}"),
+    }
+
+    // Catena geo pura: provenance preservata, piano valido.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
+            {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
+        ],
+        "output": "a",
+    })
+    .to_string();
+    validate(&plan, &input(geo_contract(1))).expect("catena geo pura valida");
+}
+
+#[test]
+fn row_diagnostics_reject_unobservable_provenance_after_filter() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "selected", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+            {"id": "cast", "op": "table.type_cast", "in": ["selected"],
+             "config": {"column": "name", "target_type": "date32", "errors": "coerce"}}
+        ],
+        "output": "cast"
+    });
+
+    let error = validate(&plan.to_string(), &[("main".to_owned(), table_contract())])
+        .expect_err("provenance row-level non dimostrabile");
+    assert!(matches!(error, PlenoraError::InvalidPlan(_)));
+    assert!(error.to_string().contains("provenance"));
+}
+
+#[test]
+fn row_diagnostics_hash_gate_follows_null_policy() {
+    // P1-3/P2: md5/sha256 rifiutano row-scoped SOLO con null_policy=error —
+    // il gate provenance segue la stessa autorita' config-sensitive del
+    // catalogo, non una lista statica.
+    let plan_with = |operation: &str, config: serde_json::Value| {
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "ordered", "op": "table.sort", "in": ["main"],
+                 "config": {"columns": ["id"]}},
+                {"id": "hash", "op": operation, "in": ["ordered"], "config": config}
+            ],
+            "output": "hash"
+        })
+        .to_string()
+    };
+    for operation in ["table.md5_hash", "table.sha256_hash"] {
+        let failure_message =
+            format!("{operation} con null_policy=error dopo sort: indici inventabili");
+        let error = validate(
+            &plan_with(
+                operation,
+                json!({"columns": ["id"], "null_policy": "error"}),
+            ),
+            &input(table_contract()),
+        )
+        .expect_err(&failure_message);
+        assert!(matches!(error, PlenoraError::InvalidPlan(_)));
+        assert!(error.to_string().contains("provenance"));
+        for config in [
+            json!({"columns": ["id"]}),
+            json!({"columns": ["id"], "null_policy": "empty"}),
+            json!({"columns": ["id"], "null_policy": "literal", "null_literal": "<null>"}),
+        ] {
+            let success_message =
+                format!("{operation} senza null_policy=error: nessun rifiuto row-scoped");
+            validate(&plan_with(operation, config), &input(table_contract()))
+                .expect(&success_message);
+        }
+    }
+}
+
+#[test]
+fn row_diagnostics_gate_ignores_hmac_sha256() {
+    // P2: hmac_sha256 non emette MAI diagnostica row-scoped (le null_policy
+    // legacy producono output dichiarato): nessun gate provenance.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "ordered", "op": "table.sort", "in": ["main"],
+             "config": {"columns": ["id"]}},
+            {"id": "mac", "op": "table.hmac_sha256", "in": ["ordered"],
+             "config": {"columns": ["id"], "key_env": "PLENORA_PLANNER_TEST_KEY"}}
+        ],
+        "output": "mac"
+    });
+    validate(&plan.to_string(), &input(table_contract()))
+        .expect("hmac_sha256 dopo sort: non emettendo, non richiede provenance");
+}
+
+#[test]
+fn row_diagnostics_type_cast_gate_follows_target_type() {
+    // Il gate segue l'autorita' anche per type_cast: solo i target con
+    // conversione fallibile row-scoped richiedono provenance.
+    let plan_with = |config: serde_json::Value| {
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [
+                {"id": "ordered", "op": "table.sort", "in": ["main"],
+                 "config": {"columns": ["id"]}},
+                {"id": "cast", "op": "table.type_cast", "in": ["ordered"], "config": config}
+            ],
+            "output": "cast"
+        })
+        .to_string()
+    };
+    validate(
+        &plan_with(json!({"column": "id", "target_type": "str"})),
+        &input(table_contract()),
+    )
+    .expect("type_cast verso str: totale, nessun rifiuto row-scoped");
+    let error = validate(
+        &plan_with(json!({"column": "name", "target_type": "date32"})),
+        &input(table_contract()),
+    )
+    .expect_err("type_cast date32 dopo sort: indici inventabili");
+    assert!(error.to_string().contains("provenance"));
+}
+
+#[test]
+fn row_diagnostics_keep_observable_provenance_through_schema_only_nodes() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "rename", "op": "table.rename", "in": ["main"],
+             "config": {"renames": [{"old_name": "name", "new_name": "effective_date"}]}},
+            {"id": "cast", "op": "table.type_cast", "in": ["rename"],
+             "config": {"column": "effective_date", "target_type": "date32", "errors": "coerce"}}
+        ],
+        "output": "cast"
+    });
+
+    validate(&plan.to_string(), &input(table_contract()))
+        .expect("rename 1:1 non perde la posizione sorgente osservabile");
+}
+
+#[test]
 fn contract_canonical_serializes_dimensions_as_icd_strings() {
     // B1.1: il fingerprint dei contratti Xy non cambia — "dimensions" resta
     // la stringa "xy" prodotta anche dalla serializzazione precedente.
@@ -153,16 +405,20 @@ fn contract_canonical_omits_encoding_unless_declared() {
     );
 }
 
-/// Pipeline mista table+geo: filter -> buffer -> aggregate.
+/// Pipeline mista table+geo: buffer -> filter -> aggregate.
+///
+/// L'op geo precede il nodo cardinality-changing: `geo.buffer` emette
+/// diagnostica row-scoped e richiede provenance originale osservabile
+/// (contratto trasversale), quindi non puo' stare a valle di `table.filter`.
 fn mixed_plan_json() -> String {
     json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
+            {"id": "f", "op": "table.filter", "in": ["b"],
              "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 100.0}},
-            {"id": "g", "op": "table.aggregate", "in": ["b"],
+            {"id": "g", "op": "table.aggregate", "in": ["f"],
              "config": {"group_by": ["id"], "aggregations": []}},
         ],
         "output": "g",
@@ -184,7 +440,7 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
 
     assert_eq!(graph.plan_format_version(), 4);
     assert_eq!(graph.engine_version().0, ENGINE_VERSION);
-    assert_eq!(graph.topological_order(), &["f", "b", "g"]);
+    assert_eq!(graph.topological_order(), &["b", "f", "g"]);
     assert_eq!(
         graph.used_operations(),
         &["geo.buffer", "table.aggregate", "table.filter"]
@@ -197,15 +453,15 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
     );
     assert_eq!(graph.input_contract_fingerprints().len(), 1);
 
-    // La geometria segue la colonna attraverso table.filter e geo.buffer con
+    // La geometria segue la colonna attraverso geo.buffer e table.filter con
     // lo stesso FieldId (rimappato, non quello del lettore).
     let input_geometry = graph.edge_contract("main").unwrap().geometries[0].field_id;
     assert_ne!(input_geometry, FieldId(7), "FieldId di input rimappato");
-    let filtered = graph.edge_contract("f").unwrap();
-    assert_eq!(filtered.geometries.len(), 1);
-    assert_eq!(filtered.geometries[0].field_id, input_geometry);
     let buffered = graph.edge_contract("b").unwrap();
+    assert_eq!(buffered.geometries.len(), 1);
     assert_eq!(buffered.geometries[0].field_id, input_geometry);
+    let filtered = graph.edge_contract("f").unwrap();
+    assert_eq!(filtered.geometries[0].field_id, input_geometry);
 
     // table.aggregate senza la geometria in group_by la perde: output tabellare.
     let output = graph.output_contract().unwrap();
@@ -231,7 +487,12 @@ fn fan_out_fan_in_validates() {
     .to_string();
     let graph = validate(&plan, &input(table_contract())).expect("fan-out/fan-in valido");
     assert_eq!(graph.topological_order(), &["a", "b", "j"]);
-    assert!(graph.output_contract().unwrap().schema.field_with_name("id").is_ok());
+    assert!(graph
+        .output_contract()
+        .unwrap()
+        .schema
+        .field_with_name("id")
+        .is_ok());
 }
 
 #[test]
@@ -390,7 +651,10 @@ fn declared_unresolved_enters_the_contract_fingerprint_with_declarations() {
     // incoerenze con dichiarazioni diverse non sono lo stesso contratto.
     let declared = contract_fingerprint(&geo_contract_declared_unresolved_crs(0))
         .expect("fingerprint declared_unresolved");
-    assert_ne!(declared, contract_fingerprint(&geo_contract(0)).expect("risolto"));
+    assert_ne!(
+        declared,
+        contract_fingerprint(&geo_contract(0)).expect("risolto")
+    );
     assert_ne!(
         declared,
         contract_fingerprint(&geo_contract_missing_crs(0)).expect("missing")
@@ -428,7 +692,9 @@ fn table_ops_propagate_declared_unresolved_unchanged() {
         validate(&plan, &input(geo_contract_declared_unresolved_crs(1))).expect("validazione");
     let output = graph.output_contract().expect("contratto di output");
     assert_eq!(output.geometries.len(), 1);
-    let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } = &output.geometries[0].crs
+    let ContractCrs::DeclaredUnresolved {
+        crs_id, definition, ..
+    } = &output.geometries[0].crs
     else {
         panic!(
             "l'incoerenza dichiarata si propaga invariata: {:?}",
@@ -491,14 +757,16 @@ fn geo_op_on_missing_crs_fails_with_the_declared_cause() {
     }
 
     // Anche a valle di op tabellari: lo stato mancante si propaga nel
-    // contratto e ferma l'op geo quando la raggiunge.
+    // contratto e ferma l'op geo quando la raggiunge. `table.rename`
+    // preserva la provenance (a differenza di `table.filter`, che la
+    // invaliderebbe e verrebbe rifiutata dal gate row-diagnostics).
     let chained = json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 1.0}},
+            {"id": "r", "op": "table.rename", "in": ["main"],
+             "config": {"renames": [{"old_name": "id", "new_name": "id2"}]}},
+            {"id": "b", "op": "geo.buffer", "in": ["r"], "config": {"distance": 1.0}},
         ],
         "output": "b",
     })
@@ -595,11 +863,26 @@ fn compiled_capability_validates_and_is_required_by_graph() {
     .to_string();
     let graph = validate(&plan, &input(geo_contract(1))).expect("geos compilato");
     assert!(graph.required_capabilities().contains("geos"));
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
-        .expect("ambiente coerente");
+    check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    )
+    .expect("ambiente coerente");
     // Un ambiente senza geos rifiuta il grafo (ADR 4).
-    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &CapabilitySet::default());
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
+    let result = check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &CapabilitySet::default(),
+    );
+    assert!(
+        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -607,7 +890,10 @@ fn input_contracts_must_match_declared_inputs() {
     let plan = mixed_plan_json();
 
     let missing = validate(&plan, &[]);
-    assert!(matches!(missing, Err(PlenoraError::InvalidPlan(_))), "{missing:?}");
+    assert!(
+        matches!(missing, Err(PlenoraError::InvalidPlan(_))),
+        "{missing:?}"
+    );
 
     let extra = validate(
         &plan,
@@ -616,7 +902,10 @@ fn input_contracts_must_match_declared_inputs() {
             ("other".to_owned(), table_contract()),
         ],
     );
-    assert!(matches!(extra, Err(PlenoraError::InvalidPlan(_))), "{extra:?}");
+    assert!(
+        matches!(extra, Err(PlenoraError::InvalidPlan(_))),
+        "{extra:?}"
+    );
 
     let duplicate = validate(
         &plan,
@@ -625,7 +914,10 @@ fn input_contracts_must_match_declared_inputs() {
             ("main".to_owned(), geo_contract(2)),
         ],
     );
-    assert!(matches!(duplicate, Err(PlenoraError::InvalidPlan(_))), "{duplicate:?}");
+    assert!(
+        matches!(duplicate, Err(PlenoraError::InvalidPlan(_))),
+        "{duplicate:?}"
+    );
 }
 
 #[test]
@@ -650,32 +942,37 @@ fn sorted_by_keys_on_input_are_rejected_fail_closed() {
 
 #[test]
 fn legacy_aliases_in_v4_plan_validate_and_share_plan_hash() {
+    // L'op geo precede `table.filter` (cardinality-changing): il gate
+    // provenance row-diagnostics rifiuterebbe l'ordine inverso.
     let aliased = json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "filter", "in": ["main"],
+            {"id": "b", "op": "geo_buffer", "in": ["main"], "config": {"distance": 100.0}},
+            {"id": "f", "op": "filter", "in": ["b"],
              "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo_buffer", "in": ["f"], "config": {"distance": 100.0}},
         ],
-        "output": "b",
+        "output": "f",
     })
     .to_string();
     let canonical = json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
+            {"id": "f", "op": "table.filter", "in": ["b"],
              "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 100.0}},
         ],
-        "output": "b",
+        "output": "f",
     })
     .to_string();
     let from_alias = validate(&aliased, &input(geo_contract(1))).expect("alias risolti");
     let from_canonical = validate(&canonical, &input(geo_contract(1))).expect("canonico");
     assert_eq!(from_alias.plan_hash(), from_canonical.plan_hash());
-    assert_eq!(from_alias.catalog_fingerprint(), from_canonical.catalog_fingerprint());
+    assert_eq!(
+        from_alias.catalog_fingerprint(),
+        from_canonical.catalog_fingerprint()
+    );
 }
 
 #[test]
@@ -686,24 +983,24 @@ fn equivalent_plans_share_plan_hash() {
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 100.0}},
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
             {"id": "c", "op": "geo.centroid", "in": ["b"]},
+            {"id": "f", "op": "table.filter", "in": ["c"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
         ],
-        "output": "c",
+        "output": "f",
     })
     .to_string();
     let explicit = json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "c", "op": "geo.centroid", "in": ["b"], "config": {}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 100.0}},
-            {"id": "f", "op": "table.filter", "in": ["main"],
+            {"id": "f", "op": "table.filter", "in": ["c"],
              "config": {"column": "id", "operator": ">", "value": 0}},
+            {"id": "c", "op": "geo.centroid", "in": ["b"], "config": {}},
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
         ],
-        "output": "c",
+        "output": "f",
     })
     .to_string();
     let first = validate(&sparse, &input(geo_contract(1))).expect("primo piano");
@@ -744,7 +1041,12 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
     let graph = validate(&plan_json, &input(table_contract())).expect("piano migrato valido");
     assert_eq!(graph.plan_format_version(), 4);
     assert_eq!(graph.topological_order(), &["n0", "n1"]);
-    assert!(graph.output_contract().unwrap().schema.field_with_name("count").is_ok());
+    assert!(graph
+        .output_contract()
+        .unwrap()
+        .schema
+        .field_with_name("count")
+        .is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -754,12 +1056,19 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
 #[test]
 fn check_compatibility_accepts_the_current_environment() {
     let graph = validate_mixed();
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
-        .expect("grafo compatibile con l'ambiente corrente");
+    check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    )
+    .expect("grafo compatibile con l'ambiente corrente");
     // Un superset di capability resta compatibile.
     let mut superset = local_capabilities();
     superset.insert("capability_futura");
-    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &superset).expect("superset compatibile");
+    check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &superset)
+        .expect("superset compatibile");
 }
 
 #[test]
@@ -767,13 +1076,17 @@ fn publish_profile_is_required_and_checked() {
     // ADR 7: il profilo di publish e' una capability del grafo.
     let graph = validate_mixed();
     // Default `AtomicPublish` finche' il formato piano non dichiara un profilo.
-    assert!(
-        graph
-            .required_capabilities()
-            .contains(PublishProfile::Atomic.capability_name())
-    );
+    assert!(graph
+        .required_capabilities()
+        .contains(PublishProfile::Atomic.capability_name()));
     // Un ambiente senza il profilo di publish richiesto rifiuta il grafo.
-    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, ARROW_VERSION, &compiled_capabilities());
+    let result = check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &compiled_capabilities(),
+    );
     match result {
         Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
@@ -789,7 +1102,13 @@ fn publish_profile_is_required_and_checked() {
 #[test]
 fn engine_version_mismatch_is_rejected() {
     let graph = validate_mixed();
-    let result = check_compatibility(&graph, CATALOG, "0.0.0-altra", ARROW_VERSION, &local_capabilities());
+    let result = check_compatibility(
+        &graph,
+        CATALOG,
+        "0.0.0-altra",
+        ARROW_VERSION,
+        &local_capabilities(),
+    );
     match result {
         Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
@@ -804,7 +1123,13 @@ fn arrow_version_mismatch_is_rejected() {
     let graph = validate_mixed();
     // Identita' coerente: la versione Arrow registrata e' quella della build.
     assert_eq!(graph.arrow_version().0, ARROW_VERSION);
-    let result = check_compatibility(&graph, CATALOG, ENGINE_VERSION, "0.0.0-altra", &local_capabilities());
+    let result = check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        "0.0.0-altra",
+        &local_capabilities(),
+    );
     match result {
         Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("GRAPH_MISMATCH"), "{message}");
@@ -830,17 +1155,24 @@ fn plan_hash_normalizes_integer_and_float_forms() {
         })
         .to_string()
     };
-    let int_graph = validate(&plan_with(json!(100)), &input(table_contract())).expect("config intera");
+    let int_graph =
+        validate(&plan_with(json!(100)), &input(table_contract())).expect("config intera");
     let float_graph =
         validate(&plan_with(json!(100.0)), &input(table_contract())).expect("config float");
     assert_eq!(int_graph.plan_hash(), float_graph.plan_hash());
 
     // Oltre 2^53 un intero puo' non avere un f64 esatto: le forme NON sono
     // unificate e gli hash restano distinti (fail-closed, nessun collasso).
-    let big_int =
-        validate(&plan_with(json!(9_007_199_254_740_994_u64)), &input(table_contract())).expect("int oltre 2^53");
-    let big_float =
-        validate(&plan_with(json!(9_007_199_254_740_994.0)), &input(table_contract())).expect("float oltre 2^53");
+    let big_int = validate(
+        &plan_with(json!(9_007_199_254_740_994_u64)),
+        &input(table_contract()),
+    )
+    .expect("int oltre 2^53");
+    let big_float = validate(
+        &plan_with(json!(9_007_199_254_740_994.0)),
+        &input(table_contract()),
+    )
+    .expect("float oltre 2^53");
     assert_ne!(big_int.plan_hash(), big_float.plan_hash());
 }
 
@@ -859,7 +1191,13 @@ fn catalog_fingerprint_mismatch_is_rejected() {
             clone
         })
         .collect();
-    let result = check_compatibility(&graph, &bumped, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
+    let result = check_compatibility(
+        &graph,
+        &bumped,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    );
     match result {
         Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("catalog_fingerprint"), "{message}");
@@ -873,8 +1211,17 @@ fn catalog_fingerprint_mismatch_is_rejected() {
         .filter(|descriptor| descriptor.id != "geo.buffer")
         .cloned()
         .collect();
-    let result = check_compatibility(&graph, &without_buffer, ENGINE_VERSION, ARROW_VERSION, &local_capabilities());
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
+    let result = check_compatibility(
+        &graph,
+        &without_buffer,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    );
+    assert!(
+        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        "{result:?}"
+    );
 
     // Un'op NON usata che cambia non invalida il grafo.
     let untouched: Vec<OperationDescriptor> = CATALOG
@@ -887,8 +1234,116 @@ fn catalog_fingerprint_mismatch_is_rejected() {
             clone
         })
         .collect();
-    check_compatibility(&graph, &untouched, ENGINE_VERSION, ARROW_VERSION, &local_capabilities())
-        .expect("op non usata fuori dal fingerprint");
+    check_compatibility(
+        &graph,
+        &untouched,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    )
+    .expect("op non usata fuori dal fingerprint");
+}
+
+#[test]
+fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
+    // ADR-0004 (delta row-diagnostics 2026-08-03): i bump di versione devono
+    // invalidare i grafi validati contro la baseline af812aa. Per ogni op
+    // rappresentativa: si valida un piano che la usa col catalogo corrente e
+    // si verifica che un catalogo riportato ALLE VERSIONI DI BASELINE
+    // produca mismatch di `catalog_fingerprint` — prova che il bump e' nel
+    // perimetro del fingerprint per-op, non solo nel descrittore.
+    let assert_baseline_mismatch =
+        |graph: &ValidatedGraph, op_id: &str, baseline: &dyn Fn(&mut OperationDescriptor)| {
+            let reverted: Vec<OperationDescriptor> = CATALOG
+                .iter()
+                .map(|descriptor| {
+                    let mut clone = descriptor.clone();
+                    if clone.id == op_id {
+                        baseline(&mut clone);
+                    }
+                    clone
+                })
+                .collect();
+            let result = check_compatibility(
+                graph,
+                &reverted,
+                ENGINE_VERSION,
+                ARROW_VERSION,
+                &local_capabilities(),
+            );
+            match result {
+                Err(PlenoraError::InvalidPlan(message)) => {
+                    assert!(
+                        message.contains("catalog_fingerprint"),
+                        "{op_id}: {message}"
+                    );
+                }
+                other => panic!("{op_id}: atteso mismatch fingerprint sulla baseline, {other:?}"),
+            }
+        };
+
+    // table.formula: baseline semantic 1 / kernel 2 (nuovo reject_rows).
+    let formula_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "derived", "op": "table.formula", "in": ["main"],
+             "config": {"new_column": "ratio", "formula": "id / 2"}}
+        ],
+        "output": "derived"
+    })
+    .to_string();
+    let graph = validate(&formula_plan, &input(table_contract())).expect("piano formula");
+    assert_baseline_mismatch(&graph, "table.formula", &|descriptor| {
+        descriptor.semantic_version = 1;
+        descriptor.kernel_version = 2;
+    });
+
+    // table.expression: baseline semantic 2 / kernel 3 (bump preesistente
+    // expression-v2; il delta row-diagnostics alza semantic 3 / kernel 4).
+    let expression_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "derived", "op": "table.expression", "in": ["main"],
+             "config": {"output_column": "ratio",
+                        "expression": {"kind": "binary", "op": "divide",
+                                       "left": {"kind": "column", "name": "id"},
+                                       "right": {"kind": "literal", "value": 2}}}}
+        ],
+        "output": "derived"
+    })
+    .to_string();
+    let graph = validate(&expression_plan, &input(table_contract())).expect("piano expression");
+    assert_baseline_mismatch(&graph, "table.expression", &|descriptor| {
+        descriptor.semantic_version = 2;
+        descriptor.kernel_version = 3;
+    });
+
+    // table.type_cast: solo kernel_version bumpata (2 -> 3, nuova
+    // implementazione diagnostica) — il fingerprint deve vedere ANCHE il
+    // bump kernel-only.
+    let cast_plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "cast", "op": "table.type_cast", "in": ["main"],
+             "config": {"column": "name", "target_type": "date32"}}
+        ],
+        "output": "cast"
+    })
+    .to_string();
+    let graph = validate(&cast_plan, &input(table_contract())).expect("piano type_cast");
+    assert_baseline_mismatch(&graph, "table.type_cast", &|descriptor| {
+        descriptor.kernel_version = 2;
+    });
+
+    // geo.buffer (diag-transport): baseline semantic 1 — l'errore row-scoped
+    // ora porta il payload di diagnostica (bump semantico, kernel invariato).
+    let graph = validate_mixed();
+    assert_baseline_mismatch(&graph, "geo.buffer", &|descriptor| {
+        descriptor.semantic_version = 1;
+    });
 }
 
 #[test]
@@ -907,16 +1362,25 @@ fn input_contract_mismatch_is_rejected() {
         Field::new("extra", DataType::Utf8, true),
     ]));
     let result = check_input_compatibility(&graph, &input(wider));
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        "{result:?}"
+    );
 
     // Geometria con CRS diverso -> mismatch.
     let other_crs = geo_contract_with_crs(1, geographic_crs());
     let result = check_input_compatibility(&graph, &input(other_crs));
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        "{result:?}"
+    );
 
     // Input mancante -> mismatch.
     let result = check_input_compatibility(&graph, &[]);
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -936,7 +1400,9 @@ fn identity_accessors_are_consistent() {
     // Limiti effettivi: default del piano non dichiarato.
     assert_eq!(
         graph.effective_limits().rows.max_rows_per_edge,
-        plenora_core::limits::Limits::default().rows.max_rows_per_edge
+        plenora_core::limits::Limits::default()
+            .rows
+            .max_rows_per_edge
     );
 }
 
@@ -1083,7 +1549,9 @@ fn catalog_matches_committed_snapshot() {
         return;
     }
     let expected = std::fs::read_to_string(path).unwrap_or_else(|error| {
-        panic!("snapshot del catalogo non leggibile ({error}): generarlo con PLENORA_UPDATE_SNAPSHOT=1")
+        panic!(
+            "snapshot del catalogo non leggibile ({error}): generarlo con PLENORA_UPDATE_SNAPSHOT=1"
+        )
     });
     // Il confronto e' insensibile agli a-capo: su Windows il checkout puo'
     // produrre CRLF (nessun .gitattributes imponeva LF fino al 2026-07-27).

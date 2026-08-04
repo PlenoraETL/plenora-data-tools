@@ -6,10 +6,11 @@ use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, S
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
-use plenora_core::{PlenoraError, Result};
 use crate::{
     column_index, replace_or_append, scalar_as_f64, scalar_as_string, validate_output_name,
+    DIVISION_BY_ZERO_MESSAGE,
 };
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -162,7 +163,9 @@ impl Parser<'_> {
                 self.position += 1;
             }
             if exponent == self.position {
-                return Err(PlenoraError::InvalidPlan("esponente formula non valido".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "esponente formula non valido".into(),
+                ));
             }
         }
         let value = std::str::from_utf8(&self.input[start..self.position])
@@ -188,15 +191,51 @@ impl Parser<'_> {
     }
 }
 
+/// Vero se l'espressione e' un letterale numerico zero (anche negato,
+/// `-0.0 == 0.0`): un divisore costante zero e' una proprieta' del piano,
+/// non delle righe.
+fn is_literal_zero(expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(value) => *value == 0.0,
+        Expr::Neg(inner) => is_literal_zero(inner),
+        _ => false,
+    }
+}
+
+/// P2 review 2026-08-03: divisione con divisore LETTERALE zero -> errore di
+/// configurazione (`InvalidPlan`), mai un rifiuto row-scoped attribuito a
+/// tutte le righe. Un divisore dipendente dalla riga (es. `i * 0`) resta
+/// row-scoped.
+fn reject_literal_zero_divisor(expr: &Expr) -> Result<()> {
+    match expr {
+        Expr::Binary(left, '/', right) if is_literal_zero(right) => {
+            let _ = left;
+            Err(PlenoraError::InvalidPlan(
+                "divisione per zero letterale nella formula: errore di configurazione, non di riga"
+                    .into(),
+            ))
+        }
+        Expr::Binary(left, _, right) => {
+            reject_literal_zero_divisor(left)?;
+            reject_literal_zero_divisor(right)
+        }
+        Expr::Neg(inner) => reject_literal_zero_divisor(inner),
+        Expr::Number(_) | Expr::Text(_) | Expr::Column(_) => Ok(()),
+    }
+}
+
 fn parse(input: &str) -> Result<Expr> {
     let mut parser = Parser {
         input: input.as_bytes(),
         position: 0,
     };
     let expression = parser.expression()?;
+    reject_literal_zero_divisor(&expression)?;
     parser.skip_space();
     if parser.position != parser.input.len() {
-        return Err(PlenoraError::InvalidPlan("token extra nella formula".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "token extra nella formula".into(),
+        ));
     }
     Ok(expression)
 }
@@ -249,7 +288,7 @@ fn evaluate(expression: &Expr, batch: &RecordBatch, row: usize) -> Result<Evalua
                     Evaluated::Number(left * right)
                 }
                 (Evaluated::Number(_), Evaluated::Number(0.0), '/') => {
-                    return Err(PlenoraError::Schema("divisione per zero".into()))
+                    return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()))
                 }
                 (Evaluated::Number(left), Evaluated::Number(right), '/') => {
                     Evaluated::Number(left / right)
@@ -438,62 +477,29 @@ impl<'a> FastProgram<'a> {
     fn run_numeric(&self, batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
         let mut stack: Vec<(f64, bool)> = Vec::with_capacity(self.depth);
         let mut output = Vec::with_capacity(batch.num_rows());
+        let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
-            stack.clear();
-            for op in &self.ops {
-                match *op {
-                    FastOp::Number(value) => stack.push((value, false)),
-                    FastOp::Column(column) => match column {
-                        FastColumn::F64(values) => {
-                            stack.push((values.value(row), values.is_null(row)));
-                        }
-                        FastColumn::I64(values) => {
-                            stack.push((values.value(row).to_f64().unwrap_or_default(), values.is_null(row)));
-                        }
-                        FastColumn::Str(_) => {
-                            return Err(PlenoraError::Internal(
-                                "programma numerico senza testo".into(),
-                            ));
-                        }
-                    },
-                    FastOp::Neg => {
-                        let (value, null) = stack.pop().unwrap_or_default();
-                        stack.push((-value, null));
-                    }
-                    FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
-                        let (right, right_null) = stack.pop().unwrap_or_default();
-                        let (left, left_null) = stack.pop().unwrap_or_default();
-                        if left_null || right_null {
-                            stack.push((0.0, true));
-                            continue;
-                        }
-                        let value = match op {
-                            FastOp::Add => left + right,
-                            FastOp::Subtract => left - right,
-                            FastOp::Multiply => left * right,
-                            FastOp::Divide if right == 0.0 => {
-                                return Err(PlenoraError::Schema("divisione per zero".into()));
-                            }
-                            FastOp::Divide => left / right,
-                            _ => {
-                                return Err(PlenoraError::Internal(
-                                    "operatore non aritmetico nel ramo aritmetico"
-                                        .into(),
-                                ));
-                            }
-                        };
-                        stack.push((value, false));
-                    }
-                    FastOp::Text(_) | FastOp::MissingColumn(_) => {
-                        return Err(PlenoraError::Internal(
-                            "programma numerico senza testo".into(),
-                        ));
-                    }
+            match self.eval_numeric_row(&mut stack, row) {
+                Ok((value, null)) => output.push(if null { None } else { Some(value) }),
+                Err(error) => {
+                    let Some(cause) = crate::row_eval_failure_cause(&error) else {
+                        return Err(error);
+                    };
+                    rejections.push(crate::RowRejection {
+                        row,
+                        cause,
+                        column: None,
+                    });
+                    // Placeholder mai pubblicato: `reject_rows` chiude prima
+                    // dell'uso di `output`.
+                    output.push(None);
                 }
             }
-            let (value, null) = stack.pop().unwrap_or_default();
-            output.push(if null { None } else { Some(value) });
         }
+        crate::reject_rows(
+            &rejections,
+            "valori formula rifiutati; consultare row_diagnostics",
+        )?;
         replace_or_append(
             batch,
             &config.new_column,
@@ -503,42 +509,94 @@ impl<'a> FastProgram<'a> {
         )
     }
 
+    /// Valutazione di una riga sul tier numerico (estratta per la raccolta
+    /// row-scoped: semantica identica al loop originale).
+    fn eval_numeric_row(&self, stack: &mut Vec<(f64, bool)>, row: usize) -> Result<(f64, bool)> {
+        stack.clear();
+        for op in &self.ops {
+            match *op {
+                FastOp::Number(value) => stack.push((value, false)),
+                FastOp::Column(column) => match column {
+                    FastColumn::F64(values) => {
+                        stack.push((values.value(row), values.is_null(row)));
+                    }
+                    FastColumn::I64(values) => {
+                        stack.push((
+                            values.value(row).to_f64().unwrap_or_default(),
+                            values.is_null(row),
+                        ));
+                    }
+                    FastColumn::Str(_) => {
+                        return Err(PlenoraError::Internal(
+                            "programma numerico senza testo".into(),
+                        ));
+                    }
+                },
+                FastOp::Neg => {
+                    let (value, null) = stack.pop().unwrap_or_default();
+                    stack.push((-value, null));
+                }
+                FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
+                    let (right, right_null) = stack.pop().unwrap_or_default();
+                    let (left, left_null) = stack.pop().unwrap_or_default();
+                    if left_null || right_null {
+                        stack.push((0.0, true));
+                        continue;
+                    }
+                    let value = match op {
+                        FastOp::Add => left + right,
+                        FastOp::Subtract => left - right,
+                        FastOp::Multiply => left * right,
+                        FastOp::Divide if right == 0.0 => {
+                            return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()));
+                        }
+                        FastOp::Divide => left / right,
+                        _ => {
+                            return Err(PlenoraError::Internal(
+                                "operatore non aritmetico nel ramo aritmetico".into(),
+                            ));
+                        }
+                    };
+                    stack.push((value, false));
+                }
+                FastOp::Text(_) | FastOp::MissingColumn(_) => {
+                    return Err(PlenoraError::Internal(
+                        "programma numerico senza testo".into(),
+                    ));
+                }
+            }
+        }
+        Ok(stack.pop().unwrap_or_default())
+    }
+
     /// Tier generale: stack di `Slot` con testo in prestito; replica
     /// `evaluate` + logica di output del generico.
     fn run_slots(&self, batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
         let mut stack: Vec<Slot<'a>> = Vec::with_capacity(self.depth);
         let mut values: Vec<Slot<'a>> = Vec::with_capacity(batch.num_rows());
+        let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
-            stack.clear();
-            for op in &self.ops {
-                match *op {
-                    FastOp::Number(value) => stack.push(Slot::Number(value)),
-                    FastOp::Text(value) => stack.push(Slot::Text(Cow::Borrowed(value))),
-                    FastOp::Column(column) => stack.push(column.slot(row)),
-                    FastOp::MissingColumn(name) => {
-                        return Err(PlenoraError::Schema(format!(
-                            "colonna non trovata: {name}"
-                        )));
-                    }
-                    FastOp::Neg => {
-                        let value = stack.pop().unwrap_or(Slot::Null);
-                        stack.push(match value {
-                            Slot::Number(value) => Slot::Number(-value),
-                            Slot::Null => Slot::Null,
-                            Slot::Text(_) => {
-                                return Err(PlenoraError::Schema("negazione di testo".into()));
-                            }
-                        });
-                    }
-                    FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
-                        let right = stack.pop().unwrap_or(Slot::Null);
-                        let left = stack.pop().unwrap_or(Slot::Null);
-                        stack.push(binary_slot(*op, left, right)?);
-                    }
+            match self.eval_slot_row(&mut stack, row) {
+                Ok(value) => values.push(value),
+                Err(error) => {
+                    let Some(cause) = crate::row_eval_failure_cause(&error) else {
+                        return Err(error);
+                    };
+                    rejections.push(crate::RowRejection {
+                        row,
+                        cause,
+                        column: None,
+                    });
+                    // Placeholder mai pubblicato: `reject_rows` chiude prima
+                    // dell'uso di `values`.
+                    values.push(Slot::Null);
                 }
             }
-            values.push(stack.pop().unwrap_or(Slot::Null));
         }
+        crate::reject_rows(
+            &rejections,
+            "valori formula rifiutati; consultare row_diagnostics",
+        )?;
         if values
             .iter()
             .all(|value| matches!(value, Slot::Number(_) | Slot::Null))
@@ -573,6 +631,41 @@ impl<'a> FastProgram<'a> {
                 Arc::new(StringArray::from(values)),
             )
         }
+    }
+
+    /// Valutazione di una riga sul tier generale (estratta per la raccolta
+    /// row-scoped: semantica identica al loop originale).
+    fn eval_slot_row<'b>(&self, stack: &mut Vec<Slot<'b>>, row: usize) -> Result<Slot<'b>>
+    where
+        'a: 'b,
+    {
+        stack.clear();
+        for op in &self.ops {
+            match *op {
+                FastOp::Number(value) => stack.push(Slot::Number(value)),
+                FastOp::Text(value) => stack.push(Slot::Text(Cow::Borrowed(value))),
+                FastOp::Column(column) => stack.push(column.slot(row)),
+                FastOp::MissingColumn(name) => {
+                    return Err(PlenoraError::Schema(format!("colonna non trovata: {name}")));
+                }
+                FastOp::Neg => {
+                    let value = stack.pop().unwrap_or(Slot::Null);
+                    stack.push(match value {
+                        Slot::Number(value) => Slot::Number(-value),
+                        Slot::Null => Slot::Null,
+                        Slot::Text(_) => {
+                            return Err(PlenoraError::Schema("negazione di testo".into()));
+                        }
+                    });
+                }
+                FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
+                    let right = stack.pop().unwrap_or(Slot::Null);
+                    let left = stack.pop().unwrap_or(Slot::Null);
+                    stack.push(binary_slot(*op, left, right)?);
+                }
+            }
+        }
+        Ok(stack.pop().unwrap_or(Slot::Null))
     }
 }
 
@@ -630,7 +723,7 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
             FastOp::Subtract => Slot::Number(left - right),
             FastOp::Multiply => Slot::Number(left * right),
             FastOp::Divide if right == 0.0 => {
-                return Err(PlenoraError::Schema("divisione per zero".into()));
+                return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()));
             }
             FastOp::Divide => Slot::Number(left / right),
             _ => {
@@ -701,10 +794,35 @@ pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
 
 /// Percorso generico originale: interprete ricorsivo sull'AST, usato come
 /// fallback per le colonne non Int64/Float64/Utf8 e come oracolo dei test.
-fn formula_generic(batch: &RecordBatch, config: &Formula, expression: &Expr) -> Result<RecordBatch> {
-    let values = (0..batch.num_rows())
-        .map(|row| evaluate(expression, batch, row))
-        .collect::<Result<Vec<_>>>()?;
+fn formula_generic(
+    batch: &RecordBatch,
+    config: &Formula,
+    expression: &Expr,
+) -> Result<RecordBatch> {
+    let mut values = Vec::with_capacity(batch.num_rows());
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        match evaluate(expression, batch, row) {
+            Ok(value) => values.push(value),
+            Err(error) => {
+                let Some(cause) = crate::row_eval_failure_cause(&error) else {
+                    return Err(error);
+                };
+                rejections.push(crate::RowRejection {
+                    row,
+                    cause,
+                    column: None,
+                });
+                // Placeholder mai pubblicato: `reject_rows` chiude prima
+                // dell'uso di `values`.
+                values.push(Evaluated::Null);
+            }
+        }
+    }
+    crate::reject_rows(
+        &rejections,
+        "valori formula rifiutati; consultare row_diagnostics",
+    )?;
     if values
         .iter()
         .all(|value| matches!(value, Evaluated::Number(_) | Evaluated::Null))
@@ -740,7 +858,6 @@ fn formula_generic(batch: &RecordBatch, config: &Formula, expression: &Expr) -> 
         )
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Fase 2A: analisi statica del tipo prodotto (analyze_contract).
@@ -874,7 +991,11 @@ mod tests {
     }
 
     /// Risultato del fast path (None se il programma non copre il caso).
-    fn fast(batch: &RecordBatch, expression: &Expr, config: &Formula) -> Option<Result<RecordBatch>> {
+    fn fast(
+        batch: &RecordBatch,
+        expression: &Expr,
+        config: &Formula,
+    ) -> Option<Result<RecordBatch>> {
         FastProgram::compile(expression, batch).map(|program| program.run(batch, config))
     }
 
@@ -920,20 +1041,96 @@ mod tests {
     }
 
     #[test]
+    fn errore_non_classificabile_propaga_senza_diagnostica_inventata() {
+        // P2 review 2026-08-03 (gap documentato): la classificazione delle
+        // cause row-scoped e' per messaggio (costanti condivise). Un errore
+        // di valutazione NON classificabile (qui sottrazione fra testi)
+        // propaga fail-closed cosi' com'e': mai una causa inventata, mai un
+        // report parziale. Una variante tipizzata richiederebbe un nuovo
+        // discriminatore in `PlenoraError` (API pubblica, non non_exhaustive)
+        // — rimandato per non rompere i consumatori.
+        let batch = fixture();
+        let error = formula(&batch, &config("s - s")).expect_err("sottrazione fra testi");
+        assert!(
+            error.row_diagnostics().is_none(),
+            "errore non classificabile: nessuna diagnostica inventata"
+        );
+        // Controllo: il fast path ha lo stesso esito (parita' fail-closed).
+        let expression = parse("s - s").expect("formula valida");
+        let generic = formula_generic(&batch, &config("s - s"), &expression)
+            .expect_err("sottrazione fra testi (generico)");
+        assert!(generic.row_diagnostics().is_none());
+        assert_eq!(
+            error.to_string(),
+            generic.to_string(),
+            "fast e generico devono propagare lo stesso errore grezzo"
+        );
+    }
+
+    #[test]
+    fn divisione_per_zero_letterale_e_errore_di_configurazione() {
+        // P2 review 2026-08-03: un divisore LETTERALE zero (anche -0) e' una
+        // proprieta' del piano, non delle righe: errore di configurazione
+        // senza diagnostica row-scoped (mai un rifiuto attribuito a TUTTE
+        // le righe). Il divisore calcolato (es. i * 0) resta row-scoped.
+        let batch = fixture();
+        for text in ["f / 0", "f / -0", "f / 0.0", "1 + f / (0)", "f / -(-0)"] {
+            let error = formula(&batch, &config(text)).expect_err(text);
+            assert!(
+                matches!(error, PlenoraError::InvalidPlan(_)),
+                "{text}: atteso InvalidPlan (config), trovato {error:?}"
+            );
+            assert!(
+                error.row_diagnostics().is_none(),
+                "{text}: nessuna diagnostica row-scoped per errore di configurazione"
+            );
+        }
+        // Controllo: divisore dipendente dalla riga -> row-scoped invariato.
+        let error = formula(&batch, &config("i / (i * 0)")).expect_err("divisione calcolata");
+        assert!(error.row_diagnostics().is_some());
+    }
+
+    #[test]
+    fn divisione_per_zero_riporta_diagnostica_row_scoped() {
+        let batch = fixture();
+        let cfg = config("i / (i * 0)");
+        // Righe difettose: 0, 2, 3, 4, 5 (riga 1 null -> null, nessun errore).
+        let error = formula(&batch, &cfg).expect_err("divisione per zero");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped presente");
+        assert_eq!(
+            report.completeness,
+            plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete
+        );
+        assert_eq!(report.observed_total, 5);
+        assert_eq!(report.total, Some(5));
+        assert_eq!(report.counts["evaluation.division_by_zero"], 5);
+        assert_eq!(report.counts.len(), 1);
+        let indices: Vec<u64> = report.examples.iter().map(|row| row.source_index).collect();
+        assert_eq!(indices, vec![0, 2, 3, 4, 5]);
+        assert!(!report.examples_truncated);
+        assert!(report.validate_for_emission().is_ok());
+        // Parita' fast/generico anche sul payload, non solo sul testo.
+        let expression = parse("i / (i * 0)").expect("formula valida");
+        let generic = formula_generic(&batch, &cfg, &expression).expect_err("divisione per zero");
+        assert_eq!(error.row_diagnostics(), generic.row_diagnostics());
+    }
+
+    #[test]
     fn oracle_errori_di_dominio_identici() {
         let batch = fixture();
         // Divisione per zero (anche -0.0), a riga 0 e a riga successiva.
+        // I divisori LETTERALI zero ("f / 0" e simili) sono errori di
+        // configurazione dal 2026-08-03 (P2 review): coperti dal test
+        // dedicato, non da questo oracolo di errori di dominio per riga.
         for text in [
-            "f / 0",
-            "f / -0",
             "f / (f - f)",
             "i / (i * 0)",
             "s - s",
             "s * f",
             "-s",
             "missing + 1",
-            "1 / 0 + missing",
-            "missing + 1 / 0",
         ] {
             assert_equivalent(&batch, text);
         }
@@ -960,7 +1157,13 @@ mod tests {
         let batch = fixture();
         // Catena lunga (AST profondo a sinistra) e colonne tutte nulle.
         let long = (0..200)
-            .map(|index| if index % 3 == 0 { "f".to_string() } else { "2".to_string() })
+            .map(|index| {
+                if index % 3 == 0 {
+                    "f".to_string()
+                } else {
+                    "2".to_string()
+                }
+            })
             .collect::<Vec<_>>()
             .join(" + ");
         assert_equivalent(&batch, &long);
@@ -980,7 +1183,8 @@ mod tests {
         let expression = parse("b + ''").expect("parse");
         assert!(fast(&batch, &expression, &config("b + ''")).is_none());
         let via_kernel = formula(&batch, &config("b + ''")).expect("fallback generico");
-        let via_generic = formula_generic(&batch, &config("b + ''"), &expression).expect("generico");
+        let via_generic =
+            formula_generic(&batch, &config("b + ''"), &expression).expect("generico");
         assert_eq!(via_kernel, via_generic);
 
         // Batch vuoto: il generico non risolve le colonne; la formula con
@@ -992,6 +1196,13 @@ mod tests {
         .expect("empty");
         let output = formula(&empty, &config("missing + 1")).expect("zero righe: nessun errore");
         assert_eq!(output.num_rows(), 0);
-        assert_eq!(output.schema().field_with_name("out").expect("out").data_type(), &DataType::Float64);
+        assert_eq!(
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
+            &DataType::Float64
+        );
     }
 }

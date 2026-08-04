@@ -71,13 +71,14 @@ pub mod temp_store;
 pub use cancellation::CancellationToken;
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
-pub use temp_store::{scavenge_stale_temp_dirs, ScavengeReport, TempStore, DEFAULT_SCAVENGE_TTL};
+pub use plenora_kernels_table::spill::SpillMetrics;
 pub use prepare::{
     explain, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
     MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
 };
 pub use table_engine::{
-    execute_batch, execute_batch_with_spill, execute_binary, Limits, Plan, Step, ValidatedPlan,
+    execute_batch, execute_batch_with_spill, execute_binary, execute_complete_batch, Limits, Plan,
+    Step, ValidatedPlan,
 };
-pub use plenora_kernels_table::spill::SpillMetrics;
+pub use temp_store::{scavenge_stale_temp_dirs, ScavengeReport, TempStore, DEFAULT_SCAVENGE_TTL};

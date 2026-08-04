@@ -237,7 +237,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_output_name(&config.column)?;
             validate_output_name(&config.output_column)?;
             if config.conditions.is_empty() || config.conditions.len() > limits.max_columns {
-                return Err(PlenoraError::InvalidPlan("numero condizioni non valido".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "numero condizioni non valido".into(),
+                ));
             }
             Ok(())
         }
@@ -304,7 +306,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
         "mask_data" => {
             let config = decode::<security::MaskData>(step)?;
             if config.maskings.is_empty() || config.maskings.len() > limits.max_columns {
-                return Err(PlenoraError::InvalidPlan("numero masking non valido".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "numero masking non valido".into(),
+                ));
             }
             config
                 .maskings
@@ -316,7 +320,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "md5_hash", false)?;
             validate_output_name(&config.output_column)?;
             if config.null_literal.len() > limits.max_string_bytes {
-                return Err(PlenoraError::InvalidPlan("null_literal troppo grande".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "null_literal troppo grande".into(),
+                ));
             }
             Ok(())
         }
@@ -420,7 +426,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
                 validate_output_name(name)?;
             }
             if config.offset == 0 {
-                return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "offset deve essere positivo".into(),
+                ));
             }
             if matches!(config.function, aggregation::WindowKind::Ntile) {
                 if !config
@@ -709,7 +717,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "sha256_hash", false)?;
             validate_output_name(&config.output_column)?;
             if config.null_literal.len() > limits.max_string_bytes {
-                return Err(PlenoraError::InvalidPlan("null_literal troppo grande".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "null_literal troppo grande".into(),
+                ));
             }
             Ok(())
         }
@@ -728,7 +738,9 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
             validate_name_list(&config.columns, limits.max_columns, "hmac_sha256", false)?;
             validate_output_name(&config.output_column)?;
             if config.key_env.trim().is_empty() {
-                return Err(PlenoraError::InvalidPlan("hmac_sha256: key_env vuoto".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "hmac_sha256: key_env vuoto".into(),
+                ));
             }
             Ok(())
         }
@@ -1330,7 +1342,9 @@ fn execute_step(
         PreparedStep::Bin(config) => analysis::bin(batch, config),
         PreparedStep::Sample(config) => analysis::sample(batch, config),
         PreparedStep::Statistics(config) => analysis::statistics(batch, config),
-        PreparedStep::Sort(config) => sort_dispatch(batch, config, limits, spill_dir, spill_metrics),
+        PreparedStep::Sort(config) => {
+            sort_dispatch(batch, config, limits, spill_dir, spill_metrics)
+        }
         PreparedStep::TopN(config) => aggregation::top_n(batch, config),
         PreparedStep::Distinct(config) => {
             distinct_dispatch(batch, config, limits, spill_dir, spill_metrics)
@@ -1467,6 +1481,20 @@ pub fn execute_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordB
     execute_batch_with_spill(batch, plan, None).map(|(output, _)| output)
 }
 
+/// Esegue un input che il chiamante dichiara materializzato per l'intera
+/// operazione.
+///
+/// Solo questo confine legacy puo' pubblicare diagnostics `complete`;
+/// [`execute_batch`] rifiuta invece diagnostics batch-local.
+///
+/// # Errors
+///
+/// Come [`execute_batch`]; in piu' `InvalidPlan` se il piano produce
+/// diagnostics batch-locali non aggregabili a questo confine.
+pub fn execute_complete_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordBatch> {
+    execute_batch_with_spill_impl(batch, plan, None, true).map(|(output, _)| output)
+}
+
 /// Come [`execute_batch`], ma con la directory di spill decisa dal
 /// chiamante (ADR-0002, Fase 2B M2c).
 ///
@@ -1485,9 +1513,31 @@ pub fn execute_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Result<RecordB
 /// Come [`execute_batch`]; in piu' l'errore dedicato `Contract`
 /// `max_temp_bytes` se la quota temp dello spill e' superata.
 pub fn execute_batch_with_spill(
+    batch: RecordBatch,
+    plan: &ValidatedPlan,
+    spill_dir: Option<&Path>,
+) -> Result<(RecordBatch, spill::SpillMetrics)> {
+    execute_batch_with_spill_impl(batch, plan, spill_dir, false)
+}
+
+/// Percorso interno del DAG: il chiamante aggrega deterministicamente tutti i
+/// batch e applica gli offset assoluti prima di rendere pubblico l'errore.
+// Re-esportato `pub(crate)` da `table_engine::mod`: la visibilita' dichiarata
+// e' quella necessaria al confine crate (il lint non vede la re-export).
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn execute_batch_with_spill_row_diagnostics(
+    batch: RecordBatch,
+    plan: &ValidatedPlan,
+    spill_dir: Option<&Path>,
+) -> Result<(RecordBatch, spill::SpillMetrics)> {
+    execute_batch_with_spill_impl(batch, plan, spill_dir, true)
+}
+
+fn execute_batch_with_spill_impl(
     mut batch: RecordBatch,
     plan: &ValidatedPlan,
     spill_dir: Option<&Path>,
+    allow_batch_local_diagnostics: bool,
 ) -> Result<(RecordBatch, spill::SpillMetrics)> {
     if plan.requires_secondary() {
         return Err(PlenoraError::InvalidPlan(
@@ -1500,24 +1550,41 @@ pub fn execute_batch_with_spill(
     let mut names_validated: Option<SchemaRef> = None;
     validate_batch(&batch, plan.limits(), &mut names_validated)?;
     let mut spill_metrics = spill::SpillMetrics::default();
-    for (index, (step, prepared)) in plan
-        .steps()
-        .iter()
-        .zip(plan.prepared_steps())
-        .enumerate()
-    {
-        batch = execute_step(&batch, prepared, plan.limits(), spill_dir, &mut spill_metrics).map_err(|error| PlenoraError::Execution {
-            node: index.to_string(),
-            operation: step.operation.clone(),
-            // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
-            execution_id: String::new(),
-            reason: error.to_string(),
+    for (index, (step, prepared)) in plan.steps().iter().zip(plan.prepared_steps()).enumerate() {
+        batch = execute_step(
+            &batch,
+            prepared,
+            plan.limits(),
+            spill_dir,
+            &mut spill_metrics,
+        )
+        .map_err(|error| {
+            if error.row_diagnostics().is_some() {
+                if allow_batch_local_diagnostics {
+                    error
+                } else {
+                    PlenoraError::Unsupported(
+                        "row diagnostics batch-local non pubblicabili: usare l'executor DAG v4"
+                            .to_owned(),
+                    )
+                }
+            } else {
+                PlenoraError::Execution {
+                    node: index.to_string(),
+                    operation: step.operation.clone(),
+                    // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
+                    execution_id: String::new(),
+                    reason: error.to_string(),
+                }
+            }
         })?;
-        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| PlenoraError::Execution {
-            node: index.to_string(),
-            operation: step.operation.clone(),
-            execution_id: String::new(),
-            reason: error.to_string(),
+        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| {
+            PlenoraError::Execution {
+                node: index.to_string(),
+                operation: step.operation.clone(),
+                execution_id: String::new(),
+                reason: error.to_string(),
+            }
         })?;
     }
     Ok((batch, spill_metrics))
@@ -1553,12 +1620,7 @@ pub fn execute_binary(
         // set-op, quindi questo percorso NON transita dalla directory
         // condivisa del `TempStore` (diversamente da sort/distinct/
         // aggregate, cfr. `execute_batch_with_spill`).
-        let output = spill::execute_set_operation(
-            prepared.name(),
-            &left,
-            &right,
-            plan.limits(),
-        )?;
+        let output = spill::execute_set_operation(prepared.name(), &left, &right, plan.limits())?;
         validate_batch(&output, plan.limits(), &mut names_validated)?;
         return Ok(output);
     }
@@ -1569,7 +1631,9 @@ pub fn execute_binary(
             joins::concat_by_name(&[&left, &right], config, plan.limits())
         }
         PreparedStep::CrossJoin(config) => joins::cross_join(&left, &right, config, plan.limits()),
-        PreparedStep::TableDiff(config) => reshape::table_diff(&left, &right, config, plan.limits()),
+        PreparedStep::TableDiff(config) => {
+            reshape::table_diff(&left, &right, config, plan.limits())
+        }
         PreparedStep::SemiJoin(config) => joins::semi_join(&left, &right, config),
         PreparedStep::AntiJoin(config) => joins::anti_join(&left, &right, config),
         PreparedStep::AsOfJoin(config) => joins::asof_join(&left, &right, config, plan.limits()),
@@ -1671,10 +1735,6 @@ mod tests {
         DECODE_CALLS.with(|calls| calls.set(0));
         let output = execute_binary(&ids_batch(), &ids_batch(), &plan).expect("concat");
         assert_eq!(output.num_rows(), 6);
-        assert_eq!(
-            decode_calls(),
-            0,
-            "deserializzazioni nel percorso binario"
-        );
+        assert_eq!(decode_calls(), 0, "deserializzazioni nel percorso binario");
     }
 }

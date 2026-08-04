@@ -31,7 +31,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use geo::{line_string, polygon, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+use geo::{
+    line_string, polygon, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
+    Polygon,
+};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
@@ -40,6 +43,7 @@ use plenora_core::contract::{
     GeometryDimensions,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::diagnostics::RowDiagnostics;
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
 use plenora_engine::planner::{validate, ValidatedGraph};
 use plenora_engine::{
@@ -130,7 +134,10 @@ fn runtime(geo_fusion: bool) -> RuntimeContext {
 
 fn single_input(batches: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
-        .with("main", Input::from_batches(batches).expect("input non vuoto"))
+        .with(
+            "main",
+            Input::from_batches(batches).expect("input non vuoto"),
+        )
         .expect("input unico")
 }
 
@@ -162,7 +169,10 @@ fn assert_group_formation(plan: &Value, nodes: &[&str]) {
             assert_eq!(ids.len(), 1, "{nodes:?}: atteso UN solo gruppo di fusione");
         } else {
             for node in nodes {
-                assert_eq!(groups[node], None, "{node}: nessun gruppo a kill switch spento");
+                assert_eq!(
+                    groups[node], None,
+                    "{node}: nessun gruppo a kill switch spento"
+                );
             }
         }
     }
@@ -183,6 +193,9 @@ struct ErrorSignature {
     phase: ErrorPhase,
     remote_effect: RemoteEffect,
     retry: RetryDisposition,
+    // R9.9: la diagnostica row-scoped fa parte della firma confrontata —
+    // la parita' fusa/non fusa (D12.3/D12.4) vale anche per il report.
+    diagnostics: Option<RowDiagnostics>,
 }
 
 fn error_signature(error: &PlenoraError) -> ErrorSignature {
@@ -192,9 +205,7 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
         | PlenoraError::Schema(reason)
         | PlenoraError::DataMapping(reason)
         | PlenoraError::Crs(reason)
-        | PlenoraError::Internal(reason) => {
-            (variant_name(error), None, None, reason.clone())
-        }
+        | PlenoraError::Internal(reason) => (variant_name(error), None, None, reason.clone()),
         PlenoraError::Execution {
             node,
             operation,
@@ -213,12 +224,21 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
             reason.clone(),
         ),
         PlenoraError::Io(error) => ("Io", None, None, error.to_string()),
+        PlenoraError::Replayed(replayed) => (
+            "Replayed",
+            replayed.node.clone(),
+            replayed.operation.clone(),
+            replayed.message.clone(),
+        ),
         // Wrapper di fase (BLOCK-03): la firma vede la variante interna;
-        // la fase (taggata) e' letta sotto da `error.phase()`.
-        PlenoraError::Tagged { source, .. } => {
+        // la fase (taggata) e' letta sotto da `error.phase()`. Il payload
+        // row-scoped vive sul wrapper ESTERNO: va letto da `error`, non dal
+        // source (che non lo porta).
+        PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
             let inner = error_signature(source);
             return ErrorSignature {
                 phase: error.phase(),
+                diagnostics: error.row_diagnostics().cloned(),
                 ..inner
             };
         }
@@ -232,6 +252,7 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
         phase: error.phase(),
         remote_effect: error.remote_effect(),
         retry: error.retry_disposition(),
+        diagnostics: error.row_diagnostics().cloned(),
     }
 }
 
@@ -246,7 +267,10 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
         PlenoraError::Internal(_) => "Internal",
-        PlenoraError::Tagged { source, .. } => variant_name(source),
+        PlenoraError::Replayed(_) => "Replayed",
+        PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
+            variant_name(source)
+        }
     }
 }
 
@@ -309,7 +333,11 @@ fn assert_oracle_error(
     signature
 }
 
-fn run_ok(plan: &Value, batches: Vec<RecordBatch>, geo_fusion: bool) -> (Vec<RecordBatch>, ExecutionMetrics) {
+fn run_ok(
+    plan: &Value,
+    batches: Vec<RecordBatch>,
+    geo_fusion: bool,
+) -> (Vec<RecordBatch>, ExecutionMetrics) {
     execute(&graph(plan), single_input(batches), runtime(geo_fusion))
         .expect("execute")
         .collect_batches()
@@ -380,7 +408,13 @@ fn multi_type_batches() -> Vec<RecordBatch> {
     ])));
     let multi_polygon = to_wkb(&Geometry::MultiPolygon(MultiPolygon(vec![
         Polygon::new(
-            LineString::from(vec![(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0), (0.0, 0.0)]),
+            LineString::from(vec![
+                (0.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 5.0),
+                (0.0, 5.0),
+                (0.0, 0.0),
+            ]),
             vec![],
         ),
         Polygon::new(
@@ -426,9 +460,15 @@ fn a_happy_path_multi_type_byte_per_byte() {
     assert_group_formation(&plan, &["t", "d", "r", "s", "k", "e"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
-    assert_eq!(fused_batches, plain_batches, "output fuso diverso dal non fuso");
+    assert_eq!(
+        fused_batches, plain_batches,
+        "output fuso diverso dal non fuso"
+    );
     for node in ["t", "d", "r", "s", "k", "e"] {
         let fused_node = &fused_metrics.nodes[node];
         let plain_node = &plain_metrics.nodes[node];
@@ -447,8 +487,18 @@ fn a_happy_path_multi_type_byte_per_byte() {
 fn contract_and_schema_identical_with_fusion_on_and_off() {
     let oracle_plan = happy_path_plan();
     let validated = graph(&oracle_plan);
-    let fused = execute(&validated, single_input(multi_type_batches()), runtime(true)).expect("fuso");
-    let plain = execute(&validated, single_input(multi_type_batches()), runtime(false)).expect("non fuso");
+    let fused = execute(
+        &validated,
+        single_input(multi_type_batches()),
+        runtime(true),
+    )
+    .expect("fuso");
+    let plain = execute(
+        &validated,
+        single_input(multi_type_batches()),
+        runtime(false),
+    )
+    .expect("non fuso");
     assert_eq!(
         fused.schema(),
         plain.schema(),
@@ -499,9 +549,9 @@ fn oversized_cell_batches() -> Vec<RecordBatch> {
         .collect();
     vec![geo_batch(
         &[0],
-        &[Some(to_wkb(&Geometry::MultiLineString(MultiLineString::new(
-            lines,
-        ))))],
+        &[Some(to_wkb(&Geometry::MultiLineString(
+            MultiLineString::new(lines),
+        )))],
     )]
 }
 
@@ -513,17 +563,16 @@ fn b_cell_over_max_cell_bytes_attributed_to_first_node() {
     let plan = cell_too_large_plan();
     assert_group_formation(&plan, &["d1", "t", "s"]);
     let signature = assert_oracle_error("b", &plan, &oversized_cell_batches, Some("d1"));
-    assert_eq!(signature.variant, "Execution", "b: errore di esecuzione");
-    assert!(
-        signature.reason.contains("cella WKB da"),
-        "b: motivo `CellTooLarge`: {}",
-        signature.reason
+    assert_eq!(
+        signature.variant, "Replayed",
+        "b: errore con diagnostica row-scoped (contesto nodo nel Replayed)"
     );
-    assert!(
-        signature.reason.contains("batch_seq"),
-        "b: contesto diagnostico presente: {}",
-        signature.reason
-    );
+    // R9.9: il motivo CellTooLarge e' machine-readable nel report (causa +
+    // indice riga), non piu' nel testo dell'errore (messaggio standard).
+    let report = signature.diagnostics.expect("b: diagnostica row-scoped");
+    assert_eq!(report.counts["geometry.cell_too_large"], 1);
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(report.examples[0].source_index, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -611,17 +660,17 @@ fn c_malformed_wkb_attributed_to_first_node() {
         let signature = assert_oracle_error(
             label,
             &plan,
-            &|| vec![geo_batch(&[0, 1], &[Some(cell.clone()), Some(point_wkb(3.0, 4.0))])],
+            &|| {
+                vec![geo_batch(
+                    &[0, 1],
+                    &[Some(cell.clone()), Some(point_wkb(3.0, 4.0))],
+                )]
+            },
             None,
         );
         assert_eq!(
-            signature.variant, "InvalidPlan",
+            signature.variant, "DataMapping",
             "{label}: rifiuto strutturale all'arco di input"
-        );
-        assert!(
-            signature.reason.contains("(riga 0)"),
-            "{label}: la riga e' nel motivo: {}",
-            signature.reason
         );
         if label == "c-troncati" {
             first_reason = signature.reason;
@@ -632,7 +681,12 @@ fn c_malformed_wkb_attributed_to_first_node() {
     let signature = assert_oracle_error(
         "c-prima-riga",
         &plan,
-        &|| vec![geo_batch(&[0, 1], &[Some(truncated_point_wkb()), Some(nan_point_wkb())])],
+        &|| {
+            vec![geo_batch(
+                &[0, 1],
+                &[Some(truncated_point_wkb()), Some(nan_point_wkb())],
+            )]
+        },
         None,
     );
     assert_eq!(
@@ -648,7 +702,10 @@ fn c_malformed_wkb_attributed_to_first_node() {
         &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
         Some("t"),
     );
-    assert_eq!(signature.variant, "Execution", "c-bowtie: errore di esecuzione");
+    assert_eq!(
+        signature.variant, "Replayed",
+        "c-bowtie: errore di esecuzione"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -679,7 +736,10 @@ fn d1_centroid_overflow_attributed_to_producer() {
     assert_group_formation(&plan, &["t", "c", "s"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(1e308, 1e308, 1e307))])];
     let signature = assert_oracle_error("d1", &plan, &fixture, Some("c"));
-    assert_eq!(signature.variant, "Execution", "d1: errore di esecuzione");
+    assert_eq!(
+        signature.variant, "Replayed",
+        "d1: errore con diagnostica row-scoped"
+    );
 }
 
 fn scale_inf_plan() -> Value {
@@ -711,7 +771,10 @@ fn d2_scale_to_infinite_attributed_to_producer() {
     assert_group_formation(&plan, &["t", "k", "r"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(1e30, 1e30, 1e30))])];
     let signature = assert_oracle_error("d2", &plan, &fixture, Some("k"));
-    assert_eq!(signature.variant, "Execution", "d2: errore di esecuzione");
+    assert_eq!(
+        signature.variant, "Replayed",
+        "d2: errore con diagnostica row-scoped"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +814,10 @@ fn e_ogc_invalid_mid_chain_attributed_to_producer() {
     assert_group_formation(&plan, &["t", "k", "r"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(0.0, 0.0, 10.0))])];
     let signature = assert_oracle_error("e", &plan, &fixture, Some("k"));
-    assert_eq!(signature.variant, "Execution", "e: errore di esecuzione");
+    assert_eq!(
+        signature.variant, "Replayed",
+        "e: errore con diagnostica row-scoped"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -804,8 +870,7 @@ fn run_cancellation(
         ..runtime(geo_fusion)
     };
     let mut output = execute(&graph(plan), inputs, runtime).expect("execute");
-    let error =
-        first_stream_error(&mut output).expect("atteso Cancelled, lo stream e' terminato");
+    let error = first_stream_error(&mut output).expect("atteso Cancelled, lo stream e' terminato");
     (error, output.metrics())
 }
 
@@ -836,11 +901,18 @@ fn f_cancellation_mid_group_same_node() {
     assert_group_formation(&plan, &["t", "s", "e"]);
     let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
     let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let signature = error_signature(&fused_error);
     assert_eq!(signature.variant, "Cancelled", "f: variante Cancelled");
-    assert_eq!(signature.node.as_deref(), Some("t"), "f: stesso nodo osservante");
+    assert_eq!(
+        signature.node.as_deref(),
+        Some("main"),
+        "f: validazione input atomica"
+    );
     assert_eq!(signature.category, ErrorCategory::Cancelled, "f: categoria");
     assert_eq!(
         signature,
@@ -911,8 +983,14 @@ fn m2_happy_path_terminal_measure_byte_per_byte() {
         assert_group_formation(&plan, &nodes);
         let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
         let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-        assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "{case}: percorso fuso eseguito");
-        assert_eq!(plain_metrics.geo_fusion_fallbacks, 0, "{case}: nessun fallback atteso");
+        assert_eq!(
+            fused_metrics.geo_fusion_fallbacks, 0,
+            "{case}: percorso fuso eseguito"
+        );
+        assert_eq!(
+            plain_metrics.geo_fusion_fallbacks, 0,
+            "{case}: nessun fallback atteso"
+        );
         assert_eq!(
             fused_batches, plain_batches,
             "{case}: output fuso diverso dal non fuso"
@@ -973,12 +1051,13 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
     });
     assert_group_formation(&plan, &["d1", "t", "vc"]);
     let signature = assert_oracle_error("m2-b", &plan, &oversized_cell_batches, Some("d1"));
-    assert_eq!(signature.variant, "Execution", "m2-b: errore di esecuzione");
-    assert!(
-        signature.reason.contains("cella WKB da"),
-        "m2-b: motivo `CellTooLarge`: {}",
-        signature.reason
+    assert_eq!(
+        signature.variant, "Replayed",
+        "m2-b: errore con diagnostica row-scoped"
     );
+    let report = signature.diagnostics.expect("m2-b: diagnostica row-scoped");
+    assert_eq!(report.counts["geometry.cell_too_large"], 1);
+    assert_eq!(report.examples[0].source_index, 0);
 }
 
 /// (M2) Input OGC-invalido (bowtie, strutturalmente valido: supera l'arco di
@@ -1004,7 +1083,10 @@ fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
         &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
         Some("t"),
     );
-    assert_eq!(signature.variant, "Execution", "m2-c: errore di esecuzione");
+    assert_eq!(
+        signature.variant, "Replayed",
+        "m2-c: errore con diagnostica row-scoped"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,10 +1174,7 @@ fn invalid_then_valid_batches() -> Vec<RecordBatch> {
                 None,
             ],
         ),
-        geo_batch(
-            &[4, 5],
-            &[Some(holed_polygon_wkb()), Some(bowtie_wkb())],
-        ),
+        geo_batch(&[4, 5], &[Some(holed_polygon_wkb()), Some(bowtie_wkb())]),
     ]
 }
 
@@ -1121,7 +1200,10 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
     assert_group_formation(&plan, &["mv", "t"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
@@ -1151,8 +1233,7 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
             .downcast_ref::<BinaryArray>()
             .expect("colonna geometria");
         for cell in cells.iter().flatten() {
-            plenora_kernels_geo::geometry_from_wkb(cell)
-                .expect("m3-a: output riparato OGC-valido");
+            plenora_kernels_geo::geometry_from_wkb(cell).expect("m3-a: output riparato OGC-valido");
         }
     }
 }
@@ -1177,7 +1258,10 @@ fn m3a2_make_valid_then_measure_boundary_bytes_match() {
     assert_group_formation(&plan, &["mv", "a"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
@@ -1197,7 +1281,10 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
     assert_group_formation(&plan, &["p", "t"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
@@ -1229,7 +1316,10 @@ fn m3b2_reproject_to_geographic_with_terminal_measure() {
     assert_group_formation(&plan, &["p", "w"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
@@ -1253,7 +1343,10 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
     assert_group_formation(&plan, &["t", "mv", "r"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
@@ -1270,11 +1363,12 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
     }
 }
 
-/// (m3-d) ADR-0012 M3: cancellazione con `make_valid` `NonInterruptible`
-/// nel gruppo — MAI dentro il kernel: il check al confine di `make_valid`
-/// onora il behavior di catalogo (saltato) in entrambi i percorsi e il
-/// `Cancelled` e' osservato al PRIMO nodo cooperativo successivo (`t`),
-/// con la stessa attribuzione.
+/// (m3-d) ADR-0012 M3: con input geometrico la validazione WKB atomica drena
+/// i batch prima del gruppo. La cancellazione iniettata dal reader e'
+/// quindi osservata deterministicamente a `main`, prima che `make_valid`
+/// `NonInterruptible` inizi; i percorsi fuso e non fuso devono produrre la
+/// stessa firma. Il confine post-`NonInterruptible` e' coperto dal test
+/// unitario fuso `fused_control_observes_cancellation_after_non_interruptible_make_valid`.
 #[cfg(feature = "geos-backend")]
 #[test]
 fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
@@ -1292,14 +1386,17 @@ fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
     assert_group_formation(&plan, &["mv", "t", "r"]);
     let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
     let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
-    assert_eq!(fused_metrics.geo_fusion_fallbacks, 0, "percorso fuso eseguito");
+    assert_eq!(
+        fused_metrics.geo_fusion_fallbacks, 0,
+        "percorso fuso eseguito"
+    );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let signature = error_signature(&fused_error);
     assert_eq!(signature.variant, "Cancelled", "m3-d: variante Cancelled");
     assert_eq!(
         signature.node.as_deref(),
-        Some("t"),
-        "m3-d: osservata al primo nodo cooperativo dopo make_valid (mai dentro)"
+        Some("main"),
+        "m3-d: la validazione WKB atomica osserva la cancellazione prima del gruppo"
     );
     assert_eq!(
         signature,
@@ -1323,8 +1420,12 @@ fn m3_backend_ops_identical_outcome_with_fusion_on_and_off() {
     fn outcome(plan: &Value, geo_fusion: bool) -> Result<Vec<RecordBatch>, String> {
         let validated = validate(&plan.to_string(), &[("main".to_owned(), geo_contract())])
             .map_err(|error| error.to_string())?;
-        let mut output = execute(&validated, single_input(multi_type_batches()), runtime(geo_fusion))
-            .map_err(|error| error.to_string())?;
+        let mut output = execute(
+            &validated,
+            single_input(multi_type_batches()),
+            runtime(geo_fusion),
+        )
+        .map_err(|error| error.to_string())?;
         let mut batches = Vec::new();
         for item in output.by_ref() {
             batches.push(item.map_err(|error| error.to_string())?);

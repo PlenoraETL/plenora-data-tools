@@ -30,6 +30,14 @@ che nessun meccanismo in-process può intercettare.
   **Mai** valori o payload sensibili.
 - Gli errori secondari (conseguenti alla cancellazione) sono telemetria, non
   sostituiscono la causa iniziale.
+- **Eccezione normativa row-scoped (Contracts 2.0-rc17, R9.9-R9.14):** un
+  rifiuto deterministico di una riga in uno stream seriale non termina subito
+  la scansione. Il componente sopprime ogni output successivo, continua solo
+  per completare conteggi ed esempi bounded e riporta un unico errore terminale
+  `plenora-row-diagnostics-v1`. Se la scansione si interrompe, il report diventa
+  `partial`/`unknown` con `knowledge_limits`; non si dichiara falsa completezza.
+  Questa eccezione non avvia altri rami, non modifica la selezione errori del DAG
+  parallelo e non autorizza remediation o drop silenziosi.
 - **Modalità diagnostica opt-in** (solo per input fidati): l'errore può
   includere nodo, indice batch, indice riga, colonna e tipo di violazione
   (es. `node=buffer batch=12 row=941 field=geometry reason=WKB_DEPTH_LIMIT`),
@@ -113,6 +121,22 @@ Implementato:
   qui deciso; **modalità diagnostica
   opt-in** (`RuntimeContext::diagnostics`): reason arricchita con
   nodo/batch/riga/colonna, mai valori.
+- **Diagnostica row-scoped**: carrier boxed in `PlenoraError`, envelope CLI
+  additivo e aggregazione seriale cross-batch per conversioni tipate,
+  trasformazioni temporali, `flatten_json`, assert di qualita', hash con
+  `null_policy=error` e `geo.from_wkt`; indici sorgente zero-based checked,
+  conteggi completi ed esempi bounded. Le righe invalide non entrano
+  nell'output accettato: le policy legacy di coercizione/null non autorizzano
+  remediation implicita.
+- **Provenance originale**: il catalogo classifica conservativamente i nodi
+  che preservano cardinalita' e ordine. Un consumer row-diagnostic dopo
+  filter/sample/explode/join/aggregate/sort/reshape o qualunque sibling path
+  non conservativo viene rifiutato dal planner finche' non esiste un sidecar
+  di lineage. La provenance non viene ricostruita o inventata.
+- **Partizioni**: Data Tools non espone ancora nodi di quarantena. Di
+  conseguenza non crea implicitamente output `accepted`/`rejected` e rifiuta
+  `explode.empty_policy=drop`; una futura partizione dovra' essere un nodo
+  esplicito con due archi distinti.
 - **Crash defense**: `TempStore` per `execution_id` con `lock.json`
   (execution_id, PID, host, heartbeat), scavenging all'avvio fail-safe
   (PID morto o heartbeat oltre TTL 24h; lock corrotto conservativo con TTL×2;

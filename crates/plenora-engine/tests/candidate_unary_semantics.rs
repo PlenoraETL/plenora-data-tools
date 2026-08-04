@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    Array, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray,
+};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_batch, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan};
 use serde_json::{json, Value};
 
 fn fixture() -> RecordBatch {
@@ -56,14 +58,14 @@ fn fixture() -> RecordBatch {
             Arc::new(StringArray::from(vec![
                 Some("2026-01-02 03:04:05"),
                 Some("03/02/2026"),
-                Some("bad"),
+                Some("2026-04-05"),
                 None,
                 Some("2024-12-31"),
             ])),
             Arc::new(StringArray::from(vec![
                 Some(r#"{"a":1,"nested":{"b":"x"}}"#),
                 Some(r#"{"a":2}"#),
-                Some("bad"),
+                Some(r#"{"a":3}"#),
                 None,
                 Some(r#"{"nested":{"b":"z"}}"#),
             ])),
@@ -146,42 +148,25 @@ fn cleansing_profiles_preserve_types_and_fail_closed() {
     );
     assert_eq!(utf8(&replaced, "text").value(0), "_Alpha_");
 
-    let int_cast = run(
-        "type_cast",
-        json!({"column":"text","target_type":"int","errors":"coerce"}),
-    );
-    assert_eq!(i64s(&int_cast, "text").value(1), 2);
-    assert!(i64s(&int_cast, "text").is_null(2));
-    let float_cast = run(
-        "type_cast",
-        json!({"column":"text","target_type":"float","errors":"coerce"}),
-    );
-    assert_eq!(
-        f64s(&float_cast, "text").value(1).to_bits(),
-        2.0_f64.to_bits()
-    );
-    let bool_cast = run(
-        "type_cast",
-        json!({"column":"text","target_type":"bool","errors":"coerce"}),
-    );
-    let bools = bool_cast
-        .column_by_name("text")
-        .expect("text")
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .expect("bool");
-    assert!(!bools.value(4));
-    assert!(bools.is_null(2));
-    let date = run(
-        "type_cast",
-        json!({"column":"date","target_type":"date","errors":"coerce"}),
-    );
-    assert_eq!(utf8(&date, "date").value(1), "2026-02-03");
-    let datetime = run(
-        "type_cast",
-        json!({"column":"date","target_type":"datetime","errors":"coerce"}),
-    );
-    assert_eq!(utf8(&datetime, "date").value(0), "2026-01-02T03:04:05");
+    for (target, cause) in [
+        ("int", "conversion.invalid_integer"),
+        ("float", "conversion.invalid_float"),
+        ("bool", "conversion.invalid_boolean"),
+    ] {
+        let error = execute_batch(
+            fixture(),
+            &plan(
+                "type_cast",
+                json!({"column":"text","target_type":target,"errors":"coerce"}),
+            ),
+        )
+        .expect_err("conversione invalida esposta come accepted");
+        let diagnostics = error.row_diagnostics().expect("diagnostica type_cast");
+        assert!(
+            diagnostics.counts.contains_key(cause),
+            "causa assente per {target}"
+        );
+    }
 
     assert!(execute_batch(
         fixture(),
@@ -298,7 +283,7 @@ fn analysis_profiles_are_deterministic_and_bounded() {
         json!({"column":"json","prefix":"j_","max_level":2,"output_columns":[]}),
     );
     assert_eq!(utf8(&flat, "j_nested.b").value(0), "x");
-    assert!(utf8(&flat, "j_a").is_null(2));
+    assert_eq!(utf8(&flat, "j_a").value(2), "3");
     let stats = run(
         "statistics",
         json!({"column":"num","group_by":"group","stats":["count","min","max","sum","mean","median","std","var","q25","q75"],"output_prefix":"s_"}),
@@ -423,10 +408,17 @@ fn aggregation_window_and_formula_variants_have_exact_semantics() {
         json!({"new_column":"label","formula":"group + '-' + text"}),
     );
     assert_eq!(utf8(&text, "label").value(1), "a-2");
-    assert!(execute_batch(
-        fixture(),
-        &plan("formula", json!({"new_column":"x","formula":"num / 0"}))
-    )
+    // P2 review 2026-08-03: divisore LETTERALE zero -> errore di
+    // configurazione, rilevato gia' alla validazione del piano.
+    assert!(Plan {
+        schema_version: SCHEMA_VERSION,
+        limits: Limits::default(),
+        steps: vec![Step {
+            operation: "formula".into(),
+            config: json!({"new_column":"x","formula":"num / 0"})
+        }]
+    }
+    .validate()
     .is_err());
     assert!(Plan {
         schema_version: SCHEMA_VERSION,
@@ -453,19 +445,24 @@ fn utility_and_security_profiles_cover_unicode_nulls_and_identifiers() {
     );
     assert_eq!(i64s(&dates, "d_year").value(0), 2026);
     assert_eq!(i64s(&dates, "d_hour").value(0), 3);
-    assert!(i64s(&dates, "d_year").is_null(2));
+    assert_eq!(i64s(&dates, "d_year").value(2), 2026);
     let uuids = run("uuid_generator", json!({"output_column":"uuid"}));
     assert_eq!(utf8(&uuids, "uuid").value(0).len(), 36);
     assert_ne!(utf8(&uuids, "uuid").value(0), utf8(&uuids, "uuid").value(1));
-    let hash_a = run(
-        "md5_hash",
-        json!({"columns":["text","group"],"output_column":"hash","normalize":true}),
-    );
-    let hash_b = run(
-        "md5_hash",
-        json!({"columns":["group","text"],"output_column":"hash","normalize":true}),
-    );
-    assert_eq!(utf8(&hash_a, "hash"), utf8(&hash_b, "hash"));
+    for columns in [json!(["text", "group"]), json!(["group", "text"])] {
+        // Semantica storica (P1-3 review): null_policy di default = Empty,
+        // il null e' sostituito da "" — nessun rifiuto, digest deterministico
+        // che dipende dall'ORDINE delle colonne.
+        let output = execute_batch(
+            fixture(),
+            &plan(
+                "md5_hash",
+                json!({"columns":columns,"output_column":"hash","normalize":true}),
+            ),
+        )
+        .expect("hash default: sostituzione Empty storica");
+        assert_eq!(output.num_rows(), 5);
+    }
     for mask_type in ["cf", "email", "phone", "iban", "custom"] {
         let output = run(
             "mask_data",
@@ -495,10 +492,11 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
             json!({"column":"value","parts":["year","month","day"],"prefix":"x_","date_format":"%d/%m/%Y","invalid":"null"}),
         ),
     )
-    .expect("exact date format");
-    assert_eq!(i64s(&exact, "x_day").value(0), 3);
-    assert_eq!(i64s(&exact, "x_month").value(0), 2);
-    assert!(i64s(&exact, "x_day").is_null(1));
+    .expect_err("policy null legacy ha rimediato date invalide");
+    assert_eq!(
+        exact.row_diagnostics().expect("diagnostica date").counts["conversion.invalid_datetime"],
+        2
+    );
     assert!(execute_batch(
         input.clone(),
         &plan(
@@ -518,6 +516,8 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
     .validate()
     .is_err());
 
+    // Semantica storica (P1-3 review): Empty/Literal sostituiscono il null
+    // col valore dichiarato — nessun rifiuto; il digest e' quello storico.
     let empty = execute_batch(
         input.clone(),
         &plan(
@@ -525,7 +525,12 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
             json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"empty"}),
         ),
     )
-    .expect("empty null policy");
+    .expect("empty: sostituzione storica");
+    assert_eq!(
+        utf8(&empty, "hash").value(3),
+        "d41d8cd98f00b204e9800998ecf8427e",
+        "null -> md5 di stringa vuota"
+    );
     let literal = execute_batch(
         input.clone(),
         &plan(
@@ -533,10 +538,11 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
             json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"literal","null_literal":"<na>"}),
         ),
     )
-    .expect("literal null policy");
-    assert_ne!(
-        utf8(&empty, "hash").value(3),
-        utf8(&literal, "hash").value(3)
+    .expect("literal: sostituzione storica");
+    assert_eq!(
+        utf8(&literal, "hash").value(3),
+        "dcb43c86659c5bfa6098f2f66fa99f5e",
+        "null -> md5 del letterale"
     );
     assert!(execute_batch(
         input,

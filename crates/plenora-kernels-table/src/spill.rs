@@ -17,10 +17,10 @@ use plenora_core::arrow::select::concat::concat_batches;
 use tempfile::TempDir;
 
 use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, KeyHasher, Sort};
-use crate::Limits;
-use plenora_core::{PlenoraError, Result};
-use crate::{column_index, replace_or_append, select_rows};
 use crate::setops::{self, CompactRowEncoder};
+use crate::Limits;
+use crate::{column_index, replace_or_append, select_rows};
+use plenora_core::{PlenoraError, Result};
 
 const RECORD_OVERHEAD_ESTIMATE: usize = 64;
 
@@ -197,10 +197,9 @@ fn read_record(
             PlenoraError::Io(error)
         }
     })?;
-    Ok(Some(
-        usize::try_from(ordinal)
-            .map_err(|_| PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into()))?,
-    ))
+    Ok(Some(usize::try_from(ordinal).map_err(|_| {
+        PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into())
+    })?))
 }
 
 /// Insieme di chiavi lette da spill con l'hash dedicato `KeyHasher`
@@ -287,12 +286,9 @@ fn collect_membership(
 /// Stima dei byte in memoria di un batch (somma delle colonne Arrow).
 #[must_use]
 pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
-    batch
-        .columns()
-        .iter()
-        .fold(0_usize, |total, column| {
-            total.saturating_add(column.get_array_memory_size())
-        })
+    batch.columns().iter().fold(0_usize, |total, column| {
+        total.saturating_add(column.get_array_memory_size())
+    })
 }
 
 #[must_use]
@@ -612,11 +608,7 @@ impl Read for CountingReader {
 
 /// Scrive un batch in un file IPC stream a chunk di `SPILL_CHUNK_ROWS`,
 /// verificando la quota a ogni chunk.
-fn write_ipc_chunks(
-    workspace: &RowSpillWorkspace,
-    path: &Path,
-    batch: &RecordBatch,
-) -> Result<()> {
+fn write_ipc_chunks(workspace: &RowSpillWorkspace, path: &Path, batch: &RecordBatch) -> Result<()> {
     let writer = CountingWriter::create(path, &workspace.bytes_written)?;
     let mut writer = StreamWriter::try_new(writer, &batch.schema())?;
     workspace.check_quota()?;
@@ -812,7 +804,9 @@ pub fn distinct_spilled_in(
                 .column(partition_batch.num_columns() - 1)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| PlenoraError::InvalidPlan("colonna ordinale spill mancante".into()))?;
+                .ok_or_else(|| {
+                    PlenoraError::InvalidPlan("colonna ordinale spill mancante".into())
+                })?;
             let read_keys = indices
                 .iter()
                 .map(|index| KeyColumn::new(partition_batch.column(*index)))
@@ -833,7 +827,9 @@ pub fn distinct_spilled_in(
                 } else {
                     estimated = estimated
                         .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                        .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
+                        .ok_or_else(|| {
+                            PlenoraError::InvalidPlan("overflow memoria spill".into())
+                        })?;
                     if estimated > limits.max_memory_bytes {
                         return Err(PlenoraError::InvalidPlan(
                             "distinct spill oltre max_memory_bytes".into(),
@@ -917,7 +913,9 @@ pub fn aggregate_spilled_in(
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     if group_indices.is_empty() {
-        return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "aggregate richiede group_by".into(),
+        ));
     }
     if batch.num_rows() == 0 {
         return Ok((
@@ -975,7 +973,9 @@ pub fn aggregate_spilled_in(
     }
     // `batch` non vuoto implica almeno una partizione non vuota.
     let Some(first) = outputs.first() else {
-        return Err(PlenoraError::InvalidPlan("aggregate spill senza partizioni".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "aggregate spill senza partizioni".into(),
+        ));
     };
     let combined = concat_batches(&first.schema(), &outputs)?;
     // Le chiavi sono univoche per costruzione (un gruppo = una riga),
@@ -1050,11 +1050,7 @@ impl RunCursor {
 /// condiviso con `compare_at` e `ColumnComparator` (null in coda,
 /// `i64::cmp`/`u64::cmp` esatti, `total_cmp` su Float64, confronto
 /// testuale altrove).
-fn compare_cells(
-    challenger: &RunCursor,
-    champion: &RunCursor,
-    column: usize,
-) -> Result<Ordering> {
+fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) -> Result<Ordering> {
     let left_batch = challenger
         .current
         .as_ref()
@@ -1381,7 +1377,10 @@ mod tests {
             .expect("colonna i64")
             .values()
             .to_vec();
-        assert_eq!(values, vec![-big - 1, -big, -3, 0, 7, big, big + 1, big + 2]);
+        assert_eq!(
+            values,
+            vec![-big - 1, -big, -3, 0, 7, big, big + 1, big + 2]
+        );
         assert!(metrics.files > 1, "attese piu' run: {metrics:?}");
         // Oracolo: identico al percorso in memoria.
         assert_eq!(spilled, aggregation::sort(&batch, &config).expect("sort"));
@@ -1574,4 +1573,3 @@ mod tests {
         assert_eq!(metrics, SpillMetrics::default());
     }
 }
-

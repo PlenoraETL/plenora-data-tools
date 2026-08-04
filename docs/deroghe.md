@@ -10,6 +10,43 @@ contratti documentati restano registrate anche nell'ADR pertinente
 Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
 (revisione `3598259bbe07d1c853453ff34ca2c1d1d28a0272`).
 
+## DER-004 — `max_temp_bytes` per dominio, non quota globale su disco
+
+- **Regola derogata:** ADR-0002 (contesto: "i limiti di memoria devono
+  valere globalmente sul piano, con rami paralleli che condividono la
+  stessa quota") letto estensivamente ai byte temporanei su disco.
+  ADR-0002 cita `max_temp_bytes` solo nella sezione spill e ADR-0006 non
+  dichiara una quota temp globale: la lettura "quota globale su disco" e'
+  quindi una possibile interpretazione, non un testo normativo — questa
+  deroga fissa l'interpretazione effettiva.
+- **Ambito:** i tre domini di scrittura temporanea misurano CIASCUNO la
+  propria scrittura contro `max_temp_bytes` del piano, senza
+  coordinamento condiviso: (1) staging IPC dell'input del gate WKB
+  (`stage_input_batches`), (2) staging IPC degli output accettati dei
+  segmenti row-diagnostics (`scan_row_diagnostic_segment`), (3) spill
+  degli operatori blocking (`SpillWorkspace`/`RowSpillWorkspace`,
+  `CountingFile`). Il picco su disco puo' arrivare alla somma dei domini
+  concorrenti (fino a ~3x la quota). Invariato: ogni dominio resta
+  individualmente bounded e fail-closed oltre quota.
+- **Motivo:** i domini hanno lifecycle e proprietari diversi (gate input,
+  segmento diagnostico, kernel spillante) e non si sovrappongono per
+  intero nel tempo; un coordinamento condiviso (semaforo cross-dominio)
+  introdurrebbe accoppiamento e rischio di stallo senza hazard coperto:
+  l'hazard reale e' la memoria di processo, gia' sotto budget governor
+  globale (`max_memory_bytes`, ADR-0002 attuato), non lo spazio disco
+  temporaneo, che vive in `TempDir` per-esecuzione con cleanup al `Drop`.
+- **Impatto sugli hazard:** un'esecuzione puo' occupare su disco fino a
+  ~3x `max_temp_bytes` nel caso peggiore (tre domini attivi in
+  sequenza/concorrenza). Chi dimensiona i volumi temporanei deve usare la
+  somma dei domini, non la quota singola. Nessun effetto su correttezza,
+  determinismo o bounded-ness per-dominio (ogni scrittura oltre quota
+  fallisce esplicita).
+- **Owner:** maintainer di plenora-data-tools.
+- **Condizione di rientro:** nessuna — design intenzionale, dichiarato
+  permanente. Se in futuro un requisito imporra' un tetto globale su
+  disco, servira' un ADR nuovo (contatore condiviso tra i tre domini) e
+  il ritiro di questa deroga.
+
 ## DER-003 — `max_batch_bytes` sugli archi interni dei gruppi fusi (fusione geo)
 
 - **Regola derogata:** ADR-0006 / `check_edge_batch` (semantica limiti):

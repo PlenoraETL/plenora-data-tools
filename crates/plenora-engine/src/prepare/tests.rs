@@ -102,10 +102,16 @@ fn linear_table_chain_fuses_into_one_streaming_segment() {
     assert_eq!(streaming.output_edge, "r");
     let blocking = &plan.segments()[1];
     assert_eq!(blocking.mode, SegmentMode::Blocking);
-    assert_eq!(blocking.parallelism, ParallelismStrategy::BlockingSingleTask);
+    assert_eq!(
+        blocking.parallelism,
+        ParallelismStrategy::BlockingSingleTask
+    );
     assert_eq!(blocking.kernels.len(), 1);
     assert_eq!(plan.output_edge(), "g");
-    assert_eq!(plan.last_consumers().get("main"), Some(&LastConsumer::Node("f".into())));
+    assert_eq!(
+        plan.last_consumers().get("main"),
+        Some(&LastConsumer::Node("f".into()))
+    );
     assert_eq!(plan.last_consumers().get("g"), Some(&LastConsumer::Output));
 }
 
@@ -126,21 +132,19 @@ fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
     let plan = prepare(&geo_graph, &RuntimeContext::default()).expect("prepare");
     assert_eq!(plan.segments().len(), 1);
     assert_eq!(plan.segments()[0].mode, SegmentMode::GeoFused);
-    assert!(
-        plan.segments()[0]
-            .kernels
-            .iter()
-            .all(|kernel| kernel.geo_role == Some(GeoRole::TransformInPlace))
-    );
+    assert!(plan.segments()[0]
+        .kernels
+        .iter()
+        .all(|kernel| kernel.geo_role == Some(GeoRole::TransformInPlace)));
 
     let mixed_graph = validate_plan(
         &json!({
             "schema_version": 4,
             "inputs": ["main"],
             "nodes": [
-                {"id": "f", "op": "table.filter", "in": ["main"],
-                 "config": {"column": "id", "operator": ">", "value": 0}},
-                {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 10.0}},
+                {"id": "r", "op": "table.rename", "in": ["main"],
+                 "config": {"renames": [{"old_name": "id", "new_name": "id2"}]}},
+                {"id": "b", "op": "geo.buffer", "in": ["r"], "config": {"distance": 10.0}},
                 {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
             ],
             "output": "a",
@@ -197,7 +201,10 @@ fn fan_out_breaks_fusion_and_marks_materialization() {
         .iter()
         .find(|segment| segment.mode == SegmentMode::BinaryBlocking)
         .expect("segmento binario");
-    assert_eq!(join_segment.input_edges.as_ref(), &["l".to_owned(), "r".to_owned()]);
+    assert_eq!(
+        join_segment.input_edges.as_ref(),
+        &["l".to_owned(), "r".to_owned()]
+    );
     assert!(!plan
         .segments()
         .iter()
@@ -247,7 +254,10 @@ fn pass_through_plan_prepares_without_segments() {
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
     assert!(plan.segments().is_empty());
     assert_eq!(plan.output_edge(), "main");
-    assert_eq!(plan.last_consumers().get("main"), Some(&LastConsumer::Output));
+    assert_eq!(
+        plan.last_consumers().get("main"),
+        Some(&LastConsumer::Output)
+    );
 }
 
 #[test]
@@ -293,7 +303,10 @@ fn unknown_statistics_are_the_conservative_default() {
         plan.input_statistics()["main"].rows,
         RuntimeStatistic::Known(1_000)
     );
-    assert_eq!(plan.segments()[0].parallelism, ParallelismStrategy::SerialFused);
+    assert_eq!(
+        plan.segments()[0].parallelism,
+        ParallelismStrategy::SerialFused
+    );
 }
 
 #[test]
@@ -342,7 +355,11 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
     assert_eq!(plan.segments().len(), 1);
     let segment = &plan.segments()[0];
     assert_eq!(segment.mode, SegmentMode::GeoFused);
-    let roles: Vec<Option<GeoRole>> = segment.kernels.iter().map(|kernel| kernel.geo_role).collect();
+    let roles: Vec<Option<GeoRole>> = segment
+        .kernels
+        .iter()
+        .map(|kernel| kernel.geo_role)
+        .collect();
     assert_eq!(
         roles,
         vec![
@@ -354,7 +371,9 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
     // Config tipizzate risolte in prepare (E1): riferimento decodificato,
     // soglia e colonne accessorie gia' pronte per il loop per batch.
     match &segment.kernels[0].config {
-        PreparedConfig::GeoSnap { tolerance, .. } => assert!((*tolerance - 0.5).abs() < f64::EPSILON),
+        PreparedConfig::GeoSnap { tolerance, .. } => {
+            assert!((*tolerance - 0.5).abs() < f64::EPSILON);
+        }
         other => panic!("config inattesa: {other:?}"),
     }
     match &segment.kernels[1].config {
@@ -386,7 +405,10 @@ fn line_locate_point_prepares_typed_point_and_output_column() {
     let segment = &plan.segments()[0];
     assert_eq!(segment.mode, SegmentMode::GeoFused);
     match &segment.kernels[0].config {
-        PreparedConfig::GeoLineLocatePoint { point, output_column } => {
+        PreparedConfig::GeoLineLocatePoint {
+            point,
+            output_column,
+        } => {
             assert_eq!((point.x(), point.y()), (0.0, 0.0));
             assert_eq!(output_column, "fraction");
         }
@@ -397,7 +419,11 @@ fn line_locate_point_prepares_typed_point_and_output_column() {
 #[test]
 fn blocking_geo_extensions_are_single_blocking_segments() {
     let cases = [
-        ("geo.collect", json!({"group_by": ["id"]}), GeoRole::WholeTable),
+        (
+            "geo.collect",
+            json!({"group_by": ["id"]}),
+            GeoRole::WholeTable,
+        ),
         ("geo.coverage_validate", json!({}), GeoRole::WholeTable),
         ("geo.shared_paths", json!({}), GeoRole::WholeTable),
         (
@@ -423,7 +449,11 @@ fn blocking_geo_extensions_are_single_blocking_segments() {
         assert_eq!(plan.segments().len(), 1, "{op}");
         let segment = &plan.segments()[0];
         assert_eq!(segment.mode, SegmentMode::Blocking, "{op}");
-        assert_eq!(segment.parallelism, ParallelismStrategy::BlockingSingleTask, "{op}");
+        assert_eq!(
+            segment.parallelism,
+            ParallelismStrategy::BlockingSingleTask,
+            "{op}"
+        );
         assert_eq!(segment.kernels[0].geo_role, Some(role), "{op}");
     }
 }
@@ -460,7 +490,10 @@ fn fuzzy_join_prepares_as_binary_blocking() {
         matches!(&segment.kernels[0].config, PreparedConfig::TableBinary(_)),
         "fuzzy_join usa il dispatch binario tabellare"
     );
-    assert_eq!(segment.input_edges.as_ref(), &["left_in".to_owned(), "right_in".to_owned()]);
+    assert_eq!(
+        segment.input_edges.as_ref(),
+        &["left_in".to_owned(), "right_in".to_owned()]
+    );
 }
 
 #[test]
@@ -480,7 +513,10 @@ fn top_n_prepares_as_blocking_table_unary() {
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
     assert_eq!(plan.segments()[0].mode, SegmentMode::Blocking);
     assert!(
-        matches!(&plan.segments()[0].kernels[0].config, PreparedConfig::TableUnary(_)),
+        matches!(
+            &plan.segments()[0].kernels[0].config,
+            PreparedConfig::TableUnary(_)
+        ),
         "top_n unaria blocking via execute_batch"
     );
 }
@@ -536,7 +572,10 @@ fn generative_geo_extensions_prepare_with_their_roles() {
     assert_eq!(segment.mode, SegmentMode::Blocking);
     assert_eq!(segment.kernels[0].geo_role, Some(GeoRole::WholeTable));
     assert!(
-        matches!(&segment.kernels[0].config, PreparedConfig::GeoGenerateGrid { .. }),
+        matches!(
+            &segment.kernels[0].config,
+            PreparedConfig::GeoGenerateGrid { .. }
+        ),
         "config tipizzata della griglia"
     );
 }
@@ -577,7 +616,10 @@ fn fusible_geo_runs_form_one_fusion_group() {
     assert!(plan.geo_fusion());
     assert_eq!(plan.segments().len(), 1);
     for kernel in &plan.segments()[0].kernels {
-        assert_eq!(kernel.geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+        assert_eq!(
+            kernel.geo_fusion,
+            plenora_core::catalog::GeoFusion::TransformInPlace
+        );
     }
     // Tre kernel fondibili consecutivi -> UN gruppo, stesso id sui membri.
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
@@ -629,8 +671,14 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
     // M2: la misura terminale (`geo.area`, capability TerminalMeasure)
     // chiude il run di transform ed entra nel gruppo come ultimo membro.
     let kernels = &plan.segments()[0].kernels;
-    assert_eq!(kernels[2].geo_fusion, plenora_core::catalog::GeoFusion::TerminalMeasure);
-    assert!(matches!(kernels[2].config, PreparedConfig::GeoMeasure { .. }));
+    assert_eq!(
+        kernels[2].geo_fusion,
+        plenora_core::catalog::GeoFusion::TerminalMeasure
+    );
+    assert!(matches!(
+        kernels[2].config,
+        PreparedConfig::GeoMeasure { .. }
+    ));
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
 }
 
@@ -713,7 +761,10 @@ fn geo_fusion_kill_switch_disables_groups() {
     };
     let plan = prepare(&graph, &runtime).expect("prepare");
 
-    assert!(!plan.geo_fusion(), "kill switch spento registrato nel piano");
+    assert!(
+        !plan.geo_fusion(),
+        "kill switch spento registrato nel piano"
+    );
     assert_eq!(fusion_groups(&plan), vec![None, None, None]);
 }
 
@@ -741,7 +792,10 @@ fn make_valid_joins_fusion_groups() {
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     let kernels = &plan.segments()[0].kernels;
-    assert_eq!(kernels[1].geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+    assert_eq!(
+        kernels[1].geo_fusion,
+        plenora_core::catalog::GeoFusion::TransformInPlace
+    );
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
 }
 
@@ -769,7 +823,10 @@ fn reproject_joins_fusion_groups() {
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     let kernels = &plan.segments()[0].kernels;
-    assert_eq!(kernels[0].geo_fusion, plenora_core::catalog::GeoFusion::TransformInPlace);
+    assert_eq!(
+        kernels[0].geo_fusion,
+        plenora_core::catalog::GeoFusion::TransformInPlace
+    );
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
 }
 
@@ -895,17 +952,24 @@ fn generate_grid_extension_revalidates_extent_and_cell_size() {
             "cell_size": 2.5
         }),
     );
-    let (config, role) =
-        prepare_geo_extension(&node, descriptor_of("geo.generate_grid"), &trigger, &trigger)
-            .expect("prepare")
-            .expect("estensione coperta");
+    let (config, role) = prepare_geo_extension(
+        &node,
+        descriptor_of("geo.generate_grid"),
+        &trigger,
+        &trigger,
+    )
+    .expect("prepare")
+    .expect("estensione coperta");
     match config {
         PreparedConfig::GeoGenerateGrid {
             extent,
             cell_size,
             shape,
         } => {
-            assert_eq!(extent, GridExtent::new(0.0, 0.0, 10.0, 10.0).expect("extent"));
+            assert_eq!(
+                extent,
+                GridExtent::new(0.0, 0.0, 10.0, 10.0).expect("extent")
+            );
             assert!((cell_size - 2.5).abs() < f64::EPSILON);
             assert_eq!(shape, GridShape::Square, "shape di default");
         }
@@ -923,7 +987,12 @@ fn generate_grid_extension_revalidates_extent_and_cell_size() {
         }),
     );
     assert!(matches!(
-        prepare_geo_extension(&degenerate, descriptor_of("geo.generate_grid"), &trigger, &trigger),
+        prepare_geo_extension(
+            &degenerate,
+            descriptor_of("geo.generate_grid"),
+            &trigger,
+            &trigger
+        ),
         Err(PlenoraError::InvalidPlan(_))
     ));
     let zero_cell = geo_node(
@@ -934,7 +1003,12 @@ fn generate_grid_extension_revalidates_extent_and_cell_size() {
         }),
     );
     assert!(matches!(
-        prepare_geo_extension(&zero_cell, descriptor_of("geo.generate_grid"), &trigger, &trigger),
+        prepare_geo_extension(
+            &zero_cell,
+            descriptor_of("geo.generate_grid"),
+            &trigger,
+            &trigger
+        ),
         Err(PlenoraError::InvalidPlan(_))
     ));
 }
@@ -959,7 +1033,10 @@ fn wkb_hex_operands_are_decoded_once_and_fail_closed() {
         );
     }
     // `line_locate_point`: una geometria che non e' un Point e' rifiutata.
-    let node = geo_node("geo.line_locate_point", json!({"point_wkb": LINESTRING_HEX}));
+    let node = geo_node(
+        "geo.line_locate_point",
+        json!({"point_wkb": LINESTRING_HEX}),
+    );
     let result = prepare_geo_extension(
         &node,
         descriptor_of("geo.line_locate_point"),
@@ -1037,7 +1114,10 @@ fn accessors_extension_revalidates_selection_and_output_contract() {
     }
     // Il contratto di output non contiene la colonna accessoria inferita:
     // incoerenza segnalata, mai accesso per nome a runtime.
-    let node = geo_node("geo.geometry_accessors", json!({"fields": ["geometry_type"]}));
+    let node = geo_node(
+        "geo.geometry_accessors",
+        json!({"fields": ["geometry_type"]}),
+    );
     match prepare_geo_extension(&node, descriptor_of("geo.geometry_accessors"), &geo, &geo) {
         Err(PlenoraError::Schema(message)) => {
             assert!(message.contains("geometry_type"), "{message}");
@@ -1138,8 +1218,16 @@ fn geo_binary_config(segment: &PhysicalSegment) -> &GeoBinaryPlan {
 #[test]
 fn geo_binary_m1_ops_prepare_as_geo_binary_with_resolved_plan() {
     let cases: [(&str, serde_json::Value, PairOperation); 4] = [
-        ("geo.sjoin", json!({"predicate": "intersects"}), PairOperation::SJoin),
-        ("geo.nearest", json!({"max_distance": 1.5}), PairOperation::Nearest),
+        (
+            "geo.sjoin",
+            json!({"predicate": "intersects"}),
+            PairOperation::SJoin,
+        ),
+        (
+            "geo.nearest",
+            json!({"max_distance": 1.5}),
+            PairOperation::Nearest,
+        ),
         ("geo.within", json!({}), PairOperation::Within),
         (
             "geo.count_points_in_polygons",

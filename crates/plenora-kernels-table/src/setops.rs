@@ -10,9 +10,9 @@ use plenora_core::arrow::schema::{DataType, Schema};
 use serde::Deserialize;
 
 use crate::joins::FastHasher;
+use crate::select_rows;
 use crate::Limits;
 use plenora_core::{PlenoraError, Result};
-use crate::select_rows;
 
 /// Insieme delle chiavi di riga gia' viste/emesse: hash FxHash-style con
 /// finalizer splitmix64 (`FastHasher` di `joins.rs`, stesso profilo di costo
@@ -153,11 +153,15 @@ impl<'a> CompactRowEncoder<'a> {
                     .downcast_ref::<Date32Array>()
                     .map(KeyColumn::Date32)
                     .ok_or_else(|| PlenoraError::Schema("array Date32 incoerente".into())),
-                DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _) => column
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .map(KeyColumn::TimestampMillis)
-                    .ok_or_else(|| PlenoraError::Schema("array TimestampMillis incoerente".into())),
+                DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _) => {
+                    column
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .map(KeyColumn::TimestampMillis)
+                        .ok_or_else(|| {
+                            PlenoraError::Schema("array TimestampMillis incoerente".into())
+                        })
+                }
                 DataType::Decimal128(_, _) => column
                     .as_any()
                     .downcast_ref::<Decimal128Array>()
@@ -174,7 +178,9 @@ impl<'a> CompactRowEncoder<'a> {
                     let values = column
                         .as_any()
                         .downcast_ref::<DictionaryArray<Int32Type>>()
-                        .ok_or_else(|| PlenoraError::Schema("array Dictionary incoerente".into()))?;
+                        .ok_or_else(|| {
+                            PlenoraError::Schema("array Dictionary incoerente".into())
+                        })?;
                     let dictionary = values
                         .values()
                         .as_any()
@@ -257,7 +263,9 @@ pub fn concat_compatible(
         .columns()
         .iter()
         .zip(right.columns())
-        .map(|(left, right)| plenora_core::arrow::select::concat::concat(&[left.as_ref(), right.as_ref()]))
+        .map(|(left, right)| {
+            plenora_core::arrow::select::concat::concat(&[left.as_ref(), right.as_ref()])
+        })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let fields = left
         .schema()
@@ -429,7 +437,10 @@ mod tests {
     // `ArrayData`, che confronta i buffer bit a bit).
     // -----------------------------------------------------------------------
 
-    fn oracle_unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result<Vec<usize>> {
+    fn oracle_unique_rows(
+        batch: &RecordBatch,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<usize>> {
         let encoder = CompactRowEncoder::try_new(batch)?;
         let mut emitted: HashSet<Box<[u8]>> = HashSet::new();
         let mut rows = Vec::new();
@@ -512,10 +523,8 @@ mod tests {
             actual_schema.fields().len(),
             "numero di colonne diverso"
         );
-        for (expected_field, actual_field) in expected_schema
-            .fields()
-            .iter()
-            .zip(actual_schema.fields())
+        for (expected_field, actual_field) in
+            expected_schema.fields().iter().zip(actual_schema.fields())
         {
             assert_eq!(expected_field.name(), actual_field.name(), "nome colonna");
             assert_eq!(
@@ -537,9 +546,7 @@ mod tests {
             "metadata schema"
         );
         assert_eq!(expected.num_rows(), actual.num_rows(), "numero righe");
-        for (expected_column, actual_column) in
-            expected.columns().iter().zip(actual.columns())
-        {
+        for (expected_column, actual_column) in expected.columns().iter().zip(actual.columns()) {
             assert_eq!(
                 expected_column.to_data(),
                 actual_column.to_data(),
@@ -710,11 +717,7 @@ mod tests {
         RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(StringArray::from(vec![
-                    Some("zz"),
-                    Some("ww"),
-                    Some("vv"),
-                ])),
+                Arc::new(StringArray::from(vec![Some("zz"), Some("ww"), Some("vv")])),
                 Arc::new(Int64Array::from(vec![
                     Some(1_000_001),
                     Some(1_000_002),
@@ -746,13 +749,9 @@ mod tests {
                     Some(9_000_003),
                 ])),
                 Arc::new(
-                    Decimal128Array::from(vec![
-                        Some(9_000_001),
-                        Some(9_000_002),
-                        Some(9_000_003),
-                    ])
-                    .with_precision_and_scale(38, 2)
-                    .expect("precisione decimal"),
+                    Decimal128Array::from(vec![Some(9_000_001), Some(9_000_002), Some(9_000_003)])
+                        .with_precision_and_scale(38, 2)
+                        .expect("precisione decimal"),
                 ),
                 Arc::new(BinaryArray::from(vec![
                     Some(&b"zz"[..]),
@@ -880,15 +879,10 @@ mod tests {
 
         // Tipo non supportato (Int32): stesso errore nei due percorsi.
         let unsupported = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "k",
-                DataType::Int32,
-                true,
-            )])),
-            vec![Arc::new(plenora_core::arrow::array::Int32Array::from(vec![
-                Some(1),
-                None,
-            ]))],
+            Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)])),
+            vec![Arc::new(plenora_core::arrow::array::Int32Array::from(
+                vec![Some(1), None],
+            ))],
         )
         .expect("fixture int32");
         for (name, oracle, fast) in [
@@ -901,8 +895,7 @@ mod tests {
             ),
             (
                 "intersect",
-                oracle_intersect(&unsupported, &unsupported, &config)
-                    .map(|batch| batch.num_rows()),
+                oracle_intersect(&unsupported, &unsupported, &config).map(|batch| batch.num_rows()),
                 intersect(&unsupported, &unsupported, &config).map(|batch| batch.num_rows()),
             ),
             (

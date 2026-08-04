@@ -257,9 +257,13 @@ fn main() {
     });
 
     let cast_dtext_date32 = cast("dtext", TargetType::Date32);
-    run_scenario("type_cast_utf8_date32", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_dtext_date32).expect("cast dtext->date32")
-    });
+    run_scenario(
+        "type_cast_utf8_date32",
+        rows,
+        repetitions,
+        &input,
+        |batch| type_cast(batch, &cast_dtext_date32).expect("cast dtext->date32"),
+    );
 
     let cast_seq_str = cast("seq", TargetType::Str);
     run_scenario("type_cast_int_utf8", rows, repetitions, &input, |batch| {

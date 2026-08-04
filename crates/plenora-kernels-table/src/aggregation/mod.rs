@@ -20,21 +20,24 @@ mod sort;
 mod window;
 
 pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
+pub(crate) use compare::compare_cells_typed;
+pub(crate) use grouping::{KeyColumn, KeyHasher};
 pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, Keep, Sort, TopN};
 pub use window::{
     rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
 };
-pub(crate) use compare::compare_cells_typed;
-pub(crate) use grouping::{KeyColumn, KeyHasher};
 
 // Simboli usati solo dai test-oracolo (`mod tests` li importa con
 // `use super::*`, come nel modulo originario).
 #[cfg(test)]
-use std::cmp::Ordering;
+use crate::{
+    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
+    validate_output_name,
+};
 #[cfg(test)]
-use std::collections::{HashMap, HashSet};
+use compare::{compare_at, row_key};
 #[cfg(test)]
-use std::sync::Arc;
+use grouping::{cmp_i64_group_key, cmp_str_group_key, cmp_u64_group_key};
 #[cfg(test)]
 use num_traits::ToPrimitive;
 #[cfg(test)]
@@ -46,14 +49,11 @@ use plenora_core::arrow::schema::DataType;
 #[cfg(test)]
 use plenora_core::{PlenoraError, Result};
 #[cfg(test)]
-use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
-    validate_output_name,
-};
+use std::cmp::Ordering;
 #[cfg(test)]
-use compare::{compare_at, row_key};
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
-use grouping::{cmp_i64_group_key, cmp_str_group_key, cmp_u64_group_key};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod tests {
@@ -141,13 +141,7 @@ mod tests {
 
     #[test]
     fn sort_nan_signed_zero_and_null_ordering_is_exact() {
-        let values = vec![
-            Some(0.0),
-            Some(f64::NAN),
-            Some(-0.0),
-            None,
-            Some(1.0),
-        ];
+        let values = vec![Some(0.0), Some(f64::NAN), Some(-0.0), None, Some(1.0)];
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
@@ -214,8 +208,16 @@ mod tests {
         assert_eq!(sorted, vec![1, 0, 3, 2]); // "a" < "b", null in coda
 
         let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("c", DataType::LargeUtf8, true)])),
-            vec![Arc::new(LargeStringArray::from(vec![Some("b"), Some("a"), None]))],
+            Arc::new(Schema::new(vec![Field::new(
+                "c",
+                DataType::LargeUtf8,
+                true,
+            )])),
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("b"),
+                Some("a"),
+                None,
+            ]))],
         )
         .expect("fixture");
         // LargeUtf8 non e' nel profilo scalare: confrontando due valori non
@@ -233,7 +235,11 @@ mod tests {
     #[test]
     fn sort_empty_single_row_and_mixed_columns() {
         let empty = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("num", DataType::Float64, false)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "num",
+                DataType::Float64,
+                false,
+            )])),
             vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
         )
         .expect("empty fixture");
@@ -283,7 +289,7 @@ mod tests {
             },
         );
         assert_eq!(sorted, vec![3, 1, 2, 0]); // (a,1),(a,2),(b,1),(b,2)
-        // Booleano: "false" < "true" come il confronto testuale.
+                                              // Booleano: "false" < "true" come il confronto testuale.
         let by_flag = sorted_ids(
             &mixed,
             &Sort {
@@ -310,9 +316,7 @@ mod tests {
             },
         )
         .expect("oracle sort");
-        let n = usize::try_from(config.n)
-            .expect("n")
-            .min(sorted.num_rows());
+        let n = usize::try_from(config.n).expect("n").min(sorted.num_rows());
         sorted.slice(0, n)
     }
 
@@ -457,7 +461,11 @@ mod tests {
         .is_err());
         // Tipo non confrontabile (LargeUtf8): stesso errore di `sort`.
         let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("c", DataType::LargeUtf8, true)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "c",
+                DataType::LargeUtf8,
+                true,
+            )])),
             vec![Arc::new(LargeStringArray::from(vec![Some("b"), Some("a")]))],
         )
         .expect("fixture");
@@ -487,7 +495,9 @@ mod tests {
             .map(|name| column_index(batch, name))
             .collect::<Result<Vec<_>>>()?;
         if group_indices.is_empty() {
-            return Err(PlenoraError::InvalidPlan("aggregate richiede group_by".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "aggregate richiede group_by".into(),
+            ));
         }
         let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for row in 0..batch.num_rows() {
@@ -592,8 +602,10 @@ mod tests {
                     let values = groups
                         .values()
                         .map(|rows| {
-                            if matches!(aggregation.function, AggFunction::First | AggFunction::Last)
-                            {
+                            if matches!(
+                                aggregation.function,
+                                AggFunction::First | AggFunction::Last
+                            ) {
                                 let row = if matches!(aggregation.function, AggFunction::First) {
                                     rows[0]
                                 } else {
@@ -639,8 +651,9 @@ mod tests {
                             let mut values = raw.into_iter().flatten().collect::<Vec<_>>();
                             if aggregation.distinct {
                                 values.sort_by(f64::total_cmp);
-                                values
-                                    .dedup_by(|left, right| left.total_cmp(right) == Ordering::Equal);
+                                values.dedup_by(|left, right| {
+                                    left.total_cmp(right) == Ordering::Equal
+                                });
                             }
                             if values.is_empty() {
                                 return Ok(None);
@@ -703,10 +716,14 @@ mod tests {
                                     })?;
                                     let position = quantile * last;
                                     let lower = position.floor().to_usize().ok_or_else(|| {
-                                        PlenoraError::InvalidPlan("indice quantile non valido".into())
+                                        PlenoraError::InvalidPlan(
+                                            "indice quantile non valido".into(),
+                                        )
                                     })?;
                                     let upper = position.ceil().to_usize().ok_or_else(|| {
-                                        PlenoraError::InvalidPlan("indice quantile non valido".into())
+                                        PlenoraError::InvalidPlan(
+                                            "indice quantile non valido".into(),
+                                        )
                                     })?;
                                     let weight = position - position.floor();
                                     // Niente mul_add/FMA: forma non fusa
@@ -714,8 +731,8 @@ mod tests {
                                     // STESSA della produzione, equivalenza
                                     // bit-a-bit per costruzione.
                                     #[allow(clippy::suboptimal_flops)]
-                                    let interpolated = (values[upper] - values[lower]) * weight
-                                        + values[lower];
+                                    let interpolated =
+                                        (values[upper] - values[lower]) * weight + values[lower];
                                     interpolated
                                 }
                                 _ => unreachable!(),
@@ -745,7 +762,11 @@ mod tests {
         for index in 0..fast.num_columns() {
             let fast_field = fast_schema.field(index);
             let reference_field = reference_schema.field(index);
-            assert_eq!(fast_field.name(), reference_field.name(), "nome colonna {index}");
+            assert_eq!(
+                fast_field.name(),
+                reference_field.name(),
+                "nome colonna {index}"
+            );
             assert_eq!(
                 fast_field.data_type(),
                 reference_field.data_type(),
@@ -1434,8 +1455,7 @@ mod tests {
             aggregations: vec![agg("num", AggFunction::Sum)],
         };
         let fast_error = aggregate(&large, &config).expect_err("fast path errore");
-        let reference_error =
-            aggregate_reference(&large, &config).expect_err("riferimento errore");
+        let reference_error = aggregate_reference(&large, &config).expect_err("riferimento errore");
         assert_eq!(fast_error.to_string(), reference_error.to_string());
 
         // group_by vuoto: errore di contratto invariato.
@@ -1504,6 +1524,8 @@ mod tests {
     }
 
     #[test]
+    // Batteria di confini sequenziale: la lunghezza e' nel numero di casi.
+    #[allow(clippy::too_many_lines)]
     fn native_group_key_order_matches_text_key_order() {
         // Confini di lunghezza decimale, segni, estremi di dominio.
         let edge_i64 = [
@@ -1542,7 +1564,11 @@ mod tests {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let value = (state >> 16).cast_signed();
-            samples_i64.push(if state & 1 == 0 { value % 2_001 - 1_000 } else { value });
+            samples_i64.push(if state & 1 == 0 {
+                value % 2_001 - 1_000
+            } else {
+                value
+            });
         }
         for &a in &samples_i64 {
             for &b in edge_i64.iter().chain(samples_i64.iter().take(64)) {
@@ -1658,7 +1684,10 @@ mod tests {
 
     /// Copia verbatim dell'implementazione pre-ottimizzazione di
     /// `dedup_advanced` (delegava a `sort` + `distinct`).
-    fn dedup_advanced_reference(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
+    fn dedup_advanced_reference(
+        batch: &RecordBatch,
+        config: &DedupAdvanced,
+    ) -> Result<RecordBatch> {
         let ordered = if let Some(column) = &config.order_column {
             sort(
                 batch,
@@ -1689,7 +1718,10 @@ mod tests {
 
     /// Copia verbatim dell'implementazione pre-ottimizzazione di
     /// `rolling_window` (finestra ricostruita in un `Vec` a ogni riga).
-    fn rolling_window_reference(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
+    fn rolling_window_reference(
+        batch: &RecordBatch,
+        config: &RollingWindow,
+    ) -> Result<RecordBatch> {
         if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
             return Err(PlenoraError::InvalidPlan(
                 "rolling_window: finestra non valida".into(),
@@ -1747,7 +1779,9 @@ mod tests {
                     RollingKind::Stddev if values.len() <= config.ddof => None,
                     RollingKind::Stddev => {
                         let length = values.len().to_f64().ok_or_else(|| {
-                            PlenoraError::InvalidPlan("dimensione rolling non rappresentabile".into())
+                            PlenoraError::InvalidPlan(
+                                "dimensione rolling non rappresentabile".into(),
+                            )
                         })?;
                         let mean = values.iter().sum::<f64>() / length;
                         let divisor = (values.len() - config.ddof).to_f64().ok_or_else(|| {
@@ -1778,9 +1812,14 @@ mod tests {
     /// Copia verbatim dell'implementazione pre-ottimizzazione di
     /// `window_function` (partizioni in `BTreeMap` su `Option<String>`).
     #[allow(clippy::too_many_lines)]
-    fn window_function_reference(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
+    fn window_function_reference(
+        batch: &RecordBatch,
+        config: &WindowFunction,
+    ) -> Result<RecordBatch> {
         if config.offset == 0 {
-            return Err(PlenoraError::InvalidPlan("offset deve essere positivo".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "offset deve essere positivo".into(),
+            ));
         }
         if matches!(config.function, WindowKind::Ntile) {
             if config.buckets.is_none_or(|buckets| buckets == 0) {
@@ -1862,8 +1901,8 @@ mod tests {
                                     .ok()
                                     .and_then(|index| (index + 1).to_f64())
                             } else {
-                                let first =
-                                    sorted.partition_point(|value| value.total_cmp(&current).is_lt());
+                                let first = sorted
+                                    .partition_point(|value| value.total_cmp(&current).is_lt());
                                 let last = sorted
                                     .partition_point(|value| !value.total_cmp(&current).is_gt())
                                     .checked_sub(1)?;
@@ -1875,7 +1914,8 @@ mod tests {
                         if sorted.len() <= 1 {
                             return Some(0.0);
                         }
-                        let rank = sorted.partition_point(|value| value.total_cmp(&current).is_lt());
+                        let rank =
+                            sorted.partition_point(|value| value.total_cmp(&current).is_lt());
                         let numerator = rank.to_f64()?;
                         let denominator = (sorted.len() - 1).to_f64()?;
                         Some(numerator / denominator)
@@ -1997,10 +2037,13 @@ mod tests {
         )
         .expect("fixture vuota");
         for keep in [Keep::First, Keep::Last, Keep::False] {
-            assert_distinct_parity(&empty, &Distinct {
-                subset: vec![],
-                keep,
-            });
+            assert_distinct_parity(
+                &empty,
+                &Distinct {
+                    subset: vec![],
+                    keep,
+                },
+            );
         }
 
         // Riga singola con valori null in tutte le colonne.
@@ -2016,10 +2059,13 @@ mod tests {
         )
         .expect("fixture riga singola");
         for keep in [Keep::First, Keep::Last, Keep::False] {
-            assert_distinct_parity(&single, &Distinct {
-                subset: vec![],
-                keep,
-            });
+            assert_distinct_parity(
+                &single,
+                &Distinct {
+                    subset: vec![],
+                    keep,
+                },
+            );
         }
     }
 
@@ -2029,18 +2075,27 @@ mod tests {
         // numeriche e testuali, con null e valori ripetuti.
         let batch = scale_fixture(70_000, 100);
         for keep in [Keep::First, Keep::Last, Keep::False] {
-            assert_distinct_parity(&batch, &Distinct {
-                subset: vec!["txt".into()],
-                keep,
-            });
-            assert_distinct_parity(&batch, &Distinct {
-                subset: vec!["val".into(), "txt".into()],
-                keep,
-            });
-            assert_distinct_parity(&batch, &Distinct {
-                subset: vec![],
-                keep,
-            });
+            assert_distinct_parity(
+                &batch,
+                &Distinct {
+                    subset: vec!["txt".into()],
+                    keep,
+                },
+            );
+            assert_distinct_parity(
+                &batch,
+                &Distinct {
+                    subset: vec!["val".into(), "txt".into()],
+                    keep,
+                },
+            );
+            assert_distinct_parity(
+                &batch,
+                &Distinct {
+                    subset: vec![],
+                    keep,
+                },
+            );
         }
     }
 
@@ -2049,7 +2104,11 @@ mod tests {
         // Colonna LargeUtf8 nel subset: il profilo scalare fallisce allo
         // stesso modo nel riferimento.
         let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("c", DataType::LargeUtf8, true)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "c",
+                DataType::LargeUtf8,
+                true,
+            )])),
             vec![Arc::new(LargeStringArray::from(vec![Some("a"), Some("b")]))],
         )
         .expect("fixture large utf8");
@@ -2077,25 +2136,34 @@ mod tests {
         let batch = mixed_fixture();
         for keep in [Keep::First, Keep::Last] {
             for ascending in [true, false] {
-                assert_dedup_parity(&batch, &DedupAdvanced {
-                    subset: vec!["g".into()],
-                    keep,
-                    order_column: Some("val".into()),
-                    ascending,
-                });
-                assert_dedup_parity(&batch, &DedupAdvanced {
-                    subset: vec!["g".into(), "val".into()],
-                    keep,
-                    order_column: Some("num".into()),
-                    ascending,
-                });
+                assert_dedup_parity(
+                    &batch,
+                    &DedupAdvanced {
+                        subset: vec!["g".into()],
+                        keep,
+                        order_column: Some("val".into()),
+                        ascending,
+                    },
+                );
+                assert_dedup_parity(
+                    &batch,
+                    &DedupAdvanced {
+                        subset: vec!["g".into(), "val".into()],
+                        keep,
+                        order_column: Some("num".into()),
+                        ascending,
+                    },
+                );
                 // Senza order_column: nessun ordinamento preliminare.
-                assert_dedup_parity(&batch, &DedupAdvanced {
-                    subset: vec!["txt".into()],
-                    keep,
-                    order_column: None,
-                    ascending,
-                });
+                assert_dedup_parity(
+                    &batch,
+                    &DedupAdvanced {
+                        subset: vec!["txt".into()],
+                        keep,
+                        order_column: None,
+                        ascending,
+                    },
+                );
             }
         }
         // keep=false: errore di contratto identico.
@@ -2140,22 +2208,28 @@ mod tests {
             assert_rolling_parity(&batch, &rolling_config(function, 3, 1));
             assert_rolling_parity(&batch, &rolling_config(function, 3, 3));
             assert_rolling_parity(&batch, &rolling_config(function, 8, 2));
-            assert_rolling_parity(&batch, &RollingWindow {
-                ddof: 0,
-                ..rolling_config(function, 3, 1)
-            });
+            assert_rolling_parity(
+                &batch,
+                &RollingWindow {
+                    ddof: 0,
+                    ..rolling_config(function, 3, 1)
+                },
+            );
         }
         // Colonna Int64, senza partizione e senza ordinamento.
-        assert_rolling_parity(&batch, &RollingWindow {
-            column: "val".into(),
-            function: RollingKind::Stddev,
-            group_by: None,
-            order_column: None,
-            window: 2,
-            min_periods: 1,
-            ddof: 1,
-            output_column: "val_roll".into(),
-        });
+        assert_rolling_parity(
+            &batch,
+            &RollingWindow {
+                column: "val".into(),
+                function: RollingKind::Stddev,
+                group_by: None,
+                order_column: None,
+                window: 2,
+                min_periods: 1,
+                ddof: 1,
+                output_column: "val_roll".into(),
+            },
+        );
         // Partizione singola esplicita (tutte le righe nella stessa chiave).
         let single = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -2168,16 +2242,19 @@ mod tests {
             ],
         )
         .expect("fixture partizione singola");
-        assert_rolling_parity(&single, &RollingWindow {
-            column: "num".into(),
-            function: RollingKind::Mean,
-            group_by: Some("g".into()),
-            order_column: None,
-            window: 2,
-            min_periods: 1,
-            ddof: 1,
-            output_column: "num_roll".into(),
-        });
+        assert_rolling_parity(
+            &single,
+            &RollingWindow {
+                column: "num".into(),
+                function: RollingKind::Mean,
+                group_by: Some("g".into()),
+                order_column: None,
+                window: 2,
+                min_periods: 1,
+                ddof: 1,
+                output_column: "num_roll".into(),
+            },
+        );
         // Finestra di un solo elemento NaN: min/max devono restituire NaN
         // (reduce dal primo elemento), non +/-inf; somma NaN invariata.
         for function in [
@@ -2187,16 +2264,19 @@ mod tests {
             RollingKind::Max,
             RollingKind::Stddev,
         ] {
-            assert_rolling_parity(&single, &RollingWindow {
-                column: "num".into(),
-                function,
-                group_by: Some("g".into()),
-                order_column: None,
-                window: 1,
-                min_periods: 1,
-                ddof: 0,
-                output_column: "num_roll".into(),
-            });
+            assert_rolling_parity(
+                &single,
+                &RollingWindow {
+                    column: "num".into(),
+                    function,
+                    group_by: Some("g".into()),
+                    order_column: None,
+                    window: 1,
+                    min_periods: 1,
+                    ddof: 0,
+                    output_column: "num_roll".into(),
+                },
+            );
         }
     }
 
@@ -2264,32 +2344,44 @@ mod tests {
             assert_window_parity(&batch, &window_config(function));
         }
         // Offset maggiore di 1 per lag/lead.
-        assert_window_parity(&batch, &WindowFunction {
-            offset: 3,
-            ..window_config(WindowKind::Lag)
-        });
-        assert_window_parity(&batch, &WindowFunction {
-            offset: 2,
-            ..window_config(WindowKind::Lead)
-        });
+        assert_window_parity(
+            &batch,
+            &WindowFunction {
+                offset: 3,
+                ..window_config(WindowKind::Lag)
+            },
+        );
+        assert_window_parity(
+            &batch,
+            &WindowFunction {
+                offset: 2,
+                ..window_config(WindowKind::Lead)
+            },
+        );
         // Ntile: bucket minori, uguali e maggiori della partizione.
         for buckets in [1_usize, 2, 3, 100] {
-            assert_window_parity(&batch, &WindowFunction {
-                buckets: Some(buckets),
-                ..window_config(WindowKind::Ntile)
-            });
+            assert_window_parity(
+                &batch,
+                &WindowFunction {
+                    buckets: Some(buckets),
+                    ..window_config(WindowKind::Ntile)
+                },
+            );
         }
         // Nome output di default (`{colonna}_{suffix}`), senza partizione,
         // senza ordinamento.
-        assert_window_parity(&batch, &WindowFunction {
-            column: "num".into(),
-            function: WindowKind::RunningMean,
-            group_by: None,
-            order_column: None,
-            offset: 1,
-            buckets: None,
-            output_column: None,
-        });
+        assert_window_parity(
+            &batch,
+            &WindowFunction {
+                column: "num".into(),
+                function: WindowKind::RunningMean,
+                group_by: None,
+                order_column: None,
+                offset: 1,
+                buckets: None,
+                output_column: None,
+            },
+        );
         // Partizione singola esplicita con NaN nella sorgente.
         let single = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -2302,16 +2394,23 @@ mod tests {
             ],
         )
         .expect("fixture partizione singola");
-        for function in [WindowKind::Rank, WindowKind::DenseRank, WindowKind::CumeDist] {
-            assert_window_parity(&single, &WindowFunction {
-                column: "num".into(),
-                function,
-                group_by: Some("g".into()),
-                order_column: None,
-                offset: 1,
-                buckets: None,
-                output_column: None,
-            });
+        for function in [
+            WindowKind::Rank,
+            WindowKind::DenseRank,
+            WindowKind::CumeDist,
+        ] {
+            assert_window_parity(
+                &single,
+                &WindowFunction {
+                    column: "num".into(),
+                    function,
+                    group_by: Some("g".into()),
+                    order_column: None,
+                    offset: 1,
+                    buckets: None,
+                    output_column: None,
+                },
+            );
         }
     }
 
@@ -2322,16 +2421,22 @@ mod tests {
         assert_window_parity(&batch, &window_config(WindowKind::DenseRank));
         assert_window_parity(&batch, &window_config(WindowKind::PercentRank));
         assert_window_parity(&batch, &window_config(WindowKind::Cumsum));
-        assert_window_parity(&batch, &WindowFunction {
-            buckets: Some(7),
-            ..window_config(WindowKind::Ntile)
-        });
+        assert_window_parity(
+            &batch,
+            &WindowFunction {
+                buckets: Some(7),
+                ..window_config(WindowKind::Ntile)
+            },
+        );
         // Scala senza partizione: un unico gruppo oltre soglia.
-        assert_window_parity(&batch, &WindowFunction {
-            group_by: None,
-            order_column: Some("num".into()),
-            ..window_config(WindowKind::CumeDist)
-        });
+        assert_window_parity(
+            &batch,
+            &WindowFunction {
+                group_by: None,
+                order_column: Some("num".into()),
+                ..window_config(WindowKind::CumeDist)
+            },
+        );
     }
 
     #[test]
@@ -2407,7 +2512,13 @@ mod tests {
             ])),
             vec![
                 Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
-                Arc::new(Int64Array::from(vec![big + 1, big, big + 2, -big - 1, -big])),
+                Arc::new(Int64Array::from(vec![
+                    big + 1,
+                    big,
+                    big + 2,
+                    -big - 1,
+                    -big,
+                ])),
             ],
         )
         .expect("fixture");

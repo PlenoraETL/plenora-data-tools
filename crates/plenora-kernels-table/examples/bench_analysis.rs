@@ -21,9 +21,7 @@ use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_kernels_table::analysis::{
-    flatten_json, statistics, FlattenJson, Stat, Statistics,
-};
+use plenora_kernels_table::analysis::{flatten_json, statistics, FlattenJson, Stat, Statistics};
 use plenora_kernels_table::Limits;
 use serde_json::json;
 
@@ -77,7 +75,9 @@ fn stats_fixture(rows: usize) -> RecordBatch {
 /// Fixture JSON annidati (3 livelli), identica a `bench_sweep::json_fixture`.
 fn json_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
-    let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
+    let ids = (0..rows)
+        .map(|row| i64::try_from(row).ok())
+        .collect::<Vec<_>>();
     let docs = (0..rows)
         .map(|_| {
             format!(

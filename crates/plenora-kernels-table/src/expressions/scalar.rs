@@ -4,9 +4,12 @@ use plenora_core::arrow::array::{Array, BooleanArray, RecordBatch};
 use plenora_core::arrow::schema::DataType;
 use serde_json::Value;
 
-use plenora_core::{PlenoraError, Result};
-use crate::{column_index, scalar_as_f64, scalar_as_string};
 use super::BinaryOperator;
+use crate::{
+    column_index, scalar_as_f64, scalar_as_string, DIVISION_BY_ZERO_MESSAGE,
+    NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
+};
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
@@ -62,9 +65,7 @@ pub fn column(batch: &RecordBatch, name: &str, row: usize) -> Result<Scalar> {
             if value.is_finite() {
                 Ok(Scalar::Number(value))
             } else {
-                Err(PlenoraError::Schema(
-                    "expression non accetta numeri non finiti".into(),
-                ))
+                Err(PlenoraError::Schema(NON_FINITE_INPUT_MESSAGE.into()))
             }
         });
     }
@@ -85,7 +86,9 @@ pub fn number(value: &Scalar, context: &str) -> Result<Option<f64>> {
     match value {
         Scalar::Null => Ok(None),
         Scalar::Number(value) => Ok(Some(*value)),
-        _ => Err(PlenoraError::Schema(format!("{context} richiede un numero"))),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede un numero"
+        ))),
     }
 }
 
@@ -121,7 +124,7 @@ fn arithmetic(op: BinaryOperator, left: &Scalar, right: &Scalar) -> Result<Scala
         BinaryOperator::Subtract => left - right,
         BinaryOperator::Multiply => left * right,
         BinaryOperator::Divide if right == 0.0 => {
-            return Err(PlenoraError::Schema("divisione per zero".into()));
+            return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()));
         }
         BinaryOperator::Divide => left / right,
         _ => {
@@ -133,9 +136,7 @@ fn arithmetic(op: BinaryOperator, left: &Scalar, right: &Scalar) -> Result<Scala
     if value.is_finite() {
         Ok(Scalar::Number(value))
     } else {
-        Err(PlenoraError::Schema(
-            "risultato expression non finito".into(),
-        ))
+        Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
     }
 }
 
@@ -153,7 +154,11 @@ fn logical(op: BinaryOperator, left: &Scalar, right: &Scalar) -> Result<Scalar> 
             (Some(false), Some(false)) => Scalar::Boolean(false),
             _ => Scalar::Null,
         },
-        _ => return Err(PlenoraError::InvalidPlan("operatore logico inatteso".into())),
+        _ => {
+            return Err(PlenoraError::InvalidPlan(
+                "operatore logico inatteso".into(),
+            ))
+        }
     })
 }
 

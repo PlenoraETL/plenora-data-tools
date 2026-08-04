@@ -178,9 +178,13 @@ fn main() {
         order_column: Some("id".into()),
         ascending: true,
     };
-    measure("table.dedup_advanced", M1, 3, "subset key, order id", || {
-        dedup_advanced(base_1m(), &dedup_config).expect("dedup_advanced")
-    });
+    measure(
+        "table.dedup_advanced",
+        M1,
+        3,
+        "subset key, order id",
+        || dedup_advanced(base_1m(), &dedup_config).expect("dedup_advanced"),
+    );
 
     let rolling_config = RollingWindow {
         column: "num".into(),
@@ -192,9 +196,13 @@ fn main() {
         ddof: 1,
         output_column: "num_roll".into(),
     };
-    measure("table.rolling_window", M1, 3, "mean w=10, partizione grp", || {
-        rolling_window(base_1m(), &rolling_config).expect("rolling_window")
-    });
+    measure(
+        "table.rolling_window",
+        M1,
+        3,
+        "mean w=10, partizione grp",
+        || rolling_window(base_1m(), &rolling_config).expect("rolling_window"),
+    );
 
     let window_config = WindowFunction {
         column: "num".into(),

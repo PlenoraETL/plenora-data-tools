@@ -203,9 +203,7 @@ impl ArrowOperation {
     pub const fn shape(self) -> ArrowShape {
         match self {
             Self::Explode | Self::Delaunay => ArrowShape::OneToMany,
-            Self::Dissolve
-            | Self::LineBuilder
-            | Self::PolygonBuilder => ArrowShape::ManyToOne,
+            Self::Dissolve | Self::LineBuilder | Self::PolygonBuilder => ArrowShape::ManyToOne,
             Self::Voronoi | Self::CleanTopology => ArrowShape::Collective,
             Self::Polygonize | Self::LineMerge => ArrowShape::WholeToMany,
             Self::GeometryDiagnostics => ArrowShape::Diagnostic,
@@ -354,7 +352,9 @@ impl TransformArrowSchema {
         self.max_output_rows.unwrap_or(MAX_ROWS)
     }
 
-    pub(in crate::geo_transport) fn required_max_output_rows(&self) -> Result<u64, ArrowTransportError> {
+    pub(in crate::geo_transport) fn required_max_output_rows(
+        &self,
+    ) -> Result<u64, ArrowTransportError> {
         self.max_output_rows
             .ok_or_else(|| ArrowTransportError::MissingParameter {
                 operation: self.operation.name(),
@@ -363,10 +363,12 @@ impl TransformArrowSchema {
     }
 
     pub(in crate::geo_transport) fn required_distance(&self) -> Result<f64, ArrowTransportError> {
-        let distance = self.distance.ok_or_else(|| ArrowTransportError::MissingParameter {
-            operation: self.operation.name(),
-            name: "distance",
-        })?;
+        let distance = self
+            .distance
+            .ok_or_else(|| ArrowTransportError::MissingParameter {
+                operation: self.operation.name(),
+                name: "distance",
+            })?;
         if !distance.is_finite() {
             return Err(ArrowTransportError::InvalidParameter {
                 operation: self.operation.name(),
@@ -394,14 +396,16 @@ impl TransformArrowSchema {
         Ok(tolerance)
     }
 
-    pub(in crate::geo_transport) fn required_target_crs(&self) -> Result<&str, ArrowTransportError> {
-        let target = self
-            .target_crs
-            .as_deref()
-            .ok_or_else(|| ArrowTransportError::MissingParameter {
-                operation: self.operation.name(),
-                name: "target_crs",
-            })?;
+    pub(in crate::geo_transport) fn required_target_crs(
+        &self,
+    ) -> Result<&str, ArrowTransportError> {
+        let target =
+            self.target_crs
+                .as_deref()
+                .ok_or_else(|| ArrowTransportError::MissingParameter {
+                    operation: self.operation.name(),
+                    name: "target_crs",
+                })?;
         if target.trim().is_empty() {
             return Err(ArrowTransportError::InvalidParameter {
                 operation: self.operation.name(),
@@ -498,7 +502,11 @@ impl TransformArrowSchema {
         })
     }
 
-    const fn finite_param(&self, name: &'static str, value: f64) -> Result<f64, ArrowTransportError> {
+    const fn finite_param(
+        &self,
+        name: &'static str,
+        value: f64,
+    ) -> Result<f64, ArrowTransportError> {
         if !value.is_finite() {
             return Err(ArrowTransportError::InvalidParameter {
                 operation: self.operation.name(),
@@ -913,8 +921,7 @@ mod tests {
     #[test]
     fn reproject_richiede_target_crs() {
         let schema = base(ArrowOperation::Reproject);
-        let Err(ArrowTransportError::MissingParameter { name, .. }) =
-            schema.validate_parameters()
+        let Err(ArrowTransportError::MissingParameter { name, .. }) = schema.validate_parameters()
         else {
             panic!("atteso MissingParameter per target_crs assente");
         };
@@ -961,10 +968,18 @@ mod tests {
             // concavity non prevista da scale.
             (ArrowOperation::Scale, "concavity", "concavity"),
             // length_threshold non prevista da densify.
-            (ArrowOperation::Densify, "length_threshold", "length_threshold"),
+            (
+                ArrowOperation::Densify,
+                "length_threshold",
+                "length_threshold",
+            ),
             // node_input/require_complete solo per polygonize.
             (ArrowOperation::Centroid, "node_input", "node_input"),
-            (ArrowOperation::Centroid, "require_complete", "require_complete"),
+            (
+                ArrowOperation::Centroid,
+                "require_complete",
+                "require_complete",
+            ),
         ] {
             let mut schema = base(operation);
             match patch {
@@ -980,7 +995,10 @@ mod tests {
             let Err(ArrowTransportError::UnexpectedParameter { name, .. }) =
                 schema.validate_parameters()
             else {
-                panic!("{}: atteso UnexpectedParameter per {patch}", operation.name());
+                panic!(
+                    "{}: atteso UnexpectedParameter per {patch}",
+                    operation.name()
+                );
             };
             assert_eq!(name, expected);
         }
@@ -1008,7 +1026,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "y_offset", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "y_offset",
+                ..
+            })
         ));
         // scale: origini opzionali, ma se presenti devono essere finite.
         let schema = TransformArrowSchema {
@@ -1019,7 +1040,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "x_origin", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "x_origin",
+                ..
+            })
         ));
         let schema = TransformArrowSchema {
             x_factor: Some(1.0),
@@ -1029,7 +1053,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "y_origin", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "y_origin",
+                ..
+            })
         ));
         // rotate: stesse origini opzionali.
         let schema = TransformArrowSchema {
@@ -1039,7 +1066,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "x_origin", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "x_origin",
+                ..
+            })
         ));
         let schema = TransformArrowSchema {
             degrees: Some(90.0),
@@ -1048,7 +1078,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "y_origin", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "y_origin",
+                ..
+            })
         ));
         // densify: max_segment_length non finita.
         let schema = TransformArrowSchema {
@@ -1057,7 +1090,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "max_segment_length", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "max_segment_length",
+                ..
+            })
         ));
         // line_substring: start_ratio fuori [0, 1].
         let schema = TransformArrowSchema {
@@ -1127,7 +1163,10 @@ mod tests {
         };
         assert!(matches!(
             schema.validate_parameters(),
-            Err(ArrowTransportError::InvalidParameter { name: "length_threshold", .. })
+            Err(ArrowTransportError::InvalidParameter {
+                name: "length_threshold",
+                ..
+            })
         ));
     }
 

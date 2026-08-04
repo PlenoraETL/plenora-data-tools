@@ -3,7 +3,7 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step};
+use plenora_engine::{execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step};
 use serde_json::{json, Value};
 
 fn fixture() -> RecordBatch {
@@ -168,13 +168,16 @@ fn every_unary_operation_executes_its_safe_profile() {
         ),
         (
             "md5_hash",
-            json!({"columns":["group","text"],"output_column":"hash","normalize":true}),
+            json!({"columns":["id","group"],"output_column":"hash","normalize":true}),
         ),
         // Estensioni table v1.1: raggiungibili via id canonico (come le
         // estensioni geo v1.1, nessun alias legacy aggiunto al catalogo).
         ("table.select_columns", json!({"columns":["id","num"]})),
         ("table.limit", json!({"n":2,"offset":1})),
-        ("table.top_n", json!({"columns":["num"],"n":2,"descending":true})),
+        (
+            "table.top_n",
+            json!({"columns":["num"],"n":2,"descending":true}),
+        ),
         (
             "table.stable_fingerprint",
             json!({"columns":["id","group"],"algorithm":"sha256"}),

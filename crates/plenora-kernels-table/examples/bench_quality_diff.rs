@@ -21,9 +21,7 @@ use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_kernels_table::governance::{
-    assert_foreign_key, reconcile, ForeignKey, Reconcile,
-};
+use plenora_kernels_table::governance::{assert_foreign_key, reconcile, ForeignKey, Reconcile};
 use plenora_kernels_table::reshape::{table_diff, TableDiff};
 use plenora_kernels_table::security::{mask_data, MaskData, MaskType, Masking};
 use plenora_kernels_table::Limits;
@@ -208,9 +206,13 @@ fn main() {
         include_unchanged: "no".into(),
         separator: ", ".into(),
     };
-    measure("table.table_diff", rows, repetitions, "1M x 1M, chiave id, diff su num", || {
-        table_diff(&left, &right, &table_diff_config, &limits).expect("table_diff")
-    });
+    measure(
+        "table.table_diff",
+        rows,
+        repetitions,
+        "1M x 1M, chiave id, diff su num",
+        || table_diff(&left, &right, &table_diff_config, &limits).expect("table_diff"),
+    );
 
     let foreign_key_config = ForeignKey {
         left_keys: vec!["key".into()],
@@ -233,9 +235,13 @@ fn main() {
         right_keys: vec!["id".into()],
         nulls_equal: true,
     };
-    measure("table.reconcile", rows, repetitions, "1M x 1M, frequenze chiave", || {
-        reconcile(&left, &right, &reconcile_config, &limits).expect("reconcile")
-    });
+    measure(
+        "table.reconcile",
+        rows,
+        repetitions,
+        "1M x 1M, frequenze chiave",
+        || reconcile(&left, &right, &reconcile_config, &limits).expect("reconcile"),
+    );
 
     let mask_config = MaskData {
         maskings: vec![Masking {
@@ -247,7 +253,11 @@ fn main() {
         }],
         overwrite: true,
     };
-    measure("table.mask_data", rows, repetitions, "mask custom 3+3 su text", || {
-        mask_data(&left, &mask_config).expect("mask_data")
-    });
+    measure(
+        "table.mask_data",
+        rows,
+        repetitions,
+        "mask custom 3+3 su text",
+        || mask_data(&left, &mask_config).expect("mask_data"),
+    );
 }

@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use num_traits::ToPrimitive;
 use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
 use proptest::prelude::*;
 use serde_json::{json, Value};

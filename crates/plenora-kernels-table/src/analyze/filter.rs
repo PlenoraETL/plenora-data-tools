@@ -57,8 +57,10 @@ pub(in crate::analyze) fn analyze_filter(
     let input = &inputs[0];
     let field = field_of(op, input, &config.column)?;
     // Eq/Ne su colonna numerica con valore non numerico: errore certo a runtime.
-    if matches!(config.operator, filtering::Operator::Eq | filtering::Operator::Ne)
-        && matches!(field.data_type(), DataType::Int64 | DataType::Float64)
+    if matches!(
+        config.operator,
+        filtering::Operator::Eq | filtering::Operator::Ne
+    ) && matches!(field.data_type(), DataType::Int64 | DataType::Float64)
         && json_text(&config.value).parse::<f64>().is_err()
     {
         return contract_error(op, "confronto numerico con valore non numerico");
@@ -96,6 +98,9 @@ pub(in crate::analyze) fn analyze_conditional(
     } else {
         (DataType::Utf8, false)
     };
-    analyze_append(input, fields, &[(config.output_column, data_type, nullable)])
+    analyze_append(
+        input,
+        fields,
+        &[(config.output_column, data_type, nullable)],
+    )
 }
-

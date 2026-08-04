@@ -48,17 +48,13 @@ fn self_test_writes_a_valid_control_frame_and_never_overwrites() {
         .arg(&output)
         .output()
         .expect("self-test");
-    assert!(
-        result.status.success(),
-        "stderr: {}",
-        stderr_of(&result)
-    );
+    assert!(result.status.success(), "stdout: {}", stderr_of(&result));
     assert!(String::from_utf8_lossy(&result.stdout).contains("\"ok\""));
 
     // Il frame di controllo e' un WKB v2 leggibile: una riga, POINT (2 3)
     // (centroide del punto di controllo, come nel sorgente).
-    let mut reader = FrameReader::new(std::fs::File::open(&output).expect("output"), 1)
-        .expect("frame reader");
+    let mut reader =
+        FrameReader::new(std::fs::File::open(&output).expect("output"), 1).expect("frame reader");
     let frame = reader.next_frame().expect("frame").expect("una riga");
     let Frame::Wkb(payload) = frame else {
         panic!("atteso frame WKB");
@@ -93,8 +89,11 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
 
     // Output `-`: la pubblicazione deve essere transazionale (rifiutato
     // prima ancora di leggere lo schema).
-    std::fs::write(&schema, br#"{"schema_version":2,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":2,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform", "--input", "input.bin", "--schema"])
         .arg(&schema)
@@ -104,13 +103,16 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("stdout disabilitato"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
 
     // schema_version diversa da 2: rifiutata prima di toccare i dati.
-    std::fs::write(&schema, br#"{"schema_version":3,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":3,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform", "--input", "input.bin", "--schema"])
         .arg(&schema)
@@ -121,7 +123,7 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("schema_version"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
     assert!(!output.exists(), "nessun output parziale");
@@ -134,8 +136,11 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
     let output = directory.path().join("output.bin");
 
     // CRS assente: la validazione semantica lo richiede sempre.
-    std::fs::write(&schema, br#"{"schema_version":2,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":2,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform", "--input", "input.bin", "--schema"])
         .arg(&schema)
@@ -144,7 +149,11 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
         .output()
         .expect("transform");
     assert!(!result.status.success());
-    assert!(stderr_of(&result).contains("crs"), "stderr: {}", stderr_of(&result));
+    assert!(
+        stderr_of(&result).contains("crs"),
+        "stdout: {}",
+        stderr_of(&result)
+    );
     assert!(!output.exists());
 
     // CRS dichiarato ma nessun backend PROJ compilato: la dichiarazione non
@@ -172,8 +181,11 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
     let output = directory.path().join("output.plngeo3");
 
     // Output `-`: pubblicazione transazionale obbligatoria.
-    std::fs::write(&schema, br#"{"schema_version":3,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":3,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
         .arg(&schema)
@@ -183,13 +195,16 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("stdout disabilitato"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
 
     // schema_version diversa da 3.
-    std::fs::write(&schema, br#"{"schema_version":2,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":2,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
         .arg(&schema)
@@ -200,14 +215,17 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("schema_version"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
     assert!(!output.exists());
 
     // CRS assente.
-    std::fs::write(&schema, br#"{"schema_version":3,"operation":"centroid","row_count":0}"#)
-        .expect("schema");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":3,"operation":"centroid","row_count":0}"#,
+    )
+    .expect("schema");
     let result = cli()
         .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
         .arg(&schema)
@@ -216,7 +234,11 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         .output()
         .expect("transform-arrow");
     assert!(!result.status.success());
-    assert!(stderr_of(&result).contains("crs"), "stderr: {}", stderr_of(&result));
+    assert!(
+        stderr_of(&result).contains("crs"),
+        "stdout: {}",
+        stderr_of(&result)
+    );
     assert!(!output.exists());
 
     // CRS dichiarato senza backend: fail-closed.
@@ -237,6 +259,8 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
 }
 
 #[test]
+// Batteria CLI fail-closed sequenziale: la lunghezza e' nel numero di casi.
+#[allow(clippy::too_many_lines)]
 fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     let directory = tempfile::tempdir().expect("tempdir");
     let schema = directory.path().join("schema.json");
@@ -249,7 +273,14 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     )
     .expect("schema");
     let result = cli()
-        .args(["pair-arrow", "--left", "-", "--right", "right.bin", "--schema"])
+        .args([
+            "pair-arrow",
+            "--left",
+            "-",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
@@ -258,7 +289,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("percorsi file"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
 
@@ -269,7 +300,14 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     )
     .expect("schema");
     let result = cli()
-        .args(["pair-arrow", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "pair-arrow",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
@@ -278,7 +316,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("schema_version"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
     assert!(!output.exists());
@@ -290,14 +328,25 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     )
     .expect("schema");
     let result = cli()
-        .args(["pair-arrow", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "pair-arrow",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
         .output()
         .expect("pair-arrow");
     assert!(!result.status.success());
-    assert!(stderr_of(&result).contains("crs"), "stderr: {}", stderr_of(&result));
+    assert!(
+        stderr_of(&result).contains("crs"),
+        "stdout: {}",
+        stderr_of(&result)
+    );
     assert!(!output.exists());
 
     // CRS dichiarati senza backend: fail-closed.
@@ -307,7 +356,14 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     )
     .expect("schema");
     let result = cli()
-        .args(["pair-arrow", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "pair-arrow",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
@@ -318,6 +374,8 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
 }
 
 #[test]
+// Batteria CLI fail-closed sequenziale: la lunghezza e' nel numero di casi.
+#[allow(clippy::too_many_lines)]
 fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     let directory = tempfile::tempdir().expect("tempdir");
     let schema = directory.path().join("schema.json");
@@ -330,7 +388,14 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     )
     .expect("schema");
     let result = cli()
-        .args(["spatial-join", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "spatial-join",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .args(["--output", "-"])
         .output()
@@ -338,7 +403,7 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("percorsi file"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
 
@@ -349,7 +414,14 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     )
     .expect("schema");
     let result = cli()
-        .args(["spatial-join", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "spatial-join",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
@@ -358,7 +430,7 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("schema_version"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
 
@@ -373,7 +445,14 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         });
         std::fs::write(&schema, serde_json::to_vec(&document).expect("json")).expect("schema");
         let result = cli()
-            .args(["spatial-join", "--left", "left.bin", "--right", "right.bin", "--schema"])
+            .args([
+                "spatial-join",
+                "--left",
+                "left.bin",
+                "--right",
+                "right.bin",
+                "--schema",
+            ])
             .arg(&schema)
             .arg("--output")
             .arg(&output)
@@ -382,7 +461,7 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         assert!(!result.status.success(), "max_pairs={max_pairs}");
         assert!(
             stderr_of(&result).contains("max_pairs"),
-            "max_pairs={max_pairs}, stderr: {}",
+            "max_pairs={max_pairs}, stdout: {}",
             stderr_of(&result)
         );
         assert!(!output.exists());
@@ -395,14 +474,25 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
     )
     .expect("schema");
     let result = cli()
-        .args(["spatial-join", "--left", "left.bin", "--right", "right.bin", "--schema"])
+        .args([
+            "spatial-join",
+            "--left",
+            "left.bin",
+            "--right",
+            "right.bin",
+            "--schema",
+        ])
         .arg(&schema)
         .arg("--output")
         .arg(&output)
         .output()
         .expect("spatial-join");
     assert!(!result.status.success());
-    assert!(stderr_of(&result).contains("crs"), "stderr: {}", stderr_of(&result));
+    assert!(
+        stderr_of(&result).contains("crs"),
+        "stdout: {}",
+        stderr_of(&result)
+    );
     assert!(!output.exists());
 }
 
@@ -426,7 +516,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("--right"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
     assert!(!output.exists());
@@ -462,11 +552,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
         .arg(&output)
         .output()
         .expect("run");
-    assert!(
-        result.status.success(),
-        "stderr: {}",
-        stderr_of(&result)
-    );
+    assert!(result.status.success(), "stdout: {}", stderr_of(&result));
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(stdout.contains("\"output_rows\": 2"), "stdout: {stdout}");
     let mut reader =
@@ -510,7 +596,7 @@ fn blocking_plan_over_max_rows_fails_before_any_publication() {
     assert!(!result.status.success());
     assert!(
         stderr_of(&result).contains("oltre"),
-        "stderr: {}",
+        "stdout: {}",
         stderr_of(&result)
     );
     assert!(!output.exists(), "nessun output parziale");

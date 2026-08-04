@@ -33,7 +33,11 @@ pub(in crate::analyze) fn analyze_sort(
     for name in &config.columns {
         field_of(op, input, name)?;
     }
-    let keys: Vec<FieldId> = config.columns.iter().map(|name| fields.intern(name)).collect();
+    let keys: Vec<FieldId> = config
+        .columns
+        .iter()
+        .map(|name| fields.intern(name))
+        .collect();
     let mut output = input.clone();
     // Sort blocking: l'intero stream di output e' ordinato sulle chiavi.
     output.properties = ContractProperties {
@@ -57,7 +61,11 @@ pub(in crate::analyze) fn analyze_top_n(
     for name in &config.columns {
         field_of(op, input, name)?;
     }
-    let keys: Vec<FieldId> = config.columns.iter().map(|name| fields.intern(name)).collect();
+    let keys: Vec<FieldId> = config
+        .columns
+        .iter()
+        .map(|name| fields.intern(name))
+        .collect();
     let mut output = input.clone();
     // Come sort, ma emesse esattamente min(n, righe) righe.
     output.properties = ContractProperties {
@@ -307,4 +315,3 @@ pub(in crate::analyze) fn analyze_window_function(
     };
     Ok(output)
 }
-

@@ -73,6 +73,7 @@ use sha2::{Digest, Sha256};
 use plenora_core::catalog::{
     find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
     ExpansionConstraint, Family, Maturity, OperationDescriptor, Origin, ResultShape,
+    SourceRowProvenance,
 };
 use plenora_core::contract::{ContractCrs, DataContract, FieldAllocator};
 use plenora_core::crs::{CrsKind, ResolvedCrs};
@@ -83,10 +84,10 @@ use plenora_kernels_table::analyze::analyze_table_contract;
 
 // Feature-dispatch come `geo_transport::publish`: senza `proj-backend` la
 // risoluzione fallisce chiusa (`CRS_BACKEND_UNAVAILABLE`).
-#[cfg(feature = "proj-backend")]
-use plenora_kernels_geo::crs::resolve_crs;
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
+#[cfg(feature = "proj-backend")]
+use plenora_kernels_geo::crs::resolve_crs;
 
 use crate::geo_transport::publish::PublishProfile;
 use crate::plan::{PlanV4, ValidatedPlanV4, PLAN_SCHEMA_VERSION_V4};
@@ -406,7 +407,10 @@ impl ValidatedGraph {
 ///   per quanto malformato; il caso "impossibile" e' un errore esplicito,
 ///   mai un panic (R6).
 #[allow(clippy::too_many_lines)] // Passi sequenziali di par. 6.1: spezzarli nuocerebbe alla leggibilita'.
-pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> Result<ValidatedGraph> {
+pub fn validate(
+    plan_json: &str,
+    input_contracts: &[(String, DataContract)],
+) -> Result<ValidatedGraph> {
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
     // risoluzione alias (PlanV4::parse, ADR 6).
     let plan = PlanV4::parse(plan_json, &PlanLimits::default())?;
@@ -498,6 +502,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
     // analyze).
     let mut fields = FieldAllocator::default();
     let mut edge_contracts: BTreeMap<String, DataContract> = BTreeMap::new();
+    let mut edge_provenance: BTreeMap<String, bool> = BTreeMap::new();
     for declared in &plan_ref.inputs {
         let mut contract = provided[declared.as_str()].clone();
         for geometry in &mut contract.geometries {
@@ -508,6 +513,7 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
             geometry.field_id = remapped;
         }
         edge_contracts.insert(declared.clone(), contract);
+        edge_provenance.insert(declared.clone(), true);
     }
 
     let nodes_by_id: HashMap<&str, &crate::plan::NodeV4> = plan_ref
@@ -520,22 +526,36 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         let descriptor = find_operation(&node.op).ok_or_else(|| {
             PlenoraError::Internal(format!("op del nodo `{}` non risolta dal parse", node.id))
         })?;
+        let source_provenance = node
+            .inputs
+            .iter()
+            .all(|source| edge_provenance.get(source).copied().unwrap_or(false));
+        // Autorita' unica catalog-level (config-sensitive): stessa
+        // classificazione del machinery executor (flag per kernel risolto in
+        // `prepare`) e del gate legacy della CLI. Nessuna lista locale.
+        let emits_row_diagnostics = descriptor.emits_row_diagnostics(&node.config);
+        if emits_row_diagnostics && !source_provenance {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "nodo `{}`: {} richiede provenance row-level originale; \
+                 l'arco di input cambia cardinalita' o ordine e non porta lineage",
+                node.id, descriptor.id
+            )));
+        }
         let inputs: Vec<DataContract> = node
             .inputs
             .iter()
             .map(|reference| {
-                edge_contracts
-                    .get(reference)
-                    .cloned()
-                    .ok_or_else(|| {
-                        PlenoraError::Internal(format!(
-                            "arco `{reference}` non risolto dalla validazione"
-                        ))
-                    })
+                edge_contracts.get(reference).cloned().ok_or_else(|| {
+                    PlenoraError::Internal(format!(
+                        "arco `{reference}` non risolto dalla validazione"
+                    ))
+                })
             })
             .collect::<Result<_>>()?;
         let output = match descriptor.family {
-            Family::Table => analyze_table_contract(descriptor.id, &inputs, &node.config, &mut fields),
+            Family::Table => {
+                analyze_table_contract(descriptor.id, &inputs, &node.config, &mut fields)
+            }
             Family::Geo => analyze_geo_contract(
                 descriptor.id,
                 &inputs,
@@ -546,6 +566,11 @@ pub fn validate(plan_json: &str, input_contracts: &[(String, DataContract)]) -> 
         }
         .map_err(|error| at_node(&node.id, error))?;
         edge_contracts.insert(node.id.clone(), output);
+        edge_provenance.insert(
+            node.id.clone(),
+            source_provenance
+                && descriptor.source_row_provenance() == SourceRowProvenance::Preserved,
+        );
     }
 
     // Passo 6: identita' ADR 4.
@@ -659,7 +684,9 @@ pub fn check_input_compatibility(
     let mut provided: HashMap<&str, &DataContract> = HashMap::with_capacity(input_contracts.len());
     for (name, contract) in input_contracts {
         if provided.insert(name.as_str(), contract).is_some() {
-            return Err(mismatch(format!("contratto di input duplicato per `{name}`")));
+            return Err(mismatch(format!(
+                "contratto di input duplicato per `{name}`"
+            )));
         }
     }
     for (declared, fingerprint) in graph
@@ -669,9 +696,9 @@ pub fn check_input_compatibility(
         .iter()
         .zip(&graph.input_contract_fingerprints)
     {
-        let contract = provided.get(declared.as_str()).ok_or_else(|| {
-            mismatch(format!("manca il contratto per l'input `{declared}`"))
-        })?;
+        let contract = provided
+            .get(declared.as_str())
+            .ok_or_else(|| mismatch(format!("manca il contratto per l'input `{declared}`")))?;
         if &contract_fingerprint(contract)? != fingerprint {
             return Err(mismatch(format!(
                 "il contratto dell'input `{declared}` e' diverso da quello validato"
@@ -680,7 +707,14 @@ pub fn check_input_compatibility(
     }
     if let Some(extra) = provided
         .keys()
-        .filter(|name| !graph.plan.plan().inputs.iter().any(|i| i.as_str() == **name))
+        .filter(|name| {
+            !graph
+                .plan
+                .plan()
+                .inputs
+                .iter()
+                .any(|i| i.as_str() == **name)
+        })
         .min()
     {
         return Err(mismatch(format!(

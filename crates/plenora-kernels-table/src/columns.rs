@@ -261,10 +261,11 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
         }
         AlignType::Timestamp => {
             let text = string()?;
-            let timestamp = chrono::DateTime::parse_from_rfc3339(text.trim())
-                .map_err(|_| invalid())?;
+            let timestamp =
+                chrono::DateTime::parse_from_rfc3339(text.trim()).map_err(|_| invalid())?;
             Arc::new(TimestampMillisecondArray::from(vec![
-                timestamp.timestamp_millis();
+                timestamp
+                    .timestamp_millis();
                 rows
             ]))
         }
@@ -943,7 +944,11 @@ mod tests {
             .downcast_ref::<StringArray>()
             .expect("utf8");
         assert!(note.is_null(0) && note.is_null(1));
-        assert!(output.schema().field_with_name("note").expect("note").is_nullable());
+        assert!(output
+            .schema()
+            .field_with_name("note")
+            .expect("note")
+            .is_nullable());
         // Zero-copy sulle colonne passthrough.
         assert!(Arc::ptr_eq(
             output.column_by_name("name").expect("name"),
@@ -1029,13 +1034,11 @@ mod tests {
                 .value(0),
             2.5
         );
-        assert!(
-            output
-                .column_by_name("b")
-                .and_then(|c| c.as_any().downcast_ref::<BooleanArray>())
-                .expect("b")
-                .value(0)
-        );
+        assert!(output
+            .column_by_name("b")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>())
+            .expect("b")
+            .value(0));
         // 2026-07-25 = 20659 giorni dall'epoch.
         assert_eq!(
             output

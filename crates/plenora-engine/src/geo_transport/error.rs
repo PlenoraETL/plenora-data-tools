@@ -3,10 +3,13 @@
 
 use thiserror::Error;
 
+use super::protocol::{MAX_ROWS, MAX_STREAM_BYTES};
+use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
+use plenora_core::diagnostics::RowDiagnostics;
+use plenora_core::PlenoraError;
 use plenora_kernels_geo::advanced::AdvancedError;
 use plenora_kernels_geo::analysis::AnalysisError;
 use plenora_kernels_geo::construction::ConstructionError;
-use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 use plenora_kernels_geo::extended::ExtendedError;
 use plenora_kernels_geo::extended_algorithms::ExtendedAlgorithmError;
 #[cfg(feature = "geos-backend")]
@@ -15,10 +18,8 @@ use plenora_kernels_geo::operations::OperationError;
 use plenora_kernels_geo::predicates::PredicateError;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::proj_backend::ProjBackendError;
-use super::protocol::{MAX_ROWS, MAX_STREAM_BYTES};
 use plenora_kernels_geo::spatial_join::SpatialJoinError;
 use plenora_kernels_geo::topology::TopologyError;
-use plenora_core::PlenoraError;
 
 use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS, MAX_IPC_METADATA_BYTES};
 
@@ -142,6 +143,62 @@ pub enum ArrowTransportError {
     #[cfg(feature = "proj-backend")]
     #[error("riproiezione PROJ fallita: {0}")]
     Reproject(#[from] ProjBackendError),
+    /// Errore con diagnostica row-scoped conforme al contratto trasversale
+    /// `plenora-row-diagnostics-v1` (R9.9-R9.12): testo e variante della
+    /// causa primaria restano invariati; il payload e' bounded, senza valori.
+    #[error("{source}")]
+    RowDiagnostics {
+        /// Causa primaria.
+        source: Box<Self>,
+        /// Payload machine-readable validato all'emissione.
+        diagnostics: Box<RowDiagnostics>,
+    },
+}
+
+impl ArrowTransportError {
+    /// Associa un payload row-scoped senza alterare testo o variante
+    /// dell'errore; un payload non valido degrada a `Internal` (mai
+    /// pubblicare diagnostica non conforme).
+    #[must_use]
+    pub fn with_row_diagnostics(self, diagnostics: RowDiagnostics) -> Self {
+        if diagnostics.validate_for_emission().is_err() {
+            return Self::Internal("row diagnostics interne non valide");
+        }
+        Self::RowDiagnostics {
+            source: Box::new(self),
+            diagnostics: Box::new(diagnostics),
+        }
+    }
+
+    /// Restituisce il payload row-scoped, anche attraverso wrapper annidati.
+    #[must_use]
+    pub fn row_diagnostics(&self) -> Option<&RowDiagnostics> {
+        match self {
+            Self::RowDiagnostics { diagnostics, .. } => Some(diagnostics),
+            _ => None,
+        }
+    }
+
+    /// L'errore causale sotto eventuali wrapper `RowDiagnostics` (per i
+    /// confronti di variante/messaggio, che la diagnostica non altera).
+    #[must_use]
+    pub fn source_error(&self) -> &Self {
+        match self {
+            Self::RowDiagnostics { source, .. } => source.source_error(),
+            _ => self,
+        }
+    }
+
+    /// Come `source_error`, per consumo: scarta i wrapper `RowDiagnostics`
+    /// e restituisce l'errore causale (usato prima di ri-allegare un report
+    /// aggregato, mai per duplicare diagnostica).
+    #[must_use]
+    pub fn into_source(self) -> Self {
+        match self {
+            Self::RowDiagnostics { source, .. } => source.into_source(),
+            _ => self,
+        }
+    }
 }
 
 /// Conversione dagli errori del kernel WKB (`geometry_from_wkb`,
@@ -165,6 +222,10 @@ impl From<PlenoraError> for ArrowTransportError {
             | PlenoraError::Schema(message) => Self::Geometry(message),
             PlenoraError::Io(error) => Self::Io(error),
             PlenoraError::Tagged { source, .. } => Self::from(*source),
+            PlenoraError::RowDiagnostics {
+                source,
+                diagnostics,
+            } => Self::from(*source).with_row_diagnostics(*diagnostics),
             other => Self::Arrow(other.to_string()),
         }
     }
@@ -214,8 +275,7 @@ mod tests {
     fn il_wrapper_di_fase_e_attraversato_fino_alla_variante_interna() {
         // Tagged su una variante di contratto: la conversione vede la
         // variante interna (Geometry), esattamente come senza tag.
-        let source =
-            PlenoraError::Schema("schema incoerente".into()).with_phase(ErrorPhase::Read);
+        let source = PlenoraError::Schema("schema incoerente".into()).with_phase(ErrorPhase::Read);
         let converted = ArrowTransportError::from(source);
         let ArrowTransportError::Geometry(message) = &converted else {
             panic!("atteso Geometry, ottenuto {converted:?}");
@@ -223,8 +283,7 @@ mod tests {
         assert_eq!(message, "schema incoerente");
         // Tagged su una variante senza controparte: stessa traversata, Arrow
         // con il testo Display completo della variante interna.
-        let source =
-            PlenoraError::Crs("crs irrisolvibile".into()).with_phase(ErrorPhase::Validate);
+        let source = PlenoraError::Crs("crs irrisolvibile".into()).with_phase(ErrorPhase::Validate);
         let converted = ArrowTransportError::from(source);
         let ArrowTransportError::Arrow(message) = &converted else {
             panic!("atteso Arrow, ottenuto {converted:?}");
