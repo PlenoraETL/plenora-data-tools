@@ -1363,11 +1363,12 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
     }
 }
 
-/// (m3-d) ADR-0012 M3: cancellazione iniettata dal reader mentre un piano con
-/// `make_valid` `NonInterruptible` attraversa piu' batch. L'iniezione avviene
-/// al confine input: a seconda del prefetch puo' essere osservata da `main` o
-/// dal primo nodo cooperativo `t`, ma mai dentro `make_valid`; i percorsi fuso
-/// e non fuso devono produrre la stessa firma.
+/// (m3-d) ADR-0012 M3: con input geometrico la validazione WKB atomica drena
+/// i batch prima del gruppo. La cancellazione iniettata dal reader e'
+/// quindi osservata deterministicamente a `main`, prima che `make_valid`
+/// `NonInterruptible` inizi; i percorsi fuso e non fuso devono produrre la
+/// stessa firma. Il confine post-`NonInterruptible` e' coperto dal test
+/// unitario deterministico `non_interruptible_op_is_never_interrupted`.
 #[cfg(feature = "geos-backend")]
 #[test]
 fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
@@ -1392,10 +1393,10 @@ fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let signature = error_signature(&fused_error);
     assert_eq!(signature.variant, "Cancelled", "m3-d: variante Cancelled");
-    assert!(
-        matches!(signature.node.as_deref(), Some("main" | "t")),
-        "m3-d: cancellazione osservata a un confine inatteso: {:?}",
-        signature.node
+    assert_eq!(
+        signature.node.as_deref(),
+        Some("main"),
+        "m3-d: la validazione WKB atomica osserva la cancellazione prima del gruppo"
     );
     assert_eq!(
         signature,
