@@ -8,7 +8,9 @@ use plenora_core::arrow::array::{
     Int64Array, ListArray, RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{
+    execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan,
+};
 use serde_json::{json, Value};
 
 fn plan(operation: &str, config: Value, limits: Limits) -> ValidatedPlan {
@@ -35,12 +37,7 @@ fn strings(values: Vec<Option<&str>>) -> RecordBatch {
 #[test]
 #[allow(clippy::too_many_lines)] // One matrix verifies all newly supported physical Arrow types.
 fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
-    let input = strings(vec![
-        Some("1970-01-01"),
-        Some("2024-02-29"),
-        None,
-        Some("invalid"),
-    ]);
+    let input = strings(vec![Some("1970-01-01"), Some("2024-02-29"), None]);
     let date = execute_batch(
         input,
         &plan(
@@ -57,13 +54,24 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
         .expect("date32 array");
     assert_eq!(values.value(0), 0);
     assert!(values.is_null(2));
-    assert!(values.is_null(3));
+
+    let invalid_date = execute_batch(
+        strings(vec![Some("invalid")]),
+        &plan(
+            "type_cast",
+            json!({"column":"value","target_type":"date32","errors":"coerce"}),
+            Limits::default(),
+        ),
+    )
+    .expect_err("date invalida coercita a null");
+    let diagnostics = invalid_date
+        .row_diagnostics()
+        .expect("diagnostica row-scoped persa");
+    assert_eq!(diagnostics.observed_total, 1);
+    assert_eq!(diagnostics.examples[0].source_index, 0);
 
     let timestamp = execute_batch(
-        strings(vec![
-            Some("1970-01-01T00:00:01Z"),
-            Some("2026-03-29 02:30:00"),
-        ]),
+        strings(vec![Some("1970-01-01T00:00:01Z")]),
         &plan(
             "type_cast",
             json!({"column":"value","target_type":"timestamp_millis","timezone":"Europe/Rome","errors":"coerce"}),
@@ -77,10 +85,25 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
         .downcast_ref::<TimestampMillisecondArray>()
         .expect("timestamp array");
     assert_eq!(values.value(0), 1_000);
-    assert!(values.is_null(1), "DST gap must never be guessed");
+    let invalid_timestamp = execute_batch(
+        strings(vec![Some("2026-03-29 02:30:00")]),
+        &plan(
+            "type_cast",
+            json!({"column":"value","target_type":"timestamp_millis","timezone":"Europe/Rome","errors":"coerce"}),
+            Limits::default(),
+        ),
+    )
+    .expect_err("DST gap must never be guessed or accepted");
+    assert_eq!(
+        invalid_timestamp
+            .row_diagnostics()
+            .expect("timestamp diagnostics")
+            .counts,
+        std::collections::BTreeMap::from([("conversion.invalid_timestamp".to_owned(), 1)])
+    );
 
     let decimal = execute_batch(
-        strings(vec![Some("12.3"), Some("-0.01"), Some("1.234"), None]),
+        strings(vec![Some("12.3"), Some("-0.01"), None]),
         &plan(
             "type_cast",
             json!({"column":"value","target_type":"decimal128","precision":6,"scale":2,"errors":"coerce"}),
@@ -100,9 +123,19 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
         decimal.schema().field(0).data_type(),
         &DataType::Decimal128(6, 2)
     );
+    let invalid_decimal = execute_batch(
+        strings(vec![Some("1.234")]),
+        &plan(
+            "type_cast",
+            json!({"column":"value","target_type":"decimal128","precision":6,"scale":2,"errors":"coerce"}),
+            Limits::default(),
+        ),
+    )
+    .expect_err("decimal non rappresentabile accettato");
+    assert!(invalid_decimal.row_diagnostics().is_some());
 
     let unsigned = execute_batch(
-        strings(vec![Some("0"), Some("18446744073709551615"), Some("-1")]),
+        strings(vec![Some("0"), Some("18446744073709551615")]),
         &plan(
             "type_cast",
             json!({"column":"value","target_type":"uint64","errors":"coerce"}),
@@ -116,7 +149,16 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
         .downcast_ref::<UInt64Array>()
         .expect("uint64 array");
     assert_eq!(values.value(1), u64::MAX);
-    assert!(values.is_null(2));
+    let invalid_unsigned = execute_batch(
+        strings(vec![Some("-1")]),
+        &plan(
+            "type_cast",
+            json!({"column":"value","target_type":"uint64","errors":"coerce"}),
+            Limits::default(),
+        ),
+    )
+    .expect_err("intero unsigned invalido accettato");
+    assert!(invalid_unsigned.row_diagnostics().is_some());
 
     for (target, expected) in [
         ("binary_utf8", DataType::Binary),

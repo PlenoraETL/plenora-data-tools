@@ -67,6 +67,14 @@ struct JoinExpansion {
 protocollo in ADR 2). I limiti di righe proteggono dalle espansioni logiche,
 non sostituiscono il budget in byte.
 
+**Perimetro di `max_temp_bytes` (chiarimento 2026-08-03, DER-004)**: la
+quota e' applicata **per dominio di scrittura**, non come tetto globale su
+disco — staging input del gate WKB, staging degli output accettati dei
+segmenti row-diagnostics e spill degli operatori misurano ciascuno la
+propria scrittura; il picco su disco puo' arrivare alla somma dei domini
+concorrenti. `max_memory_bytes` resta invece budget globale di piano
+(governor, ADR 2).
+
 ### Limiti del piano (`PlanLimits`)
 
 Applicati **durante il parsing**, prima di qualunque allocazione guidata dal

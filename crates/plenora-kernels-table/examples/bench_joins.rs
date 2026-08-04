@@ -44,14 +44,20 @@ fn left_table(rows: usize, keys: ArrayRef) -> RecordBatch {
     let payload = (0..rows)
         .map(|row| i64::try_from(row).ok())
         .collect::<Vec<_>>();
-    let tags = (0..rows).map(|row| format!("t{}", row % 97)).collect::<Vec<_>>();
+    let tags = (0..rows)
+        .map(|row| format!("t{}", row % 97))
+        .collect::<Vec<_>>();
     RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("k", keys.data_type().clone(), false),
             Field::new("lv", DataType::Int64, false),
             Field::new("lt", DataType::Utf8, false),
         ])),
-        vec![keys, Arc::new(Int64Array::from(payload)), Arc::new(StringArray::from(tags))],
+        vec![
+            keys,
+            Arc::new(Int64Array::from(payload)),
+            Arc::new(StringArray::from(tags)),
+        ],
     )
     .expect("fixture sinistra")
 }
@@ -233,7 +239,13 @@ fn main() {
         )),
     );
     run_scenario("join_inner_utf8", left_rows, repetitions, || {
-        join(&left_utf8, &right_utf8, &join_config(JoinHow::Inner), &limits).expect("join utf8")
+        join(
+            &left_utf8,
+            &right_utf8,
+            &join_config(JoinHow::Inner),
+            &limits,
+        )
+        .expect("join utf8")
     });
 
     let left_float64 = left_table(left_rows, float64_keys(left_rows, key_space));
@@ -249,7 +261,12 @@ fn main() {
         )),
     );
     run_scenario("join_inner_float64", left_rows, repetitions, || {
-        join(&left_float64, &right_float64, &join_config(JoinHow::Inner), &limits)
-            .expect("join float64")
+        join(
+            &left_float64,
+            &right_float64,
+            &join_config(JoinHow::Inner),
+            &limits,
+        )
+        .expect("join float64")
     });
 }

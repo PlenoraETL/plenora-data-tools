@@ -7,11 +7,11 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
-use plenora_core::{PlenoraError, Result};
 use crate::{
     column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_f64,
     scalar_as_string, select_rows, NumericBound,
 };
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -122,9 +122,10 @@ impl PreparedCondition {
     /// Il letterale numerico condiviso (parse alla prima riga, errore con
     /// testo identico al percorso per riga).
     fn numeric_bound(&self, message: &str) -> Result<NumericBound> {
-        match self.bound.get_or_init(|| {
-            NumericBound::parse(&self.expected).ok_or_else(|| message.to_owned())
-        }) {
+        match self
+            .bound
+            .get_or_init(|| NumericBound::parse(&self.expected).ok_or_else(|| message.to_owned()))
+        {
             Ok(bound) => Ok(*bound),
             Err(stored) => Err(PlenoraError::InvalidPlan(stored.clone())),
         }
@@ -172,7 +173,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                 // Confronto esatto nativo: il letterale intero resta intero
                 // (nessun collasso oltre 2^53); il misto intero<->double e'
                 // esatto (vedi `NumericBound` in lib.rs).
-                let bound = condition.numeric_bound("confronto numerico con valore non numerico")?;
+                let bound =
+                    condition.numeric_bound("confronto numerico con valore non numerico")?;
                 let values = array
                     .as_any()
                     .downcast_ref::<Int64Array>()
@@ -182,7 +184,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                 // Semantica storica sui double (`total_cmp`, 0.0 == -0.0,
                 // NaN uguale a NaN); un letterale intero oltre 2^53 usa il
                 // confronto misto esatto invece dell'arrotondamento a f64.
-                let bound = condition.numeric_bound("confronto numerico con valore non numerico")?;
+                let bound =
+                    condition.numeric_bound("confronto numerico con valore non numerico")?;
                 let values = array
                     .as_any()
                     .downcast_ref::<Float64Array>()
@@ -206,7 +209,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
             })
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
-            let bound = condition.numeric_bound("confronto ordinato richiede un valore numerico")?;
+            let bound =
+                condition.numeric_bound("confronto ordinato richiede un valore numerico")?;
             // Int64/UInt64 nativi esatti; Float64 in misto esatto contro i
             // letterali interi; gli altri tipi numerici (Decimal128, Date32,
             // Timestamp(ms), Utf8 numerico) restano sul profilo f64 storico.
@@ -222,9 +226,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                     .partial_cmp(&bound_as_f64(bound))
             };
             let operator = OrderedOperator::from_operator(operator).ok_or_else(|| {
-                PlenoraError::Internal(
-                    "operatore non ordinato nel ramo ordinato".into(),
-                )
+                PlenoraError::Internal("operatore non ordinato nel ramo ordinato".into())
             })?;
             Ok(ordered_typed(ordering, operator))
         }
@@ -343,8 +345,7 @@ const fn ordered_typed(ordering: Option<Ordering>, operator: OrderedOperator) ->
 /// `between`: il valore non e' sotto il minimo ne' sopra il massimo; `None`
 /// (estremo o valore NaN) esclude la riga, come `>=`/`<=` IEEE.
 const fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
-    !matches!(low, None | Some(Ordering::Less))
-        && !matches!(high, None | Some(Ordering::Greater))
+    !matches!(low, None | Some(Ordering::Less)) && !matches!(high, None | Some(Ordering::Greater))
 }
 
 /// Forma f64 di un bound, per i tipi rimasti sul profilo f64 storico
@@ -360,10 +361,20 @@ const fn bound_as_f64(bound: NumericBound) -> f64 {
 }
 
 #[allow(clippy::too_many_lines)] // specchio di `evaluate`: la simmetria riga a riga e' la garanzia di parita'
-fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -> Option<Result<Vec<usize>>> {
+fn fast_rows(
+    array: &ArrayRef,
+    operator: &Operator,
+    value: &serde_json::Value,
+) -> Option<Result<Vec<usize>>> {
     let rows = match operator {
-        Operator::Isnull => return Some(Ok((0..array.len()).filter(|r| array.is_null(*r)).collect())),
-        Operator::Notnull => return Some(Ok((0..array.len()).filter(|r| !array.is_null(*r)).collect())),
+        Operator::Isnull => {
+            return Some(Ok((0..array.len()).filter(|r| array.is_null(*r)).collect()))
+        }
+        Operator::Notnull => {
+            return Some(Ok((0..array.len())
+                .filter(|r| !array.is_null(*r))
+                .collect()))
+        }
         Operator::Eq | Operator::Ne => {
             let negate = matches!(operator, Operator::Ne);
             if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
@@ -467,7 +478,9 @@ fn fast_rows(array: &ArrayRef, operator: &Operator, value: &serde_json::Value) -
             match operator {
                 Operator::Contains => {
                     let needle = expected.to_lowercase();
-                    rows_where(values, |row| values.value(row).to_lowercase().contains(&needle))
+                    rows_where(values, |row| {
+                        values.value(row).to_lowercase().contains(&needle)
+                    })
                 }
                 Operator::Startswith => {
                     rows_where(values, |row| values.value(row).starts_with(&expected))
@@ -536,7 +549,9 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
     let conditions: Vec<PreparedCondition> = config
         .conditions
         .iter()
-        .map(|condition| PreparedCondition::new(&condition.operator, &condition.value, &condition.result))
+        .map(|condition| {
+            PreparedCondition::new(&condition.operator, &condition.value, &condition.result)
+        })
         .collect();
     let default_text = json_text(&config.default_value);
     let values = (0..batch.num_rows())
@@ -654,7 +669,13 @@ mod tests {
         );
         // NaN e' uguale a NaN (total_cmp) e -0.0 == 0.0: la matrice fissa la
         // semantica esistente, inclusi i casi limite.
-        for value in [json!(0.0), json!(-0.0), json!("NaN"), json!(1.0), json!(-1.5)] {
+        for value in [
+            json!(0.0),
+            json!(-0.0),
+            json!("NaN"),
+            json!(1.0),
+            json!(-1.5),
+        ] {
             assert_equivalent(&batch, Operator::Eq, value.clone());
             assert_equivalent(&batch, Operator::Ne, value);
         }
@@ -846,21 +867,36 @@ mod tests {
             DataType::Int64,
             true,
         );
-        let eq_hi = filter(&batch, &config(Operator::Eq, json!(9_007_199_254_740_993_i64)))
-            .expect("eq 2^53+1");
+        let eq_hi = filter(
+            &batch,
+            &config(Operator::Eq, json!(9_007_199_254_740_993_i64)),
+        )
+        .expect("eq 2^53+1");
         assert_eq!(eq_hi.num_rows(), 1);
-        let eq_lo = filter(&batch, &config(Operator::Eq, json!("9007199254740992")))
-            .expect("eq 2^53");
+        let eq_lo =
+            filter(&batch, &config(Operator::Eq, json!("9007199254740992"))).expect("eq 2^53");
         assert_eq!(eq_lo.num_rows(), 1);
         // Il bound double 9007199254740992.0 e' minore dell'intero 2^53+1.
-        let gt = filter(&batch, &config(Operator::Gt, json!(9_007_199_254_740_992.0)))
-            .expect("gt 2^53.0");
+        let gt = filter(
+            &batch,
+            &config(Operator::Gt, json!(9_007_199_254_740_992.0)),
+        )
+        .expect("gt 2^53.0");
         assert_eq!(gt.num_rows(), 1);
-        let lt = filter(&batch, &config(Operator::Lt, json!(9_007_199_254_740_993_i64)))
-            .expect("lt 2^53+1");
+        let lt = filter(
+            &batch,
+            &config(Operator::Lt, json!(9_007_199_254_740_993_i64)),
+        )
+        .expect("lt 2^53+1");
         assert_eq!(lt.num_rows(), 1);
-        let between = filter(&batch, &config(Operator::Between, json!("9007199254740993, 9007199254740993")))
-            .expect("between esatto");
+        let between = filter(
+            &batch,
+            &config(
+                Operator::Between,
+                json!("9007199254740993, 9007199254740993"),
+            ),
+        )
+        .expect("between esatto");
         assert_eq!(between.num_rows(), 1);
         // Parita' fast/generico su tutta la matrice di questi valori.
         for value in [
@@ -876,7 +912,11 @@ mod tests {
             assert_equivalent(&batch, Operator::Lt, value.clone());
             assert_equivalent(&batch, Operator::Le, value);
         }
-        assert_equivalent(&batch, Operator::Between, json!("9007199254740992,9007199254740993"));
+        assert_equivalent(
+            &batch,
+            Operator::Between,
+            json!("9007199254740992,9007199254740993"),
+        );
     }
 
     #[test]
@@ -898,21 +938,18 @@ mod tests {
         assert_eq!(gt.num_rows(), 3);
         let le = filter(&batch, &config(Operator::Le, json!(10))).expect("le 10");
         assert_eq!(le.num_rows(), 2);
-        let top = filter(
-            &batch,
-            &config(Operator::Eq, json!("18446744073709551615")),
-        )
-        .expect("eq u64::MAX");
+        let top = filter(&batch, &config(Operator::Eq, json!("18446744073709551615")))
+            .expect("eq u64::MAX");
         assert_eq!(top.num_rows(), 1);
-        let gt_max_minus_one = filter(
-            &batch,
-            &config(Operator::Gt, json!("18446744073709551614")),
-        )
-        .expect("gt u64::MAX-1");
+        let gt_max_minus_one = filter(&batch, &config(Operator::Gt, json!("18446744073709551614")))
+            .expect("gt u64::MAX-1");
         assert_eq!(gt_max_minus_one.num_rows(), 1);
         let between = filter(
             &batch,
-            &config(Operator::Between, json!("18446744073709551614,18446744073709551615")),
+            &config(
+                Operator::Between,
+                json!("18446744073709551614,18446744073709551615"),
+            ),
         )
         .expect("between u64 top");
         assert_eq!(between.num_rows(), 2);
@@ -935,15 +972,24 @@ mod tests {
         // Letterale intero oltre 2^53 contro colonna Float64: il double
         // 9007199254740992.0 NON e' uguale all'intero 9007199254740993.
         let batch = single_column_batch(
-            Arc::new(Float64Array::from(vec![Some(9_007_199_254_740_992.0), None])),
+            Arc::new(Float64Array::from(vec![
+                Some(9_007_199_254_740_992.0),
+                None,
+            ])),
             DataType::Float64,
             true,
         );
-        let eq = filter(&batch, &config(Operator::Eq, json!(9_007_199_254_740_993_i64)))
-            .expect("eq intero oltre 2^53");
+        let eq = filter(
+            &batch,
+            &config(Operator::Eq, json!(9_007_199_254_740_993_i64)),
+        )
+        .expect("eq intero oltre 2^53");
         assert_eq!(eq.num_rows(), 0);
-        let lt = filter(&batch, &config(Operator::Lt, json!(9_007_199_254_740_993_i64)))
-            .expect("lt intero oltre 2^53");
+        let lt = filter(
+            &batch,
+            &config(Operator::Lt, json!(9_007_199_254_740_993_i64)),
+        )
+        .expect("lt intero oltre 2^53");
         assert_eq!(lt.num_rows(), 1);
         assert_equivalent(&batch, Operator::Eq, json!(9_007_199_254_740_993_i64));
         assert_equivalent(&batch, Operator::Ne, json!(9_007_199_254_740_993_i64));

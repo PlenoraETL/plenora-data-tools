@@ -94,8 +94,8 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
         .expect("validate");
     assert!(
         result.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
     assert_eq!(summary["status"], "ok");
@@ -121,7 +121,11 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(field_names, ["id", "label"], "la rinomina e' inferita a secco");
+    assert_eq!(
+        field_names,
+        ["id", "label"],
+        "la rinomina e' inferita a secco"
+    );
 
     let segments = summary["segments"].as_array().expect("segmenti");
     assert_eq!(segments.len(), 1, "catena streaming fusa in un segmento");
@@ -135,7 +139,9 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
         "piano solo tabellare: solo il profilo di publish di default (ADR 7)"
     );
     assert_eq!(
-        summary["input_contract_fingerprints"].as_array().map(Vec::len),
+        summary["input_contract_fingerprints"]
+            .as_array()
+            .map(Vec::len),
         Some(1)
     );
 }
@@ -157,8 +163,8 @@ fn run_v4_scrive_output_e_metriche_json_su_stdout() {
         .expect("run");
     assert!(
         result.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
     );
     let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON metriche");
     assert_eq!(metrics["status"], "ok");
@@ -172,7 +178,9 @@ fn run_v4_scrive_output_e_metriche_json_su_stdout() {
         metrics["nodes"]["f"]["wall_time_ms"].as_f64().is_some(),
         "wall time per nodo presente"
     );
-    assert!(metrics["segments"].as_object().is_some_and(|s| !s.is_empty()));
+    assert!(metrics["segments"]
+        .as_object()
+        .is_some_and(|s| !s.is_empty()));
 
     // Output rileggibile: la rinomina e' applicata, le righe sono due.
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
@@ -218,13 +226,20 @@ fn errore_cli_emette_envelope_a_quattro_assi() {
         .output()
         .expect("run");
     assert!(!result.status.success());
-    let envelope: serde_json::Value = serde_json::from_slice(&result.stderr)
-        .expect("stderr deve essere l'envelope JSON par. 9");
+    assert!(
+        result.stdout.is_empty(),
+        "stdout libero per risultati: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&result.stderr).expect("stderr deve essere l'envelope JSON par. 9");
     assert_eq!(envelope["status"], "error");
     assert_eq!(envelope["protocol_version"], 1);
     for axis in ["category", "phase", "remote_effect", "message"] {
         assert!(
-            envelope["error"].get(axis).is_some_and(serde_json::Value::is_string),
+            envelope["error"]
+                .get(axis)
+                .is_some_and(serde_json::Value::is_string),
             "asse `{axis}` presente e testuale: {envelope}"
         );
     }
@@ -307,7 +322,11 @@ fn piano_legacy_continua_a_funzionare_invariato() {
         br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"name","new_name":"label"}]}}]}"#,
     )
     .expect("plan");
-    write_ipc(&input, &table_schema(), &[table_batch(&[1, 2], &["a", "b"])]);
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[1, 2], &["a", "b"])],
+    );
 
     // validate legacy: riepilogo di Fase 1, senza i campi del DAG v4.
     let validate = cli()
@@ -319,8 +338,8 @@ fn piano_legacy_continua_a_funzionare_invariato() {
         .expect("validate legacy");
     assert!(
         validate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&validate.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     assert_eq!(summary["status"], "ok");
@@ -339,8 +358,8 @@ fn piano_legacy_continua_a_funzionare_invariato() {
         .expect("run legacy");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
         .expect("reader");
@@ -418,7 +437,11 @@ fn write_geometry_without_crs_fixture(
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let plan = directory.join("plan.json");
     let input = directory.join("input.arrow");
-    std::fs::write(&plan, serde_json::to_vec(&filter_only_plan()).expect("json")).expect("plan");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&filter_only_plan()).expect("json"),
+    )
+    .expect("plan");
     write_ipc(
         &input,
         &geometry_without_crs_schema(geo_json),
@@ -452,8 +475,8 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
         .expect("validate");
     assert!(
         validate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&validate.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     let edges = summary["edges"].as_array().expect("archi");
@@ -475,8 +498,8 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
         .expect("run");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
         .expect("reader");
@@ -484,10 +507,14 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
     // R4.6.4: lo stato mancante arriva al bordo di scrittura dichiarato —
     // `crs_resolution = missing` e NESSUNA chiave CRS (R2.2), mai un CRS
     // inventato (R4.4), mai la dichiarazione persa.
-    let (_, geometry_field) = schema.column_with_name("geometry").expect("colonna geometry");
+    let (_, geometry_field) = schema
+        .column_with_name("geometry")
+        .expect("colonna geometry");
     let metadata = geometry_field.metadata();
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("missing")
     );
     for key in [
@@ -505,15 +532,22 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
     // Le altre nozioni restano oneste: dimensions non dichiarata ->
     // `unknown` (R3.4), encoding completato dall'estensione (R2.7).
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY)
+            .map(String::as_str),
         Some("unknown")
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_ENCODING_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_ENCODING_KEY)
+            .map(String::as_str),
         Some("wkb")
     );
     assert_eq!(
-        schema.metadata().get(adapter::PLENORA_CONTRACT_VERSION_KEY).map(String::as_str),
+        schema
+            .metadata()
+            .get(adapter::PLENORA_CONTRACT_VERSION_KEY)
+            .map(String::as_str),
         Some("1"),
         "versione di protocollo R2.5 con chiavi canoniche"
     );
@@ -530,8 +564,8 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
         .expect("re-validate");
     assert!(
         revalidate.status.success(),
-        "round-trip stderr: {}",
-        String::from_utf8_lossy(&revalidate.stderr)
+        "round-trip stdout: {}",
+        String::from_utf8_lossy(&revalidate.stdout)
     );
 }
 
@@ -656,7 +690,10 @@ fn crs_unresolved_pairs() -> Vec<(&'static str, &'static str)> {
     vec![
         (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
         (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
-        (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "declared_unresolved"),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+            "declared_unresolved",
+        ),
         (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:99999"),
         (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
     ]
@@ -695,8 +732,11 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
     // risolveva una definizione risolvibile ed emetteva `resolved`.
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
-    let (plan, input) =
-        canonical_crs_fixture(directory.path(), &filter_only_plan(), &crs_unresolved_pairs());
+    let (plan, input) = canonical_crs_fixture(
+        directory.path(),
+        &filter_only_plan(),
+        &crs_unresolved_pairs(),
+    );
 
     let validate = cli()
         .args(["validate", "--plan"])
@@ -707,8 +747,8 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
         .expect("validate");
     assert!(
         validate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&validate.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     let geometry = &summary["edges"][0]["contract"]["geometry"];
@@ -726,22 +766,28 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
         .expect("run");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("declared_unresolved"),
         "lo stato si propaga dichiarato (R4.6.4), mai collassato (R4.1)"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:99999"),
         "dichiarazione originale ri-emessa invariata"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
         Some("unknown")
     );
 
@@ -755,8 +801,8 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
         .expect("re-validate");
     assert!(
         revalidate.status.success(),
-        "round-trip stderr: {}",
-        String::from_utf8_lossy(&revalidate.stderr)
+        "round-trip stdout: {}",
+        String::from_utf8_lossy(&revalidate.stdout)
     );
 }
 
@@ -769,8 +815,11 @@ fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
     // il bordo di scrittura a fallire chiuso (R4.6.2).
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
-    let (plan, input) =
-        canonical_crs_fixture(directory.path(), &filter_only_plan(), &conflicting_crs_pairs());
+    let (plan, input) = canonical_crs_fixture(
+        directory.path(),
+        &filter_only_plan(),
+        &conflicting_crs_pairs(),
+    );
 
     let output_path = directory.path().join("output.arrow");
     let run = cli()
@@ -784,24 +833,148 @@ fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
         .expect("run");
     assert!(
         run.status.success(),
-        "il centro preserva, non rifiuta — stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "il centro preserva, non rifiuta — stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("declared_unresolved"),
         "input non dichiarato con conflitto decidibile: l'incoerenza e' preservata e dichiarata"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:4326"),
         "crs_id originale preservato"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_SRID_KEY)
+            .map(String::as_str),
         Some("3003"),
         "srid originale preservato (lineage R2.4)"
+    );
+}
+
+/// Coppie canoniche della catena `MySQL` TLS Database→Data: il provider
+/// conosce lo SRID numerico dal catalogo ma non puo' inventare l'autorita'
+/// (R4.4) — dichiara `declared_unresolved` con SOLO `srid`, senza
+/// `crs_id`/`crs_definition`/`axis_order` e senza metadato legacy `geo`.
+/// R4.3.1: lo SRID numerico e' una rappresentazione CRS (dopo definizione e
+/// identificatore), quindi la dichiarazione e' legittima.
+fn mysql_srid_only_unresolved_pairs() -> Vec<(&'static str, &'static str)> {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    vec![
+        (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+        (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+            "declared_unresolved",
+        ),
+        (adapter::PLENORA_GEOMETRY_SRID_KEY, "4326"),
+    ]
+}
+
+#[test]
+fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
+    // Reproducer della catena MySQL TLS: IPC con `srid=4326` +
+    // `declared_unresolved`, senza crs_id/definition/legacy geo, piano
+    // identity `table.filter`. Prima del fix la discovery falliva con
+    // «declared_unresolved ma nessun CRS e' dichiarato in alcuna
+    // rappresentazione accettata»: lo SRID non contava come
+    // rappresentazione. Ora validate e run passano SENZA backend e lo SRID
+    // attraversa invariato via lineage (R2.4), senza che il centro
+    // sintetizzi crs_id, definizione o axis_order (R4.4).
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = canonical_crs_fixture(
+        directory.path(),
+        &filter_only_plan(),
+        &mysql_srid_only_unresolved_pairs(),
+    );
+
+    let validate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        validate.status.success(),
+        "stdout: {} — stderr: {}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
+    let geometry = &summary["edges"][0]["contract"]["geometry"];
+    assert_eq!(geometry["crs_resolution"], "declared_unresolved");
+    assert_eq!(
+        geometry["crs"],
+        serde_json::Value::Null,
+        "nessun CRS risolto da dichiarare: lo stato non e' promosso"
+    );
+
+    let output_path = directory.path().join("output.arrow");
+    let run = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        run.status.success(),
+        "stdout: {} — stderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let metadata = geometry_metadata_of(&output_path);
+    assert_eq!(
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
+        Some("declared_unresolved"),
+        "lo stato si propaga dichiarato (R4.6.4), mai collassato (R4.1)"
+    );
+    assert_eq!(
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_SRID_KEY)
+            .map(String::as_str),
+        Some("4326"),
+        "SRID originale preservato dalla lineage (R2.4)"
+    );
+    for key in [
+        adapter::PLENORA_GEOMETRY_CRS_ID_KEY,
+        adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+        adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
+        adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    ] {
+        assert!(
+            !metadata.contains_key(key),
+            "chiave `{key}` sintetizzata dal centro (R4.4: vietato)"
+        );
+    }
+
+    // Round-trip: l'output rientra come input dello stesso piano e ripassa.
+    let revalidate = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&output_path)
+        .output()
+        .expect("re-validate");
+    assert!(
+        revalidate.status.success(),
+        "round-trip stdout: {} — stderr: {}",
+        String::from_utf8_lossy(&revalidate.stdout),
+        String::from_utf8_lossy(&revalidate.stderr)
     );
 }
 
@@ -831,7 +1004,10 @@ fn monte_mario_resolved_pairs() -> Vec<(&'static str, &'static str)> {
         (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
         (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
         (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:3003"),
-        (adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY, MONTE_MARIO_WKT),
+        (
+            adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+            MONTE_MARIO_WKT,
+        ),
         (adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
         (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
     ]
@@ -850,8 +1026,11 @@ fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
     // passthrough, mai WKT in `crs_id`).
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
-    let (plan, input) =
-        canonical_crs_fixture(directory.path(), &filter_only_plan(), &monte_mario_resolved_pairs());
+    let (plan, input) = canonical_crs_fixture(
+        directory.path(),
+        &filter_only_plan(),
+        &monte_mario_resolved_pairs(),
+    );
 
     let validate = cli()
         .args(["validate", "--plan"])
@@ -862,13 +1041,12 @@ fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
         .expect("validate");
     assert!(
         validate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&validate.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     assert_eq!(
-        summary["edges"][0]["contract"]["geometry"]["crs_resolution"],
-        "resolved",
+        summary["edges"][0]["contract"]["geometry"]["crs_resolution"], "resolved",
         "la doppia rappresentazione coerente resta resolved"
     );
 
@@ -884,35 +1062,47 @@ fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
         .expect("run");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_KEY)
+            .map(String::as_str),
         Some(MONTE_MARIO_WKT),
         "definizione WKT ri-emessa byte-per-byte (classe B)"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY)
+            .map(String::as_str),
         Some("EPSG:3003"),
         "identificatore d'autorita' originale preservato"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY)
+            .map(String::as_str),
         Some("wkt")
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_SRID_KEY)
+            .map(String::as_str),
         Some("3003"),
         "srid dedotto dal canonical del risolto riempie l'assente"
     );
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
         Some("easting_northing"),
         "lineage preservata (R2.7: mai arbitrato)"
     );
@@ -974,7 +1164,10 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
         .arg(&input)
         .output()
         .expect("validate");
-    assert!(!validate.status.success(), "decisione su missing deve fallire");
+    assert!(
+        !validate.status.success(),
+        "decisione su missing deve fallire"
+    );
     let stderr = String::from_utf8_lossy(&validate.stderr);
     assert!(stderr.contains("non e' applicabile"), "stderr: {stderr}");
 }
@@ -1011,12 +1204,14 @@ fn dag_v4_crs_decision_resolves_declared_unresolved() {
         .expect("run");
     assert!(
         run.status.success(),
-        "con la decisione il piano geo valida — stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "con la decisione il piano geo valida — stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+            .map(String::as_str),
         Some("resolved")
     );
     // geo.buffer produce una NUOVA geometria nel CRS deciso: la definizione
@@ -1027,7 +1222,9 @@ fn dag_v4_crs_decision_resolves_declared_unresolved() {
         .map(String::as_str);
     assert_eq!(declared, Some("EPSG:32632"));
     assert_eq!(
-        metadata.get(adapter::PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        metadata
+            .get(adapter::PLENORA_GEOMETRY_SRID_KEY)
+            .map(String::as_str),
         Some("32632"),
         "srid del CRS DECISO dedotto dalla definizione d'autorita' (emendamento \
          2026-07-31), non una dichiarazione superstite dalla sorgente"
@@ -1072,19 +1269,22 @@ fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
     .expect("batch geo fixture")
 }
 
-/// Piano v4 misto: filter `id > 0` -> buffer(10) -> area.
+/// Piano v4 misto: buffer(10) -> area -> filter `id > 0`.
 #[cfg(feature = "proj-backend")]
 fn mixed_plan() -> serde_json::Value {
+    // Le op geo (diagnostica row-scoped) precedono il filter
+    // cardinality-changing: il gate provenance rifiuterebbe l'ordine
+    // inverso; le asserzioni sulle righe filtrate sono invariate.
     json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 10.0}},
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
             {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
+            {"id": "f", "op": "table.filter", "in": ["a"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
         ],
-        "output": "a",
+        "output": "f",
     })
 }
 
@@ -1101,7 +1301,11 @@ fn dag_v4_misto_geo_end_to_end() {
         &geo_schema(),
         &[geo_batch(
             &[0, 1, 2],
-            &[Some(point_wkb(0.0, 0.0)), Some(point_wkb(100.0, 100.0)), None],
+            &[
+                Some(point_wkb(0.0, 0.0)),
+                Some(point_wkb(100.0, 100.0)),
+                None,
+            ],
         )],
     );
 
@@ -1115,8 +1319,8 @@ fn dag_v4_misto_geo_end_to_end() {
         .expect("validate");
     assert!(
         validate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&validate.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     assert_eq!(summary["status"], "ok");
@@ -1138,15 +1342,16 @@ fn dag_v4_misto_geo_end_to_end() {
         .expect("run");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     let metrics: serde_json::Value = serde_json::from_slice(&run.stdout).expect("JSON metriche");
     assert_eq!(metrics["status"], "ok");
     assert_eq!(metrics["output_rows"], 2);
     assert_eq!(metrics["nodes"]["b"]["operation"], "geo.buffer");
-    assert_eq!(metrics["nodes"]["b"]["rows_out"], 2);
+    assert_eq!(metrics["nodes"]["b"]["rows_out"], 3);
     assert_eq!(metrics["nodes"]["a"]["operation"], "geo.area");
+    assert_eq!(metrics["nodes"]["f"]["rows_out"], 2);
 
     // Output: geometria preservata dal buffer, colonna `area` aggiunta.
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
@@ -1156,7 +1361,10 @@ fn dag_v4_misto_geo_end_to_end() {
     assert_eq!(rows, 2);
     let batch = &batches[0];
     assert!(batch.schema().field_with_name("geometry").is_ok());
-    let (area_index, _) = batch.schema().column_with_name("area").expect("colonna area");
+    let (area_index, _) = batch
+        .schema()
+        .column_with_name("area")
+        .expect("colonna area");
     let areas = batch
         .column(area_index)
         .as_any()
@@ -1188,15 +1396,16 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
         &geo_schema(),
         &[geo_batch(
             &[0, 1, 2],
-            &[Some(point_wkb(0.0, 0.0)), Some(point_wkb(100.0, 100.0)), None],
+            &[
+                Some(point_wkb(0.0, 0.0)),
+                Some(point_wkb(100.0, 100.0)),
+                None,
+            ],
         )],
     );
 
     let mut outputs = Vec::new();
-    for (label, extra_args) in [
-        ("fuso", vec![]),
-        ("non-fuso", vec!["--no-geo-fusion"]),
-    ] {
+    for (label, extra_args) in [("fuso", vec![]), ("non-fuso", vec!["--no-geo-fusion"])] {
         let output_path = directory.path().join(format!("output-{label}.arrow"));
         let mut command = cli();
         command
@@ -1210,8 +1419,8 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
         let run = command.output().expect("run");
         assert!(
             run.status.success(),
-            "{label}, stderr: {}",
-            String::from_utf8_lossy(&run.stderr)
+            "{label}, stdout: {}",
+            String::from_utf8_lossy(&run.stdout)
         );
         let metrics: serde_json::Value =
             serde_json::from_slice(&run.stdout).expect("JSON metriche");
@@ -1247,8 +1456,8 @@ fn run_v4_espone_geo_fusion_fallbacks_anche_senza_geo() {
         .expect("run");
     assert!(
         result.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
     );
     let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON metriche");
     assert_eq!(metrics["geo_fusion_fallbacks"], 0);
@@ -1267,8 +1476,8 @@ fn run_v4_espone_geo_fusion_fallbacks_anche_senza_geo() {
 #[cfg(feature = "proj-backend")]
 fn chain_schema() -> SchemaRef {
     use plenora_kernels_geo::arrow_adapter as adapter;
-    let legacy = adapter::geometry_output_field("geometry", "EPSG:32632")
-        .expect("campo geometria legacy");
+    let legacy =
+        adapter::geometry_output_field("geometry", "EPSG:32632").expect("campo geometria legacy");
     let mut metadata = legacy.metadata().clone();
     // Legacy: dimensions dichiarate xyz nel metadato `geo`.
     metadata.insert(
@@ -1386,8 +1595,8 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
         .expect("run catena");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
 
     let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
@@ -1396,7 +1605,9 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     // R2.5: la versione di protocollo sopravvive (o e' riemessa) sullo
     // schema di output.
     assert_eq!(
-        out_schema.metadata().get(adapter::PLENORA_CONTRACT_VERSION_KEY),
+        out_schema
+            .metadata()
+            .get(adapter::PLENORA_CONTRACT_VERSION_KEY),
         Some(&"1".to_owned()),
         "plenora.contract.version sullo schema di output"
     );
@@ -1495,7 +1706,10 @@ fn canonical_crs_schema() -> SchemaRef {
             adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
             "EPSG:32632".to_owned(),
         ),
-        (adapter::PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned()),
+        (
+            adapter::PLENORA_GEOMETRY_SRID_KEY.to_owned(),
+            "32632".to_owned(),
+        ),
         (
             adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
             "easting_northing".to_owned(),
@@ -1594,8 +1808,8 @@ fn run_plan(
         .expect("run");
     assert!(
         run.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&run.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
     output_path
 }
@@ -1693,8 +1907,6 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
         "CRS preservato"
     );
     // Le righe ci sono tutte (esecuzione completata, mai un rifiuto a meta').
-    let rows: usize = reader
-        .map(|batch| batch.expect("batch").num_rows())
-        .sum();
+    let rows: usize = reader.map(|batch| batch.expect("batch").num_rows()).sum();
     assert_eq!(rows, 2);
 }

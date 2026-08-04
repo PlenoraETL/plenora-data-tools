@@ -5,7 +5,9 @@ use plenora_core::arrow::array::{
     Array, ArrayRef, Float64Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{
+    execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan,
+};
 use serde_json::{json, Value};
 
 fn plan(operation: &str, config: Value) -> ValidatedPlan {
@@ -137,14 +139,12 @@ fn temporal_operations_cover_calendar_diff_and_dst() {
         .expect("float");
     assert!((hours.value(0) - 24.0).abs() < f64::EPSILON);
 
-    let converted = execute_batch(input, &plan("timezone_convert", json!({"column":"start","input_format":"%Y-%m-%d %H:%M:%S","output_format":"%Y-%m-%d %H:%M:%S %Z","source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"utc","invalid":"error","ambiguous":"earliest"}))).expect("timezone");
-    let utc = converted
-        .column_by_name("utc")
-        .expect("utc")
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("utf8");
-    assert!(utc.value(2).starts_with("2024-10-27 00:30:00"));
+    let converted = execute_batch(input, &plan("timezone_convert", json!({"column":"start","input_format":"%Y-%m-%d %H:%M:%S","output_format":"%Y-%m-%d %H:%M:%S %Z","source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"utc","invalid":"error","ambiguous":"earliest"}))).expect_err("ambiguita' DST rimediata");
+    assert_eq!(
+        converted.row_diagnostics().expect("diagnostica DST").counts
+            ["conversion.ambiguous_local_time"],
+        1
+    );
 }
 
 #[test]
@@ -531,8 +531,8 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
             json!({"column":"value","input_format":format,"output_column":"out","invalid":"null"}),
         ),
     )
-    .expect("date format null policy");
-    assert!(formatted.column_by_name("out").expect("out").is_null(1));
+    .expect_err("policy null legacy ha rimediato data invalida");
+    assert!(formatted.row_diagnostics().is_some());
     assert!(execute_batch(
         temporal.clone(),
         &plan(
@@ -551,7 +551,7 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
                 json!({"column":"value","input_format":format,"amount":-1,"unit":unit,"output_column":"out","invalid":"null"})
             )
         )
-        .is_ok());
+        .is_err());
     }
     assert!(execute_batch(
         temporal.clone(),
@@ -569,7 +569,7 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
                 json!({"start_column":"value","end_column":"other","input_format":format,"unit":unit,"output_column":"out","invalid":"null"})
             )
         )
-        .is_ok());
+        .is_err());
     }
     assert!(execute_batch(
         temporal,
@@ -598,7 +598,7 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
                 json!({"column":"local","input_format":format,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":"null","ambiguous":ambiguous})
             )
         )
-        .is_ok());
+        .is_err());
     }
     assert!(execute_batch(
         dst,
@@ -814,6 +814,13 @@ fn nested_and_set_operations_enforce_resource_and_schema_guards() {
     assert!(execute_binary(&left, &left, &union_limit).is_err());
 }
 
+fn utf8_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
+    batch
+        .column_by_name(name)
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+        .expect("colonna utf8")
+}
+
 #[test]
 fn hash_null_policies_and_defaults_are_explicit() {
     let input = RecordBatch::try_new(
@@ -821,23 +828,43 @@ fn hash_null_policies_and_defaults_are_explicit() {
         vec![Arc::new(StringArray::from(vec![Some(" A "), None]))],
     )
     .expect("hash null fixture");
-    for config in [
-        json!({"columns":["value"]}),
-        json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"empty"}),
-        json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"literal","null_literal":" Missing "}),
-        json!({"columns":["value"],"output_column":"hash","normalize":true,"null_policy":"literal","null_literal":" Missing "}),
+    // Semantica storica (P1-3 review): solo null_policy=error rifiuta;
+    // Empty(default)/Literal sostituiscono. Oracolo: sostituire il null col
+    // valore dichiarato in una colonna tutta valida deve dare lo STESSO
+    // digest (la sostituzione e' la semantica dichiarata, non remediation).
+    for (config, substitute) in [
+        (json!({"columns":["value"]}), Some("")),
+        (
+            json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"empty"}),
+            Some(""),
+        ),
+        (
+            json!({"columns":["value"],"output_column":"hash","normalize":false,"null_policy":"literal","null_literal":" Missing "}),
+            Some(" Missing "),
+        ),
+        (
+            json!({"columns":["value"],"output_column":"hash","normalize":true,"null_policy":"literal","null_literal":" Missing "}),
+            Some(" Missing "),
+        ),
     ] {
-        let output = execute_batch(input.clone(), &plan("sha256_hash", config)).expect("hash");
+        let output_column = config
+            .get("output_column")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("sha256_hash")
+            .to_owned();
+        let output = execute_batch(input.clone(), &plan("sha256_hash", config.clone()))
+            .expect("policy storica: sostituzione, non rifiuto");
+        let substituted = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![Some(" A "), substitute]))],
+        )
+        .expect("substituted fixture");
+        let oracle = execute_batch(substituted, &plan("sha256_hash", config))
+            .expect("oracolo su colonna tutta valida");
         assert_eq!(
-            output
-                .column_by_name(if output.column_by_name("hash").is_some() {
-                    "hash"
-                } else {
-                    "sha256_hash"
-                })
-                .expect("digest")
-                .len(),
-            2
+            utf8_column(&output, &output_column).value(1),
+            utf8_column(&oracle, &output_column).value(1),
+            "il null sostituito deve dare il digest storico del sostituto"
         );
     }
     assert!(execute_batch(
@@ -1224,12 +1251,12 @@ fn explode_drop_and_unnest_column_limit_are_enforced() {
         vec![Arc::new(lists)],
     )
     .expect("empty lists");
-    let output = execute_batch(
+    let error = execute_batch(
         input,
         &plan("explode", json!({"column":"items","empty_policy":"drop"})),
     )
-    .expect("drop empty");
-    assert_eq!(output.num_rows(), 0);
+    .expect_err("drop implicito di righe vuote accettato");
+    assert!(error.to_string().contains("remediation implicita"));
 
     let structure = StructArray::from(vec![
         (

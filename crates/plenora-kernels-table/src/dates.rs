@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, Float64Array, RecordBatch, StringArray};
-use plenora_core::arrow::schema::DataType;
 use chrono::format::{Item, Parsed, StrftimeItems};
 use chrono::{LocalResult, Months, NaiveDate, NaiveDateTime, TimeDelta, TimeZone};
 use chrono_tz::Tz;
 use num_traits::ToPrimitive;
+use plenora_core::arrow::array::{Array, Float64Array, RecordBatch, StringArray};
+use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
-use plenora_core::{PlenoraError, Result};
 use crate::utility::InvalidDatePolicy;
-use crate::{column_index, replace_or_append, scalar_as_string};
+use crate::{column_index, reject_rows, replace_or_append, scalar_as_string, RowRejection};
+use plenora_core::{PlenoraError, Result};
 
 fn default_output_format() -> String {
     "%Y-%m-%d %H:%M:%S".into()
@@ -76,19 +76,17 @@ pub fn validate_format(format: &str, label: &str, max_bytes: usize) -> Result<()
         return Err(PlenoraError::InvalidPlan(format!("{label} non valido")));
     }
     if StrftimeItems::new(format).any(|item| matches!(item, Item::Error)) {
-        return Err(PlenoraError::InvalidPlan(format!("{label} non riconosciuto")));
+        return Err(PlenoraError::InvalidPlan(format!(
+            "{label} non riconosciuto"
+        )));
     }
     Ok(())
 }
 
-fn invalid<T>(policy: &InvalidDatePolicy, operation: &str, row: usize) -> Result<Option<T>> {
-    if matches!(policy, InvalidDatePolicy::Null) {
-        Ok(None)
-    } else {
-        Err(PlenoraError::InvalidPlan(format!(
-            "{operation}: valore temporale non valido alla riga {row}"
-        )))
-    }
+fn invalid<T>(_policy: &InvalidDatePolicy, operation: &str, _row: usize) -> Result<Option<T>> {
+    Err(PlenoraError::Internal(format!(
+        "prevalidazione row-scoped incoerente in {operation}"
+    )))
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,12 +109,13 @@ const fn default_invalid() -> InvalidDatePolicy {
 /// nella colonna `output_column`.
 ///
 /// Fast path su colonne Utf8 (item strftime precompilati), percorso
-/// generico riga-per-riga sugli altri tipi Arrow; i valori non parsabili
-/// seguono la policy `invalid`.
+/// generico riga-per-riga sugli altri tipi Arrow. Il token `invalid` resta
+/// compatibile in input, ma i valori non parsabili sono sempre rifiutati con
+/// diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: valore non parsabile con `invalid` = `Error`;
+/// - `DataMapping`: uno o piu' valori non parsabili, con row diagnostics;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
@@ -124,6 +123,22 @@ const fn default_invalid() -> InvalidDatePolicy {
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        if scalar_as_string(source.as_ref(), row)?
+            .is_some_and(|value| parse(&value, &config.input_format).is_none())
+        {
+            rejections.push(RowRejection {
+                row,
+                cause: "conversion.invalid_datetime",
+                column: Some(&config.column),
+            });
+        }
+    }
+    reject_rows(
+        &rejections,
+        "valori temporali rifiutati; consultare row_diagnostics",
+    )?;
     let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
         let input_items = compile_items(&config.input_format);
         let output_items = compile_items(&config.output_format);
@@ -215,13 +230,13 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 /// riscritti con `output_format` nella colonna `output_column`.
 ///
 /// Anni e mesi usano aritmetica di calendario (`Months`), le altre
-/// unita' durate fisse; valori non parsabili e overflow di data o delta
-/// seguono la policy `invalid`.
+/// unita' durate fisse; valori non parsabili e overflow di data o delta sono
+/// sempre rifiutati con diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: valore non parsabile, oppure data risultante o delta
-///   fuori range, con `invalid` = `Error`;
+/// - `DataMapping`: valore non parsabile, oppure data risultante o delta
+///   fuori range, con row diagnostics;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
@@ -229,6 +244,28 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+            continue;
+        };
+        let cause = match parse(&value, &config.input_format) {
+            None => "conversion.invalid_datetime",
+            Some(value) if shift(value, config.amount, &config.unit).is_none() => {
+                "conversion.datetime_range"
+            }
+            Some(_) => continue,
+        };
+        rejections.push(RowRejection {
+            row,
+            cause,
+            column: Some(&config.column),
+        });
+    }
+    reject_rows(
+        &rejections,
+        "valori temporali rifiutati; consultare row_diagnostics",
+    )?;
     let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
         let input_items = compile_items(&config.input_format);
         let output_items = compile_items(&config.output_format);
@@ -257,8 +294,7 @@ pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
                 values.push(None);
                 continue;
             }
-            let shifted =
-                parse_with_items(column.value(row), &input_items).and_then(shift_row);
+            let shifted = parse_with_items(column.value(row), &input_items).and_then(shift_row);
             values.push(match shifted {
                 Some(value) => Some(value.format_with_items(output_items.iter()).to_string()),
                 None => invalid(&config.invalid, "date_add", row)?,
@@ -312,33 +348,25 @@ pub struct DateDiff {
 
 /// Differenza in unita' frazionarie, identica al percorso generico
 /// (errore "intervallo fuori scala" incluso).
-fn diff_value(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
-    divisor: f64,
-    row: usize,
-) -> Result<f64> {
+fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usize) -> Result<f64> {
     end.signed_duration_since(start)
         .num_nanoseconds()
         .and_then(|nanoseconds| nanoseconds.to_f64())
         .map(|nanoseconds| nanoseconds / 1_000_000_000.0 / divisor)
-        .ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!(
-                "date_diff: intervallo fuori scala alla riga {row}"
-            ))
-        })
+        .ok_or_else(|| PlenoraError::InvalidPlan("date_diff: intervallo fuori scala".into()))
 }
 
 /// Differenza `end_column - start_column` in unita' frazionarie
 /// (`unit`), scritta come Float64 in `output_column`.
 ///
-/// Righe con un estremo null o non parsabile seguono la policy `invalid`.
+/// Un estremo null propaga null; un estremo non parsabile o un intervallo fuori
+/// scala rifiuta sempre l'output con diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: valore non parsabile con `invalid` = `Error`, oppure
-///   intervallo fuori scala (nanosecondi oltre `i64` o non
-///   rappresentabili in `f64`);
+/// - `DataMapping`: valore non parsabile oppure intervallo fuori scala
+///   (nanosecondi oltre `i64` o non rappresentabili in `f64`), con row
+///   diagnostics;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
@@ -354,6 +382,37 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
     };
     let start_source = batch.column(start_index);
     let end_source = batch.column(end_index);
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        let start = scalar_as_string(start_source.as_ref(), row)?;
+        let end = scalar_as_string(end_source.as_ref(), row)?;
+        let (Some(start), Some(end)) = (start, end) else {
+            continue;
+        };
+        let parsed_start = parse(&start, &config.input_format);
+        let parsed_end = parse(&end, &config.input_format);
+        let (cause, column) = match (parsed_start, parsed_end) {
+            (None, _) => (
+                "conversion.invalid_datetime",
+                Some(config.start_column.as_str()),
+            ),
+            (_, None) => (
+                "conversion.invalid_datetime",
+                Some(config.end_column.as_str()),
+            ),
+            (Some(start), Some(end))
+                if end.signed_duration_since(start).num_nanoseconds().is_none() =>
+            {
+                ("conversion.datetime_range", None)
+            }
+            (Some(_), Some(_)) => continue,
+        };
+        rejections.push(RowRejection { row, cause, column });
+    }
+    reject_rows(
+        &rejections,
+        "valori temporali rifiutati; consultare row_diagnostics",
+    )?;
     let values = if let (Some(starts), Some(ends)) = (
         start_source.as_any().downcast_ref::<StringArray>(),
         end_source.as_any().downcast_ref::<StringArray>(),
@@ -361,12 +420,12 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
         let input_items = compile_items(&config.input_format);
         let mut values = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() {
-            let parsed = if starts.is_null(row) || ends.is_null(row) {
-                None
-            } else {
-                parse_with_items(starts.value(row), &input_items)
-                    .zip(parse_with_items(ends.value(row), &input_items))
-            };
+            if starts.is_null(row) || ends.is_null(row) {
+                values.push(None);
+                continue;
+            }
+            let parsed = parse_with_items(starts.value(row), &input_items)
+                .zip(parse_with_items(ends.value(row), &input_items));
             values.push(match parsed {
                 Some((start, end)) => Some(diff_value(start, end, divisor, row)?),
                 None => invalid(&config.invalid, "date_diff", row)?,
@@ -378,6 +437,9 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
             .map(|row| {
                 let start = scalar_as_string(start_source.as_ref(), row)?;
                 let end = scalar_as_string(end_source.as_ref(), row)?;
+                if start.is_none() || end.is_none() {
+                    return Ok(None);
+                }
                 let parsed = start
                     .as_deref()
                     .and_then(|value| parse(value, &config.input_format))
@@ -433,20 +495,14 @@ pub struct TimezoneConvert {
 fn localize(
     timezone: Tz,
     value: NaiveDateTime,
-    policy: &AmbiguousPolicy,
-    row: usize,
+    _policy: &AmbiguousPolicy,
+    _row: usize,
 ) -> Result<Option<chrono::DateTime<Tz>>> {
     match timezone.from_local_datetime(&value) {
         LocalResult::Single(value) => Ok(Some(value)),
-        LocalResult::Ambiguous(first, second) => match policy {
-            AmbiguousPolicy::Earliest => Ok(Some(first.min(second))),
-            AmbiguousPolicy::Latest => Ok(Some(first.max(second))),
-            AmbiguousPolicy::Null => Ok(None),
-            AmbiguousPolicy::Error => Err(PlenoraError::InvalidPlan(format!(
-                "timezone_convert: ora ambigua alla riga {row}"
-            ))),
-        },
-        LocalResult::None => Ok(None),
+        LocalResult::Ambiguous(_, _) | LocalResult::None => Err(PlenoraError::Internal(
+            "prevalidazione row-scoped incoerente in timezone_convert".into(),
+        )),
     }
 }
 
@@ -454,22 +510,20 @@ fn localize(
 /// `target_timezone`, riscritta con `output_format` nella colonna
 /// `output_column`.
 ///
-/// Le ore ambigue o inesistenti (transizioni DST) seguono la policy
-/// `ambiguous`; i valori non parsabili seguono la policy `invalid`.
+/// Le policy `ambiguous` e `invalid` restano token di compatibilita': ore
+/// ambigue/inesistenti e valori non parsabili sono sempre rifiutati con
+/// diagnostica row-scoped, senza scelta o null sintetico.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida, ora
-///   ambigua con `ambiguous` = `Error`, oppure valore non parsabile o
-///   ora inesistente con `invalid` = `Error`;
+/// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida;
+/// - `DataMapping`: ora ambigua/inesistente o valore non parsabile, con row
+///   diagnostics;
 /// - `Schema`: colonna assente (come `column_index`) o tipo non
 ///   supportato dal profilo scalare (come `scalar_as_string`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
 ///   di `replace_or_append`).
-pub fn timezone_convert(
-    batch: &RecordBatch,
-    config: &TimezoneConvert,
-) -> Result<RecordBatch> {
+pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     let source_tz: Tz = config
@@ -480,6 +534,34 @@ pub fn timezone_convert(
         .target_timezone
         .parse()
         .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+            continue;
+        };
+        let Some(parsed) = parse(&value, &config.input_format) else {
+            rejections.push(RowRejection {
+                row,
+                cause: "conversion.invalid_datetime",
+                column: Some(&config.column),
+            });
+            continue;
+        };
+        let cause = match source_tz.from_local_datetime(&parsed) {
+            LocalResult::Single(_) => continue,
+            LocalResult::Ambiguous(_, _) => "conversion.ambiguous_local_time",
+            LocalResult::None => "conversion.nonexistent_local_time",
+        };
+        rejections.push(RowRejection {
+            row,
+            cause,
+            column: Some(&config.column),
+        });
+    }
+    reject_rows(
+        &rejections,
+        "valori temporali rifiutati; consultare row_diagnostics",
+    )?;
     let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
         let input_items = compile_items(&config.input_format);
         let output_items = compile_items(&config.output_format);
@@ -542,6 +624,7 @@ pub fn timezone_convert(
 mod tests {
     use plenora_core::arrow::array::{ArrayRef, Int64Array};
     use plenora_core::arrow::schema::{Field, Schema};
+    use plenora_core::diagnostics::RowDiagnosticsCompleteness;
 
     use super::*;
 
@@ -707,8 +790,113 @@ mod tests {
     fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
+            (Err(fast), _) if fast.row_diagnostics().is_some() => {}
             (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
         }
+    }
+
+    fn assert_complete_rows(error: &PlenoraError, expected: &[u64], column: &str) {
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped mancante");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+        assert_eq!(
+            report.observed_total,
+            u64::try_from(expected.len()).expect("fixture")
+        );
+        assert_eq!(report.total, Some(report.observed_total));
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(report
+            .examples
+            .iter()
+            .all(|example| example.column.as_deref() == Some(column)));
+    }
+
+    #[test]
+    fn temporal_transforms_reject_all_invalid_rows_even_with_legacy_null_policy() {
+        let batch = utf8_batch(vec![
+            Some("2024-01-01 00:00:00"),
+            Some("non una data"),
+            None,
+            Some("2023-02-29 00:00:00"),
+        ]);
+        let format = format_config(InvalidDatePolicy::Null);
+        assert_complete_rows(
+            &date_format(&batch, &format).expect_err("date_format ha accettato righe invalide"),
+            &[1, 3],
+            "ts",
+        );
+        let add = DateAdd {
+            column: "ts".into(),
+            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            output_format: "%Y-%m-%d %H:%M:%S".into(),
+            amount: 1,
+            unit: DateUnit::Days,
+            output_column: "out".into(),
+            invalid: InvalidDatePolicy::Null,
+        };
+        assert_complete_rows(
+            &date_add(&batch, &add).expect_err("date_add ha accettato righe invalide"),
+            &[1, 3],
+            "ts",
+        );
+
+        let timezone = TimezoneConvert {
+            column: "ts".into(),
+            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            output_format: "%Y-%m-%d %H:%M:%S".into(),
+            source_timezone: "Europe/Rome".into(),
+            target_timezone: "UTC".into(),
+            output_column: "out".into(),
+            invalid: InvalidDatePolicy::Null,
+            ambiguous: AmbiguousPolicy::Earliest,
+        };
+        let dst_batch = utf8_batch(vec![
+            Some("2024-01-01 00:00:00"),
+            Some("2024-10-27 02:30:00"),
+            Some("non una data"),
+        ]);
+        assert_complete_rows(
+            &timezone_convert(&dst_batch, &timezone)
+                .expect_err("timezone_convert ha rimediato righe invalide"),
+            &[1, 2],
+            "ts",
+        );
+    }
+
+    #[test]
+    fn date_diff_preserves_null_as_valid_missing_data() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("start", DataType::Utf8, true),
+                Field::new("end", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![None, Some("2024-01-01 00:00:00")])),
+                Arc::new(StringArray::from(vec![Some("2024-01-02 00:00:00"), None])),
+            ],
+        )
+        .expect("fixture");
+        let output = date_diff(
+            &batch,
+            &DateDiff {
+                start_column: "start".into(),
+                end_column: "end".into(),
+                input_format: "%Y-%m-%d %H:%M:%S".into(),
+                unit: DiffUnit::Days,
+                output_column: "out".into(),
+                invalid: InvalidDatePolicy::Error,
+            },
+        )
+        .expect("null ammessi");
+        assert_eq!(output.column(2).null_count(), 2);
     }
 
     fn format_config(invalid: InvalidDatePolicy) -> DateFormat {
@@ -726,7 +914,10 @@ mod tests {
         let batch = utf8_batch(edge_values());
         for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
             let config = format_config(invalid);
-            assert_equivalent(date_format(&batch, &config), generic_date_format(&batch, &config));
+            assert_equivalent(
+                date_format(&batch, &config),
+                generic_date_format(&batch, &config),
+            );
         }
         // Formato date-only: il fallback `NaiveDate` deve coincidere.
         let dates_only = utf8_batch(vec![
@@ -859,7 +1050,10 @@ mod tests {
                     output_column: "out".into(),
                     invalid: invalid_policy(error_policy),
                 };
-                assert_equivalent(date_diff(&batch, &config), generic_date_diff(&batch, &config));
+                assert_equivalent(
+                    date_diff(&batch, &config),
+                    generic_date_diff(&batch, &config),
+                );
             }
         }
     }
@@ -933,7 +1127,11 @@ mod tests {
             column: "n".into(),
             ..format_config(InvalidDatePolicy::Null)
         };
-        let output = date_format(&batch, &config).expect("fallback");
-        assert_eq!(output.num_rows(), 2);
+        let error = date_format(&batch, &config).expect_err("valore non temporale accettato");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica fallback mancante");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.examples[0].cause, "conversion.invalid_datetime");
     }
 }

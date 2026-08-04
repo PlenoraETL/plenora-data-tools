@@ -46,6 +46,9 @@ mod contract;
 mod executor;
 
 pub use contract::{dispatch_name, Plan, Step, ValidatedPlan, SCHEMA_VERSION};
+pub(crate) use executor::execute_batch_with_spill_row_diagnostics;
 pub(crate) use executor::unary_spill_capable;
-pub use executor::{execute_batch, execute_batch_with_spill, execute_binary};
+pub use executor::{
+    execute_batch, execute_batch_with_spill, execute_binary, execute_complete_batch,
+};
 pub use plenora_kernels_table::Limits;

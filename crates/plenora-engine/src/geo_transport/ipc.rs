@@ -63,10 +63,9 @@ fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportErro
     }
     // Conversioni totali: un offset che non entra in i64/usize e' un
     // riferimento malformato, mai un troncamento silenzioso (R5.4).
-    let vtable_signed = i64::try_from(pos).map_err(|_| ArrowTransportError::IpcTruncated)?
-        - i64::from(soffset);
-    let vtable =
-        usize::try_from(vtable_signed).map_err(|_| ArrowTransportError::IpcTruncated)?;
+    let vtable_signed =
+        i64::try_from(pos).map_err(|_| ArrowTransportError::IpcTruncated)? - i64::from(soffset);
+    let vtable = usize::try_from(vtable_signed).map_err(|_| ArrowTransportError::IpcTruncated)?;
     let vtable_len = fb_u16(buf, vtable)? as usize;
     let table_len = fb_u16(buf, vtable + 2)? as usize;
     if vtable_len < 4

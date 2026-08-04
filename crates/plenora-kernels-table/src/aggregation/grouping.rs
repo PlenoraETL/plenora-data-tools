@@ -36,13 +36,31 @@ use crate::{scalar_as_f64, scalar_as_string};
 /// ricostruzione dell'ordine canonico dei gruppi riusano gli stessi byte di
 /// chiave, cosi' i percorsi spilled hanno identita' di gruppo identica.
 pub enum KeyColumn {
-    Int64 { prefix: String, values: Int64Array },
-    UInt64 { prefix: String, values: UInt64Array },
-    Float64 { prefix: String, values: Float64Array },
-    Utf8 { prefix: String, values: StringArray },
-    Boolean { prefix: String, values: BooleanArray },
+    Int64 {
+        prefix: String,
+        values: Int64Array,
+    },
+    UInt64 {
+        prefix: String,
+        values: UInt64Array,
+    },
+    Float64 {
+        prefix: String,
+        values: Float64Array,
+    },
+    Utf8 {
+        prefix: String,
+        values: StringArray,
+    },
+    Boolean {
+        prefix: String,
+        values: BooleanArray,
+    },
     /// Qualunque altro tipo: chiave via `scalar_as_string`, come prima.
-    Generic { prefix: String, array: ArrayRef },
+    Generic {
+        prefix: String,
+        array: ArrayRef,
+    },
 }
 
 impl KeyColumn {
@@ -84,7 +102,12 @@ impl KeyColumn {
         }
     }
 
-    pub(crate) fn write_key(&self, row: usize, key: &mut String, scratch: &mut String) -> Result<()> {
+    pub(crate) fn write_key(
+        &self,
+        row: usize,
+        key: &mut String,
+        scratch: &mut String,
+    ) -> Result<()> {
         match self {
             Self::Int64 { prefix, values } => {
                 key.push_str(prefix);
@@ -164,9 +187,8 @@ impl KeyColumn {
 fn push_key_value(key: &mut String, value: &str) -> Result<()> {
     key.push('1');
     // Come sopra: fmt su String e' infallibile, ma l'errore e' esplicito.
-    write!(key, "{}", value.len()).map_err(|_| {
-        PlenoraError::Internal("formattazione chiave di gruppo su String".into())
-    })?;
+    write!(key, "{}", value.len())
+        .map_err(|_| PlenoraError::Internal("formattazione chiave di gruppo su String".into()))?;
     key.push(':');
     key.push_str(value);
     Ok(())
@@ -222,7 +244,11 @@ pub(in crate::aggregation) const PARALLEL_THRESHOLD: usize = 32_768;
 
 /// Cifre decimali di un intero senza segno (0 conta come una cifra).
 const fn decimal_digits(value: u64) -> u32 {
-    if value == 0 { 1 } else { value.ilog10() + 1 }
+    if value == 0 {
+        1
+    } else {
+        value.ilog10() + 1
+    }
 }
 
 /// Confronto lessicografico dei "tag di lunghezza" `{decimal(len)}:` delle
@@ -255,15 +281,13 @@ fn cmp_len_tag(a: u64, b: u64) -> Ordering {
 pub(in crate::aggregation) fn cmp_i64_group_key(a: i64, b: i64) -> Ordering {
     let digits_a = u64::from(decimal_digits(a.unsigned_abs()));
     let digits_b = u64::from(decimal_digits(b.unsigned_abs()));
-    cmp_len_tag(
-        digits_a + u64::from(a < 0),
-        digits_b + u64::from(b < 0),
-    )
-    .then_with(|| match (a < 0, b < 0) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        (true, true) => b.cmp(&a),
-        (false, false) => a.cmp(&b),
+    cmp_len_tag(digits_a + u64::from(a < 0), digits_b + u64::from(b < 0)).then_with(|| {
+        match (a < 0, b < 0) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (true, true) => b.cmp(&a),
+            (false, false) => a.cmp(&b),
+        }
     })
 }
 
@@ -271,11 +295,7 @@ pub(in crate::aggregation) fn cmp_i64_group_key(a: i64, b: i64) -> Ordering {
 /// lunghezza della forma decimale, poi valore (a parita' di cifre
 /// lessicografico e numerico coincidono).
 pub(in crate::aggregation) fn cmp_u64_group_key(a: u64, b: u64) -> Ordering {
-    cmp_len_tag(
-        u64::from(decimal_digits(a)),
-        u64::from(decimal_digits(b)),
-    )
-    .then_with(|| a.cmp(&b))
+    cmp_len_tag(u64::from(decimal_digits(a)), u64::from(decimal_digits(b))).then_with(|| a.cmp(&b))
 }
 
 /// Ordine delle chiavi di `row_key` per una colonna Utf8: tag di lunghezza
@@ -295,7 +315,8 @@ pub(in crate::aggregation) fn build_native_groups<K: Copy + Eq + std::hash::Hash
     key_at: impl Fn(usize) -> Option<K> + Sync,
     cmp: impl Fn(&K, &K) -> Ordering + Sync,
 ) -> Vec<Vec<usize>> {
-    let mut lookup: HashMap<K, usize, std::hash::BuildHasherDefault<KeyHasher>> = HashMap::default();
+    let mut lookup: HashMap<K, usize, std::hash::BuildHasherDefault<KeyHasher>> =
+        HashMap::default();
     let mut null_group: Option<usize> = None;
     let mut group_rows: Vec<Vec<usize>> = Vec::new();
     for row in 0..rows {
@@ -341,7 +362,10 @@ pub(in crate::aggregation) fn build_native_groups<K: Copy + Eq + std::hash::Hash
 ///
 /// Stessi byte, `HashMap` + ordinamento finale (stesso ordine lessicografico
 /// del `BTreeMap` originale).
-pub(in crate::aggregation) fn build_string_groups(batch: &RecordBatch, group_indices: &[usize]) -> Result<Vec<Vec<usize>>> {
+pub(in crate::aggregation) fn build_string_groups(
+    batch: &RecordBatch,
+    group_indices: &[usize],
+) -> Result<Vec<Vec<usize>>> {
     let key_columns = group_indices
         .iter()
         .map(|index| KeyColumn::new(batch.column(*index)))
@@ -412,11 +436,9 @@ impl<'a> NumericSource<'a> {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values
-                    .value(row)
-                    .to_f64()
-                    .map(Some)
-                    .ok_or_else(|| PlenoraError::Schema("intero non rappresentabile come f64".into()))
+                values.value(row).to_f64().map(Some).ok_or_else(|| {
+                    PlenoraError::Schema("intero non rappresentabile come f64".into())
+                })
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -489,7 +511,10 @@ type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
 /// restituite nello STESSO ordine di iterazione del `BTreeMap` originale
 /// (chiave `Option<String>` crescente): gli errori per partizione emergono
 /// nello stesso ordine e il comportamento resta deterministico.
-pub(in crate::aggregation) fn build_partitions(batch: &RecordBatch, group: Option<usize>) -> Result<KeyPartitions<'_>> {
+pub(in crate::aggregation) fn build_partitions(
+    batch: &RecordBatch,
+    group: Option<usize>,
+) -> Result<KeyPartitions<'_>> {
     let source = group.map(|index| TextSource::new(batch.column(index)));
     let mut lookup: HashMap<Option<Cow<'_, str>>, usize, std::hash::BuildHasherDefault<KeyHasher>> =
         HashMap::default();
@@ -500,7 +525,9 @@ pub(in crate::aggregation) fn build_partitions(batch: &RecordBatch, group: Optio
             .map(|source| source.value(row))
             .transpose()?
             .flatten();
-        if let Some(index) = lookup.get(&key) { partitions[*index].1.push(row) } else {
+        if let Some(index) = lookup.get(&key) {
+            partitions[*index].1.push(row);
+        } else {
             lookup.insert(key.clone(), partitions.len());
             partitions.push((key, vec![row]));
         }

@@ -39,7 +39,10 @@ fn parse_err(json_text: &str, limits: &PlanLimits) -> String {
 #[test]
 fn parses_minimal_plan_and_computes_topological_order() {
     let validated = PlanV4::parse_default(&minimal_plan_json()).unwrap();
-    assert_eq!(validated.topological_order(), &["a".to_owned(), "b".to_owned()]);
+    assert_eq!(
+        validated.topological_order(),
+        &["a".to_owned(), "b".to_owned()]
+    );
     assert_eq!(validated.plan().schema_version, PLAN_SCHEMA_VERSION_V4);
     assert_eq!(validated.plan().output, "b");
 }
@@ -170,7 +173,10 @@ fn applies_max_config_bytes_per_node_and_identifier_bytes() {
                    "config": {"expression": "x".repeat(4096)}}]
     })
     .to_string();
-    let error = parse_err(&big_config, &limits_with(|l| l.max_config_bytes_per_node = 128));
+    let error = parse_err(
+        &big_config,
+        &limits_with(|l| l.max_config_bytes_per_node = 128),
+    );
     assert!(error.contains("max_config_bytes_per_node"), "{error}");
 
     let long_id = json!({
@@ -474,14 +480,13 @@ fn canonical_json_materializes_limits_and_differs_on_real_differences() {
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}]
     })
     .to_string();
-    let canonical = PlanV4::parse_default(&with_limits).unwrap().canonical_json();
+    let canonical = PlanV4::parse_default(&with_limits)
+        .unwrap()
+        .canonical_json();
     assert_eq!(canonical["limits"]["max_rows_per_edge"], json!(5));
     assert_eq!(canonical["limits"]["max_parallelism"], json!(2));
     // Default materializzati.
-    assert_eq!(
-        canonical["limits"]["max_input_rows"],
-        json!(10_000_000_u64)
-    );
+    assert_eq!(canonical["limits"]["max_input_rows"], json!(10_000_000_u64));
     assert!(canonical["limits"]["plan"]["max_plan_nodes"].is_u64());
     assert!(canonical.get("crs").is_none());
 
@@ -496,7 +501,9 @@ fn canonical_json_materializes_limits_and_differs_on_real_differences() {
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {"expression": "y"}}]
     })
     .to_string();
-    let other = PlanV4::parse_default(&other_config).unwrap().canonical_json();
+    let other = PlanV4::parse_default(&other_config)
+        .unwrap()
+        .canonical_json();
     let base = json!({
         "schema_version": 4, "inputs": ["main"], "output": "a",
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {"expression": "x"}}]
@@ -519,7 +526,11 @@ fn crs_decisions_are_validated_and_enter_the_canonical_form() {
     .to_string();
     let validated = PlanV4::parse_default(&with_decision).unwrap();
     assert_eq!(
-        validated.plan().crs_decisions.get("main").map(String::as_str),
+        validated
+            .plan()
+            .crs_decisions
+            .get("main")
+            .map(String::as_str),
         Some("EPSG:32632")
     );
     let canonical = validated.canonical_json();
@@ -541,7 +552,9 @@ fn crs_decisions_are_validated_and_enter_the_canonical_form() {
     .to_string();
     assert_ne!(
         canonical,
-        PlanV4::parse_default(&other_decision).unwrap().canonical_json()
+        PlanV4::parse_default(&other_decision)
+            .unwrap()
+            .canonical_json()
     );
 
     // Decisione per un input non dichiarato -> errore esplicito.
@@ -576,15 +589,21 @@ fn canonical_json_normalizes_numbers() {
         })
         .to_string()
     };
-    let int_plan = PlanV4::parse_default(&plan_with(json!(100))).unwrap().canonical_json();
-    let float_plan = PlanV4::parse_default(&plan_with(json!(100.0))).unwrap().canonical_json();
+    let int_plan = PlanV4::parse_default(&plan_with(json!(100)))
+        .unwrap()
+        .canonical_json();
+    let float_plan = PlanV4::parse_default(&plan_with(json!(100.0)))
+        .unwrap()
+        .canonical_json();
     assert_eq!(int_plan, float_plan);
     // La forma canonica e' l'intero (float a valore intero entro 2^53).
     assert_eq!(int_plan["nodes"][0]["config"]["value"], json!(100));
     assert_eq!(int_plan["nodes"][0]["config"]["nested"][1][0], json!(-2));
 
     // I float con frazione restano float.
-    let frac = PlanV4::parse_default(&plan_with(json!(2.5))).unwrap().canonical_json();
+    let frac = PlanV4::parse_default(&plan_with(json!(2.5)))
+        .unwrap()
+        .canonical_json();
     assert_eq!(frac["nodes"][0]["config"]["value"], json!(2.5));
 
     // Oltre 2^53 un intero puo' non avere un f64 esatto: le forme non sono

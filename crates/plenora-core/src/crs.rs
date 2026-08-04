@@ -580,11 +580,8 @@ mod tests {
             validate_requirement(CrsRequirement::Geographic, &[&projected]),
             Err(CrsError::GeographicRequired { .. })
         ));
-        validate_geometry_domain(
-            [(f64::INFINITY, f64::NEG_INFINITY)].into_iter(),
-            &projected,
-        )
-        .unwrap();
+        validate_geometry_domain([(f64::INFINITY, f64::NEG_INFINITY)].into_iter(), &projected)
+            .unwrap();
 
         let missing_unit = ResolvedCrs::from_resolved_parts(
             "EPSG:3857".to_owned(),
@@ -786,7 +783,10 @@ mod tests {
         assert_eq!(authority_code_identifier("EPSG:4326"), Some(("EPSG", 4326)));
         assert_eq!(authority_code_identifier("epsg:4326"), Some(("epsg", 4326)));
         assert_eq!(authority_code_identifier("FOO:3003"), Some(("FOO", 3003)));
-        assert_eq!(authority_code_identifier("urn:ogc:def:crs:EPSG::4326"), None);
+        assert_eq!(
+            authority_code_identifier("urn:ogc:def:crs:EPSG::4326"),
+            None
+        );
     }
 
     #[test]
@@ -806,7 +806,13 @@ mod tests {
     #[test]
     fn definition_form_recognizes_all_supported_wkt_root_aliases_and_delimiters() {
         let wkt1 = [
-            "PROJCS", "GEOGCS", "COMPD_CS", "GEOCCS", "VERT_CS", "LOCAL_CS", "FITTED_CS",
+            "PROJCS",
+            "GEOGCS",
+            "COMPD_CS",
+            "GEOCCS",
+            "VERT_CS",
+            "LOCAL_CS",
+            "FITTED_CS",
         ];
         let wkt2 = [
             "PROJCRS",
@@ -829,11 +835,19 @@ mod tests {
             let closing = if delimiter == '[' { ']' } else { ')' };
             for root in wkt1 {
                 let definition = format!("{root}{delimiter}\"test\"{closing}");
-                assert_eq!(definition_form(&definition), DefinitionForm::Wkt, "{definition}");
+                assert_eq!(
+                    definition_form(&definition),
+                    DefinitionForm::Wkt,
+                    "{definition}"
+                );
             }
             for root in wkt2 {
                 let definition = format!("{root}{delimiter}\"test\"{closing}");
-                assert_eq!(definition_form(&definition), DefinitionForm::Wkt2, "{definition}");
+                assert_eq!(
+                    definition_form(&definition),
+                    DefinitionForm::Wkt2,
+                    "{definition}"
+                );
             }
         }
 
@@ -875,15 +889,25 @@ mod tests {
             definition_form(r#"GEODCRS["WGS 84",DATUM["World Geodetic System 1984"]]"#),
             DefinitionForm::Wkt2
         );
-        assert_eq!(definition_form(r#"projcs["lowercase"]"#), DefinitionForm::Wkt);
-        assert_eq!(definition_form(r#"GeOdCrS["mixed case"]"#), DefinitionForm::Wkt2);
+        assert_eq!(
+            definition_form(r#"projcs["lowercase"]"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"GeOdCrS["mixed case"]"#),
+            DefinitionForm::Wkt2
+        );
         for definition in [
             r#"COMPOUNDCRS["compound"]"#,
             r#"PARAMETRICCRS["parametric"]"#,
             r#"TIMECRS["temporal"]"#,
             r#"DERIVEDPROJCRS["derived"]"#,
         ] {
-            assert_eq!(definition_form(definition), DefinitionForm::Wkt2, "{definition}");
+            assert_eq!(
+                definition_form(definition),
+                DefinitionForm::Wkt2,
+                "{definition}"
+            );
         }
         // proj-string e forme degeneri: Other (comportamento storico,
         // `crs_id` — la tabella §2 non ha formato proj).

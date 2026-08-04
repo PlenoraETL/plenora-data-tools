@@ -164,9 +164,13 @@ fn main() {
         output_column: Some("simple".into()),
         extract_all: false,
     };
-    run_scenario("string_extract_simple", rows, repetitions, &input, |batch| {
-        string_extract(batch, &simple, &Limits::default()).expect("simple")
-    });
+    run_scenario(
+        "string_extract_simple",
+        rows,
+        repetitions,
+        &input,
+        |batch| string_extract(batch, &simple, &Limits::default()).expect("simple"),
+    );
 
     // Pattern complesso: gruppi nominati multipli (una colonna per gruppo).
     let named = StringExtract {

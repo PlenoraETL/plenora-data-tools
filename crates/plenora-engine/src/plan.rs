@@ -358,9 +358,7 @@ impl PlanV4 {
             )));
         }
         if legacy.steps.is_empty() {
-            return Err(contract_error(
-                "il piano legacy non contiene passi".into(),
-            ));
+            return Err(contract_error("il piano legacy non contiene passi".into()));
         }
 
         let descriptors = legacy
@@ -573,7 +571,8 @@ impl PlanV4 {
         let mut fan_out: HashMap<&str, usize> = HashMap::new();
         for node in &self.nodes {
             for reference in &node.inputs {
-                if !input_names.contains(reference.as_str()) && !node_ids.contains(reference.as_str())
+                if !input_names.contains(reference.as_str())
+                    && !node_ids.contains(reference.as_str())
                 {
                     return Err(contract_error(format!(
                         "il nodo `{}` riferisce `{reference}`, che non e' un input ne' un nodo",
@@ -637,9 +636,10 @@ fn legacy_limits_override(legacy: &table_engine::Limits) -> Result<LimitsOverrid
         max_rows_per_edge: Some(max_rows),
         max_memory_bytes: Some(legacy.max_memory_bytes as u64),
         max_temp_bytes: Some(legacy.max_temp_bytes),
-        spill_partitions: Some(u32::try_from(legacy.spill_partitions).map_err(|_| {
-            contract_error("spill_partitions legacy oltre il range u32".into())
-        })?),
+        spill_partitions: Some(
+            u32::try_from(legacy.spill_partitions)
+                .map_err(|_| contract_error("spill_partitions legacy oltre il range u32".into()))?,
+        ),
         max_string_bytes: Some(legacy.max_string_bytes),
         max_regex_bytes: Some(legacy.max_regex_bytes),
         ..LimitsOverride::default()
@@ -665,8 +665,11 @@ fn check_identifier(kind: &str, value: &str, plan_limits: &PlanLimits) -> Result
 fn topological_order(plan: &PlanV4, plan_limits: &PlanLimits) -> Result<Vec<String>> {
     let node_ids: HashSet<&str> = plan.nodes.iter().map(|node| node.id.as_str()).collect();
     // indegree conta solo gli archi nodo -> nodo (gli input sono sorgenti).
-    let mut indegree: BTreeMap<&str, usize> =
-        plan.nodes.iter().map(|node| (node.id.as_str(), 0)).collect();
+    let mut indegree: BTreeMap<&str, usize> = plan
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), 0))
+        .collect();
     let mut consumers: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in &plan.nodes {
         for reference in &node.inputs {
@@ -784,7 +787,10 @@ pub fn canonical_json(plan: &PlanV4) -> Value {
 
     let mut root = Map::new();
     root.insert("schema_version".to_owned(), json!(PLAN_SCHEMA_VERSION_V4));
-    root.insert("limits".to_owned(), canonical_limits(&plan.limits.effective()));
+    root.insert(
+        "limits".to_owned(),
+        canonical_limits(&plan.limits.effective()),
+    );
     if let Some(crs) = &plan.crs {
         root.insert("crs".to_owned(), json!(crs));
     }

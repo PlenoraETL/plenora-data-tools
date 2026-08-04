@@ -192,9 +192,13 @@ fn main() {
         columns: vec!["id".into()],
         nulls_equal: true,
     };
-    measure("assert_unique/unique_id", rows, repetitions, "chiave id unica (full scan)", || {
-        assert_unique(&unique, &unique_config)
-    });
+    measure(
+        "assert_unique/unique_id",
+        rows,
+        repetitions,
+        "chiave id unica (full scan)",
+        || assert_unique(&unique, &unique_config),
+    );
 
     let multicol_config = AssertUnique {
         columns: vec!["id".into(), "grp".into()],

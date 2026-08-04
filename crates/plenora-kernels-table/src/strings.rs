@@ -52,11 +52,7 @@ fn default_fill() -> String {
 ///   o piu' di un carattere Unicode, risultato oltre
 ///   `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8.
-pub fn string_pad(
-    batch: &RecordBatch,
-    config: &StringPad,
-    limits: &Limits,
-) -> Result<RecordBatch> {
+pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> Result<RecordBatch> {
     let output_name = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output_name)?;
     let mut fill = config.fill_char.chars();
@@ -235,9 +231,7 @@ pub fn string_extract(
                         }
                     }
                 }
-                _ => builders
-                    .iter_mut()
-                    .for_each(StringBuilder::append_null),
+                _ => builders.iter_mut().for_each(StringBuilder::append_null),
             }
         }
         let mut result = batch.clone();
@@ -344,7 +338,11 @@ const fn default_true() -> bool {
 // resta `str::to_lowercase` (regola contestuale del sigma greco finale).
 
 fn strip_accents_into(value: &str, out: &mut String) {
-    out.extend(value.nfkd().filter(|character| !is_combining_mark(*character)));
+    out.extend(
+        value
+            .nfkd()
+            .filter(|character| !is_combining_mark(*character)),
+    );
 }
 
 fn title_case_into(value: &str, out: &mut String) {
@@ -380,7 +378,10 @@ fn collapse_whitespace_into(value: &str, out: &mut String) {
 fn full_normalize_into(value: &str, out: &mut String) {
     let lowered = value.trim().to_lowercase();
     let mut pending_space = false;
-    for character in lowered.nfkd().filter(|character| !is_combining_mark(*character)) {
+    for character in lowered
+        .nfkd()
+        .filter(|character| !is_combining_mark(*character))
+    {
         if character.is_whitespace() {
             pending_space = !out.is_empty();
         } else {
@@ -512,11 +513,9 @@ mod tests {
             NormalizeOperation::Title => reference_title_case(value),
             NormalizeOperation::StripAccents => reference_strip_accents(value),
             NormalizeOperation::StripDoubleSpaces => reference_collapse_whitespace(value),
-            NormalizeOperation::Full => {
-                reference_collapse_whitespace(&reference_strip_accents(
-                    &value.trim().to_lowercase(),
-                ))
-            }
+            NormalizeOperation::Full => reference_collapse_whitespace(&reference_strip_accents(
+                &value.trim().to_lowercase(),
+            )),
         }
     }
 
@@ -739,12 +738,8 @@ mod tests {
         let batch = extract_batch();
         // extract_all con gruppi multipli su unicode: join con virgola dei
         // soli match, null propagato, nessun match -> null.
-        let output = string_extract(
-            &batch,
-            &extract_config("(\\d+)", true),
-            &Limits::default(),
-        )
-        .expect("extract_all");
+        let output = string_extract(&batch, &extract_config("(\\d+)", true), &Limits::default())
+            .expect("extract_all");
         let column = output
             .column_by_name("out")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>())

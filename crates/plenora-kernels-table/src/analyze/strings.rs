@@ -77,7 +77,10 @@ pub(in crate::analyze) fn analyze_string_extract(
         vec![(name, DataType::Utf8, true)]
     } else {
         // Con gruppi con nome: una colonna per gruppo; output_column ignorato.
-        named.into_iter().map(|n| (n, DataType::Utf8, true)).collect()
+        named
+            .into_iter()
+            .map(|n| (n, DataType::Utf8, true))
+            .collect()
     };
     for (name, _, _) in &produced {
         check_output_name(op, name)?;
@@ -266,4 +269,3 @@ pub(in crate::analyze) fn analyze_mask_data(
     }
     analyze_append(input, fields, &produced)
 }
-

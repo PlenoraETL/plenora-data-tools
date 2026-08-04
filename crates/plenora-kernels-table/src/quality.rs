@@ -10,13 +10,13 @@ use plenora_core::arrow::schema::DataType;
 use regex::Regex;
 use serde::Deserialize;
 
-use plenora_core::{PlenoraError, Result};
-use crate::{
-    column_index, compare_i64, compare_u64, replace_or_append, scalar_as_f64, scalar_as_string,
-    validate_output_name, NumericBound,
-};
 use crate::governance::RowKeyEncoder;
 use crate::joins::FastHasher;
+use crate::{
+    column_index, compare_i64, compare_u64, reject_rows, replace_or_append, scalar_as_f64,
+    scalar_as_string, validate_output_name, NumericBound, RowRejection,
+};
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,12 +58,12 @@ fn expected_type(value: &str) -> Result<DataType> {
             Box::new(DataType::Int32),
             Box::new(DataType::Utf8),
         )),
-        "list" => Ok(DataType::List(Arc::new(plenora_core::arrow::schema::Field::new(
-            "item",
-            DataType::Null,
-            true,
-        )))),
-        "struct" => Ok(DataType::Struct(plenora_core::arrow::schema::Fields::empty())),
+        "list" => Ok(DataType::List(Arc::new(
+            plenora_core::arrow::schema::Field::new("item", DataType::Null, true),
+        ))),
+        "struct" => Ok(DataType::Struct(
+            plenora_core::arrow::schema::Fields::empty(),
+        )),
         other => Err(PlenoraError::InvalidPlan(format!(
             "assert_schema: tipo non supportato {other}"
         ))),
@@ -158,16 +158,23 @@ pub struct AssertNotNull {
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`);
-/// - `InvalidPlan`: una colonna contiene un null.
+/// - `DataMapping`: una o piu' righe contengono null, con row diagnostics.
 pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<RecordBatch> {
+    let mut rejections = Vec::new();
     for name in &config.columns {
         let index = column_index(batch, name)?;
-        if let Some(row) = (0..batch.num_rows()).find(|row| batch.column(index).is_null(*row)) {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_not_null: null in {name} alla riga {row}"
-            )));
+        for row in (0..batch.num_rows()).filter(|row| batch.column(index).is_null(*row)) {
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.required_value_missing",
+                column: Some(name),
+            });
         }
     }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )?;
     Ok(batch.clone())
 }
 
@@ -214,20 +221,54 @@ pub struct AssertUnique {
 /// restituisce il batch invariato.
 ///
 /// Con `nulls_equal=true` i null contano come chiave (un solo null ammesso),
-/// con `false` le righe con null nella chiave sono saltate. Errore sul primo
-/// duplicato in ordine di scansione.
+/// con `false` le righe con null nella chiave sono saltate. Tutte le righe dei
+/// gruppi duplicati sono rifiutate e conteggiate.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
 ///   non codificabile nella chiave (come `key_for_row`);
-/// - `InvalidPlan`: chiave duplicata.
+/// - `DataMapping`: chiave duplicata, con row diagnostics.
+// La raccolta completa per riga (R9.9) rende la funzione una sequenza
+// lineare sopra il limite di linee: nessuna complessita' logica aggiunta.
+#[allow(clippy::too_many_lines)]
 pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
     let indices = config
         .columns
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
+    let mut diagnostic_seen = std::collections::HashMap::new();
+    let mut rejected_rows = HashSet::new();
+    let mut rejections = Vec::new();
+    for row in 0..batch.num_rows() {
+        if !config.nulls_equal
+            && indices
+                .iter()
+                .any(|index| batch.column(*index).is_null(row))
+        {
+            continue;
+        }
+        if let Some(first_row) = diagnostic_seen.insert(key_for_row(batch, &indices, row)?, row) {
+            if rejected_rows.insert(first_row) {
+                rejections.push(RowRejection {
+                    row: first_row,
+                    cause: "validation.duplicate_key",
+                    column: None,
+                });
+            }
+            rejected_rows.insert(row);
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.duplicate_key",
+                column: None,
+            });
+        }
+    }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )?;
     // Fast path (ottimizzazione kernel), in due livelli. Semantica identica al
     // generico (conservato verbatim nei test come oracolo
     // `assert_unique_reference`): scansione in ordine di riga, errore sul
@@ -315,9 +356,9 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         }
         encoder.encode_into(row, &mut key)?;
         if !seen.insert(key.clone()) {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_unique: duplicato alla riga {row}"
-            )));
+            return Err(PlenoraError::InvalidPlan(
+                "assert_unique: chiave duplicata".into(),
+            ));
         }
     }
     Ok(batch.clone())
@@ -344,15 +385,15 @@ fn assert_unique_scalar<K: Hash + Eq>(
                 continue;
             }
             if seen_null {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "assert_unique: duplicato alla riga {row}"
-                )));
+                return Err(PlenoraError::InvalidPlan(
+                    "assert_unique: chiave duplicata".into(),
+                ));
             }
             seen_null = true;
         } else if !seen.insert(key(row)) {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_unique: duplicato alla riga {row}"
-            )));
+            return Err(PlenoraError::InvalidPlan(
+                "assert_unique: chiave duplicata".into(),
+            ));
         }
     }
     Ok(batch.clone())
@@ -375,10 +416,7 @@ pub struct AssertRange {
 /// true se il valore viola i limiti configurati; `compare` confronta il
 /// valore con un estremo (`None` = confronto con NaN: nessuna violazione,
 /// come i confronti IEEE storici).
-fn range_outside(
-    config: &AssertRange,
-    compare: &mut dyn FnMut(f64) -> Option<Ordering>,
-) -> bool {
+fn range_outside(config: &AssertRange, compare: &mut dyn FnMut(f64) -> Option<Ordering>) -> bool {
     let below = config.min.is_some_and(|min| {
         if config.inclusive_min {
             compare(min) == Some(Ordering::Less)
@@ -408,7 +446,8 @@ fn range_outside(
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
 ///   non convertibile in numero (come `scalar_as_f64`);
-/// - `InvalidPlan`: null non ammesso o valore fuori intervallo.
+/// - `DataMapping`: null non ammesso o valore fuori intervallo, con row
+///   diagnostics.
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
@@ -418,6 +457,7 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
     // piu' sull'estremo. Gli altri tipi restano sul profilo f64 storico.
     let int64 = array.as_any().downcast_ref::<Int64Array>();
     let uint64 = array.as_any().downcast_ref::<UInt64Array>();
+    let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         // `None` = riga null (gestita sotto); `Some(true)` = fuori intervallo.
         let outside = if let Some(values) = int64 {
@@ -445,16 +485,25 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
             if config.allow_null {
                 continue;
             }
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_range: null alla riga {row}"
-            )));
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.required_value_missing",
+                column: Some(&config.column),
+            });
+            continue;
         };
         if outside {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_range: valore fuori intervallo alla riga {row}"
-            )));
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.value_out_of_range",
+                column: Some(&config.column),
+            });
         }
     }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )?;
     Ok(batch.clone())
 }
 
@@ -474,8 +523,9 @@ pub struct AssertRegex {
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o non di
 ///   tipo Utf8;
-/// - `InvalidPlan`: pattern non una regex valida, oppure valore non conforme
-///   (incluso un null con `allow_null=false`).
+/// - `InvalidPlan`: pattern non una regex valida;
+/// - `DataMapping`: valore non conforme (incluso un null con
+///   `allow_null=false`), con row diagnostics.
 pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     if batch.column(index).data_type() != &DataType::Utf8 {
@@ -485,17 +535,31 @@ pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordB
     }
     let pattern = Regex::new(&config.pattern)
         .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+    let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         match scalar_as_string(batch.column(index).as_ref(), row)? {
             Some(value) if pattern.is_match(&value) => {}
             None if config.allow_null => {}
-            _ => {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "assert_regex: valore non conforme alla riga {row}"
-                )))
+            None => {
+                rejections.push(RowRejection {
+                    row,
+                    cause: "validation.required_value_missing",
+                    column: Some(&config.column),
+                });
+            }
+            Some(_) => {
+                rejections.push(RowRejection {
+                    row,
+                    cause: "validation.regex_mismatch",
+                    column: Some(&config.column),
+                });
             }
         }
     }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )?;
     Ok(batch.clone())
 }
 
@@ -631,7 +695,10 @@ mod tests {
         // Senza la riga oltre 2^53 il vincolo passa.
         let ok = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)])),
-            vec![Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_992), None]))],
+            vec![Arc::new(Int64Array::from(vec![
+                Some(9_007_199_254_740_992),
+                None,
+            ]))],
         )
         .expect("fixture ok");
         assert!(assert_range(&ok, &config).is_ok());
@@ -719,6 +786,32 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn assert_regex_distinguishes_null_from_text_mismatch() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![None, Some("no")]))],
+        )
+        .expect("fixture");
+        let error = assert_regex(
+            &batch,
+            &AssertRegex {
+                column: "text".into(),
+                pattern: "^yes$".into(),
+                allow_null: false,
+            },
+        )
+        .expect_err("righe non conformi accettate");
+        let report = error.row_diagnostics().expect("diagnostica regex mancante");
+        assert_eq!(report.counts["validation.required_value_missing"], 1);
+        assert_eq!(report.counts["validation.regex_mismatch"], 1);
+        assert_eq!(report.examples[0].source_index, 0);
+        assert_eq!(
+            report.examples[0].cause,
+            "validation.required_value_missing"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Test-oracolo del fast path di `assert_unique`: l'implementazione
     // pre-ottimizzazione e' copiata verbatim qui sotto e usata come riferimento.
@@ -775,7 +868,9 @@ mod tests {
                 assert_eq!(expected.num_columns(), actual.num_columns());
             }
             (Err(expected), Err(actual)) => {
-                assert_eq!(expected.to_string(), actual.to_string());
+                if actual.row_diagnostics().is_none() {
+                    assert_eq!(expected.to_string(), actual.to_string());
+                }
             }
             _ => panic!(
                 "esiti divergenti: reference={} fast={}",
@@ -804,10 +899,11 @@ mod tests {
         let head = int_batch(ids);
         assert_unique_equivalent(&head, &unique_config(&["id"], true));
         let error = assert_unique(&head, &unique_config(&["id"], true)).expect_err("duplicato");
-        assert_eq!(
-            error.to_string(),
-            "contract violation: assert_unique: duplicato alla riga 1"
-        );
+        let report = error.row_diagnostics().expect("diagnostica duplicato");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.examples[0].source_index, 0);
+        assert_eq!(report.examples[1].source_index, 1);
+        assert_eq!(report.examples[0].cause, "validation.duplicate_key");
         // Duplicato all'ultima riga (caso peggiore: scansione completa).
         let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
         let last = ids.len() - 1;
@@ -947,9 +1043,7 @@ mod tests {
 
     #[test]
     fn assert_unique_matches_reference_across_key_types() {
-        use plenora_core::arrow::array::{
-            BinaryArray, BooleanArray, Date32Array, UInt64Array,
-        };
+        use plenora_core::arrow::array::{BinaryArray, BooleanArray, Date32Array, UInt64Array};
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("u", DataType::UInt64, true),
@@ -961,10 +1055,18 @@ mod tests {
             ])),
             vec![
                 Arc::new(UInt64Array::from(vec![Some(7), Some(8), Some(7)])),
-                Arc::new(BooleanArray::from(vec![Some(true), Some(false), Some(true)])),
+                Arc::new(BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                ])),
                 Arc::new(Float64Array::from(vec![Some(1.25), Some(2.5), Some(1.25)])),
                 Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("x")])),
-                Arc::new(Date32Array::from(vec![Some(19_000), Some(19_001), Some(19_000)])),
+                Arc::new(Date32Array::from(vec![
+                    Some(19_000),
+                    Some(19_001),
+                    Some(19_000),
+                ])),
                 Arc::new(BinaryArray::from(vec![
                     Some(&b"aa"[..]),
                     Some(&b"bb"[..]),
@@ -1016,7 +1118,9 @@ mod tests {
             batch.schema(),
             vec![
                 Arc::new(Int64Array::from(
-                    (0..rows).map(|row| Some(i64::try_from(row).expect("i64"))).collect::<Vec<_>>(),
+                    (0..rows)
+                        .map(|row| Some(i64::try_from(row).expect("i64")))
+                        .collect::<Vec<_>>(),
                 )),
                 batch.column(1).clone(),
             ],

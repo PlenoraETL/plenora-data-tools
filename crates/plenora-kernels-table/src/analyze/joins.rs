@@ -145,9 +145,7 @@ pub(in crate::analyze) fn analyze_join(
         .iter()
         .map(|name| {
             left.schema.index_of(name).map_err(|_| {
-                PlenoraError::Internal(format!(
-                    "{op}: chiave verificata assente nello schema"
-                ))
+                PlenoraError::Internal(format!("{op}: chiave verificata assente nello schema"))
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -156,9 +154,7 @@ pub(in crate::analyze) fn analyze_join(
         .iter()
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::Internal(format!(
-                    "{op}: chiave verificata assente nello schema"
-                ))
+                PlenoraError::Internal(format!("{op}: chiave verificata assente nello schema"))
             })
         })
         .collect::<Result<HashSet<_>>>()?;
@@ -207,9 +203,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     require_utf8(op, left, &config.left_key)?;
     require_utf8(op, right, &config.right_key)?;
     let left_index = left.schema.index_of(&config.left_key).map_err(|_| {
-        PlenoraError::Internal(format!(
-            "{op}: chiave verificata assente nello schema"
-        ))
+        PlenoraError::Internal(format!("{op}: chiave verificata assente nello schema"))
     })?;
     let (mut fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
         op,
@@ -275,10 +269,7 @@ pub(in crate::analyze) fn analyze_cross_join(
     )
 }
 
-fn product_row_count(
-    left: &DataContract,
-    right: &DataContract,
-) -> Option<ContractProperty<u64>> {
+fn product_row_count(left: &DataContract, right: &DataContract) -> Option<ContractProperty<u64>> {
     let left_property = left.properties.row_count.as_ref()?;
     let right_property = right.properties.row_count.as_ref()?;
     if left_property.scope != right_property.scope {
@@ -336,7 +327,10 @@ pub(in crate::analyze) fn analyze_asof_join(
     if left_on.data_type() != right_on.data_type()
         || !matches!(left_on.data_type(), DataType::Int64 | DataType::Float64)
     {
-        return contract_error(op, "left_on/right_on devono avere tipo identico Int64 o Float64");
+        return contract_error(
+            op,
+            "left_on/right_on devono avere tipo identico Int64 o Float64",
+        );
     }
     check_foreign_keys(op, left, right, &config.left_by, &config.right_by)?;
     let omitted: HashSet<usize> = config
@@ -345,9 +339,7 @@ pub(in crate::analyze) fn analyze_asof_join(
         .chain(std::iter::once(&config.right_on))
         .map(|name| {
             right.schema.index_of(name).map_err(|_| {
-                PlenoraError::Internal(format!(
-                    "{op}: chiave verificata assente nello schema"
-                ))
+                PlenoraError::Internal(format!("{op}: chiave verificata assente nello schema"))
             })
         })
         .collect::<Result<HashSet<_>>>()?;
@@ -399,7 +391,11 @@ pub(in crate::analyze) fn analyze_concat(
     // input (conflitto su valori diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria del primo input (gli schemi sono identici per nome/tipo).
-    let geometry = propagate_geometry(first, &schema, first.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        first,
+        &schema,
+        first.geometries.first().map(|g| g.name.as_str()),
+    );
     let row_count = sum_row_count(inputs);
     finish(
         schema,
@@ -427,7 +423,12 @@ fn sum_row_count(inputs: &[DataContract]) -> Option<ContractProperty<u64>> {
         PropertyConfidence::Proven(_) => {
             let mut total = 0_u64;
             for input in inputs {
-                let value = input.properties.row_count.as_ref()?.confidence.proven_value()?;
+                let value = input
+                    .properties
+                    .row_count
+                    .as_ref()?
+                    .confidence
+                    .proven_value()?;
                 total = total.checked_add(*value)?;
             }
             PropertyConfidence::Proven(total)
@@ -435,7 +436,13 @@ fn sum_row_count(inputs: &[DataContract]) -> Option<ContractProperty<u64>> {
         PropertyConfidence::Estimated(_) => {
             let mut total = 0_u64;
             for input in inputs {
-                let value = input.properties.row_count.as_ref()?.confidence.value().copied()?;
+                let value = input
+                    .properties
+                    .row_count
+                    .as_ref()?
+                    .confidence
+                    .value()
+                    .copied()?;
                 if !matches!(
                     input.properties.row_count.as_ref()?.confidence,
                     PropertyConfidence::Estimated(_)
@@ -605,29 +612,40 @@ pub(in crate::analyze) fn analyze_set_operation(
         if !is_scalar_string(field.data_type()) {
             return contract_error(
                 op,
-                format!("tipo {:?} non supportato dalle set operation", field.data_type()),
+                format!(
+                    "tipo {:?} non supportato dalle set operation",
+                    field.data_type()
+                ),
             );
         }
     }
     if set_op == SetOp::UnionDistinct {
-        let fields_out: Vec<Field> = left
-            .schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(index, field)| {
-                field
-                    .as_ref()
-                    .clone()
-                    .with_nullable(field.is_nullable() || right.schema.field(index).is_nullable())
-            })
-            .collect();
+        let fields_out: Vec<Field> =
+            left.schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    field.as_ref().clone().with_nullable(
+                        field.is_nullable() || right.schema.field(index).is_nullable(),
+                    )
+                })
+                .collect();
         // R2.4: due sorgenti — merge dei metadata di schema; stessa chiave
         // con valori diversi -> errore (come i join, mai precedenza implicita).
         let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
         let schema = Schema::new_with_metadata(fields_out, metadata);
-        let geometry = propagate_geometry(left, &schema, left.geometries.first().map(|g| g.name.as_str()));
-        finish(schema, geometry, left.active_geometry, ContractProperties::default())
+        let geometry = propagate_geometry(
+            left,
+            &schema,
+            left.geometries.first().map(|g| g.name.as_str()),
+        );
+        finish(
+            schema,
+            geometry,
+            left.active_geometry,
+            ContractProperties::default(),
+        )
     } else {
         // intersect/except: output = left via select_rows, ordine canonico.
         let mut output = left.clone();
@@ -635,4 +653,3 @@ pub(in crate::analyze) fn analyze_set_operation(
         Ok(output)
     }
 }
-

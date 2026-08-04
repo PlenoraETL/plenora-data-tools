@@ -145,10 +145,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, StringArray,
+    UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
-use plenora_core::arrow::ipc::writer::FileWriter;
+use plenora_core::arrow::ipc::writer::{FileWriter, StreamWriter};
 use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
@@ -158,7 +159,12 @@ use plenora_core::catalog::{
 use plenora_core::contract::{
     BatchSequence, ContractCrs, DataContract, GeometryDimensions, GeometryEncoding,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::error::ReplayedError;
+use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, Result, RetryDisposition};
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
 };
@@ -647,25 +653,7 @@ impl ExecState {
     /// porta l'`execution_id` (riempito qui se il punto di origine, in
     /// profondita' nel dispatch, non lo aveva a disposizione).
     fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
-        match error {
-            PlenoraError::Execution {
-                node,
-                operation,
-                mut execution_id,
-                reason,
-            } => {
-                if execution_id.is_empty() {
-                    execution_id.clone_from(&self.execution_id);
-                }
-                PlenoraError::Execution {
-                    node,
-                    operation,
-                    execution_id,
-                    reason,
-                }
-            }
-            other => other,
-        }
+        error.with_execution_id(&self.execution_id)
     }
 
     /// Arricchimento diagnostico opt-in (ADR 3, M1d): con `diagnostics`
@@ -709,65 +697,59 @@ impl ExecState {
 /// originale (`Execution`/`Cancelled` con nodo, operazione ed `execution_id`) e'
 /// preservata, non declassata a `InvalidPlan`.
 struct StoredEdgeError {
+    category: ErrorCategory,
+    phase: ErrorPhase,
+    remote_effect: plenora_core::RemoteEffect,
+    retry: RetryDisposition,
     node: Option<String>,
     operation: Option<String>,
     execution_id: Option<String>,
-    cancelled: bool,
+    execution_reason: Option<String>,
     reason: String,
+    row_diagnostics: Option<Box<RowDiagnostics>>,
 }
 
 impl StoredEdgeError {
     fn from_error(error: &PlenoraError) -> Self {
-        match error {
-            PlenoraError::Execution {
-                node,
-                operation,
-                execution_id,
-                reason,
-            } => Self {
-                node: Some(node.clone()),
-                operation: Some(operation.clone()),
-                execution_id: Some(execution_id.clone()),
-                cancelled: false,
-                reason: reason.clone(),
+        let (node, operation, execution_id) = error.execution_location().map_or(
+            (None, None, None),
+            |(node, operation, execution_id)| {
+                (
+                    Some(node.to_owned()),
+                    Some(operation.to_owned()),
+                    execution_id.map(ToOwned::to_owned),
+                )
             },
-            PlenoraError::Cancelled {
-                node,
-                operation,
-                execution_id,
-                reason,
-            } => Self {
-                node: Some(node.clone()),
-                operation: Some(operation.clone()),
-                execution_id: Some(execution_id.clone()),
-                cancelled: true,
-                reason: reason.clone(),
-            },
-            other => Self {
-                node: None,
-                operation: None,
-                execution_id: None,
-                cancelled: false,
-                reason: other.to_string(),
-            },
+        );
+        Self {
+            category: error.category(),
+            phase: error.phase(),
+            remote_effect: error.remote_effect(),
+            retry: error.retry_disposition(),
+            node,
+            operation,
+            execution_id,
+            execution_reason: error.execution_reason().map(ToOwned::to_owned),
+            reason: error.to_string(),
+            row_diagnostics: error.row_diagnostics().cloned().map(Box::new),
         }
     }
 
     fn to_error(&self) -> PlenoraError {
-        match (&self.node, &self.operation) {
-            (Some(node), Some(operation)) if self.cancelled => PlenoraError::Cancelled {
-                node: node.clone(),
-                operation: operation.clone(),
-                execution_id: self.execution_id.clone().unwrap_or_default(),
-                reason: self.reason.clone(),
-            },
-            (Some(node), Some(operation)) => PlenoraError::Execution {
-                node: node.clone(),
-                operation: operation.clone(),
-                execution_id: self.execution_id.clone().unwrap_or_default(),
-                reason: self.reason.clone(),
-            },
-            _ => PlenoraError::InvalidPlan(format!("arco interrotto: {}", self.reason)),
+        let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
+            category: self.category,
+            phase: self.phase,
+            remote_effect: self.remote_effect,
+            retry: self.retry,
+            message: self.reason.clone(),
+            node: self.node.clone(),
+            operation: self.operation.clone(),
+            execution_id: self.execution_id.clone(),
+            execution_reason: self.execution_reason.clone(),
+        }));
+        match &self.row_diagnostics {
+            Some(diagnostics) => replayed.with_row_diagnostics((**diagnostics).clone()),
+            None => replayed,
         }
     }
 }
@@ -1269,6 +1251,8 @@ pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) 
 
 /// `execute_physical` (ADR 5, interno): verifica degli input contro i
 /// contratti validati e costruzione della rete di stream.
+// Orchestrazione lineare della rete di stream: lunga per costruzione.
+#[allow(clippy::too_many_lines)]
 fn execute_physical(
     plan: &Rc<ExecutionPlan>,
     graph: &ValidatedGraph,
@@ -1373,8 +1357,14 @@ fn execute_physical(
         let batch = &governed.batch;
         let _ = check_batch_bytes(&output_state, batch, "output")?;
         let limits = &output_state.plan.limits();
-        output_counts.0 += batch.num_rows() as u64;
-        output_counts.1 += 1;
+        output_counts.0 = output_counts
+            .0
+            .checked_add(batch.num_rows() as u64)
+            .ok_or_else(|| PlenoraError::Internal("overflow conteggio righe output".into()))?;
+        output_counts.1 = output_counts
+            .1
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow conteggio batch output".into()))?;
         if output_counts.0 > limits.rows.max_output_rows {
             return Err(PlenoraError::InvalidPlan(format!(
                 "max_output_rows superato: {} righe di output > {}",
@@ -1451,6 +1441,8 @@ impl Network {
     /// (reader/contratto dell'input presenti per il dispatch del chiamante,
     /// colonna geometria nello schema del contratto): il caso "impossibile"
     /// e' un errore esplicito, mai un panic (R6).
+    // Costruzione lineare della rete per arco: lunga per costruzione.
+    #[allow(clippy::too_many_lines)]
     fn input_stream(&mut self, edge: &str) -> Result<BatchStream> {
         let input = self.inputs.remove(edge).ok_or_else(|| {
             PlenoraError::Internal(format!(
@@ -1480,8 +1472,10 @@ impl Network {
         let expected_schema = contract.schema.clone();
         let (geometry_index, geometry_dimensions, geometry_encoding, geometry_srid) =
             geometry_input_requirements(&contract)?;
+        let requires_atomic_wkb_validation = geometry_index.is_some();
         let mut sequence_number = 0_u64;
-        Ok(Box::new(raw.map(move |item| {
+        let mut source_row_offset = 0_u64;
+        let mapped = Box::new(raw.map(move |item| {
             // Confine di lettura (BLOCK-03): gli errori della sorgente e la
             // coerenza per-batch dello schema nascono leggendo l'input —
             // fase Read. Gli errori di governor e di validazione WKB qui
@@ -1496,6 +1490,10 @@ impl Network {
                 .with_phase(ErrorPhase::Read));
             }
             let bytes = check_batch_bytes(&state, &batch, &edge_name)?;
+            let batch_offset = source_row_offset;
+            source_row_offset = source_row_offset
+                .checked_add(batch.num_rows() as u64)
+                .ok_or_else(|| PlenoraError::Internal("overflow indice sorgente WKB".into()))?;
             if let Some(index) = geometry_index {
                 validate_wkb_cells(
                     &state,
@@ -1505,6 +1503,7 @@ impl Network {
                     geometry_dimensions,
                     geometry_encoding,
                     geometry_srid,
+                    batch_offset,
                 )?;
             }
             {
@@ -1512,14 +1511,20 @@ impl Network {
                 // Chiave clonata solo al primo batch dell'input (V2): i
                 // batch successivi entrano dal `get_mut` sul nome esistente.
                 if let Some(entry) = counts.get_mut(&edge_name) {
-                    entry.0 += batch.num_rows() as u64;
-                    entry.1 += 1;
-                    entry.2 += bytes;
+                    entry.0 = entry
+                        .0
+                        .checked_add(batch.num_rows() as u64)
+                        .ok_or_else(|| {
+                            PlenoraError::Internal("overflow conteggio righe input".into())
+                        })?;
+                    entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+                        PlenoraError::Internal("overflow conteggio batch input".into())
+                    })?;
+                    entry.2 = entry.2.checked_add(bytes).ok_or_else(|| {
+                        PlenoraError::Internal("overflow conteggio byte input".into())
+                    })?;
                 } else {
-                    let entry = counts.entry(edge_name.clone()).or_insert((0, 0, 0));
-                    entry.0 += batch.num_rows() as u64;
-                    entry.1 += 1;
-                    entry.2 += bytes;
+                    counts.insert(edge_name.clone(), (batch.num_rows() as u64, 1, bytes));
                 }
                 let entry = &counts[&edge_name];
                 let limits = &state.plan.limits();
@@ -1553,9 +1558,20 @@ impl Network {
                 input_partition: 0,
                 sequence_number,
             };
-            sequence_number += 1;
+            sequence_number = sequence_number
+                .checked_add(1)
+                .ok_or_else(|| PlenoraError::Internal("overflow sequenza batch input".into()))?;
             Ok(GovernedBatch::new(batch, Some(lease), Some(seq)))
-        })))
+        })) as BatchStream;
+        if requires_atomic_wkb_validation {
+            Ok(atomic_input_validation_stream(
+                mapped,
+                Rc::clone(&self.state),
+                edge.to_owned(),
+            ))
+        } else {
+            Ok(mapped)
+        }
     }
 
     /// Stream prodotto da un segmento, secondo la sua modalita' (E2).
@@ -1567,11 +1583,20 @@ impl Network {
         match mode {
             SegmentMode::LinearStreaming | SegmentMode::GeoFused => {
                 let input = self.edge_stream(&input_edges[0])?;
-                let plan = Rc::clone(&self.plan);
-                let state = Rc::clone(&self.state);
-                Ok(Box::new(input.map(move |item| {
-                    item.and_then(|governed| run_streaming_chain(&plan, index, &state, governed))
-                })))
+                if segment_emits_row_diagnostics(&self.plan, index) {
+                    Ok(row_diagnostic_stream(
+                        input,
+                        Rc::clone(&self.plan),
+                        Rc::clone(&self.state),
+                        index,
+                    ))
+                } else {
+                    let plan = Rc::clone(&self.plan);
+                    let state = Rc::clone(&self.state);
+                    Ok(Box::new(input.map(move |item| {
+                        run_streaming_chain(&plan, index, &state, item?, None)
+                    })))
+                }
             }
             SegmentMode::Blocking => {
                 let mut input = self.edge_stream(&input_edges[0])?;
@@ -1662,16 +1687,347 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
     Ok(bytes as u64)
 }
 
-/// Validazione dinamica in lettura (D8): struttura WKB di ogni cella non
-/// null, con i limiti effettivi del piano applicati prima del validatore
-/// strutturale (`max_wkb_cell_bytes` per cella, `max_geometry_depth` per
-/// l'annidamento; il tetto componenti resta quello del validatore).
+/// Writer con conteggio dei byte e quota dichiarata (`max_temp_bytes` del
+/// piano): superata la quota la scrittura fallisce con errore esplicito,
+/// mai silenzioso.
+struct CountingFile {
+    file: std::fs::File,
+    written: u64,
+    max_bytes: u64,
+}
+
+impl CountingFile {
+    fn create(path: &Path, max_bytes: u64) -> Result<Self> {
+        let file = std::fs::File::create(path).map_err(PlenoraError::Io)?;
+        Ok(Self {
+            file,
+            written: 0,
+            max_bytes,
+        })
+    }
+}
+
+impl std::io::Write for CountingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.written.checked_add(buf.len() as u64).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "overflow conteggio staging IPC",
+            )
+        })?;
+        if written > self.max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "staging IPC oltre max_temp_bytes",
+            ));
+        }
+        let n = self.file.write(buf)?;
+        self.written = self.written.checked_add(n as u64).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "overflow conteggio staging IPC",
+            )
+        })?;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Metadati per-batch dello staging IPC: byte da ri-riservare al replay
+/// (gli stessi della riserva originale, rilasciata allo staging) e
+/// sequenza logica ADR-0001 catturata allo staging e ripubblicata
+/// invariata al replay.
+struct StagedBatchMeta {
+    bytes: u64,
+    sequence: Option<BatchSequence>,
+}
+
+/// Stato del replay: lettore IPC sul file di staging e metadati per-batch
+/// (byte da ri-riservare + sequenza logica da ripubblicare).
+struct StagedReplay {
+    reader: StreamReader<std::fs::File>,
+    staged: std::collections::VecDeque<StagedBatchMeta>,
+    // La directory temporanea vive fino alla fine del replay.
+    _dir: tempfile::TempDir,
+}
+
+/// Replay di UN batch dallo staging IPC: compattazione right-sized, lease
+/// ri-riservato per batch (memoria bounded) e sequenza logica ripubblicata
+/// invariata. Condiviso dal gate input WKB e dallo staging degli output
+/// accettati dei segmenti row-diagnostics (P1): nessuna logica duplicata.
+fn replay_staged_batch(
+    state: &ExecState,
+    replay: &mut StagedReplay,
+    owner: &str,
+) -> Option<Result<GovernedBatch>> {
+    match replay.reader.next() {
+        Some(Ok(batch)) => {
+            let Some(meta) = replay.staged.pop_front() else {
+                return Some(Err(PlenoraError::Internal(
+                    "replay staging IPC: conteggio byte incoerente".into(),
+                )));
+            };
+            // Compattazione: la decodifica IPC condivide un'unica
+            // allocazione corpo tra le colonne e ogni buffer la conta
+            // interamente (lease e confini di kernel gonfiati ~3x).
+            // `take` copia ogni colonna in buffer right-sized: una
+            // copia per batch, memoria bounded.
+            let batch = match compact_staged_batch(&batch) {
+                Ok(compacted) => compacted,
+                Err(error) => return Some(Err(error)),
+            };
+            match state.governor.reserve(meta.bytes, owner) {
+                Ok(lease) => Some(Ok(GovernedBatch::new(batch, Some(lease), meta.sequence))),
+                Err(error) => Some(Err(error)),
+            }
+        }
+        Some(Err(error)) => Some(Err(PlenoraError::Internal(format!(
+            "replay staging IPC: {error}"
+        )))),
+        None => None,
+    }
+}
+
+/// Copia un batch decodificato dallo staging in buffer right-sized (vedi
+/// replay): `take` con tutti gli indici, per colonna.
 ///
-/// B1.3: il validatore e' stride-aware — la dimensionalita' attesa
-/// (`dimensions`, dal contratto risolto dell'arco) fissa lo stride delle
-/// coordinate e ogni type code incoerente col contratto e' un errore
-/// dedicato; con `Unknown` (R3.4) lo stride e' derivato dal type code di
-/// ogni geometria.
+/// # Errors
+/// - `InvalidPlan`: righe oltre `u32::MAX` (gia' escluso dai limiti di
+///   piano, difesa);
+/// - `Schema`: errore Arrow nella `take` o nella ricostruzione.
+fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
+    let indices: UInt32Array = (0..u32::try_from(batch.num_rows())
+        .map_err(|_| PlenoraError::InvalidPlan("batch staging oltre u32 righe".into()))?)
+        .collect::<Vec<_>>()
+        .into();
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &indices, None).map_err(PlenoraError::from))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+}
+
+/// Validazione atomica dell'input geometrico (D8/B1.3) con memoria BOUNDED:
+/// i batch accettati sono staged su IPC entro la quota `max_temp_bytes`
+/// dichiarata dal piano e il lease governor e' rilasciato subito; solo a
+/// validazione completata senza rifiuti i batch sono riletti uno alla
+/// volta, con lease ri-riservato per batch e stessa sequenza logica.
+/// Invarianti R9.9 preservate: nessun accepted esce prima della validazione
+/// completa; un rifiuto row-scoped (anche tardivo) produce il report
+/// completo mergiato e zero accepted; un errore non row-scoped propaga
+/// fail-closed con la diagnostica parziale dichiarata. Un errore di I/O in
+/// replay e' una failure infrastrutturale (accepted parziali possibili,
+/// come ogni failure mid-stream): non e' un rifiuto di righe.
+///
+/// Nota quota: lo staging degli input, lo staging degli output accettati
+/// dei segmenti row-diagnostics e gli spill degli operatori misurano
+/// ciascuno la propria scrittura contro `max_temp_bytes`; la somma su
+/// disco puo' superare la quota (v1, contabilita' separate).
+/// Esito della fase di staging dell'input gate: errore terminale (eventuale
+/// assenza di batch staged -> stream vuoto) oppure replay dal file staged.
+enum StagingOutcome {
+    Terminal(Option<PlenoraError>),
+    Replay(StagedReplay),
+}
+
+/// Scrive un batch nello staging IPC (inizializzando file e writer al primo
+/// batch); la quota `max_temp_bytes` e' fatta rispettare da `CountingFile`.
+/// `what` qualifica il contesto nei messaggi (`input` gate WKB, `output`
+/// segmenti row-diagnostics): stessa logica, nessuna duplicazione.
+fn stage_one_batch(
+    writer: &mut Option<StreamWriter<CountingFile>>,
+    staging: &mut Option<(tempfile::TempDir, std::path::PathBuf)>,
+    state: &Rc<ExecState>,
+    what: &str,
+    edge: &str,
+    batch: &RecordBatch,
+) -> Result<()> {
+    if writer.is_none() {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("plenora-staging-{what}-"))
+            .tempdir()
+            .map_err(PlenoraError::Io)?;
+        let path = dir.path().join("staged.arrow");
+        let counting = CountingFile::create(&path, state.plan.limits().max_temp_bytes)?;
+        let stream = StreamWriter::try_new(counting, &batch.schema())
+            .map_err(|error| PlenoraError::Internal(format!("staging {what}: {error}")))?;
+        *writer = Some(stream);
+        *staging = Some((dir, path));
+    }
+    let active = writer
+        .as_mut()
+        .ok_or_else(|| PlenoraError::Internal(format!("staging {what} non inizializzato")))?;
+    active.write(batch).map_err(|error| {
+        PlenoraError::InvalidPlan(format!(
+            "staging {what} `{edge}` fallito oltre la quota o per I/O: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
+/// Drena lo stream di input validando ogni batch (gate WKB con diagnostica
+/// completa) e facendo staging IPC bounded su `max_temp_bytes`; il lease del
+/// governor e' rilasciato dopo lo staging di ciascun batch.
+// Macchina a stati lineare: staging, diagnostica, chiusura e apertura replay
+// restano nello stesso scope per rendere evidente il cleanup fail-closed.
+#[allow(clippy::too_many_lines)]
+fn stage_input_batches(
+    input: &mut BatchStream,
+    state: &Rc<ExecState>,
+    edge: &str,
+) -> StagingOutcome {
+    let mut diagnostics = None;
+    let mut terminal_error = None;
+    let mut staged_meta: std::collections::VecDeque<StagedBatchMeta> =
+        std::collections::VecDeque::new();
+    let mut next_sequence: u64 = 0;
+    let mut staging: Option<(tempfile::TempDir, std::path::PathBuf)> = None;
+    let mut writer: Option<StreamWriter<CountingFile>> = None;
+    for item in input {
+        match item {
+            Ok(batch) => {
+                if diagnostics.is_none() && terminal_error.is_none() {
+                    let staged = stage_one_batch(
+                        &mut writer,
+                        &mut staging,
+                        state,
+                        "input",
+                        edge,
+                        &batch.batch,
+                    );
+                    if let Err(error) = staged {
+                        terminal_error = Some(attach_partial_row_diagnostics(
+                            error,
+                            &mut diagnostics,
+                            "data_tools.input_staging_failed",
+                        ));
+                        break;
+                    }
+                    let sequence_number = next_sequence;
+                    let Some(next) = next_sequence.checked_add(1) else {
+                        terminal_error = Some(attach_partial_row_diagnostics(
+                            PlenoraError::Internal("overflow sequenza staging input".into()),
+                            &mut diagnostics,
+                            "data_tools.input_staging_failed",
+                        ));
+                        break;
+                    };
+                    next_sequence = next;
+                    staged_meta.push_back(StagedBatchMeta {
+                        bytes: batch.accounted_bytes(),
+                        sequence: Some(BatchSequence {
+                            source_node: edge.to_owned(),
+                            input_partition: 0,
+                            sequence_number,
+                        }),
+                    });
+                    // Il lease del batch e' rilasciato con il drop:
+                    // durante il drenaggio resta riservato al piu'
+                    // un batch alla volta.
+                }
+            }
+            Err(error) => {
+                if let Some(report) = error.row_diagnostics().cloned() {
+                    if let Err(error) = merge_row_diagnostics(&mut diagnostics, report, 0) {
+                        terminal_error = Some(attach_partial_row_diagnostics(
+                            error,
+                            &mut diagnostics,
+                            "data_tools.diagnostic_merge_failed",
+                        ));
+                        break;
+                    }
+                } else {
+                    terminal_error = Some(attach_partial_row_diagnostics(
+                        error,
+                        &mut diagnostics,
+                        "data_tools.input_stream_interrupted",
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+    if terminal_error.is_none() {
+        if let Some(active) = writer.as_mut() {
+            if let Err(error) = active.finish() {
+                terminal_error = Some(attach_partial_row_diagnostics(
+                    PlenoraError::Internal(format!("chiusura staging input: {error}")),
+                    &mut diagnostics,
+                    "data_tools.input_staging_failed",
+                ));
+            }
+        }
+    }
+    drop(writer);
+    if terminal_error.is_none() {
+        if let Err(error) = state.check_cancellation_point(edge, "input_validation") {
+            terminal_error = Some(attach_partial_row_diagnostics(
+                error,
+                &mut diagnostics,
+                "data_tools.cancelled_after_rejection",
+            ));
+        } else if let Some(report) = diagnostics.take() {
+            terminal_error = Some(complete_row_diagnostic_error(report, None));
+        }
+    }
+    if let Some(error) = terminal_error {
+        return StagingOutcome::Terminal(Some(error));
+    }
+    let Some((dir, path)) = staging.take() else {
+        return StagingOutcome::Terminal(None);
+    };
+    match std::fs::File::open(&path)
+        .map_err(PlenoraError::Io)
+        .and_then(|file| {
+            StreamReader::try_new(file, None)
+                .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
+        }) {
+        Ok(reader) => StagingOutcome::Replay(StagedReplay {
+            reader,
+            staged: staged_meta,
+            _dir: dir,
+        }),
+        Err(error) => StagingOutcome::Terminal(Some(error)),
+    }
+}
+
+/// Validazione atomica dell'input geometrico: staging bounded + replay.
+fn atomic_input_validation_stream(
+    mut input: BatchStream,
+    state: Rc<ExecState>,
+    edge: String,
+) -> BatchStream {
+    let mut terminal: Option<std::vec::IntoIter<Result<GovernedBatch>>> = None;
+    let mut replay: Option<StagedReplay> = None;
+    Box::new(std::iter::from_fn(move || {
+        if terminal.is_none() && replay.is_none() {
+            match stage_input_batches(&mut input, &state, &edge) {
+                StagingOutcome::Terminal(error) => {
+                    terminal = Some(
+                        error
+                            .map_or_else(Vec::new, |error| vec![Err(error)])
+                            .into_iter(),
+                    );
+                }
+                StagingOutcome::Replay(staged) => replay = Some(staged),
+            }
+        }
+        if let Some(active) = terminal.as_mut() {
+            return active.next();
+        }
+        let active = replay.as_mut()?;
+        replay_staged_batch(&state, active, &edge)
+    }))
+}
+
+// Il contesto di validazione e' un gruppo di parametri coeso (celle, limiti,
+// framing, offset): estrarlo in una struct dedicata non aggiungerebbe
+// informazione in questo choke point interno.
+#[allow(clippy::too_many_arguments)]
 fn validate_wkb_cells(
     state: &ExecState,
     batch: &RecordBatch,
@@ -1680,7 +2036,9 @@ fn validate_wkb_cells(
     dimensions: GeometryDimensions,
     encoding: GeometryEncoding,
     expected_srid: Option<u32>,
+    source_offset: u64,
 ) -> Result<()> {
+    const EXAMPLES_LIMIT: u64 = 10;
     let cells = batch_geometry_cells(batch, geometry_index, "geometry")?;
     let limits = state.plan.limits();
     let max_cell = limits.max_wkb_cell_bytes;
@@ -1688,38 +2046,84 @@ fn validate_wkb_cells(
     // Diagnostica opt-in (M1d): il nome della colonna e' contesto
     // strutturale, non un valore — risolto solo nel ramo d'errore (V2),
     // mai allocato sul percorso felice.
-    let column_detail = || format!("colonna `{}`", batch.schema().field(geometry_index).name());
+    let column = batch.schema().field(geometry_index).name().clone();
+    let mut rejected = Vec::new();
     for row in 0..batch.num_rows() {
         if cells.is_null(row) {
             continue;
         }
         let payload = cells.value(row);
         if payload.len() as u64 > max_cell {
-            return Err(state.with_diagnostics(
-                PlenoraError::InvalidPlan(format!(
-                    "cella WKB oltre max_wkb_cell_bytes sull'arco `{edge}` (riga {row})"
-                )),
-                Some(&column_detail()),
-            ));
+            rejected.push((row, "geometry.cell_too_large"));
+            continue;
         }
-        validate_wkb_transport_for_dimensions_with_depth(
+        if let Err(error) = validate_wkb_transport_for_dimensions_with_depth(
             payload,
             dimensions,
             encoding,
             expected_srid,
             max_depth,
-        )
-        .map_err(|error| match error {
-            PlenoraError::Crs(_) => PlenoraError::Crs(format!(
-                "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
-            )),
-            _ => PlenoraError::InvalidPlan(format!(
-                "WKB non valido sull'arco `{edge}` (riga {row}): {error}"
-            )),
-        })
-        .map_err(|error| state.with_diagnostics(error, Some(&column_detail())))?;
+        ) {
+            rejected.push((
+                row,
+                if matches!(error, PlenoraError::Crs(_)) {
+                    "geometry.crs_mismatch"
+                } else {
+                    "geometry.invalid_wkb"
+                },
+            ));
+        }
     }
-    Ok(())
+    if rejected.is_empty() {
+        return Ok(());
+    }
+    let observed_total = u64::try_from(rejected.len())
+        .map_err(|_| PlenoraError::Internal("troppe rejection WKB".into()))?;
+    let mut counts = BTreeMap::new();
+    let mut examples = Vec::new();
+    for (row, cause) in rejected {
+        let count = counts.entry(cause.to_owned()).or_insert(0_u64);
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow conteggio rejection WKB".into()))?;
+        if u64::try_from(examples.len())
+            .map_err(|_| PlenoraError::Internal("troppi esempi WKB".into()))?
+            < EXAMPLES_LIMIT
+        {
+            examples.push(RowDiagnosticExample {
+                source_index: source_offset
+                    .checked_add(u64::try_from(row).map_err(|_| {
+                        PlenoraError::Internal("indice WKB non rappresentabile".into())
+                    })?)
+                    .ok_or_else(|| PlenoraError::Internal("overflow indice WKB".into()))?,
+                cause: cause.to_owned(),
+                column: Some(column.clone()),
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    let report = RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    Err(PlenoraError::DataMapping(format!(
+        "geometrie non conformi sull'arco `{edge}`; consultare row_diagnostics"
+    ))
+    .with_phase(ErrorPhase::Read)
+    .with_row_diagnostics(report))
 }
 
 fn geometry_input_requirements(
@@ -1804,8 +2208,14 @@ fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     // Chiave clonata solo al primo batch dell'arco (V2): i batch successivi
     // entrano dal `get_mut` sul nome esistente.
     if let Some(entry) = counts.get_mut(edge) {
-        entry.0 += rows;
-        entry.1 += 1;
+        entry.0 = entry
+            .0
+            .checked_add(rows)
+            .ok_or_else(|| PlenoraError::Internal("overflow conteggio righe arco".into()))?;
+        entry.1 = entry
+            .1
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow conteggio batch arco".into()))?;
     } else {
         counts.insert(edge.to_owned(), (rows, 1));
     }
@@ -1944,6 +2354,20 @@ fn check_join_expansion(
 /// in profondita' non lo ha a disposizione): lo riempie il tag M1d al
 /// confine di uscita (`ExecState::tag_execution`).
 fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
+    if let Some(diagnostics) = error.row_diagnostics().cloned() {
+        let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
+            category: error.category(),
+            phase: error.phase(),
+            remote_effect: error.remote_effect(),
+            retry: error.retry_disposition(),
+            message: error.to_string(),
+            node: Some(kernel.node_id.clone()),
+            operation: Some(kernel.operation.to_owned()),
+            execution_id: None,
+            execution_reason: error.execution_reason().map(ToOwned::to_owned),
+        }));
+        return replayed.with_row_diagnostics(diagnostics);
+    }
     let reason = match error {
         PlenoraError::Execution { reason, .. } => reason,
         other => other.to_string(),
@@ -1954,6 +2378,350 @@ fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
         execution_id: String::new(),
         reason,
     }
+}
+
+fn merge_row_diagnostics(
+    aggregate: &mut Option<RowDiagnostics>,
+    mut incoming: RowDiagnostics,
+    source_offset: u64,
+) -> Result<()> {
+    for example in &mut incoming.examples {
+        example.source_index = source_offset
+            .checked_add(example.source_index)
+            .ok_or_else(|| PlenoraError::Internal("indice sorgente fuori intervallo".into()))?;
+    }
+    let Some(existing) = aggregate.as_ref() else {
+        *aggregate = Some(incoming);
+        return Ok(());
+    };
+    let mut merged = existing.clone();
+    if merged.contract != incoming.contract
+        || merged.scope != incoming.scope
+        || merged.index_basis != incoming.index_basis
+        || merged.examples_limit != incoming.examples_limit
+    {
+        return Err(PlenoraError::Internal(
+            "report row-scoped incompatibili nello stesso stream".into(),
+        ));
+    }
+    merged.observed_total = merged
+        .observed_total
+        .checked_add(incoming.observed_total)
+        .ok_or_else(|| PlenoraError::Internal("conteggio row-scoped fuori intervallo".into()))?;
+    merged.total =
+        match (merged.total, incoming.total) {
+            (Some(left), Some(right)) => Some(left.checked_add(right).ok_or_else(|| {
+                PlenoraError::Internal("totale row-scoped fuori intervallo".into())
+            })?),
+            _ => None,
+        };
+    merged.input_total = match (merged.input_total, incoming.input_total) {
+        (Some(left), Some(right)) => Some(
+            left.checked_add(right)
+                .ok_or_else(|| PlenoraError::Internal("input_total diagnostico overflow".into()))?,
+        ),
+        _ => None,
+    };
+    for (cause, count) in incoming.counts {
+        let entry = merged.counts.entry(cause).or_default();
+        *entry = entry
+            .checked_add(count)
+            .ok_or_else(|| PlenoraError::Internal("conteggio causa fuori intervallo".into()))?;
+    }
+    let incoming_example_count = incoming.examples.len();
+    let before = merged.examples.len();
+    for example in incoming.examples {
+        if u64::try_from(merged.examples.len())
+            .map_err(|_| PlenoraError::Internal("numero esempi fuori intervallo".into()))?
+            >= merged.examples_limit
+        {
+            break;
+        }
+        merged.examples.push(example);
+    }
+    merged.examples_truncated = merged.examples_truncated
+        || incoming.examples_truncated
+        || merged.examples.len().saturating_sub(before) < incoming_example_count;
+    if incoming.completeness != RowDiagnosticsCompleteness::Complete {
+        merged.completeness = incoming.completeness;
+        let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
+        for limit in incoming.knowledge_limits.unwrap_or_default() {
+            if !knowledge_limits.contains(&limit) {
+                knowledge_limits.push(limit);
+            }
+        }
+        merged.knowledge_limits = (!knowledge_limits.is_empty()).then_some(knowledge_limits);
+    }
+    *aggregate = Some(merged);
+    Ok(())
+}
+
+fn attach_partial_row_diagnostics(
+    error: PlenoraError,
+    aggregate: &mut Option<RowDiagnostics>,
+    knowledge_limit: &str,
+) -> PlenoraError {
+    let Some(mut report) = aggregate.take() else {
+        return error;
+    };
+    report.completeness = RowDiagnosticsCompleteness::Partial;
+    report.total = None;
+    report.knowledge_limits = Some(vec![knowledge_limit.to_owned()]);
+    error.with_row_diagnostics(report)
+}
+
+fn complete_row_diagnostic_error(
+    report: RowDiagnostics,
+    context: Option<(String, String, String)>,
+) -> PlenoraError {
+    let source = match context {
+        Some((node, operation, execution_id)) => PlenoraError::Replayed(Box::new(ReplayedError {
+            category: ErrorCategory::DataMapping,
+            phase: ErrorPhase::Read,
+            remote_effect: plenora_core::RemoteEffect::None,
+            retry: RetryDisposition::Never,
+            message: "righe non conformi al contratto di trasformazione".into(),
+            node: Some(node),
+            operation: Some(operation),
+            execution_id: Some(execution_id),
+            execution_reason: None,
+        })),
+        None => {
+            PlenoraError::DataMapping("righe non conformi al contratto di trasformazione".into())
+                .with_phase(ErrorPhase::Read)
+        }
+    };
+    source.with_row_diagnostics(report)
+}
+
+/// Selezione del machinery row-diagnostics per segmento (R9.9): un kernel
+/// vi partecipa se e solo se l'autorita' di catalogo
+/// (`OperationDescriptor::emits_row_diagnostics`, risolta in `prepare`
+/// sulla config del nodo) lo dichiara emittente — stessa classificazione
+/// del gate provenance del planner e del gate legacy CLI, nessuna lista
+/// locale duplicata.
+fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> bool {
+    plan.segments()[segment_index]
+        .kernels
+        .iter()
+        .any(|kernel| kernel.emits_row_diagnostics)
+}
+
+/// Scansione completa di un segmento row-diagnostics (R9.9): esegue i
+/// kernel batch per batch, fa merge delle rejection row-scoped con offset
+/// assoluti e fa staging IPC bounded degli accepted su `max_temp_bytes`
+/// (lease rilasciato per batch — P1: nessun accumulo in RAM/lease per
+/// tutto l'input; uno stream valido oltre il budget cumulativo non viene
+/// piu' rifiutato). A scan completata: report completo (rejection anche
+/// tardiva -> zero accepted, lo staged e' scartato dal `Drop` del `TempDir`)
+/// oppure replay degli staged con ri-riserva per batch. Sequenza logica e
+/// ordine di pubblicazione invariati (ADR-0001).
+// Sequenza lineare di stati, lunga per costruzione.
+#[allow(clippy::too_many_lines)]
+fn scan_row_diagnostic_segment(
+    input: &mut EdgeStream,
+    plan: &Rc<ExecutionPlan>,
+    state: &Rc<ExecState>,
+    segment_index: usize,
+) -> StagingOutcome {
+    let mut diagnostics = None;
+    let mut diagnostic_context = None;
+    let mut source_offset = 0_u64;
+    let mut terminal_error = None;
+    let mut staged_meta: std::collections::VecDeque<StagedBatchMeta> =
+        std::collections::VecDeque::new();
+    let mut staging: Option<(tempfile::TempDir, std::path::PathBuf)> = None;
+    let mut writer: Option<StreamWriter<CountingFile>> = None;
+    let output_edge = &plan.segments()[segment_index].output_edge;
+    for item in input {
+        let governed = match item {
+            Ok(governed) => governed,
+            Err(error) => {
+                if let Some(report) = error.row_diagnostics().cloned() {
+                    if let Err(error) = merge_row_diagnostics(&mut diagnostics, report, 0) {
+                        terminal_error = Some(attach_partial_row_diagnostics(
+                            error,
+                            &mut diagnostics,
+                            "data_tools.diagnostic_merge_failed",
+                        ));
+                        break;
+                    }
+                    continue;
+                }
+                terminal_error = Some(attach_partial_row_diagnostics(
+                    error,
+                    &mut diagnostics,
+                    "data_tools.input_stream_interrupted",
+                ));
+                break;
+            }
+        };
+        let batch_offset = source_offset;
+        let Ok(batch_rows) = u64::try_from(governed.batch.num_rows()) else {
+            terminal_error = Some(attach_partial_row_diagnostics(
+                PlenoraError::Internal("cardinalita batch fuori intervallo".into()),
+                &mut diagnostics,
+                "data_tools.source_offset_unrepresentable",
+            ));
+            break;
+        };
+        let Some(offset) = source_offset.checked_add(batch_rows) else {
+            terminal_error = Some(attach_partial_row_diagnostics(
+                PlenoraError::Internal("indice sorgente stream fuori intervallo".into()),
+                &mut diagnostics,
+                "data_tools.source_offset_overflow",
+            ));
+            break;
+        };
+        source_offset = offset;
+        // Una rejection di validazione input (WKB) non ha contesto di
+        // nodo: si continua a drenare/validare l'input per completare
+        // i conteggi, senza eseguire alcun kernel downstream.
+        if diagnostics.is_some() && diagnostic_context.is_none() {
+            continue;
+        }
+        let diagnostic_node = diagnostic_context
+            .as_ref()
+            .map(|(node, _, _): &(String, String, String)| node.as_str());
+        match run_streaming_chain(plan, segment_index, state, governed, diagnostic_node) {
+            Ok(output) => {
+                if diagnostics.is_none() {
+                    // P1: staging IPC bounded dell'accepted — il lease e'
+                    // rilasciato qui (drop di `output` a fine iterazione) e
+                    // ri-riservato per batch solo al replay, a scan
+                    // completato. Se una rejection tardiva arriva dopo, lo
+                    // staged viene scartato senza pubblicare nulla.
+                    let staged = stage_one_batch(
+                        &mut writer,
+                        &mut staging,
+                        state,
+                        "output",
+                        output_edge,
+                        &output.batch,
+                    );
+                    if let Err(error) = staged {
+                        terminal_error = Some(attach_partial_row_diagnostics(
+                            error,
+                            &mut diagnostics,
+                            "data_tools.output_staging_failed",
+                        ));
+                        break;
+                    }
+                    staged_meta.push_back(StagedBatchMeta {
+                        bytes: output.accounted_bytes(),
+                        sequence: output.seq.clone(),
+                    });
+                }
+            }
+            Err(error) => {
+                let Some(report) = error.row_diagnostics().cloned() else {
+                    terminal_error = Some(attach_partial_row_diagnostics(
+                        error,
+                        &mut diagnostics,
+                        "data_tools.processing_interrupted",
+                    ));
+                    break;
+                };
+                if diagnostic_context.is_none() {
+                    if let Some((node, operation, execution_id)) = error.execution_location() {
+                        diagnostic_context = Some((
+                            node.to_owned(),
+                            operation.to_owned(),
+                            execution_id
+                                .map_or_else(|| state.execution_id.clone(), ToOwned::to_owned),
+                        ));
+                    }
+                }
+                if let Err(error) = merge_row_diagnostics(&mut diagnostics, report, batch_offset) {
+                    terminal_error = Some(attach_partial_row_diagnostics(
+                        error,
+                        &mut diagnostics,
+                        "data_tools.diagnostic_merge_failed",
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+    if terminal_error.is_none() {
+        if let Some(active) = writer.as_mut() {
+            if let Err(error) = active.finish() {
+                terminal_error = Some(attach_partial_row_diagnostics(
+                    PlenoraError::Internal(format!("chiusura staging output: {error}")),
+                    &mut diagnostics,
+                    "data_tools.output_staging_failed",
+                ));
+            }
+        }
+    }
+    drop(writer);
+    if terminal_error.is_none() {
+        if let Err(error) = state.check_cancellation_point("output", "row_diagnostics") {
+            terminal_error = Some(attach_partial_row_diagnostics(
+                error,
+                &mut diagnostics,
+                "data_tools.cancelled_after_rejection",
+            ));
+        } else if let Some(report) = diagnostics.take() {
+            terminal_error = Some(complete_row_diagnostic_error(
+                report,
+                diagnostic_context.take(),
+            ));
+        }
+    }
+    if let Some(error) = terminal_error {
+        return StagingOutcome::Terminal(Some(error));
+    }
+    let Some((dir, path)) = staging.take() else {
+        return StagingOutcome::Terminal(None);
+    };
+    match std::fs::File::open(&path)
+        .map_err(PlenoraError::Io)
+        .and_then(|file| {
+            StreamReader::try_new(file, None)
+                .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
+        }) {
+        Ok(reader) => StagingOutcome::Replay(StagedReplay {
+            reader,
+            staged: staged_meta,
+            _dir: dir,
+        }),
+        Err(error) => StagingOutcome::Terminal(Some(error)),
+    }
+}
+
+/// Machinery R9.9 per i segmenti che emettono diagnostica: scansione
+/// completa (staging bounded degli accepted) seguita da replay lazy con
+/// ri-riserva per batch — nessun accepted esce prima dello scan completo,
+/// nessun lease trattenuto oltre il singolo batch.
+fn row_diagnostic_stream(
+    mut input: EdgeStream,
+    plan: Rc<ExecutionPlan>,
+    state: Rc<ExecState>,
+    segment_index: usize,
+) -> BatchStream {
+    let mut terminal: Option<std::vec::IntoIter<Result<GovernedBatch>>> = None;
+    let mut replay: Option<StagedReplay> = None;
+    Box::new(std::iter::from_fn(move || {
+        if terminal.is_none() && replay.is_none() {
+            match scan_row_diagnostic_segment(&mut input, &plan, &state, segment_index) {
+                StagingOutcome::Terminal(error) => {
+                    terminal = Some(
+                        error
+                            .map_or_else(Vec::new, |error| vec![Err(error)])
+                            .into_iter(),
+                    );
+                }
+                StagingOutcome::Replay(staged) => replay = Some(staged),
+            }
+        }
+        if let Some(active) = terminal.as_mut() {
+            return active.next();
+        }
+        let active = replay.as_mut()?;
+        let output_edge = &plan.segments()[segment_index].output_edge;
+        replay_staged_batch(&state, active, output_edge)
+    }))
 }
 
 /// Conversione di un panic di kernel in errore di nodo (ADR 3): il payload
@@ -2122,6 +2890,7 @@ fn run_streaming_chain(
     segment_index: usize,
     state: &ExecState,
     governed: GovernedBatch,
+    stop_after_node: Option<&str>,
 ) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
     let output_is_plan_output = segment.output_edge == plan.output_edge();
@@ -2152,6 +2921,7 @@ fn run_streaming_chain(
         None
     };
     let mut position = 0_usize;
+    let mut stopped_early = false;
     while position < kernels.len() {
         // ADR-0012: se il kernel apre un gruppo di fusione geo (>= 2 membri)
         // il gruppo e' eseguito col runner fuso su QUESTO batch; a
@@ -2159,7 +2929,8 @@ fn run_streaming_chain(
         // il batch (D12.7, fallback strumentato) e il loop standard
         // processa i kernel uno a uno.
         let group_len = fusion_group_len(kernels, position);
-        if group_len > 1
+        if stop_after_node.is_none()
+            && group_len > 1
             && try_run_fused_group(
                 segment,
                 state,
@@ -2212,7 +2983,15 @@ fn run_streaming_chain(
             position == 0,
             is_last,
         );
+        if stop_after_node == Some(kernel.node_id.as_str()) {
+            stopped_early = true;
+            break;
+        }
         position += 1;
+    }
+    if stopped_early {
+        drop(input_lease);
+        return Ok(GovernedBatch::new(batch, None, seq));
     }
     // Ricomposizione: quota dell'output acquisita prima di rilasciare
     // l'input (mai sotto-conteggio al confine, ADR-0002).
@@ -2505,10 +3284,12 @@ fn try_run_fused_group(
         }
         Err(FusedStepError::Kernel { index, error }) => {
             attempt.account(index, None, finished)?;
-            let error = step_error(
-                &kernels[index],
-                PlenoraError::InvalidPlan(error.to_string()),
-            );
+            let base = PlenoraError::InvalidPlan(error.to_string());
+            let base = match error.row_diagnostics() {
+                Some(diagnostics) => base.with_row_diagnostics(diagnostics.clone()),
+                None => base,
+            };
+            let error = step_error(&kernels[index], base);
             Err(state.with_diagnostics(error, batch_detail))
         }
         Err(FusedStepError::Measure { index, error }) => {
@@ -2609,9 +3390,12 @@ fn dispatch_kernel(
 ) -> Result<RecordBatch> {
     match &kernel.config {
         PreparedConfig::TableUnary(plan) => {
-            let (output, spill_metrics) =
-                table_engine::execute_batch_with_spill(batch, plan, Some(state.spill_directory()))
-                    .map_err(|error| step_error(kernel, error))?;
+            let (output, spill_metrics) = table_engine::execute_batch_with_spill_row_diagnostics(
+                batch,
+                plan,
+                Some(state.spill_directory()),
+            )
+            .map_err(|error| step_error(kernel, error))?;
             state.add_spill_metrics(spill_metrics);
             Ok(output)
         }
@@ -2676,8 +3460,17 @@ fn geo_transform_batch(
     state: &ExecState,
 ) -> Result<RecordBatch> {
     let prepared = state.one_to_one_prepared(kernel, &batch.schema(), params)?;
-    one_to_one_batch_prepared(batch, params, &prepared)
-        .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))
+    one_to_one_batch_prepared(batch, params, &prepared).map_err(|error| {
+        // R9.9: il trasporto allega la diagnostica row-scoped completa dei
+        // fallimenti di cella (indici batch-locali); qui si preserva e il
+        // wrapper di segmento la traduce in indici assoluti.
+        let base = PlenoraError::InvalidPlan(error.to_string());
+        let base = match error.row_diagnostics() {
+            Some(diagnostics) => base.with_row_diagnostics(diagnostics.clone()),
+            None => base,
+        };
+        step_error(kernel, base)
+    })
 }
 
 /// Misura geo "add column" (semantica v4): decodifica le celle WKB non null,
@@ -2699,16 +3492,32 @@ fn geo_measure_batch(
         .map_or("geometry", |geometry| geometry.name.as_str());
     let cells = batch_geometry_cells(batch, geometry_index, geometry_name)
         .map_err(|error| step_error(kernel, error))?;
+    // R9.9: i fallimenti per riga (decode di un intermedio non conforme o
+    // kernel scalare) sono raccolti COMPLETI prima di chiudere — stessa
+    // semantica del ramo fuso (`measure_cells`): mai il solo primo errore.
+    let mut failures: Vec<(u64, &'static str)> = Vec::new();
+    let mut first_error: Option<PlenoraError> = None;
+    let mut record = |row: usize, cause: &'static str, error: PlenoraError| {
+        failures.push((row as u64, cause));
+        if first_error.is_none() {
+            first_error = Some(error);
+        }
+    };
     let column: ArrayRef = match measure {
         MeasureKind::Area | MeasureKind::Length | MeasureKind::Perimeter => {
             let mut values: Vec<Option<f64>> = Vec::with_capacity(batch.num_rows());
             for row in 0..batch.num_rows() {
-                values.push(measure_f64(
-                    kernel,
-                    cells.value(row),
-                    measure,
-                    cells.is_null(row),
-                )?);
+                if cells.is_null(row) {
+                    values.push(None);
+                    continue;
+                }
+                match measure_f64_raw(cells.value(row), measure) {
+                    Ok(value) => values.push(Some(value)),
+                    Err((cause, error)) => {
+                        record(row, cause, error);
+                        values.push(None);
+                    }
+                }
             }
             std::sync::Arc::new(Float64Array::from(values))
         }
@@ -2719,12 +3528,23 @@ fn geo_measure_batch(
                     values.push(None);
                     continue;
                 }
-                let geometry = decode_geometry_cell(cells.value(row))
-                    .map_err(|error| step_error(kernel, error))?;
-                let value = operations::vertex_count(&geometry).map_err(|error| {
-                    step_error(kernel, PlenoraError::InvalidPlan(error.to_string()))
-                })?;
-                values.push(Some(value));
+                let decoded = decode_geometry_cell(cells.value(row))
+                    .map_err(|error| ("geometry.invalid_wkb", error))
+                    .and_then(|geometry| {
+                        operations::vertex_count(&geometry).map_err(|error| {
+                            (
+                                "geometry.kernel_failed",
+                                PlenoraError::InvalidPlan(error.to_string()),
+                            )
+                        })
+                    });
+                match decoded {
+                    Ok(value) => values.push(Some(value)),
+                    Err((cause, error)) => {
+                        record(row, cause, error);
+                        values.push(None);
+                    }
+                }
             }
             std::sync::Arc::new(UInt64Array::from(values))
         }
@@ -2735,40 +3555,54 @@ fn geo_measure_batch(
                     values.push(None);
                     continue;
                 }
-                let geometry = decode_geometry_cell(cells.value(row))
-                    .map_err(|error| step_error(kernel, error))?;
-                let value = operations::to_wkt(&geometry).map_err(|error| {
-                    step_error(kernel, PlenoraError::InvalidPlan(error.to_string()))
-                })?;
-                values.push(Some(value));
+                let decoded = decode_geometry_cell(cells.value(row))
+                    .map_err(|error| ("geometry.invalid_wkb", error))
+                    .and_then(|geometry| {
+                        operations::to_wkt(&geometry).map_err(|error| {
+                            (
+                                "geometry.kernel_failed",
+                                PlenoraError::InvalidPlan(error.to_string()),
+                            )
+                        })
+                    });
+                match decoded {
+                    Ok(value) => values.push(Some(value)),
+                    Err((cause, error)) => {
+                        record(row, cause, error);
+                        values.push(None);
+                    }
+                }
             }
             std::sync::Arc::new(StringArray::from(values))
         }
     };
+    if let Some(first) = first_error {
+        return Err(step_error(
+            kernel,
+            first.with_row_diagnostics(measure_row_diagnostics(&failures)),
+        ));
+    }
     // Lo schema di output e' quello del contratto (input + colonna misura),
     // un clone di Arc condiviso: nessuna ricostruzione per batch (V1),
     // stesso percorso degli altri kernel add-column.
     append_output_column(kernel, batch, column)
 }
 
-/// Misura scalare su una cella (null-in → null-out).
-fn measure_f64(
-    kernel: &PreparedKernel,
+/// Misura scalare su una cella (null gia' gestito dal chiamante): errore
+/// grezzo con la causa row-scoped, nella forma del ramo fuso.
+fn measure_f64_raw(
     payload: &[u8],
     measure: MeasureKind,
-    is_null: bool,
-) -> Result<Option<f64>> {
-    if is_null {
-        return Ok(None);
-    }
-    let geometry = decode_geometry_cell(payload).map_err(|error| step_error(kernel, error))?;
-    let value = match measure {
+) -> std::result::Result<f64, (&'static str, PlenoraError)> {
+    let geometry =
+        decode_geometry_cell(payload).map_err(|error| ("geometry.invalid_wkb", error))?;
+    match measure {
         MeasureKind::Area => operations::area(&geometry),
         MeasureKind::Length => operations::length(&geometry),
         MeasureKind::Perimeter => operations::perimeter(&geometry),
         MeasureKind::VertexCount | MeasureKind::ToWkt => {
-            return Err(step_error(
-                kernel,
+            return Err((
+                "geometry.kernel_failed",
                 PlenoraError::Internal(
                     "misura non f64 nel percorso scalare f64: invariante di dispatch violata"
                         .into(),
@@ -2776,8 +3610,54 @@ fn measure_f64(
             ));
         }
     }
-    .map_err(|error| step_error(kernel, PlenoraError::InvalidPlan(error.to_string())))?;
-    Ok(Some(value))
+    .map_err(|error| {
+        (
+            "geometry.kernel_failed",
+            PlenoraError::InvalidPlan(error.to_string()),
+        )
+    })
+}
+
+/// Report `plenora-row-diagnostics-v1` completo (batch-locale) per i
+/// fallimenti per riga di una misura geo: stessa forma del ramo fuso e del
+/// trasporto (scope Read, esempi bounded, nessun valore).
+fn measure_row_diagnostics(rows: &[(u64, &'static str)]) -> RowDiagnostics {
+    const EXAMPLES_LIMIT: u64 = 10;
+    let mut by_row = std::collections::BTreeMap::new();
+    for (row, cause) in rows {
+        by_row.entry(*row).or_insert(*cause);
+    }
+    let observed_total = by_row.len() as u64;
+    let mut counts = std::collections::BTreeMap::new();
+    let mut examples = Vec::new();
+    for (row, cause) in &by_row {
+        *counts.entry((*cause).to_owned()).or_insert(0_u64) += 1;
+        if u64::try_from(examples.len()).unwrap_or(u64::MAX) < EXAMPLES_LIMIT {
+            examples.push(RowDiagnosticExample {
+                source_index: *row,
+                cause: (*cause).to_owned(),
+                column: None,
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2838,8 +3718,13 @@ fn geo_from_wkt_batch(
         .as_any()
         .downcast_ref::<StringArray>()
         .ok_or_else(|| step_error(kernel, PlenoraError::Schema("colonna WKT non Utf8".into())))?;
-    let cells = plenora_kernels_geo::extensions::from_wkt_column(values, on_error)
-        .map_err(|error| step_error(kernel, error))?;
+    let column_name = batch.schema().field(wkt_column_index).name().clone();
+    let cells = plenora_kernels_geo::extensions::from_wkt_column_named(
+        values,
+        on_error,
+        Some(&column_name),
+    )
+    .map_err(|error| step_error(kernel, error))?;
     let geometry = BinaryArray::from(cells.iter().map(|cell| cell.as_deref()).collect::<Vec<_>>());
     append_output_column(kernel, batch, std::sync::Arc::new(geometry))
 }

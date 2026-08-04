@@ -1,20 +1,27 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    builder::{BinaryBuilder, BooleanBuilder, PrimitiveBuilder, StringBuilder, StringDictionaryBuilder},
+    builder::{
+        BinaryBuilder, BooleanBuilder, PrimitiveBuilder, StringBuilder, StringDictionaryBuilder,
+    },
     types::{ArrowPrimitiveType, Float64Type, Int32Type, Int64Type, UInt64Type},
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int64Array,
     PrimitiveArray, RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use plenora_core::{PlenoraError, Result};
 use crate::{column_index, replace_or_append, scalar_as_string};
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -250,7 +257,13 @@ fn fill_boolean(values: &BooleanArray, method: &FillMethod, fixed: Option<bool>)
                 return Arc::new(values.clone());
             };
             let out: Vec<bool> = (0..values.len())
-                .map(|row| if values.is_null(row) { fixed } else { values.value(row) })
+                .map(|row| {
+                    if values.is_null(row) {
+                        fixed
+                    } else {
+                        values.value(row)
+                    }
+                })
                 .collect();
             Arc::new(BooleanArray::from(out))
         }
@@ -474,8 +487,9 @@ pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
 
 fn cast_failure<T>(errors: CastErrors, message: &str) -> Result<Option<T>> {
     match errors {
-        CastErrors::Coerce => Ok(None),
-        CastErrors::Raise => Err(PlenoraError::Schema(message.into())),
+        CastErrors::Coerce | CastErrors::Raise => Err(PlenoraError::Internal(format!(
+            "prevalidazione row-scoped incoerente: {message}"
+        ))),
         CastErrors::Ignore => Err(PlenoraError::InvalidPlan(
             "errors=ignore non puo' garantire un tipo Arrow omogeneo; usare coerce o raise".into(),
         )),
@@ -615,8 +629,8 @@ fn source_strings(source: &ArrayRef) -> Result<Vec<Option<String>>> {
 /// quindi si riproduce il parse testuale. "-0" (da -0.0) parse a 0.
 fn cast_f64_i64(value: f64) -> Option<i64> {
     const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
-    // Confronto esatto voluto: riproduce il parse testuale del generico
-    // (finito e intero per bit), come documentato sopra la funzione.
+                                                // Confronto esatto voluto: riproduce il parse testuale del generico
+                                                // (finito e intero per bit), come documentato sopra la funzione.
     #[allow(clippy::float_cmp)]
     if !value.is_finite() || value != value.trunc() {
         return None;
@@ -631,8 +645,8 @@ fn cast_f64_i64(value: f64) -> Option<i64> {
 /// segno: i negativi falliscono sempre, -0.0 fallisce ("-0").
 fn cast_f64_u64(value: f64) -> Option<u64> {
     const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
-    // Come `cast_f64_i64`: confronti esatti voluti, riproducono il parse
-    // testuale del generico incluso il rifiuto di "-0".
+                                                // Come `cast_f64_i64`: confronti esatti voluti, riproducono il parse
+                                                // testuale del generico incluso il rifiuto di "-0".
     #[allow(clippy::float_cmp)]
     if !value.is_finite()
         || value != value.trunc()
@@ -680,14 +694,14 @@ fn parse_date32_fast(value: &str, format: &str) -> Option<i32> {
     parse_date32(value, format)
 }
 
-/// Target `str`: i null diventano stringa vuota (`unwrap_or_default` del generico).
+/// Target `str`: i null sorgente restano null.
 fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
     let len = source.len();
     let mut builder = StringBuilder::with_capacity(len, len * 8);
     if let Some(values) = source.as_any().downcast_ref::<StringArray>() {
         for row in 0..len {
             if values.is_null(row) {
-                builder.append_value("");
+                builder.append_null();
             } else {
                 builder.append_value(values.value(row));
             }
@@ -695,7 +709,7 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
     } else if let Some(values) = source.as_any().downcast_ref::<Int64Array>() {
         for row in 0..len {
             if values.is_null(row) {
-                builder.append_value("");
+                builder.append_null();
             } else {
                 builder.append_value(values.value(row).to_string());
             }
@@ -703,7 +717,7 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
     } else if let Some(values) = source.as_any().downcast_ref::<UInt64Array>() {
         for row in 0..len {
             if values.is_null(row) {
-                builder.append_value("");
+                builder.append_null();
             } else {
                 builder.append_value(values.value(row).to_string());
             }
@@ -711,7 +725,7 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
     } else if let Some(values) = source.as_any().downcast_ref::<Float64Array>() {
         for row in 0..len {
             if values.is_null(row) {
-                builder.append_value("");
+                builder.append_null();
             } else {
                 builder.append_value(values.value(row).to_string());
             }
@@ -719,7 +733,7 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
     } else if let Some(values) = source.as_any().downcast_ref::<BooleanArray>() {
         for row in 0..len {
             if values.is_null(row) {
-                builder.append_value("");
+                builder.append_null();
             } else {
                 builder.append_value(values.value(row).to_string());
             }
@@ -738,8 +752,7 @@ fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>
         return Ok(Some(Arc::new(values.clone())));
     }
     let len = source.len();
-    let out: Vec<Option<i64>> = if let Some(values) =
-        source.as_any().downcast_ref::<UInt64Array>()
+    let out: Vec<Option<i64>> = if let Some(values) = source.as_any().downcast_ref::<UInt64Array>()
     {
         (0..len)
             .map(|row| {
@@ -853,7 +866,8 @@ fn cast_to_bool(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef
         return Ok(Some(Arc::new(values.clone())));
     }
     let len = source.len();
-    let out: Vec<Option<bool>> = if let Some(values) = source.as_any().downcast_ref::<Int64Array>() {
+    let out: Vec<Option<bool>> = if let Some(values) = source.as_any().downcast_ref::<Int64Array>()
+    {
         // Il generico parsa la stringa: "1" -> true, "0" -> false, altro fallisce.
         (0..len)
             .map(|row| {
@@ -1065,7 +1079,9 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Arc::new(TimestampMillisecondArray::from(out).with_timezone_opt(config.timezone.clone()))
+            Arc::new(
+                TimestampMillisecondArray::from(out).with_timezone_opt(config.timezone.clone()),
+            )
         }
         TargetType::Decimal128 => {
             let Some(values) = source.as_any().downcast_ref::<StringArray>() else {
@@ -1123,20 +1139,47 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
     Ok(Some(array))
 }
 
-/// Converte la colonna al tipo `target_type` secondo la politica `errors`
-/// (`coerce` -> null, `raise` -> errore sulla prima riga fallita).
+/// Converte la colonna al tipo `target_type`.
+///
+/// I token legacy `coerce` e `raise` sono entrambi fail-closed per i target
+/// fallibili: nessun valore invalido viene convertito in null e tutte le
+/// righe osservate entrano nella diagnostica strutturata.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente; conversione fallita con `errors = raise`;
-///   tipo sorgente fuori dal profilo scalare (percorso generico, via
+/// - `Schema`: colonna assente; tipo sorgente fuori dal profilo scalare (via
 ///   `scalar_as_string`); errore Arrow nella costruzione (es. precision/
 ///   scale decimal128, builder dictionary);
+/// - `DataMapping`: almeno una riga non convertibile, con row diagnostics;
 /// - `InvalidPlan`: `errors = ignore` (nessun tipo Arrow omogeneo garantibile);
 ///   `decimal128` senza `precision`/`scale`.
 pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
+    type_cast_with_source_offset(batch, config, 0)
+}
+
+/// Esegue il cast usando un offset assoluto della stream sorgente per la diagnostica.
+///
+/// # Errors
+///
+/// Restituisce un errore se la colonna non esiste, il tipo sorgente non è supportato,
+/// il cast viola la policy dichiarata, un indice assoluto eccede `u64` oppure una riga
+/// non è convertibile. In quest'ultimo caso l'errore contiene la diagnostica row-scoped.
+pub fn type_cast_with_source_offset(
+    batch: &RecordBatch,
+    config: &TypeCast,
+    source_offset: u64,
+) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {
+        if let Some(report) = cast_row_diagnostics(source, &config.column, config, source_offset)? {
+            return Err(PlenoraError::DataMapping(
+                "conversione rifiutata; consultare row_diagnostics".to_owned(),
+            )
+            .with_phase(ErrorPhase::Read)
+            .with_row_diagnostics(report));
+        }
+    }
     let array = match type_cast_fast(source, config)? {
         Some(array) => array,
         None => type_cast_generic(source, config)?,
@@ -1150,6 +1193,131 @@ pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> 
     )
 }
 
+fn cast_row_diagnostics(
+    source: &ArrayRef,
+    column: &str,
+    config: &TypeCast,
+    source_offset: u64,
+) -> Result<Option<RowDiagnostics>> {
+    const EXAMPLES_LIMIT: u64 = 10;
+    let mut observed_total = 0_u64;
+    let mut counts = BTreeMap::new();
+    let mut examples = Vec::new();
+    for row in 0..source.len() {
+        if source.is_null(row) {
+            continue;
+        }
+        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+            continue;
+        };
+        let Some(cause) = string_cast_rejection(&value, config) else {
+            continue;
+        };
+        observed_total = observed_total.checked_add(1).ok_or_else(|| {
+            PlenoraError::Internal("overflow del conteggio diagnostico".to_owned())
+        })?;
+        let count = counts.entry(cause.to_owned()).or_insert(0_u64);
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow del conteggio causa".to_owned()))?;
+        let local_index = u64::try_from(row).map_err(|_| {
+            PlenoraError::Internal("indice sorgente non rappresentabile".to_owned())
+        })?;
+        let source_index = source_offset
+            .checked_add(local_index)
+            .ok_or_else(|| PlenoraError::Internal("overflow dell'indice sorgente".to_owned()))?;
+        if u64::try_from(examples.len()).map_err(|_| {
+            PlenoraError::Internal("conteggio esempi non rappresentabile".to_owned())
+        })? < EXAMPLES_LIMIT
+        {
+            examples.push(RowDiagnosticExample {
+                source_index,
+                cause: cause.to_owned(),
+                column: Some(column.to_owned()),
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    if observed_total == 0 {
+        return Ok(None);
+    }
+    Ok(Some(RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        total: Some(observed_total),
+        observed_total,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        input_total: None,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    }))
+}
+
+fn string_cast_rejection(value: &str, config: &TypeCast) -> Option<&'static str> {
+    let trimmed = value.trim();
+    let invalid = match config.target_type {
+        TargetType::Str | TargetType::BinaryUtf8 | TargetType::DictionaryUtf8 => return None,
+        TargetType::Int => trimmed.parse::<i64>().is_err(),
+        TargetType::Float => {
+            if trimmed.contains(',') {
+                trimmed.replace(',', ".").parse::<f64>().is_err()
+            } else {
+                trimmed.parse::<f64>().is_err()
+            }
+        }
+        TargetType::Bool => !matches!(
+            trimmed.to_lowercase().as_str(),
+            "true"
+                | "1"
+                | "yes"
+                | "si"
+                | "sì"
+                | "vero"
+                | "t"
+                | "y"
+                | "s"
+                | "false"
+                | "0"
+                | "no"
+                | "falso"
+                | "f"
+                | "n"
+        ),
+        TargetType::Uint64 => trimmed.parse::<u64>().is_err(),
+        TargetType::Date => parse_date(value, &config.date_format, false).is_none(),
+        TargetType::Datetime => parse_date(value, &config.date_format, true).is_none(),
+        TargetType::Date32 => parse_date32_fast(value, &config.date_format).is_none(),
+        TargetType::TimestampMillis => {
+            parse_timestamp_millis(value, &config.date_format, config.timezone.as_deref()).is_none()
+        }
+        TargetType::Decimal128 => match (config.precision, config.scale) {
+            (Some(precision), Some(scale)) => parse_decimal128(value, precision, scale).is_none(),
+            _ => return None,
+        },
+    };
+    if !invalid {
+        return None;
+    }
+    Some(match config.target_type {
+        TargetType::Int => "conversion.invalid_integer",
+        TargetType::Float => "conversion.invalid_float",
+        TargetType::Bool => "conversion.invalid_boolean",
+        TargetType::Uint64 => "conversion.invalid_unsigned_integer",
+        TargetType::Date | TargetType::Date32 => "conversion.invalid_date",
+        TargetType::Datetime => "conversion.invalid_datetime",
+        TargetType::TimestampMillis => "conversion.invalid_timestamp",
+        TargetType::Decimal128 => "conversion.invalid_decimal",
+        TargetType::Str | TargetType::BinaryUtf8 | TargetType::DictionaryUtf8 => return None,
+    })
+}
+
 /// Percorso generico originale (conversione scalare per riga): fallback per le
 /// combinazioni non coperte dal fast path e oracolo dei test di equivalenza.
 #[allow(clippy::too_many_lines)] // One exhaustive dispatcher keeps all cast policies auditable.
@@ -1157,9 +1325,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
     let array: ArrayRef = match config.target_type {
         TargetType::Str => Arc::new(StringArray::from(
             (0..source.len())
-                .map(|row| {
-                    scalar_as_string(source.as_ref(), row).map(|v| Some(v.unwrap_or_default()))
-                })
+                .map(|row| scalar_as_string(source.as_ref(), row))
                 .collect::<Result<Vec<_>>>()?,
         )),
         TargetType::Int => Arc::new(Int64Array::from(
@@ -1383,7 +1549,8 @@ mod tests {
                 Value::String(v) => Some(v.clone()),
                 other => Some(other.to_string()),
             };
-            let mut out: Vec<Option<String>> = values.iter().map(|v| v.map(str::to_owned)).collect();
+            let mut out: Vec<Option<String>> =
+                values.iter().map(|v| v.map(str::to_owned)).collect();
             fill_options(&mut out, method, fixed);
             return Ok(Arc::new(StringArray::from(out)));
         }
@@ -1826,7 +1993,12 @@ mod tests {
     #[test]
     fn cast_fallback_combinations_match_generic_through_public_entry() {
         let sources: Vec<ArrayRef> = vec![
-            Arc::new(Date32Array::from(vec![Some(0), Some(19000), Some(-1), None])),
+            Arc::new(Date32Array::from(vec![
+                Some(0),
+                Some(19000),
+                Some(-1),
+                None,
+            ])),
             Arc::new(TimestampMillisecondArray::from(vec![
                 Some(0),
                 Some(1_700_000_000_000),
@@ -1839,13 +2011,18 @@ mod tests {
             for target in all_targets() {
                 for errors in all_errors() {
                     let config = cast_config(target, errors);
-                    let production = type_cast(&batch, &config).map_err(|e| format!("{e:?}"));
-                    let generic = type_cast_generic(batch.column(0), &config)
-                        .map(single_batch)
-                        .map_err(|e| format!("{e:?}"));
+                    let production = type_cast(&batch, &config);
+                    let generic = type_cast_generic(batch.column(0), &config).map(single_batch);
                     match (production, generic) {
                         (Ok(production), Ok(generic)) => assert_eq!(production, generic),
-                        (Err(production), Err(generic)) => assert_eq!(production, generic),
+                        (Err(production), _) if production.row_diagnostics().is_some() => {
+                            assert!(production
+                                .row_diagnostics()
+                                .is_some_and(|report| report.observed_total > 0));
+                        }
+                        (Err(production), Err(generic)) => {
+                            assert_eq!(format!("{production:?}"), format!("{generic:?}"));
+                        }
                         (production, generic) => panic!(
                             "fallback {:?}: produzione/generico divergono (prod ok={}, gen ok={})",
                             config.target_type,
@@ -1896,9 +2073,18 @@ mod tests {
     #[test]
     fn coalesce_fast_matches_generic_on_numeric_types() {
         assert_coalesce_equiv(vec![
-            ("a", Arc::new(Int64Array::from(vec![None, Some(1), None, Some(4)]))),
-            ("b", Arc::new(Int64Array::from(vec![None, None, Some(3), Some(5)]))),
-            ("c", Arc::new(Int64Array::from(vec![Some(9), Some(9), Some(9), None]))),
+            (
+                "a",
+                Arc::new(Int64Array::from(vec![None, Some(1), None, Some(4)])),
+            ),
+            (
+                "b",
+                Arc::new(Int64Array::from(vec![None, None, Some(3), Some(5)])),
+            ),
+            (
+                "c",
+                Arc::new(Int64Array::from(vec![Some(9), Some(9), Some(9), None])),
+            ),
         ]);
         assert_coalesce_equiv(vec![
             ("a", Arc::new(UInt64Array::from(vec![None, Some(u64::MAX)]))),
@@ -1911,21 +2097,40 @@ mod tests {
             ),
             (
                 "b",
-                Arc::new(Float64Array::from(vec![Some(2.5), None, Some(f64::INFINITY)])),
+                Arc::new(Float64Array::from(vec![
+                    Some(2.5),
+                    None,
+                    Some(f64::INFINITY),
+                ])),
             ),
         ]);
         assert_coalesce_equiv(vec![
-            ("a", Arc::new(BooleanArray::from(vec![None, Some(true), None]))),
-            ("b", Arc::new(BooleanArray::from(vec![Some(false), None, Some(true)]))),
+            (
+                "a",
+                Arc::new(BooleanArray::from(vec![None, Some(true), None])),
+            ),
+            (
+                "b",
+                Arc::new(BooleanArray::from(vec![Some(false), None, Some(true)])),
+            ),
         ]);
     }
 
     #[test]
     fn coalesce_fast_matches_generic_on_utf8_and_edge_cases() {
         assert_coalesce_equiv(vec![
-            ("a", Arc::new(StringArray::from(vec![None, Some("x"), None]))),
-            ("b", Arc::new(StringArray::from(vec![None, None, Some("y")]))),
-            ("c", Arc::new(StringArray::from(vec![Some("z"), Some("z"), None]))),
+            (
+                "a",
+                Arc::new(StringArray::from(vec![None, Some("x"), None])),
+            ),
+            (
+                "b",
+                Arc::new(StringArray::from(vec![None, None, Some("y")])),
+            ),
+            (
+                "c",
+                Arc::new(StringArray::from(vec![Some("z"), Some("z"), None])),
+            ),
         ]);
         // Prima colonna senza null: scorciatoia identita'.
         assert_coalesce_equiv(vec![
@@ -1942,6 +2147,236 @@ mod tests {
             Arc::new(Int64Array::from(Vec::<Option<i64>>::new())),
         )]);
         assert_coalesce_equiv(vec![("a", Arc::new(StringArray::from(vec![Some("solo")])))]);
+    }
+
+    #[test]
+    fn invalid_dates_return_complete_row_diagnostics_instead_of_coerced_nulls() {
+        let values = (0..1_025)
+            .map(|source_index| {
+                if source_index == 4 {
+                    Some("2026-02-30".to_owned())
+                } else if source_index == 1_004 {
+                    Some("not-a-date".to_owned())
+                } else {
+                    Some("2026-08-02".to_owned())
+                }
+            })
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_from_iter([(
+            "effective_date",
+            Arc::new(StringArray::from(values)) as ArrayRef,
+        )])
+        .unwrap();
+        let config = TypeCast {
+            column: "effective_date".to_owned(),
+            target_type: TargetType::Date32,
+            errors: CastErrors::Coerce,
+            date_format: String::new(),
+            timezone: None,
+            precision: None,
+            scale: None,
+        };
+
+        let error = type_cast(&batch, &config).expect_err("date invalide accettate");
+        let diagnostics = error.row_diagnostics().expect("diagnostica persa");
+        assert_eq!(diagnostics.contract, "plenora-row-diagnostics-v1");
+        assert_eq!(diagnostics.index_basis, "source_row_zero_based");
+        assert_eq!(diagnostics.total, Some(2));
+        assert_eq!(diagnostics.observed_total, 2);
+        assert_eq!(diagnostics.counts["conversion.invalid_date"], 2);
+        assert_eq!(
+            diagnostics
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![4, 1_004]
+        );
+        assert!(diagnostics
+            .examples
+            .iter()
+            .all(|example| example.column.as_deref() == Some("effective_date")));
+        assert!(!error.to_string().contains("2026-02-30"));
+        assert!(!error.to_string().contains("not-a-date"));
+    }
+
+    #[test]
+    fn invalid_date_indices_include_the_stream_source_offset() {
+        let batch = RecordBatch::try_from_iter([(
+            "effective_date",
+            Arc::new(StringArray::from(vec![
+                Some("2026-08-02"),
+                Some("2026-08-02"),
+                Some("2026-08-02"),
+                Some("2026-08-02"),
+                Some("not-a-date"),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let config = TypeCast {
+            column: "effective_date".to_owned(),
+            target_type: TargetType::Date32,
+            errors: CastErrors::Coerce,
+            date_format: String::new(),
+            timezone: None,
+            precision: None,
+            scale: None,
+        };
+
+        let error = type_cast_with_source_offset(&batch, &config, 1_000)
+            .expect_err("date invalida accettata");
+        let diagnostics = error.row_diagnostics().expect("diagnostica persa");
+        assert_eq!(diagnostics.observed_total, 1);
+        assert_eq!(diagnostics.examples[0].source_index, 1_004);
+    }
+
+    #[test]
+    fn invalid_dates_raise_policy_also_returns_complete_row_diagnostics() {
+        let batch = RecordBatch::try_from_iter([(
+            "effective_date",
+            Arc::new(StringArray::from(vec![
+                Some("bad"),
+                Some("2026-08-02"),
+                Some("bad"),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let config = TypeCast {
+            column: "effective_date".to_owned(),
+            target_type: TargetType::Date32,
+            errors: CastErrors::Raise,
+            date_format: String::new(),
+            timezone: None,
+            precision: None,
+            scale: None,
+        };
+
+        let error = type_cast(&batch, &config).expect_err("date invalide accettate con Raise");
+        let report = error.row_diagnostics().expect("diagnostica mancante");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.total, Some(2));
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+    }
+
+    #[test]
+    fn invalid_date_examples_are_bounded_without_truncating_counts() {
+        let batch = RecordBatch::try_from_iter([(
+            "effective_date",
+            Arc::new(StringArray::from(vec![Some("bad"); 12])) as ArrayRef,
+        )])
+        .unwrap();
+        let config = TypeCast {
+            column: "effective_date".to_owned(),
+            target_type: TargetType::Date32,
+            errors: CastErrors::Coerce,
+            date_format: String::new(),
+            timezone: None,
+            precision: None,
+            scale: None,
+        };
+
+        let error = type_cast(&batch, &config).expect_err("date invalide accettate");
+        let report = error.row_diagnostics().expect("diagnostica mancante");
+        assert_eq!(report.observed_total, 12);
+        assert_eq!(report.total, Some(12));
+        assert_eq!(report.counts["conversion.invalid_date"], 12);
+        assert_eq!(report.examples.len(), 10);
+        assert!(report.examples_truncated);
+    }
+
+    #[test]
+    fn string_cast_targets_reject_invalid_rows_with_stable_causes() {
+        let cases = [
+            (TargetType::Int, "conversion.invalid_integer", None, None),
+            (TargetType::Float, "conversion.invalid_float", None, None),
+            (TargetType::Bool, "conversion.invalid_boolean", None, None),
+            (
+                TargetType::Uint64,
+                "conversion.invalid_unsigned_integer",
+                None,
+                None,
+            ),
+            (TargetType::Date, "conversion.invalid_date", None, None),
+            (
+                TargetType::Datetime,
+                "conversion.invalid_datetime",
+                None,
+                None,
+            ),
+            (TargetType::Date32, "conversion.invalid_date", None, None),
+            (
+                TargetType::TimestampMillis,
+                "conversion.invalid_timestamp",
+                None,
+                None,
+            ),
+            (
+                TargetType::Decimal128,
+                "conversion.invalid_decimal",
+                Some(18),
+                Some(2),
+            ),
+        ];
+        for (target_type, cause, precision, scale) in cases {
+            let batch = RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![Some("not-valid")])) as ArrayRef,
+            )])
+            .unwrap();
+            let config = TypeCast {
+                column: "value".to_owned(),
+                target_type,
+                errors: CastErrors::Coerce,
+                date_format: String::new(),
+                timezone: None,
+                precision,
+                scale,
+            };
+            let error = type_cast(&batch, &config).expect_err("valore invalido accettato");
+            let report = error.row_diagnostics().expect("diagnostica mancante");
+            assert_eq!(report.counts[cause], 1, "target {target_type:?}");
+            assert_eq!(report.examples[0].cause, cause);
+        }
+    }
+
+    #[test]
+    fn type_cast_str_preserves_null_in_fast_and_generic_paths() {
+        let config = TypeCast {
+            column: "value".to_owned(),
+            target_type: TargetType::Str,
+            errors: CastErrors::Coerce,
+            date_format: String::new(),
+            timezone: None,
+            precision: None,
+            scale: None,
+        };
+        for source in [
+            Arc::new(Int64Array::from(vec![Some(7), None])) as ArrayRef,
+            Arc::new(Date32Array::from(vec![Some(0), None])) as ArrayRef,
+        ] {
+            let output = type_cast_fast(&source, &config)
+                .expect("fast path")
+                .unwrap_or_else(|| type_cast_generic(&source, &config).expect("fallback"));
+            let strings = output
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("output Utf8");
+            assert!(strings.is_null(1));
+
+            let generic = type_cast_generic(&source, &config).expect("oracolo generico");
+            let generic = generic
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("output generico Utf8");
+            assert!(generic.is_null(1));
+        }
     }
 
     #[test]

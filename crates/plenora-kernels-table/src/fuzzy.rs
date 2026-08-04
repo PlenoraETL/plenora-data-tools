@@ -131,10 +131,7 @@ impl FuzzyJoin {
 ///   `max_candidates` nullo; nome della colonna score vuoto o oltre 1024
 ///   byte (come `validate_output_name`).
 pub fn validate_config(config: &FuzzyJoin) -> Result<()> {
-    if !config.threshold.is_finite()
-        || config.threshold <= 0.0
-        || config.threshold > 1.0
-    {
+    if !config.threshold.is_finite() || config.threshold <= 0.0 || config.threshold > 1.0 {
         return Err(PlenoraError::InvalidPlan(
             "threshold deve essere in (0, 1]".into(),
         ));
@@ -319,7 +316,9 @@ fn levenshtein_distance_scratch(
         current[0] = row + 1;
         for (col, &b) in right.iter().enumerate() {
             let substitution = previous[col] + usize::from(a != b);
-            current[col + 1] = (previous[col + 1] + 1).min(current[col] + 1).min(substitution);
+            current[col + 1] = (previous[col + 1] + 1)
+                .min(current[col] + 1)
+                .min(substitution);
         }
         std::mem::swap(previous, current);
     }
@@ -536,19 +535,17 @@ pub fn fuzzy_join(
                     }
                 };
                 for &right_row in candidates {
-                    let null_block_error = || {
-                        PlenoraError::Internal(
-                            "righe destre nei blocchi non sono null".into(),
-                        )
-                    };
+                    let null_block_error =
+                        || PlenoraError::Internal("righe destre nei blocchi non sono null".into());
                     let similarity = match (config.metric, &left_decoded, &right_decoded) {
                         (
                             FuzzyMetric::JaroWinkler,
                             FuzzyRowForm::Chars(left_chars),
                             FuzzyForm::Chars(right_chars),
                         ) => {
-                            let right_chars =
-                                right_chars[right_row].as_ref().ok_or_else(null_block_error)?;
+                            let right_chars = right_chars[right_row]
+                                .as_ref()
+                                .ok_or_else(null_block_error)?;
                             jaro_winkler_chars(left_chars, right_chars, &mut scratch)
                         }
                         (
@@ -556,8 +553,9 @@ pub fn fuzzy_join(
                             FuzzyRowForm::Chars(left_chars),
                             FuzzyForm::Chars(right_chars),
                         ) => {
-                            let right_chars =
-                                right_chars[right_row].as_ref().ok_or_else(null_block_error)?;
+                            let right_chars = right_chars[right_row]
+                                .as_ref()
+                                .ok_or_else(null_block_error)?;
                             levenshtein_normalized_chars(left_chars, right_chars, &mut scratch)
                         }
                         (
@@ -565,14 +563,14 @@ pub fn fuzzy_join(
                             FuzzyRowForm::Tokens(left_tokens),
                             FuzzyForm::Tokens(right_tokens),
                         ) => {
-                            let right_tokens =
-                                right_tokens[right_row].as_ref().ok_or_else(null_block_error)?;
+                            let right_tokens = right_tokens[right_row]
+                                .as_ref()
+                                .ok_or_else(null_block_error)?;
                             jaccard_sets(left_tokens, right_tokens)
                         }
                         _ => {
                             return Err(PlenoraError::Internal(
-                                "forma decodificata incoerente con la metrica"
-                                    .into(),
+                                "forma decodificata incoerente con la metrica".into(),
                             ));
                         }
                     };
@@ -591,7 +589,9 @@ pub fn fuzzy_join(
             scores.push(None);
         }
         if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("fuzzy_join supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "fuzzy_join supera max_rows".into(),
+            ));
         }
     }
     let mut output = combine_horizontal(
@@ -674,11 +674,17 @@ mod tests {
 
     fn people() -> (RecordBatch, RecordBatch) {
         let left = batch(vec![
-            ("name", utf8_column_of(&[Some("Martha"), Some("Müller"), None])),
+            (
+                "name",
+                utf8_column_of(&[Some("Martha"), Some("Müller"), None]),
+            ),
             ("lv", i64_column_of(&[1, 2, 3])),
         ]);
         let right = batch(vec![
-            ("name", utf8_column_of(&[Some("Marhta"), Some("Muller"), None])),
+            (
+                "name",
+                utf8_column_of(&[Some("Marhta"), Some("Muller"), None]),
+            ),
             ("rv", i64_column_of(&[10, 20, 30])),
         ]);
         (left, right)
@@ -699,20 +705,29 @@ mod tests {
     #[test]
     fn jaro_winkler_matches_reference_values() {
         let martha = jaro_winkler("MARTHA", "MARHTA");
-        assert!((martha - 0.9611).abs() < 1e-3, "jaro_winkler(MARTHA, MARHTA) = {martha}");
+        assert!(
+            (martha - 0.9611).abs() < 1e-3,
+            "jaro_winkler(MARTHA, MARHTA) = {martha}"
+        );
         assert!((jaro_winkler("abc", "abc") - 1.0).abs() < f64::EPSILON);
         assert!((jaro_winkler("", "") - 1.0).abs() < f64::EPSILON);
         assert!((jaro_winkler("abc", "xyz")).abs() < f64::EPSILON);
         assert!((jaro_winkler("", "abc")).abs() < f64::EPSILON);
         // Simmetrica.
         let dwight = jaro_winkler("DWAYNE", "DUANE");
-        assert!((dwight - 0.84).abs() < 1e-2, "jaro_winkler(DWAYNE, DUANE) = {dwight}");
+        assert!(
+            (dwight - 0.84).abs() < 1e-2,
+            "jaro_winkler(DWAYNE, DUANE) = {dwight}"
+        );
     }
 
     #[test]
     fn levenshtein_normalized_matches_reference_values() {
         let kitten = levenshtein_normalized("kitten", "sitting");
-        assert!((kitten - (1.0 - 3.0 / 7.0)).abs() < 1e-9, "kitten/sitting = {kitten}");
+        assert!(
+            (kitten - (1.0 - 3.0 / 7.0)).abs() < 1e-9,
+            "kitten/sitting = {kitten}"
+        );
         assert!((levenshtein_normalized("abc", "abc") - 1.0).abs() < f64::EPSILON);
         assert!((levenshtein_normalized("", "abc")).abs() < f64::EPSILON);
         assert!((levenshtein_normalized("", "") - 1.0).abs() < f64::EPSILON);
@@ -823,7 +838,11 @@ mod tests {
             .downcast_ref::<StringArray>()
             .expect("name_R Utf8");
         assert!(right_names.is_null(1) && right_names.is_null(2));
-        assert!(output.schema().field_with_name("score").expect("score").is_nullable());
+        assert!(output
+            .schema()
+            .field_with_name("score")
+            .expect("score")
+            .is_nullable());
     }
 
     #[test]
@@ -834,12 +853,12 @@ mod tests {
         let mut json = base_config();
         json["metric"] = serde_json::json!("levenshtein");
         json["threshold"] = serde_json::json!(0.5);
-        let prefix = fuzzy_join(&left, &right, &config(json.clone()), &Limits::default())
-            .expect("prefix");
+        let prefix =
+            fuzzy_join(&left, &right, &config(json.clone()), &Limits::default()).expect("prefix");
         assert_eq!(prefix.num_rows(), 0, "prefix diverso: nessun candidato");
         json["blocking"] = serde_json::json!("soundex");
-        let soundex = fuzzy_join(&left, &right, &config(json.clone()), &Limits::default())
-            .expect("soundex");
+        let soundex =
+            fuzzy_join(&left, &right, &config(json.clone()), &Limits::default()).expect("soundex");
         assert_eq!(soundex.num_rows(), 1, "soundex uguale: candidato trovato");
         // none: tutte le coppie candidate (qui 1x1).
         json["blocking"] = serde_json::json!("none");
@@ -868,16 +887,23 @@ mod tests {
         assert_eq!(output.num_rows(), 1, "default case-insensitive");
         let mut json = base_config();
         json["case_sensitive"] = serde_json::json!(true);
-        let output = fuzzy_join(&left, &right, &config(json), &Limits::default())
-            .expect("case-sensitive");
-        assert_eq!(output.num_rows(), 0, "case-sensitive: prefisso 'MA' vs 'ma'");
+        let output =
+            fuzzy_join(&left, &right, &config(json), &Limits::default()).expect("case-sensitive");
+        assert_eq!(
+            output.num_rows(),
+            0,
+            "case-sensitive: prefisso 'MA' vs 'ma'"
+        );
     }
 
     #[test]
     fn duplicate_right_keys_match_in_right_index_order() {
         let left = batch(vec![("name", utf8_column_of(&[Some("Martha")]))]);
         let right = batch(vec![
-            ("name", utf8_column_of(&[Some("Marhta"), Some("Marhta"), Some("xyz")])),
+            (
+                "name",
+                utf8_column_of(&[Some("Marhta"), Some("Marhta"), Some("xyz")]),
+            ),
             ("rv", i64_column_of(&[5, 9, 1])),
         ]);
         let output = fuzzy_join(&left, &right, &config(base_config()), &Limits::default())
@@ -893,8 +919,14 @@ mod tests {
 
     #[test]
     fn unicode_keys_compare_per_character() {
-        let left = batch(vec![("name", utf8_column_of(&[Some("André"), Some("東京タワー")]))]);
-        let right = batch(vec![("name", utf8_column_of(&[Some("Andre"), Some("東京タワー")]))]);
+        let left = batch(vec![(
+            "name",
+            utf8_column_of(&[Some("André"), Some("東京タワー")]),
+        )]);
+        let right = batch(vec![(
+            "name",
+            utf8_column_of(&[Some("Andre"), Some("東京タワー")]),
+        )]);
         let mut json = base_config();
         json["metric"] = serde_json::json!("levenshtein");
         json["threshold"] = serde_json::json!(0.8);

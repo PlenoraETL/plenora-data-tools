@@ -196,7 +196,10 @@ mod tests {
         let mut catalog_ids: Vec<&str> = CATALOG.iter().map(|op| op.id).collect();
         ids.sort_unstable();
         catalog_ids.sort_unstable();
-        assert_eq!(ids, catalog_ids, "ogni op del catalogo esattamente una volta");
+        assert_eq!(
+            ids, catalog_ids,
+            "ogni op del catalogo esattamente una volta"
+        );
     }
 
     #[test]

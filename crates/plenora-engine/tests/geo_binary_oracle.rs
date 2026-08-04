@@ -377,9 +377,15 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
             reason.clone(),
         ),
         PlenoraError::Io(error) => ("Io", None, None, error.to_string()),
+        PlenoraError::Replayed(replayed) => (
+            "Replayed",
+            replayed.node.clone(),
+            replayed.operation.clone(),
+            replayed.message.clone(),
+        ),
         // Wrapper di fase: la firma vede la variante interna; la fase
         // (taggata) e' letta sotto da `error.phase()`.
-        PlenoraError::Tagged { source, .. } => {
+        PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
             let inner = error_signature(source);
             return ErrorSignature {
                 phase: error.phase(),
@@ -410,7 +416,10 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
         PlenoraError::Internal(_) => "Internal",
-        PlenoraError::Tagged { source, .. } => variant_name(source),
+        PlenoraError::Replayed(_) => "Replayed",
+        PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
+            variant_name(source)
+        }
     }
 }
 
@@ -1207,7 +1216,7 @@ fn oversized_runtime() -> RuntimeContext {
 /// la misura esatta in byte. Entrambi fail-closed sulla stessa cella alla
 /// stessa soglia per-cella di 64 MiB — asserzioni separate per lato, mai un
 /// confronto campo-per-campo.
-fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBatch>, side: &str) {
+fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBatch>, _side: &str) {
     let v3_error = run_v3(&v3_sjoin_schema(1, 1), &left, &right)
         .expect_err("c: atteso CellTooLarge nel trasporto v3");
     let ArrowTransportError::CellTooLarge(cell_bytes) = v3_error else {
@@ -1231,27 +1240,23 @@ fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBa
         .expect("c: atteso il rifiuto perimetrale d'arco, stream riuscito");
     let signature = error_signature(&v4_error);
     assert_eq!(
-        signature.variant, "InvalidPlan",
+        signature.variant, "DataMapping",
         "{case} v4: rifiuto perimetrale d'arco, non del nodo (vedi header, punto 3): {v4_error}"
     );
     assert_eq!(signature.node, None, "{case} v4: nessun nodo strutturato");
     assert_eq!(
         signature.category,
-        ErrorCategory::InvalidPlan,
+        ErrorCategory::DataMapping,
         "{case} v4: categoria"
     );
     assert_eq!(
         signature.phase,
-        ErrorPhase::Validate,
+        ErrorPhase::Read,
         "{case} v4: fase derivata dalla variante (validazione d'arco)"
     );
     assert_eq!(
-        signature.reason,
-        format!(
-            "cella WKB oltre max_wkb_cell_bytes sull'arco `{side}_in` (riga 0) [colonna `geom`]"
-        ),
-        "{case} v4: gate per-cella d'arco (soglia 64 MiB), riga nel testo e colonna \
-         nel dettaglio diagnostico"
+        signature.reason, "righe non conformi al contratto di trasformazione",
+        "{case} v4: dettagli row-scoped solo nella diagnostica strutturata"
     );
 }
 

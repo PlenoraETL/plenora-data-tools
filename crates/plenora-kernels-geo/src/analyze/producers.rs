@@ -247,8 +247,8 @@ pub(in crate::analyze) fn analyze_from_coords(
 }
 
 /// `from_wkt`: nessuna geometria in input; una colonna `Utf8` WKT produce la
-/// colonna geometria (nuovo `FieldId`, **nullable**: celle null o invalide
-/// con `on_error: null` danno geometria null). CRS da config `crs` o di
+/// colonna geometria (nuovo `FieldId`, **nullable** per le celle sorgente
+/// null; WKT invalido rifiuta l'output con diagnostica row-scoped). CRS da config `crs` o di
 /// piano; requisito del catalogo (`Known`).
 pub(in crate::analyze) fn analyze_from_wkt(
     op: &str,

@@ -4,21 +4,26 @@
 
 use std::io::{Read, Write};
 
+use geo::Geometry;
+use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{
     Array, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use geo::Geometry;
-use geozero::{CoordDimensions, ToWkb};
 use rayon::prelude::*;
 
+use super::protocol::MAX_ROWS;
+use plenora_core::contract::{CrsResolution, GeometryDimensions, GeometryEncoding};
+use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::PlenoraError;
 use plenora_kernels_geo::advanced::voronoi_cells;
 use plenora_kernels_geo::construction::{
     line_from_ordered_points, point_from_lon_lat, polygon_from_ordered_points,
 };
-use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
-use plenora_core::contract::{CrsResolution, GeometryDimensions, GeometryEncoding};
-use plenora_core::PlenoraError;
 use plenora_kernels_geo::extended::{
     affine_transform_validated, concave_hull_validated, geodesic_line_length_m,
     rotate_about_validated, scale_about_validated, translate_validated,
@@ -27,11 +32,11 @@ use plenora_kernels_geo::extended_algorithms::{
     delaunay, densify, geodesic_area_m2, geometry_diagnostics, line_interpolate_point, line_merge,
     line_substring, snap_to_grid,
 };
+use plenora_kernels_geo::geometry_contract::{validate_geometry_structural, wkb_size_xy};
 #[cfg(feature = "geos-backend")]
 use plenora_kernels_geo::geos_backend::{
     make_valid_geometry, make_valid_wkb, polygonize_linework, RepairMethod,
 };
-use plenora_kernels_geo::geometry_contract::{validate_geometry_structural, wkb_size_xy};
 use plenora_kernels_geo::operations::{
     area, boundary, bounds, buffer_with_cap, explode, length, perimeter, point_on_surface,
     simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, OperationError, SimplifyPolicy,
@@ -39,11 +44,10 @@ use plenora_kernels_geo::operations::{
 use plenora_kernels_geo::predicates::SpatialPredicate;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::proj_backend::Reprojector;
-use super::protocol::MAX_ROWS;
 use plenora_kernels_geo::topology::{clean_valid_polygon_topology_validated, dissolve_validated};
 use plenora_kernels_geo::{
-    MAX_WKB_COMPONENTS, MAX_WKB_DEPTH, Operation, check_geometry_valid, geometry_from_wkb,
-    transform_geometry_canonical, transform_wkb,
+    check_geometry_valid, geometry_from_wkb, transform_geometry_canonical, transform_wkb,
+    Operation, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,
 };
 
 use super::envelope::{EnvelopeReader, EnvelopeWriter};
@@ -53,6 +57,8 @@ use super::schema::{
     ArrowOperation, ArrowShape, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
     TransformArrowSummary,
 };
+#[cfg(feature = "geos-backend")]
+use super::transport::MAX_NODING_WORK;
 use super::transport::{
     CLASS_COLUMN, DEFAULT_MAX_POINTS, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
     GEO_METADATA_KEY, MAX_CELL_BYTES, MAX_CELL_COORDINATES, MAX_CLEAN_VERTICES,
@@ -63,8 +69,6 @@ use plenora_kernels_geo::arrow_adapter::{
     GeometryMetadataDetails, PLENORA_CONTRACT_VERSION, PLENORA_CONTRACT_VERSION_KEY,
     PLENORA_GEOMETRY_NAMESPACE_PREFIX,
 };
-#[cfg(feature = "geos-backend")]
-use super::transport::MAX_NODING_WORK;
 
 #[cfg(feature = "proj-backend")]
 std::thread_local! {
@@ -74,7 +78,10 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub(in crate::geo_transport) fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, ArrowTransportError> {
+pub(in crate::geo_transport) fn geometry_column_index(
+    schema: &Schema,
+    name: &str,
+) -> Result<usize, ArrowTransportError> {
     let (index, field) = schema
         .column_with_name(name)
         .ok_or_else(|| ArrowTransportError::MissingGeometryColumn(name.to_owned()))?;
@@ -104,7 +111,9 @@ pub(in crate::geo_transport) fn geometry_column_index(schema: &Schema, name: &st
 /// [`plenora_kernels_geo::arrow_adapter::geo_metadata_json`] (stesso output
 /// byte-per-byte); qui restano solo le validazioni con le varianti
 /// d'errore strutturate del trasporto.
-pub(in crate::geo_transport) fn geo_metadata_json(crs: &str) -> Result<String, ArrowTransportError> {
+pub(in crate::geo_transport) fn geo_metadata_json(
+    crs: &str,
+) -> Result<String, ArrowTransportError> {
     if crs.trim().is_empty() {
         return Err(ArrowTransportError::CrsRequired);
     }
@@ -115,7 +124,10 @@ pub(in crate::geo_transport) fn geo_metadata_json(crs: &str) -> Result<String, A
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
 }
 
-pub(in crate::geo_transport) fn geometry_output_field(name: &str, crs: &str) -> Result<Field, ArrowTransportError> {
+pub(in crate::geo_transport) fn geometry_output_field(
+    name: &str,
+    crs: &str,
+) -> Result<Field, ArrowTransportError> {
     // Validazione CRS con le varianti strutturate del trasporto; la
     // costruzione del campo (metadati geoarrow.wkb + geo.crs +
     // geo.dimensions) e' unica in `arrow_adapter` (unificazione B1.1).
@@ -174,7 +186,10 @@ pub(in crate::geo_transport) fn geometry_output_field(name: &str, crs: &str) -> 
 /// `geo` malformato resta propagato com'e' (la sua lettura fail-closed e'
 /// della discovery v4, non del trasporto legacy).
 fn canonical_legacy_field(field: &Field) -> Field {
-    if field.metadata().get(GEOARROW_EXTENSION_KEY).map(String::as_str)
+    if field
+        .metadata()
+        .get(GEOARROW_EXTENSION_KEY)
+        .map(String::as_str)
         != Some(GEOARROW_WKB_EXTENSION)
     {
         return field.clone();
@@ -227,8 +242,7 @@ fn canonical_legacy_field(field: &Field) -> Field {
                 dimensions.as_str().to_owned(),
             );
             metadata.insert(
-                plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
-                    .to_owned(),
+                plenora_kernels_geo::arrow_adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
                 CrsResolution::Missing.as_str().to_owned(),
             );
             metadata
@@ -321,7 +335,9 @@ enum TransformedColumn {
 
 /// Codifica una geometria gia' validata dal kernel in WKB 2D entro il limite
 /// per cella.
-pub(in crate::geo_transport) fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, ArrowTransportError> {
+pub(in crate::geo_transport) fn encode_geometry(
+    geometry: &Geometry<f64>,
+) -> Result<Vec<u8>, ArrowTransportError> {
     let payload = geometry
         .to_wkb(CoordDimensions::xy())
         .map_err(|error| OperationError::InvalidOutput(error.to_string()))?;
@@ -416,13 +432,18 @@ const fn accepts_ogc_invalid_input(params: &TransformArrowSchema) -> bool {
 /// `prepare` solo sulle op del perimetro ADR-0012 — difesa in profondita',
 /// non un caso d'uso). A feature spenta `make_valid`/`reproject` danno
 /// `BackendUnavailable` esattamente come i bracci non fusi (M3).
-fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform, ArrowTransportError> {
+fn resolve_transform(
+    params: &TransformArrowSchema,
+) -> Result<ResolvedTransform, ArrowTransportError> {
     match params.operation {
         ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope => {
-            let kernel = params
-                .operation
-                .geometry_kernel()
-                .ok_or(ArrowTransportError::Internal("operazione geometrica senza kernel"))?;
+            let kernel =
+                params
+                    .operation
+                    .geometry_kernel()
+                    .ok_or(ArrowTransportError::Internal(
+                        "operazione geometrica senza kernel",
+                    ))?;
             Ok(ResolvedTransform::Canonical(kernel))
         }
         ArrowOperation::Buffer => Ok(ResolvedTransform::Buffer {
@@ -443,7 +464,9 @@ fn resolve_transform(params: &TransformArrowSchema) -> Result<ResolvedTransform,
             let coefficients: [f64; 6] = params
                 .coefficients
                 .as_deref()
-                .ok_or(ArrowTransportError::Internal("coefficients validato assente"))?
+                .ok_or(ArrowTransportError::Internal(
+                    "coefficients validato assente",
+                ))?
                 .try_into()
                 .map_err(|_| {
                     ArrowTransportError::Internal("coefficients validato non di 6 elementi")
@@ -552,9 +575,7 @@ fn apply_transform_cell(
         ResolvedTransform::AffineTransform { coefficients } => {
             Ok(Some(affine_transform_validated(geometry, *coefficients)?))
         }
-        ResolvedTransform::Translate { x, y } => {
-            Ok(Some(translate_validated(geometry, *x, *y)?))
-        }
+        ResolvedTransform::Translate { x, y } => Ok(Some(translate_validated(geometry, *x, *y)?)),
         ResolvedTransform::Scale {
             x_factor,
             y_factor,
@@ -574,9 +595,7 @@ fn apply_transform_cell(
             *length_threshold,
             MAX_CELL_COORDINATES,
         )?)),
-        ResolvedTransform::Densify {
-            max_segment_length,
-        } => Ok(Some(densify(
+        ResolvedTransform::Densify { max_segment_length } => Ok(Some(densify(
             geometry,
             *max_segment_length,
             MAX_CELL_COORDINATES,
@@ -616,9 +635,9 @@ fn apply_transform_cell(
                         Reprojector::new(source, target, MAX_CELL_COORDINATES)?,
                     ));
                 }
-                let (_, _, reprojector) = slot
-                    .as_ref()
-                    .ok_or(ArrowTransportError::Internal("pipeline appena creata assente"))?;
+                let (_, _, reprojector) = slot.as_ref().ok_or(ArrowTransportError::Internal(
+                    "pipeline appena creata assente",
+                ))?;
                 Ok(Some(reprojector.reproject(geometry)?))
             })
         }
@@ -637,8 +656,8 @@ fn map_nullable<T: Send>(
 ) -> Result<Vec<Option<T>>, ArrowTransportError> {
     let cell_values: Vec<Option<&[u8]>> = cells.iter().collect();
     // ADR-0001: come la primitiva omonima in arrow_adapter — i `Result`
-    // per riga prima (ordine preservato dal collect indicizzato), il primo
-    // errore IN ORDINE DI RIGA poi, dal collect sequenziale; mai la
+    // per riga prima (ordine preservato dal collect indicizzato), poi la
+    // selezione deterministica degli errori IN ORDINE DI RIGA; mai la
     // selezione non deterministica di rayon.
     let results: Vec<Result<Option<T>, ArrowTransportError>> = cell_values
         .into_par_iter()
@@ -652,7 +671,118 @@ fn map_nullable<T: Send>(
             }
         })
         .collect();
-    results.into_iter().collect()
+    // R9.9: i fallimenti attribuibili alla riga sono raccolti COMPLETI su
+    // tutte le celle prima di chiudere — l'errore primario resta quello
+    // della prima riga difettosa, arricchito della diagnostica bounded.
+    let mut failures: Vec<(u64, ArrowTransportError)> = Vec::new();
+    let mut values = Vec::with_capacity(results.len());
+    for (row, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(value) => values.push(value),
+            Err(error) => {
+                failures.push((row as u64, error));
+                values.push(None);
+            }
+        }
+    }
+    if failures.is_empty() {
+        return Ok(values);
+    }
+    Err(collect_cell_failures(failures))
+}
+
+/// Causa `plenora-row-diagnostics-v1` di un fallimento di cella attribuibile
+/// alla riga; `None` per errori non row-scoped (difetti interni del
+/// trasporto, parametri): propagano senza diagnostica, fail-closed com'e'.
+/// Il vocabolario e' quello degli altri emettitori geo (gate WKB,
+/// `geo.from_wkt`, `geo.from_coords`).
+const fn cell_failure_cause(error: &ArrowTransportError) -> Option<&'static str> {
+    match error {
+        ArrowTransportError::CellTooLarge(_) => Some("geometry.cell_too_large"),
+        ArrowTransportError::WrongGeometryType { .. } => Some("geometry.wrong_type"),
+        // Decode e validazione WKB arrivano come `Geometry` (conversione
+        // `From<PlenoraError>` dei payload di contratto).
+        ArrowTransportError::Geometry(_) => Some("geometry.invalid_wkb"),
+        #[cfg(feature = "proj-backend")]
+        ArrowTransportError::Reproject(_) => Some("geometry.reprojection_failed"),
+        #[cfg(feature = "geos-backend")]
+        ArrowTransportError::MakeValid(_) => Some("geometry.repair_failed"),
+        ArrowTransportError::Kernel(_)
+        | ArrowTransportError::Topology(_)
+        | ArrowTransportError::Construction(_)
+        | ArrowTransportError::Advanced(_)
+        | ArrowTransportError::Extended(_)
+        | ArrowTransportError::ExtendedAlgorithm(_)
+        | ArrowTransportError::Predicate(_)
+        | ArrowTransportError::Analysis(_) => Some("geometry.kernel_failed"),
+        _ => None,
+    }
+}
+
+/// Chiude un insieme di fallimenti di cella (indice riga batch-locale,
+/// errore): se OGNI fallimento e' attribuibile alla riga, l'errore della
+/// prima riga e' restituito con la diagnostica completa allegata; se uno
+/// qualunque non lo e', propaga il primo errore non attribuibile com'e'
+/// (fail-closed senza diagnostica, mai un report parziale spacciato per
+/// completo).
+fn collect_cell_failures(failures: Vec<(u64, ArrowTransportError)>) -> ArrowTransportError {
+    let mut rows = std::collections::BTreeMap::new();
+    for (row, error) in &failures {
+        let Some(cause) = cell_failure_cause(error) else {
+            return match failures
+                .into_iter()
+                .find(|(_, candidate)| cell_failure_cause(candidate).is_none())
+            {
+                Some((_, error)) => error,
+                None => ArrowTransportError::Internal("classificazione celle incoerente"),
+            };
+        };
+        rows.entry(*row).or_insert(cause);
+    }
+    let report = cell_diagnostics_report(&rows);
+    let Some((_, first)) = failures.into_iter().next() else {
+        return ArrowTransportError::Internal("raccolta celle vuota");
+    };
+    first.with_row_diagnostics(report)
+}
+
+/// Report `plenora-row-diagnostics-v1` completo per fallimenti di cella
+/// (scope Read, indici batch-locali zero-based, esempi bounded a 10, nessun
+/// valore): la traduzione batch-locale -> assoluta e il merge cross-batch
+/// spettano all'executor (segmenti `segment_emits_row_diagnostics`).
+fn cell_diagnostics_report(rows: &std::collections::BTreeMap<u64, &'static str>) -> RowDiagnostics {
+    const EXAMPLES_LIMIT: u64 = 10;
+    let observed_total = rows.len() as u64;
+    let mut counts = std::collections::BTreeMap::new();
+    let mut examples = Vec::new();
+    for (row, cause) in rows {
+        *counts.entry((*cause).to_owned()).or_insert(0_u64) += 1;
+        if u64::try_from(examples.len()).unwrap_or(u64::MAX) < EXAMPLES_LIMIT {
+            examples.push(RowDiagnosticExample {
+                source_index: *row,
+                cause: (*cause).to_owned(),
+                column: None,
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    }
 }
 
 /// Braccio condiviso delle trasformazioni 1:1 fondibili di profilo B
@@ -688,7 +818,9 @@ fn transform_cells(
         ArrowOperation::Centroid | ArrowOperation::ConvexHull | ArrowOperation::Envelope => {
             let kernel = operation
                 .geometry_kernel()
-                .ok_or(ArrowTransportError::Internal("operazione geometrica senza kernel"))?;
+                .ok_or(ArrowTransportError::Internal(
+                    "operazione geometrica senza kernel",
+                ))?;
             Ok(TransformedColumn::Binary(map_nullable(cells, |payload| {
                 Ok(transform_wkb(kernel, payload).map(Some)?)
             })?))
@@ -743,9 +875,9 @@ fn transform_cells(
                                 Reprojector::new(&source, &target, MAX_CELL_COORDINATES)?,
                             ));
                         }
-                        let (_, _, reprojector) = slot
-                            .as_ref()
-                            .ok_or(ArrowTransportError::Internal("pipeline appena creata assente"))?;
+                        let (_, _, reprojector) = slot.as_ref().ok_or(
+                            ArrowTransportError::Internal("pipeline appena creata assente"),
+                        )?;
                         let reprojected = reprojector.reproject(&geometry)?;
                         encode_geometry(&reprojected).map(Some)
                     })
@@ -832,7 +964,7 @@ fn transform_cells(
                             operation: operation.name(),
                             expected: "Polygon/MultiPolygon",
                             actual: geometry_type_name(other).to_owned(),
-                        })
+                        });
                     }
                 }
                 Ok(geodesic_area_m2(&geometry).map(Some)?)
@@ -883,7 +1015,9 @@ pub(in crate::geo_transport) fn expect_line_string(
     }
 }
 
-pub(in crate::geo_transport) const fn spatial_predicate_name(predicate: SpatialPredicate) -> &'static str {
+pub(in crate::geo_transport) const fn spatial_predicate_name(
+    predicate: SpatialPredicate,
+) -> &'static str {
     match predicate {
         SpatialPredicate::Intersects => "intersects",
         SpatialPredicate::Disjoint => "disjoint",
@@ -942,12 +1076,16 @@ pub fn transform_batches(
         ArrowShape::Collective => match params.operation {
             ArrowOperation::Voronoi => voronoi_batches(schema, batches, params),
             ArrowOperation::CleanTopology => clean_topology_batches(schema, batches, params),
-            _ => Err(ArrowTransportError::Internal("shape Collective non coperta")),
+            _ => Err(ArrowTransportError::Internal(
+                "shape Collective non coperta",
+            )),
         },
         ArrowShape::WholeToMany => match params.operation {
             ArrowOperation::Polygonize => polygonize_batches(schema, batches, params),
             ArrowOperation::LineMerge => line_merge_batches(schema, batches, params),
-            _ => Err(ArrowTransportError::Internal("shape WholeToMany non coperta")),
+            _ => Err(ArrowTransportError::Internal(
+                "shape WholeToMany non coperta",
+            )),
         },
         ArrowShape::FromCoords => from_coords_batches(schema, batches, params),
         ArrowShape::Diagnostic => diagnostics_batches(schema, batches, params),
@@ -1020,7 +1158,7 @@ pub fn prepare_one_to_one(
             _ => {
                 return Err(ArrowTransportError::Internal(
                     "operazione non geometrica non coperta",
-                ))
+                ));
             }
         }
     }
@@ -1060,7 +1198,10 @@ pub fn one_to_one_batch_prepared(
     match transformed {
         TransformedColumn::Binary(values) => {
             columns[geometry_index] = std::sync::Arc::new(
-                values.iter().map(|cell| cell.as_deref()).collect::<BinaryArray>(),
+                values
+                    .iter()
+                    .map(|cell| cell.as_deref())
+                    .collect::<BinaryArray>(),
             );
         }
         TransformedColumn::Float64(values) => {
@@ -1237,7 +1378,9 @@ fn transform_cells_fused(
     // Decode UNA volta: errori attribuiti al primo kernel del gruppo (come il
     // fallimento di `geometry_from_wkb` al primo nodo del percorso non fuso).
     // M3 (trappola 1): con `make_valid` in testa il gate e' SOLO strutturale.
-    let first_repairs = group.first().is_some_and(|params| accepts_ogc_invalid_input(params));
+    let first_repairs = group
+        .first()
+        .is_some_and(|params| accepts_ogc_invalid_input(params));
     let mut geometries = map_nullable(cells, |payload| {
         let geometry = if first_repairs {
             plenora_kernels_geo::wkb_decoder::decode_validated(payload)?
@@ -1259,7 +1402,13 @@ fn transform_cells_fused(
         let successor_repairs = group
             .get(index + 1)
             .is_some_and(|next| accepts_ogc_invalid_input(next));
-        apply_fused_kernel(&resolved, &mut geometries, index, group.len(), successor_repairs)?;
+        apply_fused_kernel(
+            &resolved,
+            &mut geometries,
+            index,
+            group.len(),
+            successor_repairs,
+        )?;
     }
     // Misura terminale (M2): passo dedicato DOPO il loop dei kernel. Nel
     // percorso non fuso il nodo trasformazione completa TUTTE le righe
@@ -1274,16 +1423,30 @@ fn transform_cells_fused(
             Some(apply_fused_measure(terminal, &geometries, group.len())?)
         }
     };
-    // Encode UNA volta alla fine: errori attribuiti all'ultimo kernel.
+    // Encode UNA volta alla fine: errori attribuiti all'ultimo kernel, con
+    // raccolta completa per riga come nel percorso non fuso (`map_nullable`).
     let last = group.len() - 1;
     let results: Vec<Result<Option<Vec<u8>>, ArrowTransportError>> = geometries
         .par_iter()
         .map(|slot| slot.as_ref().map(encode_geometry).transpose())
         .collect();
-    let values = results
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| FusedStepError::Kernel { index: last, error })?;
+    let mut failures: Vec<(u64, ArrowTransportError)> = Vec::new();
+    let mut values = Vec::with_capacity(results.len());
+    for (row, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(value) => values.push(value),
+            Err(error) => {
+                failures.push((row as u64, error));
+                values.push(None);
+            }
+        }
+    }
+    if !failures.is_empty() {
+        return Err(FusedStepError::Kernel {
+            index: last,
+            error: collect_cell_failures(failures),
+        });
+    }
     Ok(FusedCells {
         geometry: values,
         measure,
@@ -1291,11 +1454,15 @@ fn transform_cells_fused(
 }
 
 /// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
-/// indicizzato e primo errore in ordine di riga, come `map_nullable`
-/// (ADR-0001). La tabella di attribuzione e' quella di
-/// [`transform_cells_fused`]. `successor_accepts_ogc_invalid` e' vero solo
-/// quando il kernel successivo e' `make_valid` (M3, trappola 1): la
-/// validazione inter-passo resta strutturale ma omette il check OGC.
+/// indicizzato (ADR-0001), poi raccolta COMPLETA dei fallimenti per riga
+/// (R9.9): gli errori del kernel sono attribuiti al kernel stesso, quelli
+/// della validazione inter-passo al kernel successivo — il kernel ha la
+/// precedenza (nel percorso non fuso il suo nodo fallirebbe prima, col suo
+/// report completo, e il successivo non partirebbe mai). La tabella di
+/// attribuzione e' quella di [`transform_cells_fused`].
+/// `successor_accepts_ogc_invalid` e' vero solo quando il kernel successivo
+/// e' `make_valid` (M3, trappola 1): la validazione inter-passo resta
+/// strutturale ma omette il check OGC.
 fn apply_fused_kernel(
     resolved: &ResolvedTransform,
     geometries: &mut [Option<Geometry<f64>>],
@@ -1306,14 +1473,14 @@ fn apply_fused_kernel(
     // Profilo A (D12.4): la validazione post-kernel e' interamente dentro
     // `transform_geometry_canonical` (OGC, 64 MiB, strutturale — kernel i).
     let profile_a = matches!(resolved, ResolvedTransform::Canonical(_));
-    let results: Vec<Result<(), FusedStepError>> = geometries
+    let results: Vec<Result<(), FusedCellFailure>> = geometries
         .par_iter_mut()
         .map(|slot| {
             let Some(input) = slot.take() else {
                 return Ok(());
             };
-            let output = apply_transform_cell(resolved, &input)
-                .map_err(|error| FusedStepError::Kernel { index, error })?;
+            let output =
+                apply_transform_cell(resolved, &input).map_err(FusedCellFailure::Kernel)?;
             if !profile_a {
                 if let Some(geometry) = &output {
                     // D12.3: il limite di cella scatta a ogni nodo intermedio
@@ -1321,10 +1488,9 @@ fn apply_fused_kernel(
                     // `wkb_size_xy`, stessa variante di `encode_geometry`.
                     let size = wkb_size_xy(geometry);
                     if size > MAX_CELL_BYTES {
-                        return Err(FusedStepError::Kernel {
-                            index,
-                            error: ArrowTransportError::CellTooLarge(size),
-                        });
+                        return Err(FusedCellFailure::Kernel(ArrowTransportError::CellTooLarge(
+                            size,
+                        )));
                     }
                     // D12.4 profilo B: l'intermedio invalido fallirebbe al
                     // decode del nodo successivo (strutturale, poi OGC —
@@ -1335,20 +1501,14 @@ fn apply_fused_kernel(
                     if index + 1 < group_len {
                         validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
                             .map_err(ArrowTransportError::from)
-                            .map_err(|error| FusedStepError::Kernel {
-                                index: index + 1,
-                                error,
-                            })?;
+                            .map_err(FusedCellFailure::Successor)?;
                         // M3 (trappola 1): il check OGC e' omesso SOLO
                         // davanti a `make_valid` — il suo "decode" non fuso
                         // e' il solo gate strutturale di `make_valid_wkb`.
                         if !successor_accepts_ogc_invalid {
                             check_geometry_valid(geometry)
                                 .map_err(ArrowTransportError::from)
-                                .map_err(|error| FusedStepError::Kernel {
-                                    index: index + 1,
-                                    error,
-                                })?;
+                                .map_err(FusedCellFailure::Successor)?;
                         }
                     }
                 }
@@ -1357,7 +1517,39 @@ fn apply_fused_kernel(
             Ok(())
         })
         .collect();
-    results.into_iter().collect()
+    let mut kernel_failures: Vec<(u64, ArrowTransportError)> = Vec::new();
+    let mut successor_failures: Vec<(u64, ArrowTransportError)> = Vec::new();
+    for (row, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(()) => {}
+            Err(FusedCellFailure::Kernel(error)) => kernel_failures.push((row as u64, error)),
+            Err(FusedCellFailure::Successor(error)) => {
+                successor_failures.push((row as u64, error));
+            }
+        }
+    }
+    if !kernel_failures.is_empty() {
+        return Err(FusedStepError::Kernel {
+            index,
+            error: collect_cell_failures(kernel_failures),
+        });
+    }
+    if !successor_failures.is_empty() {
+        return Err(FusedStepError::Kernel {
+            index: index + 1,
+            error: collect_cell_failures(successor_failures),
+        });
+    }
+    Ok(())
+}
+
+/// Fallimento di una cella nel runner fuso: del kernel in corso o della
+/// validazione inter-passo attribuita al kernel successivo (D12.3/D12.4).
+enum FusedCellFailure {
+    /// Errore del kernel in corso.
+    Kernel(ArrowTransportError),
+    /// Errore della validazione inter-passo (attribuito al kernel + 1).
+    Successor(ArrowTransportError),
 }
 
 /// Misura terminale di un gruppo fuso sulle geometrie decodificate
@@ -1382,35 +1574,37 @@ fn apply_fused_measure(
     index: usize,
 ) -> Result<TransformedColumn, FusedStepError> {
     match measure {
-        FusedTerminalMeasure::Area => {
-            Ok(TransformedColumn::Float64(measure_cells(geometries, index, area)?))
-        }
-        FusedTerminalMeasure::Length => {
-            Ok(TransformedColumn::Float64(measure_cells(geometries, index, length)?))
-        }
-        FusedTerminalMeasure::Perimeter => {
-            Ok(TransformedColumn::Float64(measure_cells(geometries, index, perimeter)?))
-        }
-        FusedTerminalMeasure::VertexCount => {
-            Ok(TransformedColumn::UInt64(measure_cells(geometries, index, vertex_count)?))
-        }
-        FusedTerminalMeasure::ToWkt => {
-            Ok(TransformedColumn::Utf8(measure_cells(geometries, index, to_wkt)?))
-        }
+        FusedTerminalMeasure::Area => Ok(TransformedColumn::Float64(measure_cells(
+            geometries, index, area,
+        )?)),
+        FusedTerminalMeasure::Length => Ok(TransformedColumn::Float64(measure_cells(
+            geometries, index, length,
+        )?)),
+        FusedTerminalMeasure::Perimeter => Ok(TransformedColumn::Float64(measure_cells(
+            geometries, index, perimeter,
+        )?)),
+        FusedTerminalMeasure::VertexCount => Ok(TransformedColumn::UInt64(measure_cells(
+            geometries,
+            index,
+            vertex_count,
+        )?)),
+        FusedTerminalMeasure::ToWkt => Ok(TransformedColumn::Utf8(measure_cells(
+            geometries, index, to_wkt,
+        )?)),
     }
 }
 
 /// Una misura scalare su tutte le celle decodificate del gruppo (M2): per
-/// cella validazione pre-misura poi kernel, primo errore in ordine di riga
-/// (pattern rayon con collect indicizzato, ADR-0001 — come `map_nullable`;
-/// il ramo non fuso e' un loop sequenziale con lo stesso criterio di
-/// selezione).
+/// cella validazione pre-misura poi kernel, con raccolta COMPLETA dei
+/// fallimenti per riga (R9.9 — il ramo non fuso raccoglie gli stessi
+/// fallimenti in `map_nullable`/`geo_measure_batch`); l'errore primario e'
+/// quello della prima riga difettosa, nella forma del percorso non fuso.
 fn measure_cells<T: Send>(
     geometries: &[Option<Geometry<f64>>],
     index: usize,
     kernel: impl Fn(&Geometry<f64>) -> Result<T, OperationError> + Sync,
 ) -> Result<Vec<Option<T>>, FusedStepError> {
-    let results: Vec<Result<Option<T>, FusedStepError>> = geometries
+    let results: Vec<Result<Option<T>, MeasureCellFailure>> = geometries
         .par_iter()
         .map(|slot| {
             let Some(geometry) = slot.as_ref() else {
@@ -1423,18 +1617,63 @@ fn measure_cells<T: Send>(
             // ramo non fuso.
             validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
                 .and_then(|()| check_geometry_valid(geometry))
-                .map_err(|error| FusedStepError::Measure { index, error })?;
+                .map_err(|error| MeasureCellFailure {
+                    cause: "geometry.invalid_wkb",
+                    error,
+                })?;
             // Stessa chiusura del ramo non fuso: `OperationError` ->
             // `InvalidPlan` del suo display.
             kernel(geometry)
                 .map(Some)
-                .map_err(|error| FusedStepError::Measure {
-                    index,
+                .map_err(|error| MeasureCellFailure {
+                    cause: "geometry.kernel_failed",
                     error: PlenoraError::InvalidPlan(error.to_string()),
                 })
         })
         .collect();
-    results.into_iter().collect()
+    let mut failures: Vec<(u64, &'static str, PlenoraError)> = Vec::new();
+    let mut values = Vec::with_capacity(results.len());
+    for (row, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(value) => values.push(value),
+            Err(failure) => {
+                failures.push((row as u64, failure.cause, failure.error));
+                values.push(None);
+            }
+        }
+    }
+    if failures.is_empty() {
+        return Ok(values);
+    }
+    Err(FusedStepError::Measure {
+        index,
+        error: collect_measure_failures(failures),
+    })
+}
+
+/// Fallimento di una cella della misura terminale: causa gia' assegnata al
+/// sito (validazione del "decode" o kernel scalare).
+struct MeasureCellFailure {
+    cause: &'static str,
+    error: PlenoraError,
+}
+
+/// Chiude i fallimenti per riga della misura terminale: report completo
+/// allegato all'errore della prima riga difettosa (forma del percorso non
+/// fuso, `PlenoraError`).
+fn collect_measure_failures(failures: Vec<(u64, &'static str, PlenoraError)>) -> PlenoraError {
+    let mut rows = std::collections::BTreeMap::new();
+    let mut first = None;
+    for (row, cause, error) in failures {
+        rows.entry(row).or_insert(cause);
+        if first.is_none() {
+            first = Some(error);
+        }
+    }
+    let Some(first) = first else {
+        return PlenoraError::Internal("raccolta misura vuota".to_owned());
+    };
+    first.with_row_diagnostics(cell_diagnostics_report(&rows))
 }
 
 /// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
@@ -1539,9 +1778,121 @@ pub fn one_to_one_batch_fused(
         })
 }
 
+/// Aggrega un report batch-locale in quello accumulato applicando l'offset
+/// sorgente assoluto (checked): conteggi sommati, esempi bounded al limite,
+/// completeness degradata se uno qualunque dei contributi non e' completo.
+/// Stessa disciplina del merge dell'executor (R9.9): mai un indice inventato,
+/// mai un overflow silenzioso.
+fn merge_report_with_offset(
+    aggregate: &mut Option<RowDiagnostics>,
+    incoming: &RowDiagnostics,
+    source_offset: u64,
+) -> Result<(), ArrowTransportError> {
+    let mut shifted = incoming.clone();
+    for example in &mut shifted.examples {
+        example.source_index = source_offset.checked_add(example.source_index).ok_or(
+            ArrowTransportError::Internal("indice sorgente fuori intervallo"),
+        )?;
+    }
+    let Some(existing) = aggregate.as_ref() else {
+        *aggregate = Some(shifted);
+        return Ok(());
+    };
+    let mut merged = existing.clone();
+    if merged.contract != shifted.contract
+        || merged.scope != shifted.scope
+        || merged.index_basis != shifted.index_basis
+        || merged.examples_limit != shifted.examples_limit
+    {
+        return Err(ArrowTransportError::Internal(
+            "report row-scoped incompatibili nello stesso stream",
+        ));
+    }
+    merged.observed_total = merged
+        .observed_total
+        .checked_add(shifted.observed_total)
+        .ok_or(ArrowTransportError::Internal(
+            "conteggio row-scoped fuori intervallo",
+        ))?;
+    merged.total = match (merged.total, shifted.total) {
+        (Some(left), Some(right)) => Some(left.checked_add(right).ok_or(
+            ArrowTransportError::Internal("totale row-scoped fuori intervallo"),
+        )?),
+        _ => None,
+    };
+    merged.input_total = match (merged.input_total, shifted.input_total) {
+        (Some(left), Some(right)) => Some(left.checked_add(right).ok_or(
+            ArrowTransportError::Internal("input_total diagnostico overflow"),
+        )?),
+        _ => None,
+    };
+    for (cause, count) in shifted.counts {
+        let entry = merged.counts.entry(cause).or_insert(0_u64);
+        *entry = entry
+            .checked_add(count)
+            .ok_or(ArrowTransportError::Internal(
+                "conteggio causa fuori intervallo",
+            ))?;
+    }
+    let incoming_example_count = shifted.examples.len();
+    let before = merged.examples.len();
+    for example in shifted.examples {
+        if u64::try_from(merged.examples.len())
+            .map_err(|_| ArrowTransportError::Internal("numero esempi fuori intervallo"))?
+            >= merged.examples_limit
+        {
+            break;
+        }
+        merged.examples.push(example);
+    }
+    merged.examples_truncated = merged.examples_truncated
+        || shifted.examples_truncated
+        || merged.examples.len().saturating_sub(before) < incoming_example_count;
+    if shifted.completeness != RowDiagnosticsCompleteness::Complete {
+        merged.completeness = shifted.completeness;
+        let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
+        for limit in shifted.knowledge_limits.unwrap_or_default() {
+            if !knowledge_limits.contains(&limit) {
+                knowledge_limits.push(limit);
+            }
+        }
+        merged.knowledge_limits = (!knowledge_limits.is_empty()).then_some(knowledge_limits);
+    }
+    *aggregate = Some(merged);
+    Ok(())
+}
+
+/// Allega il report accumulato a un errore tardivo non row-scoped (R9.9):
+/// la scansione completa non e' piu' dimostrabile, quindi il report e'
+/// declassato a `Partial` con `total` sconosciuto e il knowledge limit
+/// dichiarato — stessa disciplina e stesso vocabolario `data_tools.*`
+/// dell'executor (`attach_partial_row_diagnostics`). Senza report
+/// accumulato l'errore propaga com'e'.
+fn attach_partial_report(
+    error: ArrowTransportError,
+    aggregate: &mut Option<RowDiagnostics>,
+    knowledge_limit: &str,
+) -> ArrowTransportError {
+    let Some(mut report) = aggregate.take() else {
+        return error;
+    };
+    report.completeness = RowDiagnosticsCompleteness::Partial;
+    report.total = None;
+    report.knowledge_limits = Some(vec![knowledge_limit.to_owned()]);
+    error.with_row_diagnostics(report)
+}
+
 /// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
 /// GeoArrow-WKB, Float64, `UInt64`, Utf8 oppure quattro colonne Float64 per
 /// `bounds`); tutte le altre colonne passano invariate; i null sono preservati.
+///
+/// Fallimenti row-scoped (R9.9): TUTTI i batch sono scansionati, i report
+/// batch-locali sono aggregati con offset sorgente assoluti (checked) in un
+/// unico report completo allegato all'errore della prima riga invalida; un
+/// errore tardivo non row-scoped propaga l'errore reale fail-closed con il
+/// report accumulato declassato a `Partial` ([`attach_partial_report`]),
+/// mai la perdita silenziosa della diagnostica gia' osservata.
+/// In caso di rifiuto nessun batch di output e' pubblicato.
 fn one_to_one_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -1549,8 +1900,55 @@ fn one_to_one_batches(
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     let prepared = prepare_one_to_one(schema, params)?;
     let mut output_batches = Vec::with_capacity(batches.len());
+    let mut source_offset = 0_u64;
+    let mut diagnostics: Option<RowDiagnostics> = None;
+    let mut first_error: Option<ArrowTransportError> = None;
     for batch in batches {
-        output_batches.push(one_to_one_batch_prepared(batch, params, &prepared)?);
+        match one_to_one_batch_prepared(batch, params, &prepared) {
+            Ok(output) => {
+                if diagnostics.is_none() {
+                    output_batches.push(output);
+                }
+            }
+            Err(error) => {
+                let report = error.row_diagnostics().cloned();
+                if let Some(report) = report {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    if let Err(error) =
+                        merge_report_with_offset(&mut diagnostics, &report, source_offset)
+                    {
+                        return Err(attach_partial_report(
+                            error,
+                            &mut diagnostics,
+                            "data_tools.diagnostic_merge_failed",
+                        ));
+                    }
+                } else {
+                    return Err(attach_partial_report(
+                        error,
+                        &mut diagnostics,
+                        "data_tools.processing_interrupted",
+                    ));
+                }
+            }
+        }
+        source_offset =
+            source_offset
+                .checked_add(u64::try_from(batch.num_rows()).map_err(|_| {
+                    ArrowTransportError::Internal("cardinalita batch fuori intervallo")
+                })?)
+                .ok_or(ArrowTransportError::Internal(
+                    "indice sorgente stream fuori intervallo",
+                ))?;
+    }
+    if let Some(report) = diagnostics {
+        let base = first_error.map_or_else(
+            || ArrowTransportError::Internal("diagnostica senza errore sorgente"),
+            ArrowTransportError::into_source,
+        );
+        return Err(base.with_row_diagnostics(report));
     }
     Ok((prepared.output_schema, output_batches))
 }
@@ -1622,7 +2020,7 @@ fn explode_batches(
                 _ => {
                     return Err(ArrowTransportError::Internal(
                         "explode_batches: operazione non 1:N",
-                    ))
+                    ));
                 }
             };
             let next = total_rows
@@ -1642,7 +2040,8 @@ fn explode_batches(
             }
         }
         let take_indices = UInt64Array::from(take_indices);
-        let mut columns: Vec<plenora_core::arrow::array::ArrayRef> = Vec::with_capacity(batch.num_columns() + 1);
+        let mut columns: Vec<plenora_core::arrow::array::ArrayRef> =
+            Vec::with_capacity(batch.num_columns() + 1);
         for (index, column) in batch.columns().iter().enumerate() {
             if index == geometry_index {
                 columns.push(std::sync::Arc::new(
@@ -1716,7 +2115,7 @@ fn collect_batches(
         _ => {
             return Err(ArrowTransportError::Internal(
                 "collect_batches: operazione non N:1",
-            ))
+            ));
         }
     };
     let limit = params.max_output_rows_limit();
@@ -1836,12 +2235,13 @@ fn clean_topology_batches(
     batches: &[RecordBatch],
     params: &TransformArrowSchema,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
-    let snap_tolerance = params
-        .snap_tolerance
-        .ok_or_else(|| ArrowTransportError::MissingParameter {
-            operation: params.operation.name(),
-            name: "snap_tolerance",
-        })?;
+    let snap_tolerance =
+        params
+            .snap_tolerance
+            .ok_or_else(|| ArrowTransportError::MissingParameter {
+                operation: params.operation.name(),
+                name: "snap_tolerance",
+            })?;
     let remove_overlaps = params.remove_overlaps.unwrap_or(true);
     let fill_gaps = params.fill_gaps.unwrap_or(true);
     let geometry_column = params.geometry_column();
@@ -1878,12 +2278,7 @@ fn clean_topology_batches(
     )?;
     let mut encoded: Vec<Option<Vec<u8>>> = Vec::with_capacity(cleaned.len());
     for geometry in &cleaned {
-        encoded.push(
-            geometry
-                .as_ref()
-                .map(encode_geometry)
-                .transpose()?,
-        );
+        encoded.push(geometry.as_ref().map(encode_geometry).transpose()?);
     }
 
     let mut output_fields: Vec<Field> = schema
@@ -2062,12 +2457,17 @@ fn geometry_rows_output(
     let output_schema =
         std::sync::Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
     let mut columns: Vec<plenora_core::arrow::array::ArrayRef> = vec![std::sync::Arc::new(
-        rows.iter().map(|row| row.0.as_deref()).collect::<BinaryArray>(),
+        rows.iter()
+            .map(|row| row.0.as_deref())
+            .collect::<BinaryArray>(),
     )];
     if with_class {
         let classes: Vec<&'static str> = rows
             .iter()
-            .map(|row| row.1.ok_or(ArrowTransportError::Internal("classe mancante")))
+            .map(|row| {
+                row.1
+                    .ok_or(ArrowTransportError::Internal("classe mancante"))
+            })
             .collect::<Result<_, _>>()?;
         columns.push(std::sync::Arc::new(StringArray::from(classes)));
     }
@@ -2167,12 +2567,20 @@ fn line_merge_batches(
     geometry_rows_output(schema, geometry_column, output_crs, &rows, false)
 }
 
-/// Estrae i valori di una colonna numerica come float64 opzionali.
+/// Valori numerici di una colonna coordinate: ogni cella e' `Ok(Some(f64))`
+/// (finita o meno — la finitezza e' giudicata dal kernel punto), `Ok(None)`
+/// per i null, oppure `Err(causa)` per un difetto row-scoped.
+///
+/// Guardia di range (R5.4): oltre 2^53 in valore assoluto la conversione
+/// i64 -> f64 non e' esatta e sposterebbe la coordinata in silenzio; la riga
+/// e' marcata con la causa `geometry.inexact_integer_coordinate` invece di
+/// produrre una geometria imprecisa — la raccolta completa spetta al
+/// chiamante ([`from_coords_batches`]).
 fn numeric_values(
     batch: &RecordBatch,
     index: usize,
     name: &str,
-) -> Result<Vec<Option<f64>>, ArrowTransportError> {
+) -> Result<Vec<Result<Option<f64>, &'static str>>, ArrowTransportError> {
     let column = batch.column(index);
     match column.data_type() {
         DataType::Float64 => Ok(column
@@ -2180,32 +2588,30 @@ fn numeric_values(
             .downcast_ref::<Float64Array>()
             .ok_or(ArrowTransportError::Internal("tipo verificato Float64"))?
             .iter()
+            .map(Ok)
             .collect()),
         DataType::Int64 => {
-            // Guardia di range (R5.4): oltre 2^53 in valore assoluto la
-            // conversione i64 -> f64 non e' esatta e sposterebbe la
-            // coordinata in silenzio; si rifiuta la riga con errore
-            // tipizzato invece di produrre una geometria imprecisa.
             const MAX_EXACT: u64 = 1_u64 << 53;
-            // Esattezza garantita dalla guardia: qui |x| <= 2^53, quindi
-            // ogni i64 ammesso ha un f64 esattamente uguale.
-            #[allow(clippy::cast_precision_loss)]
-            let exact = |x: i64| -> Result<f64, ArrowTransportError> {
-                if x.unsigned_abs() > MAX_EXACT {
-                    Err(ArrowTransportError::IntegerCoordinateTooLarge {
-                        name: name.to_owned(),
-                    })
-                } else {
-                    Ok(x as f64)
-                }
-            };
-            column
+            let values = column
                 .as_any()
                 .downcast_ref::<plenora_core::arrow::array::Int64Array>()
                 .ok_or(ArrowTransportError::Internal("tipo verificato Int64"))?
                 .iter()
-                .map(|value| value.map(exact).transpose())
-                .collect()
+                .map(|value| {
+                    value
+                        .map(|x| {
+                            if x.unsigned_abs() > MAX_EXACT {
+                                Err("geometry.inexact_integer_coordinate")
+                            } else {
+                                // Esattezza garantita dalla guardia: |x| <= 2^53.
+                                #[allow(clippy::cast_precision_loss)]
+                                Ok(x as f64)
+                            }
+                        })
+                        .transpose()
+                })
+                .collect::<Vec<_>>();
+            Ok(values)
         }
         other => Err(ArrowTransportError::ColumnNotNumeric {
             name: name.to_owned(),
@@ -2217,8 +2623,15 @@ fn numeric_values(
 /// `from_coords` (1:1 senza colonna geometria in input): due colonne
 /// numeriche (default `x`/`y`) producono una colonna geometria Point
 /// aggiunta in coda; null in x o y -> geometria null; coordinate non finite
-/// sono rifiutate dal kernel (fail-closed). Tutte le colonne di input
-/// passano invariate.
+/// o intere oltre 2^53 sono difetti row-scoped: raccolta completa su tutti
+/// i batch (indice sorgente assoluto zero-based) e rifiuto fail-closed con
+/// diagnostica `plenora-row-diagnostics-v1`, mai valori nei messaggi.
+/// Un errore tardivo non row-scoped propaga l'errore reale con il report
+/// delle rejection gia' osservate declassato a `Partial`
+/// ([`attach_partial_coordinate_report`]), mai la perdita silenziosa.
+/// Tutte le colonne di input passano invariate.
+// Sequenza lineare di raccolta per batch: lunga per costruzione (R9.9).
+#[allow(clippy::too_many_lines)]
 fn from_coords_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -2258,39 +2671,219 @@ fn from_coords_batches(
     let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
 
     let limit = params.max_output_rows_limit();
+    let mut rejections: Vec<CoordinateRejection<'_>> = Vec::new();
+    let mut source_offset = 0_u64;
     let mut output_batches = Vec::with_capacity(batches.len());
     for batch in batches {
-        if batch.num_rows() as u64 > limit {
-            return Err(ArrowTransportError::OutputRowsExceeded {
-                actual: batch.num_rows() as u64,
-                limit,
+        if let Err(error) = from_coords_one_batch(
+            batch,
+            params,
+            limit,
+            x_index,
+            y_index,
+            &output_schema,
+            &mut rejections,
+            &mut source_offset,
+            &mut output_batches,
+        ) {
+            // Errore tardivo non row-scoped con rejection gia' osservate:
+            // propaga l'errore reale con il report parziale allegato, mai la
+            // perdita silenziosa (stessa disciplina di
+            // [`attach_partial_report`]); zero accepted (si risponde Err).
+            return Err(attach_partial_coordinate_report(error, &rejections));
+        }
+    }
+    reject_coordinate_rows(&rejections)?;
+    Ok((std::sync::Arc::new(output_schema), output_batches))
+}
+
+/// Corpo per-batch di `from_coords`: validazione cardinalita', raccolta
+/// delle rejection row-scoped (indice assoluto via `source_offset`) e
+/// costruzione del batch di output. Estratto dal ciclo affinche' un errore
+/// tardivo non row-scoped possa essere arricchito dal chiamante con il
+/// report parziale delle rejection gia' osservate (R9.9).
+#[allow(clippy::too_many_arguments)]
+fn from_coords_one_batch<'a>(
+    batch: &RecordBatch,
+    params: &'a TransformArrowSchema,
+    limit: u64,
+    x_index: usize,
+    y_index: usize,
+    output_schema: &Schema,
+    rejections: &mut Vec<CoordinateRejection<'a>>,
+    source_offset: &mut u64,
+    output_batches: &mut Vec<RecordBatch>,
+) -> Result<(), ArrowTransportError> {
+    if batch.num_rows() as u64 > limit {
+        return Err(ArrowTransportError::OutputRowsExceeded {
+            actual: batch.num_rows() as u64,
+            limit,
+        });
+    }
+    let xs = numeric_values(batch, x_index, params.x_column())?;
+    let ys = numeric_values(batch, y_index, params.y_column())?;
+    let mut points: Vec<Option<Vec<u8>>> = Vec::with_capacity(batch.num_rows());
+    for (row, (x, y)) in xs.into_iter().zip(ys).enumerate() {
+        let source_index = source_offset
+            .checked_add(u64::try_from(row).map_err(|_| {
+                ArrowTransportError::Internal("indice coordinata non rappresentabile")
+            })?)
+            .ok_or(ArrowTransportError::Internal("overflow indice coordinata"))?;
+        let evaluated = match (x, y) {
+            (Ok(x), Ok(y)) => Ok((x, y)),
+            (Err(cause), _) => Err((cause, params.x_column())),
+            (_, Err(cause)) => Err((cause, params.y_column())),
+        };
+        let (x, y) = match evaluated {
+            Ok(pair) => pair,
+            Err((cause, column)) => {
+                rejections.push(CoordinateRejection {
+                    source_index,
+                    cause,
+                    column,
+                });
+                points.push(None);
+                continue;
+            }
+        };
+        match (x, y) {
+            (Some(x), Some(y)) => match point_from_lon_lat(x, y) {
+                Ok(point) => points.push(Some(encode_geometry(&point)?)),
+                Err(
+                    plenora_kernels_geo::construction::ConstructionError::NonFiniteCoordinate {
+                        name,
+                    },
+                ) => {
+                    let column = if name == "lon" {
+                        params.x_column()
+                    } else {
+                        params.y_column()
+                    };
+                    rejections.push(CoordinateRejection {
+                        source_index,
+                        cause: "geometry.non_finite_coordinate",
+                        column,
+                    });
+                    points.push(None);
+                }
+                Err(error) => return Err(ArrowTransportError::Construction(error)),
+            },
+            _ => points.push(None),
+        }
+    }
+    *source_offset = source_offset
+        .checked_add(batch.num_rows() as u64)
+        .ok_or(ArrowTransportError::Internal("overflow offset sorgente"))?;
+    let mut columns = batch.columns().to_vec();
+    columns.push(std::sync::Arc::new(
+        points
+            .iter()
+            .map(|point| point.as_deref())
+            .collect::<BinaryArray>(),
+    ));
+    output_batches.push(
+        RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+    );
+    Ok(())
+}
+
+/// Rifiuto row-scoped di `from_coords`: indice sorgente assoluto, causa e
+/// nome della colonna coordinata (mai il valore).
+struct CoordinateRejection<'a> {
+    source_index: u64,
+    cause: &'static str,
+    column: &'a str,
+}
+
+/// Report `plenora-row-diagnostics-v1` delle rejection coordinate: indice
+/// sorgente assoluto, conteggi esatti, esempi bounded (mai valori). Il
+/// chiamante decide completeness/knowledge limits: completo a scansione
+/// finita ([`reject_coordinate_rows`]), parziale su errore tardivo
+/// ([`attach_partial_coordinate_report`]).
+fn coordinate_diagnostics_report(
+    rejections: &[CoordinateRejection<'_>],
+) -> Result<RowDiagnostics, ArrowTransportError> {
+    const EXAMPLES_LIMIT: u64 = 10;
+    let mut rows = std::collections::BTreeMap::new();
+    for rejection in rejections {
+        rows.entry(rejection.source_index).or_insert(rejection);
+    }
+    let observed_total = u64::try_from(rows.len())
+        .map_err(|_| ArrowTransportError::Internal("troppe rejection coordinate"))?;
+    let mut counts = std::collections::BTreeMap::new();
+    let mut examples = Vec::new();
+    for rejection in rows.values() {
+        let count = counts.entry(rejection.cause.to_owned()).or_insert(0_u64);
+        *count = count.checked_add(1).ok_or(ArrowTransportError::Internal(
+            "overflow conteggio causa coordinate",
+        ))?;
+        if u64::try_from(examples.len())
+            .map_err(|_| ArrowTransportError::Internal("troppi esempi coordinate"))?
+            < EXAMPLES_LIMIT
+        {
+            examples.push(RowDiagnosticExample {
+                source_index: rejection.source_index,
+                cause: rejection.cause.to_owned(),
+                column: Some(rejection.column.to_owned()),
+                key: None,
+                write_state: None,
             });
         }
-        let xs = numeric_values(batch, x_index, params.x_column())?;
-        let ys = numeric_values(batch, y_index, params.y_column())?;
-        let mut points: Vec<Option<Vec<u8>>> = Vec::with_capacity(batch.num_rows());
-        for (x, y) in xs.into_iter().zip(ys) {
-            match (x, y) {
-                (Some(x), Some(y)) => {
-                    let point = point_from_lon_lat(x, y)?;
-                    points.push(Some(encode_geometry(&point)?));
-                }
-                _ => points.push(None),
-            }
-        }
-        let mut columns = batch.columns().to_vec();
-        columns.push(std::sync::Arc::new(
-            points
-                .iter()
-                .map(|point| point.as_deref())
-                .collect::<BinaryArray>(),
-        ));
-        output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
-        );
     }
-    Ok((std::sync::Arc::new(output_schema), output_batches))
+    Ok(RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    })
+}
+
+/// Errore tardivo non row-scoped di `from_coords` con rejection gia'
+/// osservate: allega il report declassato a `Partial` (`total` sconosciuto,
+/// knowledge limit dichiarato — stessa disciplina di
+/// [`attach_partial_report`]). Senza rejection l'errore propaga com'e'.
+fn attach_partial_coordinate_report(
+    error: ArrowTransportError,
+    rejections: &[CoordinateRejection<'_>],
+) -> ArrowTransportError {
+    if rejections.is_empty() {
+        return error;
+    }
+    match coordinate_diagnostics_report(rejections) {
+        Ok(mut report) => {
+            report.completeness = RowDiagnosticsCompleteness::Partial;
+            report.total = None;
+            report.knowledge_limits = Some(vec!["data_tools.processing_interrupted".to_owned()]);
+            error.with_row_diagnostics(report)
+        }
+        Err(build_error) => build_error,
+    }
+}
+
+/// Chiude fail-closed quando una o piu' coordinate sono state rifiutate:
+/// report completo e deterministico (conteggi esatti, esempi bounded).
+fn reject_coordinate_rows(
+    rejections: &[CoordinateRejection<'_>],
+) -> Result<(), ArrowTransportError> {
+    if rejections.is_empty() {
+        return Ok(());
+    }
+    let report = coordinate_diagnostics_report(rejections)?;
+    Err(ArrowTransportError::Geometry(
+        "coordinate non conformi; consultare row_diagnostics".to_owned(),
+    )
+    .with_row_diagnostics(report))
 }
 
 /// Pipeline completa envelope -> Arrow -> kernel -> Arrow -> envelope.
@@ -2352,14 +2945,13 @@ pub fn transform_arrow(
     })
 }
 
-
 // ---------------------------------------------------------------------------
 // Test del runner fuso (ADR-0012)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use geo::{LineString, MultiPoint, Point, line_string, polygon};
+    use geo::{line_string, polygon, LineString, MultiPoint, Point};
 
     use super::*;
 
@@ -2473,7 +3065,10 @@ mod tests {
                 ]),
             ),
         ]);
-        assert_eq!(geometry_column_index(&canonical_only, "geom").expect("canonica-only"), 1);
+        assert_eq!(
+            geometry_column_index(&canonical_only, "geom").expect("canonica-only"),
+            1
+        );
 
         let bare = Schema::new(vec![Field::new("geom", DataType::Binary, true)]);
         assert!(matches!(
@@ -2487,14 +3082,14 @@ mod tests {
         group: &[&TransformArrowSchema],
         cells: &BinaryArray,
     ) -> Result<Vec<Option<Vec<u8>>>, ArrowTransportError> {
-        let mut current: Vec<Option<Vec<u8>>> = cells
-            .iter()
-            .map(|cell| cell.map(<[u8]>::to_vec))
-            .collect();
+        let mut current: Vec<Option<Vec<u8>>> =
+            cells.iter().map(|cell| cell.map(<[u8]>::to_vec)).collect();
         for params in group {
             let array = cells_array(&current);
             let TransformedColumn::Binary(values) = transform_cells(params, &array)? else {
-                return Err(ArrowTransportError::Internal("fixture: attesa colonna Binary"));
+                return Err(ArrowTransportError::Internal(
+                    "fixture: attesa colonna Binary",
+                ));
             };
             current = values;
         }
@@ -2575,9 +3170,15 @@ mod tests {
             FusedStepError::Kernel { index, error } => {
                 assert_eq!(index, 1, "attribuzione al kernel che ha prodotto la cella");
                 assert!(
-                    matches!(error, ArrowTransportError::CellTooLarge(size) if size == expected_size),
+                    matches!(error.source_error(), ArrowTransportError::CellTooLarge(size) if *size == expected_size),
                     "variante/misura diverse da encode_geometry: {error}"
                 );
+                // D12.3 + R9.9: la riga difettosa e' riportata con
+                // diagnostica completa (indice batch-locale).
+                let report = error.row_diagnostics().expect("diagnostica row-scoped");
+                assert_eq!(report.observed_total, 1);
+                assert_eq!(report.counts["geometry.cell_too_large"], 1);
+                assert_eq!(report.examples[0].source_index, 0);
             }
             FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
             FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
@@ -2609,6 +3210,94 @@ mod tests {
             FusedStepError::Control(_) => panic!("atteso errore di kernel, trovato Control"),
             FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
         }
+    }
+
+    /// Righe difettose nel percorso non fuso (`transform_cells`): la
+    /// diagnostica row-scoped e' completa (conteggi esatti su tutte le
+    /// righe, esempi bounded, indici batch-locali zero-based) e l'errore
+    /// primario resta quello della prima riga difettosa.
+    #[test]
+    fn transform_cells_reports_complete_row_diagnostics() {
+        let params = fused_params(ArrowOperation::Centroid);
+        let cells = cells_array(&[
+            Some(wkb(&Geometry::Point(Point::new(0.0, 0.0)))),
+            Some(vec![0x01, 0x09, 0x00]), // WKB troncato
+            None,
+            Some(vec![0x02]), // endian flag invalida
+        ]);
+        let Err(error) = transform_cells(&params, &cells) else {
+            panic!("celle malformate accettate");
+        };
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.total, Some(2));
+        assert_eq!(report.counts["geometry.invalid_wkb"], 2);
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(report.validate_for_emission().is_ok());
+    }
+
+    /// Parita' D12.3/D12.4 estesa alla diagnostica: un fallimento per riga
+    /// produce lo STESSO report nel percorso fuso e in quello sequenziale —
+    /// stessa attribuzione (kernel 0 del gruppo == primo nodo), stesse
+    /// cause, stessi indici, stesso errore primario.
+    #[test]
+    fn fused_and_sequential_report_identical_row_diagnostics() {
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(0.0);
+        let centroid = fused_params(ArrowOperation::Centroid);
+        let group: Vec<&TransformArrowSchema> = [&translate, &centroid].to_vec();
+
+        // Righe 1 e 3 con WKB malformato: il decode fallisce in entrambi i
+        // percorsi, attribuito al primo kernel/nodo del gruppo.
+        let cells = cells_array(&[
+            Some(wkb(&Geometry::Point(Point::new(0.0, 0.0)))),
+            Some(vec![0x01, 0x09, 0x00]), // WKB troncato
+            Some(wkb(&Geometry::Point(Point::new(1.0, 1.0)))),
+            Some(vec![0x02]), // endian flag invalida
+        ]);
+        let Err(sequential_error) = run_sequential(&group, &cells) else {
+            panic!("WKB malformato accettato");
+        };
+        let fused_error = run_fused(&group, &cells).expect_err("WKB malformato");
+
+        let sequential_report = sequential_error
+            .row_diagnostics()
+            .expect("diagnostica nel percorso non fuso");
+        assert_eq!(sequential_report.observed_total, 2);
+        assert_eq!(sequential_report.counts["geometry.invalid_wkb"], 2);
+        assert_eq!(
+            sequential_report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+
+        let FusedStepError::Kernel { index, error } = fused_error else {
+            panic!("atteso errore di kernel");
+        };
+        assert_eq!(index, 0, "attribuzione al primo kernel del gruppo");
+        let fused_report = error
+            .row_diagnostics()
+            .unwrap_or_else(|| panic!("diagnostica nel percorso fuso: {error}"));
+        assert_eq!(
+            fused_report, sequential_report,
+            "report diverso fra i percorsi"
+        );
+        assert_eq!(
+            error.to_string(),
+            sequential_error.to_string(),
+            "errore primario diverso fra i percorsi"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2657,9 +3346,12 @@ mod tests {
         else {
             panic!("fixture: attesa colonna Float64");
         };
-        let fused = run_fused_measured(&group, FusedTerminalMeasure::Area, &cells)
-            .expect("percorso fuso");
-        assert_eq!(fused.geometry, expected_geometry, "geometria diversa byte-per-byte");
+        let fused =
+            run_fused_measured(&group, FusedTerminalMeasure::Area, &cells).expect("percorso fuso");
+        assert_eq!(
+            fused.geometry, expected_geometry,
+            "geometria diversa byte-per-byte"
+        );
         let Some(TransformedColumn::Float64(fused_area)) = fused.measure else {
             panic!("attesa colonna misura Float64");
         };
@@ -2686,9 +3378,12 @@ mod tests {
         else {
             panic!("fixture: attesa colonna Utf8");
         };
-        let fused = run_fused_measured(&group, FusedTerminalMeasure::ToWkt, &cells)
-            .expect("percorso fuso");
-        assert_eq!(fused.geometry, expected_geometry, "geometria diversa byte-per-byte");
+        let fused =
+            run_fused_measured(&group, FusedTerminalMeasure::ToWkt, &cells).expect("percorso fuso");
+        assert_eq!(
+            fused.geometry, expected_geometry,
+            "geometria diversa byte-per-byte"
+        );
         let Some(TransformedColumn::Utf8(fused_wkt)) = fused.measure else {
             panic!("attesa colonna misura Utf8");
         };
@@ -2722,7 +3417,11 @@ mod tests {
         match error {
             FusedStepError::Measure { index, error } => {
                 assert_eq!(index, 2, "attribuzione al nodo misura");
-                assert_eq!(error.to_string(), expected.to_string(), "forma del non fuso");
+                assert_eq!(
+                    error.to_string(),
+                    expected.to_string(),
+                    "forma del non fuso"
+                );
             }
             FusedStepError::Kernel { .. } => panic!("atteso Measure, trovato Kernel"),
             FusedStepError::Control(_) => panic!("atteso Measure, trovato Control"),
@@ -2797,7 +3496,10 @@ mod tests {
         ]);
         let expected = run_sequential(&group, &cells).expect("percorso non fuso");
         let fused = run_fused(&group, &cells).expect("percorso fuso");
-        assert_eq!(fused, expected, "byte di confine diversi (GEOS vs canonico)");
+        assert_eq!(
+            fused, expected,
+            "byte di confine diversi (GEOS vs canonico)"
+        );
     }
 
     /// M3: `make_valid` a meta' catena con successore — la validazione

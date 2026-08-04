@@ -3,20 +3,20 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
     builder::StringBuilder, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray,
     RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use num_traits::ToPrimitive;
 use serde::Deserialize;
 
 use crate::Limits;
-use plenora_core::{PlenoraError, Result};
 use crate::{
     column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
     validate_output_name,
 };
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,11 +182,9 @@ impl<'a> NumericColumn<'a> {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values
-                    .value(row)
-                    .to_f64()
-                    .map(Some)
-                    .ok_or_else(|| PlenoraError::Schema("intero non rappresentabile come f64".into()))
+                values.value(row).to_f64().map(Some).ok_or_else(|| {
+                    PlenoraError::Schema("intero non rappresentabile come f64".into())
+                })
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
@@ -440,7 +438,11 @@ fn pivot_column(
                 .collect::<Result<Vec<_>>>()?;
             (
                 source.data_type().clone(),
-                plenora_core::arrow::select::take::take(source.as_ref(), &UInt32Array::from(indices), None)?,
+                plenora_core::arrow::select::take::take(
+                    source.as_ref(),
+                    &UInt32Array::from(indices),
+                    None,
+                )?,
             )
         }
         PivotAgg::Count => {
@@ -449,7 +451,9 @@ fn pivot_column(
                 .map(|rows| {
                     rows.map(|rows| {
                         i64::try_from(rows.iter().filter(|row| !source.is_null(**row)).count())
-                            .map_err(|_| PlenoraError::InvalidPlan("conteggio pivot oltre i64".into()))
+                            .map_err(|_| {
+                                PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
+                            })
                     })
                     .transpose()
                 })
@@ -502,7 +506,9 @@ fn pivot_column(
                     let mut extremum = 0.0_f64;
                     let mut count = 0_usize;
                     for row in *rows {
-                        let Some(value) = numeric.value(*row)? else { continue };
+                        let Some(value) = numeric.value(*row)? else {
+                            continue;
+                        };
                         if count == 0 {
                             extremum = value;
                         } else if matches!(function, PivotAgg::Min) {
@@ -518,14 +524,15 @@ fn pivot_column(
                     }
                     Ok(Some(match function {
                         PivotAgg::Sum => sum,
-                        PivotAgg::Mean => sum / count.to_f64().ok_or_else(|| {
-                            PlenoraError::InvalidPlan("gruppo pivot non rappresentabile".into())
-                        })?,
+                        PivotAgg::Mean => {
+                            sum / count.to_f64().ok_or_else(|| {
+                                PlenoraError::InvalidPlan("gruppo pivot non rappresentabile".into())
+                            })?
+                        }
                         PivotAgg::Min | PivotAgg::Max => extremum,
                         _ => {
                             return Err(PlenoraError::Internal(
-                                "funzione pivot non numerica nel ramo numerico"
-                                    .into(),
+                                "funzione pivot non numerica nel ramo numerico".into(),
                             ));
                         }
                     }))
@@ -700,11 +707,7 @@ pub struct Transpose {
 // ripiego testuale, una colonna per riga): lunga per costruzione, uno
 // spezzone artificiale peggiorerebbe la leggibilita'.
 #[allow(clippy::too_many_lines)]
-pub fn transpose(
-    batch: &RecordBatch,
-    config: &Transpose,
-    limits: &Limits,
-) -> Result<RecordBatch> {
+pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
     if batch.num_rows() == 0 {
         return Ok(batch.clone());
     }
@@ -718,16 +721,19 @@ pub fn transpose(
         .collect::<Vec<_>>();
     let output_columns = batch.num_rows().saturating_add(1);
     if data_indices.len() > limits.max_rows || output_columns > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan("transpose supera i limiti".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "transpose supera i limiti".into(),
+        ));
     }
     let first_name = config.id_column.clone().unwrap_or_else(|| "col_0".into());
     let mut fields = vec![Field::new(&first_name, DataType::Utf8, false)];
-    let mut columns: Vec<Arc<dyn plenora_core::arrow::array::Array>> = vec![Arc::new(StringArray::from(
-        data_indices
-            .iter()
-            .map(|index| batch.schema().field(*index).name().clone())
-            .collect::<Vec<_>>(),
-    ))];
+    let mut columns: Vec<Arc<dyn plenora_core::arrow::array::Array>> =
+        vec![Arc::new(StringArray::from(
+            data_indices
+                .iter()
+                .map(|index| batch.schema().field(*index).name().clone())
+                .collect::<Vec<_>>(),
+        ))];
     let data_type = data_indices.first().map_or(DataType::Utf8, |index| {
         batch.column(*index).data_type().clone()
     });
@@ -772,7 +778,9 @@ pub fn transpose(
                         .and_then(|base| base.checked_add(row))
                         .and_then(|index| u64::try_from(index).ok())
                         .map(Some)
-                        .ok_or_else(|| PlenoraError::InvalidPlan("indice transpose oltre u64".into()))
+                        .ok_or_else(|| {
+                            PlenoraError::InvalidPlan("indice transpose oltre u64".into())
+                        })
                 })
                 .collect::<Result<Vec<_>>>()?;
             columns.push(plenora_core::arrow::select::take::take(
@@ -827,9 +835,10 @@ pub struct Explode {
 /// Espande una colonna `List` in una riga per elemento (stile pandas
 /// explode).
 ///
-/// Liste null o vuote: riga con valore null se `empty_policy` e' `Null`,
-/// scartate se `Drop`. Il nome di output e' `output_column` o la colonna
-/// stessa.
+/// Liste null o vuote producono una riga con valore null con `empty_policy`
+/// `Null`. Il token legacy `Drop` e' rifiutato: l'omissione richiede un nodo
+/// esplicito di selezione o partizione. Il nome di output e' `output_column` o
+/// la colonna stessa.
 ///
 /// # Errors
 ///
@@ -837,11 +846,12 @@ pub struct Explode {
 /// - `InvalidPlan`: righe di output oltre `max_rows`, indice elemento oltre
 ///   u32, nome di output non valido; inoltre gli errori di
 ///   `replace_or_append`.
-pub fn explode(
-    batch: &RecordBatch,
-    config: &Explode,
-    limits: &Limits,
-) -> Result<RecordBatch> {
+pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result<RecordBatch> {
+    if matches!(config.empty_policy, EmptyListPolicy::Drop) {
+        return Err(PlenoraError::InvalidPlan(
+            "explode.empty_policy=drop e' remediation implicita; usare un nodo esplicito di selezione o partizione accepted/rejected".into(),
+        ));
+    }
     let index = column_index(batch, &config.column)?;
     let list = batch
         .column(index)
@@ -876,8 +886,11 @@ pub fn explode(
         }
     }
     let repeated = select_rows(batch, &rows)?;
-    let output =
-        plenora_core::arrow::select::take::take(list.values().as_ref(), &UInt32Array::from(values), None)?;
+    let output = plenora_core::arrow::select::take::take(
+        list.values().as_ref(),
+        &UInt32Array::from(values),
+        None,
+    )?;
     replace_or_append(&repeated, output_name, list.value_type(), true, output)
 }
 
@@ -918,7 +931,9 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         .saturating_sub(usize::from(config.drop_source))
         .saturating_add(structure.num_columns());
     if projected_columns > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan("unnest supera max_columns".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "unnest supera max_columns".into(),
+        ));
     }
     let mut fields = Vec::with_capacity(projected_columns);
     let mut columns = Vec::with_capacity(projected_columns);
@@ -1083,8 +1098,9 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
             let index = if let Some(new_row) = row.new_row {
                 left.len().saturating_add(new_row)
             } else {
-                row.old_row
-                    .ok_or_else(|| PlenoraError::InvalidPlan("riga table_diff senza sorgente".into()))?
+                row.old_row.ok_or_else(|| {
+                    PlenoraError::InvalidPlan("riga table_diff senza sorgente".into())
+                })?
             };
             u32::try_from(index)
                 .map(Some)
@@ -1119,7 +1135,9 @@ pub fn table_diff(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-        return Err(PlenoraError::InvalidPlan("chiavi table_diff non valide".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "chiavi table_diff non valide".into(),
+        ));
     }
     let left_keys = config
         .left_keys
@@ -1176,14 +1194,10 @@ pub fn table_diff(
         .collect::<Vec<_>>();
     let mut key = String::new();
     let mut text = String::new();
-    let mut old = DiffKeyMap::with_capacity_and_hasher(
-        left.num_rows(),
-        BuildHasherDefault::default(),
-    );
-    let mut new = DiffKeyMap::with_capacity_and_hasher(
-        right.num_rows(),
-        BuildHasherDefault::default(),
-    );
+    let mut old =
+        DiffKeyMap::with_capacity_and_hasher(left.num_rows(), BuildHasherDefault::default());
+    let mut new =
+        DiffKeyMap::with_capacity_and_hasher(right.num_rows(), BuildHasherDefault::default());
     for row in 0..left.num_rows() {
         encode_diff_key(&left_key_columns, row, &mut key, &mut text)?;
         if old.insert(key.clone(), row).is_some() {
@@ -1223,8 +1237,10 @@ pub fn table_diff(
             (Some(old_row), Some(new_row)) => {
                 let mut changed = Vec::new();
                 let mut old_values = Vec::new();
-                for ((name, left_column), right_column) in
-                    compare.iter().zip(&left_text_columns).zip(&right_text_columns)
+                for ((name, left_column), right_column) in compare
+                    .iter()
+                    .zip(&left_text_columns)
+                    .zip(&right_text_columns)
                 {
                     before.clear();
                     after.clear();
@@ -1265,7 +1281,9 @@ pub fn table_diff(
         }
     }
     if rows.len() > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("table_diff supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "table_diff supera max_rows".into(),
+        ));
     }
     let output_count = config
         .right_keys
@@ -1492,12 +1510,10 @@ mod tests {
                     .iter()
                     .map(|rows| {
                         rows.map(|rows| {
-                            i64::try_from(
-                                rows.iter().filter(|row| !source.is_null(**row)).count(),
-                            )
-                            .map_err(|_| {
-                                PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
-                            })
+                            i64::try_from(rows.iter().filter(|row| !source.is_null(**row)).count())
+                                .map_err(|_| {
+                                    PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
+                                })
                         })
                         .transpose()
                     })
@@ -2212,7 +2228,12 @@ mod tests {
                 ])),
             ],
         );
-        for function in [PivotAgg::Sum, PivotAgg::First, PivotAgg::Count, PivotAgg::Concat] {
+        for function in [
+            PivotAgg::Sum,
+            PivotAgg::First,
+            PivotAgg::Count,
+            PivotAgg::Concat,
+        ] {
             let config = pivot_config("a, b", "p", "v", function.clone());
             let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
             let reference =
@@ -2255,7 +2276,12 @@ mod tests {
                 ])),
             ],
         );
-        for function in [PivotAgg::Sum, PivotAgg::Mean, PivotAgg::Count, PivotAgg::First] {
+        for function in [
+            PivotAgg::Sum,
+            PivotAgg::Mean,
+            PivotAgg::Count,
+            PivotAgg::First,
+        ] {
             let config = pivot_config("d", "p", "v", function.clone());
             let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
             let reference =
@@ -2311,7 +2337,9 @@ mod tests {
         let rows = 1_000;
         let keys = (0..rows).map(i64::from).collect::<Vec<_>>();
         let pivots = (0..rows).map(|_| "solo").collect::<Vec<_>>();
-        let values = (0..rows).map(|row| Some(i64::from(row % 50))).collect::<Vec<_>>();
+        let values = (0..rows)
+            .map(|row| Some(i64::from(row % 50)))
+            .collect::<Vec<_>>();
         let batch = batch_of(
             vec![
                 Field::new("k", DataType::Int64, false),
@@ -2441,7 +2469,9 @@ mod tests {
         limits: &Limits,
     ) -> Result<RecordBatch> {
         if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
-            return Err(PlenoraError::InvalidPlan("chiavi table_diff non valide".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "chiavi table_diff non valide".into(),
+            ));
         }
         let left_keys = config
             .left_keys
@@ -2517,8 +2547,7 @@ mod tests {
                         compare.iter().zip(&left_compare).zip(&right_compare)
                     {
                         let before = scalar_as_string(left.column(*left_index).as_ref(), old_row)?;
-                        let after =
-                            scalar_as_string(right.column(*right_index).as_ref(), new_row)?;
+                        let after = scalar_as_string(right.column(*right_index).as_ref(), new_row)?;
                         if before != after {
                             changed.push(name.clone());
                             old_values.push(before.unwrap_or_default());
@@ -2547,7 +2576,9 @@ mod tests {
             }
         }
         if rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("table_diff supera max_rows".into()));
+            return Err(PlenoraError::InvalidPlan(
+                "table_diff supera max_rows".into(),
+            ));
         }
         let output_count = config
             .right_keys
@@ -2758,7 +2789,9 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("status utf8");
-        let states: Vec<&str> = (0..status_column.len()).map(|row| status_column.value(row)).collect();
+        let states: Vec<&str> = (0..status_column.len())
+            .map(|row| status_column.value(row))
+            .collect();
         assert_eq!(
             states,
             vec!["MODIFIED", "MODIFIED", "DELETED", "DELETED", "ADDED", "ADDED"]

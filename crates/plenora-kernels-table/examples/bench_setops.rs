@@ -125,7 +125,9 @@ fn setop_right_fixture(rows: usize) -> RecordBatch {
     for row in 0..rows {
         let draws: [u64; DRAWS_PER_ROW] = if row >= rows / 2 {
             let base = row * DRAWS_PER_ROW;
-            stream[base..base + DRAWS_PER_ROW].try_into().expect("draws")
+            stream[base..base + DRAWS_PER_ROW]
+                .try_into()
+                .expect("draws")
         } else {
             [(); DRAWS_PER_ROW].map(|()| rng.next())
         };

@@ -96,6 +96,18 @@ pub enum ResultShape {
     Diagnostic,
 }
 
+/// Osservabilita' dell'indice sorgente attraverso un nodo.
+///
+/// `Preserved` significa che ogni configurazione valida del descrittore
+/// mantiene cardinalita' e ordine delle righe. Ogni altra operazione e'
+/// `Unavailable`: senza un sidecar di lineage il runtime non puo' ricostruire
+/// un indice sorgente originale e deve rifiutare i consumer row-diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SourceRowProvenance {
+    Preserved,
+    Unavailable,
+}
+
 /// Requisito CRS (solo operazioni geo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CrsRequirement {
@@ -223,7 +235,11 @@ impl JoinExpansion {
     pub fn compute(output_rows: u64, left_rows: u64, right_rows: u64) -> Self {
         fn ratio(numerator: u64, denominator: u64) -> f64 {
             if denominator == 0 {
-                if numerator == 0 { 0.0 } else { f64::INFINITY }
+                if numerator == 0 {
+                    0.0
+                } else {
+                    f64::INFINITY
+                }
             } else {
                 numerator as f64 / denominator as f64
             }
@@ -306,6 +322,166 @@ pub struct OperationDescriptor {
     pub config_schema_version: u32,
     pub contract_analysis_version: u32,
     pub kernel_version: u32,
+}
+
+impl OperationDescriptor {
+    /// Dichiara se la posizione sorgente resta osservabile per tutte le
+    /// configurazioni valide dell'operazione.
+    ///
+    /// La classificazione e' conservativa: una sola modalita' capace di
+    /// selezionare, riordinare, espandere o aggregare rende il descrittore
+    /// `Unavailable`. Questo evita provenance inventata nei sibling paths.
+    #[must_use]
+    pub fn source_row_provenance(&self) -> SourceRowProvenance {
+        match self.family {
+            Family::Table => {
+                if matches!(
+                    self.id,
+                    "table.bin"
+                        | "table.add_row_number"
+                        | "table.assert_unique"
+                        | "table.assert_foreign_key"
+                ) || (matches!(self.arity, Arity::Unary)
+                    && !matches!(
+                        self.id,
+                        "table.aggregate"
+                            | "table.dedup_advanced"
+                            | "table.distinct"
+                            | "table.filter"
+                            | "table.limit"
+                            | "table.melt"
+                            | "table.pivot"
+                            | "table.sample"
+                            | "table.sort"
+                            | "table.statistics"
+                            | "table.top_n"
+                            | "table.transpose"
+                            | "table.validate_rules"
+                            | "table.window_function"
+                            | "table.rolling_window"
+                            | "table.explode"
+                            | "table.unnest"
+                    ))
+                {
+                    SourceRowProvenance::Preserved
+                } else {
+                    SourceRowProvenance::Unavailable
+                }
+            }
+            Family::Geo => {
+                if matches!(self.arity, Arity::Unary)
+                    && matches!(
+                        self.result_shape,
+                        Some(ResultShape::OneToOne | ResultShape::FromCoords)
+                    )
+                {
+                    SourceRowProvenance::Preserved
+                } else {
+                    SourceRowProvenance::Unavailable
+                }
+            }
+        }
+    }
+
+    /// Dichiara se l'operazione, nella configurazione data, puo' rifiutare
+    /// righe con diagnostica row-scoped (`plenora-row-diagnostics-v1`).
+    ///
+    /// Autorita' UNICA catalog-level (accanto a [`Self::source_row_provenance`]
+    /// e `required_capabilities`): la usano il gate provenance del planner, il
+    /// `prepare` (flag per kernel del machinery di segmento) e il gate dei
+    /// piani legacy della CLI. Nessuna lista duplicata altrove: chiunque
+    /// aggiunga un percorso di rifiuto row-scoped la dichiara QUI.
+    ///
+    /// La proprieta' e' config-sensitive per costruzione:
+    /// - `table.type_cast`: solo i target con conversione fallibile
+    ///   row-scoped (`int`, `float`, `bool`, `uint64`, `date`, `datetime`,
+    ///   `date32`, `timestamp_millis`, `decimal128`) e solo con `errors`
+    ///   assente/`coerce`/`raise`; gli altri target (es. `str`) sono totali;
+    /// - `table.md5_hash`/`table.sha256_hash`: solo con `null_policy=error`
+    ///   (P1-3: `empty`/`literal` hanno semantica storica dichiarata, nessun
+    ///   rifiuto);
+    /// - `table.hmac_sha256`: MAI (P2) — le `null_policy` legacy producono
+    ///   output dichiarato, nessun rifiuto row-scoped possibile.
+    ///
+    /// Le op geo elencate sono quelle dispatchate nel DAG v4 con raccolta
+    /// row-scoped (ledger `diag-transport`/`diag-wkt`): le op solo-trasporto
+    /// (es. `geo.geodesic_*`) non attraversano nessuno dei tre gate e restano
+    /// coperte dal contratto del trasporto.
+    #[must_use]
+    pub fn emits_row_diagnostics(&self, config: &serde_json::Value) -> bool {
+        match self.family {
+            Family::Table => match self.id {
+                "table.flatten_json"
+                | "table.date_extract"
+                | "table.date_format"
+                | "table.date_add"
+                | "table.date_diff"
+                | "table.timezone_convert"
+                | "table.formula"
+                | "table.expression"
+                | "table.assert_not_null"
+                | "table.assert_unique"
+                | "table.assert_range"
+                | "table.assert_regex"
+                | "table.assert_foreign_key" => true,
+                "table.type_cast" => {
+                    matches!(
+                        config
+                            .get("target_type")
+                            .and_then(serde_json::Value::as_str),
+                        Some(
+                            "int"
+                                | "float"
+                                | "bool"
+                                | "uint64"
+                                | "date"
+                                | "datetime"
+                                | "date32"
+                                | "timestamp_millis"
+                                | "decimal128"
+                        )
+                    ) && matches!(
+                        config.get("errors").and_then(serde_json::Value::as_str),
+                        None | Some("coerce" | "raise")
+                    )
+                }
+                "table.md5_hash" | "table.sha256_hash" => matches!(
+                    config
+                        .get("null_policy")
+                        .and_then(serde_json::Value::as_str),
+                    Some("error")
+                ),
+                _ => false,
+            },
+            Family::Geo => matches!(
+                self.id,
+                "geo.from_wkt"
+                    | "geo.centroid"
+                    | "geo.convex_hull"
+                    | "geo.envelope"
+                    | "geo.buffer"
+                    | "geo.simplify"
+                    | "geo.boundary"
+                    | "geo.point_on_surface"
+                    | "geo.make_valid"
+                    | "geo.reproject"
+                    | "geo.affine_transform"
+                    | "geo.translate"
+                    | "geo.scale"
+                    | "geo.rotate"
+                    | "geo.concave_hull"
+                    | "geo.densify"
+                    | "geo.snap_to_grid"
+                    | "geo.line_substring"
+                    | "geo.line_interpolate_point"
+                    | "geo.area"
+                    | "geo.length"
+                    | "geo.perimeter"
+                    | "geo.vertex_count"
+                    | "geo.to_wkt"
+            ),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -468,204 +644,2076 @@ macro_rules! op {
 /// Catalogo unificato: 71 operazioni tabellari + 75 geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
     // --- Tabellari Manipola-compat (37) -----------------------------------
-    op!("table.add_row_number", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.aggregate", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
-    op!("table.bin", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.concat", Table, ManipolaCompat, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, PublicProtocol),
-    op!("table.concat_columns", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.conditional", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.cross_join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, expansion_constraint = MaxRelative),
-    op!("table.date_extract", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.dedup_advanced", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
-    op!("table.distinct", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2),
-    op!("table.drop_columns", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.fill_na", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.filter", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.flatten_json", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.formula", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    op!(
+        "table.add_row_number",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.aggregate",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.bin",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.concat",
+        Table,
+        ManipolaCompat,
+        NAry,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        InputOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.concat_columns",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.conditional",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.cross_join",
+        Table,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "table.date_extract",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.dedup_advanced",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.distinct",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.drop_columns",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.fill_na",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.filter",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.flatten_json",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.formula",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
     // join generico: molti-a-molti possibile -> MaxRelative (ADR 6).
-    op!("table.join", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = MaxRelative),
-    op!("table.lookup", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.melt", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.pivot", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.rename", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.reorder_columns", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.replace", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.sample", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.sort", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.split_column", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.statistics", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.string_extract", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.string_length", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.string_pad", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
+    op!(
+        "table.join",
+        Table,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "table.lookup",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.melt",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.pivot",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.rename",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.reorder_columns",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.replace",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.sample",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.sort",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.split_column",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.statistics",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.string_extract",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.string_length",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.string_pad",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
     // diff: l'output (added/removed/changed) e' proporzionale a entrambi gli
     // input -> SumRelative (ADR 6).
-    op!("table.table_diff", Table, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = SumRelative),
-    op!("table.text_normalize", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.transpose", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.type_cast", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.uuid_generator", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.window_function", Table, ManipolaCompat, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.mask_data", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.md5_hash", Table, ManipolaCompat, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
+    op!(
+        "table.table_diff",
+        Table,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = SumRelative
+    ),
+    op!(
+        "table.text_normalize",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.transpose",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.type_cast",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.uuid_generator",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.window_function",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.mask_data",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.md5_hash",
+        Table,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
     // --- Tabellari estensioni (25) -----------------------------------------
     // anti_join: output <= left -> LeftRelative.
-    op!("table.anti_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
+    op!(
+        "table.anti_join",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = LeftRelative
+    ),
     // asof_join: una corrispondenza per riga left (lookup-style) -> LeftRelative.
-    op!("table.asof_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, expansion_constraint = LeftRelative),
-    op!("table.assert_not_null", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_range", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_regex", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_schema", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_unique", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.coalesce", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.date_add", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.date_diff", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
-    op!("table.date_format", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    op!(
+        "table.asof_join",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        expansion_constraint = LeftRelative
+    ),
+    op!(
+        "table.assert_not_null",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
+    op!(
+        "table.assert_range",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
+    op!(
+        "table.assert_regex",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
+    op!(
+        "table.assert_schema",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.assert_unique",
+        Table,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.coalesce",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
+    op!(
+        "table.date_add",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.date_diff",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
+    op!(
+        "table.date_format",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
     // except: output <= left -> LeftRelative.
-    op!("table.except", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
-    op!("table.explode", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol),
+    op!(
+        "table.except",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = LeftRelative
+    ),
+    op!(
+        "table.explode",
+        Table,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
     // intersect: output <= left (e <= right) -> LeftRelative.
-    op!("table.intersect", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
-    op!("table.rolling_window", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    op!(
+        "table.intersect",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = LeftRelative
+    ),
+    op!(
+        "table.rolling_window",
+        Table,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
     // semi_join: output <= left -> LeftRelative.
-    op!("table.semi_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
-    op!("table.sha256_hash", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.timezone_convert", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    op!(
+        "table.semi_join",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = LeftRelative
+    ),
+    op!(
+        "table.sha256_hash",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
+    op!(
+        "table.timezone_convert",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3
+    ),
     // union_distinct: output <= left + right -> SumRelative (esplicito).
-    op!("table.union_distinct", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], CanonicalOrder, PublicProtocol, kernel_version = 2, expansion_constraint = SumRelative),
-    op!("table.unnest", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
+    op!(
+        "table.union_distinct",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        CanonicalOrder,
+        PublicProtocol,
+        kernel_version = 2,
+        expansion_constraint = SumRelative
+    ),
+    op!(
+        "table.unnest",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
     // expression v2 (Fase estensione funzioni/temporali): nuove funzioni
     // (substring, regex_replace, between, in, greatest, least, floor, ceil,
     // power) e date_trunc con output Date32/TimestampMs nativi -> tutte e 4
     // le versioni incrementate (ADR 4).
-    op!("table.expression", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol,
-        semantic_version = 2, config_schema_version = 2, contract_analysis_version = 2, kernel_version = 3),
-    op!("table.assert_cardinality", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
-    op!("table.assert_metadata", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, PublicProtocol),
+    op!(
+        "table.expression",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 3,
+        config_schema_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 4
+    ),
+    op!(
+        "table.assert_cardinality",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
+    op!(
+        "table.assert_metadata",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol
+    ),
     // assert_foreign_key: validazione, output = left -> LeftRelative.
-    op!("table.assert_foreign_key", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2, expansion_constraint = LeftRelative),
+    op!(
+        "table.assert_foreign_key",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 3,
+        expansion_constraint = LeftRelative
+    ),
     // reconcile: semantica di output non caratterizzata con certezza ->
     // SumRelative di default (da rivedere se emerge un vincolo piu' preciso).
-    op!("table.reconcile", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, PublicProtocol, kernel_version = 2),
+    op!(
+        "table.reconcile",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        kernel_version = 2
+    ),
     // --- Geografiche Manipola-compat (33) -----------------------------------
-    op!("geo.centroid", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
-    op!("geo.convex_hull", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
-    op!("geo.envelope", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace),
+    op!(
+        "geo.centroid",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.convex_hull",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.envelope",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
     // sjoin: una geometria left puo' intersecare molte right (molti-a-molti)
     // -> MaxRelative (ADR 6).
-    op!("geo.sjoin", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, PublicProtocol, expansion_constraint = MaxRelative),
-    op!("geo.area", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
-    op!("geo.boundary", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.bounds_extractor", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.buffer", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.clean_topology", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.sjoin",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        PublicProtocol,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.area",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TerminalMeasure,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.boundary",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.bounds_extractor",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.buffer",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.clean_topology",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // clip/difference: il taglio puo' spezzare una geometria left in piu'
     // pezzi (OneToMany) -> MaxRelative.
-    op!("geo.clip", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.count_points_in_polygons", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
-    op!("geo.difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.dissolve", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], CanonicalOrder, KernelValidated),
-    op!("geo.distance", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.explode", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
-    op!("geo.from_coords", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::FromCoords), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.intersection", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.length", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
-    op!("geo.line_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.clip",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.count_points_in_polygons",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = LeftRelative
+    ),
+    op!(
+        "geo.difference",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.dissolve",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        CanonicalOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.distance",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.explode",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.from_coords",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::FromCoords),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.intersection",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.length",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TerminalMeasure,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.line_builder",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // nearest: una corrispondenza per riga left (lookup-style) -> LeftRelative.
-    op!("geo.nearest", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
+    op!(
+        "geo.nearest",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = LeftRelative
+    ),
     // overlay: un left puo' produrre piu' pezzi (OneToMany) -> MaxRelative.
-    op!("geo.overlay", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.perimeter", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
-    op!("geo.point_on_surface", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.polygon_builder", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.simplify", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.symmetric_difference", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
-    op!("geo.to_wkt", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
+    op!(
+        "geo.overlay",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.perimeter",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TerminalMeasure,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.point_on_surface",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.polygon_builder",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.simplify",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.symmetric_difference",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
+    op!(
+        "geo.to_wkt",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TerminalMeasure,
+        semantic_version = 2
+    ),
     // union: semantica di output non caratterizzata con certezza (unione
     // dissolta dei due input) -> SumRelative di default (da rivedere).
-    op!("geo.union", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.vertex_count", Geo, ManipolaCompat, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, geo_fusion = TerminalMeasure),
-    op!("geo.voronoi", Geo, ManipolaCompat, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.union",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.vertex_count",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TerminalMeasure,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.voronoi",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // within: filtro del left sul right -> output <= left -> LeftRelative.
-    op!("geo.within", Geo, ManipolaCompat, BinaryOrdered, BinaryBlocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_constraint = LeftRelative),
+    op!(
+        "geo.within",
+        Geo,
+        ManipolaCompat,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = LeftRelative
+    ),
     // ADR-0012 M3: make_valid entra nel perimetro di fusione come
     // TransformInPlace; l'ammissione di input OGC-invalido (trappola 1) e'
     // una proprieta' del suo gate di decode, gestita dal runner fuso con
     // l'eccezione documentata in ADR-0012 D12.4-M3 — non richiede una
     // variante di capability dedicata (la relazione di raggruppamento e'
     // identica: 1:1 in place sulla stessa colonna).
-    op!("geo.make_valid", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &["geos"], DefinedOrder, BackendPending, geo_fusion = TransformInPlace),
-    op!("geo.reproject", Geo, ManipolaCompat, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToOne), Some(CrsRequirement::Reprojection), &["proj"], DefinedOrder, BackendPending, geo_fusion = TransformInPlace),
+    op!(
+        "geo.make_valid",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        NonInterruptible,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &["geos"],
+        DefinedOrder,
+        BackendPending,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.reproject",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        NonInterruptible,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Reprojection),
+        &["proj"],
+        DefinedOrder,
+        BackendPending,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
     // --- Predicati DE-9IM, estensioni geo (11) ------------------------------
-    op!("geo.predicate_intersects", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_disjoint", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_contains", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_within", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_equals_topo", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_covers", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_covered_by", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_contains_properly", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_touches", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_crosses", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.predicate_overlaps", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.predicate_intersects",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_disjoint",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_contains",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_within",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_equals_topo",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_covers",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_covered_by",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_contains_properly",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_touches",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_crosses",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.predicate_overlaps",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni geo (21) -------------------------------------------------
-    op!("geo.affine_transform", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.translate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.scale", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.rotate", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.concave_hull", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.hausdorff_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.haversine_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.geodesic_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.geodesic_line_length", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.densify", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.snap_to_grid", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated, geo_fusion = TransformInPlace),
-    op!("geo.delaunay", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToMany), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.polygonize", Geo, Extension, Unary, Blocking, NonInterruptible, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &["geos"], DefinedOrder, BackendPending),
-    op!("geo.line_merge", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.split", Geo, Extension, Unary, Streaming, NonInterruptible, Some(ResultShape::OneToMany), Some(CrsRequirement::SameProjected), &["geos"], DefinedOrder, BackendPending),
-    op!("geo.line_substring", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.line_interpolate_point", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
-    op!("geo.frechet_distance", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
-    op!("geo.bearing", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.geodesic_area", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Geographic), &[], DefinedOrder, KernelValidated),
-    op!("geo.geometry_diagnostics", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::Diagnostic), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.affine_transform",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.translate",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.scale",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.rotate",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.concave_hull",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.hausdorff_distance",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.haversine_distance",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Geographic),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.geodesic_distance",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Geographic),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.geodesic_line_length",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Geographic),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.densify",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.snap_to_grid",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.delaunay",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.polygonize",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        NonInterruptible,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Projected),
+        &["geos"],
+        DefinedOrder,
+        BackendPending
+    ),
+    op!(
+        "geo.line_merge",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.split",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        NonInterruptible,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::SameProjected),
+        &["geos"],
+        DefinedOrder,
+        BackendPending
+    ),
+    op!(
+        "geo.line_substring",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.line_interpolate_point",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.frechet_distance",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.bearing",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Geographic),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.geodesic_area",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Geographic),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2
+    ),
+    op!(
+        "geo.geometry_diagnostics",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::Diagnostic),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni geo v1.1 (4) ---------------------------------------------
-    op!("geo.from_wkt", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::FromCoords), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
-    op!("geo.geometry_accessors", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
-    op!("geo.collect", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::ManyToOne), Some(CrsRequirement::Known), &[], CanonicalOrder, KernelValidated),
-    op!("geo.line_locate_point", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.from_wkt",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::FromCoords),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
+    op!(
+        "geo.geometry_accessors",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.collect",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::ManyToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        CanonicalOrder,
+        KernelValidated
+    ),
+    op!(
+        "geo.line_locate_point",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni geo v1.2 (3) ---------------------------------------------
-    op!("geo.generate_grid", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
-    op!("geo.subdivide", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToMany), Some(CrsRequirement::Known), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.generate_grid",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::WholeToMany),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_factor_exempt = true
+    ),
+    op!(
+        "geo.subdivide",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToMany),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // `snap`: il riferimento da config (`reference_wkb`) e' assunto nello
     // stesso CRS dell'input (convenzione D16): requisito SameProjected per
     // l'unica colonna, come le distanze "unarie".
-    op!("geo.snap", Geo, Extension, Unary, Streaming, Cooperative, Some(ResultShape::OneToOne), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.snap",
+        Geo,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni geo v1.3 (3) ---------------------------------------------
     // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
     // input (Blocking) e producono una riga per issue/tratto condiviso
     // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
     // quindi SameProjected. Esenti da `max_expansion_factor` (ADR 6:
     // esenzione dichiarata in catalogo).
-    op!("geo.coverage_validate", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
-    op!("geo.shared_paths", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::WholeToMany), Some(CrsRequirement::SameProjected), &[], DefinedOrder, KernelValidated, expansion_factor_exempt = true),
+    op!(
+        "geo.coverage_validate",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::WholeToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_factor_exempt = true
+    ),
+    op!(
+        "geo.shared_paths",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::WholeToMany),
+        Some(CrsRequirement::SameProjected),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_factor_exempt = true
+    ),
     // `cluster_dbscan`: clustering globale per densita' (vicinati R-tree
     // sull'intero input) ma output allineato alle righe (un'etichetta UInt64
     // nullable per riga, noise -> null): Blocking con shape OneToOne; eps in
     // unita' di mappa, quindi Projected.
-    op!("geo.cluster_dbscan", Geo, Extension, Unary, Blocking, BoundaryOnly, Some(ResultShape::OneToOne), Some(CrsRequirement::Projected), &[], DefinedOrder, KernelValidated),
+    op!(
+        "geo.cluster_dbscan",
+        Geo,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Projected),
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni table v1.1 (4) -------------------------------------------
-    op!("table.limit", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], InputOrder, KernelValidated),
-    op!("table.select_columns", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
-    op!("table.stable_fingerprint", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated, kernel_version = 2),
-    op!("table.top_n", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated),
+    op!(
+        "table.limit",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        InputOrder,
+        KernelValidated
+    ),
+    op!(
+        "table.select_columns",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "table.stable_fingerprint",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        kernel_version = 2
+    ),
+    op!(
+        "table.top_n",
+        Table,
+        Extension,
+        Unary,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni table v1.2 (4) -------------------------------------------
-    op!("table.align_schema", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
-    op!("table.concat_by_name", Table, Extension, NAry, Blocking, BoundaryOnly, None, None, &[], InputOrder, KernelValidated),
-    op!("table.hmac_sha256", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated, kernel_version = 2),
-    op!("table.validate_rules", Table, Extension, Unary, Streaming, Cooperative, None, None, &[], DefinedOrder, KernelValidated),
+    op!(
+        "table.align_schema",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
+    op!(
+        "table.concat_by_name",
+        Table,
+        Extension,
+        NAry,
+        Blocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        InputOrder,
+        KernelValidated
+    ),
+    op!(
+        "table.hmac_sha256",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        kernel_version = 2
+    ),
+    op!(
+        "table.validate_rules",
+        Table,
+        Extension,
+        Unary,
+        Streaming,
+        Cooperative,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated
+    ),
     // --- Estensioni table v1.3 (1) -------------------------------------------
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
     // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
@@ -674,7 +2722,20 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
     // output definito (scansione sinistra, indice destro). Piu' candidati
     // per riga left possibili -> MaxRelative.
-    op!("table.fuzzy_join", Table, Extension, BinaryOrdered, BinaryBlocking, BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated, expansion_constraint = MaxRelative),
+    op!(
+        "table.fuzzy_join",
+        Table,
+        Extension,
+        BinaryOrdered,
+        BinaryBlocking,
+        BoundaryOnly,
+        None,
+        None,
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        expansion_constraint = MaxRelative
+    ),
 ];
 
 /// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
@@ -757,7 +2818,11 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "geo_buffer", "geo.buffer"),
     (3, "geo_clean_topology", "geo.clean_topology"),
     (3, "geo_clip", "geo.clip"),
-    (3, "geo_count_points_in_polygons", "geo.count_points_in_polygons"),
+    (
+        3,
+        "geo_count_points_in_polygons",
+        "geo.count_points_in_polygons",
+    ),
     (3, "geo_difference", "geo.difference"),
     (3, "geo_dissolve", "geo.dissolve"),
     (3, "geo_distance", "geo.distance"),
@@ -788,7 +2853,11 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "predicate_equals_topo", "geo.predicate_equals_topo"),
     (3, "predicate_covers", "geo.predicate_covers"),
     (3, "predicate_covered_by", "geo.predicate_covered_by"),
-    (3, "predicate_contains_properly", "geo.predicate_contains_properly"),
+    (
+        3,
+        "predicate_contains_properly",
+        "geo.predicate_contains_properly",
+    ),
     (3, "predicate_touches", "geo.predicate_touches"),
     (3, "predicate_crosses", "geo.predicate_crosses"),
     (3, "predicate_overlaps", "geo.predicate_overlaps"),
@@ -851,7 +2920,10 @@ mod tests {
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
-            CATALOG.iter().filter(|op| op.family == Family::Table).count(),
+            CATALOG
+                .iter()
+                .filter(|op| op.family == Family::Table)
+                .count(),
             71
         );
         assert_eq!(
@@ -911,32 +2983,54 @@ mod tests {
 
     #[test]
     fn find_operation_accepts_canonical_ids_and_aliases() {
-        assert_eq!(find_operation("table.filter").map(|op| op.id), Some("table.filter"));
-        assert_eq!(find_operation("filter").map(|op| op.id), Some("table.filter"));
-        assert_eq!(find_operation("geo_buffer").map(|op| op.id), Some("geo.buffer"));
-        assert_eq!(find_operation("translate").map(|op| op.id), Some("geo.translate"));
+        assert_eq!(
+            find_operation("table.filter").map(|op| op.id),
+            Some("table.filter")
+        );
+        assert_eq!(
+            find_operation("filter").map(|op| op.id),
+            Some("table.filter")
+        );
+        assert_eq!(
+            find_operation("geo_buffer").map(|op| op.id),
+            Some("geo.buffer")
+        );
+        assert_eq!(
+            find_operation("translate").map(|op| op.id),
+            Some("geo.translate")
+        );
         assert!(find_operation("nonexistent_op").is_none());
     }
 
     #[test]
-    fn versions_default_to_one_and_expression_is_v2() {
+    fn versions_default_to_one_and_expression_versions_are_explicit() {
         // Default: tutte e 4 le componenti a 1 per le op senza incrementi.
         let filter = find_operation("table.filter").expect("table.filter");
         assert_eq!(filter.semantic_version, 1);
         assert_eq!(filter.config_schema_version, 1);
         assert_eq!(filter.contract_analysis_version, 1);
         assert_eq!(filter.kernel_version, 2);
-        // Macro estesa: le 4 versioni di table.expression sono tutte esplicite.
+        // Le 4 componenti di table.expression restano esplicite e indipendenti:
+        // diagnostics row-scoped cambia semantica e kernel, non schema config
+        // né analisi del contratto (ADR-0004).
         let expression = find_operation("table.expression").expect("table.expression");
-        assert_eq!(expression.semantic_version, 2);
+        assert_eq!(expression.semantic_version, 3);
         assert_eq!(expression.config_schema_version, 2);
         assert_eq!(expression.contract_analysis_version, 2);
-        assert_eq!(expression.kernel_version, 3);
+        assert_eq!(expression.kernel_version, 4);
         // Nessuna versione puo' essere 0 in tutto il catalogo.
         for op in CATALOG {
             assert!(op.semantic_version >= 1, "{} semantic_version", op.id);
-            assert!(op.config_schema_version >= 1, "{} config_schema_version", op.id);
-            assert!(op.contract_analysis_version >= 1, "{} contract_analysis_version", op.id);
+            assert!(
+                op.config_schema_version >= 1,
+                "{} config_schema_version",
+                op.id
+            );
+            assert!(
+                op.contract_analysis_version >= 1,
+                "{} contract_analysis_version",
+                op.id
+            );
             assert!(op.kernel_version >= 1, "{} kernel_version", op.id);
         }
     }
@@ -966,10 +3060,70 @@ mod tests {
         // dichiarazione esplicita restano sulla base left+right e non sono
         // esenti.
         let filter = find_operation("table.filter").expect("table.filter");
-        assert_eq!(filter.expansion_constraint, ExpansionConstraint::SumRelative);
+        assert_eq!(
+            filter.expansion_constraint,
+            ExpansionConstraint::SumRelative
+        );
         assert!(!filter.expansion_factor_exempt);
         let reconcile = find_operation("table.reconcile").expect("table.reconcile");
-        assert_eq!(reconcile.expansion_constraint, ExpansionConstraint::SumRelative);
+        assert_eq!(
+            reconcile.expansion_constraint,
+            ExpansionConstraint::SumRelative
+        );
+    }
+
+    #[test]
+    fn row_provenance_audit_is_fail_closed_for_cardinality_and_order_changes() {
+        for id in [
+            "table.filter",
+            "table.sample",
+            "table.explode",
+            "table.join",
+            "table.aggregate",
+            "table.sort",
+            "table.melt",
+            "table.pivot",
+            "table.transpose",
+            "table.table_diff",
+            "table.top_n",
+            "table.distinct",
+            "table.dedup_advanced",
+            "table.window_function",
+            "table.concat",
+            "table.concat_by_name",
+            "table.cross_join",
+            "table.fuzzy_join",
+            "table.asof_join",
+            "table.semi_join",
+            "table.anti_join",
+            "geo.collect",
+            "geo.subdivide",
+            "geo.sjoin",
+            "geo.generate_grid",
+        ] {
+            assert_eq!(
+                find_operation(id).map(OperationDescriptor::source_row_provenance),
+                Some(SourceRowProvenance::Unavailable),
+                "{id} non deve dichiarare provenance originale"
+            );
+        }
+        for id in [
+            "table.rename",
+            "table.reorder_columns",
+            "table.flatten_json",
+            "table.type_cast",
+            "table.bin",
+            "table.add_row_number",
+            "table.assert_unique",
+            "table.assert_foreign_key",
+            "geo.from_wkt",
+        ] {
+            assert_eq!(
+                find_operation(id).map(OperationDescriptor::source_row_provenance),
+                Some(SourceRowProvenance::Preserved),
+                "{id} deve conservare posizione e cardinalita'"
+            );
+        }
     }
 
     #[test]
@@ -985,7 +3139,10 @@ mod tests {
             ("table.asof_join", ExpansionConstraint::LeftRelative),
             ("table.except", ExpansionConstraint::LeftRelative),
             ("table.intersect", ExpansionConstraint::LeftRelative),
-            ("table.assert_foreign_key", ExpansionConstraint::LeftRelative),
+            (
+                "table.assert_foreign_key",
+                ExpansionConstraint::LeftRelative,
+            ),
             ("geo.sjoin", ExpansionConstraint::MaxRelative),
             ("geo.clip", ExpansionConstraint::MaxRelative),
             ("geo.difference", ExpansionConstraint::MaxRelative),
@@ -994,7 +3151,10 @@ mod tests {
             ("geo.symmetric_difference", ExpansionConstraint::MaxRelative),
             ("geo.nearest", ExpansionConstraint::LeftRelative),
             ("geo.within", ExpansionConstraint::LeftRelative),
-            ("geo.count_points_in_polygons", ExpansionConstraint::LeftRelative),
+            (
+                "geo.count_points_in_polygons",
+                ExpansionConstraint::LeftRelative,
+            ),
             ("geo.union", ExpansionConstraint::SumRelative),
         ];
         for (id, constraint) in expected {
@@ -1088,14 +3248,8 @@ mod tests {
             expansion.binding_metric(ExpansionConstraint::Custom(2.5)),
             expansion.output_over_sum_inputs
         );
-        assert_eq!(
-            ExpansionConstraint::Custom(2.5).binding_threshold(4.0),
-            2.5
-        );
-        assert_eq!(
-            ExpansionConstraint::MaxRelative.binding_threshold(4.0),
-            4.0
-        );
+        assert_eq!(ExpansionConstraint::Custom(2.5).binding_threshold(4.0), 2.5);
+        assert_eq!(ExpansionConstraint::MaxRelative.binding_threshold(4.0), 4.0);
         // Uguaglianza per bit: nessuna ambiguita' float nel fingerprint.
         assert_eq!(
             ExpansionConstraint::Custom(2.5),
@@ -1114,9 +3268,19 @@ mod tests {
         // coesiste con le altre chiavi in qualunque ordine. Nessuna op del
         // catalogo v1 la usa (riservata a op future guidate da stime).
         let descriptor = op!(
-            "table.__custom_test", Table, Extension, BinaryOrdered, BinaryBlocking,
-            BoundaryOnly, None, None, &[], DefinedOrder, KernelValidated,
-            expansion_constraint = Custom(2.5), kernel_version = 2
+            "table.__custom_test",
+            Table,
+            Extension,
+            BinaryOrdered,
+            BinaryBlocking,
+            BoundaryOnly,
+            None,
+            None,
+            &[],
+            DefinedOrder,
+            KernelValidated,
+            expansion_constraint = Custom(2.5),
+            kernel_version = 2
         );
         assert_eq!(
             descriptor.expansion_constraint,
@@ -1209,5 +3373,200 @@ mod tests {
         assert_eq!(GeoFusion::NotFusible.as_str(), "not_fusible");
         assert_eq!(GeoFusion::TransformInPlace.as_str(), "transform_in_place");
         assert_eq!(GeoFusion::TerminalMeasure.as_str(), "terminal_measure");
+    }
+
+    /// Config di sonda generiche per l'autorita' row-diagnostics: applicate a
+    /// TUTTE le op (non sono una lista di op, coprono lo spazio config
+    /// sensibile: target di cast e policy null degli hash).
+    fn row_diagnostics_probes() -> Vec<serde_json::Value> {
+        let mut probes = vec![serde_json::json!({})];
+        for target in [
+            "int",
+            "float",
+            "bool",
+            "uint64",
+            "date",
+            "datetime",
+            "date32",
+            "timestamp_millis",
+            "decimal128",
+            "str",
+        ] {
+            probes.push(serde_json::json!({"target_type": target}));
+            probes.push(serde_json::json!({"target_type": target, "errors": "coerce"}));
+            probes.push(serde_json::json!({"target_type": target, "errors": "raise"}));
+        }
+        for policy in ["error", "empty", "literal"] {
+            probes.push(serde_json::json!({"null_policy": policy}));
+        }
+        probes
+    }
+
+    #[test]
+    fn row_diagnostics_authority_locks_config_sensitive_operations() {
+        let type_cast = find_operation("table.type_cast").expect("type_cast");
+        for target in [
+            "int",
+            "float",
+            "bool",
+            "uint64",
+            "date",
+            "datetime",
+            "date32",
+            "timestamp_millis",
+            "decimal128",
+        ] {
+            for errors in [None, Some("coerce"), Some("raise")] {
+                let config = errors.map_or_else(
+                    || serde_json::json!({"target_type": target}),
+                    |mode| serde_json::json!({"target_type": target, "errors": mode}),
+                );
+                assert!(
+                    type_cast.emits_row_diagnostics(&config),
+                    "type_cast {target}/{errors:?} rifiuta righe: deve emettere"
+                );
+            }
+        }
+        // Target senza conversione fallibile row-scoped: nessuna emissione.
+        assert!(!type_cast.emits_row_diagnostics(&serde_json::json!({"target_type": "str"})));
+        assert!(!type_cast.emits_row_diagnostics(&serde_json::json!({})));
+
+        // P1-3: md5/sha256 rifiutano row-scoped solo con null_policy=error;
+        // le altre policy hanno semantica storica dichiarata.
+        for id in ["table.md5_hash", "table.sha256_hash"] {
+            let hash = find_operation(id).expect(id);
+            assert!(hash.emits_row_diagnostics(&serde_json::json!({"null_policy": "error"})));
+            assert!(!hash.emits_row_diagnostics(&serde_json::json!({})));
+            assert!(!hash.emits_row_diagnostics(&serde_json::json!({"null_policy": "empty"})));
+            assert!(!hash.emits_row_diagnostics(&serde_json::json!({"null_policy": "literal"})));
+        }
+
+        // P2: hmac_sha256 non emette MAI (le null_policy legacy producono
+        // output dichiarato, nessun rifiuto row-scoped).
+        let hmac = find_operation("table.hmac_sha256").expect("hmac");
+        for config in [
+            serde_json::json!({}),
+            serde_json::json!({"null_policy": "error"}),
+            serde_json::json!({"null_policy": "empty"}),
+            serde_json::json!({"null_policy": "null"}),
+            serde_json::json!({"null_policy": "skip"}),
+        ] {
+            assert!(
+                !hmac.emits_row_diagnostics(&config),
+                "hmac_sha256 non deve mai emettere diagnostica row-scoped"
+            );
+        }
+
+        // P0 (drift lock): formula ed expression emettono con qualunque
+        // configurazione; se il catalogo smettesse di classificarle il gate
+        // legacy tornerebbe bypassabile via sort -> formula/expression.
+        assert!(find_operation("table.formula")
+            .expect("formula")
+            .emits_row_diagnostics(&serde_json::json!({})));
+        assert!(find_operation("table.expression")
+            .expect("expression")
+            .emits_row_diagnostics(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn row_diagnostics_emitting_operations_are_a_closed_catalog_set() {
+        // Mutation/anti-drift: il perimetro delle op che emettono diagnostica
+        // row-scoped e' chiuso e contato (16 table diag-kernel senza hmac +
+        // 24 geo DAG-dispatchate). Cambiarlo richiede un diff esplicito di
+        // questo test e del ledger di copertura.
+        let probes = row_diagnostics_probes();
+        let emitting: Vec<&str> = CATALOG
+            .iter()
+            .filter(|op| probes.iter().any(|config| op.emits_row_diagnostics(config)))
+            .map(|op| op.id)
+            .collect();
+        assert_eq!(
+            emitting.len(),
+            40,
+            "perimetro row-diagnostics: {emitting:?}"
+        );
+        for id in &emitting {
+            let descriptor = find_operation(id).expect("risolta");
+            assert_eq!(
+                descriptor.source_row_provenance(),
+                SourceRowProvenance::Preserved,
+                "{id}: emette diagnostica ma non preserva la provenance sorgente"
+            );
+        }
+    }
+
+    #[test]
+    fn row_diagnostics_changes_carry_the_declared_version_bumps() {
+        // ADR-0004: ogni op il cui comportamento osservabile, kernel o gate
+        // planner e' cambiato con la diagnostica row-scoped (delta 2026-08-03
+        // su baseline af812aa) dichiara il bump nelle componenti di versione.
+        // La tabella e' hard-coded dal delta e dalla baseline — nessun valore
+        // letto dal catalogo stesso (anti-tautologia): (id, semantic,
+        // config_schema, contract_analysis, kernel).
+        let expected: &[(&str, u32, u32, u32, u32)] = &[
+            // diag-kernel table: nuovo reject_rows / comportamento pubblico.
+            ("table.date_extract", 2, 1, 1, 3),
+            ("table.flatten_json", 2, 1, 1, 3),
+            ("table.type_cast", 2, 1, 1, 3),
+            ("table.md5_hash", 2, 1, 1, 2),
+            ("table.sha256_hash", 2, 1, 1, 2),
+            ("table.assert_not_null", 2, 1, 1, 2),
+            ("table.assert_range", 2, 1, 1, 2),
+            ("table.assert_regex", 2, 1, 1, 2),
+            ("table.assert_unique", 2, 1, 1, 3),
+            ("table.assert_foreign_key", 2, 1, 1, 3),
+            ("table.date_add", 2, 1, 1, 3),
+            ("table.date_diff", 2, 1, 1, 3),
+            ("table.date_format", 2, 1, 1, 3),
+            ("table.timezone_convert", 2, 1, 1, 3),
+            ("table.explode", 2, 1, 1, 2),
+            ("table.formula", 2, 1, 1, 3),
+            ("table.expression", 3, 2, 2, 4),
+            // diag-wkt: raccolta nel kernel geo.
+            ("geo.from_wkt", 2, 1, 1, 2),
+            // diag-transport / diag-coords: il rifiuto row-scoped ora porta
+            // il payload `plenora-row-diagnostics-v1` (comportamento
+            // osservabile; kernel invariato -> bump semantico soltanto).
+            ("geo.affine_transform", 2, 1, 1, 1),
+            ("geo.area", 2, 1, 1, 1),
+            ("geo.boundary", 2, 1, 1, 1),
+            ("geo.bounds_extractor", 2, 1, 1, 1),
+            ("geo.buffer", 2, 1, 1, 1),
+            ("geo.centroid", 2, 1, 1, 1),
+            ("geo.concave_hull", 2, 1, 1, 1),
+            ("geo.convex_hull", 2, 1, 1, 1),
+            ("geo.densify", 2, 1, 1, 1),
+            ("geo.envelope", 2, 1, 1, 1),
+            ("geo.from_coords", 2, 1, 1, 1),
+            ("geo.geodesic_area", 2, 1, 1, 1),
+            ("geo.geodesic_line_length", 2, 1, 1, 1),
+            ("geo.length", 2, 1, 1, 1),
+            ("geo.line_interpolate_point", 2, 1, 1, 1),
+            ("geo.line_substring", 2, 1, 1, 1),
+            ("geo.make_valid", 2, 1, 1, 1),
+            ("geo.perimeter", 2, 1, 1, 1),
+            ("geo.point_on_surface", 2, 1, 1, 1),
+            ("geo.reproject", 2, 1, 1, 1),
+            ("geo.rotate", 2, 1, 1, 1),
+            ("geo.scale", 2, 1, 1, 1),
+            ("geo.simplify", 2, 1, 1, 1),
+            ("geo.snap_to_grid", 2, 1, 1, 1),
+            ("geo.to_wkt", 2, 1, 1, 1),
+            ("geo.translate", 2, 1, 1, 1),
+            ("geo.vertex_count", 2, 1, 1, 1),
+        ];
+        for (id, semantic, config_schema, contract_analysis, kernel) in expected {
+            let descriptor = find_operation(id).expect(id);
+            assert_eq!(
+                (
+                    descriptor.semantic_version,
+                    descriptor.config_schema_version,
+                    descriptor.contract_analysis_version,
+                    descriptor.kernel_version,
+                ),
+                (*semantic, *config_schema, *contract_analysis, *kernel),
+                "{id}: versioni non allineate al bump dichiarato (ADR-0004)"
+            );
+        }
     }
 }

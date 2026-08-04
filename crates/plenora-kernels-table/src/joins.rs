@@ -12,10 +12,8 @@ use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::Deserialize;
 
 use crate::Limits;
+use crate::{column_index, scalar_as_f64, scalar_as_string, select_rows, validate_output_name};
 use plenora_core::{PlenoraError, Result};
-use crate::{
-    column_index, scalar_as_f64, scalar_as_string, select_rows, validate_output_name,
-};
 
 fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<String>> {
     let mut out = String::new();
@@ -98,7 +96,9 @@ impl<'a> KeyCol<'a> {
 
     fn value(&self, row: usize) -> Option<KeyVal<'a>> {
         match self {
-            Self::Int64(values) => values.is_valid(row).then(|| KeyVal::Int64(values.value(row))),
+            Self::Int64(values) => values
+                .is_valid(row)
+                .then(|| KeyVal::Int64(values.value(row))),
             Self::UInt64(values) => values
                 .is_valid(row)
                 .then(|| KeyVal::UInt64(values.value(row))),
@@ -108,7 +108,9 @@ impl<'a> KeyCol<'a> {
             Self::Boolean(values) => values
                 .is_valid(row)
                 .then(|| KeyVal::Boolean(values.value(row))),
-            Self::Utf8(values) => values.is_valid(row).then(|| KeyVal::Utf8(values.value(row))),
+            Self::Utf8(values) => values
+                .is_valid(row)
+                .then(|| KeyVal::Utf8(values.value(row))),
         }
     }
 }
@@ -184,7 +186,10 @@ impl Hasher for KeyHasher {
 /// costo: throughput su milioni di chiavi, non resistenza avversaria).
 pub(crate) type FastHasher = BuildHasherDefault<KeyHasher>;
 
-fn take_optional(array: &dyn plenora_core::arrow::array::Array, rows: &[Option<usize>]) -> Result<ArrayRef> {
+fn take_optional(
+    array: &dyn plenora_core::arrow::array::Array,
+    rows: &[Option<usize>],
+) -> Result<ArrayRef> {
     let indices: UInt32Array = rows
         .iter()
         .map(|row| {
@@ -195,7 +200,9 @@ fn take_optional(array: &dyn plenora_core::arrow::array::Array, rows: &[Option<u
         })
         .collect::<Result<Vec<_>>>()?
         .into();
-    Ok(plenora_core::arrow::select::take::take(array, &indices, None)?)
+    Ok(plenora_core::arrow::select::take::take(
+        array, &indices, None,
+    )?)
 }
 
 fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
@@ -332,9 +339,9 @@ fn join_impl(
         }
     }
     let (left_rows, right_rows) = if fast {
-        join_rows_fast(left, right, config, limits, &left_keys, &right_keys).unwrap_or_else(|| {
-            join_rows_generic(left, right, config, limits, &left_keys, &right_keys)
-        })?
+        join_rows_fast(left, right, config, limits, &left_keys, &right_keys).unwrap_or_else(
+            || join_rows_generic(left, right, config, limits, &left_keys, &right_keys),
+        )?
     } else {
         join_rows_generic(left, right, config, limits, &left_keys, &right_keys)?
     };
@@ -548,7 +555,9 @@ impl<'a> RightMap<'a> {
         buffer: &mut Vec<KeyVal<'a>>,
     ) -> Option<&Vec<usize>> {
         match self {
-            Self::One(map) => left_keys.columns[0].value(row).and_then(|key| map.get(&key)),
+            Self::One(map) => left_keys.columns[0]
+                .value(row)
+                .and_then(|key| map.get(&key)),
             Self::Many(map) => left_keys.get(row, buffer).and_then(|key| map.get(key)),
         }
     }
@@ -950,7 +959,9 @@ pub fn cross_join(
         .checked_mul(right.num_rows())
         .ok_or_else(|| PlenoraError::InvalidPlan("overflow cross_join".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("cross_join supera max_rows".into()));
+        return Err(PlenoraError::InvalidPlan(
+            "cross_join supera max_rows".into(),
+        ));
     }
     let left_rows = (0..left.num_rows())
         .flat_map(|left| std::iter::repeat_n(Some(left), right.num_rows()))
@@ -1015,9 +1026,10 @@ fn membership_impl(
         }
     }
     if fast {
-        if let (Some(left_typed), Some(right_typed)) =
-            (FastKeys::new(left, &left_keys), FastKeys::new(right, &right_keys))
-        {
+        if let (Some(left_typed), Some(right_typed)) = (
+            FastKeys::new(left, &left_keys),
+            FastKeys::new(right, &right_keys),
+        ) {
             return membership_fast(left, &left_typed, &right_typed, keep_matches);
         }
     }
@@ -1096,12 +1108,7 @@ impl<'a> RightSet<'a> {
         Self::Many(set)
     }
 
-    fn contains(
-        &self,
-        left_keys: &FastKeys<'a>,
-        row: usize,
-        buffer: &mut Vec<KeyVal<'a>>,
-    ) -> bool {
+    fn contains(&self, left_keys: &FastKeys<'a>, row: usize, buffer: &mut Vec<KeyVal<'a>>) -> bool {
         match self {
             Self::One(set) => left_keys.columns[0]
                 .value(row)
@@ -1193,10 +1200,9 @@ fn asof_on_value(array: &dyn Array, row: usize) -> Result<Option<f64>> {
         return values
             .is_valid(row)
             .then(|| {
-                values
-                    .value(row)
-                    .to_f64()
-                    .ok_or_else(|| PlenoraError::Schema("intero non rappresentabile come f64".into()))
+                values.value(row).to_f64().ok_or_else(|| {
+                    PlenoraError::Schema("intero non rappresentabile come f64".into())
+                })
             })
             .transpose();
     }
@@ -1402,7 +1408,8 @@ pub fn asof_join(
     if left.column(left_on).data_type() != right.column(right_on).data_type()
         || !matches!(
             left.column(left_on).data_type(),
-            plenora_core::arrow::schema::DataType::Int64 | plenora_core::arrow::schema::DataType::Float64
+            plenora_core::arrow::schema::DataType::Int64
+                | plenora_core::arrow::schema::DataType::Float64
         )
     {
         return Err(PlenoraError::Schema(
@@ -1430,11 +1437,18 @@ pub fn asof_join(
     // alla chiave stringa — invariante documentata di `KeyVal`) e `on` da
     // array tipizzati; se un tipo `by` non e' coperto, il percorso
     // generico per chiave testuale (stesso risultato, per costruzione).
-    if let (Some(left_keys), Some(right_keys)) =
-        (FastKeys::new(left, &left_by), FastKeys::new(right, &right_by))
-    {
+    if let (Some(left_keys), Some(right_keys)) = (
+        FastKeys::new(left, &left_by),
+        FastKeys::new(right, &right_by),
+    ) {
         let right_rows = asof_right_rows_fast(
-            left, right, config, left_on, right_on, &left_keys, &right_keys,
+            left,
+            right,
+            config,
+            left_on,
+            right_on,
+            &left_keys,
+            &right_keys,
         )?;
         let left_rows = (0..left.num_rows()).map(Some).collect::<Vec<_>>();
         let mut omitted = vec![right_on];
@@ -1449,9 +1463,8 @@ pub fn asof_join(
             limits,
         );
     }
-    let right_rows = asof_right_rows_generic(
-        left, right, config, &left_by, &right_by, left_on, right_on,
-    )?;
+    let right_rows =
+        asof_right_rows_generic(left, right, config, &left_by, &right_by, left_on, right_on)?;
     let left_rows = (0..left.num_rows()).map(Some).collect::<Vec<_>>();
     let mut omitted = vec![right_on];
     omitted.extend(right_by);
@@ -1522,11 +1535,27 @@ mod tests {
             ),
             (
                 "by",
-                utf8_column(&[Some("a"), Some("a"), Some("b"), Some("b"), Some("b"), None, Some("a")]),
+                utf8_column(&[
+                    Some("a"),
+                    Some("a"),
+                    Some("b"),
+                    Some("b"),
+                    Some("b"),
+                    None,
+                    Some("a"),
+                ]),
             ),
             (
                 "by2",
-                i64_column(&[Some(1), Some(1), Some(2), Some(2), Some(2), Some(9), Some(1)]),
+                i64_column(&[
+                    Some(1),
+                    Some(1),
+                    Some(2),
+                    Some(2),
+                    Some(2),
+                    Some(9),
+                    Some(1),
+                ]),
             ),
         ]);
         let left = batch(vec![
@@ -1669,7 +1698,8 @@ mod tests {
                             let $value = reference_values.value(row);
                             let reference_value = $converted;
                             assert_eq!(
-                                fast_value, reference_value,
+                                fast_value,
+                                reference_value,
                                 "valore colonna {} riga {row}",
                                 fast_field.name()
                             );
@@ -1734,30 +1764,27 @@ mod tests {
             right_keys: right_keys.iter().map(|key| (*key).to_owned()).collect(),
         };
         for keep_matches in [true, false] {
-            let fast = membership_impl(left, right, &config, keep_matches, true)
-                .expect("membership fast");
+            let fast =
+                membership_impl(left, right, &config, keep_matches, true).expect("membership fast");
             let reference = membership_impl(left, right, &config, keep_matches, false)
                 .expect("membership reference");
             assert_batches_identical(&fast, &reference);
         }
     }
 
-    const ALL_HOWS: [JoinHow; 4] = [JoinHow::Inner, JoinHow::Left, JoinHow::Right, JoinHow::Outer];
+    const ALL_HOWS: [JoinHow; 4] = [
+        JoinHow::Inner,
+        JoinHow::Left,
+        JoinHow::Right,
+        JoinHow::Outer,
+    ];
 
     /// Chiavi Int64 con duplicati su entrambi i lati (molti-a-molti) e null.
     fn left_i64() -> RecordBatch {
         batch(vec![
             (
                 "k",
-                i64_column(&[
-                    Some(1),
-                    Some(2),
-                    Some(2),
-                    None,
-                    Some(3),
-                    Some(2),
-                    Some(7),
-                ]),
+                i64_column(&[Some(1), Some(2), Some(2), None, Some(3), Some(2), Some(7)]),
             ),
             (
                 "lv",
@@ -1796,8 +1823,13 @@ mod tests {
     fn fast_join_uint64_matches_generic() {
         let left = batch(vec![(
             "k",
-            Arc::new(UInt64Array::from(vec![Some(1), Some(2), Some(2), None, Some(9)]))
-                as ArrayRef,
+            Arc::new(UInt64Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(2),
+                None,
+                Some(9),
+            ])) as ArrayRef,
         )]);
         let right = batch(vec![(
             "k",
@@ -1805,8 +1837,20 @@ mod tests {
         )]);
         // Inner/Left: Right/Outer falliscono in `coalesce` (UInt64 non
         // supportato) in entrambi i percorsi, verificato sotto.
-        assert_join_identical(&left, &right, &["k"], &["k"], &[JoinHow::Inner, JoinHow::Left]);
-        assert_join_identical(&left, &right, &["k"], &["k"], &[JoinHow::Right, JoinHow::Outer]);
+        assert_join_identical(
+            &left,
+            &right,
+            &["k"],
+            &["k"],
+            &[JoinHow::Inner, JoinHow::Left],
+        );
+        assert_join_identical(
+            &left,
+            &right,
+            &["k"],
+            &["k"],
+            &[JoinHow::Right, JoinHow::Outer],
+        );
     }
 
     #[test]
@@ -1867,7 +1911,19 @@ mod tests {
                     None,
                 ])) as ArrayRef,
             ),
-            ("rv", i64_column(&[Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)])),
+            (
+                "rv",
+                i64_column(&[
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                    Some(6),
+                    Some(7),
+                ]),
+            ),
         ]);
         // NaN matcha NaN (stringa "NaN" per ogni bit pattern), -0.0 non matcha
         // 0.0 ("-0" vs "0"), infiniti distinti per segno.
@@ -1888,8 +1944,12 @@ mod tests {
         let right = batch(vec![
             (
                 "k",
-                Arc::new(BooleanArray::from(vec![Some(true), Some(true), None, Some(false)]))
-                    as ArrayRef,
+                Arc::new(BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(false),
+                ])) as ArrayRef,
             ),
             ("rv", i64_column(&[Some(1), Some(2), Some(3), Some(4)])),
         ]);
@@ -1939,21 +1999,24 @@ mod tests {
                     Some(0.5),
                 ])) as ArrayRef,
             ),
-            ("rv", i64_column(&[Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)])),
+            (
+                "rv",
+                i64_column(&[Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)]),
+            ),
         ]);
-        assert_join_identical(&left, &right, &["ka", "kb", "kf"], &["ka", "kb", "kf"], &ALL_HOWS);
+        assert_join_identical(
+            &left,
+            &right,
+            &["ka", "kb", "kf"],
+            &["ka", "kb", "kf"],
+            &ALL_HOWS,
+        );
     }
 
     #[test]
     fn fast_join_empty_sides_match_generic() {
-        let empty_left = batch(vec![
-            ("k", i64_column(&[])),
-            ("lv", i64_column(&[])),
-        ]);
-        let empty_right = batch(vec![
-            ("k", i64_column(&[])),
-            ("rv", i64_column(&[])),
-        ]);
+        let empty_left = batch(vec![("k", i64_column(&[])), ("lv", i64_column(&[]))]);
+        let empty_right = batch(vec![("k", i64_column(&[])), ("rv", i64_column(&[]))]);
         assert_join_identical(&left_i64(), &empty_right, &["k"], &["k"], &ALL_HOWS);
         assert_join_identical(&empty_left, &right_i64(), &["k"], &["k"], &ALL_HOWS);
         assert_join_identical(&empty_left, &empty_right, &["k"], &["k"], &ALL_HOWS);
@@ -1963,8 +2026,12 @@ mod tests {
     fn fast_join_fallback_date32_matches_generic() {
         let left = batch(vec![(
             "k",
-            Arc::new(Date32Array::from(vec![Some(19_000), Some(19_000), None, Some(1)]))
-                as ArrayRef,
+            Arc::new(Date32Array::from(vec![
+                Some(19_000),
+                Some(19_000),
+                None,
+                Some(1),
+            ])) as ArrayRef,
         )]);
         let right = batch(vec![
             (
@@ -1974,7 +2041,13 @@ mod tests {
             ("rv", i64_column(&[Some(1), Some(2), Some(3)])),
         ]);
         // Tipo fuori dal fast path: entrambi i percorsi usano il generico.
-        assert_join_identical(&left, &right, &["k"], &["k"], &[JoinHow::Inner, JoinHow::Left]);
+        assert_join_identical(
+            &left,
+            &right,
+            &["k"],
+            &["k"],
+            &[JoinHow::Inner, JoinHow::Left],
+        );
         assert_membership_identical(&left, &right, &["k"], &["k"]);
     }
 
@@ -2100,9 +2173,16 @@ mod tests {
             .column_by_name("c")
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
             .expect("c");
-        assert!(c.is_null(0) && c.is_null(1), "input senza la colonna -> null");
+        assert!(
+            c.is_null(0) && c.is_null(1),
+            "input senza la colonna -> null"
+        );
         assert_eq!(c.value(2), "only-second");
-        assert!(output.schema().field_with_name("c").expect("c").is_nullable());
+        assert!(output
+            .schema()
+            .field_with_name("c")
+            .expect("c")
+            .is_nullable());
         // Input singolo: passthrough (schema e valori identici).
         let single = concat_by_name(&[&first], &concat_config(false), &Limits::default())
             .expect("input singolo");
@@ -2140,9 +2220,12 @@ mod tests {
             ("a", i64_column(&[Some(1)])),
             ("b", utf8_column(&[Some("x")])),
         ]);
-        assert!(
-            concat_by_name(&[&wide, &permuted], &concat_config(true), &Limits::default()).is_err()
-        );
+        assert!(concat_by_name(
+            &[&wide, &permuted],
+            &concat_config(true),
+            &Limits::default()
+        )
+        .is_err());
         // Strict con schemi identici: ok.
         let other = batch(vec![
             ("a", i64_column(&[Some(2)])),

@@ -36,13 +36,11 @@ use plenora_kernels_table::aggregation::{top_n, TopN};
 use plenora_kernels_table::analysis::{bin, lookup, sample, Bin, Bins, Lookup, Sample};
 use plenora_kernels_table::cleansing::{replace, Replace};
 use plenora_kernels_table::columns::{
-    align_schema, concat_columns, select_columns, split_column, AlignColumn, AlignSchema, AlignType,
-    ConcatColumns, SelectColumns, SplitColumn,
+    align_schema, concat_columns, select_columns, split_column, AlignColumn, AlignSchema,
+    AlignType, ConcatColumns, SelectColumns, SplitColumn,
 };
 use plenora_kernels_table::filtering::{conditional, Condition, Conditional, Operator};
-use plenora_kernels_table::fuzzy::{
-    fuzzy_join, FuzzyBlocking, FuzzyHow, FuzzyJoin, FuzzyMetric,
-};
+use plenora_kernels_table::fuzzy::{fuzzy_join, FuzzyBlocking, FuzzyHow, FuzzyJoin, FuzzyMetric};
 use plenora_kernels_table::governance::{
     assert_cardinality, assert_metadata, validate_rules, AssertCardinality, AssertMetadata,
     RuleOperator, RuleSeverity, ValidateOutputMode, ValidateRule, ValidateRules,
@@ -270,9 +268,7 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     // Bound evidente: row < rows e rows <= M10 = 10^7 (scale del bench,
     // costanti in testa al file) << 2^53: cast esatto in f64.
     #[allow(clippy::cast_precision_loss)]
-    let vals = (0..rows)
-        .map(|row| Some(row as f64))
-        .collect::<Vec<_>>();
+    let vals = (0..rows).map(|row| Some(row as f64)).collect::<Vec<_>>();
     RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("ts", DataType::Int64, false),
@@ -289,7 +285,9 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
 /// Fixture con colonna List<Int64> (liste corte, 0..5 elementi).
 fn list_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
-    let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
+    let ids = (0..rows)
+        .map(|row| i64::try_from(row).ok())
+        .collect::<Vec<_>>();
     // Bound evidente: row < rows <= M10 = 10^7 (scale del bench) e
     // value < length <= 4 (length = rng.next() % 5): entrambi i cast
     // entrano in i64 senza wrap.
@@ -318,7 +316,9 @@ fn list_fixture(rows: usize) -> RecordBatch {
 /// Fixture con colonna Struct{a int64, b float64, c utf8}.
 fn struct_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
-    let ids = (0..rows).map(|row| i64::try_from(row).ok()).collect::<Vec<_>>();
+    let ids = (0..rows)
+        .map(|row| i64::try_from(row).ok())
+        .collect::<Vec<_>>();
     // Reinterpretazione bit a bit intenzionale: colonna random a pieno range.
     let a = (0..rows)
         .map(|_| Some(rng.next().cast_signed()))
@@ -650,7 +650,8 @@ fn write_outputs(results: &[Measurement]) {
             entry.rows_per_second,
             entry.output_rows,
             entry
-                .peak_rss_kib.map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
+                .peak_rss_kib
+                .map_or_else(|| "n/d".into(), |kib| format!("{}", kib / 1024)),
             entry.note,
         )
         .expect("markdown");
@@ -677,9 +678,13 @@ fn main() {
         labels: None,
         output_column: Some("num_bin".into()),
     };
-    sweep_unary(&mut results, "table.bin", true, "20 bucket equal-width", |batch| {
-        bin(batch, &bin_config).expect("bin")
-    });
+    sweep_unary(
+        &mut results,
+        "table.bin",
+        true,
+        "20 bucket equal-width",
+        |batch| bin(batch, &bin_config).expect("bin"),
+    );
 
     let lookup_mapping = (0..1_024)
         .map(|index| (format!("g{index}"), Value::from(format!("c{index}"))))
@@ -690,9 +695,13 @@ fn main() {
         default: Value::Null,
         output_column: Some("grp_code".into()),
     };
-    sweep_unary(&mut results, "table.lookup", true, "mappa 1024 chiavi utf8", |batch| {
-        lookup(batch, &lookup_config).expect("lookup")
-    });
+    sweep_unary(
+        &mut results,
+        "table.lookup",
+        true,
+        "mappa 1024 chiavi utf8",
+        |batch| lookup(batch, &lookup_config).expect("lookup"),
+    );
 
     let sample_config = Sample {
         n: 100,
@@ -700,9 +709,13 @@ fn main() {
         random_state: Some(42),
         stratify_column: None,
     };
-    sweep_unary(&mut results, "table.sample", true, "fraction 0.1", |batch| {
-        sample(batch, &sample_config).expect("sample")
-    });
+    sweep_unary(
+        &mut results,
+        "table.sample",
+        true,
+        "fraction 0.1",
+        |batch| sample(batch, &sample_config).expect("sample"),
+    );
 
     // --- Colonne --------------------------------------------------------------
     let concat_columns_config = ConcatColumns {
@@ -711,9 +724,13 @@ fn main() {
         separator: "-".into(),
         skip_null: true,
     };
-    sweep_unary(&mut results, "table.concat_columns", true, "2 colonne utf8", |batch| {
-        concat_columns(batch, &concat_columns_config, &limits).expect("concat_columns")
-    });
+    sweep_unary(
+        &mut results,
+        "table.concat_columns",
+        true,
+        "2 colonne utf8",
+        |batch| concat_columns(batch, &concat_columns_config, &limits).expect("concat_columns"),
+    );
 
     let split_config = SplitColumn {
         column: "path".into(),
@@ -721,9 +738,13 @@ fn main() {
         new_columns: vec!["p1".into(), "p2".into(), "p3".into()],
         max_splits: -1,
     };
-    sweep_unary(&mut results, "table.split_column", true, "3 colonne su '/'", |batch| {
-        split_column(batch, &split_config, &limits).expect("split_column")
-    });
+    sweep_unary(
+        &mut results,
+        "table.split_column",
+        true,
+        "3 colonne su '/'",
+        |batch| split_column(batch, &split_config, &limits).expect("split_column"),
+    );
 
     // --- Cleansing -------------------------------------------------------------
     let replace_config = Replace {
@@ -732,24 +753,44 @@ fn main() {
         new_value: "group42".into(),
         regex: false,
     };
-    sweep_unary(&mut results, "table.replace", true, "sostituzione letterale utf8", |batch| {
-        replace(batch, &replace_config).expect("replace")
-    });
+    sweep_unary(
+        &mut results,
+        "table.replace",
+        true,
+        "sostituzione letterale utf8",
+        |batch| replace(batch, &replace_config).expect("replace"),
+    );
 
     // --- Filtering ---------------------------------------------------------------
     let conditional_config = Conditional {
         column: "num".into(),
         conditions: vec![
-            Condition { operator: Operator::Lt, value: json!(2500.0), result: json!("low") },
-            Condition { operator: Operator::Lt, value: json!(5000.0), result: json!("mid") },
-            Condition { operator: Operator::Lt, value: json!(7500.0), result: json!("high") },
+            Condition {
+                operator: Operator::Lt,
+                value: json!(2500.0),
+                result: json!("low"),
+            },
+            Condition {
+                operator: Operator::Lt,
+                value: json!(5000.0),
+                result: json!("mid"),
+            },
+            Condition {
+                operator: Operator::Lt,
+                value: json!(7500.0),
+                result: json!("high"),
+            },
         ],
         default_value: json!("top"),
         output_column: "band".into(),
     };
-    sweep_unary(&mut results, "table.conditional", true, "3 condizioni numeriche", |batch| {
-        conditional(batch, &conditional_config).expect("conditional")
-    });
+    sweep_unary(
+        &mut results,
+        "table.conditional",
+        true,
+        "3 condizioni numeriche",
+        |batch| conditional(batch, &conditional_config).expect("conditional"),
+    );
 
     // --- Reshape ---------------------------------------------------------------------
     let explode_config = Explode {
@@ -758,9 +799,13 @@ fn main() {
         empty_policy: plenora_kernels_table::reshape::EmptyListPolicy::Null,
     };
     let list_input = list_fixture(M1);
-    results.push(measure("table.explode", M1, 3, "List<Int64> 0..4 elementi (~2.5M out)", || {
-        explode(&list_input, &explode_config, &limits).expect("explode")
-    }));
+    results.push(measure(
+        "table.explode",
+        M1,
+        3,
+        "List<Int64> 0..4 elementi (~2.5M out)",
+        || explode(&list_input, &explode_config, &limits).expect("explode"),
+    ));
 
     let unnest_config = Unnest {
         column: "payload".into(),
@@ -817,9 +862,13 @@ fn main() {
     };
     let asof_left = asof_fixture(M1, 0);
     let asof_right = asof_fixture(M1, 1);
-    results.push(measure("table.asof_join", M1, 3, "1M x 1M backward su ts int64", || {
-        asof_join(&asof_left, &asof_right, &asof_config, &limits).expect("asof_join")
-    }));
+    results.push(measure(
+        "table.asof_join",
+        M1,
+        3,
+        "1M x 1M backward su ts int64",
+        || asof_join(&asof_left, &asof_right, &asof_config, &limits).expect("asof_join"),
+    ));
 
     // --- Security --------------------------------------------------------------------------
     let md5_config = Md5Hash {
@@ -829,9 +878,13 @@ fn main() {
         null_policy: HashNullPolicy::Empty,
         null_literal: String::new(),
     };
-    sweep_unary(&mut results, "table.md5_hash", true, "1 colonna utf8 40 char", |batch| {
-        md5_hash(batch, &md5_config).expect("md5_hash")
-    });
+    sweep_unary(
+        &mut results,
+        "table.md5_hash",
+        true,
+        "1 colonna utf8 40 char",
+        |batch| md5_hash(batch, &md5_config).expect("md5_hash"),
+    );
 
     let sha256_config = Sha256Hash {
         columns: vec!["text".into()],
@@ -840,18 +893,26 @@ fn main() {
         null_policy: HashNullPolicy::Empty,
         null_literal: String::new(),
     };
-    sweep_unary(&mut results, "table.sha256_hash", true, "1 colonna utf8 40 char", |batch| {
-        sha256_hash(batch, &sha256_config).expect("sha256_hash")
-    });
+    sweep_unary(
+        &mut results,
+        "table.sha256_hash",
+        true,
+        "1 colonna utf8 40 char",
+        |batch| sha256_hash(batch, &sha256_config).expect("sha256_hash"),
+    );
 
     // --- Strings ------------------------------------------------------------------------------
     let length_config = StringLength {
         column: "text".into(),
         output_column: Some("text_len".into()),
     };
-    sweep_unary(&mut results, "table.string_length", true, "stringhe 40 char", |batch| {
-        string_length(batch, &length_config).expect("string_length")
-    });
+    sweep_unary(
+        &mut results,
+        "table.string_length",
+        true,
+        "stringhe 40 char",
+        |batch| string_length(batch, &length_config).expect("string_length"),
+    );
 
     let pad_config = StringPad {
         column: "text".into(),
@@ -860,9 +921,13 @@ fn main() {
         fill_char: "0".into(),
         output_column: Some("text_pad".into()),
     };
-    sweep_unary(&mut results, "table.string_pad", true, "width 48 left su 40 char", |batch| {
-        string_pad(batch, &pad_config, &limits).expect("string_pad")
-    });
+    sweep_unary(
+        &mut results,
+        "table.string_pad",
+        true,
+        "width 48 left su 40 char",
+        |batch| string_pad(batch, &pad_config, &limits).expect("string_pad"),
+    );
 
     // --- Utility ----------------------------------------------------------------------------------
     let row_number_config = AddRowNumber {
@@ -872,24 +937,36 @@ fn main() {
         order_column: None,
         ascending: true,
     };
-    sweep_unary(&mut results, "table.add_row_number", true, "senza partizione", |batch| {
-        add_row_number(batch, &row_number_config).expect("add_row_number")
-    });
+    sweep_unary(
+        &mut results,
+        "table.add_row_number",
+        true,
+        "senza partizione",
+        |batch| add_row_number(batch, &row_number_config).expect("add_row_number"),
+    );
 
     let uuid_config = UuidGenerator {
         output_column: "uuid".into(),
     };
-    sweep_unary(&mut results, "table.uuid_generator", true, "uuid v4 per riga", |batch| {
-        uuid_generator(batch, &uuid_config).expect("uuid_generator")
-    });
+    sweep_unary(
+        &mut results,
+        "table.uuid_generator",
+        true,
+        "uuid v4 per riga",
+        |batch| uuid_generator(batch, &uuid_config).expect("uuid_generator"),
+    );
 
     // --- Quality --------------------------------------------------------------------------------------
     let not_null_config = AssertNotNull {
         columns: vec!["id".into(), "num".into()],
     };
-    sweep_unary(&mut results, "table.assert_not_null", true, "2 colonne", |batch| {
-        assert_not_null(batch, &not_null_config).expect("assert_not_null")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_not_null",
+        true,
+        "2 colonne",
+        |batch| assert_not_null(batch, &not_null_config).expect("assert_not_null"),
+    );
 
     let range_config = AssertRange {
         column: "num".into(),
@@ -899,42 +976,82 @@ fn main() {
         inclusive_max: true,
         allow_null: false,
     };
-    sweep_unary(&mut results, "table.assert_range", true, "num in 0..10000", |batch| {
-        assert_range(batch, &range_config).expect("assert_range")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_range",
+        true,
+        "num in 0..10000",
+        |batch| assert_range(batch, &range_config).expect("assert_range"),
+    );
 
     let regex_config = AssertRegex {
         column: "text".into(),
         pattern: "^[0-9a-f]{40}$".into(),
         allow_null: false,
     };
-    sweep_unary(&mut results, "table.assert_regex", true, "^[0-9a-f]{40}$", |batch| {
-        assert_regex(batch, &regex_config).expect("assert_regex")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_regex",
+        true,
+        "^[0-9a-f]{40}$",
+        |batch| assert_regex(batch, &regex_config).expect("assert_regex"),
+    );
 
     let schema_config = AssertSchema {
         fields: vec![
-            SchemaExpectation { name: "id".into(), data_type: "int64".into(), nullable: None },
-            SchemaExpectation { name: "num".into(), data_type: "float64".into(), nullable: None },
-            SchemaExpectation { name: "grp".into(), data_type: "utf8".into(), nullable: None },
-            SchemaExpectation { name: "text".into(), data_type: "utf8".into(), nullable: None },
-            SchemaExpectation { name: "key".into(), data_type: "int64".into(), nullable: None },
-            SchemaExpectation { name: "path".into(), data_type: "utf8".into(), nullable: None },
+            SchemaExpectation {
+                name: "id".into(),
+                data_type: "int64".into(),
+                nullable: None,
+            },
+            SchemaExpectation {
+                name: "num".into(),
+                data_type: "float64".into(),
+                nullable: None,
+            },
+            SchemaExpectation {
+                name: "grp".into(),
+                data_type: "utf8".into(),
+                nullable: None,
+            },
+            SchemaExpectation {
+                name: "text".into(),
+                data_type: "utf8".into(),
+                nullable: None,
+            },
+            SchemaExpectation {
+                name: "key".into(),
+                data_type: "int64".into(),
+                nullable: None,
+            },
+            SchemaExpectation {
+                name: "path".into(),
+                data_type: "utf8".into(),
+                nullable: None,
+            },
         ],
         allow_extra: false,
         ordered: true,
     };
-    sweep_unary(&mut results, "table.assert_schema", true, "6 campi ordinati", |batch| {
-        assert_schema(batch, &schema_config).expect("assert_schema")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_schema",
+        true,
+        "6 campi ordinati",
+        |batch| assert_schema(batch, &schema_config).expect("assert_schema"),
+    );
 
     let unique_config = AssertUnique {
         columns: vec!["id".into()],
         nulls_equal: true,
     };
-    sweep_unary(&mut results, "table.assert_unique", false, "chiave id unica", |batch| {
-        assert_unique(batch, &unique_config).expect("assert_unique")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_unique",
+        false,
+        "chiave id unica",
+        |batch| assert_unique(batch, &unique_config).expect("assert_unique"),
+    );
 
     // --- Governance --------------------------------------------------------------------------------------
     let cardinality_config = AssertCardinality {
@@ -942,17 +1059,25 @@ fn main() {
         min_rows: Some(1),
         max_rows: None,
     };
-    sweep_unary(&mut results, "table.assert_cardinality", true, "min_rows=1", |batch| {
-        assert_cardinality(batch, &cardinality_config).expect("assert_cardinality")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_cardinality",
+        true,
+        "min_rows=1",
+        |batch| assert_cardinality(batch, &cardinality_config).expect("assert_cardinality"),
+    );
 
     let metadata_config = AssertMetadata {
         expected: std::iter::once(("source".to_owned(), "bench_sweep2".to_owned())).collect(),
         allow_extra: true,
     };
-    sweep_unary(&mut results, "table.assert_metadata", true, "1 chiave metadata", |batch| {
-        assert_metadata(batch, &metadata_config).expect("assert_metadata")
-    });
+    sweep_unary(
+        &mut results,
+        "table.assert_metadata",
+        true,
+        "1 chiave metadata",
+        |batch| assert_metadata(batch, &metadata_config).expect("assert_metadata"),
+    );
 
     // =====================================================================
     // Kernel nuovi (estensioni v1.1/v1.2/v1.3)
@@ -961,37 +1086,60 @@ fn main() {
     let select_config = SelectColumns {
         columns: vec!["text".into(), "id".into(), "num".into()],
     };
-    sweep_unary(&mut results, "table.select_columns", true, "3 colonne su 6, ordine permutato", |batch| {
-        select_columns(batch, &select_config).expect("select_columns")
-    });
+    sweep_unary(
+        &mut results,
+        "table.select_columns",
+        true,
+        "3 colonne su 6, ordine permutato",
+        |batch| select_columns(batch, &select_config).expect("select_columns"),
+    );
 
-    let limit_config = Limit { n: 500_000, offset: 100 };
-    sweep_unary(&mut results, "table.limit", true, "n=500k offset=100 (slice zero-copy)", |batch| {
-        limit(batch, &limit_config).expect("limit")
-    });
+    let limit_config = Limit {
+        n: 500_000,
+        offset: 100,
+    };
+    sweep_unary(
+        &mut results,
+        "table.limit",
+        true,
+        "n=500k offset=100 (slice zero-copy)",
+        |batch| limit(batch, &limit_config).expect("limit"),
+    );
 
     let top_n_config = TopN {
         columns: vec!["num".into()],
         n: 100,
         descending: true,
     };
-    sweep_unary(&mut results, "table.top_n", true, "n=100 desc su num", |batch| {
-        top_n(batch, &top_n_config).expect("top_n")
-    });
+    sweep_unary(
+        &mut results,
+        "table.top_n",
+        true,
+        "n=100 desc su num",
+        |batch| top_n(batch, &top_n_config).expect("top_n"),
+    );
 
     let fingerprint_config = StableFingerprint {
         columns: Vec::new(), // tutte le colonne, ordine di schema
         output_column: "fingerprint".into(),
         algorithm: FingerprintAlgorithm::Sha256,
     };
-    sweep_unary(&mut results, "table.stable_fingerprint", true, "sha256 su tutte e 6 le colonne", |batch| {
-        stable_fingerprint(batch, &fingerprint_config).expect("stable_fingerprint")
-    });
+    sweep_unary(
+        &mut results,
+        "table.stable_fingerprint",
+        true,
+        "sha256 su tutte e 6 le colonne",
+        |batch| stable_fingerprint(batch, &fingerprint_config).expect("stable_fingerprint"),
+    );
 
     let align = align_config();
-    sweep_wide(&mut results, "table.align_schema", true, "20 colonne: 18 permutate + 1 default + 1 null, 2 scartate", |batch| {
-        align_schema(batch, &align).expect("align_schema")
-    });
+    sweep_wide(
+        &mut results,
+        "table.align_schema",
+        true,
+        "20 colonne: 18 permutate + 1 default + 1 null, 2 scartate",
+        |batch| align_schema(batch, &align).expect("align_schema"),
+    );
 
     let concat_by_name_config = ConcatByName { strict: false };
     let third = base_1m().num_rows() / 3;
@@ -1015,7 +1163,13 @@ fn main() {
     let cbn_c = select_columns(
         &base_1m().slice(2 * third, base_1m().num_rows() - 2 * third),
         &SelectColumns {
-            columns: vec!["num".into(), "id".into(), "grp".into(), "text".into(), "key".into()],
+            columns: vec![
+                "num".into(),
+                "id".into(),
+                "grp".into(),
+                "text".into(),
+                "key".into(),
+            ],
         },
     )
     .expect("cbn input 3");
@@ -1070,9 +1224,13 @@ fn main() {
         ],
         output_mode: ValidateOutputMode::Annotate,
     };
-    sweep_unary(&mut results, "table.validate_rules", true, "5 regole (range/regex/notnull/lt/ne), annotate", |batch| {
-        validate_rules(batch, &rules_config).expect("validate_rules")
-    });
+    sweep_unary(
+        &mut results,
+        "table.validate_rules",
+        true,
+        "5 regole (range/regex/notnull/lt/ne), annotate",
+        |batch| validate_rules(batch, &rules_config).expect("validate_rules"),
+    );
 
     let hmac_config = HmacSha256 {
         columns: vec!["id".into(), "text".into()],
@@ -1080,9 +1238,13 @@ fn main() {
         output_column: "hmac".into(),
         null_policy: HmacNullPolicy::Empty,
     };
-    sweep_unary(&mut results, "table.hmac_sha256", true, "2 colonne (id+text), chiave da env", |batch| {
-        hmac_sha256(batch, &hmac_config).expect("hmac_sha256")
-    });
+    sweep_unary(
+        &mut results,
+        "table.hmac_sha256",
+        true,
+        "2 colonne (id+text), chiave da env",
+        |batch| hmac_sha256(batch, &hmac_config).expect("hmac_sha256"),
+    );
 
     // fuzzy_join: anagrafica sintetica (fixture di bench_fuzzy_join), scala
     // fissa 1M x 10k: escalation disattivata perche' il costo e' ~lineare
@@ -1128,12 +1290,12 @@ fn main() {
         M1,
         3,
         "1M x 10k anagrafica, jaro_winkler prefix(2), soglia 0.85",
-        || {
-            fuzzy_join(&fuzzy_left, &fuzzy_right, &fuzzy_config, &fuzzy_limits)
-                .expect("fuzzy_join")
-        },
+        || fuzzy_join(&fuzzy_left, &fuzzy_right, &fuzzy_config, &fuzzy_limits).expect("fuzzy_join"),
     ));
 
     write_outputs(&results);
-    eprintln!("sweep2 completato: {} misure -> benchmarks/sweep/", results.len());
+    eprintln!(
+        "sweep2 completato: {} misure -> benchmarks/sweep/",
+        results.len()
+    );
 }

@@ -134,6 +134,718 @@ fn output_rows(output: Output) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(clippy::too_many_lines)] // Matrice unica di assi, wrapper e replay del carrier.
+fn stored_edge_error_preserves_row_diagnostics_and_axes() {
+    let report = plenora_core::diagnostics::RowDiagnostics {
+        contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
+        index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
+        observed_total: 1,
+        total: Some(1),
+        input_total: None,
+        counts: std::collections::BTreeMap::from([("conversion.invalid_date".to_owned(), 1)]),
+        examples_limit: 10,
+        examples_truncated: false,
+        examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
+            source_index: 4,
+            cause: "conversion.invalid_date".to_owned(),
+            column: Some("effective_date".to_owned()),
+            key: None,
+            write_state: None,
+        }],
+        knowledge_limits: None,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    let original = PlenoraError::DataMapping("righe non conformi".to_owned())
+        .with_phase(ErrorPhase::Read)
+        .with_row_diagnostics(report.clone());
+
+    let replayed = StoredEdgeError::from_error(&original).to_error();
+    assert_eq!(
+        replayed.category(),
+        plenora_core::ErrorCategory::DataMapping
+    );
+    assert_eq!(replayed.phase(), ErrorPhase::Read);
+    assert_eq!(replayed.remote_effect(), plenora_core::RemoteEffect::None);
+    assert_eq!(
+        replayed.retry_disposition(),
+        plenora_core::RetryDisposition::Never
+    );
+    assert_eq!(
+        replayed
+            .row_diagnostics()
+            .expect("carrier preservato")
+            .examples[0]
+            .source_index,
+        4
+    );
+
+    let cancelled = PlenoraError::Cancelled {
+        node: "cast".to_owned(),
+        operation: "table.type_cast".to_owned(),
+        execution_id: "exec-1".to_owned(),
+        reason: "cancellazione richiesta".to_owned(),
+    }
+    .with_phase(ErrorPhase::Read)
+    .with_row_diagnostics(report.clone());
+    let replayed_cancelled = StoredEdgeError::from_error(&cancelled).to_error();
+    assert!(replayed_cancelled.is_cancelled());
+    assert_eq!(replayed_cancelled.phase(), ErrorPhase::Read);
+    assert_eq!(
+        replayed_cancelled.execution_context(),
+        Some(("cast", "table.type_cast", "exec-1"))
+    );
+    assert!(replayed_cancelled.row_diagnostics().is_some());
+
+    let execution = PlenoraError::Execution {
+        node: "cast".to_owned(),
+        operation: "table.type_cast".to_owned(),
+        execution_id: String::new(),
+        reason: "rifiuto righe".to_owned(),
+    }
+    .with_phase(ErrorPhase::Read)
+    .with_row_diagnostics(report.clone());
+    let replayed_execution = StoredEdgeError::from_error(&execution)
+        .to_error()
+        .with_execution_id("exec-2");
+    assert_eq!(
+        replayed_execution.category(),
+        plenora_core::ErrorCategory::Execution
+    );
+    assert_eq!(
+        replayed_execution.execution_context(),
+        Some(("cast", "table.type_cast", "exec-2"))
+    );
+    assert_eq!(
+        replayed_execution.to_string(),
+        "step failed at node `cast` (operation `table.type_cast`, execution `exec-2`): rifiuto righe"
+    );
+    assert!(replayed_execution.row_diagnostics().is_some());
+
+    let tagged_io =
+        PlenoraError::Io(std::io::Error::other("errore trasporto")).with_phase(ErrorPhase::Read);
+    let replayed_io = StoredEdgeError::from_error(&tagged_io).to_error();
+    assert_eq!(replayed_io.category(), plenora_core::ErrorCategory::Io);
+    assert_eq!(replayed_io.phase(), ErrorPhase::Read);
+    assert_eq!(
+        replayed_io.retry_disposition(),
+        plenora_core::RetryDisposition::Safe
+    );
+    assert_eq!(
+        replayed_io.remote_effect(),
+        plenora_core::RemoteEffect::None
+    );
+    assert!(replayed_io.row_diagnostics().is_none());
+
+    let first = report.clone();
+    let second = report;
+    let mut aggregate = None;
+    merge_row_diagnostics(&mut aggregate, first, 0).expect("primo report");
+    merge_row_diagnostics(&mut aggregate, second, 5).expect("secondo report");
+    let aggregate = aggregate.expect("aggregato");
+    assert_eq!(aggregate.input_total, None);
+    assert_eq!(aggregate.observed_total, 2);
+}
+
+#[test]
+fn diagnostic_merge_overflow_is_transactional_and_preserves_partial_report() {
+    let examples = (0_u64..10)
+        .map(
+            |source_index| plenora_core::diagnostics::RowDiagnosticExample {
+                source_index,
+                cause: "conversion.invalid_date".to_owned(),
+                column: Some("effective_date".to_owned()),
+                key: None,
+                write_state: None,
+            },
+        )
+        .collect::<Vec<_>>();
+    let maximal = plenora_core::diagnostics::RowDiagnostics {
+        contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
+        index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total: u64::MAX,
+        total: Some(u64::MAX),
+        input_total: None,
+        counts: std::collections::BTreeMap::from([(
+            "conversion.invalid_date".to_owned(),
+            u64::MAX,
+        )]),
+        examples_limit: 10,
+        examples_truncated: true,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    assert_eq!(maximal.validate_for_emission(), Ok(()));
+    let mut incoming = maximal.clone();
+    incoming.observed_total = 1;
+    incoming.total = Some(1);
+    incoming
+        .counts
+        .insert("conversion.invalid_date".to_owned(), 1);
+    incoming.examples.truncate(1);
+    incoming.examples_truncated = false;
+
+    let before = maximal.clone();
+    let mut aggregate = Some(maximal);
+    let merge_error =
+        merge_row_diagnostics(&mut aggregate, incoming, 10).expect_err("overflow non rifiutato");
+    assert_eq!(aggregate.as_ref(), Some(&before));
+
+    let partial = attach_partial_row_diagnostics(
+        merge_error,
+        &mut aggregate,
+        "data_tools.diagnostic_merge_failed",
+    );
+    let report = partial
+        .row_diagnostics()
+        .expect("osservazioni accumulate perse");
+    assert_eq!(report.completeness, RowDiagnosticsCompleteness::Partial);
+    assert_eq!(report.observed_total, u64::MAX);
+    assert_eq!(report.validate_for_emission(), Ok(()));
+}
+
+#[test]
+fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        true,
+    )]));
+    let make_batch = |rows: usize, invalid_row: usize| {
+        let values = (0..rows)
+            .map(|row| {
+                if row == invalid_row {
+                    Some("not-a-date")
+                } else {
+                    Some("2026-08-02")
+                }
+            })
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
+            .expect("batch date")
+    };
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {
+                "id": "cast",
+                "op": "table.type_cast",
+                "in": ["main"],
+                "config": {
+                    "column": "effective_date",
+                    "target_type": "date32",
+                    "errors": "coerce"
+                }
+            },
+            {
+                "id": "after",
+                "op": "table.rename",
+                "in": ["cast"],
+                "config": {
+                    "renames": [{"old_name": "effective_date", "new_name": "parsed_date"}]
+                }
+            }
+        ],
+        "output": "after"
+    });
+    let inputs = single_input("main", vec![make_batch(5, 4), make_batch(1_020, 999)]);
+    let mut output = run(
+        &plan,
+        inputs,
+        &[("main".to_owned(), DataContract::tabular(schema))],
+    )
+    .expect("execute lazy");
+
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato dopo rifiuto row-scoped");
+    };
+    let diagnostics = error.row_diagnostics().expect("diagnostica mancante");
+    assert_eq!(diagnostics.observed_total, 2);
+    assert_eq!(diagnostics.total, Some(2));
+    assert_eq!(
+        diagnostics
+            .examples
+            .iter()
+            .map(|example| example.source_index)
+            .collect::<Vec<_>>(),
+        vec![4, 1_004]
+    );
+    let (node, operation, execution_id) = error
+        .execution_context()
+        .expect("contesto DAG sul report terminale");
+    assert_eq!(node, "cast");
+    assert_eq!(operation, "table.type_cast");
+    assert!(!execution_id.is_empty());
+    assert_eq!(output.metrics().nodes["after"].batches_in, 0);
+}
+
+#[test]
+fn formula_collects_complete_row_diagnostics_across_input_batches() {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let make_batch = |values: Vec<Option<i64>>| {
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(values))])
+            .expect("batch id")
+    };
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {
+                "id": "calc",
+                "op": "table.formula",
+                "in": ["main"],
+                "config": {"new_column": "ratio", "formula": "10 / id"}
+            },
+            {
+                "id": "after",
+                "op": "table.rename",
+                "in": ["calc"],
+                "config": {"renames": [{"old_name": "ratio", "new_name": "final"}]}
+            }
+        ],
+        "output": "after"
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            make_batch(vec![Some(1), Some(0), Some(2)]),
+            make_batch(vec![Some(3), Some(0), None]),
+        ],
+    );
+    let mut output = run(
+        &plan,
+        inputs,
+        &[("main".to_owned(), DataContract::tabular(schema))],
+    )
+    .expect("execute lazy");
+
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato dopo rifiuto row-scoped");
+    };
+    let diagnostics = error.row_diagnostics().expect("diagnostica mancante");
+    assert_eq!(diagnostics.observed_total, 2);
+    assert_eq!(diagnostics.total, Some(2));
+    assert_eq!(diagnostics.counts["evaluation.division_by_zero"], 2);
+    assert_eq!(
+        diagnostics
+            .examples
+            .iter()
+            .map(|example| example.source_index)
+            .collect::<Vec<_>>(),
+        vec![1, 4]
+    );
+    let (node, operation, execution_id) = error
+        .execution_context()
+        .expect("contesto DAG sul report terminale");
+    assert_eq!(node, "calc");
+    assert_eq!(operation, "table.formula");
+    assert!(!execution_id.is_empty());
+    assert_eq!(output.metrics().nodes["after"].batches_in, 0);
+}
+
+#[test]
+fn expression_collects_complete_row_diagnostics_across_input_batches() {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let make_batch = |values: Vec<Option<i64>>| {
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(values))])
+            .expect("batch id")
+    };
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {
+                "id": "calc",
+                "op": "table.expression",
+                "in": ["main"],
+                "config": {
+                    "output_column": "ratio",
+                    "expression": {
+                        "kind": "binary",
+                        "op": "divide",
+                        "left": {"kind": "literal", "value": 10},
+                        "right": {"kind": "column", "name": "id"}
+                    }
+                }
+            },
+            {
+                "id": "after",
+                "op": "table.rename",
+                "in": ["calc"],
+                "config": {"renames": [{"old_name": "ratio", "new_name": "final"}]}
+            }
+        ],
+        "output": "after"
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            make_batch(vec![Some(1), Some(0), Some(2)]),
+            make_batch(vec![Some(3), Some(0), None]),
+        ],
+    );
+    let mut output = run(
+        &plan,
+        inputs,
+        &[("main".to_owned(), DataContract::tabular(schema))],
+    )
+    .expect("execute lazy");
+
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato dopo rifiuto row-scoped");
+    };
+    let diagnostics = error.row_diagnostics().expect("diagnostica mancante");
+    assert_eq!(diagnostics.observed_total, 2);
+    assert_eq!(diagnostics.total, Some(2));
+    assert_eq!(diagnostics.counts["evaluation.division_by_zero"], 2);
+    assert_eq!(
+        diagnostics
+            .examples
+            .iter()
+            .map(|example| example.source_index)
+            .collect::<Vec<_>>(),
+        vec![1, 4]
+    );
+    let (node, operation, execution_id) = error
+        .execution_context()
+        .expect("contesto DAG sul report terminale");
+    assert_eq!(node, "calc");
+    assert_eq!(operation, "table.expression");
+    assert!(!execution_id.is_empty());
+    assert_eq!(output.metrics().nodes["after"].batches_in, 0);
+}
+
+#[test]
+fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        false,
+    )]));
+    let batch = |values: Vec<&str>| {
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
+            .expect("batch date")
+    };
+    let batches = vec![
+        batch(vec!["2026-08-01", "2026-08-02"]),
+        batch(vec!["not-a-date"]),
+    ];
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [{
+            "id": "cast",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {"column": "effective_date", "target_type": "date32"}
+        }],
+        "output": "cast"
+    });
+    let make_output = || {
+        run(
+            &plan,
+            single_input("main", batches.clone()),
+            &[("main".to_owned(), DataContract::tabular(schema.clone()))],
+        )
+        .expect("execute")
+    };
+
+    let mut output = make_output();
+    let error = output
+        .next()
+        .expect("errore terminale")
+        .expect_err("primo batch pubblicato prima della rejection tardiva");
+    assert_eq!(
+        error.row_diagnostics().expect("diagnostica").examples[0].source_index,
+        2
+    );
+    assert!(output.next().is_none());
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("late-cast.arrow");
+    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(
+        !destination.exists(),
+        "nessun artefatto IPC dopo rejection tardiva"
+    );
+}
+
+#[test]
+fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        true,
+    )]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(StringArray::from(vec![
+            Some("2026-08-02"),
+            Some("2026-08-02"),
+            Some("2026-08-02"),
+            Some("2026-08-02"),
+            Some("not-a-date"),
+        ]))],
+    )
+    .expect("batch date");
+    let interrupted = PlenoraError::Io(std::io::Error::other("interruzione fixture"))
+        .with_phase(plenora_core::ErrorPhase::Read);
+    let input = Input::from_iter(
+        schema.clone(),
+        vec![Ok(batch), Err(interrupted)].into_iter(),
+    );
+    let inputs = Inputs::new().with("main", input).expect("input fallibile");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [{
+            "id": "cast",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {
+                "column": "effective_date",
+                "target_type": "date32",
+                "errors": "coerce"
+            }
+        }],
+        "output": "cast"
+    });
+    let output = run(
+        &plan,
+        inputs,
+        &[("main".to_owned(), DataContract::tabular(schema))],
+    )
+    .expect("execute lazy");
+
+    let error = output
+        .collect_batches()
+        .expect_err("stream interrotto accettato");
+    let diagnostics = error.row_diagnostics().expect("diagnostica persa");
+    assert_eq!(
+        diagnostics.completeness,
+        plenora_core::diagnostics::RowDiagnosticsCompleteness::Partial
+    );
+    assert_eq!(diagnostics.total, None);
+    assert_eq!(diagnostics.observed_total, 1);
+    assert_eq!(
+        diagnostics.knowledge_limits,
+        Some(vec!["data_tools.input_stream_interrupted".to_owned()])
+    );
+}
+
+#[test]
+fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
+    // P1 (review 2026-08-03): 4 batch validi, ciascuno sotto il budget di
+    // memoria, ma con output cumulativi SOPRA budget. Prima del fix gli
+    // accepted restavano in RAM con lease trattenuti fino a fine scan e lo
+    // stream valido veniva rifiutato ("budget esaurito"): ora gli accepted
+    // sono staged su IPC bounded (lease rilasciato per batch, ri-riserva al
+    // replay dopo lo scan completo).
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        true,
+    )]));
+    let make_batch = || {
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(
+                (0..512).map(|_| Some("2026-08-02")).collect::<Vec<_>>(),
+            ))],
+        )
+        .expect("batch valido")
+    };
+    let plan_with = |max_memory_bytes: u64| {
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": {"max_memory_bytes": max_memory_bytes},
+            "nodes": [{
+                "id": "cast",
+                "op": "table.type_cast",
+                "in": ["main"],
+                "config": {
+                    "column": "effective_date",
+                    "target_type": "date32",
+                    "errors": "coerce"
+                }
+            }],
+            "output": "cast"
+        })
+    };
+    let contract = [("main".to_owned(), DataContract::tabular(schema.clone()))];
+    // Sonda: byte governati di un batch di input e del suo output (le
+    // fixture sono identiche per i 4 batch -> stessi byte per batch).
+    let probe = run(
+        &plan_with(u64::MAX / 4),
+        single_input("main", vec![make_batch()]),
+        &contract,
+    )
+    .expect("sonda");
+    let (probe_batches, _) = output_rows(probe).expect("sonda valida");
+    let input_bytes = make_batch().get_array_memory_size() as u64;
+    let output_bytes = probe_batches[0].get_array_memory_size() as u64;
+    assert!(input_bytes > 0 && output_bytes > 0);
+    // Budget: copre i picchi per-batch (scan input+output, replay output)
+    // ma NON 3 lease di output trattenuti piu' l'input del quarto batch.
+    let budget = input_bytes + 2 * output_bytes + output_bytes / 4;
+    let output = run(
+        &plan_with(budget),
+        single_input(
+            "main",
+            vec![make_batch(), make_batch(), make_batch(), make_batch()],
+        ),
+        &contract,
+    )
+    .expect("execute lazy");
+    let (batches, _) = output
+        .collect_governed()
+        .expect("stream valido rifiutato: gli accepted devono essere staged");
+    let sequences: Vec<u64> = batches
+        .iter()
+        .map(|governed| governed.seq.as_ref().expect("sequenza").sequence_number)
+        .collect();
+    let rows: usize = batches
+        .iter()
+        .map(|governed| governed.batch.num_rows())
+        .sum();
+    // Ordine e BatchSequence logici invariati (ADR-0001).
+    assert_eq!(sequences, vec![0, 1, 2, 3]);
+    assert_eq!(rows, 4 * 512);
+}
+
+#[test]
+fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
+    // Rejection tardiva con staging: gli accepted staged sono scartati
+    // (nessun batch pubblicato), il drenaggio continua per i conteggi
+    // completi e gli indici restano assoluti sull'input originale.
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        true,
+    )]));
+    let batch_of = |rows: &[Option<&str>]| {
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(rows.to_vec()))],
+        )
+        .expect("batch")
+    };
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [{
+            "id": "cast",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {"column": "effective_date", "target_type": "date32"}
+        }],
+        "output": "cast"
+    });
+    let make_output = || {
+        run(
+            &plan,
+            single_input(
+                "main",
+                vec![
+                    batch_of(&[Some("2026-08-02"), Some("2026-08-02")]),
+                    batch_of(&[Some("2026-08-02"), Some("2026-08-02")]),
+                    batch_of(&[Some("not-a-date")]),
+                    batch_of(&[Some("2026-08-02"), Some("2026-08-02"), Some("2026-08-02")]),
+                ],
+            ),
+            &[("main".to_owned(), DataContract::tabular(schema.clone()))],
+        )
+        .expect("execute lazy")
+    };
+    let mut output = make_output();
+    let error = output
+        .next()
+        .expect("terminale")
+        .expect_err("accepted pubblicati prima della rejection");
+    let diagnostics = error.row_diagnostics().expect("diagnostica persa");
+    assert_eq!(diagnostics.observed_total, 1);
+    assert_eq!(diagnostics.total, Some(1));
+    assert_eq!(diagnostics.examples.len(), 1);
+    assert_eq!(diagnostics.examples[0].source_index, 4);
+    assert!(matches!(
+        diagnostics.completeness,
+        plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete
+    ));
+    assert!(output.next().is_none(), "solo il terminale dopo lo scan");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(!destination.exists());
+}
+
+#[test]
+fn accepted_output_staging_beyond_temp_quota_fails_closed() {
+    // P1 fail-closed: stream VALIDO la cui staging IPC supera la quota
+    // `max_temp_bytes` -> errore esplicito, zero accepted pubblicati,
+    // nessun artefatto scrivibile via write_ipc_file.
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        true,
+    )]));
+    let make_batch = || {
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![
+                Some("2026-08-02"),
+                Some("2026-08-02"),
+            ]))],
+        )
+        .expect("batch valido")
+    };
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "limits": {"max_temp_bytes": 1},
+        "nodes": [{
+            "id": "cast",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {"column": "effective_date", "target_type": "date32"}
+        }],
+        "output": "cast"
+    });
+    let make_output = || {
+        run(
+            &plan,
+            single_input(
+                "main",
+                vec![make_batch(), make_batch(), make_batch(), make_batch()],
+            ),
+            &[("main".to_owned(), DataContract::tabular(schema.clone()))],
+        )
+        .expect("execute lazy")
+    };
+    let mut output = make_output();
+    let error = output
+        .next()
+        .expect("terminale")
+        .expect_err("accepted pubblicati nonostante la quota temp");
+    assert!(
+        error.to_string().contains("staging"),
+        "errore atteso di staging oltre quota: {error}"
+    );
+    assert!(output.next().is_none(), "zero accepted oltre la quota");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("output.arrow");
+    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(!destination.exists());
+}
+
+#[test]
 fn linear_table_chain_executes_with_coherent_per_node_metrics() {
     let plan = json!({
         "schema_version": 4,
@@ -184,16 +896,19 @@ fn linear_table_chain_executes_with_coherent_per_node_metrics() {
 
 #[test]
 fn mixed_table_geo_chain_executes_buffer_then_area() {
+    // Le op geo (diagnostica row-scoped) precedono il filter
+    // cardinality-changing: il gate provenance rifiuterebbe l'ordine
+    // inverso.
     let plan = json!({
         "schema_version": 4,
         "inputs": ["main"],
         "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "b", "op": "geo.buffer", "in": ["f"], "config": {"distance": 10.0}},
+            {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
             {"id": "a", "op": "geo.area", "in": ["b"], "config": {}},
+            {"id": "f", "op": "table.filter", "in": ["a"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
         ],
-        "output": "a",
+        "output": "f",
     });
     let inputs = single_input(
         "main",
@@ -235,7 +950,8 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
     );
     assert!(areas.is_null(1), "null in -> null out");
 
-    assert_eq!(metrics.nodes["b"].rows_out, 2);
+    assert_eq!(metrics.nodes["b"].rows_out, 3);
+    assert_eq!(metrics.nodes["f"].rows_out, 2);
     assert_eq!(metrics.nodes["a"].operation, "geo.area");
 }
 
@@ -449,9 +1165,67 @@ fn invalid_wkb_cell_fails_at_read_before_any_output() {
     );
     let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
     let error = output.collect_batches().expect_err("WKB invalido");
+    let report = error.row_diagnostics().expect("diagnostica WKB mancante");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::DataMapping);
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
+    assert_eq!(report.examples[0].source_index, 0);
+}
+
+#[test]
+fn late_wkb_rejections_are_complete_absolute_and_publish_nothing() {
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let batches = vec![
+        geo_batch(
+            &[1, 2],
+            &[Some(point_wkb(1.0, 2.0)), Some(point_wkb(3.0, 4.0))],
+        ),
+        geo_batch(
+            &[3, 4, 5],
+            &[
+                Some(b"bad-a".to_vec()),
+                Some(point_wkb(5.0, 6.0)),
+                Some(b"bad-b".to_vec()),
+            ],
+        ),
+    ];
+    let make_output = || {
+        run(
+            &plan,
+            single_input("main", batches.clone()),
+            &[("main".to_owned(), geo_contract())],
+        )
+        .expect("execute")
+    };
+
+    let mut output = make_output();
+    let error = output
+        .next()
+        .expect("errore terminale")
+        .expect_err("batch valido emesso prima della rejection tardiva");
+    assert!(output.next().is_none());
+    let report = error.row_diagnostics().expect("diagnostica WKB mancante");
+    assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+    assert_eq!(report.observed_total, 2);
+    assert_eq!(
+        report
+            .examples
+            .iter()
+            .map(|example| example.source_index)
+            .collect::<Vec<_>>(),
+        vec![2, 4]
+    );
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("late-wkb.arrow");
+    assert!(make_output().write_ipc_file(&destination).is_err());
     assert!(
-        error.to_string().contains("WKB"),
-        "validazione dinamica in lettura (D8): {error}"
+        !destination.exists(),
+        "nessun artefatto IPC dopo rejection tardiva"
     );
 }
 
@@ -517,10 +1291,10 @@ fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
     let error = output
         .collect_batches()
         .expect_err("type code incoerente col contratto");
-    assert!(
-        error.to_string().contains("incoerente"),
-        "errore dedicato di mismatch dimensionale: {error}"
-    );
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica dimensioni mancante");
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
 }
 
 #[test]
@@ -699,10 +1473,8 @@ fn mismatching_ewkb_srid_fails_with_crs_error() {
     let error = output
         .collect_batches()
         .expect_err("SRID incoerente rifiutato");
-    assert!(
-        matches!(error, PlenoraError::Crs(_)),
-        "errore CRS dedicato: {error}"
-    );
+    let report = error.row_diagnostics().expect("diagnostica SRID mancante");
+    assert_eq!(report.counts["geometry.crs_mismatch"], 1);
 }
 
 #[test]
@@ -726,11 +1498,10 @@ fn wkb_encoding_rejects_embedded_srid_even_when_it_matches_authority() {
     let error = output
         .collect_batches()
         .expect_err("WKB puro deve rifiutare il flag SRID EWKB");
-    assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
-    assert!(
-        error.to_string().contains("unsupported operation"),
-        "{error}"
-    );
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica encoding mancante");
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
 }
 
 #[test]
@@ -756,11 +1527,10 @@ fn undeclared_legacy_encoding_defaults_to_wkb_and_rejects_embedded_srid() {
     let error = output
         .collect_batches()
         .expect_err("encoding legacy non dichiarato resta WKB, mai EWKB implicito");
-    assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
-    assert!(
-        error.to_string().contains("unsupported operation"),
-        "{error}"
-    );
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica encoding legacy mancante");
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
 }
 
 #[test]
@@ -830,8 +1600,10 @@ fn ewkb_embedded_srid_requires_governed_authority() {
     let error = output
         .collect_batches()
         .expect_err("EWKB con SRID embedded richiede autorita' governata");
-    assert!(matches!(error, PlenoraError::Crs(_)), "{error}");
-    assert!(error.to_string().contains("senza autorita'"), "{error}");
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica autorita' mancante");
+    assert_eq!(report.counts["geometry.crs_mismatch"], 1);
 }
 
 #[test]
@@ -883,11 +1655,22 @@ fn matching_ewkb_srid_still_fails_at_geometry_kernel_decode() {
     let error = output
         .collect_batches()
         .expect_err("kernel geometrico non deve perdere SRID embedded");
-    assert!(matches!(error, PlenoraError::Execution { .. }));
+    // R9.9: il fallimento di decode e' row-scoped — rifiuto fail-closed con
+    // il messaggio standard e la diagnostica completa (causa machine-readable,
+    // indice riga); la causa Unsupported del kernel non e' piu' nel testo
+    // dell'errore (mai dettagli di riga nei messaggi) ma nel report.
     assert!(
-        error.to_string().contains("unsupported operation"),
-        "causa Unsupported preservata nell'envelope del kernel: {error}"
+        error
+            .to_string()
+            .contains("righe non conformi al contratto di trasformazione"),
+        "rifiuto fail-closed per SRID embedded non dichiarato: {error}"
     );
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica row-scoped per decode EWKB fallito");
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
+    assert_eq!(report.examples[0].source_index, 0);
 }
 
 #[test]
@@ -1973,7 +2756,9 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
          non lo srid della sorgente)"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_AXIS_ORDER_KEY).map(String::as_str),
+        metadata
+            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            .map(String::as_str),
         Some("lon_lat"),
         "l'ordine descrive le coordinate GIS normalizzate prodotte dal backend, non gli assi authority"
     );
@@ -2129,7 +2914,113 @@ fn u64_column(batch: &RecordBatch, name: &str) -> UInt64Array {
 }
 
 #[test]
-fn geo_snap_subdivide_length_chain_expands_rows() {
+fn geo_transform_reports_complete_row_diagnostics_across_input_batches() {
+    // line_substring richiede LineString: i Point sono un difetto
+    // row-attribuibile (geometry.wrong_type). Due batch con una riga
+    // difettosa ciascuno -> indici ASSOLUTI 1 e 2 nel report mergiato;
+    // nessun accepted, nessun batch downstream.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "sub", "op": "geo.line_substring", "in": ["main"],
+             "config": {"start_ratio": 0.0, "end_ratio": 1.0}},
+            {"id": "after", "op": "geo.area", "in": ["sub"], "config": {}},
+        ],
+        "output": "after",
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            geo_batch(
+                &[0, 1],
+                &[
+                    Some(line_wkb(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0)])),
+                    Some(point_wkb(1.0, 2.0)),
+                ],
+            ),
+            geo_batch(
+                &[2, 3],
+                &[
+                    Some(point_wkb(3.0, 4.0)),
+                    Some(line_wkb(&[(0.0, 0.0), (1.0, 1.0)])),
+                ],
+            ),
+        ],
+    );
+    let mut output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato dopo rifiuto row-scoped");
+    };
+    let report = error.row_diagnostics().expect("diagnostica row-scoped");
+    assert_eq!(report.contract, "plenora-row-diagnostics-v1");
+    assert_eq!(report.observed_total, 2);
+    assert_eq!(report.total, Some(2));
+    assert_eq!(report.counts["geometry.wrong_type"], 2);
+    assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+    assert!(!report.examples_truncated);
+    assert_eq!(
+        report
+            .examples
+            .iter()
+            .map(|example| example.source_index)
+            .collect::<Vec<_>>(),
+        vec![1, 2],
+        "indici assoluti: riga 1 del batch 0 e riga 0 del batch 1"
+    );
+    assert!(report.validate_for_emission().is_ok());
+    assert_eq!(output.metrics().nodes["after"].batches_in, 0);
+}
+
+#[test]
+fn geo_measure_reports_complete_row_diagnostics_across_input_batches() {
+    // geo.area su WKB malformato a meta' del secondo batch: indice assoluto
+    // 3 nel report mergiato; il nodo a valle non riceve nulla.
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "m", "op": "geo.area", "in": ["main"], "config": {}},
+            {"id": "after", "op": "geo.centroid", "in": ["m"], "config": {}},
+        ],
+        "output": "after",
+    });
+    let inputs = single_input(
+        "main",
+        vec![
+            geo_batch(
+                &[0, 1, 2],
+                &[
+                    Some(point_wkb(0.0, 0.0)),
+                    Some(point_wkb(1.0, 1.0)),
+                    Some(point_wkb(2.0, 2.0)),
+                ],
+            ),
+            geo_batch(
+                &[3],
+                &[Some(vec![0x01, 0x09, 0x00])], // WKB troncato
+            ),
+        ],
+    );
+    let mut output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato dopo rifiuto row-scoped");
+    };
+    let report = error.row_diagnostics().expect("diagnostica row-scoped");
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
+    assert_eq!(report.examples[0].source_index, 3);
+    assert!(report.validate_for_emission().is_ok());
+    assert_eq!(output.metrics().nodes["after"].batches_in, 0);
+}
+
+#[test]
+fn geo_snap_subdivide_chain_expands_rows() {
+    // NOTA (gate provenance row-diagnostics): `geo.length` a valle di
+    // `geo.subdivide` (cardinality-changing) e' un piano illegittimo —
+    // la misura emette diagnostica con indici sorgente non piu'
+    // osservabili. La catena si ferma a subdivide; la copertura delle
+    // misure geo e' nei test dedicati.
     let mut perturbed = reference_line();
     perturbed[1] = (4.1, 0.0); // Vertice da agganciare a (4,0) con tolleranza 0.5.
     let reference = line_wkb(&reference_line());
@@ -2141,9 +3032,8 @@ fn geo_snap_subdivide_length_chain_expands_rows() {
              "config": {"reference_wkb": hex(&reference), "tolerance": 0.5}},
             {"id": "d", "op": "geo.subdivide", "in": ["s"],
              "config": {"max_vertices": 4}},
-            {"id": "l", "op": "geo.length", "in": ["d"], "config": {}},
         ],
-        "output": "l",
+        "output": "d",
     });
     let inputs = single_input(
         "main",
@@ -2160,18 +3050,6 @@ fn geo_snap_subdivide_length_chain_expands_rows() {
     assert_eq!(batch.num_rows(), 3);
     let parents = u64_column(batch, "__parent_index");
     assert_eq!(parents.values(), &[0, 0, 1]);
-    let lengths = f64_column(batch, "length");
-    assert!(
-        (lengths.value(0) - 12.0).abs() < 1e-9,
-        "{}",
-        lengths.value(0)
-    );
-    assert!(
-        (lengths.value(1) - 12.0).abs() < 1e-9,
-        "{}",
-        lengths.value(1)
-    );
-    assert!(lengths.is_null(2), "null in -> null out");
     // Il vertice perturbato e' stato agganciato alla referenza.
     let geom_index = batch.schema().column_with_name("geom").expect("geom").0;
     let cells = batch
@@ -2698,7 +3576,11 @@ fn table_fuzzy_join_matches_similar_names() {
 
 #[cfg(feature = "proj-backend")]
 #[test]
-fn geo_from_wkt_snap_subdivide_length_chain_executes() {
+fn geo_from_wkt_rejects_invalid_rows_before_downstream_cardinality_changes() {
+    // NOTA (gate provenance): la catena si ferma a `subdivide` — una misura
+    // geo a valle del cambio di cardinalita' sarebbe un piano illegittimo.
+    // L'intento e' preservato: il rifiuto row-scoped scatta alla radice
+    // (`w`), prima che la cardinalita' cambi.
     let reference = line_wkb(&reference_line());
     let plan = json!({
         "schema_version": 4,
@@ -2711,41 +3593,28 @@ fn geo_from_wkt_snap_subdivide_length_chain_executes() {
              "config": {"reference_wkb": hex(&reference), "tolerance": 0.5}},
             {"id": "d", "op": "geo.subdivide", "in": ["s"],
              "config": {"max_vertices": 4}},
-            {"id": "l", "op": "geo.length", "in": ["d"], "config": {}},
         ],
-        "output": "l",
+        "output": "d",
     });
     let wkt = "LINESTRING(0 0, 4.1 0, 4 4, 8 4, 8 8, 12 8, 12 12)";
     let inputs = single_input(
         "main",
         vec![table_batch(&[0, 1, 2], &[wkt, "NON E WKT", "POINT(1 1)"])],
     );
-    let (batches, _) =
+    let error =
         output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
-            .expect("stream ok");
-
-    let batch = &batches[0];
-    // Riga 0: 2 parti; riga 1 (WKT invalido): null; riga 2 (punto): 1 parte.
-    assert_eq!(batch.num_rows(), 4);
-    let parents = u64_column(batch, "__parent_index");
-    assert_eq!(parents.values(), &[0, 0, 1, 2]);
-    let lengths = f64_column(batch, "length");
-    assert!((lengths.value(0) - 12.0).abs() < 1e-9);
-    assert!((lengths.value(1) - 12.0).abs() < 1e-9);
-    assert!(lengths.is_null(2), "WKT invalido con on_error null -> null");
-    assert!(
-        (lengths.value(3) - 0.0).abs() < 1e-12,
-        "lunghezza di un punto"
-    );
-    // La colonna geometria prodotta ha i metadati GeoArrow del contratto.
-    let schema = batch.schema();
-    let field = schema.field_with_name("geometry").expect("geometry");
+            .expect_err("WKT invalido pubblicato attraverso la catena downstream");
+    let report = error.row_diagnostics().expect("diagnostica WKT mancante");
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(report.total, Some(1));
+    assert_eq!(report.examples[0].source_index, 1);
+    assert_eq!(report.examples[0].cause, "geometry.invalid_wkt");
+    assert_eq!(report.examples[0].column.as_deref(), Some("name"));
     assert_eq!(
-        field
-            .metadata()
-            .get("ARROW:extension:name")
-            .map(String::as_str),
-        Some("geoarrow.wkb")
+        error
+            .execution_context()
+            .map(|(node, operation, _)| (node, operation)),
+        Some(("w", "geo.from_wkt"))
     );
 }
 
@@ -2960,7 +3829,10 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
     let error = output
         .collect_batches()
         .expect_err("annidamento oltre il limite");
-    assert!(error.to_string().contains("annidamento"), "{error}");
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica profondita' mancante");
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
 
     let plan = json!({
         "schema_version": 4,
@@ -2981,15 +3853,39 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
 
 #[test]
 fn edge_stream_delivers_upstream_error_once_per_reader() {
+    let report = plenora_core::diagnostics::RowDiagnostics {
+        contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
+        index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total: 1,
+        total: Some(1),
+        input_total: None,
+        counts: std::collections::BTreeMap::from([("conversion.invalid_date".to_owned(), 1)]),
+        examples_limit: 10,
+        examples_truncated: false,
+        examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
+            source_index: 4,
+            cause: "conversion.invalid_date".to_owned(),
+            column: Some("effective_date".to_owned()),
+            key: None,
+            write_state: None,
+        }],
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
     let upstream: BatchStream = Box::new(
         vec![
             Ok(GovernedBatch::new(table_batch(&[1], &["a"]), None, None)),
-            Err(PlenoraError::Execution {
+            Err(PlenoraError::Cancelled {
                 node: "n1".to_owned(),
                 operation: "table.filter".to_owned(),
-                execution_id: "exec-test".to_owned(),
-                reason: "boom".to_owned(),
-            }),
+                execution_id: String::new(),
+                reason: "cancellazione richiesta".to_owned(),
+            }
+            .with_phase(ErrorPhase::Read)
+            .with_row_diagnostics(report)),
         ]
         .into_iter(),
     );
@@ -3000,10 +3896,19 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     // Primo consumatore: batch, errore originale, poi chiusura (mai un
     // iteratore infinito di errori).
     assert!(matches!(first.next(), Some(Ok(_))));
-    match first.next() {
-        Some(Err(PlenoraError::Execution { node, .. })) => assert_eq!(node, "n1"),
-        other => panic!("atteso l'errore Step originale: {other:?}"),
-    }
+    let original = first
+        .next()
+        .expect("errore originale")
+        .expect_err("atteso errore")
+        .with_execution_id("exec-test");
+    assert!(original.is_cancelled());
+    assert_eq!(original.phase(), ErrorPhase::Read);
+    assert_eq!(
+        original.execution_context(),
+        Some(("n1", "table.filter", "exec-test"))
+    );
+    let original_message = original.to_string();
+    assert!(original.row_diagnostics().is_some());
     assert!(first.next().is_none(), "errore consegnato una sola volta");
     assert!(first.next().is_none(), "lo stream resta chiuso");
 
@@ -3012,20 +3917,40 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
     // chiusura.
     assert!(matches!(second.next(), Some(Ok(_))));
     match second.next() {
-        Some(Err(PlenoraError::Execution {
-            node,
-            operation,
-            execution_id,
-            reason,
-        })) => {
-            assert_eq!(node, "n1");
-            assert_eq!(operation, "table.filter");
-            assert_eq!(execution_id, "exec-test");
-            assert_eq!(reason, "boom");
+        Some(Err(error)) => {
+            let error = error.with_execution_id("exec-test");
+            assert!(error.is_cancelled());
+            assert_eq!(error.phase(), ErrorPhase::Read);
+            assert_eq!(
+                error.execution_context(),
+                Some(("n1", "table.filter", "exec-test"))
+            );
+            assert_eq!(error.to_string(), original_message);
+            assert_eq!(
+                error
+                    .row_diagnostics()
+                    .expect("diagnostica replayata")
+                    .examples[0]
+                    .source_index,
+                4
+            );
         }
         other => panic!("atteso Step preservato, non Contract declassato: {other:?}"),
     }
     assert!(second.next().is_none(), "errore consegnato una sola volta");
+
+    let pretagged = PlenoraError::Cancelled {
+        node: "n1".to_owned(),
+        operation: "table.filter".to_owned(),
+        execution_id: "exec-origin".to_owned(),
+        reason: "cancellazione richiesta".to_owned(),
+    }
+    .with_execution_id("exec-boundary");
+    assert_eq!(
+        pretagged.execution_context(),
+        Some(("n1", "table.filter", "exec-origin")),
+        "il confine non sovrascrive un ID già assegnato"
+    );
 }
 
 #[test]
@@ -3525,6 +4450,75 @@ fn cancel_between_batches_in_streaming_chain() {
 }
 
 #[test]
+fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "effective_date",
+        DataType::Utf8,
+        false,
+    )]));
+    let invalid = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(StringArray::from(vec!["not-a-date"]))],
+    )
+    .expect("fixture");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [{
+            "id": "cast_cancel_after_reject",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {"column": "effective_date", "target_type": "date32"}
+        }],
+        "output": "cast_cancel_after_reject"
+    });
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    let mut emitted = false;
+    let input = Input::from_iter(
+        schema.clone(),
+        std::iter::from_fn(move || {
+            if emitted {
+                cancel.cancel();
+                None
+            } else {
+                emitted = true;
+                Some(Ok(invalid.clone()))
+            }
+        }),
+    );
+    let graph = validate(
+        &plan.to_string(),
+        &[("main".to_owned(), DataContract::tabular(schema))],
+    )
+    .expect("validate");
+    let inputs = Inputs::new().with("main", input).expect("input");
+    let mut output = execute(
+        &graph,
+        inputs,
+        RuntimeContext {
+            cancellation: token,
+            ..RuntimeContext::default()
+        },
+    )
+    .expect("execute");
+    let error = output
+        .next()
+        .expect("errore")
+        .expect_err("cancellazione persa dopo rejection");
+    assert!(error.is_cancelled());
+    let report = error
+        .row_diagnostics()
+        .expect("diagnostica rejection persa");
+    assert_eq!(report.completeness, RowDiagnosticsCompleteness::Partial);
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(
+        report.knowledge_limits,
+        Some(vec!["data_tools.cancelled_after_rejection".to_owned()])
+    );
+}
+
+#[test]
 fn cancel_during_blocking_drain() {
     let plan = json!({
         "schema_version": 4,
@@ -3827,21 +4821,19 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
         .expect("execute")
         .collect_batches()
         .expect_err("WKB invalido")
-        .to_string()
     };
     let off = run_with(false);
-    assert!(off.contains("(riga 0)"), "{off}");
-    assert!(
-        !off.contains("colonna"),
-        "diagnostics spento: messaggio invariato: {off}"
-    );
+    let off_report = off
+        .row_diagnostics()
+        .expect("diagnostica sempre strutturata");
+    assert_eq!(off_report.examples[0].column.as_deref(), Some("geom"));
     let on = run_with(true);
+    let on_report = on
+        .row_diagnostics()
+        .expect("diagnostica sempre strutturata");
+    assert_eq!(on_report.examples[0].column.as_deref(), Some("geom"));
     assert!(
-        on.contains("colonna `geom`"),
-        "contesto colonna a flag attivo: {on}"
-    );
-    assert!(
-        !on.contains("non-e-wkb"),
+        !on.to_string().contains("non-e-wkb"),
         "mai valori: il payload della cella non compare: {on}"
     );
 }
@@ -4852,4 +5844,86 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
         ErrorPhase::Write,
         "kernel: fase Write derivata"
     );
+}
+
+#[test]
+fn atomic_input_gate_streams_valid_input_over_cumulative_memory_budget() {
+    // P1-4: input geometrico VALIDO piu' grande del budget memoria cumulativo
+    // ma entro il budget per batch: il gate atomico non puo' trattenere i
+    // lease di tutti i batch — staging bounded e replay, nessun accepted
+    // pubblicato prima della validazione completa.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_memory_bytes": 128 * 1024},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let rows_per_batch = 1000_i64;
+    let batch = |offset: i64| {
+        geo_batch(
+            &(offset..offset + rows_per_batch).collect::<Vec<_>>(),
+            &(0..u32::try_from(rows_per_batch).expect("righe per batch"))
+                .map(|index| Some(point_wkb(f64::from(index), 1.0)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let inputs = single_input(
+        "main",
+        vec![batch(0), batch(1000), batch(2000), batch(3000)],
+    );
+    let output = run(&plan, inputs, &[("main".to_owned(), geo_contract())])
+        .expect("input valido sopra il budget cumulativo deve fluire");
+    // Consumo in streaming: ogni batch di output e' rilasciato dopo il
+    // conteggio — il lease vivo resta quello del batch in lavorazione.
+    let mut rows = 0_usize;
+    for item in output {
+        rows += item.expect("esecuzione").num_rows();
+    }
+    assert_eq!(rows, 4000, "tutte le righe valide devono arrivare a valle");
+}
+
+#[test]
+fn atomic_input_gate_rejects_late_invalid_with_zero_accepted_over_budget() {
+    // P1-4 (controllo fail-closed): stesso scenario sopra budget cumulativo,
+    // WKB malformato nell'ULTIMO batch — zero accepted, diagnostica completa
+    // con indice assoluto, nessun batch pubblicato a valle.
+    let plan = json!({
+        "schema_version": 4,
+        "limits": {"max_memory_bytes": 128 * 1024},
+        "inputs": ["main"],
+        "nodes": [],
+        "output": "main",
+    });
+    let rows_per_batch = 1000_i64;
+    let valid = |offset: i64| {
+        geo_batch(
+            &(offset..offset + rows_per_batch).collect::<Vec<_>>(),
+            &(0..u32::try_from(rows_per_batch).expect("righe per batch"))
+                .map(|index| Some(point_wkb(f64::from(index), 1.0)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let malformed: &[u8] = &[0x01, 0x09, 0x00];
+    let mut last_cells: Vec<Option<Vec<u8>>> = (0..u32::try_from(rows_per_batch)
+        .expect("righe per batch"))
+        .map(|index| Some(point_wkb(f64::from(index), 2.0)))
+        .collect();
+    last_cells[999] = Some(malformed.to_vec());
+    let last = geo_batch(
+        &(3000..3000 + rows_per_batch).collect::<Vec<_>>(),
+        &last_cells,
+    );
+    let inputs = single_input("main", vec![valid(0), valid(1000), valid(2000), last]);
+    let mut output = run(&plan, inputs, &[("main".to_owned(), geo_contract())]).expect("execute");
+    let Err(error) = output.next().expect("errore terminale mancante") else {
+        panic!("batch accettato pubblicato prima del rifiuto tardivo");
+    };
+    let report = error.row_diagnostics().expect("diagnostica row-scoped");
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(report.total, Some(1));
+    assert_eq!(report.counts["geometry.invalid_wkb"], 1);
+    assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+    assert_eq!(report.examples[0].source_index, 3999);
+    assert!(report.validate_for_emission().is_ok());
 }

@@ -149,9 +149,13 @@ fn main() {
     });
 
     // 2) formula mista con concatenazione testuale via `+`.
-    run_scenario("formula_mixed_strings", rows, repetitions, &input, &|batch| {
-        run_formula(batch, "name + '-' + code")
-    });
+    run_scenario(
+        "formula_mixed_strings",
+        rows,
+        repetitions,
+        &input,
+        &|batch| run_formula(batch, "name + '-' + code"),
+    );
 
     // 3) expression aritmetica: add(mul(num, 2.5), subtract(other, val)).
     let arith = json!({
@@ -196,7 +200,11 @@ fn main() {
             ]
         }
     });
-    run_scenario("expression_mixed_strings", rows, repetitions, &input, &|batch| {
-        run_expression(batch, &mixed)
-    });
+    run_scenario(
+        "expression_mixed_strings",
+        rows,
+        repetitions,
+        &input,
+        &|batch| run_expression(batch, &mixed),
+    );
 }

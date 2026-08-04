@@ -296,14 +296,20 @@ mod tests {
             Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("dc", DataType::Decimal128(10, 2), true),
             Field::new("u", DataType::UInt64, true),
-            Field::new("lst", DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), true),
+            Field::new(
+                "lst",
+                DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                true,
+            ),
             Field::new(
                 "st",
-                DataType::Struct(vec![
-                    Field::new("a", DataType::Int64, true),
-                    Field::new("b", DataType::Utf8, true),
-                ]
-                .into()),
+                DataType::Struct(
+                    vec![
+                        Field::new("a", DataType::Int64, true),
+                        Field::new("b", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
                 true,
             ),
             Field::new("geom", DataType::Binary, true),
@@ -410,11 +416,7 @@ mod tests {
             .schema
             .field_with_name(name)
             .unwrap_or_else(|_| panic!("colonna {name} assente dallo schema di output"));
-        assert_eq!(
-            field.data_type(),
-            data_type,
-            "tipo della colonna {name}"
-        );
+        assert_eq!(field.data_type(), data_type, "tipo della colonna {name}");
         assert_eq!(field.is_nullable(), nullable, "nullability di {name}");
     }
 
@@ -435,7 +437,10 @@ mod tests {
             .row_count
             .as_ref()
             .expect("row_count assente");
-        *property.confidence.proven_value().expect("row_count non Proven")
+        *property
+            .confidence
+            .proven_value()
+            .expect("row_count non Proven")
     }
 
     // -- Completezza del dispatch -------------------------------------------
@@ -499,8 +504,12 @@ mod tests {
         assert_eq!(table_ops.len(), 71);
         for descriptor in table_ops {
             let inputs = vec![tabular_contract(), right_contract()];
-            let result =
-                analyze_table_contract(descriptor.id, &inputs, &json!({}), &mut FieldAllocator::default());
+            let result = analyze_table_contract(
+                descriptor.id,
+                &inputs,
+                &json!({}),
+                &mut FieldAllocator::default(),
+            );
             if let Err(PlenoraError::Unsupported(message)) = &result {
                 assert!(
                     !message.contains("analyze_contract non disponibile"),
@@ -515,11 +524,21 @@ mod tests {
     fn unknown_and_geo_ops_are_unsupported() {
         let inputs = vec![tabular_contract()];
         assert!(matches!(
-            analyze_table_contract("table.nonexistent", &inputs, &json!({}), &mut FieldAllocator::default()),
+            analyze_table_contract(
+                "table.nonexistent",
+                &inputs,
+                &json!({}),
+                &mut FieldAllocator::default()
+            ),
             Err(PlenoraError::Unsupported(_))
         ));
         assert!(matches!(
-            analyze_table_contract("geo.buffer", &inputs, &json!({}), &mut FieldAllocator::default()),
+            analyze_table_contract(
+                "geo.buffer",
+                &inputs,
+                &json!({}),
+                &mut FieldAllocator::default()
+            ),
             Err(PlenoraError::Unsupported(_))
         ));
     }
@@ -529,21 +548,42 @@ mod tests {
         let one = vec![tabular_contract()];
         let three = [tabular_contract(), tabular_contract(), tabular_contract()];
         assert!(matches!(
-            analyze_table_contract("table.join", &one, &json!({}), &mut FieldAllocator::default()),
+            analyze_table_contract(
+                "table.join",
+                &one,
+                &json!({}),
+                &mut FieldAllocator::default()
+            ),
             Err(PlenoraError::InvalidPlan(_))
         ));
         assert!(matches!(
-            analyze_table_contract("table.filter", &three[..2], &json!({}), &mut FieldAllocator::default()),
+            analyze_table_contract(
+                "table.filter",
+                &three[..2],
+                &json!({}),
+                &mut FieldAllocator::default()
+            ),
             Err(PlenoraError::InvalidPlan(_))
         ));
         assert!(matches!(
-            analyze_table_contract("table.concat", &one, &json!({}), &mut FieldAllocator::default()),
+            analyze_table_contract(
+                "table.concat",
+                &one,
+                &json!({}),
+                &mut FieldAllocator::default()
+            ),
             Err(PlenoraError::InvalidPlan(_))
         ));
         // concat N-aria: 3 input ammessi.
         let (a, b) = simple_pair();
         let (_, c) = simple_pair();
-        assert!(analyze_table_contract("table.concat", &[a, b, c], &json!({}), &mut FieldAllocator::default()).is_ok());
+        assert!(analyze_table_contract(
+            "table.concat",
+            &[a, b, c],
+            &json!({}),
+            &mut FieldAllocator::default()
+        )
+        .is_ok());
     }
 
     // -- utility / strings / security / dates --------------------------------
@@ -556,7 +596,11 @@ mod tests {
         assert_eq!(proven_rows(&output), 100);
         assert!(output.properties.sorted_by.is_some());
         assert!(matches!(
-            err("table.add_row_number", &[tabular_contract()], json!({"order_column": "id"})),
+            err(
+                "table.add_row_number",
+                &[tabular_contract()],
+                json!({"order_column": "id"})
+            ),
             PlenoraError::InvalidPlan(_)
         ));
     }
@@ -570,26 +614,64 @@ mod tests {
         );
         assert_field(&output, "name_year", &DataType::Int64, true);
         assert_field(&output, "name_week", &DataType::Int64, true);
-        assert!(err("table.date_extract", &[tabular_contract()], json!({"column": "missing"})).to_string().contains("missing"));
+        assert!(err(
+            "table.date_extract",
+            &[tabular_contract()],
+            json!({"column": "missing"})
+        )
+        .to_string()
+        .contains("missing"));
     }
 
     #[test]
     fn uuid_generator_appends_non_nullable_utf8() {
         let output = ok("table.uuid_generator", &[tabular_contract()], json!({}));
         assert_field(&output, "uuid", &DataType::Utf8, false);
-        assert!(err("table.uuid_generator", &[tabular_contract()], json!({"output_column": " "})).to_string().contains("nome"));
+        assert!(err(
+            "table.uuid_generator",
+            &[tabular_contract()],
+            json!({"output_column": " "})
+        )
+        .to_string()
+        .contains("nome"));
     }
 
     #[test]
     fn string_ops_validate_utf8_and_produce_expected_types() {
-        let padded = ok("table.string_pad", &[tabular_contract()], json!({"column": "name"}));
+        let padded = ok(
+            "table.string_pad",
+            &[tabular_contract()],
+            json!({"column": "name"}),
+        );
         assert_field(&padded, "name", &DataType::Utf8, true);
-        assert!(err("table.string_pad", &[tabular_contract()], json!({"column": "value"})).to_string().contains("Utf8"));
-        assert!(err("table.string_pad", &[tabular_contract()], json!({"column": "name", "fill_char": "ab"})).to_string().contains("fill_char"));
+        assert!(err(
+            "table.string_pad",
+            &[tabular_contract()],
+            json!({"column": "value"})
+        )
+        .to_string()
+        .contains("Utf8"));
+        assert!(err(
+            "table.string_pad",
+            &[tabular_contract()],
+            json!({"column": "name", "fill_char": "ab"})
+        )
+        .to_string()
+        .contains("fill_char"));
 
-        let length = ok("table.string_length", &[tabular_contract()], json!({"column": "name"}));
+        let length = ok(
+            "table.string_length",
+            &[tabular_contract()],
+            json!({"column": "name"}),
+        );
         assert_field(&length, "name_length", &DataType::Int64, true);
-        assert!(err("table.string_length", &[tabular_contract()], json!({"column": "flag"})).to_string().contains("Utf8"));
+        assert!(err(
+            "table.string_length",
+            &[tabular_contract()],
+            json!({"column": "flag"})
+        )
+        .to_string()
+        .contains("Utf8"));
 
         let extracted = ok(
             "table.string_extract",
@@ -604,22 +686,58 @@ mod tests {
             json!({"column": "name", "pattern": "\\d+"}),
         );
         assert_field(&plain, "name_extracted", &DataType::Utf8, true);
-        assert!(err("table.string_extract", &[tabular_contract()], json!({"column": "name", "pattern": "("})).to_string().contains("regex"));
+        assert!(err(
+            "table.string_extract",
+            &[tabular_contract()],
+            json!({"column": "name", "pattern": "("})
+        )
+        .to_string()
+        .contains("regex"));
 
-        let normalized = ok("table.text_normalize", &[tabular_contract()], json!({"columns": ["name"]}));
+        let normalized = ok(
+            "table.text_normalize",
+            &[tabular_contract()],
+            json!({"columns": ["name"]}),
+        );
         assert_field(&normalized, "name", &DataType::Utf8, true);
-        assert!(err("table.text_normalize", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
+        assert!(err(
+            "table.text_normalize",
+            &[tabular_contract()],
+            json!({"columns": []})
+        )
+        .to_string()
+        .contains("columns"));
     }
 
     #[test]
     fn hash_and_mask_ops_append_utf8() {
-        let md5 = ok("table.md5_hash", &[tabular_contract()], json!({"columns": ["name"]}));
+        let md5 = ok(
+            "table.md5_hash",
+            &[tabular_contract()],
+            json!({"columns": ["name"]}),
+        );
         assert_field(&md5, "md5_hash", &DataType::Utf8, false);
-        assert!(err("table.md5_hash", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
+        assert!(err(
+            "table.md5_hash",
+            &[tabular_contract()],
+            json!({"columns": []})
+        )
+        .to_string()
+        .contains("columns"));
 
-        let sha = ok("table.sha256_hash", &[tabular_contract()], json!({"columns": ["name"]}));
+        let sha = ok(
+            "table.sha256_hash",
+            &[tabular_contract()],
+            json!({"columns": ["name"]}),
+        );
         assert_field(&sha, "sha256_hash", &DataType::Utf8, false);
-        assert!(err("table.sha256_hash", &[tabular_contract()], json!({"columns": ["missing"]})).to_string().contains("missing"));
+        assert!(err(
+            "table.sha256_hash",
+            &[tabular_contract()],
+            json!({"columns": ["missing"]})
+        )
+        .to_string()
+        .contains("missing"));
 
         let masked = ok(
             "table.mask_data",
@@ -634,10 +752,18 @@ mod tests {
         );
         assert!(overwritten.schema.field_with_name("name_masked").is_err());
         assert_field(&overwritten, "name", &DataType::Utf8, true);
-        assert!(err("table.mask_data", &[tabular_contract()], json!({"maskings": []})).to_string().contains("maskings"));
+        assert!(err(
+            "table.mask_data",
+            &[tabular_contract()],
+            json!({"maskings": []})
+        )
+        .to_string()
+        .contains("maskings"));
     }
 
     #[test]
+    // Batteria di contratti sequenziale: la lunghezza e' nel numero di casi.
+    #[allow(clippy::too_many_lines)]
     fn v1_1_extensions_analyze_contracts() {
         // select_columns: proiezione nell'ordine dato, geometria propagata se
         // selezionata inalterata.
@@ -668,16 +794,36 @@ mod tests {
         );
         assert!(output.properties.sorted_by.is_none());
         assert_eq!(proven_rows(&output), 100);
-        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
-        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": ["missing"]})).to_string().contains("missing"));
-        assert!(err("table.select_columns", &[tabular_contract()], json!({"columns": ["id", "id"]})).to_string().contains("ripetuta"));
+        assert!(err(
+            "table.select_columns",
+            &[tabular_contract()],
+            json!({"columns": []})
+        )
+        .to_string()
+        .contains("columns"));
+        assert!(err(
+            "table.select_columns",
+            &[tabular_contract()],
+            json!({"columns": ["missing"]})
+        )
+        .to_string()
+        .contains("missing"));
+        assert!(err(
+            "table.select_columns",
+            &[tabular_contract()],
+            json!({"columns": ["id", "id"]})
+        )
+        .to_string()
+        .contains("ripetuta"));
 
         // limit: schema invariato, ordine preservato, row_count non esatto.
         let output = ok("table.limit", &[proven_contract()], json!({"n": 10}));
         assert_eq!(output.schema.fields().len(), base_fields().len());
         assert!(output.properties.sorted_by.is_some());
         assert!(output.properties.row_count.is_none());
-        assert!(err("table.limit", &[tabular_contract()], json!({})).to_string().contains("config"));
+        assert!(err("table.limit", &[tabular_contract()], json!({}))
+            .to_string()
+            .contains("config"));
 
         // top_n: sorted_by Proven sulle chiavi, row_count = min(n, righe).
         let output = ok(
@@ -693,8 +839,20 @@ mod tests {
             json!({"columns": ["value"], "n": 10_000}),
         );
         assert_eq!(proven_rows(&output), 100);
-        assert!(err("table.top_n", &[tabular_contract()], json!({"columns": [], "n": 1})).to_string().contains("columns"));
-        assert!(err("table.top_n", &[tabular_contract()], json!({"columns": ["missing"], "n": 1})).to_string().contains("missing"));
+        assert!(err(
+            "table.top_n",
+            &[tabular_contract()],
+            json!({"columns": [], "n": 1})
+        )
+        .to_string()
+        .contains("columns"));
+        assert!(err(
+            "table.top_n",
+            &[tabular_contract()],
+            json!({"columns": ["missing"], "n": 1})
+        )
+        .to_string()
+        .contains("missing"));
 
         // stable_fingerprint: append Utf8 non nullable; colonne validate.
         let output = ok(
@@ -703,11 +861,27 @@ mod tests {
             json!({"columns": ["id", "name"]}),
         );
         assert_field(&output, "fingerprint", &DataType::Utf8, false);
-        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({"columns": ["lst"]})).to_string().contains("scalare"));
-        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({"columns": ["id", "id"]})).to_string().contains("ripetuta"));
+        assert!(err(
+            "table.stable_fingerprint",
+            &[tabular_contract()],
+            json!({"columns": ["lst"]})
+        )
+        .to_string()
+        .contains("scalare"));
+        assert!(err(
+            "table.stable_fingerprint",
+            &[tabular_contract()],
+            json!({"columns": ["id", "id"]})
+        )
+        .to_string()
+        .contains("ripetuta"));
         // Default (tutte le colonne): lo schema di test contiene List/Struct,
         // non leggibili via profilo scalare -> fail-closed in validazione.
-        assert!(err("table.stable_fingerprint", &[tabular_contract()], json!({})).to_string().contains("scalare"));
+        assert!(
+            err("table.stable_fingerprint", &[tabular_contract()], json!({}))
+                .to_string()
+                .contains("scalare")
+        );
     }
 
     #[test]
@@ -757,10 +931,34 @@ mod tests {
         assert_eq!(output.geometries.len(), 1);
         assert_eq!(output.active_geometry, Some(FieldId(7)));
         // Errori: tipo diverso, default non convertibile, duplicati, vuoto.
-        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "id", "type": "Utf8"}]})).to_string().contains("cast implicito"));
-        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "x", "type": "Int64", "default": "abc"}]})).to_string().contains("default"));
-        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": [{"name": "id", "type": "Int64"}, {"name": "id", "type": "Int64"}]})).to_string().contains("ripetuta"));
-        assert!(err("table.align_schema", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
+        assert!(err(
+            "table.align_schema",
+            &[tabular_contract()],
+            json!({"columns": [{"name": "id", "type": "Utf8"}]})
+        )
+        .to_string()
+        .contains("cast implicito"));
+        assert!(err(
+            "table.align_schema",
+            &[tabular_contract()],
+            json!({"columns": [{"name": "x", "type": "Int64", "default": "abc"}]})
+        )
+        .to_string()
+        .contains("default"));
+        assert!(err(
+            "table.align_schema",
+            &[tabular_contract()],
+            json!({"columns": [{"name": "id", "type": "Int64"}, {"name": "id", "type": "Int64"}]})
+        )
+        .to_string()
+        .contains("ripetuta"));
+        assert!(err(
+            "table.align_schema",
+            &[tabular_contract()],
+            json!({"columns": []})
+        )
+        .to_string()
+        .contains("columns"));
 
         // concat_by_name: unione per nome su schemi diversi.
         let (a, b) = simple_pair();
@@ -798,14 +996,24 @@ mod tests {
             true,
         )])));
         let (a, b) = simple_pair();
-        assert!(err("table.concat_by_name", &[a, incompatible, b], json!({})).to_string().contains("incompatibili"));
+        assert!(
+            err("table.concat_by_name", &[a, incompatible, b], json!({}))
+                .to_string()
+                .contains("incompatibili")
+        );
         // Strict: schemi permutati -> errore.
         let permuted = DataContract::tabular(Arc::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, true),
             Field::new("id", DataType::Int64, false),
         ])));
         let (a, _) = simple_pair();
-        assert!(err("table.concat_by_name", &[a, permuted], json!({"strict": true})).to_string().contains("schemi"));
+        assert!(err(
+            "table.concat_by_name",
+            &[a, permuted],
+            json!({"strict": true})
+        )
+        .to_string()
+        .contains("schemi"));
 
         // validate_rules annotate: tre colonne non nullable, row_count 1:1.
         let output = ok(
@@ -834,16 +1042,58 @@ mod tests {
         assert!(output.geometries.is_empty());
         // Errori di validazione: regex invalida, ordinato su Utf8, regex su
         // numerica, value mancante/non ammesso, regola duplicata.
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "regex", "column": "name", "value": "("}]})).to_string().contains("regex"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "gt", "column": "name", "value": 1}]})).to_string().contains("numerica"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "regex", "column": "id", "value": "1"}]})).to_string().contains("Utf8"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "eq", "column": "id"}]})).to_string().contains("value"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [{"name": "r", "operator": "isnull", "column": "id", "value": 1}]})).to_string().contains("value"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": [
-            {"name": "r", "operator": "isnull", "column": "id"},
-            {"name": "r", "operator": "notnull", "column": "id"}
-        ]})).to_string().contains("ripetuta"));
-        assert!(err("table.validate_rules", &[tabular_contract()], json!({"rules": []})).to_string().contains("rules"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [{"name": "r", "operator": "regex", "column": "name", "value": "("}]})
+        )
+        .to_string()
+        .contains("regex"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [{"name": "r", "operator": "gt", "column": "name", "value": 1}]})
+        )
+        .to_string()
+        .contains("numerica"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [{"name": "r", "operator": "regex", "column": "id", "value": "1"}]})
+        )
+        .to_string()
+        .contains("Utf8"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [{"name": "r", "operator": "eq", "column": "id"}]})
+        )
+        .to_string()
+        .contains("value"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [{"name": "r", "operator": "isnull", "column": "id", "value": 1}]})
+        )
+        .to_string()
+        .contains("value"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": [
+                {"name": "r", "operator": "isnull", "column": "id"},
+                {"name": "r", "operator": "notnull", "column": "id"}
+            ]})
+        )
+        .to_string()
+        .contains("ripetuta"));
+        assert!(err(
+            "table.validate_rules",
+            &[tabular_contract()],
+            json!({"rules": []})
+        )
+        .to_string()
+        .contains("rules"));
 
         // hmac_sha256: append Utf8; nullable solo con null_policy "null".
         let output = ok(
@@ -858,10 +1108,34 @@ mod tests {
             json!({"columns": ["id"], "key_env": "PLENORA_HMAC", "null_policy": "null"}),
         );
         assert_field(&output, "hmac", &DataType::Utf8, true);
-        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": [], "key_env": "K"})).to_string().contains("columns"));
-        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id"], "key_env": " "})).to_string().contains("key_env"));
-        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["lst"], "key_env": "K"})).to_string().contains("scalare"));
-        assert!(err("table.hmac_sha256", &[tabular_contract()], json!({"columns": ["id", "id"], "key_env": "K"})).to_string().contains("ripetuta"));
+        assert!(err(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": [], "key_env": "K"})
+        )
+        .to_string()
+        .contains("columns"));
+        assert!(err(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": ["id"], "key_env": " "})
+        )
+        .to_string()
+        .contains("key_env"));
+        assert!(err(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": ["lst"], "key_env": "K"})
+        )
+        .to_string()
+        .contains("scalare"));
+        assert!(err(
+            "table.hmac_sha256",
+            &[tabular_contract()],
+            json!({"columns": ["id", "id"], "key_env": "K"})
+        )
+        .to_string()
+        .contains("ripetuta"));
     }
 
     #[test]
@@ -880,13 +1154,15 @@ mod tests {
             .iter()
             .map(|field| field.name().as_str())
             .collect();
-        assert_eq!(
-            names.last(),
-            Some(&"score"),
-            "score in coda: {names:?}"
+        assert_eq!(names.last(), Some(&"score"), "score in coda: {names:?}");
+        assert!(
+            names.contains(&"rname_R"),
+            "chiave destra inclusa: {names:?}"
         );
-        assert!(names.contains(&"rname_R"), "chiave destra inclusa: {names:?}");
-        assert!(names.contains(&"name"), "chiave sinistra conserva il nome: {names:?}");
+        assert!(
+            names.contains(&"name"),
+            "chiave sinistra conserva il nome: {names:?}"
+        );
         assert_field(&output, "score", &DataType::Float64, false);
         assert!(output.properties.sorted_by.is_none());
         assert!(output.properties.row_count.is_none());
@@ -901,11 +1177,13 @@ mod tests {
         for bad in [json!(0.0), json!(-0.1), json!(1.5), json!(null)] {
             let mut config = json!({"left_key": "name", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "none"});
             config["threshold"] = bad;
-            assert!(
-                err("table.fuzzy_join", &[tabular_contract(), right_contract()], config)
-                    .to_string()
-                    .contains("fuzzy_join")
-            );
+            assert!(err(
+                "table.fuzzy_join",
+                &[tabular_contract(), right_contract()],
+                config
+            )
+            .to_string()
+            .contains("fuzzy_join"));
         }
         // Chiavi mancanti o non Utf8, blocking_param fuori posto, collisione score.
         assert!(err("table.fuzzy_join", &[tabular_contract(), right_contract()], json!({"left_key": "missing", "right_key": "rname", "metric": "jaccard", "threshold": 0.5, "blocking": "prefix"})).to_string().contains("missing"));
@@ -1027,11 +1305,27 @@ mod tests {
             json!({"column": "name", "mapping": {"a": "A"}}),
         );
         assert_field(&lookup, "name", &DataType::Utf8, true);
-        assert!(err("table.lookup", &[tabular_contract()], json!({"column": "missing", "mapping": {}})).to_string().contains("missing"));
+        assert!(err(
+            "table.lookup",
+            &[tabular_contract()],
+            json!({"column": "missing", "mapping": {}})
+        )
+        .to_string()
+        .contains("missing"));
 
-        let binned = ok("table.bin", &[tabular_contract()], json!({"column": "value", "bins": 5}));
+        let binned = ok(
+            "table.bin",
+            &[tabular_contract()],
+            json!({"column": "value", "bins": 5}),
+        );
         assert_field(&binned, "value_bin", &DataType::Utf8, true);
-        assert!(err("table.bin", &[tabular_contract()], json!({"column": "value", "bins": 1})).to_string().contains("2..=100"));
+        assert!(err(
+            "table.bin",
+            &[tabular_contract()],
+            json!({"column": "value", "bins": 1})
+        )
+        .to_string()
+        .contains("2..=100"));
         assert!(err(
             "table.bin",
             &[tabular_contract()],
@@ -1040,17 +1334,47 @@ mod tests {
         .to_string()
         .contains("crescenti"));
 
-        let stats = ok("table.statistics", &[tabular_contract()], json!({"column": "value"}));
-        for name in ["value_count", "value_min", "value_max", "value_mean", "value_median", "value_std"] {
+        let stats = ok(
+            "table.statistics",
+            &[tabular_contract()],
+            json!({"column": "value"}),
+        );
+        for name in [
+            "value_count",
+            "value_min",
+            "value_max",
+            "value_mean",
+            "value_median",
+            "value_std",
+        ] {
             assert_field(&stats, name, &DataType::Float64, true);
         }
-        assert!(err("table.statistics", &[tabular_contract()], json!({"column": "flag"})).to_string().contains("numero"));
+        assert!(err(
+            "table.statistics",
+            &[tabular_contract()],
+            json!({"column": "flag"})
+        )
+        .to_string()
+        .contains("numero"));
 
         let sampled = ok("table.sample", &[proven_contract()], json!({"n": 10}));
         assert_eq!(sampled.schema.fields().len(), base_fields().len());
-        assert_eq!(proven_rows(&sampled), 10, "sample senza stratify: min(n, righe)");
-        assert!(sampled.properties.sorted_by.is_none(), "sample mescola le righe");
-        assert!(err("table.sample", &[tabular_contract()], json!({"fraction": 1.5})).to_string().contains("fraction"));
+        assert_eq!(
+            proven_rows(&sampled),
+            10,
+            "sample senza stratify: min(n, righe)"
+        );
+        assert!(
+            sampled.properties.sorted_by.is_none(),
+            "sample mescola le righe"
+        );
+        assert!(err(
+            "table.sample",
+            &[tabular_contract()],
+            json!({"fraction": 1.5})
+        )
+        .to_string()
+        .contains("fraction"));
     }
 
     #[test]
@@ -1063,7 +1387,11 @@ mod tests {
         assert_field(&output, "name_a", &DataType::Utf8, true);
         assert_field(&output, "name_b", &DataType::Utf8, true);
         assert!(matches!(
-            err("table.flatten_json", &[tabular_contract()], json!({"column": "name"})),
+            err(
+                "table.flatten_json",
+                &[tabular_contract()],
+                json!({"column": "name"})
+            ),
             PlenoraError::Unsupported(_)
         ));
         assert!(err(
@@ -1079,22 +1407,46 @@ mod tests {
 
     #[test]
     fn sort_produces_proven_stream_sorted_by_and_keeps_rows() {
-        let output = ok("table.sort", &[proven_contract()], json!({"columns": ["id", "name"]}));
+        let output = ok(
+            "table.sort",
+            &[proven_contract()],
+            json!({"columns": ["id", "name"]}),
+        );
         let keys = proven_sorted_keys(&output);
         assert_eq!(keys.len(), 2);
         assert_eq!(proven_rows(&output), 100);
         assert_eq!(output.geometries.len(), 1);
-        assert!(err("table.sort", &[tabular_contract()], json!({"columns": []})).to_string().contains("columns"));
-        assert!(err("table.sort", &[tabular_contract()], json!({"columns": ["missing"]})).to_string().contains("missing"));
+        assert!(
+            err("table.sort", &[tabular_contract()], json!({"columns": []}))
+                .to_string()
+                .contains("columns")
+        );
+        assert!(err(
+            "table.sort",
+            &[tabular_contract()],
+            json!({"columns": ["missing"]})
+        )
+        .to_string()
+        .contains("missing"));
     }
 
     #[test]
     fn distinct_and_dedup_keep_schema_and_drop_row_count() {
-        let distinct = ok("table.distinct", &[proven_contract()], json!({"subset": ["name"]}));
+        let distinct = ok(
+            "table.distinct",
+            &[proven_contract()],
+            json!({"subset": ["name"]}),
+        );
         assert_eq!(distinct.schema.fields().len(), base_fields().len());
         assert!(distinct.properties.row_count.is_none());
         assert_eq!(proven_sorted_keys(&distinct), &[FieldId(0)]);
-        assert!(err("table.distinct", &[tabular_contract()], json!({"subset": ["missing"]})).to_string().contains("missing"));
+        assert!(err(
+            "table.distinct",
+            &[tabular_contract()],
+            json!({"subset": ["missing"]})
+        )
+        .to_string()
+        .contains("missing"));
 
         let dedup = ok(
             "table.dedup_advanced",
@@ -1103,7 +1455,11 @@ mod tests {
         );
         assert_eq!(proven_sorted_keys(&dedup).len(), 1);
         assert!(matches!(
-            err("table.dedup_advanced", &[tabular_contract()], json!({"subset": ["name"], "keep": "false"})),
+            err(
+                "table.dedup_advanced",
+                &[tabular_contract()],
+                json!({"subset": ["name"], "keep": "false"})
+            ),
             PlenoraError::InvalidPlan(_)
         ));
     }
@@ -1127,7 +1483,10 @@ mod tests {
         assert_field(&output, "value_sum", &DataType::Float64, true);
         assert_field(&output, "value_mean", &DataType::Float64, true);
         assert_field(&output, "id", &DataType::Int64, false);
-        assert!(output.geometries.is_empty(), "geometria non in group_by: tabellare");
+        assert!(
+            output.geometries.is_empty(),
+            "geometria non in group_by: tabellare"
+        );
         assert!(output.properties.sorted_by.is_none());
         assert!(output.properties.row_count.is_none());
 
@@ -1138,7 +1497,13 @@ mod tests {
         );
         assert_field(&count_only, "count", &DataType::Int64, false);
 
-        assert!(err("table.aggregate", &[tabular_contract()], json!({"group_by": []})).to_string().contains("group_by"));
+        assert!(err(
+            "table.aggregate",
+            &[tabular_contract()],
+            json!({"group_by": []})
+        )
+        .to_string()
+        .contains("group_by"));
         assert!(err(
             "table.aggregate",
             &[tabular_contract()],
@@ -1203,14 +1568,31 @@ mod tests {
 
     #[test]
     fn drop_columns_removes_geometry_and_becomes_tabular() {
-        let output = ok("table.drop_columns", &[geo_contract()], json!({"columns": ["geom"]}));
+        let output = ok(
+            "table.drop_columns",
+            &[geo_contract()],
+            json!({"columns": ["geom"]}),
+        );
         assert!(output.schema.field_with_name("geom").is_err());
-        assert!(output.geometries.is_empty(), "drop della geometria -> tabellare");
+        assert!(
+            output.geometries.is_empty(),
+            "drop della geometria -> tabellare"
+        );
         assert!(output.active_geometry.is_none());
         // Nomi inesistenti ignorati silenziosamente (comportamento del kernel).
-        let unchanged = ok("table.drop_columns", &[geo_contract()], json!({"columns": ["nope"]}));
+        let unchanged = ok(
+            "table.drop_columns",
+            &[geo_contract()],
+            json!({"columns": ["nope"]}),
+        );
         assert_eq!(unchanged.geometries.len(), 1);
-        assert!(err("table.drop_columns", &[tabular_contract()], json!({"columns": "x"})).to_string().contains("config"));
+        assert!(err(
+            "table.drop_columns",
+            &[tabular_contract()],
+            json!({"columns": "x"})
+        )
+        .to_string()
+        .contains("config"));
     }
 
     #[test]
@@ -1222,7 +1604,11 @@ mod tests {
         );
         assert_eq!(output.geometries.len(), 1);
         assert_eq!(output.geometries[0].name, "geometry");
-        assert_eq!(output.geometries[0].field_id, FieldId(7), "rinomina preserva il FieldId");
+        assert_eq!(
+            output.geometries[0].field_id,
+            FieldId(7),
+            "rinomina preserva il FieldId"
+        );
         assert_eq!(output.active_geometry, Some(FieldId(7)));
         assert!(err(
             "table.rename",
@@ -1468,7 +1854,10 @@ mod tests {
                 }
             }),
         );
-        assert!(heterogeneous.to_string().contains("eterogenei"), "{heterogeneous}");
+        assert!(
+            heterogeneous.to_string().contains("eterogenei"),
+            "{heterogeneous}"
+        );
         assert!(err(
             "table.expression",
             &[tabular_contract()],
@@ -1558,59 +1947,49 @@ mod tests {
             true,
         );
         // Unita' invalida, non letterale, sub-day su Date32.
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({"output_column": "e", "expression": date_trunc("week", "ts")})
-            )
-            .to_string()
-            .contains("unita' non valida")
-        );
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({
-                    "output_column": "e",
-                    "expression": {
-                        "kind": "function",
-                        "name": "date_trunc",
-                        "args": [{"kind": "column", "name": "name"}, {"kind": "column", "name": "ts"}]
-                    }
-                })
-            )
-            .to_string()
-            .contains("letterale")
-        );
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({"output_column": "e", "expression": date_trunc("hour", "d")})
-            )
-            .to_string()
-            .contains("sub-day")
-        );
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("week", "ts")})
+        )
+        .to_string()
+        .contains("unita' non valida"));
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {
+                    "kind": "function",
+                    "name": "date_trunc",
+                    "args": [{"kind": "column", "name": "name"}, {"kind": "column", "name": "ts"}]
+                }
+            })
+        )
+        .to_string()
+        .contains("letterale"));
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("hour", "d")})
+        )
+        .to_string()
+        .contains("sub-day"));
         // Input testuale (nessun parsing) e timezone-aware: errori in validazione.
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({"output_column": "e", "expression": date_trunc("day", "name")})
-            )
-            .to_string()
-            .contains("Date32 o Timestamp")
-        );
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({"output_column": "e", "expression": date_trunc("day", "tstz")})
-            )
-            .to_string()
-            .contains("timezone-aware")
-        );
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("day", "name")})
+        )
+        .to_string()
+        .contains("Date32 o Timestamp"));
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({"output_column": "e", "expression": date_trunc("day", "tstz")})
+        )
+        .to_string()
+        .contains("timezone-aware"));
         // Valore letterale null: tipo Any -> Utf8 in auto, come il kernel.
         let null_source = ok(
             "table.expression",
@@ -1626,39 +2005,35 @@ mod tests {
         );
         assert_field(&null_source, "e", &DataType::Utf8, true);
         // Valore non temporale (letterale numerico): rifiutato a secco.
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({
-                    "output_column": "e",
-                    "expression": {
-                        "kind": "function",
-                        "name": "date_trunc",
-                        "args": [{"kind": "literal", "value": "day"}, {"kind": "literal", "value": 5}]
-                    }
-                })
-            )
-            .to_string()
-            .contains("colonna temporale")
-        );
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {
+                    "kind": "function",
+                    "name": "date_trunc",
+                    "args": [{"kind": "literal", "value": "day"}, {"kind": "literal", "value": 5}]
+                }
+            })
+        )
+        .to_string()
+        .contains("colonna temporale"));
         // Annidamento: sub-day su un date_trunc che produce Date32.
-        assert!(
-            err(
-                "table.expression",
-                &[temporal_contract()],
-                json!({
-                    "output_column": "e",
-                    "expression": {
-                        "kind": "function",
-                        "name": "date_trunc",
-                        "args": [{"kind": "literal", "value": "hour"}, date_trunc("month", "d")]
-                    }
-                })
-            )
-            .to_string()
-            .contains("sub-day")
-        );
+        assert!(err(
+            "table.expression",
+            &[temporal_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {
+                    "kind": "function",
+                    "name": "date_trunc",
+                    "args": [{"kind": "literal", "value": "hour"}, date_trunc("month", "d")]
+                }
+            })
+        )
+        .to_string()
+        .contains("sub-day"));
     }
 
     #[test]
@@ -1693,9 +2068,8 @@ mod tests {
         };
         let col = |name: &str| json!({"kind": "column", "name": name});
         let lit = |value: Value| json!({"kind": "literal", "value": value});
-        let func = |name: &str, args: Vec<Value>| {
-            json!({"kind": "function", "name": name, "args": args})
-        };
+        let func =
+            |name: &str, args: Vec<Value>| json!({"kind": "function", "name": name, "args": args});
 
         // Colonne: Boolean resta Boolean; i tipi fuori profilo sono errori.
         assert_field(&infer(col("flag")), "e", &DataType::Boolean, true);
@@ -1710,17 +2084,39 @@ mod tests {
 
         // Unari: not/negate richiedono Boolean/Number; is_null e' Boolean.
         let unary = |op: &str, value: Value| json!({"kind": "unary", "op": op, "value": value});
-        assert_field(&infer(unary("not", col("flag"))), "e", &DataType::Boolean, true);
-        assert_field(&infer(unary("negate", col("value"))), "e", &DataType::Float64, true);
-        assert_field(&infer(unary("is_null", col("name"))), "e", &DataType::Boolean, true);
-        assert_field(&infer(unary("is_not_null", col("value"))), "e", &DataType::Boolean, true);
-        assert!(infer_err(unary("not", col("value"))).to_string().contains("operando Boolean"));
-        assert!(infer_err(unary("negate", col("name"))).to_string().contains("operando Number"));
+        assert_field(
+            &infer(unary("not", col("flag"))),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert_field(
+            &infer(unary("negate", col("value"))),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+        assert_field(
+            &infer(unary("is_null", col("name"))),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert_field(
+            &infer(unary("is_not_null", col("value"))),
+            "e",
+            &DataType::Boolean,
+            true,
+        );
+        assert!(infer_err(unary("not", col("value")))
+            .to_string()
+            .contains("operando Boolean"));
+        assert!(infer_err(unary("negate", col("name")))
+            .to_string()
+            .contains("operando Number"));
 
         // Binari: logici su Boolean, confronti su tipi omogenei -> Boolean.
-        let binary = |op: &str, left: Value, right: Value| {
-            json!({"kind": "binary", "op": op, "left": left, "right": right})
-        };
+        let binary = |op: &str, left: Value, right: Value| json!({"kind": "binary", "op": op, "left": left, "right": right});
         assert_field(
             &infer(binary("and", col("flag"), lit(json!(true)))),
             "e",
@@ -1733,9 +2129,20 @@ mod tests {
             &DataType::Boolean,
             true,
         );
-        assert!(infer_err(binary("and", col("value"), lit(json!(1)))).to_string().contains("operando Boolean"));
-        assert!(infer_err(binary("or", col("flag"), col("name"))).to_string().contains("operando Boolean"));
-        for op in ["equal", "not_equal", "greater", "greater_equal", "less", "less_equal"] {
+        assert!(infer_err(binary("and", col("value"), lit(json!(1))))
+            .to_string()
+            .contains("operando Boolean"));
+        assert!(infer_err(binary("or", col("flag"), col("name")))
+            .to_string()
+            .contains("operando Boolean"));
+        for op in [
+            "equal",
+            "not_equal",
+            "greater",
+            "greater_equal",
+            "less",
+            "less_equal",
+        ] {
             assert_field(
                 &infer(binary(op, col("value"), lit(json!(1)))),
                 "e",
@@ -1753,18 +2160,45 @@ mod tests {
         );
 
         // Funzioni testuali: argomenti Text obbligatori.
-        assert_field(&infer(func("lower", vec![col("name")])), "e", &DataType::Utf8, true);
-        assert_field(&infer(func("upper", vec![col("name")])), "e", &DataType::Utf8, true);
-        assert_field(&infer(func("trim", vec![col("name")])), "e", &DataType::Utf8, true);
-        assert!(infer_err(func("lower", vec![col("value")])).to_string().contains("operando Text"));
         assert_field(
-            &infer(func("concat", vec![col("name"), lit(json!("-")), col("name")])),
+            &infer(func("lower", vec![col("name")])),
             "e",
             &DataType::Utf8,
             true,
         );
-        assert_field(&infer(func("length", vec![col("name")])), "e", &DataType::Float64, true);
-        assert!(infer_err(func("length", vec![col("value")])).to_string().contains("operando Text"));
+        assert_field(
+            &infer(func("upper", vec![col("name")])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert_field(
+            &infer(func("trim", vec![col("name")])),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert!(infer_err(func("lower", vec![col("value")]))
+            .to_string()
+            .contains("operando Text"));
+        assert_field(
+            &infer(func(
+                "concat",
+                vec![col("name"), lit(json!("-")), col("name")],
+            )),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert_field(
+            &infer(func("length", vec![col("name")])),
+            "e",
+            &DataType::Float64,
+            true,
+        );
+        assert!(infer_err(func("length", vec![col("value")]))
+            .to_string()
+            .contains("operando Text"));
         for name in ["contains", "starts_with", "ends_with"] {
             assert_field(
                 &infer(func(name, vec![col("name"), lit(json!("a"))])),
@@ -1773,7 +2207,11 @@ mod tests {
                 true,
             );
         }
-        assert!(infer_err(func("contains", vec![col("name"), lit(json!(1))])).to_string().contains("operando Text"));
+        assert!(
+            infer_err(func("contains", vec![col("name"), lit(json!(1))]))
+                .to_string()
+                .contains("operando Text")
+        );
 
         // Funzioni numeriche: argomenti Number obbligatori.
         for name in ["abs", "round", "floor", "ceil"] {
@@ -1785,18 +2223,28 @@ mod tests {
             );
         }
         // `year` legge le colonne temporali come Number (come il kernel).
-        assert_field(&infer(func("year", vec![col("d")])), "e", &DataType::Float64, true);
+        assert_field(
+            &infer(func("year", vec![col("d")])),
+            "e",
+            &DataType::Float64,
+            true,
+        );
         assert_field(
             &infer(func("power", vec![col("value"), lit(json!(2))])),
             "e",
             &DataType::Float64,
             true,
         );
-        assert!(infer_err(func("abs", vec![col("name")])).to_string().contains("operando Number"));
+        assert!(infer_err(func("abs", vec![col("name")]))
+            .to_string()
+            .contains("operando Number"));
 
         // substring: (testo, numero, numero?) -> testo.
         assert_field(
-            &infer(func("substring", vec![col("name"), lit(json!(0)), lit(json!(2))])),
+            &infer(func(
+                "substring",
+                vec![col("name"), lit(json!(0)), lit(json!(2))],
+            )),
             "e",
             &DataType::Utf8,
             true,
@@ -1808,27 +2256,54 @@ mod tests {
             true,
         );
         // Senza argomenti non c'e' nulla da controllare: il tipo resta Text.
-        assert_field(&infer(func("substring", vec![])), "e", &DataType::Utf8, true);
-        assert!(infer_err(func("substring", vec![col("value"), lit(json!(0))])).to_string().contains("operando Text"));
-        assert!(infer_err(func("substring", vec![col("name"), col("name")])).to_string().contains("operando Number"));
-
-        // regex_replace: tutti gli argomenti testuali -> testo.
         assert_field(
-            &infer(func("regex_replace", vec![col("name"), lit(json!("a")), lit(json!("b"))])),
+            &infer(func("substring", vec![])),
             "e",
             &DataType::Utf8,
             true,
         );
-        assert!(infer_err(func("regex_replace", vec![col("name"), lit(json!(1)), lit(json!("b"))])).to_string().contains("operando Text"));
+        assert!(
+            infer_err(func("substring", vec![col("value"), lit(json!(0))]))
+                .to_string()
+                .contains("operando Text")
+        );
+        assert!(infer_err(func("substring", vec![col("name"), col("name")]))
+            .to_string()
+            .contains("operando Number"));
+
+        // regex_replace: tutti gli argomenti testuali -> testo.
+        assert_field(
+            &infer(func(
+                "regex_replace",
+                vec![col("name"), lit(json!("a")), lit(json!("b"))],
+            )),
+            "e",
+            &DataType::Utf8,
+            true,
+        );
+        assert!(infer_err(func(
+            "regex_replace",
+            vec![col("name"), lit(json!(1)), lit(json!("b"))]
+        ))
+        .to_string()
+        .contains("operando Text"));
 
         // between: omogeneita' come i confronti -> Boolean.
         assert_field(
-            &infer(func("between", vec![col("value"), lit(json!(0)), lit(json!(1))])),
+            &infer(func(
+                "between",
+                vec![col("value"), lit(json!(0)), lit(json!(1))],
+            )),
             "e",
             &DataType::Boolean,
             true,
         );
-        assert!(infer_err(func("between", vec![col("value"), lit(json!(0)), col("name")])).to_string().contains("eterogenei"));
+        assert!(infer_err(func(
+            "between",
+            vec![col("value"), lit(json!(0)), col("name")]
+        ))
+        .to_string()
+        .contains("eterogenei"));
 
         // greatest/least: tipo comune degli argomenti.
         assert_field(
@@ -1845,9 +2320,7 @@ mod tests {
         );
 
         // case: tipo comune dei rami e dell'else; eterogeneo -> errore.
-        let case = |branches: Vec<Value>, else_value: Value| {
-            json!({"kind": "case", "branches": branches, "else_value": else_value})
-        };
+        let case = |branches: Vec<Value>, else_value: Value| json!({"kind": "case", "branches": branches, "else_value": else_value});
         assert_field(
             &infer(case(
                 vec![json!({"when": col("flag"), "then": lit(json!(1))})],
@@ -1882,6 +2355,8 @@ mod tests {
     // -- quality / governance ----------------------------------------------------
 
     #[test]
+    // Batteria di assert sequenziale: la lunghezza e' nel numero di casi.
+    #[allow(clippy::too_many_lines)]
     fn assert_ops_validate_and_pass_through() {
         let input = proven_contract();
         let output = ok(
@@ -1908,18 +2383,88 @@ mod tests {
         .to_string()
         .contains("non supportato"));
 
-        assert!(ok("table.assert_not_null", &[tabular_contract()], json!({"columns": ["id"]})).schema.fields().len() == base_fields().len());
-        assert!(err("table.assert_not_null", &[tabular_contract()], json!({"columns": ["missing"]})).to_string().contains("missing"));
+        assert!(
+            ok(
+                "table.assert_not_null",
+                &[tabular_contract()],
+                json!({"columns": ["id"]})
+            )
+            .schema
+            .fields()
+            .len()
+                == base_fields().len()
+        );
+        assert!(err(
+            "table.assert_not_null",
+            &[tabular_contract()],
+            json!({"columns": ["missing"]})
+        )
+        .to_string()
+        .contains("missing"));
 
-        assert!(ok("table.assert_unique", &[tabular_contract()], json!({"columns": ["id"]})).schema.fields().len() == base_fields().len());
-        assert!(err("table.assert_unique", &[tabular_contract()], json!({"columns": ["st"]})).to_string().contains("scalare"));
+        assert!(
+            ok(
+                "table.assert_unique",
+                &[tabular_contract()],
+                json!({"columns": ["id"]})
+            )
+            .schema
+            .fields()
+            .len()
+                == base_fields().len()
+        );
+        assert!(err(
+            "table.assert_unique",
+            &[tabular_contract()],
+            json!({"columns": ["st"]})
+        )
+        .to_string()
+        .contains("scalare"));
 
-        assert!(ok("table.assert_range", &[tabular_contract()], json!({"column": "value", "min": 0})).schema.fields().len() == base_fields().len());
-        assert!(err("table.assert_range", &[tabular_contract()], json!({"column": "flag"})).to_string().contains("numero"));
+        assert!(
+            ok(
+                "table.assert_range",
+                &[tabular_contract()],
+                json!({"column": "value", "min": 0})
+            )
+            .schema
+            .fields()
+            .len()
+                == base_fields().len()
+        );
+        assert!(err(
+            "table.assert_range",
+            &[tabular_contract()],
+            json!({"column": "flag"})
+        )
+        .to_string()
+        .contains("numero"));
 
-        assert!(ok("table.assert_regex", &[tabular_contract()], json!({"column": "name", "pattern": "^a+$"})).schema.fields().len() == base_fields().len());
-        assert!(err("table.assert_regex", &[tabular_contract()], json!({"column": "name", "pattern": "("})).to_string().contains("regex"));
-        assert!(err("table.assert_regex", &[tabular_contract()], json!({"column": "value", "pattern": "a"})).to_string().contains("Utf8"));
+        assert!(
+            ok(
+                "table.assert_regex",
+                &[tabular_contract()],
+                json!({"column": "name", "pattern": "^a+$"})
+            )
+            .schema
+            .fields()
+            .len()
+                == base_fields().len()
+        );
+        assert!(err(
+            "table.assert_regex",
+            &[tabular_contract()],
+            json!({"column": "name", "pattern": "("})
+        )
+        .to_string()
+        .contains("regex"));
+        assert!(err(
+            "table.assert_regex",
+            &[tabular_contract()],
+            json!({"column": "value", "pattern": "a"})
+        )
+        .to_string()
+        .contains("Utf8"));
 
         let coalesced = ok(
             "table.coalesce",
@@ -1987,7 +2532,9 @@ mod tests {
             json!({"fields": beyond, "allow_extra": true}),
         );
         assert!(
-            error.to_string().contains("colonna mancante in posizione 11"),
+            error
+                .to_string()
+                .contains("colonna mancante in posizione 11"),
             "{error}"
         );
 
@@ -2045,57 +2592,79 @@ mod tests {
             )
         };
         // Nome vuoto (solo spazi).
-        assert!(rule_err(json!({"name": "  ", "operator": "isnull", "column": "id"}))
-            .to_string()
-            .contains("nome regola vuoto"));
+        assert!(
+            rule_err(json!({"name": "  ", "operator": "isnull", "column": "id"}))
+                .to_string()
+                .contains("nome regola vuoto")
+        );
         // Regola senza column.
         assert!(rule_err(json!({"name": "r", "operator": "isnull"}))
             .to_string()
             .contains("senza column"));
         // eq/ne su tipo non confrontabile (List).
-        assert!(rule_err(json!({"name": "r", "operator": "eq", "column": "lst", "value": 1}))
-            .to_string()
-            .contains("non confrontabile"));
+        assert!(
+            rule_err(json!({"name": "r", "operator": "eq", "column": "lst", "value": 1}))
+                .to_string()
+                .contains("non confrontabile")
+        );
         // eq numerico con valore non parsabile.
-        assert!(rule_err(json!({"name": "r", "operator": "eq", "column": "id", "value": "abc"}))
-            .to_string()
-            .contains("non numerico"));
+        assert!(
+            rule_err(json!({"name": "r", "operator": "eq", "column": "id", "value": "abc"}))
+                .to_string()
+                .contains("non numerico")
+        );
         // Confronto ordinato con valore non numerico.
-        assert!(rule_err(json!({"name": "r", "operator": "ge", "column": "value", "value": "abc"}))
-            .to_string()
-            .contains("valore numerico"));
+        assert!(rule_err(
+            json!({"name": "r", "operator": "ge", "column": "value", "value": "abc"})
+        )
+        .to_string()
+        .contains("valore numerico"));
         // range su colonna non numerica.
-        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "name", "value": "1,2"}))
-            .to_string()
-            .contains("range richiede colonna numerica"));
+        assert!(rule_err(
+            json!({"name": "r", "operator": "range", "column": "name", "value": "1,2"})
+        )
+        .to_string()
+        .contains("range richiede colonna numerica"));
         // range senza la coppia min,max.
-        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "id", "value": "1"}))
-            .to_string()
-            .contains("min,max"));
+        assert!(
+            rule_err(json!({"name": "r", "operator": "range", "column": "id", "value": "1"}))
+                .to_string()
+                .contains("min,max")
+        );
         // range con estremi non numerici.
-        assert!(rule_err(json!({"name": "r", "operator": "range", "column": "id", "value": "a,b"}))
-            .to_string()
-            .contains("estremi range non numerici"));
+        assert!(rule_err(
+            json!({"name": "r", "operator": "range", "column": "id", "value": "a,b"})
+        )
+        .to_string()
+        .contains("estremi range non numerici"));
         // regex oltre il limite di byte.
         let long_pattern = "a".repeat(Limits::default().max_regex_bytes + 1);
-        assert!(rule_err(json!({"name": "r", "operator": "regex", "column": "name", "value": long_pattern}))
-            .to_string()
-            .contains("max_regex_bytes"));
+        assert!(rule_err(
+            json!({"name": "r", "operator": "regex", "column": "name", "value": long_pattern})
+        )
+        .to_string()
+        .contains("max_regex_bytes"));
     }
 
     #[test]
     fn assert_cardinality_uses_proven_row_count() {
-        assert!(ok(
-            "table.assert_cardinality",
-            &[proven_contract()],
-            json!({"min_rows": 50, "max_rows": 100})
-        )
-        .schema
-        .fields()
-        .len()
-            == base_fields().len());
+        assert!(
+            ok(
+                "table.assert_cardinality",
+                &[proven_contract()],
+                json!({"min_rows": 50, "max_rows": 100})
+            )
+            .schema
+            .fields()
+            .len()
+                == base_fields().len()
+        );
         assert!(matches!(
-            err("table.assert_cardinality", &[proven_contract()], json!({"exact_rows": 5})),
+            err(
+                "table.assert_cardinality",
+                &[proven_contract()],
+                json!({"exact_rows": 5})
+            ),
             PlenoraError::InvalidPlan(_)
         ));
     }
@@ -2228,10 +2797,17 @@ mod tests {
             &[tabular_contract()],
             json!({"id_column": "id"}),
         );
-        assert!(matches!(transpose, PlenoraError::Unsupported(_)), "{transpose}");
+        assert!(
+            matches!(transpose, PlenoraError::Unsupported(_)),
+            "{transpose}"
+        );
         // Config invalida fallisce prima come Contract.
         assert!(matches!(
-            err("table.pivot", &[tabular_contract()], json!({"index_col": 1})),
+            err(
+                "table.pivot",
+                &[tabular_contract()],
+                json!({"index_col": 1})
+            ),
             PlenoraError::InvalidPlan(_)
         ));
     }
@@ -2248,14 +2824,28 @@ mod tests {
             json!({"column": "lst", "output_column": "element"}),
         );
         assert_field(&renamed, "element", &DataType::Int64, true);
-        assert_field(&renamed, "lst", &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), true);
-        assert!(err("table.explode", &[tabular_contract()], json!({"column": "id"})).to_string().contains("List"));
+        assert_field(
+            &renamed,
+            "lst",
+            &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            true,
+        );
+        assert!(err(
+            "table.explode",
+            &[tabular_contract()],
+            json!({"column": "id"})
+        )
+        .to_string()
+        .contains("List"));
     }
 
     #[test]
     fn unnest_expands_struct_fields() {
         let output = ok("table.unnest", &[geo_contract()], json!({"column": "st"}));
-        assert!(output.schema.field_with_name("st").is_err(), "drop_source di default");
+        assert!(
+            output.schema.field_with_name("st").is_err(),
+            "drop_source di default"
+        );
         assert_field(&output, "a", &DataType::Int64, true);
         assert_field(&output, "b", &DataType::Utf8, true);
         assert_eq!(output.geometries.len(), 1);
@@ -2265,11 +2855,25 @@ mod tests {
             json!({"column": "st", "prefix": "s_", "drop_source": false}),
         );
         assert_field(&prefixed, "s_a", &DataType::Int64, true);
-        assert_field(&prefixed, "st", &DataType::Struct(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("b", DataType::Utf8, true),
-        ].into()), true);
-        assert!(err("table.unnest", &[tabular_contract()], json!({"column": "id"})).to_string().contains("Struct"));
+        assert_field(
+            &prefixed,
+            "st",
+            &DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Int64, true),
+                    Field::new("b", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        );
+        assert!(err(
+            "table.unnest",
+            &[tabular_contract()],
+            json!({"column": "id"})
+        )
+        .to_string()
+        .contains("Struct"));
         // Nome derivato che collide con una colonna esistente: errore.
         let colliding = DataContract::tabular(Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
@@ -2329,14 +2933,21 @@ mod tests {
         assert_field(&output, "value_L", &DataType::Float64, true);
         assert_field(&output, "name_R", &DataType::Utf8, true);
         assert_field(&output, "rname_R", &DataType::Utf8, true);
-        assert!(output.schema.field_with_name("rid").is_err(), "chiave right omessa");
+        assert!(
+            output.schema.field_with_name("rid").is_err(),
+            "chiave right omessa"
+        );
         // Geometria left non chiave: rinominata _L, FieldId preservato.
         assert_eq!(output.geometries.len(), 1);
         assert_eq!(output.geometries[0].name, "geom_L");
         assert_eq!(output.geometries[0].field_id, FieldId(7));
         assert_eq!(output.active_geometry, Some(FieldId(7)));
         for field in output.schema.fields() {
-            assert!(field.is_nullable(), "join forza nullable=true su {}", field.name());
+            assert!(
+                field.is_nullable(),
+                "join forza nullable=true su {}",
+                field.name()
+            );
         }
         assert!(err(
             "table.join",
@@ -2398,9 +3009,13 @@ mod tests {
         let mut colliding_fields = base_fields();
         colliding_fields.push(Field::new("name_x", DataType::Utf8, true));
         let colliding = DataContract::tabular(Arc::new(Schema::new(colliding_fields)));
-        assert!(err("table.cross_join", &[colliding, right_contract()], json!({}))
-            .to_string()
-            .contains("collisione"));
+        assert!(err(
+            "table.cross_join",
+            &[colliding, right_contract()],
+            json!({})
+        )
+        .to_string()
+        .contains("collisione"));
     }
 
     #[test]
@@ -2415,9 +3030,13 @@ mod tests {
             assert_eq!(output.geometries.len(), 1);
             assert_eq!(proven_sorted_keys(&output), &[FieldId(0)]);
             assert!(output.properties.row_count.is_none());
-            assert!(err(op, &[tabular_contract(), right_contract()], json!({"left_keys": [], "right_keys": []}))
-                .to_string()
-                .contains("chiavi"));
+            assert!(err(
+                op,
+                &[tabular_contract(), right_contract()],
+                json!({"left_keys": [], "right_keys": []})
+            )
+            .to_string()
+            .contains("chiavi"));
         }
     }
 
@@ -2472,7 +3091,11 @@ mod tests {
     #[test]
     fn set_operations_validate_schema_and_encoder_types() {
         let (left, right) = simple_pair();
-        let union = ok("table.union_distinct", &[left.clone(), right.clone()], json!({}));
+        let union = ok(
+            "table.union_distinct",
+            &[left.clone(), right.clone()],
+            json!({}),
+        );
         assert_field(&union, "name", &DataType::Utf8, true);
         assert!(union.properties.row_count.is_none());
 
@@ -2603,9 +3226,18 @@ mod tests {
         );
         assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error}");
         let message = error.to_string();
-        assert!(message.contains("shared"), "chiave in conflitto nominata: {message}");
-        assert!(!message.contains("same"), "mai valori negli errori: {message}");
-        assert!(!message.contains("other"), "mai valori negli errori: {message}");
+        assert!(
+            message.contains("shared"),
+            "chiave in conflitto nominata: {message}"
+        );
+        assert!(
+            !message.contains("same"),
+            "mai valori negli errori: {message}"
+        );
+        assert!(
+            !message.contains("other"),
+            "mai valori negli errori: {message}"
+        );
     }
 
     #[test]
@@ -2631,19 +3263,35 @@ mod tests {
             HashMap::from([("unit".to_owned(), "m/s".to_owned())]);
         let filled = ok(
             "table.fill_na",
-            &[with_field_metadata(&tabular_contract(), "value", &[("unit", "m/s")])],
+            &[with_field_metadata(
+                &tabular_contract(),
+                "value",
+                &[("unit", "m/s")],
+            )],
             json!({"column": "value", "value": 0}),
         );
         let field = filled.schema.field_with_name("value").unwrap();
-        assert_eq!(field.metadata(), &expected, "fill_na: metadata di campo (R2.4)");
+        assert_eq!(
+            field.metadata(),
+            &expected,
+            "fill_na: metadata di campo (R2.4)"
+        );
 
         let replaced = ok(
             "table.replace",
-            &[with_field_metadata(&tabular_contract(), "name", &[("unit", "m/s")])],
+            &[with_field_metadata(
+                &tabular_contract(),
+                "name",
+                &[("unit", "m/s")],
+            )],
             json!({"column": "name", "old_value": "a", "new_value": "b"}),
         );
         let field = replaced.schema.field_with_name("name").unwrap();
-        assert_eq!(field.metadata(), &expected, "replace: metadata di campo (R2.4)");
+        assert_eq!(
+            field.metadata(),
+            &expected,
+            "replace: metadata di campo (R2.4)"
+        );
 
         // Join identity-preserving: la rinomina `_L` conserva i metadata.
         let joined = ok(
@@ -2655,7 +3303,11 @@ mod tests {
             json!({"left_keys": ["id"], "right_keys": ["rid"]}),
         );
         let field = joined.schema.field_with_name("name_L").unwrap();
-        assert_eq!(field.metadata(), &expected, "join: metadata di campo (R2.4)");
+        assert_eq!(
+            field.metadata(),
+            &expected,
+            "join: metadata di campo (R2.4)"
+        );
     }
 
     #[test]
@@ -2668,8 +3320,14 @@ mod tests {
             &[left, right],
             json!({"left_keys": ["id"], "right_keys": ["rid"]}),
         );
-        assert_eq!(output.schema.metadata().get("r_only"), Some(&"1".to_owned()));
-        assert_eq!(output.schema.metadata().get("shared"), Some(&"v".to_owned()));
+        assert_eq!(
+            output.schema.metadata().get("r_only"),
+            Some(&"1".to_owned())
+        );
+        assert_eq!(
+            output.schema.metadata().get("shared"),
+            Some(&"v".to_owned())
+        );
         // Campi ricostruiti = colonne derivate (R2.4): nessun metadata ereditato.
         let field = output.schema.field_with_name("id").unwrap();
         assert!(
@@ -2709,7 +3367,10 @@ mod tests {
         // chiavi FieldId(0)) prima di internare.
         let _ = ok_with_allocator(&mut allocator);
         let id = allocator.alloc();
-        assert!(id.0 > 7, "alloc dopo observe deve superare gli id di input: {id}");
+        assert!(
+            id.0 > 7,
+            "alloc dopo observe deve superare gli id di input: {id}"
+        );
     }
 
     fn ok_with_allocator(allocator: &mut FieldAllocator) -> DataContract {
@@ -2778,6 +3439,8 @@ mod tests {
                     Field::new("name", DataType::Utf8, true),
                     Field::new("value", DataType::Float64, true),
                     Field::new("flag", DataType::Boolean, true),
+                    Field::new("date", DataType::Utf8, true),
+                    Field::new("json", DataType::Utf8, true),
                     Field::new("geom", DataType::Binary, true),
                 ])),
                 vec![
@@ -2785,6 +3448,16 @@ mod tests {
                     Arc::new(StringArray::from(vec![Some("b"), Some("a"), None])),
                     Arc::new(Float64Array::from(vec![Some(3.5), Some(1.5), None])),
                     Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+                    Arc::new(StringArray::from(vec![
+                        Some("2024-01-02"),
+                        Some("2025-03-04"),
+                        None,
+                    ])),
+                    Arc::new(StringArray::from(vec![
+                        Some("{\"a\":1}"),
+                        Some("{\"a\":2}"),
+                        None,
+                    ])),
                     Arc::new(BinaryArray::from(vec![
                         Some(b"wkb-a".as_slice()),
                         Some(b"wkb-b".as_slice()),
@@ -2863,8 +3536,9 @@ mod tests {
         ) -> DataContract {
             let expected = kernel(batch).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let input = geo_input(batch);
-            let analyzed = analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
-                .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
+            let analyzed =
+                analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
+                    .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
             assert_eq!(
                 signature(&analyzed.schema),
                 signature(&expected.schema()),
@@ -2882,8 +3556,9 @@ mod tests {
         ) {
             let expected = kernel(batch).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let input = DataContract::tabular(batch.schema());
-            let analyzed = analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
-                .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
+            let analyzed =
+                analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
+                    .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
             assert_eq!(
                 signature(&analyzed.schema),
                 signature(&expected.schema()),
@@ -2941,7 +3616,12 @@ mod tests {
                 "table.filter",
                 &batch,
                 json!({"column": "value", "operator": ">", "value": 2}),
-                |b| filtering::filter(b, &cfg(&json!({"column": "value", "operator": ">", "value": 2}))),
+                |b| {
+                    filtering::filter(
+                        b,
+                        &cfg(&json!({"column": "value", "operator": ">", "value": 2})),
+                    )
+                },
             );
             assert_eq!(filtered.geometries.len(), 1);
             check_unary("table.sample", &batch, json!({"n": 2}), |b| {
@@ -2958,18 +3638,24 @@ mod tests {
                     )
                 },
             );
-            check_unary("table.drop_columns", &batch, json!({"columns": ["flag"]}), |b| {
-                columns::drop_columns(b, &cfg(&json!({"columns": ["flag"]})))
-            });
+            check_unary(
+                "table.drop_columns",
+                &batch,
+                json!({"columns": ["flag"]}),
+                |b| columns::drop_columns(b, &cfg(&json!({"columns": ["flag"]}))),
+            );
             check_unary(
                 "table.reorder_columns",
                 &batch,
                 json!({"columns": ["name"]}),
                 |b| columns::reorder_columns(b, &cfg(&json!({"columns": ["name"]}))),
             );
-            check_unary("table.concat_columns", &batch, json!({"columns": ["name"]}), |b| {
-                columns::concat_columns(b, &cfg(&json!({"columns": ["name"]})), &limits)
-            });
+            check_unary(
+                "table.concat_columns",
+                &batch,
+                json!({"columns": ["name"]}),
+                |b| columns::concat_columns(b, &cfg(&json!({"columns": ["name"]})), &limits),
+            );
             check_unary(
                 "table.split_column",
                 &batch,
@@ -3012,7 +3698,9 @@ mod tests {
                 |b| {
                     filtering::conditional(
                         b,
-                        &cfg(&json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": 1}], "default_value": 0})),
+                        &cfg(
+                            &json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": 1}], "default_value": 0}),
+                        ),
                     )
                 },
             );
@@ -3023,7 +3711,9 @@ mod tests {
                 |b| {
                     filtering::conditional(
                         b,
-                        &cfg(&json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}], "default_value": "lo"})),
+                        &cfg(
+                            &json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}], "default_value": "lo"}),
+                        ),
                     )
                 },
             );
@@ -3033,29 +3723,38 @@ mod tests {
                 json!({"column": "name", "mapping": {"a": "A"}}),
                 |b| analysis::lookup(b, &cfg(&json!({"column": "name", "mapping": {"a": "A"}}))),
             );
-            check_unary("table.bin", &batch, json!({"column": "value", "bins": 2}), |b| {
-                analysis::bin(b, &cfg(&json!({"column": "value", "bins": 2})))
-            });
-            check_unary("table.statistics", &batch, json!({"column": "value"}), |b| {
-                analysis::statistics(b, &cfg(&json!({"column": "value"})))
-            });
+            check_unary(
+                "table.bin",
+                &batch,
+                json!({"column": "value", "bins": 2}),
+                |b| analysis::bin(b, &cfg(&json!({"column": "value", "bins": 2}))),
+            );
+            check_unary(
+                "table.statistics",
+                &batch,
+                json!({"column": "value"}),
+                |b| analysis::statistics(b, &cfg(&json!({"column": "value"}))),
+            );
             check_unary(
                 "table.date_extract",
                 &batch,
-                json!({"column": "name", "parts": ["year", "month"]}),
+                json!({"column": "date", "parts": ["year", "month"]}),
                 |b| {
                     utility::date_extract(
                         b,
-                        &cfg(&json!({"column": "name", "parts": ["year", "month"]})),
+                        &cfg(&json!({"column": "date", "parts": ["year", "month"]})),
                     )
                 },
             );
             check_unary("table.string_pad", &batch, json!({"column": "name"}), |b| {
                 strings::string_pad(b, &cfg(&json!({"column": "name"})), &limits)
             });
-            check_unary("table.string_length", &batch, json!({"column": "name"}), |b| {
-                strings::string_length(b, &cfg(&json!({"column": "name"})))
-            });
+            check_unary(
+                "table.string_length",
+                &batch,
+                json!({"column": "name"}),
+                |b| strings::string_length(b, &cfg(&json!({"column": "name"}))),
+            );
             check_unary(
                 "table.string_extract",
                 &batch,
@@ -3068,15 +3767,21 @@ mod tests {
                     )
                 },
             );
-            check_unary("table.text_normalize", &batch, json!({"columns": ["name"]}), |b| {
-                strings::text_normalize(b, &cfg(&json!({"columns": ["name"]})), &limits)
+            check_unary(
+                "table.text_normalize",
+                &batch,
+                json!({"columns": ["name"]}),
+                |b| strings::text_normalize(b, &cfg(&json!({"columns": ["name"]})), &limits),
+            );
+            check_unary("table.md5_hash", &batch, json!({"columns": ["id"]}), |b| {
+                security::md5_hash(b, &cfg(&json!({"columns": ["id"]})))
             });
-            check_unary("table.md5_hash", &batch, json!({"columns": ["name"]}), |b| {
-                security::md5_hash(b, &cfg(&json!({"columns": ["name"]})))
-            });
-            check_unary("table.sha256_hash", &batch, json!({"columns": ["name"]}), |b| {
-                security::sha256_hash(b, &cfg(&json!({"columns": ["name"]})))
-            });
+            check_unary(
+                "table.sha256_hash",
+                &batch,
+                json!({"columns": ["id"]}),
+                |b| security::sha256_hash(b, &cfg(&json!({"columns": ["id"]}))),
+            );
             check_unary(
                 "table.mask_data",
                 &batch,
@@ -3089,44 +3794,52 @@ mod tests {
             check_unary(
                 "table.date_format",
                 &batch,
-                json!({"column": "name", "input_format": "%Y", "output_column": "df"}),
+                json!({"column": "date", "input_format": "%Y-%m-%d", "output_column": "df"}),
                 |b| {
                     dates::date_format(
                         b,
-                        &cfg(&json!({"column": "name", "input_format": "%Y", "output_column": "df"})),
+                        &cfg(
+                            &json!({"column": "date", "input_format": "%Y-%m-%d", "output_column": "df"}),
+                        ),
                     )
                 },
             );
             check_unary(
                 "table.date_add",
                 &batch,
-                json!({"column": "name", "input_format": "%Y", "amount": 1, "unit": "days", "output_column": "da"}),
+                json!({"column": "date", "input_format": "%Y-%m-%d", "amount": 1, "unit": "days", "output_column": "da"}),
                 |b| {
                     dates::date_add(
                         b,
-                        &cfg(&json!({"column": "name", "input_format": "%Y", "amount": 1, "unit": "days", "output_column": "da"})),
+                        &cfg(
+                            &json!({"column": "date", "input_format": "%Y-%m-%d", "amount": 1, "unit": "days", "output_column": "da"}),
+                        ),
                     )
                 },
             );
             check_unary(
                 "table.date_diff",
                 &batch,
-                json!({"start_column": "name", "end_column": "name", "input_format": "%Y", "unit": "days", "output_column": "dd"}),
+                json!({"start_column": "date", "end_column": "date", "input_format": "%Y-%m-%d", "unit": "days", "output_column": "dd"}),
                 |b| {
                     dates::date_diff(
                         b,
-                        &cfg(&json!({"start_column": "name", "end_column": "name", "input_format": "%Y", "unit": "days", "output_column": "dd"})),
+                        &cfg(
+                            &json!({"start_column": "date", "end_column": "date", "input_format": "%Y-%m-%d", "unit": "days", "output_column": "dd"}),
+                        ),
                     )
                 },
             );
             check_unary(
                 "table.timezone_convert",
                 &batch,
-                json!({"column": "name", "input_format": "%Y", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"}),
+                json!({"column": "date", "input_format": "%Y-%m-%d", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"}),
                 |b| {
                     dates::timezone_convert(
                         b,
-                        &cfg(&json!({"column": "name", "input_format": "%Y", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"})),
+                        &cfg(
+                            &json!({"column": "date", "input_format": "%Y-%m-%d", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"}),
+                        ),
                     )
                 },
             );
@@ -3137,7 +3850,9 @@ mod tests {
                 |b| {
                     aggregation::aggregate(
                         b,
-                        &cfg(&json!({"group_by": ["name"], "aggregations": [{"column": "value", "function": "sum"}, {"column": "id", "function": "count"}]})),
+                        &cfg(
+                            &json!({"group_by": ["name"], "aggregations": [{"column": "value", "function": "sum"}, {"column": "id", "function": "count"}]}),
+                        ),
                     )
                 },
             );
@@ -3148,7 +3863,9 @@ mod tests {
                 |b| {
                     aggregation::rolling_window(
                         b,
-                        &cfg(&json!({"column": "value", "function": "sum", "window": 2, "output_column": "rw"})),
+                        &cfg(
+                            &json!({"column": "value", "function": "sum", "window": 2, "output_column": "rw"}),
+                        ),
                     )
                 },
             );
@@ -3156,13 +3873,23 @@ mod tests {
                 "table.window_function",
                 &batch,
                 json!({"column": "value", "function": "rank"}),
-                |b| aggregation::window_function(b, &cfg(&json!({"column": "value", "function": "rank"}))),
+                |b| {
+                    aggregation::window_function(
+                        b,
+                        &cfg(&json!({"column": "value", "function": "rank"})),
+                    )
+                },
             );
             check_unary(
                 "table.coalesce",
                 &batch,
                 json!({"columns": ["value"], "output_column": "c"}),
-                |b| quality::coalesce(b, &cfg(&json!({"columns": ["value"], "output_column": "c"}))),
+                |b| {
+                    quality::coalesce(
+                        b,
+                        &cfg(&json!({"columns": ["value"], "output_column": "c"})),
+                    )
+                },
             );
             check_unary(
                 "table.formula",
@@ -3174,7 +3901,12 @@ mod tests {
                 "table.formula",
                 &batch,
                 json!({"new_column": "f", "formula": "name + 'x'"}),
-                |b| formula::formula(b, &cfg(&json!({"new_column": "f", "formula": "name + 'x'"}))),
+                |b| {
+                    formula::formula(
+                        b,
+                        &cfg(&json!({"new_column": "f", "formula": "name + 'x'"})),
+                    )
+                },
             );
             check_unary(
                 "table.expression",
@@ -3183,7 +3915,9 @@ mod tests {
                 |b| {
                     expressions::expression(
                         b,
-                        &cfg(&json!({"output_column": "e", "expression": {"kind": "binary", "op": "add", "left": {"kind": "column", "name": "value"}, "right": {"kind": "literal", "value": 1}}})),
+                        &cfg(
+                            &json!({"output_column": "e", "expression": {"kind": "binary", "op": "add", "left": {"kind": "column", "name": "value"}, "right": {"kind": "literal", "value": 1}}}),
+                        ),
                     )
                 },
             );
@@ -3194,18 +3928,20 @@ mod tests {
                 |b| {
                     expressions::expression(
                         b,
-                        &cfg(&json!({"output_column": "e", "expression": {"kind": "column", "name": "name"}, "output_type": "text"})),
+                        &cfg(
+                            &json!({"output_column": "e", "expression": {"kind": "column", "name": "name"}, "output_type": "text"}),
+                        ),
                     )
                 },
             );
             check_unary(
                 "table.flatten_json",
                 &batch,
-                json!({"column": "name", "output_columns": ["name_a"]}),
+                json!({"column": "json", "output_columns": ["json_a"]}),
                 |b| {
                     analysis::flatten_json(
                         b,
-                        &cfg(&json!({"column": "name", "output_columns": ["name_a"]})),
+                        &cfg(&json!({"column": "json", "output_columns": ["json_a"]})),
                         &limits,
                     )
                 },
@@ -3229,16 +3965,24 @@ mod tests {
                 |b| {
                     quality::assert_schema(
                         b,
-                        &cfg(&json!({"fields": [{"name": "id", "data_type": "int64", "nullable": false}], "allow_extra": true})),
+                        &cfg(
+                            &json!({"fields": [{"name": "id", "data_type": "int64", "nullable": false}], "allow_extra": true}),
+                        ),
                     )
                 },
             );
-            check_unary("table.assert_not_null", &batch, json!({"columns": ["id"]}), |b| {
-                quality::assert_not_null(b, &cfg(&json!({"columns": ["id"]})))
-            });
-            check_unary("table.assert_unique", &batch, json!({"columns": ["id"]}), |b| {
-                quality::assert_unique(b, &cfg(&json!({"columns": ["id"]})))
-            });
+            check_unary(
+                "table.assert_not_null",
+                &batch,
+                json!({"columns": ["id"]}),
+                |b| quality::assert_not_null(b, &cfg(&json!({"columns": ["id"]}))),
+            );
+            check_unary(
+                "table.assert_unique",
+                &batch,
+                json!({"columns": ["id"]}),
+                |b| quality::assert_unique(b, &cfg(&json!({"columns": ["id"]}))),
+            );
             check_unary(
                 "table.assert_range",
                 &batch,
@@ -3261,12 +4005,18 @@ mod tests {
                     )
                 },
             );
-            check_unary("table.assert_cardinality", &batch, json!({"min_rows": 1}), |b| {
-                governance::assert_cardinality(b, &cfg(&json!({"min_rows": 1})))
-            });
-            check_unary("table.assert_metadata", &batch, json!({"expected": {}}), |b| {
-                governance::assert_metadata(b, &cfg(&json!({"expected": {}})))
-            });
+            check_unary(
+                "table.assert_cardinality",
+                &batch,
+                json!({"min_rows": 1}),
+                |b| governance::assert_cardinality(b, &cfg(&json!({"min_rows": 1}))),
+            );
+            check_unary(
+                "table.assert_metadata",
+                &batch,
+                json!({"expected": {}}),
+                |b| governance::assert_metadata(b, &cfg(&json!({"expected": {}}))),
+            );
 
             let nested = nested_batch();
             check_unary_plain("table.explode", &nested, json!({"column": "lst"}), |b| {
@@ -3320,14 +4070,26 @@ mod tests {
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| joins::semi_join(l, r, &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]}))),
+                |l, r| {
+                    joins::semi_join(
+                        l,
+                        r,
+                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
+                    )
+                },
             );
             check_binary(
                 "table.anti_join",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| joins::anti_join(l, r, &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]}))),
+                |l, r| {
+                    joins::anti_join(
+                        l,
+                        r,
+                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
+                    )
+                },
             );
             check_binary(
                 "table.asof_join",

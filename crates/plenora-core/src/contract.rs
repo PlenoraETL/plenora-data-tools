@@ -816,8 +816,7 @@ pub struct UnknownSpatialSemantics;
 
 impl fmt::Display for UnknownSpatialSemantics {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .write_str("semantica spaziale non riconosciuta (ammesse: geometry, geography)")
+        formatter.write_str("semantica spaziale non riconosciuta (ammesse: geometry, geography)")
     }
 }
 
@@ -871,7 +870,8 @@ pub struct UnknownGeometryPrecision;
 
 impl fmt::Display for UnknownGeometryPrecision {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("precisione geometria non riconosciuta (ammesse: float64, float32, native)")
+        formatter
+            .write_str("precisione geometria non riconosciuta (ammesse: float64, float32, native)")
     }
 }
 
@@ -1264,15 +1264,12 @@ impl DataContract {
             )));
         }
         for geometry in &self.geometries {
-            let field = self
-                .schema
-                .field_with_name(&geometry.name)
-                .map_err(|_| {
-                    PlenoraError::Schema(format!(
-                        "colonna geometrica `{}` ({}) assente dallo schema",
-                        geometry.name, geometry.field_id
-                    ))
-                })?;
+            let field = self.schema.field_with_name(&geometry.name).map_err(|_| {
+                PlenoraError::Schema(format!(
+                    "colonna geometrica `{}` ({}) assente dallo schema",
+                    geometry.name, geometry.field_id
+                ))
+            })?;
             if field.is_nullable() != geometry.nullable {
                 return Err(PlenoraError::Schema(format!(
                     "colonna geometrica `{}`: nullability del contratto ({}) diversa dallo schema ({})",
@@ -1562,7 +1559,10 @@ mod tests {
         assert_eq!(estimated.value(), Some(&42));
         assert_eq!(estimated.known_value(), None);
         assert_eq!(unknown.value(), None);
-        assert_eq!(RuntimeStatistic::<u64>::default(), RuntimeStatistic::Unknown);
+        assert_eq!(
+            RuntimeStatistic::<u64>::default(),
+            RuntimeStatistic::Unknown
+        );
     }
 
     #[test]
@@ -1608,7 +1608,10 @@ mod tests {
 
     #[test]
     fn geometry_encoding_serde_roundtrip_icd_lowercase() {
-        let cases = [(GeometryEncoding::Wkb, "wkb"), (GeometryEncoding::Ewkb, "ewkb")];
+        let cases = [
+            (GeometryEncoding::Wkb, "wkb"),
+            (GeometryEncoding::Ewkb, "ewkb"),
+        ];
         for (encoding, text) in cases {
             assert_eq!(encoding.as_str(), text);
             assert_eq!(encoding.to_string(), text);
@@ -1813,7 +1816,10 @@ mod tests {
                 GeometryType::MultiPolygon,
             ]
         );
-        assert_eq!(property.to_canonical_list(), "point,linestring,multipolygon");
+        assert_eq!(
+            property.to_canonical_list(),
+            "point,linestring,multipolygon"
+        );
         // Una stessa dichiarazione ha una sola serializzazione (R3.4.1).
         let reordered = GeometryTypesProperty::new(
             TypesDeclaration::Exact,
@@ -1854,7 +1860,13 @@ mod tests {
 
         // Fail-closed: spazi, maiuscole, snake_case, token vuoti, duplicati
         // e ordine non canonico sono errori, mai correzioni silenziose.
-        for list in ["point, polygon", "Point", "line_string", "point,,polygon", "point,"] {
+        for list in [
+            "point, polygon",
+            "Point",
+            "line_string",
+            "point,,polygon",
+            "point,",
+        ] {
             assert_eq!(
                 GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, list),
                 Err(GeometryTypesPropertyError::UnknownTypeInList)
@@ -1910,11 +1922,13 @@ mod tests {
             assert_eq!(parsed, resolution);
             assert_eq!(text.parse::<CrsResolution>(), Ok(resolution));
         }
-        for value in ["declaredunresolved", "DECLARED_UNRESOLVED", "", "unresolved"] {
-            assert_eq!(
-                value.parse::<CrsResolution>(),
-                Err(UnknownCrsResolution)
-            );
+        for value in [
+            "declaredunresolved",
+            "DECLARED_UNRESOLVED",
+            "",
+            "unresolved",
+        ] {
+            assert_eq!(value.parse::<CrsResolution>(), Err(UnknownCrsResolution));
         }
     }
 

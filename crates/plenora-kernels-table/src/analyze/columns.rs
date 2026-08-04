@@ -33,7 +33,11 @@ pub(in crate::analyze) fn analyze_drop_columns(
         .collect();
     let removed_any = kept.len() != input.schema.fields().len();
     let schema = Schema::new_with_metadata(kept, input.schema.metadata().clone());
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     let dropped_geometry = if geometry.is_none() {
         input.geometries.first().map(|g| g.field_id)
     } else {
@@ -97,7 +101,12 @@ pub(in crate::analyze) fn analyze_rename(
     });
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
     // Rinomina: FieldId preservati (D16), righe e ordine invariati.
-    finish(schema, geometry, input.active_geometry, input.properties.clone())
+    finish(
+        schema,
+        geometry,
+        input.active_geometry,
+        input.properties.clone(),
+    )
 }
 
 pub(in crate::analyze) fn analyze_reorder_columns(
@@ -130,8 +139,17 @@ pub(in crate::analyze) fn analyze_reorder_columns(
     }
     ordered.extend(rest);
     let schema = Schema::new_with_metadata(ordered, input.schema.metadata().clone());
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
-    finish(schema, geometry, input.active_geometry, input.properties.clone())
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
+    finish(
+        schema,
+        geometry,
+        input.active_geometry,
+        input.properties.clone(),
+    )
 }
 
 pub(in crate::analyze) fn analyze_concat_columns(
@@ -208,7 +226,11 @@ pub(in crate::analyze) fn analyze_select_columns(
     }
     let removed_any = fields_out.len() != input.schema.fields().len();
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     let dropped_geometry = if geometry.is_none() {
         input.geometries.first().map(|g| g.field_id)
     } else {
@@ -249,7 +271,10 @@ pub(in crate::analyze) fn analyze_align_schema(
     for declared in &config.columns {
         check_output_name(op, &declared.name)?;
         if !seen.insert(declared.name.as_str()) {
-            return contract_error(op, format!("colonna ripetuta in columns: {}", declared.name));
+            return contract_error(
+                op,
+                format!("colonna ripetuta in columns: {}", declared.name),
+            );
         }
         let data_type = declared.align_type.data_type();
         if let Ok(field) = input.schema.field_with_name(&declared.name) {
@@ -295,8 +320,11 @@ pub(in crate::analyze) fn analyze_align_schema(
         }
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry =
-        propagate_geometry(input, &schema, input.geometries.first().map(|g| g.name.as_str()));
+    let geometry = propagate_geometry(
+        input,
+        &schema,
+        input.geometries.first().map(|g| g.name.as_str()),
+    );
     let dropped_geometry = if geometry.is_none() {
         input.geometries.first().map(|g| g.field_id)
     } else {
@@ -320,4 +348,3 @@ pub(in crate::analyze) fn analyze_align_schema(
     );
     finish(schema, geometry, active, properties)
 }
-

@@ -11,11 +11,11 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
 use crate::Limits;
-use plenora_core::{PlenoraError, Result};
 use crate::{
-    column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_f64,
-    scalar_as_string, NumericBound,
+    column_index, compare_f64, compare_i64, compare_u64, reject_rows, replace_or_append,
+    scalar_as_f64, scalar_as_string, NumericBound, RowRejection,
 };
+use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,10 +34,7 @@ pub struct AssertCardinality {
 ///
 /// - `InvalidPlan`: righe diverse da `exact_rows`, oppure fuori dall'intervallo
 ///   `min_rows`/`max_rows`.
-pub fn assert_cardinality(
-    batch: &RecordBatch,
-    config: &AssertCardinality,
-) -> Result<RecordBatch> {
+pub fn assert_cardinality(batch: &RecordBatch, config: &AssertCardinality) -> Result<RecordBatch> {
     let valid = config.exact_rows.map_or_else(
         || {
             config.min_rows.is_none_or(|min| batch.num_rows() >= min)
@@ -326,9 +323,10 @@ impl<'a> RowKeyEncoder<'a> {
 ///
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
 ///   delle chiavi non identici fra i due lati;
-/// - `InvalidPlan`: chiave null in `left` con `allow_null = false`; chiave
-///   sinistra non presente in `right`; memoria oltre
-///   `limits.max_memory_bytes`; overflow dei contatori (errore Internal).
+/// - `DataMapping`: chiave null in `left` con `allow_null = false` o chiave
+///   sinistra non presente in `right`, con row diagnostics;
+/// - `InvalidPlan`: memoria oltre `limits.max_memory_bytes`;
+/// - `Internal`: overflow dei contatori.
 pub fn assert_foreign_key(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -350,7 +348,9 @@ pub fn assert_foreign_key(
             if referenced.insert(std::mem::take(&mut key)) {
                 memory_used = memory_used
                     .checked_add(key_bytes.saturating_add(64))
-                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria foreign key".into()))?;
+                    .ok_or_else(|| {
+                        PlenoraError::InvalidPlan("overflow memoria foreign key".into())
+                    })?;
                 if memory_used > limits.max_memory_bytes {
                     return Err(PlenoraError::InvalidPlan(
                         "assert_foreign_key oltre max_memory_bytes".into(),
@@ -360,22 +360,32 @@ pub fn assert_foreign_key(
         }
     }
     let mut left_encoder = RowKeyEncoder::new(left, &left_indices);
+    let mut rejections = Vec::new();
     for row in 0..left.num_rows() {
         if has_null(left, &left_indices, row) {
             if config.allow_null {
                 continue;
             }
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_foreign_key: chiave null alla riga {row}"
-            )));
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.foreign_key_null",
+                column: None,
+            });
+            continue;
         }
         left_encoder.encode_into(row, &mut key)?;
         if !referenced.contains(key.as_slice()) {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "assert_foreign_key: riferimento mancante alla riga {row}"
-            )));
+            rejections.push(RowRejection {
+                row,
+                cause: "validation.foreign_key_missing",
+                column: None,
+            });
         }
     }
+    reject_rows(
+        &rejections,
+        "righe non conformi; consultare row_diagnostics",
+    )?;
     Ok(left.clone())
 }
 
@@ -414,7 +424,9 @@ fn frequencies(
         } else {
             *memory_used = memory_used
                 .checked_add(key.len().saturating_add(64))
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria reconciliation".into()))?;
+                .ok_or_else(|| {
+                    PlenoraError::InvalidPlan("overflow memoria reconciliation".into())
+                })?;
             if *memory_used > limits.max_memory_bytes {
                 return Err(PlenoraError::InvalidPlan(
                     "reconcile oltre max_memory_bytes".into(),
@@ -668,10 +680,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             )));
         }
         let column = rule.column.as_deref().ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!(
-                "validate_rules: regola {} senza column",
-                rule.name
-            ))
+            PlenoraError::InvalidPlan(format!("validate_rules: regola {} senza column", rule.name))
         })?;
         let column_index = column_index(batch, column)?;
         let data_type = batch.column(column_index).data_type().clone();
@@ -680,7 +689,11 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             return Err(PlenoraError::InvalidPlan(format!(
                 "validate_rules: regola {}: value {} per l'operatore {:?}",
                 rule.name,
-                if needs_value { "obbligatorio" } else { "non ammesso" },
+                if needs_value {
+                    "obbligatorio"
+                } else {
+                    "non ammesso"
+                },
                 rule.operator
             )));
         }
@@ -791,8 +804,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
 /// `range`: il valore non e' sotto il minimo ne' sopra il massimo; `None`
 /// (estremo NaN) esclude la riga, come i confronti IEEE storici.
 const fn within_rule_range(low: Option<Ordering>, high: Option<Ordering>) -> bool {
-    !matches!(low, None | Some(Ordering::Less))
-        && !matches!(high, None | Some(Ordering::Greater))
+    !matches!(low, None | Some(Ordering::Less)) && !matches!(high, None | Some(Ordering::Greater))
 }
 
 /// Confronto ordinato di regola da un `Ordering` tipizzato.
@@ -804,7 +816,10 @@ const fn within_rule_range(low: Option<Ordering>, high: Option<Ordering>) -> boo
 const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Option<bool> {
     match operator {
         RuleOperator::Gt => Some(matches!(ordering, Some(Ordering::Greater))),
-        RuleOperator::Ge => Some(matches!(ordering, Some(Ordering::Greater | Ordering::Equal))),
+        RuleOperator::Ge => Some(matches!(
+            ordering,
+            Some(Ordering::Greater | Ordering::Equal)
+        )),
         RuleOperator::Lt => Some(matches!(ordering, Some(Ordering::Less))),
         RuleOperator::Le => Some(matches!(ordering, Some(Ordering::Less | Ordering::Equal))),
         _ => None,
@@ -847,10 +862,13 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                             any.downcast_ref::<Float64Array>().map_or_else(
                                 || {
                                     if rule.numeric_column {
-                                        scalar_as_f64(array, row).ok().flatten().is_some_and(|actual| {
-                                            actual == rule.expected_number
-                                                || (actual.is_nan() && rule.expected_number.is_nan())
-                                        })
+                                        scalar_as_f64(array, row).ok().flatten().is_some_and(
+                                            |actual| {
+                                                actual == rule.expected_number
+                                                    || (actual.is_nan()
+                                                        && rule.expected_number.is_nan())
+                                            },
+                                        )
                                     } else {
                                         scalar_as_string(array, row)
                                             .ok()
@@ -895,10 +913,9 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                         || {
                             any.downcast_ref::<Float64Array>().map_or_else(
                                 || {
-                                    scalar_as_f64(array, row)
-                                        .ok()
-                                        .flatten()
-                                        .and_then(|actual| actual.partial_cmp(&rule.expected_number))
+                                    scalar_as_f64(array, row).ok().flatten().and_then(|actual| {
+                                        actual.partial_cmp(&rule.expected_number)
+                                    })
                                 },
                                 |values| {
                                     rule.expected_bound
@@ -917,51 +934,49 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
                         .and_then(|bound| compare_i64(values.value(row), bound))
                 },
             );
-            rule_ordered(ordering, rule.operator).ok_or_else(|| {
-                PlenoraError::Internal("operatore di regola non ordinato".into())
-            })?
+            rule_ordered(ordering, rule.operator)
+                .ok_or_else(|| PlenoraError::Internal("operatore di regola non ordinato".into()))?
         }
-        RuleOperator::Range => {
-            any.downcast_ref::<Int64Array>().map_or_else(
-                || {
-                    any.downcast_ref::<UInt64Array>().map_or_else(
-                        || {
-                            any.downcast_ref::<Float64Array>().map_or_else(
-                                || {
-                                    scalar_as_f64(array, row)
-                                        .ok()
-                                        .flatten()
-                                        .is_some_and(|actual| {
-                                            actual >= rule.expected_number && actual <= rule.expected_high
-                                        })
-                                },
-                                |values| match (rule.expected_bound, rule.expected_high_bound) {
-                                    (Some(low), Some(high)) => within_rule_range(
-                                        compare_f64(values.value(row), low),
-                                        compare_f64(values.value(row), high),
-                                    ),
-                                    _ => false,
-                                },
-                            )
-                        },
-                        |values| match (rule.expected_bound, rule.expected_high_bound) {
-                            (Some(low), Some(high)) => within_rule_range(
-                                compare_u64(values.value(row), low),
-                                compare_u64(values.value(row), high),
-                            ),
-                            _ => false,
-                        },
-                    )
-                },
-                |values| match (rule.expected_bound, rule.expected_high_bound) {
-                    (Some(low), Some(high)) => within_rule_range(
-                        compare_i64(values.value(row), low),
-                        compare_i64(values.value(row), high),
-                    ),
-                    _ => false,
-                },
-            )
-        }
+        RuleOperator::Range => any.downcast_ref::<Int64Array>().map_or_else(
+            || {
+                any.downcast_ref::<UInt64Array>().map_or_else(
+                    || {
+                        any.downcast_ref::<Float64Array>().map_or_else(
+                            || {
+                                scalar_as_f64(array, row)
+                                    .ok()
+                                    .flatten()
+                                    .is_some_and(|actual| {
+                                        actual >= rule.expected_number
+                                            && actual <= rule.expected_high
+                                    })
+                            },
+                            |values| match (rule.expected_bound, rule.expected_high_bound) {
+                                (Some(low), Some(high)) => within_rule_range(
+                                    compare_f64(values.value(row), low),
+                                    compare_f64(values.value(row), high),
+                                ),
+                                _ => false,
+                            },
+                        )
+                    },
+                    |values| match (rule.expected_bound, rule.expected_high_bound) {
+                        (Some(low), Some(high)) => within_rule_range(
+                            compare_u64(values.value(row), low),
+                            compare_u64(values.value(row), high),
+                        ),
+                        _ => false,
+                    },
+                )
+            },
+            |values| match (rule.expected_bound, rule.expected_high_bound) {
+                (Some(low), Some(high)) => within_rule_range(
+                    compare_i64(values.value(row), low),
+                    compare_i64(values.value(row), high),
+                ),
+                _ => false,
+            },
+        ),
         // La colonna di una regola regex e' garantita Utf8 da
         // `compile_rules` (V2): prestito diretto sulla `StringArray`,
         // senza l'allocazione per riga di `scalar_as_string`. Tipi diversi
@@ -1095,7 +1110,10 @@ pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Rec
                 ])),
                 vec![
                     Arc::new(StringArray::from(
-                        rules.iter().map(|rule| rule.name.as_str()).collect::<Vec<_>>(),
+                        rules
+                            .iter()
+                            .map(|rule| rule.name.as_str())
+                            .collect::<Vec<_>>(),
                     )),
                     Arc::new(Int64Array::from(error_counts)),
                     Arc::new(Int64Array::from(warning_counts)),
@@ -1104,7 +1122,6 @@ pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Rec
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1135,9 +1152,9 @@ mod tests {
         let mut output: HashMap<Vec<u8>, usize> = HashMap::new();
         for row in 0..batch.num_rows() {
             if !nulls_equal && has_null(batch, indices, row) {
-                *side_nulls = side_nulls
-                    .checked_add(1)
-                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow null reconciliation".into()))?;
+                *side_nulls = side_nulls.checked_add(1).ok_or_else(|| {
+                    PlenoraError::InvalidPlan("overflow null reconciliation".into())
+                })?;
                 continue;
             }
             let key = key_for_row(batch, indices, row)?;
@@ -1335,8 +1352,16 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .expect("value ref");
         for row in 0..fast.num_rows() {
-            assert_eq!(metrics_fast.value(row), metrics_ref.value(row), "metrica {row}");
-            assert_eq!(values_fast.value(row), values_ref.value(row), "valore {row}");
+            assert_eq!(
+                metrics_fast.value(row),
+                metrics_ref.value(row),
+                "metrica {row}"
+            );
+            assert_eq!(
+                values_fast.value(row),
+                values_ref.value(row),
+                "valore {row}"
+            );
         }
     }
 
@@ -1364,17 +1389,42 @@ mod tests {
                 Field::new("x", DataType::Binary, true),
             ],
             vec![
-                Arc::new(Int64Array::from(vec![Some(1), None, Some(-5), Some(i64::MAX)])),
-                Arc::new(StringArray::from(vec![Some("a"), None, Some("héllo"), Some("")])),
+                Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(-5),
+                    Some(i64::MAX),
+                ])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    None,
+                    Some("héllo"),
+                    Some(""),
+                ])),
                 Arc::new(Float64Array::from(vec![
                     Some(f64::NAN),
                     Some(-0.0),
                     Some(f64::INFINITY),
                     Some(1.5),
                 ])),
-                Arc::new(BooleanArray::from(vec![Some(true), None, Some(false), Some(true)])),
-                Arc::new(UInt64Array::from(vec![Some(0), None, Some(u64::MAX), Some(7)])),
-                Arc::new(Date32Array::from(vec![Some(0), None, Some(-1), Some(19_000)])),
+                Arc::new(BooleanArray::from(vec![
+                    Some(true),
+                    None,
+                    Some(false),
+                    Some(true),
+                ])),
+                Arc::new(UInt64Array::from(vec![
+                    Some(0),
+                    None,
+                    Some(u64::MAX),
+                    Some(7),
+                ])),
+                Arc::new(Date32Array::from(vec![
+                    Some(0),
+                    None,
+                    Some(-1),
+                    Some(19_000),
+                ])),
                 Arc::new(timestamp),
                 Arc::new(decimal),
                 Arc::new(BinaryArray::from(vec![
@@ -1490,36 +1540,38 @@ mod tests {
             allow_null: false,
         };
         let fast = assert_foreign_key(&left, &right, &config, &Limits::default()).expect("fast");
-        let reference =
-            assert_foreign_key_reference(&left, &right, &config, &Limits::default())
-                .expect("reference");
+        let reference = assert_foreign_key_reference(&left, &right, &config, &Limits::default())
+            .expect("reference");
         assert_eq!(fast.num_rows(), reference.num_rows());
         assert_eq!(fast.schema(), reference.schema());
     }
 
     #[test]
-    fn assert_foreign_key_errors_match_reference() {
+    fn assert_foreign_key_errors_are_row_scoped_and_non_row_errors_match_reference() {
         let right = mixed_batch(vec![Some(1), Some(2)], vec![Some("a"), Some("b")]);
-        // Riferimento mancante: stessa riga e stesso messaggio.
+        // Riferimento mancante: stessa riga, ma diagnostica strutturata e
+        // senza valore della chiave.
         let left = mixed_batch(vec![Some(1), Some(9)], vec![Some("a"), Some("z")]);
         let config = ForeignKey {
             left_keys: vec!["id".into()],
             right_keys: vec!["id".into()],
             allow_null: false,
         };
-        let fast = assert_foreign_key(&left, &right, &config, &Limits::default())
-            .expect_err("fast err");
-        let reference = assert_foreign_key_reference(&left, &right, &config, &Limits::default())
-            .expect_err("ref err");
-        assert_eq!(fast.to_string(), reference.to_string(), "riferimento mancante");
-        // Chiave null con allow_null=false: stesso messaggio.
+        let fast =
+            assert_foreign_key(&left, &right, &config, &Limits::default()).expect_err("fast err");
+        let report = fast.row_diagnostics().expect("diagnostica foreign key");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.total, Some(1));
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(report.examples[0].cause, "validation.foreign_key_missing");
+        // Chiave null con allow_null=false: diagnostica distinta.
         let left_null = mixed_batch(vec![Some(1), None], vec![Some("a"), Some("x")]);
         let fast = assert_foreign_key(&left_null, &right, &config, &Limits::default())
             .expect_err("fast err");
-        let reference =
-            assert_foreign_key_reference(&left_null, &right, &config, &Limits::default())
-                .expect_err("ref err");
-        assert_eq!(fast.to_string(), reference.to_string(), "chiave null");
+        let report = fast.row_diagnostics().expect("diagnostica chiave null");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        assert_eq!(report.examples[0].cause, "validation.foreign_key_null");
         // allow_null=true: le null vengono saltate in entrambe.
         let config_allow = ForeignKey {
             left_keys: vec!["id".into()],
@@ -1527,10 +1579,13 @@ mod tests {
             allow_null: true,
         };
         assert!(assert_foreign_key(&left_null, &right, &config_allow, &Limits::default()).is_ok());
-        assert!(
-            assert_foreign_key_reference(&left_null, &right, &config_allow, &Limits::default())
-                .is_ok()
-        );
+        assert!(assert_foreign_key_reference(
+            &left_null,
+            &right,
+            &config_allow,
+            &Limits::default()
+        )
+        .is_ok());
         // max_memory_bytes: stesso errore (contabilita' basata sui byte chiave).
         let tight = Limits {
             max_memory_bytes: 4,
@@ -1580,7 +1635,9 @@ mod tests {
             .column_by_name(name)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
             .expect("utf8");
-        (0..column.len()).map(|row| column.value(row).to_owned()).collect()
+        (0..column.len())
+            .map(|row| column.value(row).to_owned())
+            .collect()
     }
 
     #[test]
@@ -1642,7 +1699,10 @@ mod tests {
         )
         .expect("summary");
         assert_eq!(output.num_rows(), 3);
-        assert_eq!(annotated_strings(&output, "name"), ["id_pos", "name_fmt", "name_missing"]);
+        assert_eq!(
+            annotated_strings(&output, "name"),
+            ["id_pos", "name_fmt", "name_missing"]
+        );
         let errors = output
             .column_by_name("errors")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
@@ -1651,8 +1711,14 @@ mod tests {
             .column_by_name("warnings")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
             .expect("warnings");
-        assert_eq!((0..3).map(|r| errors.value(r)).collect::<Vec<_>>(), [2, 0, 0]);
-        assert_eq!((0..3).map(|r| warnings.value(r)).collect::<Vec<_>>(), [0, 2, 3]);
+        assert_eq!(
+            (0..3).map(|r| errors.value(r)).collect::<Vec<_>>(),
+            [2, 0, 0]
+        );
+        assert_eq!(
+            (0..3).map(|r| warnings.value(r)).collect::<Vec<_>>(),
+            [0, 2, 3]
+        );
     }
 
     #[test]

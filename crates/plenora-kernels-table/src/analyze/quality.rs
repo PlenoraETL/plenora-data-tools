@@ -45,9 +45,7 @@ pub(in crate::analyze) fn analyze_assert_schema(
     for (position, expectation) in config.fields.iter().enumerate() {
         let field = if config.ordered {
             input.schema.fields().get(position).ok_or_else(|| {
-                PlenoraError::InvalidPlan(format!(
-                    "{op}: colonna mancante in posizione {position}"
-                ))
+                PlenoraError::InvalidPlan(format!("{op}: colonna mancante in posizione {position}"))
             })?
         } else {
             input
@@ -86,10 +84,7 @@ pub(in crate::analyze) fn analyze_assert_schema(
             .nullable
             .is_some_and(|nullable| nullable != field.is_nullable())
         {
-            return contract_error(
-                op,
-                format!("nullability errata per {}", expectation.name),
-            );
+            return contract_error(op, format!("nullability errata per {}", expectation.name));
         }
     }
     Ok(input.clone())
@@ -116,7 +111,9 @@ fn expected_type(op: &str, value: &str) -> Result<DataType> {
             DataType::Null,
             true,
         )))),
-        "struct" => Ok(DataType::Struct(plenora_core::arrow::schema::Fields::empty())),
+        "struct" => Ok(DataType::Struct(
+            plenora_core::arrow::schema::Fields::empty(),
+        )),
         other => contract_error(op, format!("tipo non supportato {other}")),
     }
 }
@@ -303,7 +300,13 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
 ) -> Result<DataContract> {
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
-    check_foreign_keys(op, &inputs[0], &inputs[1], &config.left_keys, &config.right_keys)?;
+    check_foreign_keys(
+        op,
+        &inputs[0],
+        &inputs[1],
+        &config.left_keys,
+        &config.right_keys,
+    )?;
     // Right non contribuisce allo schema: output = left invariato.
     Ok(inputs[0].clone())
 }
@@ -316,7 +319,13 @@ pub(in crate::analyze) fn analyze_reconcile(
 ) -> Result<DataContract> {
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
-    check_foreign_keys(op, &inputs[0], &inputs[1], &config.left_keys, &config.right_keys)?;
+    check_foreign_keys(
+        op,
+        &inputs[0],
+        &inputs[1],
+        &config.left_keys,
+        &config.right_keys,
+    )?;
     // Schema fisso: 5 righe di metriche, indipendente dagli input.
     // R2.4: dataset derivato — nessuna colonna degli input sopravvive e i
     // metadata di schema degli input NON si ereditano (descriverebbero il
@@ -374,7 +383,11 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 format!(
                     "regola {}: value {} per l'operatore",
                     rule.name,
-                    if needs_value { "obbligatorio" } else { "non ammesso" }
+                    if needs_value {
+                        "obbligatorio"
+                    } else {
+                        "non ammesso"
+                    }
                 ),
             );
         }
@@ -397,7 +410,10 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 {
                     return contract_error(
                         op,
-                        format!("regola {}: confronto numerico con valore non numerico", rule.name),
+                        format!(
+                            "regola {}: confronto numerico con valore non numerico",
+                            rule.name
+                        ),
                     );
                 }
             }
@@ -437,7 +453,10 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     );
                 }
                 let Some((low, high)) = expected.split_once(',') else {
-                    return contract_error(op, format!("regola {}: range richiede min,max", rule.name));
+                    return contract_error(
+                        op,
+                        format!("regola {}: range richiede min,max", rule.name),
+                    );
                 };
                 if low.trim().parse::<f64>().is_err() || high.trim().parse::<f64>().is_err() {
                     return contract_error(
@@ -458,7 +477,10 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     );
                 }
                 if expected.len() > Limits::default().max_regex_bytes {
-                    return contract_error(op, format!("regola {}: pattern oltre max_regex_bytes", rule.name));
+                    return contract_error(
+                        op,
+                        format!("regola {}: pattern oltre max_regex_bytes", rule.name),
+                    );
                 }
                 regex::Regex::new(&expected).map_err(|error| {
                     PlenoraError::InvalidPlan(format!(
@@ -495,4 +517,3 @@ pub(in crate::analyze) fn analyze_validate_rules(
         }
     }
 }
-

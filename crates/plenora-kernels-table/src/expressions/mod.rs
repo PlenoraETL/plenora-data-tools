@@ -85,6 +85,63 @@ pub struct CaseBranch {
     pub then: Expression,
 }
 
+/// Vero se l'espressione e' un letterale numerico zero (anche negato):
+/// un divisore costante zero e' una proprieta' del piano, non delle righe.
+fn is_literal_zero(expr: &Expression) -> bool {
+    match expr {
+        Expression::Literal { value } => value.as_f64() == Some(0.0),
+        Expression::Unary {
+            op: UnaryOperator::Negate,
+            value,
+        } => is_literal_zero(value),
+        _ => false,
+    }
+}
+
+/// Rifiuta le divisioni con divisore letterale zero (P2 review 2026-08-03).
+///
+/// Errore di configurazione (`InvalidPlan`), mai un rifiuto row-scoped
+/// attribuito a tutte le righe. Un divisore dipendente dalla riga resta
+/// row-scoped.
+///
+/// # Errors
+/// - `InvalidPlan`: divisore letterale zero in qualunque punto dell'albero.
+pub fn reject_literal_zero_divisor(expr: &Expression) -> plenora_core::error::Result<()> {
+    use plenora_core::error::PlenoraError;
+    match expr {
+        Expression::Binary {
+            op: BinaryOperator::Divide,
+            right,
+            ..
+        } if is_literal_zero(right) => Err(PlenoraError::InvalidPlan(
+            "divisione per zero letterale nell'espressione: errore di configurazione, non di riga"
+                .into(),
+        )),
+        Expression::Binary { left, right, .. } => {
+            reject_literal_zero_divisor(left)?;
+            reject_literal_zero_divisor(right)
+        }
+        Expression::Unary { value, .. } => reject_literal_zero_divisor(value),
+        Expression::Function { args, .. } => {
+            for arg in args {
+                reject_literal_zero_divisor(arg)?;
+            }
+            Ok(())
+        }
+        Expression::Case {
+            branches,
+            else_value,
+        } => {
+            for branch in branches {
+                reject_literal_zero_divisor(&branch.when)?;
+                reject_literal_zero_divisor(&branch.then)?;
+            }
+            reject_literal_zero_divisor(else_value)
+        }
+        Expression::Column { .. } | Expression::Literal { .. } => Ok(()),
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaryOperator {
@@ -151,15 +208,15 @@ pub enum Function {
 // Simboli usati solo dai test-oracolo (`mod tests` li importa con
 // `use super::*`, come nel modulo originario).
 #[cfg(test)]
-use std::sync::Arc;
+use fast::FastProgram;
+#[cfg(test)]
+use interpreter::expression_generic;
 #[cfg(test)]
 use plenora_core::arrow::array::{Array, RecordBatch, TimestampMillisecondArray};
 #[cfg(test)]
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 #[cfg(test)]
-use fast::FastProgram;
-#[cfg(test)]
-use interpreter::expression_generic;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Test-oracolo: fast path compilato vs interprete generico.
@@ -170,6 +227,7 @@ mod tests {
         BooleanArray, Date32Array, Float64Array, Int64Array, StringArray, UInt64Array,
     };
     use plenora_core::arrow::schema::{Field, Schema};
+    use plenora_core::error::PlenoraError;
     use serde_json::json;
 
     use super::*;
@@ -187,11 +245,7 @@ mod tests {
                 Field::new("i", DataType::Int64, true),
                 Field::new("u", DataType::UInt64, true),
                 Field::new("d", DataType::Date32, true),
-                Field::new(
-                    "ts",
-                    DataType::Timestamp(TimeUnit::Millisecond, None),
-                    true,
-                ),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
                 Field::new(
                     "tstz",
                     DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
@@ -444,10 +498,7 @@ mod tests {
         // Ramo non percorso con colonna mancante: nessun errore (lazy).
         assert_equivalent(
             &batch,
-            case(
-                vec![(lit(json!(false)), col("missing"))],
-                lit(json!(1)),
-            ),
+            case(vec![(lit(json!(false)), col("missing"))], lit(json!(1))),
             None,
         );
         // Ramo percorso con colonna mancante: errore identico.
@@ -459,10 +510,7 @@ mod tests {
         // Ramo non percorso con letterale non scalare: nessun errore (lazy).
         assert_equivalent(
             &batch,
-            case(
-                vec![(lit(json!(false)), lit(json!([1, 2])))],
-                lit(json!(1)),
-            ),
+            case(vec![(lit(json!(false)), lit(json!([1, 2])))], lit(json!(1))),
             None,
         );
         // Letterale non scalare valutato: errore identico.
@@ -475,11 +523,7 @@ mod tests {
             None,
         );
         // Output eterogeneo in auto: errore identico.
-        assert_equivalent(
-            &batch,
-            case(vec![(col("b"), col("n"))], col("s")),
-            None,
-        );
+        assert_equivalent(&batch, case(vec![(col("b"), col("n"))], col("s")), None);
     }
 
     #[test]
@@ -505,6 +549,90 @@ mod tests {
         assert_equivalent(&batch, col("n"), Some("text"));
         assert_equivalent(&batch, col("b"), Some("boolean"));
         assert_equivalent(&batch, col("n"), Some("number"));
+    }
+
+    #[test]
+    fn divisione_per_zero_letterale_e_errore_di_configurazione() {
+        // P2 review 2026-08-03: divisore LETTERALE zero (anche negato) ->
+        // errore di configurazione senza diagnostica row-scoped; mai un
+        // rifiuto attribuito a tutte le righe.
+        let batch = fixture();
+        for divisor in [
+            lit(json!(0.0)),
+            lit(json!(0)),
+            json!({"kind":"unary","op":"negate","value": lit(json!(0.0))}),
+        ] {
+            let cfg = config(bin("divide", col("i"), divisor), None);
+            let error = expression(&batch, &cfg).expect_err("divisore letterale zero");
+            assert!(
+                matches!(error, PlenoraError::InvalidPlan(_)),
+                "atteso InvalidPlan (config), trovato {error:?}"
+            );
+            assert!(
+                error.row_diagnostics().is_none(),
+                "nessuna diagnostica row-scoped per errore di configurazione"
+            );
+        }
+        // Controllo: divisore dipendente dalla riga -> row-scoped invariato.
+        let cfg = config(
+            bin(
+                "divide",
+                col("i"),
+                bin("multiply", col("i"), lit(json!(0.0))),
+            ),
+            None,
+        );
+        let error = expression(&batch, &cfg).expect_err("divisione calcolata");
+        assert!(error.row_diagnostics().is_some());
+    }
+
+    #[test]
+    fn divisione_per_zero_riporta_diagnostica_row_scoped() {
+        let batch = fixture();
+        // Divisore dipendente dalla riga (i * 0): il rifiuto resta row-scoped.
+        let cfg = config(
+            bin(
+                "divide",
+                col("i"),
+                bin("multiply", col("i"), lit(json!(0.0))),
+            ),
+            None,
+        );
+        // Righe difettose: 0, 2, 3, 4, 5 (riga 1 null -> null, nessun errore).
+        let error = expression(&batch, &cfg).expect_err("divisione per zero");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped presente");
+        assert_eq!(
+            report.completeness,
+            plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete
+        );
+        assert_eq!(report.observed_total, 5);
+        assert_eq!(report.total, Some(5));
+        assert_eq!(report.counts["evaluation.division_by_zero"], 5);
+        assert_eq!(report.counts.len(), 1);
+        let indices: Vec<u64> = report.examples.iter().map(|row| row.source_index).collect();
+        assert_eq!(indices, vec![0, 2, 3, 4, 5]);
+        assert!(!report.examples_truncated);
+        assert!(report.validate_for_emission().is_ok());
+        // Parita' fast/generico anche sul payload, non solo sul testo.
+        let generic = expression_generic(&batch, &cfg).expect_err("divisione per zero");
+        assert_eq!(error.row_diagnostics(), generic.row_diagnostics());
+    }
+
+    #[test]
+    fn numeri_non_finiti_riportano_diagnostica_row_scoped() {
+        let batch = fixture();
+        let cfg = config(col("nan"), None);
+        let error = expression(&batch, &cfg).expect_err("NaN in colonna");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped presente");
+        assert_eq!(report.observed_total, 1);
+        assert_eq!(report.counts["evaluation.non_finite_input"], 1);
+        assert_eq!(report.examples[0].source_index, 1);
+        let generic = expression_generic(&batch, &cfg).expect_err("NaN in colonna");
+        assert_eq!(error.row_diagnostics(), generic.row_diagnostics());
     }
 
     #[test]
@@ -548,17 +676,28 @@ mod tests {
             func("substring", vec![col("s"), lit(json!(1)), lit(json!(2))]),
             func(
                 "substring",
-                vec![lit(json!("héllo\u{1F600}world")), lit(json!(0)), lit(json!(6))],
+                vec![
+                    lit(json!("héllo\u{1F600}world")),
+                    lit(json!(0)),
+                    lit(json!(6)),
+                ],
             ),
             func(
                 "substring",
-                vec![lit(json!("héllo\u{1F600}world")), lit(json!(6)), lit(json!(1))],
+                vec![
+                    lit(json!("héllo\u{1F600}world")),
+                    lit(json!(6)),
+                    lit(json!(1)),
+                ],
             ),
             // start oltre la lunghezza -> vuota; len oltre -> troncata.
             func("substring", vec![col("s"), lit(json!(99))]),
             func("substring", vec![col("s"), lit(json!(0)), lit(json!(99))]),
             // Non interi troncati verso zero; -0.0 vale 0.
-            func("substring", vec![col("s"), lit(json!(1.9)), lit(json!(2.5))]),
+            func(
+                "substring",
+                vec![col("s"), lit(json!(1.9)), lit(json!(2.5))],
+            ),
             func("substring", vec![col("s"), lit(json!(-0.0))]),
             // start negativo -> errore; null propagati (anche len null).
             func("substring", vec![col("s"), lit(json!(-1))]),
@@ -581,9 +720,16 @@ mod tests {
             ),
             func(
                 "regex_replace",
-                vec![lit(json!("abc123")), lit(json!("(bc)(\\d)")), lit(json!("$2$1"))],
+                vec![
+                    lit(json!("abc123")),
+                    lit(json!("(bc)(\\d)")),
+                    lit(json!("$2$1")),
+                ],
             ),
-            func("regex_replace", vec![col("s"), lit(json!("([")), lit(json!("x"))]),
+            func(
+                "regex_replace",
+                vec![col("s"), lit(json!("([")), lit(json!("x"))],
+            ),
             func("regex_replace", vec![col("s"), col("s"), lit(json!("x"))]),
             func("regex_replace", vec![col("s"), col("n"), lit(json!("x"))]),
             // Null nel valore: nessuna compilazione della regex (lazy).
@@ -751,7 +897,10 @@ mod tests {
         assert_eq!(values.value(2), 19_000); // day: identita'
 
         // Timestamp(ms): troncamenti aritmetici con rem_euclid (pre-1970).
-        let cfg = config(func("date_trunc", vec![lit(json!("second")), col("ts")]), None);
+        let cfg = config(
+            func("date_trunc", vec![lit(json!("second")), col("ts")]),
+            None,
+        );
         let output = expression(&batch, &cfg).expect("date_trunc second");
         let values = output
             .column(output.schema().index_of("out").expect("out"))
@@ -770,7 +919,10 @@ mod tests {
         assert_eq!(values.value(5), -86_400_000);
 
         // month/year su timestamp via calendario UTC.
-        let cfg = config(func("date_trunc", vec![lit(json!("month")), col("ts")]), None);
+        let cfg = config(
+            func("date_trunc", vec![lit(json!("month")), col("ts")]),
+            None,
+        );
         let output = expression(&batch, &cfg).expect("date_trunc month");
         let values = output
             .column(output.schema().index_of("out").expect("out"))
@@ -796,19 +948,33 @@ mod tests {
             ],
         )
         .expect("all-null");
-        let cfg = config(func("date_trunc", vec![lit(json!("month")), col("d")]), None);
+        let cfg = config(
+            func("date_trunc", vec![lit(json!("month")), col("d")]),
+            None,
+        );
         let output = expression(&all_null, &cfg).expect("all-null Date32");
         assert_eq!(output.num_rows(), 2);
         assert_eq!(
-            output.schema().field_with_name("out").expect("out").data_type(),
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
             &DataType::Date32
         );
         let generic = expression_generic(&all_null, &cfg).expect("generico");
         assert_eq!(output, generic);
-        let cfg = config(func("date_trunc", vec![lit(json!("hour")), col("ts")]), None);
+        let cfg = config(
+            func("date_trunc", vec![lit(json!("hour")), col("ts")]),
+            None,
+        );
         let output = expression(&all_null, &cfg).expect("all-null TimestampMs");
         assert_eq!(
-            output.schema().field_with_name("out").expect("out").data_type(),
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, None)
         );
         let generic = expression_generic(&all_null, &cfg).expect("generico");
@@ -830,20 +996,35 @@ mod tests {
         let output = expression(&empty, &cfg).expect("vuoto Date32");
         assert_eq!(output.num_rows(), 0);
         assert_eq!(
-            output.schema().field_with_name("out").expect("out").data_type(),
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
             &DataType::Date32
         );
-        let cfg = config(func("date_trunc", vec![lit(json!("minute")), col("ts")]), None);
+        let cfg = config(
+            func("date_trunc", vec![lit(json!("minute")), col("ts")]),
+            None,
+        );
         let output = expression(&empty, &cfg).expect("vuoto TimestampMs");
         assert_eq!(
-            output.schema().field_with_name("out").expect("out").data_type(),
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, None)
         );
         // Radice non date_trunc: comportamento invariato (Utf8 vuoto).
         let cfg = config(col("d"), None);
         let output = expression(&empty, &cfg).expect("vuoto non temporale");
         assert_eq!(
-            output.schema().field_with_name("out").expect("out").data_type(),
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
             &DataType::Utf8
         );
     }
@@ -863,9 +1044,15 @@ mod tests {
         let bad = config(func("in", vec![col("s"), lit(json!([[1]]))]), None);
         assert!(validate(&bad, 100).is_err());
         // Forme valide accettate.
-        let good = config(func("date_trunc", vec![lit(json!("month")), col("d")]), None);
+        let good = config(
+            func("date_trunc", vec![lit(json!("month")), col("d")]),
+            None,
+        );
         validate(&good, 100).expect("date_trunc valido");
-        let good = config(func("in", vec![col("s"), lit(json!(["a", 1, null, true]))]), None);
+        let good = config(
+            func("in", vec![col("s"), lit(json!(["a", 1, null, true]))]),
+            None,
+        );
         validate(&good, 100).expect("in valido");
     }
 }

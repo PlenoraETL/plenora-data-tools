@@ -9,7 +9,11 @@ use plenora_core::Result;
 use crate::scalar_as_string;
 
 #[cfg(test)] // Solo i test-oracolo usano il percorso testuale originale.
-pub(in crate::aggregation) fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
+pub(in crate::aggregation) fn row_key(
+    batch: &RecordBatch,
+    indices: &[usize],
+    row: usize,
+) -> Result<String> {
     let mut key = String::new();
     for index in indices {
         let value = scalar_as_string(batch.column(*index).as_ref(), row)?;
@@ -66,7 +70,9 @@ pub fn compare_cells_typed(
                 left.as_any().downcast_ref::<Int64Array>(),
                 right.as_any().downcast_ref::<Int64Array>(),
             ) {
-                return Ok(left_values.value(left_row).cmp(&right_values.value(right_row)));
+                return Ok(left_values
+                    .value(left_row)
+                    .cmp(&right_values.value(right_row)));
             }
         }
         DataType::UInt64 => {
@@ -74,7 +80,9 @@ pub fn compare_cells_typed(
                 left.as_any().downcast_ref::<UInt64Array>(),
                 right.as_any().downcast_ref::<UInt64Array>(),
             ) {
-                return Ok(left_values.value(left_row).cmp(&right_values.value(right_row)));
+                return Ok(left_values
+                    .value(left_row)
+                    .cmp(&right_values.value(right_row)));
             }
         }
         DataType::Float64 => {
@@ -93,7 +101,12 @@ pub fn compare_cells_typed(
         .cmp(&scalar_as_string(right.as_ref(), right_row)?))
 }
 
-pub(in crate::aggregation) fn compare_at(batch: &RecordBatch, index: usize, left: usize, right: usize) -> Result<Ordering> {
+pub(in crate::aggregation) fn compare_at(
+    batch: &RecordBatch,
+    index: usize,
+    left: usize,
+    right: usize,
+) -> Result<Ordering> {
     let array = batch.column(index);
     compare_cells_typed(array, left, array, right)
 }

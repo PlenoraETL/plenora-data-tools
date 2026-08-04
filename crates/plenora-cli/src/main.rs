@@ -228,12 +228,11 @@ fn run_pipeline(
     if plan.requires_secondary() || plan.requires_blocking() {
         let left = load_complete(input_path, &plan)?;
         let output = if plan.requires_secondary() {
-            let right_path =
-                right_path.ok_or_else(|| contract("il piano richiede --right"))?;
+            let right_path = right_path.ok_or_else(|| contract("il piano richiede --right"))?;
             let right = load_complete(right_path, &plan)?;
             execute_binary(&left, &right, &plan)?
         } else {
-            execute_batch(left, &plan)?
+            plenora_engine::execute_complete_batch(left, &plan)?
         };
         return publish_one(output_path, &output);
     }
@@ -248,9 +247,9 @@ fn run_pipeline(
     let mut total_rows = 0_usize;
     for input in reader {
         let input = input?;
-        total_rows = total_rows.checked_add(input.num_rows()).ok_or_else(|| {
-            contract("overflow nel conteggio complessivo delle righe")
-        })?;
+        total_rows = total_rows
+            .checked_add(input.num_rows())
+            .ok_or_else(|| contract("overflow nel conteggio complessivo delle righe"))?;
         if total_rows > plan.limits().max_rows {
             return Err(contract(format!(
                 "file con oltre {} righe",
@@ -447,10 +446,11 @@ fn execute_transform(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    let (result, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-        transform_stream(&mut input_reader, output_writer, &schema)
-            .map_err(|error| contract(error.to_string()))
-    })?;
+    let (result, outcome) =
+        publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
+            transform_stream(&mut input_reader, output_writer, &schema)
+                .map_err(|error| contract(error.to_string()))
+        })?;
     report_publish_outcome(outcome, output_path);
     Ok(result)
 }
@@ -486,10 +486,26 @@ fn execute_transform_arrow(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    let (summary, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-        transform_arrow(&mut input_reader, output_writer, &schema)
-            .map_err(|error| contract(error.to_string()))
-    })?;
+    let (summary, outcome) =
+        publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
+            transform_arrow(&mut input_reader, output_writer, &schema).map_err(|error| {
+                // Un rifiuto row-scoped (R9.9) e' un difetto del DATO letto,
+                // non del piano: assi data_mapping/read e diagnostica
+                // preservata, mai riclassificato invalid_plan/validate.
+                // Gli errori non row-scoped mantengono la classificazione
+                // storica `contract` (unico percorso del trasporto legacy che
+                // produce diagnostica: `transform_arrow`; `pair_arrow` e il
+                // v2 a frame WKB non ne emettono).
+                error.row_diagnostics().map_or_else(
+                    || contract(error.to_string()),
+                    |diagnostics| {
+                        PlenoraError::DataMapping(error.to_string())
+                            .with_phase(ErrorPhase::Read)
+                            .with_row_diagnostics(diagnostics.clone())
+                    },
+                )
+            })
+        })?;
     report_publish_outcome(outcome, output_path);
     Ok(summary)
 }
@@ -516,15 +532,11 @@ fn execute_pair_arrow(
 
     let mut left_reader = BufReader::with_capacity(1024 * 1024, File::open(left_path)?);
     let mut right_reader = BufReader::with_capacity(1024 * 1024, File::open(right_path)?);
-    let (summary, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-        pair_arrow(
-            &mut left_reader,
-            &mut right_reader,
-            output_writer,
-            &schema,
-        )
-        .map_err(|error| contract(error.to_string()))
-    })?;
+    let (summary, outcome) =
+        publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
+            pair_arrow(&mut left_reader, &mut right_reader, output_writer, &schema)
+                .map_err(|error| contract(error.to_string()))
+        })?;
     report_publish_outcome(outcome, output_path);
     Ok(summary)
 }
@@ -606,13 +618,14 @@ fn execute_spatial_join(
     let left = read_geometry_stream(left_path, schema.left_row_count)?;
     let right = read_geometry_stream(right_path, schema.right_row_count)?;
     let pairs = spatial_join_nullable_validated(&left, &right, schema.predicate, schema.max_pairs)?;
-    let pair_count = u64::try_from(pairs.len())
-        .map_err(|_| contract("pair_count non rappresentabile"))?;
-    let (checksum, outcome) = publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
-        let (_, checksum) =
-            write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
-        Ok(checksum)
-    })?;
+    let pair_count =
+        u64::try_from(pairs.len()).map_err(|_| contract("pair_count non rappresentabile"))?;
+    let (checksum, outcome) =
+        publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
+            let (_, checksum) =
+                write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
+            Ok(checksum)
+        })?;
     report_publish_outcome(outcome, output_path);
     Ok(SpatialJoinSummary {
         pairs: pair_count,
@@ -671,9 +684,8 @@ fn catalog_command(args: &[String]) -> Result<(), Box<dyn Error>> {
             })
         })
         .map(|parsed| {
-            parsed.ok_or_else(|| {
-                contract("famiglia sconosciuta: attesa `table` o `geo`".to_owned())
-            })
+            parsed
+                .ok_or_else(|| contract("famiglia sconosciuta: attesa `table` o `geo`".to_owned()))
         })
         .transpose()?;
     let entries: Vec<serde_json::Value> = CATALOG
@@ -967,7 +979,12 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
     } else {
         Some(FieldId(0))
     };
-    DataContract::new(schema, geometries, active_geometry, ContractProperties::default())
+    DataContract::new(
+        schema,
+        geometries,
+        active_geometry,
+        ContractProperties::default(),
+    )
 }
 
 /// Stato CRS del contratto dalla lettura di contratto completata (R2.7),
@@ -988,7 +1005,13 @@ fn discover_input_contract_from_schema(schema: SchemaRef) -> Result<DataContract
 ///    cosi' com'e', NESSUNA risoluzione tentata (cambio di comportamento
 ///    dichiarato: prima una definizione risolvibile era risolta ed emessa
 ///    come `resolved`; nessuna chiamata al backend, quindi nessun
-///    `BackendUnavailable`);
+///    `BackendUnavailable`). Le rappresentazioni contano per precedenza
+///    R4.3.1: definizione, identificatore, poi SRID numerico — un
+///    `declared_unresolved` con SOLO `srid` (il produttore conosce il
+///    codice dal catalogo ma non puo' inventare l'autorita', R4.4) e'
+///    legittimo: lo stato e' `DeclaredUnresolved` con
+///    `crs_id`/`definition` assenti (mai sintetizzati) e lo SRID resta
+///    custodito dallo schema Arrow originale;
 /// 2. conflitti DECIDIBILI senza backend: (2a) SOLO per input NON dichiarati
 ///    (`crs_resolution` assente — il caso per cui la regola e' nata, la
 ///    doppia rappresentazione `GeoArrow` legacy), `crs_id` e
@@ -1031,8 +1054,11 @@ fn contract_crs_from_keys(
     let crs_id = keys.crs_id.clone();
     let definition = keys.crs_definition.clone();
     // (1) Incoerenza dichiarata dal produttore: preservata, mai risolta.
+    // R4.3.1: anche il solo SRID numerico e' una rappresentazione (dopo
+    // definizione e identificatore) — senza `crs_id`/`definition` lo stato
+    // li porta assenti (R4.4: mai sintetizzarli).
     if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
-        && (crs_id.is_some() || definition.is_some())
+        && (crs_id.is_some() || definition.is_some() || keys.srid.is_some())
     {
         return Ok(ContractCrs::DeclaredUnresolved {
             crs_id,
@@ -1187,15 +1213,15 @@ fn geometry_contract_from_field(
     crs: ContractCrs,
     keys: &CanonicalGeometryKeys,
 ) -> GeometryColumnContract {
-    let types = keys.types.as_ref().map_or_else(
-        GeometryColumnContract::undeclared_types,
-        |types| {
-            ContractProperty::new(
-                PropertyConfidence::Declared(types.clone()),
-                PropertyScope::Schema,
-            )
-        },
-    );
+    let types =
+        keys.types
+            .as_ref()
+            .map_or_else(GeometryColumnContract::undeclared_types, |types| {
+                ContractProperty::new(
+                    PropertyConfidence::Declared(types.clone()),
+                    PropertyScope::Schema,
+                )
+            });
     GeometryColumnContract {
         field_id: FieldId(0),
         name: field.name().clone(),
@@ -1210,7 +1236,10 @@ fn geometry_contract_from_field(
 /// Accoppia i percorsi CLI agli input dichiarati dal piano v4, in ordine di
 /// dichiarazione (posizionale, deterministico). Un conteggio diverso e' un
 /// errore esplicito, prima ancora di toccare i file.
-fn pair_v4_inputs(probe: &PlanInputsProbe, paths: &[PathBuf]) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
+fn pair_v4_inputs(
+    probe: &PlanInputsProbe,
+    paths: &[PathBuf],
+) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
     if probe.inputs.len() != paths.len() {
         return Err(contract(format!(
             "il piano dichiara {} input ({}) ma ne sono stati forniti {}",
@@ -1219,11 +1248,18 @@ fn pair_v4_inputs(probe: &PlanInputsProbe, paths: &[PathBuf]) -> Result<Vec<(Str
             paths.len()
         )));
     }
-    Ok(probe.inputs.iter().cloned().zip(paths.iter().cloned()).collect())
+    Ok(probe
+        .inputs
+        .iter()
+        .cloned()
+        .zip(paths.iter().cloned())
+        .collect())
 }
 
 /// Contratti degli input di un piano v4, scoperti dagli header IPC.
-fn discover_contracts(pairs: &[(String, PathBuf)]) -> Result<Vec<(String, DataContract)>, PlenoraError> {
+fn discover_contracts(
+    pairs: &[(String, PathBuf)],
+) -> Result<Vec<(String, DataContract)>, PlenoraError> {
     pairs
         .iter()
         .map(|(name, path)| {
@@ -1477,10 +1513,13 @@ fn validate_dag_v4(
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
-    let execution = explain(&graph, &RuntimeContext {
-        geo_fusion,
-        ..RuntimeContext::default()
-    })?;
+    let execution = explain(
+        &graph,
+        &RuntimeContext {
+            geo_fusion,
+            ..RuntimeContext::default()
+        },
+    )?;
     println!(
         "{}",
         serde_json::to_string_pretty(&graph_summary_json(&graph, &execution))?
@@ -1551,6 +1590,51 @@ fn v4_input_paths(args: &[String]) -> Result<Vec<PathBuf>, PlenoraError> {
     Ok(paths)
 }
 
+fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraError> {
+    // Fail-closed su TUTTI i piani legacy che contengono op row-diagnostics,
+    // anche blocking/secondary: nel percorso legacy non esiste gate
+    // provenance (quello e' solo DAG v4) e un nodo blocking (es. sort)
+    // renderebbe gli indici pubblicati posizioni post-riordino, non
+    // `source_row_zero_based`. Nessun indice inventato: si richiede DAG v4.
+    //
+    // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
+    // (catalogo plenora-core), la stessa del gate provenance del planner e
+    // del machinery di segmento dell'executor — nessuna lista locale
+    // duplicata (P0: formula/expression erano omesse qui; P2: hmac_sha256
+    // non emette, md5/sha256 solo con null_policy=error). La scansione
+    // precede la validazione legacy: un'op diagnostica richiede DAG v4
+    // anche se il resto del piano sarebbe invalido — mai eseguire per poi
+    // scoprire indici inventati.
+    let document: serde_json::Value = serde_json::from_str(plan_text)?;
+    let requires_v4 = document
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|steps| {
+            steps.iter().any(|step| {
+                let Some(operation) = step.get("operation").and_then(serde_json::Value::as_str)
+                else {
+                    return false;
+                };
+                // Risoluzione come in validazione v4: id canonico o alias
+                // legacy; i nomi sconosciuti restano al rifiuto della
+                // validazione legacy sotto (comportamento invariato).
+                let Some(descriptor) = find_operation(operation) else {
+                    return false;
+                };
+                let config = step.get("config").unwrap_or(&serde_json::Value::Null);
+                descriptor.emits_row_diagnostics(config)
+            })
+        });
+    if requires_v4 {
+        return Err(PlenoraError::Unsupported(
+            "operazione con diagnostics row-scoped richiede piano DAG v4".to_owned(),
+        ));
+    }
+    let validated: Plan = serde_json::from_str(plan_text)?;
+    let _ = validated.validate()?;
+    Ok(())
+}
+
 /// Dispatch di `run`: DAG v4 se il piano dichiara `schema_version: 4`,
 /// pipeline tabellare legacy altrimenti (comportamento invariato).
 fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -1572,6 +1656,7 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
             !has_flag(args, "--no-geo-fusion"),
         );
     }
+    reject_legacy_row_diagnostics_plan(&plan_text)?;
     Ok(run_pipeline(
         &plan_path,
         &value_after(args, "--input")?,
@@ -1620,9 +1705,7 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             // unica in plenora-core::capabilities).
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &plenora_core::capabilities::component_capabilities()
-                )?
+                serde_json::to_string_pretty(&plenora_core::capabilities::component_capabilities())?
             );
             Ok(())
         }
@@ -1716,10 +1799,33 @@ fn main() {
         // publish atomico garantisce che nessun output parziale sia stato
         // pubblicato. Envelope §9 anche per la cancellazione (categoria
         // dedicata, fase/effetto/retry dagli assi).
-        let cancelled =
-            matches!(error.downcast_ref::<PlenoraError>(), Some(PlenoraError::Cancelled { .. }));
-        eprintln!("{}", error_envelope(error.as_ref(), cancelled));
-        std::process::exit(if cancelled { EXIT_CANCELLED } else { 2 });
+        let cancelled = error
+            .downcast_ref::<PlenoraError>()
+            .is_some_and(PlenoraError::is_cancelled);
+        let envelope = error_envelope(error.as_ref(), cancelled);
+        let exit_code = error_exit_code(&envelope);
+        if emit_error_envelope(std::io::stderr().lock(), &envelope).is_err() {
+            std::process::exit(2);
+        }
+        std::process::exit(exit_code);
+    }
+}
+
+/// Envelope di errore §9 sul canale storico: STDERR. Su stdout passano solo
+/// risultati/metriche dei comandi — mai l'envelope di errore (P1-5 review
+/// 2026-08-03: il contratto pubblico storico e' ripristinato).
+fn emit_error_envelope(
+    mut stderr: impl Write,
+    envelope: &serde_json::Value,
+) -> std::io::Result<()> {
+    writeln!(stderr, "{envelope}")
+}
+
+fn error_exit_code(envelope: &serde_json::Value) -> i32 {
+    if envelope["error"]["category"].as_str() == Some("cancelled") {
+        EXIT_CANCELLED
+    } else {
+        2
     }
 }
 
@@ -1738,7 +1844,8 @@ fn main() {
 /// errori di parse JSON del piano -> `data_mapping`/`validate`/`none`/
 /// `never`; qualunque altro tipo -> `internal`/`validate`/`none`/`never`.
 fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
-    let (category, phase, remote_effect, disposition) = error.downcast_ref::<PlenoraError>().map_or_else(
+    let plenora_error = error.downcast_ref::<PlenoraError>();
+    let (category, phase, remote_effect, disposition) = plenora_error.map_or_else(
         || {
             if error.downcast_ref::<std::io::Error>().is_some() {
                 ("io", "read", "none", RetryDisposition::Safe)
@@ -1778,16 +1885,26 @@ fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json:
         "retry": retry,
         "message": message,
     });
-    if let Some(
-        PlenoraError::Execution { node, operation, execution_id, .. }
-        | PlenoraError::Cancelled { node, operation, execution_id, .. },
-    ) = error.downcast_ref::<PlenoraError>()
+    if let Some((node, operation, execution_id)) =
+        plenora_error.and_then(PlenoraError::execution_context)
     {
         let mut context = serde_json::json!({ "node": node, "operation": operation });
         if !execution_id.is_empty() {
-            context["execution_id"] = serde_json::Value::String(execution_id.clone());
+            context["execution_id"] = serde_json::Value::String(execution_id.to_owned());
         }
         body["context"] = context;
+    }
+    if let Some(diagnostics) = plenora_error.and_then(PlenoraError::row_diagnostics) {
+        if let Ok(value) = serde_json::to_value(diagnostics) {
+            body["row_diagnostics"] = value;
+        } else {
+            body["category"] = serde_json::Value::String("internal".to_owned());
+            body["phase"] = serde_json::Value::String("write".to_owned());
+            body["remote_effect"] = serde_json::Value::String("none".to_owned());
+            body["retry"] = serde_json::json!({ "kind": "never" });
+            body["message"] =
+                serde_json::Value::String("row diagnostics interne non valide".to_owned());
+        }
     }
     serde_json::json!({
         "status": "error",
@@ -1811,10 +1928,18 @@ mod tests {
         PLENORA_CONTRACT_VERSION_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
         PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
         PLENORA_GEOMETRY_CRS_ID_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-        PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY,
-        PLENORA_GEOMETRY_SRID_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
-        PLENORA_GEOMETRY_TYPES_KEY,
+        PLENORA_GEOMETRY_DIMENSIONS_KEY, PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_SRID_KEY,
+        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
     };
+
+    #[test]
+    fn error_envelope_is_capturable_on_declared_stderr_channel() {
+        let envelope = error_envelope(&PlenoraError::InvalidPlan("piano invalido".into()), false);
+        let mut stderr = Vec::new();
+        emit_error_envelope(&mut stderr, &envelope).expect("stderr catturabile");
+        let decoded: serde_json::Value = serde_json::from_slice(&stderr).expect("envelope JSON");
+        assert_eq!(decoded, envelope);
+    }
 
     use super::*;
 
@@ -1834,7 +1959,10 @@ mod tests {
         assert_eq!(envelope["error"]["category"], "execution");
         assert_eq!(envelope["error"]["phase"], "write");
         assert_eq!(envelope["error"]["remote_effect"], "none");
-        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "never"})
+        );
         assert_eq!(envelope["error"]["context"]["node"], "t");
         assert_eq!(envelope["error"]["context"]["operation"], "geo.centroid");
         assert_eq!(envelope["error"]["context"]["execution_id"], "exec-1");
@@ -1853,7 +1981,10 @@ mod tests {
         let envelope = error_envelope(&contract, false);
         assert_eq!(envelope["error"]["category"], "unsupported");
         assert_eq!(envelope["error"]["phase"], "validate");
-        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "never"})
+        );
         assert!(envelope["error"].get("context").is_none());
 
         let legacy_step = PlenoraError::Execution {
@@ -1867,18 +1998,272 @@ mod tests {
     }
 
     #[test]
+    fn legacy_date32_coerce_requires_dag_v4() {
+        let plan = serde_json::json!({
+            "schema_version": 1,
+            "steps": [{
+                "operation": "type_cast",
+                "config": {"column": "effective_date", "target_type": "date32", "errors": "coerce"}
+            }]
+        });
+        let error = reject_legacy_row_diagnostics_plan(&plan.to_string())
+            .expect_err("legacy non può dichiarare completezza cross-batch");
+        assert!(matches!(error, PlenoraError::Unsupported(_)));
+    }
+
+    #[test]
+    fn every_catalog_row_diagnostic_operation_requires_dag_v4_in_legacy_plans() {
+        // Catalog-driven (anti-drift, P0/P2): l'universo delle op arriva dal
+        // catalogo, NON da una lista duplicata nel test. Per ogni
+        // (descrittore, config) che l'autorita' dichiara diagnostica, ogni
+        // nome risolvibile (id canonico + alias legacy) in un piano
+        // sort -> op deve essere rifiutato DAL GATE (errore Unsupported, mai
+        // da una validazione incidentale).
+        let mut probes = vec![serde_json::json!({})];
+        for target in [
+            "int",
+            "float",
+            "bool",
+            "uint64",
+            "date",
+            "datetime",
+            "date32",
+            "timestamp_millis",
+            "decimal128",
+            "str",
+        ] {
+            probes.push(serde_json::json!({"target_type": target}));
+            probes.push(serde_json::json!({"target_type": target, "errors": "coerce"}));
+            probes.push(serde_json::json!({"target_type": target, "errors": "raise"}));
+        }
+        for policy in ["error", "empty", "literal"] {
+            probes.push(serde_json::json!({"null_policy": policy}));
+        }
+        let mut gated = std::collections::BTreeSet::new();
+        for descriptor in plenora_core::catalog::CATALOG {
+            let mut names = vec![descriptor.id.to_owned()];
+            names.extend(
+                plenora_core::catalog::ALIASES
+                    .iter()
+                    .filter(|(_, _, canonical)| *canonical == descriptor.id)
+                    .map(|(_, alias, _)| (*alias).to_owned()),
+            );
+            for config in &probes {
+                if !descriptor.emits_row_diagnostics(config) {
+                    continue;
+                }
+                for name in &names {
+                    let plan = serde_json::json!({
+                        "schema_version": 1,
+                        "steps": [
+                            {"operation": "sort", "config": {"columns": ["id"]}},
+                            {"operation": name, "config": config}
+                        ]
+                    });
+                    let error = reject_legacy_row_diagnostics_plan(&plan.to_string())
+                        .expect_err("op diagnostica legacy non bloccata dal gate");
+                    assert!(
+                        matches!(error, PlenoraError::Unsupported(_)),
+                        "{} (nome `{name}`, config {config}): rifiuto atteso dal gate \
+                         (Unsupported), ottenuto {error:?}",
+                        descriptor.id
+                    );
+                    gated.insert(descriptor.id);
+                }
+            }
+        }
+        // Lock espliciti del perimetro (P0: formula/expression erano il
+        // bypass; P2: md5/sha256 con null_policy=error; type_cast fallibile).
+        for expected in [
+            "table.formula",
+            "table.expression",
+            "table.type_cast",
+            "table.md5_hash",
+            "table.sha256_hash",
+            "table.flatten_json",
+            "table.assert_not_null",
+            "geo.from_wkt",
+            "geo.centroid",
+        ] {
+            assert!(
+                gated.contains(expected),
+                "{expected}: op diagnostica non coperta dal gate legacy"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_gate_passes_operations_that_do_not_emit_row_diagnostics() {
+        // P1-3/P2: md5/sha256 senza null_policy=error, type_cast verso `str`
+        // e hmac_sha256 non emettono diagnostica row-scoped: il gate li
+        // lascia passare (resta la validazione legacy, qui con config
+        // valide). Lock anti-regressione sull'autorita' config-sensitive.
+        for plan in [
+            serde_json::json!({"schema_version": 1, "steps": [
+                {"operation": "md5_hash", "config": {"columns": ["id"]}}
+            ]}),
+            serde_json::json!({"schema_version": 1, "steps": [
+                {"operation": "md5_hash", "config": {"columns": ["id"], "null_policy": "empty"}}
+            ]}),
+            serde_json::json!({"schema_version": 1, "steps": [
+                {"operation": "sha256_hash", "config": {
+                    "columns": ["id"], "null_policy": "literal", "null_literal": "<null>"
+                }}
+            ]}),
+            serde_json::json!({"schema_version": 1, "steps": [
+                {"operation": "type_cast", "config": {
+                    "column": "id", "target_type": "str", "date_format": "", "errors": "coerce"
+                }}
+            ]}),
+            serde_json::json!({"schema_version": 1, "steps": [
+                {"operation": "table.hmac_sha256", "config": {
+                    "columns": ["id"], "key_env": "PLENORA_GATE_TEST_KEY"
+                }}
+            ]}),
+        ] {
+            reject_legacy_row_diagnostics_plan(&plan.to_string())
+                .expect("op non diagnostica bloccata dal gate legacy");
+        }
+    }
+
+    #[test]
+    fn legacy_diagnostic_plans_are_rejected_even_when_blocking() {
+        // Nel percorso legacy non esiste gate provenance (solo DAG v4):
+        // qualsiasi op row-diagnostics, anche come primo step o dopo op
+        // blocking row-preserving, richiede DAG v4 — la materializzazione
+        // completa non attesta la provenance `source_row_zero_based`.
+        for plan in [
+            serde_json::json!({
+                "schema_version": 1,
+                "steps": [{
+                    "operation": "assert_unique",
+                    "config": {"columns": ["id"], "nulls_equal": true}
+                }]
+            }),
+            serde_json::json!({
+                "schema_version": 1,
+                "steps": [{
+                    "operation": "assert_foreign_key",
+                    "config": {"left_keys": ["id"], "right_keys": ["id"]}
+                }]
+            }),
+            serde_json::json!({
+                "schema_version": 1,
+                "steps": [
+                    {"operation": "bin", "config": {"column": "value", "bins": 2}},
+                    {"operation": "assert_regex", "config": {"column": "name", "pattern": ".*"}}
+                ]
+            }),
+            serde_json::json!({
+                "schema_version": 1,
+                "steps": [
+                    {"operation": "add_row_number", "config": {}},
+                    {"operation": "type_cast", "config": {"column": "value", "target_type": "date32"}}
+                ]
+            }),
+        ] {
+            let error = reject_legacy_row_diagnostics_plan(&plan.to_string())
+                .expect_err("piano legacy diagnostico: provenance non attestabile");
+            assert!(matches!(error, PlenoraError::Unsupported(_)));
+        }
+    }
+
+    #[test]
+    fn error_envelope_preserves_optional_row_diagnostics() {
+        let mut counts = std::collections::BTreeMap::new();
+        counts.insert("conversion.invalid_date".to_owned(), 1);
+        let report = plenora_core::diagnostics::RowDiagnostics {
+            contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
+            index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
+            knowledge_limits: None,
+            total: Some(1),
+            observed_total: 1,
+            counts,
+            examples_limit: 10,
+            examples_truncated: false,
+            examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
+                source_index: 4,
+                cause: "conversion.invalid_date".to_owned(),
+                column: Some("effective_date".to_owned()),
+                key: None,
+                write_state: None,
+            }],
+            input_total: None,
+            diagnostic_state_counts: None,
+            write_outcome: None,
+        };
+        let error = PlenoraError::DataMapping("conversione data rifiutata".to_owned())
+            .with_phase(ErrorPhase::Read)
+            .with_row_diagnostics(report.clone());
+        let envelope = error_envelope(&error, false);
+
+        assert_eq!(
+            envelope["error"]["row_diagnostics"],
+            serde_json::to_value(&report).expect("serializzazione report")
+        );
+        assert_eq!(envelope["error"]["category"], "data_mapping");
+        assert_eq!(envelope["error"]["phase"], "read");
+
+        let ordinary = error_envelope(
+            &PlenoraError::DataMapping("errore ordinario".to_owned()),
+            false,
+        );
+        assert!(ordinary["error"].get("row_diagnostics").is_none());
+
+        let mut invalid = report;
+        invalid.examples_limit = 0;
+        let direct = PlenoraError::RowDiagnostics {
+            source: Box::new(PlenoraError::DataMapping("righe non conformi".to_owned())),
+            diagnostics: Box::new(invalid.clone()),
+        };
+        let fail_closed = error_envelope(&direct, false);
+        assert!(fail_closed["error"].get("row_diagnostics").is_none());
+        assert_eq!(fail_closed["error"]["category"], "internal");
+        assert_eq!(
+            fail_closed["error"]["message"],
+            "row diagnostics interne non valide"
+        );
+
+        let cancelled_direct = PlenoraError::RowDiagnostics {
+            source: Box::new(PlenoraError::Cancelled {
+                node: "cast".to_owned(),
+                operation: "table.type_cast".to_owned(),
+                execution_id: "exec-invalid".to_owned(),
+                reason: "cancellazione richiesta".to_owned(),
+            }),
+            diagnostics: Box::new(invalid.clone()),
+        };
+        let cancelled_fail_closed = error_envelope(&cancelled_direct, true);
+        assert_eq!(cancelled_fail_closed["error"]["category"], "internal");
+        assert_eq!(error_exit_code(&cancelled_fail_closed), 2);
+
+        let rejected = PlenoraError::DataMapping("righe non conformi".to_owned())
+            .with_row_diagnostics(invalid);
+        assert_eq!(rejected.category(), plenora_core::ErrorCategory::Internal);
+        assert!(rejected.row_diagnostics().is_none());
+    }
+
+    #[test]
     fn error_envelope_maps_io_json_and_unknown_errors() {
         let io = std::io::Error::other("disco pieno");
         let envelope = error_envelope(&io, false);
         assert_eq!(envelope["error"]["category"], "io");
         assert_eq!(envelope["error"]["phase"], "read");
-        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "safe"}));
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "safe"})
+        );
 
         let json = serde_json::from_str::<u32>("\"non-un-numero\"").expect_err("json invalido");
         let envelope = error_envelope(&json, false);
         assert_eq!(envelope["error"]["category"], "data_mapping");
         assert_eq!(envelope["error"]["phase"], "validate");
-        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "never"})
+        );
     }
 
     #[test]
@@ -1907,7 +2292,11 @@ mod tests {
         };
         let envelope = error_envelope(&error, true);
         assert_eq!(envelope["error"]["category"], "cancelled");
-        assert_eq!(envelope["error"]["retry"], serde_json::json!({"kind": "never"}));
+        assert_eq!(error_exit_code(&envelope), EXIT_CANCELLED);
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "never"})
+        );
         assert!(
             envelope["error"]["message"]
                 .as_str()
@@ -1916,6 +2305,38 @@ mod tests {
             "messaggio dedicato preservato: {envelope}"
         );
         assert_eq!(envelope["error"]["context"]["execution_id"], "exec-9");
+
+        let wrapped = error.with_row_diagnostics(plenora_core::diagnostics::RowDiagnostics {
+            contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
+            index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Partial,
+            observed_total: 1,
+            total: None,
+            input_total: None,
+            counts: std::collections::BTreeMap::from([("conversion.invalid_date".to_owned(), 1)]),
+            examples_limit: 10,
+            examples_truncated: false,
+            examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
+                source_index: 4,
+                cause: "conversion.invalid_date".to_owned(),
+                column: Some("effective_date".to_owned()),
+                key: None,
+                write_state: None,
+            }],
+            knowledge_limits: Some(vec!["data_tools.processing_interrupted".to_owned()]),
+            diagnostic_state_counts: None,
+            write_outcome: None,
+        });
+        assert!(wrapped.is_cancelled(), "exit code deve restare 130");
+        let wrapped_envelope = error_envelope(&wrapped, wrapped.is_cancelled());
+        assert_eq!(wrapped_envelope["error"]["category"], "cancelled");
+        assert_eq!(error_exit_code(&wrapped_envelope), EXIT_CANCELLED);
+        assert_eq!(
+            wrapped_envelope["error"]["context"]["execution_id"],
+            "exec-9"
+        );
+        assert!(wrapped_envelope["error"].get("row_diagnostics").is_some());
     }
 
     fn projected_crs() -> ResolvedCrs {
@@ -1998,11 +2419,9 @@ mod tests {
         assert_eq!(contract.encoding, Some(GeometryEncoding::Ewkb));
 
         // Forma scritta dai writer correnti (dimensions xy, niente encoding).
-        let written = plenora_kernels_geo::arrow_adapter::geometry_output_field(
-            "geometry",
-            "EPSG:32632",
-        )
-        .expect("field");
+        let written =
+            plenora_kernels_geo::arrow_adapter::geometry_output_field("geometry", "EPSG:32632")
+                .expect("field");
         let contract = contract_from_field(&written).expect("discovery");
         assert_eq!(contract.dimensions, GeometryDimensions::Xy);
         // Milestone C (R2.7): il nome di estensione `geoarrow.wkb` dichiara
@@ -2281,10 +2700,14 @@ mod tests {
         ]);
         let contract =
             discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
-        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
-            &contract.geometries[0].crs
+        let ContractCrs::DeclaredUnresolved {
+            crs_id, definition, ..
+        } = &contract.geometries[0].crs
         else {
-            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+            panic!(
+                "atteso DeclaredUnresolved: {:?}",
+                contract.geometries[0].crs
+            );
         };
         assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
         assert_eq!(definition, &None);
@@ -2311,10 +2734,14 @@ mod tests {
         ]);
         let contract =
             discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
-        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
-            &contract.geometries[0].crs
+        let ContractCrs::DeclaredUnresolved {
+            crs_id, definition, ..
+        } = &contract.geometries[0].crs
         else {
-            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+            panic!(
+                "atteso DeclaredUnresolved: {:?}",
+                contract.geometries[0].crs
+            );
         };
         assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
         assert_eq!(definition, &None);
@@ -2357,7 +2784,10 @@ mod tests {
         // dichiarazione esplicita era il bug del caso owner).
         let field = canonical_crs_field(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
-            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, r#"{"type":"GeographicCRS"}"#),
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+                r#"{"type":"GeographicCRS"}"#,
+            ),
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lat_lon"),
         ]);
@@ -2369,13 +2799,13 @@ mod tests {
             definition_format,
         } = &contract.geometries[0].crs
         else {
-            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+            panic!(
+                "atteso DeclaredUnresolved: {:?}",
+                contract.geometries[0].crs
+            );
         };
         assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
-        assert_eq!(
-            definition.as_deref(),
-            Some(r#"{"type":"GeographicCRS"}"#)
-        );
+        assert_eq!(definition.as_deref(), Some(r#"{"type":"GeographicCRS"}"#));
         assert_eq!(
             definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
             Some("projjson")
@@ -2407,9 +2837,15 @@ mod tests {
         vec![
             (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved".to_owned()),
             (PLENORA_GEOMETRY_CRS_ID_KEY, crs_id.to_owned()),
-            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, MONTE_MARIO_WKT.to_owned()),
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+                MONTE_MARIO_WKT.to_owned(),
+            ),
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt".to_owned()),
-            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing".to_owned()),
+            (
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+                "easting_northing".to_owned(),
+            ),
         ]
     }
 
@@ -2421,8 +2857,10 @@ mod tests {
         // contro PROJ e la verifica di coerenza (crs_id 3003 == srid del
         // canonical) conferma — `Resolved`, con `authority_srid` 3003.
         let pairs = monte_mario_resolved_pairs("EPSG:3003");
-        let pairs_ref: Vec<(&str, &str)> =
-            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
         let field = canonical_crs_field(&pairs_ref);
         let contract =
             discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
@@ -2440,8 +2878,10 @@ mod tests {
         // `DeclaredUnresolved` con le dichiarazioni ORIGINALI preservate
         // (non passa e nulla si perde).
         let pairs = monte_mario_resolved_pairs("EPSG:4326");
-        let pairs_ref: Vec<(&str, &str)> =
-            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
         let field = canonical_crs_field(&pairs_ref);
         let contract =
             discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
@@ -2451,7 +2891,10 @@ mod tests {
             definition_format,
         } = &contract.geometries[0].crs
         else {
-            panic!("atteso DeclaredUnresolved: {:?}", contract.geometries[0].crs);
+            panic!(
+                "atteso DeclaredUnresolved: {:?}",
+                contract.geometries[0].crs
+            );
         };
         assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
         assert_eq!(definition.as_deref(), Some(MONTE_MARIO_WKT));
@@ -2465,13 +2908,18 @@ mod tests {
     #[test]
     fn discovery_resolved_with_same_code_but_different_authority_stays_unresolved() {
         let pairs = monte_mario_resolved_pairs("FOO:3003");
-        let pairs_ref: Vec<(&str, &str)> =
-            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
         let field = canonical_crs_field(&pairs_ref);
         let contract =
             discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
         assert!(
-            matches!(contract.geometries[0].crs, ContractCrs::DeclaredUnresolved { .. }),
+            matches!(
+                contract.geometries[0].crs,
+                ContractCrs::DeclaredUnresolved { .. }
+            ),
             "un'autorita' diversa non puo' essere certificata dal solo codice numerico"
         );
     }
@@ -2486,8 +2934,10 @@ mod tests {
         // regola (3) e la risoluzione impossibile fallisce con errore
         // `Crs` — coerente col `resolved` a rappresentazione singola.
         let pairs = monte_mario_resolved_pairs("EPSG:3003");
-        let pairs_ref: Vec<(&str, &str)> =
-            pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
         let field = canonical_crs_field(&pairs_ref);
         let result = discover_input_contract_from_schema(schema_v1(vec![field]));
         assert!(
@@ -2535,9 +2985,15 @@ mod tests {
                 r#"{"crs":"EPSG:99999","encoding":"wkb"}"#.to_owned(),
             ),
         ]);
-        if let ContractCrs::DeclaredUnresolved { crs_id: Some(id), .. } = &crs {
+        if let ContractCrs::DeclaredUnresolved {
+            crs_id: Some(id), ..
+        } = &crs
+        {
             metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), id.clone());
-            metadata.insert(PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(), "unknown".to_owned());
+            metadata.insert(
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                "unknown".to_owned(),
+            );
             metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "99999".to_owned());
         }
         let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
@@ -2579,9 +3035,10 @@ mod tests {
 
     #[test]
     fn crs_decisions_on_unknown_input_is_an_error() {
-        let mut contracts = vec![("main".to_owned(), contract_with_crs_state(
-            declared_unresolved_state(),
-        ))];
+        let mut contracts = vec![(
+            "main".to_owned(),
+            contract_with_crs_state(declared_unresolved_state()),
+        )];
         let probe = PlanInputsProbe {
             inputs: vec!["main".to_owned()],
             crs_decisions: std::collections::BTreeMap::from([(
@@ -2599,18 +3056,11 @@ mod tests {
         // non ne dichiara (R4.4); su `resolved` e' una contraddizione del
         // piano. Mai ignorata in silenzio: errore esplicito in entrambi i
         // casi, prima di toccare il backend (il test vale senza PROJ).
-        for state in [
-            ContractCrs::Missing,
-            ContractCrs::Resolved(projected_crs()),
-        ] {
+        for state in [ContractCrs::Missing, ContractCrs::Resolved(projected_crs())] {
             let mut contracts = vec![("main".to_owned(), contract_with_crs_state(state))];
-            let error =
-                apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts)
-                    .expect_err("stato non decidibile");
-            assert!(
-                error.to_string().contains("non e' applicabile"),
-                "{error}"
-            );
+            let error = apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts)
+                .expect_err("stato non decidibile");
+            assert!(error.to_string().contains("non e' applicabile"), "{error}");
         }
     }
 
@@ -2623,20 +3073,32 @@ mod tests {
         // check fail-closed dell'executor confronta i campi del file con il
         // contratto validato — la sostituzione delle dichiarazioni avviene
         // solo in emissione (strip nella fusione dello schema di output).
-        let mut contracts = vec![("main".to_owned(), contract_with_crs_state(
-            declared_unresolved_state(),
-        ))];
-        apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts)
-            .expect("decisione");
+        let mut contracts = vec![(
+            "main".to_owned(),
+            contract_with_crs_state(declared_unresolved_state()),
+        )];
+        apply_crs_decisions(&decisions_probe("EPSG:32632"), &mut contracts).expect("decisione");
         let contract = &contracts[0].1;
         let ContractCrs::ResolvedByDecision(crs) = &contract.geometries[0].crs else {
-            panic!("atteso ResolvedByDecision: {:?}", contract.geometries[0].crs);
+            panic!(
+                "atteso ResolvedByDecision: {:?}",
+                contract.geometries[0].crs
+            );
         };
         assert_eq!(crs.definition(), "EPSG:32632");
-        assert_eq!(contract.geometries[0].crs.resolution(), CrsResolution::Resolved);
-        let metadata = contract.schema.field_with_name("geometry").expect("campo").metadata();
         assert_eq!(
-            metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY).map(String::as_str),
+            contract.geometries[0].crs.resolution(),
+            CrsResolution::Resolved
+        );
+        let metadata = contract
+            .schema
+            .field_with_name("geometry")
+            .expect("campo")
+            .metadata();
+        assert_eq!(
+            metadata
+                .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
+                .map(String::as_str),
             Some("declared_unresolved"),
             "lo schema di input resta quello scoperto"
         );
@@ -2705,7 +3167,10 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect();
-        assert_eq!(argument_value(&args, "--schema").expect("presente"), "s.json");
+        assert_eq!(
+            argument_value(&args, "--schema").expect("presente"),
+            "s.json"
+        );
         let missing = argument_value(&args, "--output").expect_err("flag assente");
         assert!(missing.to_string().contains("--output"), "{missing}");
         let dangling: Vec<String> = vec!["--input".to_string()];
@@ -2738,7 +3203,11 @@ mod tests {
             assert_eq!(message, "input `main` (dati.arrow): boom");
         }
         // Le altre varianti passano inalterate (testo e tipo).
-        let io = at_input("main", path, PlenoraError::Io(std::io::Error::other("disco")));
+        let io = at_input(
+            "main",
+            path,
+            PlenoraError::Io(std::io::Error::other("disco")),
+        );
         assert!(matches!(io, PlenoraError::Io(_)));
         assert_eq!(io.to_string(), "io error: disco");
     }
@@ -2788,13 +3257,82 @@ mod tests {
             crs_id: Some("EPSG:32632".to_owned()),
             ..CanonicalGeometryKeys::default()
         };
-        let ContractCrs::DeclaredUnresolved { crs_id, definition, .. } =
-            contract_crs_from_keys("geometry", None, &keys).expect("stato")
+        let ContractCrs::DeclaredUnresolved {
+            crs_id, definition, ..
+        } = contract_crs_from_keys("geometry", None, &keys).expect("stato")
         else {
             panic!("atteso DeclaredUnresolved");
         };
         assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
         assert_eq!(definition.as_deref(), Some(r#"{"type":"ProjectedCRS"}"#));
+    }
+
+    #[test]
+    fn contract_crs_from_keys_srid_only_declared_unresolved_is_a_representation() {
+        // Catena MySQL TLS Database→Data: il provider conosce lo SRID
+        // numerico dal catalogo ma non puo' inventare l'autorita' (R4.4) —
+        // dichiara `declared_unresolved` con SOLO `srid`, senza
+        // `crs_id`/`crs_definition`. R4.3.1: lo SRID numerico e' la terza
+        // rappresentazione CRS (dopo definizione e identificatore), quindi
+        // la dichiarazione NON e' la contraddizione R4.1 — lo stato e'
+        // `DeclaredUnresolved` con crs_id/definition/format ASSENTI (mai
+        // sintetizzati); lo SRID resta custodito dallo schema Arrow
+        // originale (il contratto non lo modella).
+        let keys = CanonicalGeometryKeys {
+            srid: Some(4326),
+            crs_resolution: Some(CrsResolution::DeclaredUnresolved),
+            ..CanonicalGeometryKeys::default()
+        };
+        let ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format,
+        } = contract_crs_from_keys("geometry", None, &keys).expect("stato")
+        else {
+            panic!("atteso DeclaredUnresolved");
+        };
+        assert_eq!(crs_id, None, "crs_id mai sintetizzato");
+        assert_eq!(definition, None, "definizione mai sintetizzata");
+        assert_eq!(definition_format, None, "formato mai sintetizzato");
+    }
+
+    #[test]
+    fn contract_crs_from_keys_declared_unresolved_without_any_representation_is_an_error() {
+        // Fail-closed (R4.1): `declared_unresolved` senza crs_id, definition
+        // E srid resta una contraddizione — errore esplicito, mai collasso
+        // su `missing`.
+        let keys = CanonicalGeometryKeys {
+            crs_resolution: Some(CrsResolution::DeclaredUnresolved),
+            ..CanonicalGeometryKeys::default()
+        };
+        let result = contract_crs_from_keys("geometry", None, &keys);
+        match result {
+            Err(PlenoraError::InvalidPlan(message)) => {
+                assert!(
+                    message.contains("nessun CRS e' dichiarato in alcuna rappresentazione"),
+                    "{message}"
+                );
+            }
+            other => panic!("attesa contraddizione R4.1, ottenuto {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_crs_from_keys_resolved_with_srid_only_is_never_promoted() {
+        // Fail-closed: lo SRID numerico da solo non identifica un'autorita'
+        // risolvibile e il centro non la inventa (R4.4) — un `resolved`
+        // dichiarato con SOLO `srid` non e' promosso ne' risolto
+        // implicitamente: resta la contraddizione R4.1 di sempre (errore).
+        let keys = CanonicalGeometryKeys {
+            srid: Some(4326),
+            crs_resolution: Some(CrsResolution::Resolved),
+            ..CanonicalGeometryKeys::default()
+        };
+        let result = contract_crs_from_keys("geometry", None, &keys);
+        assert!(
+            matches!(result, Err(PlenoraError::InvalidPlan(_))),
+            "`resolved` srid-only non promosso: {result:?}"
+        );
     }
 
     #[test]
@@ -2806,15 +3344,9 @@ mod tests {
         let keys = CanonicalGeometryKeys::default();
         let result = contract_crs_from_keys("geometry", Some(&legacy), &keys);
         #[cfg(feature = "proj-backend")]
-        assert!(
-            matches!(result, Ok(ContractCrs::Resolved(_))),
-            "{result:?}"
-        );
+        assert!(matches!(result, Ok(ContractCrs::Resolved(_))), "{result:?}");
         #[cfg(not(feature = "proj-backend"))]
-        assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
-            "{result:?}"
-        );
+        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
         // Nessuna rappresentazione: `Missing`, mai errore (R4.6.3).
         let missing = contract_crs_from_keys("geometry", None, &keys).expect("assente");
         assert!(matches!(missing, ContractCrs::Missing));
@@ -2829,9 +3361,9 @@ mod tests {
                 "geoarrow.point".to_owned(),
             )]),
         );
-        let result = discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(
-            vec![unknown_extension],
-        )));
+        let result = discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(vec![
+            unknown_extension,
+        ])));
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("non supportata"), "{message}");
@@ -2944,11 +3476,8 @@ mod tests {
     #[test]
     fn open_input_accepts_file_and_stream_ipc_framings() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let schema: SchemaRef = std::sync::Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int64,
-            false,
-        )]));
+        let schema: SchemaRef =
+            std::sync::Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             std::sync::Arc::clone(&schema),
             vec![std::sync::Arc::new(
@@ -2958,8 +3487,8 @@ mod tests {
         .expect("batch");
         // IPC file format.
         let file_path = directory.path().join("in.arrow");
-        let mut writer =
-            FileWriter::try_new(File::create(&file_path).expect("create"), &schema).expect("writer");
+        let mut writer = FileWriter::try_new(File::create(&file_path).expect("create"), &schema)
+            .expect("writer");
         writer.write(&batch).expect("write");
         writer.finish().expect("finish");
         assert!(is_ipc_file_format(&file_path).expect("sniff"));
@@ -2977,7 +3506,9 @@ mod tests {
         for path in [&file_path, &stream_path] {
             let input = open_input(path).expect("open_input");
             match input {
-                Input::Stream { schema: declared, .. } => assert_eq!(declared, schema),
+                Input::Stream {
+                    schema: declared, ..
+                } => assert_eq!(declared, schema),
                 Input::Batches(_) => panic!("gli input da percorso sono lazy"),
             }
         }
@@ -2993,10 +3524,12 @@ mod tests {
             v4_input_paths(&single).expect("paths"),
             vec![PathBuf::from("a.arrow")]
         );
-        let multiple: Vec<String> = ["run", "--inputs", "b.arrow", "c.arrow", "--output", "o.arrow"]
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let multiple: Vec<String> = [
+            "run", "--inputs", "b.arrow", "c.arrow", "--output", "o.arrow",
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
         assert_eq!(
             v4_input_paths(&multiple).expect("paths"),
             vec![PathBuf::from("b.arrow"), PathBuf::from("c.arrow")],
@@ -3086,7 +3619,10 @@ mod tests {
         let mut output = Vec::new();
         let result = transform_stream(&mut input.as_slice(), &mut output, &centroid_schema(3));
         let error = result.expect_err("row_count non coerente");
-        assert!(error.to_string().contains("row_count non coerente"), "{error}");
+        assert!(
+            error.to_string().contains("row_count non coerente"),
+            "{error}"
+        );
     }
 
     #[test]

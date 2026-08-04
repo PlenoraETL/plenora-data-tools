@@ -1,0 +1,1207 @@
+{
+ "schema": "plenora-row-diagnostics-coverage-ledger-v1",
+ "date": "2026-08-03",
+ "catalog_ops": 146,
+ "categories": {
+  "diag-kernel": {
+   "description": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  "diag-transport": {
+   "description": "map_nullable a raccolta completa + aggregazione multi-batch a offset assoluti (P0-2) + runner fuso ADR-0012 (parita' testata) nel DAG; NIENTE gate planner per le op solo-trasporto (es. geodesic_*): il gate provenance esiste solo nel planner DAG, sul trasporto la provenance e' la posizione nel batch di input aggregata con offset checked; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, transport::one_to_one_reports_absolute_indices_and_complete_scan_across_batches (incl. Bounds), executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  "diag-wkt": {
+   "description": "kernels-geo reject_rows (WIP preesistente); test: kernels-geo lib + planner gate"
+  },
+  "diag-coords": {
+   "description": "raccolta transport from_coords con indici assoluti multi-batch (questa campagna); test: transport::from_coords_reports_row_diagnostics_with_absolute_indices, CLI roundtrip_smoke::transform_arrow_from_coords_reports_row_diagnostics"
+  },
+  "report-data": {
+   "description": "le issue sono DATI di output dichiarati (schema di contratto), non rifiuti: nessun drop; test dedicati executor/transport"
+  },
+  "gate-only": {
+   "description": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  "transport-collective": {
+   "description": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  "unsupported": {
+   "description": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  "whole": {
+   "description": "failure group/whole-level (overflow aggregato, asserzione di cardinalita' intera, totale): non row-attribuibile per definizione, provenance Unavailable dichiarata dal catalogo; fail-closed senza source_index conforme"
+  },
+  "failclosed-config": {
+   "description": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  }
+ },
+ "operations": [
+  {
+   "id": "geo.affine_transform",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.area",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.bearing",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.boundary",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.bounds_extractor",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "failure per-cella reale: il ramo Bounds di one_to_one usa map_nullable a raccolta completa (WKB malformato/cella troppo grande -> geometry.invalid_wkb ecc.) con aggregazione multi-batch a offset assoluti (P0-2 review); test: geo_transport::transport::one_to_one_reports_absolute_indices_and_complete_scan_across_batches (include ArrowOperation::Bounds)"
+  },
+  {
+   "id": "geo.buffer",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.centroid",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.clean_topology",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.clip",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.cluster_dbscan",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.collect",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.concave_hull",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.convex_hull",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.count_points_in_polygons",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.coverage_validate",
+   "family": "geo",
+   "result_shape": "whole_to_many",
+   "execution_class": "blocking",
+   "category": "report-data",
+   "evidence": "le issue sono DATI di output dichiarati (schema di contratto), non rifiuti: nessun drop; test dedicati executor/transport"
+  },
+  {
+   "id": "geo.delaunay",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.densify",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.difference",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.dissolve",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.distance",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.envelope",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.explode",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "streaming",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.frechet_distance",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.from_coords",
+   "family": "geo",
+   "result_shape": "from_coords",
+   "execution_class": "streaming",
+   "category": "diag-coords",
+   "evidence": "raccolta transport from_coords con indici assoluti multi-batch (questa campagna); test: transport::from_coords_reports_row_diagnostics_with_absolute_indices, CLI roundtrip_smoke::transform_arrow_from_coords_reports_row_diagnostics"
+  },
+  {
+   "id": "geo.from_wkt",
+   "family": "geo",
+   "result_shape": "from_coords",
+   "execution_class": "streaming",
+   "category": "diag-wkt",
+   "evidence": "kernels-geo reject_rows (WIP preesistente); test: kernels-geo lib + planner gate"
+  },
+  {
+   "id": "geo.generate_grid",
+   "family": "geo",
+   "result_shape": "whole_to_many",
+   "execution_class": "blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.geodesic_area",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.geodesic_distance",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.geodesic_line_length",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.geometry_accessors",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.geometry_diagnostics",
+   "family": "geo",
+   "result_shape": "diagnostic",
+   "execution_class": "streaming",
+   "category": "report-data",
+   "evidence": "le issue sono DATI di output dichiarati (schema di contratto), non rifiuti: nessun drop; test dedicati executor/transport"
+  },
+  {
+   "id": "geo.hausdorff_distance",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.haversine_distance",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.intersection",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.length",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.line_builder",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.line_interpolate_point",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.line_locate_point",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.line_merge",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.line_substring",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.make_valid",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.nearest",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.overlay",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.perimeter",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.point_on_surface",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.polygon_builder",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.polygonize",
+   "family": "geo",
+   "result_shape": "many_to_one",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.predicate_contains",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_contains_properly",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_covered_by",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_covers",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_crosses",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_disjoint",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_equals_topo",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_intersects",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_overlaps",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_touches",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.predicate_within",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.reproject",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.rotate",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.scale",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.shared_paths",
+   "family": "geo",
+   "result_shape": "whole_to_many",
+   "execution_class": "blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.simplify",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.sjoin",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.snap",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.snap_to_grid",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.split",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "streaming",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.subdivide",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "streaming",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "geo.symmetric_difference",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.to_wkt",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.translate",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.union",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "unsupported",
+   "evidence": "nessun percorso esecutivo pubblico: Unsupported fail-closed a prepare (DAG) e assente da ArrowOperation (trasporto); nessun accepted possibile"
+  },
+  {
+   "id": "geo.vertex_count",
+   "family": "geo",
+   "result_shape": "one_to_one",
+   "execution_class": "streaming",
+   "category": "diag-transport",
+   "evidence": "map_nullable a raccolta completa + runner fuso ADR-0012 (parita' testata) + attach executor; test: unary::transform_cells_reports_complete_row_diagnostics, unary::fused_and_sequential_report_identical_row_diagnostics, unary::cell_too_large_is_attributed_to_the_producing_kernel, executor::geo_transform/geo_measure_reports_complete_row_diagnostics_across_input_batches"
+  },
+  {
+   "id": "geo.voronoi",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "blocking",
+   "category": "transport-collective",
+   "evidence": "solo trasporto CLI (non dispatchable DAG): kernel totale su input gate-validato; failure kernel collettiva fail-closed senza indice (residuo R1, failure non row-attribuibile per costruzione)"
+  },
+  {
+   "id": "geo.within",
+   "family": "geo",
+   "result_shape": "one_to_many",
+   "execution_class": "binary_blocking",
+   "category": "gate-only",
+   "evidence": "failure per-cella possibile solo su archi di input del piano: gate WKB atomico con diagnostica completa (test: executor::late_wkb_rejections_are_complete_absolute_and_publish_nothing); su input validato il kernel e' totale"
+  },
+  {
+   "id": "table.add_row_number",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.aggregate",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "whole",
+   "evidence": "failure group/whole-level (overflow aggregato, asserzione di cardinalita' intera, totale): non row-attribuibile per definizione, provenance Unavailable dichiarata dal catalogo; fail-closed senza source_index conforme"
+  },
+  {
+   "id": "table.align_schema",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.anti_join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.asof_join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.assert_cardinality",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "whole",
+   "evidence": "failure group/whole-level (overflow aggregato, asserzione di cardinalita' intera, totale): non row-attribuibile per definizione, provenance Unavailable dichiarata dal catalogo; fail-closed senza source_index conforme"
+  },
+  {
+   "id": "table.assert_foreign_key",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.assert_metadata",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.assert_not_null",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.assert_range",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.assert_regex",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.assert_schema",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.assert_unique",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.bin",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.coalesce",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.concat",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.concat_by_name",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.concat_columns",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.conditional",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.cross_join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.date_add",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.date_diff",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.date_extract",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.date_format",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.dedup_advanced",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.distinct",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.drop_columns",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.except",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.explode",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.expression",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.fill_na",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.filter",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.flatten_json",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.formula",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.fuzzy_join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.hmac_sha256",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata); P2 review 2026-08-03: hmac_sha256 non emette MAI diagnostica row-scoped (null_policy legacy con output dichiarato), autorita' catalogo emits_row_diagnostics"
+  },
+  {
+   "id": "table.intersect",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.limit",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.lookup",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.mask_data",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.md5_hash",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.melt",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.pivot",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.reconcile",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.rename",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.reorder_columns",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.replace",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.rolling_window",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.sample",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.select_columns",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.semi_join",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.sha256_hash",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.sort",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.split_column",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.stable_fingerprint",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.statistics",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "whole",
+   "evidence": "failure group/whole-level (overflow aggregato, asserzione di cardinalita' intera, totale): non row-attribuibile per definizione, provenance Unavailable dichiarata dal catalogo; fail-closed senza source_index conforme"
+  },
+  {
+   "id": "table.string_extract",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.string_length",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.string_pad",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.table_diff",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.text_normalize",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.timezone_convert",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.top_n",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.transpose",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.type_cast",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "diag-kernel",
+   "evidence": "kernel reject_rows (plenora-kernels-table) + gate planner + merge executor; test: kernels-table lib (286), planner::row_diagnostics_*, executor::*_collects_complete_row_diagnostics_*"
+  },
+  {
+   "id": "table.union_distinct",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "binary_blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.unnest",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.uuid_generator",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  },
+  {
+   "id": "table.validate_rules",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "streaming",
+   "category": "report-data",
+   "evidence": "le issue sono DATI di output dichiarati (schema di contratto), non rifiuti: nessun drop; test dedicati executor/transport"
+  },
+  {
+   "id": "table.window_function",
+   "family": "table",
+   "result_shape": null,
+   "execution_class": "blocking",
+   "category": "failclosed-config",
+   "evidence": "errori solo di configurazione/schema rilevati ad analyze/prepare (tipo colonne, parametri, mismatch schemi); nessun fallimento per-riga sul dato: verificato in audit 2026-08-03 sui kernel (null-safe, semantica null dichiarata)"
+  }
+ ]
+}

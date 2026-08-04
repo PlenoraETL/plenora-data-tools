@@ -74,7 +74,9 @@ impl Drop for LeaseInner {
     fn drop(&mut self) {
         // Mai panic in Drop: un mutex avvelenato durante uno unwind non deve
         // abortire il processo — il rilascio della quota resta garantito.
-        self.governor.reserved_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.governor
+            .reserved_bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
         self.governor.live_leases.fetch_sub(1, Ordering::AcqRel);
         let mut births = self
             .governor
@@ -235,9 +237,15 @@ impl MemoryGovernor {
         // seriale un solo produttore alla volta tira lo stream, ma la forma
         // resta corretta anche in concorso (la quota in eccesso e'
         // restituita subito) — pronta per M3 senza cambi di API.
-        let reserved = self.shared.reserved_bytes.fetch_add(bytes, Ordering::AcqRel) + bytes;
+        let reserved = self
+            .shared
+            .reserved_bytes
+            .fetch_add(bytes, Ordering::AcqRel)
+            + bytes;
         if reserved > self.shared.budget {
-            self.shared.reserved_bytes.fetch_sub(bytes, Ordering::AcqRel);
+            self.shared
+                .reserved_bytes
+                .fetch_sub(bytes, Ordering::AcqRel);
             return Err(PlenoraError::InvalidPlan(format!(
                 "max_memory_bytes superato: `{owner}` richiede {bytes} byte, \
                  {} gia' riservati su un budget di {}",
@@ -281,11 +289,11 @@ impl MemoryGovernor {
             ReservationResult::Granted(lease) => Ok(lease),
             // Mai emessi dalla v1 (vedi `try_reserve`); mappati comunque a
             // fail-fast per difesa — mai `unreachable!` su esiti futuri.
-            ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => Err(
-                PlenoraError::InvalidPlan(format!(
+            ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => {
+                Err(PlenoraError::InvalidPlan(format!(
                     "max_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
-                )),
-            ),
+                )))
+            }
         }
     }
 }
@@ -410,7 +418,9 @@ mod tests {
         assert_eq!(governor.reserved_bytes(), 60);
 
         drop(lease);
-        governor.reserve(60, "nodo_b").expect("quota liberata dal Drop");
+        governor
+            .reserve(60, "nodo_b")
+            .expect("quota liberata dal Drop");
     }
 
     #[test]

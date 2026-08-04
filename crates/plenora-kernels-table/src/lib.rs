@@ -70,17 +70,108 @@ pub mod strings;
 pub mod utility;
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
     types::Int32Type, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
     DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray,
     UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use num_traits::ToPrimitive;
 
-use plenora_core::{PlenoraError, Result};
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
+
+pub(crate) struct RowRejection<'a> {
+    pub row: usize,
+    pub cause: &'static str,
+    pub column: Option<&'a str>,
+}
+
+/// Messaggi degli errori di valutazione attribuibili alla riga (dato, non
+/// piano): costanti uniche condivise fra i siti di costruzione
+/// (`expressions`, `formula`) e la classificazione — mai dati di riga.
+pub(crate) const DIVISION_BY_ZERO_MESSAGE: &str = "divisione per zero";
+pub(crate) const NON_FINITE_INPUT_MESSAGE: &str = "expression non accetta numeri non finiti";
+pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato expression non finito";
+
+/// Classifica un errore di valutazione per riga: `Some(causa)` solo se il
+/// difetto dipende dal valore della cella (divisione per zero, numero non
+/// finito in ingresso o in uscita). Gli errori di tipo/piano (`Schema` con
+/// altri messaggi, `InvalidPlan`, `Internal`) restano non row-scoped e
+/// propagano invariati, come prima.
+pub(crate) fn row_eval_failure_cause(error: &PlenoraError) -> Option<&'static str> {
+    let PlenoraError::Schema(message) = error else {
+        return None;
+    };
+    match message.as_str() {
+        DIVISION_BY_ZERO_MESSAGE => Some("evaluation.division_by_zero"),
+        NON_FINITE_INPUT_MESSAGE => Some("evaluation.non_finite_input"),
+        NON_FINITE_RESULT_MESSAGE => Some("evaluation.non_finite_result"),
+        _ => None,
+    }
+}
+
+/// Chiude fail-closed una batch quando una validazione per-riga trova difetti.
+/// Conteggi ed esempi sono deterministici, bounded e non contengono valori.
+pub(crate) fn reject_rows(rejections: &[RowRejection<'_>], message: &'static str) -> Result<()> {
+    const EXAMPLES_LIMIT: u64 = 10;
+    if rejections.is_empty() {
+        return Ok(());
+    }
+    let mut rows = BTreeMap::new();
+    for rejection in rejections {
+        rows.entry(rejection.row).or_insert(rejection);
+    }
+    let observed_total = u64::try_from(rows.len())
+        .map_err(|_| PlenoraError::Internal("troppe rejection row-scoped".into()))?;
+    let mut counts = BTreeMap::new();
+    let mut examples = Vec::new();
+    for rejection in rows.values() {
+        let count = counts.entry(rejection.cause.to_owned()).or_insert(0_u64);
+        *count = count.checked_add(1).ok_or_else(|| {
+            PlenoraError::Internal("overflow del conteggio causa row-scoped".into())
+        })?;
+        if u64::try_from(examples.len())
+            .map_err(|_| PlenoraError::Internal("troppi esempi row-scoped".into()))?
+            < EXAMPLES_LIMIT
+        {
+            examples.push(RowDiagnosticExample {
+                source_index: u64::try_from(rejection.row).map_err(|_| {
+                    PlenoraError::Internal("indice sorgente non rappresentabile".into())
+                })?,
+                cause: rejection.cause.to_owned(),
+                column: rejection.column.map(ToOwned::to_owned),
+                key: None,
+                write_state: None,
+            });
+        }
+    }
+    let report = RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    Err(PlenoraError::DataMapping(message.into())
+        .with_phase(ErrorPhase::Read)
+        .with_row_diagnostics(report))
+}
 
 /// Indice della colonna `name` nel batch.
 ///
@@ -457,7 +548,11 @@ fn compare_i64_f64(actual: i64, expected: f64) -> Option<Ordering> {
 // I cast f64 -> u64 nel corpo sono esatti per costruzione: NaN e infiniti
 // sono esclusi dalle guardie iniziali, il segno negativo dalla guardia
 // `expected < 0.0`, l'overflow dalla guardia `expected >= 2^64`.
-#[allow(clippy::float_cmp, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
     if expected.is_nan() {
         return None;
@@ -493,7 +588,8 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows
         .iter()
         .map(|row| {
-            u32::try_from(*row).map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))
+            u32::try_from(*row)
+                .map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?
         .into();
@@ -501,7 +597,8 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
         .columns()
         .iter()
         .map(|column| {
-            plenora_core::arrow::select::take::take(column.as_ref(), &indices, None).map_err(PlenoraError::from)
+            plenora_core::arrow::select::take::take(column.as_ref(), &indices, None)
+                .map_err(PlenoraError::from)
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
@@ -572,9 +669,15 @@ mod tests {
     fn compare_i64_is_exact_beyond_2_pow_53() {
         let lo = 9_007_199_254_740_992_i64; // 2^53
         let hi = 9_007_199_254_740_993_i64; // 2^53 + 1: stesso double di lo
-        assert_eq!(compare_i64(hi, NumericBound::I64(lo)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_i64(hi, NumericBound::I64(lo)),
+            Some(Ordering::Greater)
+        );
         assert_eq!(compare_i64(lo, NumericBound::I64(hi)), Some(Ordering::Less));
-        assert_eq!(compare_i64(hi, NumericBound::I64(hi)), Some(Ordering::Equal));
+        assert_eq!(
+            compare_i64(hi, NumericBound::I64(hi)),
+            Some(Ordering::Equal)
+        );
         // Bound f64: lo e hi collassano sullo stesso double, il confronto
         // resta esatto.
         let collapsed = NumericBound::F64(9_007_199_254_740_992.0);
@@ -586,15 +689,39 @@ mod tests {
     #[test]
     fn compare_i64_mixed_covers_fraction_inf_nan_and_ranges() {
         assert_eq!(compare_i64(5, NumericBound::F64(5.5)), Some(Ordering::Less));
-        assert_eq!(compare_i64(5, NumericBound::F64(4.5)), Some(Ordering::Greater));
-        assert_eq!(compare_i64(-5, NumericBound::F64(-5.5)), Some(Ordering::Greater));
-        assert_eq!(compare_i64(-6, NumericBound::F64(-5.5)), Some(Ordering::Less));
-        assert_eq!(compare_i64(0, NumericBound::F64(-0.0)), Some(Ordering::Equal));
-        assert_eq!(compare_i64(i64::MAX, NumericBound::F64(f64::INFINITY)), Some(Ordering::Less));
-        assert_eq!(compare_i64(i64::MIN, NumericBound::F64(f64::NEG_INFINITY)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_i64(5, NumericBound::F64(4.5)),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_i64(-5, NumericBound::F64(-5.5)),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_i64(-6, NumericBound::F64(-5.5)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_i64(0, NumericBound::F64(-0.0)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_i64(i64::MAX, NumericBound::F64(f64::INFINITY)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_i64(i64::MIN, NumericBound::F64(f64::NEG_INFINITY)),
+            Some(Ordering::Greater)
+        );
         assert_eq!(compare_i64(0, NumericBound::F64(f64::NAN)), None);
-        assert_eq!(compare_i64(i64::MAX, NumericBound::F64(1e30)), Some(Ordering::Less));
-        assert_eq!(compare_i64(i64::MIN, NumericBound::F64(-1e30)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_i64(i64::MAX, NumericBound::F64(1e30)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_i64(i64::MIN, NumericBound::F64(-1e30)),
+            Some(Ordering::Greater)
+        );
         // -2^63 e' un double intero esatto in gamma i64.
         assert_eq!(
             compare_i64(i64::MIN, NumericBound::F64(-9_223_372_036_854_775_808.0)),
@@ -613,16 +740,31 @@ mod tests {
 
     #[test]
     fn compare_u64_orders_natively_not_textually() {
-        assert_eq!(compare_u64(10, NumericBound::U64(9)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_u64(10, NumericBound::U64(9)),
+            Some(Ordering::Greater)
+        );
         assert_eq!(compare_u64(9, NumericBound::U64(10)), Some(Ordering::Less));
-        assert_eq!(compare_u64(u64::MAX, NumericBound::U64(u64::MAX)), Some(Ordering::Equal));
-        assert_eq!(compare_u64(0, NumericBound::I64(-1)), Some(Ordering::Greater));
-        assert_eq!(compare_u64(10, NumericBound::I64(9)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_u64(u64::MAX, NumericBound::U64(u64::MAX)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_u64(0, NumericBound::I64(-1)),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_u64(10, NumericBound::I64(9)),
+            Some(Ordering::Greater)
+        );
         // Bound f64 oltre 2^53: 2^64 e' maggiore di ogni u64.
         let top = NumericBound::F64(18_446_744_073_709_551_616.0); // 2^64
         assert_eq!(compare_u64(u64::MAX, top), Some(Ordering::Less));
         assert_eq!(compare_u64(0, NumericBound::F64(0.5)), Some(Ordering::Less));
-        assert_eq!(compare_u64(1, NumericBound::F64(0.5)), Some(Ordering::Greater));
+        assert_eq!(
+            compare_u64(1, NumericBound::F64(0.5)),
+            Some(Ordering::Greater)
+        );
         assert_eq!(compare_u64(0, NumericBound::F64(f64::NAN)), None);
     }
 
@@ -631,11 +773,17 @@ mod tests {
         // Letterale intero oltre 2^53 contro colonna Float64: il double
         // 9007199254740992.0 e' minore dell'intero 9007199254740993.
         assert_eq!(
-            compare_f64(9_007_199_254_740_992.0, NumericBound::I64(9_007_199_254_740_993)),
+            compare_f64(
+                9_007_199_254_740_992.0,
+                NumericBound::I64(9_007_199_254_740_993)
+            ),
             Some(Ordering::Less)
         );
         assert_eq!(
-            compare_f64(9_007_199_254_740_992.0, NumericBound::I64(9_007_199_254_740_992)),
+            compare_f64(
+                9_007_199_254_740_992.0,
+                NumericBound::I64(9_007_199_254_740_992)
+            ),
             Some(Ordering::Equal)
         );
         assert_eq!(compare_f64(f64::NAN, NumericBound::I64(1)), None);

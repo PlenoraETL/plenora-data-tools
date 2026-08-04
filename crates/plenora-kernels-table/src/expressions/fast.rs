@@ -6,16 +6,19 @@ use chrono::{Datelike, NaiveDate};
 use num_traits::ToPrimitive;
 use serde_json::Value;
 
+use super::interpreter::root_temporal_type;
+use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
+use super::{BinaryOperator, Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
+use crate::{
+    column_index, replace_or_append, scalar_as_f64, scalar_as_string, DIVISION_BY_ZERO_MESSAGE,
+    NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
+};
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int64Array,
     RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
-use crate::{column_index, replace_or_append, scalar_as_f64, scalar_as_string};
-use super::interpreter::root_temporal_type;
-use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
-use super::{BinaryOperator, Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
 
 // ---------------------------------------------------------------------------
 // Fast path compilato (ottimizzazione kernel `table.expression`, ultimo batch).
@@ -187,9 +190,11 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(values.value(row).to_f64().ok_or_else(|| {
-                        PlenoraError::Schema("decimal128 non rappresentabile come f64".into())
-                    })? / factor)
+                    finite_number(
+                        values.value(row).to_f64().ok_or_else(|| {
+                            PlenoraError::Schema("decimal128 non rappresentabile come f64".into())
+                        })? / factor,
+                    )
                 }
             }
             Self::Str(values) => Ok(if values.is_null(row) {
@@ -207,9 +212,7 @@ fn finite_number(value: f64) -> Result<FastValue<'static>> {
     if value.is_finite() {
         Ok(FastValue::Number(value))
     } else {
-        Err(PlenoraError::Schema(
-            "expression non accetta numeri non finiti".into(),
-        ))
+        Err(PlenoraError::Schema(NON_FINITE_INPUT_MESSAGE.into()))
     }
 }
 
@@ -260,7 +263,9 @@ fn fast_number(value: &FastValue<'_>, context: &str) -> Result<Option<f64>> {
     match value {
         FastValue::Null => Ok(None),
         FastValue::Number(value) => Ok(Some(*value)),
-        _ => Err(PlenoraError::Schema(format!("{context} richiede un numero"))),
+        _ => Err(PlenoraError::Schema(format!(
+            "{context} richiede un numero"
+        ))),
     }
 }
 
@@ -294,9 +299,10 @@ fn fast_arithmetic<'a>(
     left: &FastValue<'a>,
     right: &FastValue<'a>,
 ) -> Result<FastValue<'a>> {
-    let (Some(left), Some(right)) =
-        (fast_number(left, "operatore")?, fast_number(right, "operatore")?)
-    else {
+    let (Some(left), Some(right)) = (
+        fast_number(left, "operatore")?,
+        fast_number(right, "operatore")?,
+    ) else {
         return Ok(FastValue::Null);
     };
     let value = match op {
@@ -304,7 +310,7 @@ fn fast_arithmetic<'a>(
         BinaryOperator::Subtract => left - right,
         BinaryOperator::Multiply => left * right,
         BinaryOperator::Divide if right == 0.0 => {
-            return Err(PlenoraError::Schema("divisione per zero".into()));
+            return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()));
         }
         BinaryOperator::Divide => left / right,
         _ => {
@@ -316,9 +322,7 @@ fn fast_arithmetic<'a>(
     if value.is_finite() {
         Ok(FastValue::Number(value))
     } else {
-        Err(PlenoraError::Schema(
-            "risultato expression non finito".into(),
-        ))
+        Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
     }
 }
 
@@ -341,7 +345,11 @@ fn fast_logical<'a>(
             (Some(false), Some(false)) => FastValue::Boolean(false),
             _ => FastValue::Null,
         },
-        _ => return Err(PlenoraError::InvalidPlan("operatore logico inatteso".into())),
+        _ => {
+            return Err(PlenoraError::InvalidPlan(
+                "operatore logico inatteso".into(),
+            ))
+        }
     })
 }
 
@@ -357,36 +365,28 @@ fn fast_binary<'a>(
         | BinaryOperator::Multiply
         | BinaryOperator::Divide => fast_arithmetic(op, left, right),
         BinaryOperator::And | BinaryOperator::Or => fast_logical(op, left, right),
-        BinaryOperator::Equal => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
-                FastValue::Boolean(value == Ordering::Equal)
-            }))
-        }
-        BinaryOperator::NotEqual => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+        BinaryOperator::Equal => Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+            FastValue::Boolean(value == Ordering::Equal)
+        })),
+        BinaryOperator::NotEqual => Ok(fast_compare(left, right)?
+            .map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Equal)
-            }))
-        }
-        BinaryOperator::Greater => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+            })),
+        BinaryOperator::Greater => Ok(fast_compare(left, right)?
+            .map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value == Ordering::Greater)
-            }))
-        }
-        BinaryOperator::GreaterEqual => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+            })),
+        BinaryOperator::GreaterEqual => Ok(fast_compare(left, right)?
+            .map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Less)
-            }))
-        }
-        BinaryOperator::Less => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
-                FastValue::Boolean(value == Ordering::Less)
-            }))
-        }
-        BinaryOperator::LessEqual => {
-            Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+            })),
+        BinaryOperator::Less => Ok(fast_compare(left, right)?.map_or(FastValue::Null, |value| {
+            FastValue::Boolean(value == Ordering::Less)
+        })),
+        BinaryOperator::LessEqual => Ok(fast_compare(left, right)?
+            .map_or(FastValue::Null, |value| {
                 FastValue::Boolean(value != Ordering::Greater)
-            }))
-        }
+            })),
     }
 }
 
@@ -407,7 +407,9 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
     match name {
         Function::Coalesce => {
             if args.is_empty() {
-                return Err(PlenoraError::InvalidPlan("coalesce richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "coalesce richiede argomenti".into(),
+                ));
             }
             Ok(args
                 .into_iter()
@@ -446,15 +448,16 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 }
                 _ => {
                     return Err(PlenoraError::Internal(
-                        "il ramo unario ammette solo lower/upper/trim/length/year"
-                            .into(),
+                        "il ramo unario ammette solo lower/upper/trim/length/year".into(),
                     ));
                 }
             })
         }
         Function::Concat => {
             if args.is_empty() {
-                return Err(PlenoraError::InvalidPlan("concat richiede argomenti".into()));
+                return Err(PlenoraError::InvalidPlan(
+                    "concat richiede argomenti".into(),
+                ));
             }
             let mut output = String::new();
             for value in &args {
@@ -479,8 +482,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::EndsWith => value.ends_with(pattern),
                 _ => {
                     return Err(PlenoraError::Internal(
-                        "il ramo testo ammette solo contains/starts_with/ends_with"
-                            .into(),
+                        "il ramo testo ammette solo contains/starts_with/ends_with".into(),
                     ));
                 }
             }))
@@ -527,9 +529,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
             if value.is_finite() {
                 Ok(FastValue::Number(value))
             } else {
-                Err(PlenoraError::Schema(
-                    "risultato expression non finito".into(),
-                ))
+                Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
             }
         }
         Function::Substring => {
@@ -602,8 +602,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
             Ok(best)
         }
         Function::RegexReplace | Function::DateTrunc | Function::In => Err(PlenoraError::Internal(
-            "regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast"
-                .into(),
+            "regex_replace/date_trunc/in hanno nodi dedicati in evaluate_fast".into(),
         )),
     }
 }
@@ -790,13 +789,10 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
             };
             let array = batch.column(index);
             match array.data_type() {
-                DataType::Date32 => array
-                    .as_any()
-                    .downcast_ref::<Date32Array>()
-                    .map_or_else(
-                        || TemporalSource::Error(LazyError::Schema("array Date32 incoerente".into())),
-                        TemporalSource::Date32,
-                    ),
+                DataType::Date32 => array.as_any().downcast_ref::<Date32Array>().map_or_else(
+                    || TemporalSource::Error(LazyError::Schema("array Date32 incoerente".into())),
+                    TemporalSource::Date32,
+                ),
                 DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
                     if timezone.is_some() {
                         return TemporalSource::Error(LazyError::Schema(
@@ -824,9 +820,7 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
             name: Function::DateTrunc,
             args,
         } => TemporalSource::Nested(Box::new(compile_date_trunc(args, batch))),
-        Expression::Literal {
-            value: Value::Null,
-        } => TemporalSource::NullLiteral,
+        Expression::Literal { value: Value::Null } => TemporalSource::NullLiteral,
         _ => TemporalSource::Error(LazyError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
@@ -863,9 +857,8 @@ fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> 
         Expression::Literal {
             value: Value::String(pattern),
         } => RegexSource::Compiled(
-            regex::Regex::new(pattern).map_err(|error| {
-                format!("regex_replace: regex non valida: {error}")
-            }),
+            regex::Regex::new(pattern)
+                .map_err(|error| format!("regex_replace: regex non valida: {error}")),
             pattern.as_str(),
         ),
         other => RegexSource::Dynamic(Box::new(compile_expression(other, batch))),
@@ -998,7 +991,9 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                     .map_err(|message| PlenoraError::InvalidPlan(message.clone()))?,
                 RegexSource::Dynamic(_) => {
                     owned = regex::Regex::new(pattern_text).map_err(|error| {
-                        PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
+                        PlenoraError::InvalidPlan(format!(
+                            "regex_replace: regex non valida: {error}"
+                        ))
                     })?;
                     &owned
                 }
@@ -1045,9 +1040,7 @@ fn fast_scalar_date32(value: &FastValue<'_>, context: &str) -> Result<Option<i32
     match value {
         FastValue::Null => Ok(None),
         FastValue::Date32(value) => Ok(Some(*value)),
-        _ => Err(PlenoraError::Schema(format!(
-            "{context} richiede una data"
-        ))),
+        _ => Err(PlenoraError::Schema(format!("{context} richiede una data"))),
     }
 }
 
@@ -1074,9 +1067,30 @@ impl<'a> FastProgram<'a> {
     }
 
     pub fn run(&self, batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
-        let values = (0..batch.num_rows())
-            .map(|row| evaluate_fast(&self.root, row))
-            .collect::<Result<Vec<_>>>()?;
+        let mut values = Vec::with_capacity(batch.num_rows());
+        let mut rejections = Vec::new();
+        for row in 0..batch.num_rows() {
+            match evaluate_fast(&self.root, row) {
+                Ok(value) => values.push(value),
+                Err(error) => {
+                    let Some(cause) = crate::row_eval_failure_cause(&error) else {
+                        return Err(error);
+                    };
+                    rejections.push(crate::RowRejection {
+                        row,
+                        cause,
+                        column: None,
+                    });
+                    // Placeholder mai pubblicato: `reject_rows` chiude prima
+                    // dell'uso di `values`.
+                    values.push(FastValue::Null);
+                }
+            }
+        }
+        crate::reject_rows(
+            &rejections,
+            "valori expression rifiutati; consultare row_diagnostics",
+        )?;
         let mut resolved = resolved_output_type_fast(&values, config.output_type)?;
         // Auto con tutti i valori null: una radice date_trunc risolve il tipo
         // temporale dallo schema di input, mai Utf8 (come il generico).
@@ -1089,8 +1103,8 @@ impl<'a> FastProgram<'a> {
         }
         match resolved {
             OutputType::Auto => Err(PlenoraError::Internal(
-            "output_type Auto non risolto".into(),
-        )),
+                "output_type Auto non risolto".into(),
+            )),
             OutputType::Number => replace_or_append(
                 batch,
                 &config.output_column,

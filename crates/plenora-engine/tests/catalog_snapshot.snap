@@ -17,7 +17,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -37,7 +37,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -77,7 +77,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -97,7 +97,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -117,7 +117,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -137,7 +137,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -237,7 +237,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -257,7 +257,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -337,7 +337,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -417,7 +417,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -477,7 +477,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "from_coords",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -492,12 +492,12 @@
     "family": "geo",
     "geo_fusion": "not_fusible",
     "id": "geo.from_wkt",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "kernel_validated",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "from_coords",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -537,7 +537,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -577,7 +577,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -697,7 +697,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -737,7 +737,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -797,7 +797,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -819,7 +819,7 @@
       "geos"
     ],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -879,7 +879,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -899,7 +899,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1183,7 +1183,7 @@
       "proj"
     ],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1203,7 +1203,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1223,7 +1223,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1263,7 +1263,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -1323,7 +1323,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1405,7 +1405,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1425,7 +1425,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -1465,7 +1465,7 @@
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": "one_to_one",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1640,12 +1640,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.assert_foreign_key",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1680,12 +1680,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.assert_not_null",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1700,12 +1700,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.assert_range",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1720,12 +1720,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.assert_regex",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1760,12 +1760,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.assert_unique",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1920,12 +1920,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.date_add",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1940,12 +1940,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.date_diff",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1960,12 +1960,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.date_extract",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -1980,12 +1980,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.date_format",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2080,12 +2080,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.explode",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2100,12 +2100,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.expression",
-    "kernel_version": 3,
+    "kernel_version": 4,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 2
+    "semantic_version": 3
   },
   {
     "arity": "unary",
@@ -2160,12 +2160,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.flatten_json",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2180,12 +2180,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.formula",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",
@@ -2340,12 +2340,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.md5_hash",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2560,12 +2560,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.sha256_hash",
-    "kernel_version": 1,
+    "kernel_version": 2,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2760,12 +2760,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.timezone_convert",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",
@@ -2820,12 +2820,12 @@
     "family": "table",
     "geo_fusion": "not_fusible",
     "id": "table.type_cast",
-    "kernel_version": 2,
+    "kernel_version": 3,
     "maturity": "public_protocol",
     "origin": "manipola_compat",
     "required_capabilities": [],
     "result_shape": null,
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "binary_ordered",

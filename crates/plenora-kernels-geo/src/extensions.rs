@@ -9,18 +9,25 @@
 //! Errori: le condizioni dei kernel puri usano [`ExtensionError`]; l'adapter
 //! di colonna mappa tutto su [`PlenoraError`] preservando i messaggi.
 
+use std::collections::BTreeMap;
+
 use geo::algorithm::line_locate_point::LineLocatePoint;
 use geo::algorithm::validation::Validation;
 use geo::{Geometry, MultiLineString, MultiPoint, MultiPolygon, Point};
 use plenora_core::arrow::array::StringArray;
-use plenora_core::PlenoraError;
+use plenora_core::diagnostics::{
+    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+};
+use plenora_core::{ErrorPhase, PlenoraError};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wkt::ToWkt;
 
 use crate::arrow_adapter::encode_geometry;
-use crate::construction::{geometry_from_wkt, ConstructionError};
+use crate::construction::geometry_from_wkt;
+use crate::geometry_type_name;
 
 #[derive(Debug, Error)]
 pub enum ExtensionError {
@@ -52,37 +59,29 @@ fn u64_len(len: usize) -> Result<u64, ExtensionError> {
     u64::try_from(len).map_err(|_| ExtensionError::IndexOverflow)
 }
 
-/// Nome OGC del tipo, come esposto da `geometry_accessors`.
-use crate::geometry_type_name;
-
 // ---------------------------------------------------------------------------
 // geo.from_wkt
 // ---------------------------------------------------------------------------
 
-/// Politica sugli errori di parsing WKT (config `on_error`, default `null`).
+/// Politica legacy sugli errori di parsing WKT.
+///
+/// Entrambe le varianti rifiutano ora l'intero output con diagnostica
+/// row-scoped: il valore resta accettato in deserializzazione per leggere
+/// piani storici, ma non autorizza piu' remediation implicita.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnWktError {
-    /// Cella WKT invalida -> geometria null.
+    /// Nome legacy: nessuna cella invalida viene piu' convertita in null.
     Null,
-    /// Cella WKT invalida -> errore di contratto (fail-closed).
+    /// Cella WKT invalida -> rifiuto fail-closed row-scoped.
     Fail,
 }
 
-/// Converte una cella WKT non-null in una cella WKB; `None` se il parsing
-/// fallisce con politica `null`.
-fn wkt_cell_to_wkb(value: &str, on_error: OnWktError) -> Result<Option<Vec<u8>>, PlenoraError> {
-    match geometry_from_wkt(value) {
-        Ok(geometry) => encode_geometry(&geometry).map(Some),
-        Err(error) => match on_error {
-            OnWktError::Null => Ok(None),
-            OnWktError::Fail => Err(wkt_error(&error)),
-        },
-    }
-}
-
-fn wkt_error(error: &ConstructionError) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.from_wkt: {error}"))
+/// Converte una cella WKT non-null in WKB senza percorso di remediation.
+fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, &'static str> {
+    geometry_from_wkt(value)
+        .map_err(|_| "geometry.invalid_wkt")
+        .and_then(|geometry| encode_geometry(&geometry).map_err(|_| "geometry.encoding_failed"))
 }
 
 /// Adapter di colonna per `geo.from_wkt`: celle `Utf8` -> celle WKB.
@@ -93,36 +92,95 @@ fn wkt_error(error: &ConstructionError) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se una cella WKT non e' valida con politica
-/// [`OnWktError::Fail`] (l'errore riporta l'indice di riga), o per gli
-/// errori di codifica WKB di `encode_geometry` (geometria prodotta non
-/// valida o cella oltre il limite di byte).
+/// `PlenoraError::DataMapping` con diagnostica row-scoped completa se almeno
+/// una cella WKT non e' valida, o errore di codifica WKB se la geometria
+/// prodotta non e' rappresentabile. Entrambi i token [`OnWktError`] sono
+/// fail-closed.
 pub fn from_wkt_column(
     values: &StringArray,
     on_error: OnWktError,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
+    from_wkt_column_named(values, on_error, None)
+}
+
+/// Variante usata dall'engine per conservare il nome della colonna sorgente
+/// nella diagnostica senza includerne mai i valori.
+///
+/// # Errors
+///
+/// `InvalidPlan` fail-closed con diagnostica row-scoped se una o piu' celle
+/// non sono WKT valido (conteggi completi, esempi bounded, nessun valore).
+pub fn from_wkt_column_named(
+    values: &StringArray,
+    _on_error: OnWktError,
+    column: Option<&str>,
+) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
+    const EXAMPLES_LIMIT: u64 = 10;
     let cells: Vec<Option<&str>> = values.iter().collect();
     // Come `map_nullable` (ADR-0001): il primo errore IN ORDINE DI RIGA e'
     // selezionato dal collect sequenziale — la riga riportata nel messaggio
     // non puo' dipendere dallo scheduling di rayon.
-    let results: Vec<Result<Option<Vec<u8>>, PlenoraError>> = cells
+    let results: Vec<Result<Option<Vec<u8>>, &'static str>> = cells
         .into_par_iter()
-        .enumerate()
-        .map(|(row, cell)| {
-            cell.map_or_else(
-                || Ok(None),
-                |value| {
-                    wkt_cell_to_wkb(value, on_error).map_err(|error| match error {
-                        PlenoraError::InvalidPlan(reason) => {
-                            PlenoraError::InvalidPlan(format!("riga {row}: {reason}"))
-                        }
-                        other => other,
-                    })
-                },
-            )
-        })
+        .map(|cell| cell.map_or_else(|| Ok(None), |value| wkt_cell_to_wkb(value).map(Some)))
         .collect();
-    results.into_iter().collect()
+    let mut output = Vec::with_capacity(results.len());
+    let mut examples = Vec::new();
+    let mut observed_total = 0_u64;
+    let mut counts = BTreeMap::new();
+    for (row, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(cell) => output.push(cell),
+            Err(cause) => {
+                observed_total = observed_total.checked_add(1).ok_or_else(|| {
+                    PlenoraError::Internal("overflow del conteggio diagnostico WKT".into())
+                })?;
+                let cause_count = counts.entry(cause.to_owned()).or_insert(0_u64);
+                *cause_count = cause_count.checked_add(1).ok_or_else(|| {
+                    PlenoraError::Internal("overflow del conteggio causa WKT".into())
+                })?;
+                let source_index = u64::try_from(row).map_err(|_| {
+                    PlenoraError::Internal("indice sorgente WKT non rappresentabile".into())
+                })?;
+                if u64::try_from(examples.len())
+                    .map_err(|_| PlenoraError::Internal("troppi esempi WKT".into()))?
+                    < EXAMPLES_LIMIT
+                {
+                    examples.push(RowDiagnosticExample {
+                        source_index,
+                        cause: cause.to_owned(),
+                        column: column.map(ToOwned::to_owned),
+                        key: None,
+                        write_state: None,
+                    });
+                }
+            }
+        }
+    }
+    if observed_total == 0 {
+        return Ok(output);
+    }
+    let report = RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total,
+        total: Some(observed_total),
+        input_total: None,
+        counts,
+        examples_limit: EXAMPLES_LIMIT,
+        examples_truncated: observed_total > EXAMPLES_LIMIT,
+        examples,
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    Err(
+        PlenoraError::DataMapping("geometrie WKT rifiutate; consultare row_diagnostics".into())
+            .with_phase(ErrorPhase::Read)
+            .with_row_diagnostics(report),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -363,21 +421,50 @@ mod tests {
     #[test]
     fn from_wkt_column_applies_the_on_error_policy() {
         let invalid = StringArray::from(vec![Some("POINT(12 41"), Some("SRID=4326;POINT(1 2)")]);
-        let nulled = from_wkt_column(&invalid, OnWktError::Null).expect("politica null");
-        assert_eq!(nulled, vec![None, None]);
-        let failed = from_wkt_column(&invalid, OnWktError::Fail);
-        // Entrambe le celle sono invalide: l'errore (in una delle due righe)
-        // deve riportare l'indice di riga; l'ordine di short-circuit rayon
-        // non e' rilevante per il contratto.
-        assert!(
-            matches!(&failed, Err(PlenoraError::InvalidPlan(reason)) if reason.contains("riga ")),
-            "{failed:?}"
-        );
+        for policy in [OnWktError::Null, OnWktError::Fail] {
+            let failed = from_wkt_column(&invalid, policy)
+                .expect_err("politica legacy non deve pubblicare null sintetici");
+            assert_eq!(
+                failed.row_diagnostics().map(|report| report.observed_total),
+                Some(2)
+            );
+        }
         let dimensional = StringArray::from(vec![Some("POINT Z (1 2 3)")]);
-        assert!(matches!(
-            from_wkt_column(&dimensional, OnWktError::Fail),
-            Err(PlenoraError::InvalidPlan(_))
-        ));
+        assert!(from_wkt_column(&dimensional, OnWktError::Fail)
+            .is_err_and(|error| error.row_diagnostics().is_some()));
+    }
+
+    #[test]
+    fn from_wkt_never_publishes_invalid_cells_and_reports_all_source_rows() {
+        let values = StringArray::from(vec![
+            Some("POINT(1 2)"),
+            Some("POINT(12 41"),
+            None,
+            Some("SRID=4326;POINT(1 2)"),
+        ]);
+        for policy in [OnWktError::Null, OnWktError::Fail] {
+            let error = from_wkt_column(&values, policy)
+                .expect_err("WKT invalido trasformato in output accettato");
+            let report = error
+                .row_diagnostics()
+                .expect("diagnostica row-scoped mancante");
+            assert_eq!(report.observed_total, 2);
+            assert_eq!(report.total, Some(2));
+            assert_eq!(report.counts["geometry.invalid_wkt"], 2);
+            assert_eq!(
+                report
+                    .examples
+                    .iter()
+                    .map(|example| example.source_index)
+                    .collect::<Vec<_>>(),
+                vec![1, 3]
+            );
+            assert!(report
+                .examples
+                .iter()
+                .all(|example| example.column.is_none()));
+            assert!(!error.to_string().contains("POINT"));
+        }
     }
 
     #[test]

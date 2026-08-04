@@ -24,7 +24,11 @@ pub(in crate::analyze) fn analyze_date_op(
         require_scalar_string(op, input, name)?;
     }
     check_output_name(op, output_column)?;
-    analyze_append(input, fields, &[(output_column.to_owned(), data_type, true)])
+    analyze_append(
+        input,
+        fields,
+        &[(output_column.to_owned(), data_type, true)],
+    )
 }
 
 pub(in crate::analyze) fn analyze_date_format(
@@ -86,9 +90,9 @@ pub(in crate::analyze) fn analyze_timezone_convert(
 ) -> Result<DataContract> {
     let config: dates::TimezoneConvert = typed(op, config)?;
     for timezone in [&config.source_timezone, &config.target_timezone] {
-        timezone
-            .parse::<chrono_tz::Tz>()
-            .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}")))?;
+        timezone.parse::<chrono_tz::Tz>().map_err(|_| {
+            PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}"))
+        })?;
     }
     analyze_date_op(
         op,
@@ -99,4 +103,3 @@ pub(in crate::analyze) fn analyze_timezone_convert(
         DataType::Utf8,
     )
 }
-

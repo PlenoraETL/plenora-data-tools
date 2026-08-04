@@ -141,18 +141,21 @@ fn informational_commands_and_argument_errors_are_stable() {
         .iter()
         .filter(|operation| operation.family == Family::Table)
         .count();
-    assert_eq!(
-        parsed.as_array().expect("array").len(),
-        table_operations
-    );
+    assert_eq!(parsed.as_array().expect("array").len(), table_operations);
 
     for argument in ["--help", "-h"] {
         let help = Command::new(executable())
             .arg(argument)
             .output()
             .expect("help");
-        assert!(help.status.success(), "{argument} deve terminare con successo");
-        assert!(help.stderr.is_empty(), "{argument} non deve emettere errori");
+        assert!(
+            help.status.success(),
+            "{argument} deve terminare con successo"
+        );
+        assert!(
+            help.stderr.is_empty(),
+            "{argument} non deve emettere errori"
+        );
         assert!(String::from_utf8_lossy(&help.stdout).contains("plenora-data-tools catalog"));
     }
 
@@ -481,8 +484,8 @@ fn capabilities_emette_il_documento_dichiarativo_icd10() {
         .expect("capabilities");
     assert!(
         output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
     assert_eq!(document["protocol_version"], 1);
@@ -504,4 +507,292 @@ fn capabilities_emette_il_documento_dichiarativo_icd10() {
         .expect("geo.reproject presente");
     assert_eq!(reproject["required_capabilities"], json!(["proj"]));
     assert_eq!(reproject["cancellation_behavior"], "non_interruptible");
+}
+
+// P0-1: un piano legacy con nodo blocking prima di un'op row-diagnostics
+// pubblicherebbe indici post-sort dichiarati `source_row_zero_based`.
+// Fail-closed: la CLI rifiuta e richiede DAG v4, nessun output pubblicato.
+#[test]
+fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("input.arrow");
+    let output = directory.path().join("output.arrow");
+    let plan = directory.path().join("plan.json");
+    let schema = Schema::new(vec![Field::new("value", DataType::Utf8, true)]);
+    // Ordine tale che il sort riordini davvero: la riga invalida e' la PRIMA
+    // sorgente (indice 0) ma la SECONDA post-sort — un indice pubblicato
+    // `source_row_zero_based` sarebbe inventato (1 invece di 0).
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(StringArray::from(vec![
+            Some("non-una-data"),
+            Some("2024-01-01"),
+        ]))],
+    )
+    .expect("fixture");
+    write_batches(&input, &[batch], &schema);
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "steps": [
+                {"operation": "sort", "config": {"columns": ["value"]}},
+                {"operation": "type_cast", "config": {
+                    "column": "value", "target_type": "date32", "errors": "coerce"
+                }}
+            ]
+        }))
+        .expect("json"),
+    )
+    .expect("write plan");
+    let result = Command::new(executable())
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .expect("run legacy blocking");
+    assert!(
+        !result.status.success(),
+        "piano legacy blocking+diagnostico accettato: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        !output.exists(),
+        "nessun output pubblicabile da un piano rifiutato"
+    );
+    // Il rifiuto deve venire dal GATE (provenance non attestabile), non
+    // dall'esecuzione: nessun report row-scoped con indici post-sort.
+    // Golden di canale (P1-5): l'envelope di errore vive su STDERR e
+    // stdout resta vuoto — mai mescolare envelope e risultati.
+    assert!(
+        result.stdout.is_empty(),
+        "stdout deve restare libero per risultati/metriche: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let envelope_text = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(
+        envelope_text.contains("DAG v4"),
+        "atteso rifiuto fail-closed verso DAG v4, trovato: {envelope_text}"
+    );
+    assert!(
+        !envelope_text.contains("row_diagnostics"),
+        "indici post-sort pubblicati come source_row: {envelope_text}"
+    );
+}
+
+// P0 (review 2026-08-03): formula ed expression erano omesse dal gate
+// legacy pur essendo row-diagnostics per planner/executor: un piano
+// sort -> formula/expression bypassava il gate e `execute_complete_batch`
+// pubblicava indici post-sort come `source_row_zero_based` Complete.
+// Il rifiuto deve avvenire al gate, PRIMA dell'esecuzione: fixture con
+// divisore zero — se l'esecuzione partisse, stderr porterebbe un report
+// row_diagnostics con indici post-sort inventati.
+#[test]
+fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
+    let schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
+    // Il divisore zero e' la riga sorgente 1 ma la riga 0 post-sort: un
+    // indice pubblicato `source_row_zero_based` sarebbe inventato.
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int64Array::from(vec![Some(1), Some(0), Some(2)]))],
+    )
+    .expect("fixture");
+    let steps = [
+        (
+            "formula",
+            json!({"new_column": "ratio", "formula": "10 / id"}),
+        ),
+        (
+            "expression",
+            json!({
+                "output_column": "ratio",
+                "expression": {
+                    "kind": "binary",
+                    "op": "divide",
+                    "left": {"kind": "literal", "value": 10},
+                    "right": {"kind": "column", "name": "id"}
+                }
+            }),
+        ),
+    ];
+    for (operation, config) in steps {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let input = directory.path().join("input.arrow");
+        let output = directory.path().join("output.arrow");
+        let plan = directory.path().join("plan.json");
+        write_batches(&input, std::slice::from_ref(&batch), &schema);
+        std::fs::write(
+            &plan,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "steps": [
+                    {"operation": "sort", "config": {"columns": ["id"]}},
+                    {"operation": operation, "config": config}
+                ]
+            }))
+            .expect("json"),
+        )
+        .expect("write plan");
+        let result = Command::new(executable())
+            .arg("run")
+            .arg("--plan")
+            .arg(&plan)
+            .arg("--input")
+            .arg(&input)
+            .arg("--output")
+            .arg(&output)
+            .output()
+            .expect("run legacy formula/expression");
+        let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        assert!(
+            !result.status.success(),
+            "{operation}: piano legacy blocking+diagnostico accettato: {stderr}"
+        );
+        assert!(
+            !output.exists(),
+            "{operation}: nessun output pubblicabile da un piano rifiutato"
+        );
+        assert!(
+            result.stdout.is_empty(),
+            "{operation}: stdout deve restare libero: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert!(
+            stderr.contains("DAG v4"),
+            "{operation}: atteso rifiuto fail-closed verso DAG v4: {stderr}"
+        );
+        assert!(
+            !stderr.contains("row_diagnostics"),
+            "{operation}: indici post-sort pubblicati come source_row: {stderr}"
+        );
+    }
+}
+
+// Anti-drift (P0/P2): il gate legacy deve coprire TUTTE le op che
+// l'autorita' di catalogo dichiara row-diagnostics ed esprimibili in un
+// piano legacy (alias storico). L'universo delle op arriva dal catalogo,
+// non da una lista duplicata nel test: un'op diagnostica nuova o
+// riclassificata rompe questo test finche' gate e autorita' divergono.
+fn row_diagnostics_config_probes() -> Vec<serde_json::Value> {
+    let mut probes = vec![json!({})];
+    for target in [
+        "int",
+        "float",
+        "bool",
+        "uint64",
+        "date",
+        "datetime",
+        "date32",
+        "timestamp_millis",
+        "decimal128",
+        "str",
+    ] {
+        probes.push(json!({"target_type": target}));
+        probes.push(json!({"target_type": target, "errors": "coerce"}));
+        probes.push(json!({"target_type": target, "errors": "raise"}));
+    }
+    for policy in ["error", "empty", "literal"] {
+        probes.push(json!({"null_policy": policy}));
+    }
+    probes
+}
+
+#[test]
+fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
+    let probes = row_diagnostics_config_probes();
+
+    let schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int64Array::from(vec![Some(1)]))],
+    )
+    .expect("fixture");
+    let mut gated = std::collections::BTreeSet::new();
+    for descriptor in CATALOG {
+        let aliases: Vec<&str> = plenora_core::catalog::ALIASES
+            .iter()
+            .filter(|(_, _, canonical)| *canonical == descriptor.id)
+            .map(|(_, alias, _)| *alias)
+            .collect();
+        if aliases.is_empty() {
+            continue;
+        }
+        let Some(config) = probes
+            .iter()
+            .find(|config| descriptor.emits_row_diagnostics(config))
+        else {
+            continue;
+        };
+        for alias in aliases {
+            let directory = tempfile::tempdir().expect("tempdir");
+            let input = directory.path().join("input.arrow");
+            let output = directory.path().join("output.arrow");
+            let plan = directory.path().join("plan.json");
+            write_batches(&input, std::slice::from_ref(&batch), &schema);
+            std::fs::write(
+                &plan,
+                serde_json::to_vec(&json!({
+                    "schema_version": 1,
+                    "steps": [
+                        {"operation": "sort", "config": {"columns": ["id"]}},
+                        {"operation": alias, "config": config}
+                    ]
+                }))
+                .expect("json"),
+            )
+            .expect("write plan");
+            let result = Command::new(executable())
+                .arg("run")
+                .arg("--plan")
+                .arg(&plan)
+                .arg("--input")
+                .arg(&input)
+                .arg("--output")
+                .arg(&output)
+                .output()
+                .expect("run legacy gate probe");
+            let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+            assert!(
+                !result.status.success(),
+                "{} (alias `{alias}`): bypass del gate legacy: {stderr}",
+                descriptor.id
+            );
+            assert!(
+                stderr.contains("DAG v4"),
+                "{} (alias `{alias}`): atteso rifiuto dal gate verso DAG v4: {stderr}",
+                descriptor.id
+            );
+            assert!(
+                !stderr.contains("row_diagnostics"),
+                "{} (alias `{alias}`): row_diagnostics inventata: {stderr}",
+                descriptor.id
+            );
+            assert!(
+                !output.exists(),
+                "{} (alias `{alias}`): output pubblicato da piano rifiutato",
+                descriptor.id
+            );
+            gated.insert(descriptor.id);
+        }
+    }
+    // Lock espliciti del perimetro atteso (P0: formula/expression; P2:
+    // md5/sha256 con null_policy=error; type_cast fallibile).
+    for expected in [
+        "table.formula",
+        "table.expression",
+        "table.type_cast",
+        "table.md5_hash",
+        "table.sha256_hash",
+        "table.flatten_json",
+        "geo.centroid",
+    ] {
+        assert!(
+            gated.contains(expected),
+            "{expected}: op diagnostica con alias legacy non coperta dal gate"
+        );
+    }
 }

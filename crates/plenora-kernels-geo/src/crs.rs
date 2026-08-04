@@ -279,8 +279,7 @@ mod tests {
             "EPSG:4326",
             1,
         )
-        .unwrap()
-        else {
+        .unwrap() else {
             panic!("point expected")
         };
         // Oracolo PROJ bundled 9.6.2, ordine GIS normalizzato lon/lat. La
@@ -288,8 +287,7 @@ mod tests {
         assert!((reprojected.x() - 8.999_646_005_468).abs() < 1e-7);
         assert!((reprojected.y() - 45.423_341_342_810).abs() < 1e-7);
 
-        let alternative_definition =
-            MONTE_MARIO_WKT_TOWGS84.replace("-104.1,-49.1,-9.9", "0,0,0");
+        let alternative_definition = MONTE_MARIO_WKT_TOWGS84.replace("-104.1,-49.1,-9.9", "0,0,0");
         let alternative = resolve_crs(&alternative_definition, "crs").unwrap();
         assert!(!bound.semantically_equals(&alternative));
     }

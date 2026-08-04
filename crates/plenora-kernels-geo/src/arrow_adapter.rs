@@ -482,7 +482,11 @@ pub struct GeometryMetadataDetails {
 ///   scrittura — R2.4, mai una persa, mai una inventata): `crs_id` e/o
 ///   `crs_definition` con il suo `crs_definition_format` (R4.3), cosi' come
 ///   le porta il contratto; `srid` non e' ri-emesso dal blocco (non e'
-///   modellato dal contratto: resta propagato dalla lineage);
+///   modellato dal contratto: resta propagato dalla lineage). Con la SOLA
+///   rappresentazione SRID (R4.3.1: il produttore conosce il codice
+///   numerico, non l'autorita' — R4.4) il blocco non emette nemmeno
+///   `axis_order` (la tabella R2.2 lo impone solo con `crs_id` o
+///   `crs_definition`): sintetizzarlo sarebbe una dichiarazione inventata;
 /// - con `missing` NON sono emesse `crs_id`/`crs_definition`/
 ///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
 ///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
@@ -498,9 +502,9 @@ pub struct GeometryMetadataDetails {
 ///   Limite preesistente invariato: una proj-string (`+proj=...`) non ha
 ///   formato nella tabella §2 e resta in `crs_id`
 ///   ([`DefinitionForm::Other`]).
-/// - con un CRS risolto o dichiarato non risolto `axis_order` e' sempre
-///   emesso (obbligatorio quando un
-///   CRS e' presente) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
+/// - con un CRS risolto `axis_order` e' sempre emesso, e con `declared_unresolved`
+///   e' emesso quando `crs_id` o `crs_definition` e' presente (obbligatorio
+///   in quei casi) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
 ///   ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito, poi
 ///   l'ordine GIS normalizzato quando la definizione canonica permette di
 ///   stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai
@@ -569,12 +573,16 @@ pub fn canonical_geometry_metadata(
             // R4.6.4: le dichiarazioni originali sono ri-emesse invariate —
             // l'incoerenza arriva al bordo di scrittura com'era, mai persa
             // e mai conciliata. `axis_order` e' emesso come per `resolved`
-            // (obbligatorio quando una rappresentazione CRS e' presente):
-            // qui NON c'e' un `ResolvedCrs` da cui dedurre (lo stato porta
-            // le dichiarazioni, non una definizione risolta), quindi senza
-            // dettaglio esplicito vale `unknown` — l'assenza di una
-            // dichiarazione, che non sovrascrive la lineage (vedi
-            // `canonical_output_schema`).
+            // (obbligatorio per la tabella R2.2 quando `crs_id` o
+            // `crs_definition` e' presente): qui NON c'e' un `ResolvedCrs`
+            // da cui dedurre (lo stato porta le dichiarazioni, non una
+            // definizione risolta), quindi senza dettaglio esplicito vale
+            // `unknown` — l'assenza di una dichiarazione, che non
+            // sovrascrive la lineage (vedi `canonical_output_schema`).
+            // Con la SOLA rappresentazione SRID (R4.3.1 — il produttore
+            // conosce il codice, non l'autorita') la tabella R2.2 non
+            // impone `axis_order` e il centro non lo sintetizza (R4.4):
+            // resta alla lineage, se dichiarato.
             if let Some(crs_id) = crs_id {
                 metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), crs_id.clone());
             }
@@ -590,11 +598,13 @@ pub fn canonical_geometry_metadata(
                     );
                 }
             }
-            let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
-            metadata.insert(
-                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                axis_order.as_str().to_owned(),
-            );
+            if crs_id.is_some() || definition.is_some() {
+                let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    axis_order.as_str().to_owned(),
+                );
+            }
         }
         // Con `crs_resolution = missing` nessuna chiave CRS e' emessa (R2.2:
         // `missing` non ammette `crs_id`/`crs_definition`/`srid`/`axis_order`).

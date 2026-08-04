@@ -3,13 +3,13 @@ use std::cmp::Ordering;
 use chrono::{Datelike, NaiveDate, TimeDelta};
 use serde_json::Value;
 
-use plenora_core::arrow::array::{Array, Date32Array, RecordBatch, TimestampMillisecondArray};
-use plenora_core::arrow::schema::{DataType, TimeUnit};
-use plenora_core::{PlenoraError, Result};
-use crate::column_index;
 use super::interpreter::evaluate;
 use super::scalar::{compare, literal, Scalar};
 use super::{Expression, Function};
+use crate::column_index;
+use plenora_core::arrow::array::{Array, Date32Array, RecordBatch, TimestampMillisecondArray};
+use plenora_core::arrow::schema::{DataType, TimeUnit};
+use plenora_core::{PlenoraError, Result};
 
 // ---------------------------------------------------------------------------
 // date_trunc / in: nodi speciali valutati in `evaluate` (non in `function`)
@@ -64,7 +64,10 @@ fn date32_epoch() -> Result<NaiveDate> {
 
 /// Unita' sub-day non ammesse su Date32 (una data non ha componente oraria).
 pub fn check_date32_unit(unit: TruncUnit) -> Result<()> {
-    if matches!(unit, TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second) {
+    if matches!(
+        unit,
+        TruncUnit::Hour | TruncUnit::Minute | TruncUnit::Second
+    ) {
         return Err(PlenoraError::InvalidPlan(
             "date_trunc: unita' sub-day non ammessa su Date32".into(),
         ));
@@ -188,9 +191,7 @@ pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -
             name: Function::DateTrunc,
             args,
         } => date_trunc_generic(args, batch, row),
-        Expression::Literal {
-            value: Value::Null,
-        } => Ok(Scalar::Null),
+        Expression::Literal { value: Value::Null } => Ok(Scalar::Null),
         _ => Err(PlenoraError::InvalidPlan(
             "date_trunc: il valore deve essere una colonna temporale".into(),
         )),
