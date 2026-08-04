@@ -569,6 +569,86 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
     );
 }
 
+#[cfg(feature = "proj-backend")]
+#[test]
+fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let output = directory.path().join("output.arrow");
+    let plan_json = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "centroid-node", "op": "geo.centroid", "in": ["main"], "config": {}}
+        ],
+        "output": "centroid-node"
+    });
+    let (plan, input) =
+        canonical_crs_fixture(directory.path(), &plan_json, &monte_mario_resolved_pairs());
+    let schema = FileReader::try_new(std::fs::File::open(&input).expect("input"), None)
+        .expect("reader")
+        .schema();
+    let invalid = [vec![0x01, 0x09, 0x00]];
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![7_i64])) as ArrayRef,
+            Arc::new(
+                invalid
+                    .iter()
+                    .map(|wkb| Some(wkb.as_slice()))
+                    .collect::<BinaryArray>(),
+            ) as ArrayRef,
+        ],
+    )
+    .expect("batch WKB invalido");
+    write_ipc(&input, &schema, &[batch]);
+
+    let result = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .expect("run");
+
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    assert!(!output.exists(), "nessun output parziale");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&result.stderr).expect("envelope JSON");
+    assert_eq!(
+        envelope["error"]["context"]["node"], "centroid-node",
+        "{envelope}"
+    );
+    assert_eq!(envelope["error"]["context"]["operation"], "geo.centroid");
+    let execution_id = envelope["error"]["context"]["execution_id"]
+        .as_str()
+        .expect("execution_id autorevole");
+    assert!(execution_id.starts_with("exec-"), "{execution_id}");
+    assert_eq!(
+        envelope["error"]["row_diagnostics"],
+        json!({
+            "contract": "plenora-row-diagnostics-v1",
+            "scope": "read",
+            "index_basis": "source_row_zero_based",
+            "completeness": "complete",
+            "observed_total": 1,
+            "total": 1,
+            "counts": {"geometry.invalid_wkb": 1},
+            "examples_limit": 10,
+            "examples_truncated": false,
+            "examples": [{
+                "source_index": 0,
+                "cause": "geometry.invalid_wkb",
+                "column": "geometry"
+            }]
+        }),
+        "la diagnostica row-scoped resta invariata"
+    );
+}
+
 #[test]
 fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     let directory = tempfile::tempdir().expect("tempdir");

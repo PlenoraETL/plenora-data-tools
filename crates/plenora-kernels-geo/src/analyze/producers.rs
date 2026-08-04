@@ -9,7 +9,8 @@ use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::CrsRequirement;
 use plenora_core::contract::{
     ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator,
-    GeometryColumnContract, GeometryDimensions, PropertyConfidence, PropertyScope,
+    GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
+    GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
 };
 use plenora_core::crs::{validate_requirement, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
@@ -310,6 +311,19 @@ pub(in crate::analyze) fn analyze_from_wkt(
         true,
     )?);
     let field_id = fields_allocator.alloc();
+    let output_types = GeometryTypesProperty::new(
+        TypesDeclaration::Mixed,
+        vec![
+            GeometryType::Point,
+            GeometryType::LineString,
+            GeometryType::Polygon,
+            GeometryType::MultiPoint,
+            GeometryType::MultiLineString,
+            GeometryType::MultiPolygon,
+            GeometryType::GeometryCollection,
+        ],
+    )
+    .map_err(|error| PlenoraError::Internal(error.to_string()))?;
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
@@ -317,9 +331,14 @@ pub(in crate::analyze) fn analyze_from_wkt(
         // Produttore (B1.3): il parser WKT decodifica in `Geometry<f64>` —
         // dichiara Xy.
         dimensions: GeometryDimensions::Xy,
-        encoding: None,
+        encoding: Some(GeometryEncoding::Wkb),
         nullable: true,
-        types: GeometryColumnContract::undeclared_types(),
+        // Il parser accetta per contratto tipi geometrici eterogenei; `mixed`
+        // e' informazione esplicita, non dati non ispezionati (`unresolved`).
+        types: ContractProperty::new(
+            PropertyConfidence::Declared(output_types),
+            PropertyScope::Schema,
+        ),
     };
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
@@ -426,15 +445,21 @@ pub(in crate::analyze) fn analyze_generate_grid(
         fields.push(Field::new(CENTROID_Y_COLUMN, DataType::Float64, false));
     }
     let field_id = fields_allocator.alloc();
+    let output_types =
+        GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
+            .map_err(|error| PlenoraError::Internal(error.to_string()))?;
     let geometry = GeometryColumnContract {
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
         crs: ContractCrs::Resolved(crs),
         // Produttore (B1.3): le celle griglia sono poligoni XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
-        encoding: None,
+        encoding: Some(GeometryEncoding::Wkb),
         nullable: false,
-        types: GeometryColumnContract::undeclared_types(),
+        types: ContractProperty::new(
+            PropertyConfidence::Declared(output_types),
+            PropertyScope::Schema,
+        ),
     };
     let properties = ContractProperties {
         row_count: Some(ContractProperty::new(

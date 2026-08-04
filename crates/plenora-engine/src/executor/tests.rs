@@ -3620,6 +3620,90 @@ fn geo_from_wkt_rejects_invalid_rows_before_downstream_cardinality_changes() {
 
 #[cfg(feature = "proj-backend")]
 #[test]
+fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
+    let cases = [
+        (
+            json!({
+                "schema_version": 4,
+                "crs": "EPSG:32632",
+                "inputs": ["main"],
+                "nodes": [{
+                    "id": "w", "op": "geo.from_wkt", "in": ["main"],
+                    "config": {"wkt_column": "name"}
+                }],
+                "output": "w",
+            }),
+            vec![table_batch(
+                &[1, 2],
+                &["POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 0))"],
+            )],
+            "mixed",
+            "point,linestring,polygon,multipoint,multilinestring,multipolygon,geometrycollection",
+            2,
+        ),
+        (
+            json!({
+                "schema_version": 4,
+                "crs": "EPSG:32632",
+                "inputs": ["main"],
+                "nodes": [{
+                    "id": "g", "op": "geo.generate_grid", "in": ["main"],
+                    "config": {
+                        "extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 10.0, "ymax": 10.0},
+                        "cell_size": 5.0
+                    }
+                }],
+                "output": "g",
+            }),
+            vec![table_batch(&[1], &["trigger"])],
+            "exact",
+            "polygon",
+            4,
+        ),
+    ];
+
+    for (plan, batches, declaration, types, expected_rows) in cases {
+        let output = run(
+            &plan,
+            single_input("main", batches),
+            &[("main".to_owned(), table_contract())],
+        )
+        .expect("execute producer");
+        let schema = output.schema();
+        let field = schema
+            .field_with_name("geometry")
+            .expect("campo geometry pubblico");
+        assert_eq!(
+            field
+                .metadata()
+                .get(PLENORA_GEOMETRY_ENCODING_KEY)
+                .map(String::as_str),
+            Some("wkb")
+        );
+        assert_eq!(
+            field
+                .metadata()
+                .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
+                .map(String::as_str),
+            Some(declaration)
+        );
+        assert_eq!(
+            field
+                .metadata()
+                .get(PLENORA_GEOMETRY_TYPES_KEY)
+                .map(String::as_str),
+            Some(types)
+        );
+        let (batches, _) = output.collect_batches().expect("output leggibile");
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected_rows
+        );
+    }
+}
+
+#[cfg(feature = "proj-backend")]
+#[test]
 fn geo_generate_grid_then_collect_executes() {
     let plan = json!({
         "schema_version": 4,

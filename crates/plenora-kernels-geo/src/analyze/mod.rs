@@ -2728,7 +2728,13 @@ mod tests {
     /// (op, dichiarazione attesa, lista canonica attesa) per le operazioni
     /// che CAMBIANO il tipo geometrico: i tipi dichiarati sono quelli
     /// dell'OUTPUT, verificati contro i kernel (`transform_output_types`).
-    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 17] = [
+    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 19] = [
+        (
+            "geo.from_wkt",
+            TypesDeclaration::Mixed,
+            "point,linestring,polygon,multipoint,multilinestring,multipolygon,geometrycollection",
+        ),
+        ("geo.generate_grid", TypesDeclaration::Exact, "polygon"),
         ("geo.centroid", TypesDeclaration::Exact, "point"),
         ("geo.point_on_surface", TypesDeclaration::Exact, "point"),
         (
@@ -2864,7 +2870,14 @@ mod tests {
             let Some((declaration, list)) = expected_types_of(case.op) else {
                 continue;
             };
-            let mut inputs = vec![geo_contract_with_declared_types()];
+            // I produttori accettano per contratto input senza geometria: la
+            // riscrittura dei tipi riguarda il loro output, non autorizza un
+            // input geometrico che il kernel deve rifiutare.
+            let mut inputs = match case.op {
+                "geo.from_wkt" => vec![wkt_tabular_contract()],
+                "geo.generate_grid" => vec![tabular_contract()],
+                _ => vec![geo_contract_with_declared_types()],
+            };
             if case.binary {
                 inputs.push(geo_contract(projected_crs()));
             }

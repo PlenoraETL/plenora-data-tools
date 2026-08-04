@@ -483,7 +483,7 @@
     "arity": "unary",
     "cancellation_behavior": "cooperative",
     "config_schema_version": 1,
-    "contract_analysis_version": 1,
+    "contract_analysis_version": 2,
     "crs_requirement": "known",
     "determinism": "defined_order",
     "execution_class": "streaming",
@@ -497,13 +497,13 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "from_coords",
-    "semantic_version": 2
+    "semantic_version": 3
   },
   {
     "arity": "unary",
     "cancellation_behavior": "boundary_only",
     "config_schema_version": 1,
-    "contract_analysis_version": 1,
+    "contract_analysis_version": 2,
     "crs_requirement": "known",
     "determinism": "defined_order",
     "execution_class": "blocking",
@@ -517,7 +517,7 @@
     "origin": "extension",
     "required_capabilities": [],
     "result_shape": "whole_to_many",
-    "semantic_version": 1
+    "semantic_version": 2
   },
   {
     "arity": "unary",

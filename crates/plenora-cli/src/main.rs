@@ -52,8 +52,8 @@ use plenora_engine::geo_transport::publish::{
     PublishProfile,
 };
 use plenora_engine::geo_transport::transport::{
-    pair_arrow, transform_arrow, PairArrowSchema, PairArrowSummary, TransformArrowSchema,
-    TransformArrowSummary,
+    pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, PairArrowSchema,
+    PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
 };
 use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
 use plenora_engine::planner::{self, ValidatedGraph};
@@ -168,6 +168,23 @@ fn argument_value(args: &[String], name: &str) -> Result<String, PlenoraError> {
     args.get(position + 1)
         .cloned()
         .ok_or_else(|| contract(format!("valore mancante per {name}")))
+}
+
+/// Formato dei due output Arrow legacy. L'assenza del flag conserva
+/// l'envelope PLNGEO3 storico; qualunque valore non dichiarato fallisce
+/// prima di aprire il percorso di pubblicazione.
+fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraError> {
+    let Some(position) = args.iter().position(|value| value == "--output-format") else {
+        return Ok(ArrowOutputFormat::PlnGeo3);
+    };
+    match args.get(position + 1).map(String::as_str) {
+        Some("plngeo3") => Ok(ArrowOutputFormat::PlnGeo3),
+        Some("ipc-file") => Ok(ArrowOutputFormat::IpcFile),
+        Some(_) => Err(contract(
+            "--output-format non valido (ammessi: plngeo3, ipc-file)",
+        )),
+        None => Err(contract("valore mancante per --output-format")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +476,7 @@ fn execute_transform_arrow(
     input: &str,
     schema_path: &Path,
     output: &str,
+    output_format: ArrowOutputFormat,
 ) -> Result<TransformArrowSummary, Box<dyn Error>> {
     if output == "-" {
         return Err(contract(
@@ -488,23 +506,24 @@ fn execute_transform_arrow(
     let output_path = Path::new(output);
     let (summary, outcome) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-            transform_arrow(&mut input_reader, output_writer, &schema).map_err(|error| {
-                // Un rifiuto row-scoped (R9.9) e' un difetto del DATO letto,
-                // non del piano: assi data_mapping/read e diagnostica
-                // preservata, mai riclassificato invalid_plan/validate.
-                // Gli errori non row-scoped mantengono la classificazione
-                // storica `contract` (unico percorso del trasporto legacy che
-                // produce diagnostica: `transform_arrow`; `pair_arrow` e il
-                // v2 a frame WKB non ne emettono).
-                error.row_diagnostics().map_or_else(
-                    || contract(error.to_string()),
-                    |diagnostics| {
-                        PlenoraError::DataMapping(error.to_string())
-                            .with_phase(ErrorPhase::Read)
-                            .with_row_diagnostics(diagnostics.clone())
-                    },
-                )
-            })
+            transform_arrow_with_format(&mut input_reader, output_writer, &schema, output_format)
+                .map_err(|error| {
+                    // Un rifiuto row-scoped (R9.9) e' un difetto del DATO letto,
+                    // non del piano: assi data_mapping/read e diagnostica
+                    // preservata, mai riclassificato invalid_plan/validate.
+                    // Gli errori non row-scoped mantengono la classificazione
+                    // storica `contract` (unico percorso del trasporto legacy che
+                    // produce diagnostica: `transform_arrow`; `pair_arrow` e il
+                    // v2 a frame WKB non ne emettono).
+                    error.row_diagnostics().map_or_else(
+                        || contract(error.to_string()),
+                        |diagnostics| {
+                            PlenoraError::DataMapping(error.to_string())
+                                .with_phase(ErrorPhase::Read)
+                                .with_row_diagnostics(diagnostics.clone())
+                        },
+                    )
+                })
         })?;
     report_publish_outcome(outcome, output_path);
     Ok(summary)
@@ -515,6 +534,7 @@ fn execute_pair_arrow(
     right_path: &Path,
     schema_path: &Path,
     output_path: &Path,
+    output_format: ArrowOutputFormat,
 ) -> Result<PairArrowSummary, Box<dyn Error>> {
     let schema: PairArrowSchema = serde_json::from_reader(BufReader::with_capacity(
         64 * 1024,
@@ -534,8 +554,14 @@ fn execute_pair_arrow(
     let mut right_reader = BufReader::with_capacity(1024 * 1024, File::open(right_path)?);
     let (summary, outcome) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-            pair_arrow(&mut left_reader, &mut right_reader, output_writer, &schema)
-                .map_err(|error| contract(error.to_string()))
+            pair_arrow_with_format(
+                &mut left_reader,
+                &mut right_reader,
+                output_writer,
+                &schema,
+                output_format,
+            )
+            .map_err(|error| contract(error.to_string()))
         })?;
     report_publish_outcome(outcome, output_path);
     Ok(summary)
@@ -1722,10 +1748,12 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some("transform-arrow") => {
+            let output_format = arrow_output_format(args)?;
             let input = argument_value(args, "--input")?;
             let schema = argument_value(args, "--schema")?;
             let output = argument_value(args, "--output")?;
-            let summary = execute_transform_arrow(&input, Path::new(&schema), &output)?;
+            let summary =
+                execute_transform_arrow(&input, Path::new(&schema), &output, output_format)?;
             println!(
                 "{{\"status\":\"ok\",\"rows\":{},\"output_rows\":{},\"sha256\":\"{}\"}}",
                 summary.rows,
@@ -1735,6 +1763,7 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some("pair-arrow") => {
+            let output_format = arrow_output_format(args)?;
             let left = argument_value(args, "--left")?;
             let right = argument_value(args, "--right")?;
             let schema = argument_value(args, "--schema")?;
@@ -1750,6 +1779,7 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
                 Path::new(&right),
                 Path::new(&schema),
                 Path::new(&output),
+                output_format,
             )?;
             println!(
                 "{{\"status\":\"ok\",\"left_rows\":{},\"right_rows\":{},\"output_rows\":{},\"sha256\":\"{}\"}}",

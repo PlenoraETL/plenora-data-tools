@@ -2469,7 +2469,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2,
+        semantic_version = 3,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -2524,7 +2525,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_factor_exempt = true
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.subdivide",
@@ -3522,8 +3525,10 @@ mod tests {
             ("table.explode", 2, 1, 1, 2),
             ("table.formula", 2, 1, 1, 3),
             ("table.expression", 3, 2, 2, 4),
-            // diag-wkt: raccolta nel kernel geo.
-            ("geo.from_wkt", 2, 1, 1, 2),
+            // diag-wkt: raccolta nel kernel geo. La successiva dichiarazione
+            // pubblica encoding/types del produttore cambia anche semantica e
+            // contract analysis (ADR-0004/ADR-0009).
+            ("geo.from_wkt", 3, 1, 2, 2),
             // diag-transport / diag-coords: il rifiuto row-scoped ora porta
             // il payload `plenora-row-diagnostics-v1` (comportamento
             // osservabile; kernel invariato -> bump semantico soltanto).
