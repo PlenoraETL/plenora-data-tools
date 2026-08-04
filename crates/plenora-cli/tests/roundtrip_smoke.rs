@@ -31,6 +31,34 @@ fn write_ipc(path: &std::path::Path, schema: &Schema, batches: &[RecordBatch]) {
     writer.finish().expect("finish");
 }
 
+#[cfg(feature = "proj-backend")]
+fn assert_public_io_admission_metadata(schema: &Schema) {
+    let geometry = schema
+        .field_with_name("geometry")
+        .expect("campo geometria pubblico");
+    let metadata = geometry.metadata();
+    for (key, expected) in [
+        ("plenora.geometry.encoding", "wkb"),
+        ("plenora.geometry.dimensions", "xy"),
+        ("plenora.geometry.crs_resolution", "resolved"),
+        ("plenora.geometry.types_declaration", "exact"),
+        ("plenora.geometry.types", "point"),
+    ] {
+        assert_eq!(
+            metadata.get(key).map(String::as_str),
+            Some(expected),
+            "metadato pubblico {key}"
+        );
+    }
+    assert_eq!(
+        schema
+            .metadata()
+            .get("plenora.contract.version")
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
 #[test]
 fn catalog_unificato_e_filtro_famiglia() {
     let output = cli().arg("catalog").output().expect("catalog");
@@ -249,6 +277,29 @@ fn transform_arrow_v3_roundtrip() {
     assert!(stdout.contains("\"rows\":1"), "stdout: {stdout}");
     assert!(stdout.contains("\"output_rows\":1"), "stdout: {stdout}");
     assert!(output_path.exists());
+
+    let ipc_output = directory.path().join("output.arrow");
+    let result = cli()
+        .arg("transform-arrow")
+        .arg("--input")
+        .arg(&input)
+        .arg("--schema")
+        .arg(&schema_path)
+        .arg("--output")
+        .arg(&ipc_output)
+        .args(["--output-format", "ipc-file"])
+        .output()
+        .expect("transform-arrow ipc-file");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
+        .expect("Arrow IPC file pubblico");
+    assert_public_io_admission_metadata(reader.schema().as_ref());
+    let batches = reader.collect::<Result<Vec<_>, _>>().expect("batch IPC");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
 }
 
 /// `transform-arrow` con `from_coords`: le coordinate non finite sono un
@@ -529,6 +580,39 @@ fn transform_arrow_v3_emits_canonical_keys() {
 /// pass-through (`within`) il blocco e' derivato dal metadato `geo` del
 /// campo propagato (stesso CRS, stessa dimensionalita').
 #[cfg(feature = "proj-backend")]
+fn assert_pair_transport_metadata(schema: &Schema) {
+    use plenora_engine::geo_transport::transport::DEFAULT_GEOMETRY_COLUMN;
+
+    let (_, field) = schema
+        .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+        .expect("geometry column");
+    let metadata = field.metadata();
+    assert_eq!(
+        metadata
+            .get("plenora.geometry.dimensions")
+            .map(String::as_str),
+        Some("xy")
+    );
+    assert_eq!(
+        metadata
+            .get("plenora.geometry.crs_resolution")
+            .map(String::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        metadata.get("plenora.geometry.crs_id").map(String::as_str),
+        Some("EPSG:3857")
+    );
+    assert_eq!(
+        schema
+            .metadata()
+            .get("plenora.contract.version")
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
+#[cfg(feature = "proj-backend")]
 #[test]
 fn pair_arrow_v3_emits_canonical_keys() {
     use plenora_engine::geo_transport::transport::{
@@ -600,31 +684,47 @@ fn pair_arrow_v3_emits_canonical_keys() {
         .read_payload()
         .expect("payload");
     let (out_schema, _) = decode_ipc(&payload).expect("ipc");
-    let (_, field) = out_schema
-        .column_with_name(DEFAULT_GEOMETRY_COLUMN)
-        .expect("geometry column");
-    let metadata = field.metadata();
-    assert_eq!(
-        metadata
-            .get("plenora.geometry.dimensions")
-            .map(String::as_str),
-        Some("xy")
+    assert_pair_transport_metadata(out_schema.as_ref());
+
+    let ipc_output = directory.path().join("pair-output.arrow");
+    let result = cli()
+        .arg("pair-arrow")
+        .arg("--left")
+        .arg(&left_path)
+        .arg("--right")
+        .arg(&right_path)
+        .arg("--schema")
+        .arg(&schema_path)
+        .arg("--output")
+        .arg(&ipc_output)
+        .args(["--output-format", "ipc-file"])
+        .output()
+        .expect("pair-arrow ipc-file");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    assert_eq!(
-        metadata
-            .get("plenora.geometry.crs_resolution")
-            .map(String::as_str),
-        Some("resolved")
-    );
-    assert_eq!(
-        metadata.get("plenora.geometry.crs_id").map(String::as_str),
-        Some("EPSG:3857")
-    );
-    assert_eq!(
-        out_schema
-            .metadata()
-            .get("plenora.contract.version")
-            .map(String::as_str),
-        Some("1")
-    );
+    let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
+        .expect("Arrow IPC file pubblico");
+    assert_public_io_admission_metadata(reader.schema().as_ref());
+    let batches = reader.collect::<Result<Vec<_>, _>>().expect("batch IPC");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+}
+
+#[test]
+fn arrow_output_format_rejects_unknown_values_before_publication() {
+    for command in ["transform-arrow", "pair-arrow"] {
+        let result = cli()
+            .args([command, "--output-format", "stream"])
+            .output()
+            .expect("invocazione CLI");
+        assert_eq!(result.status.code(), Some(2), "{command}");
+        assert!(result.stdout.is_empty(), "{command}");
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            error.contains("--output-format non valido"),
+            "{command}: {error}"
+        );
+    }
 }

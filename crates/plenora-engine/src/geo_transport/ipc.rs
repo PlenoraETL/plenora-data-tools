@@ -4,7 +4,7 @@
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::reader::StreamReader;
-use plenora_core::arrow::ipc::writer::StreamWriter;
+use plenora_core::arrow::ipc::writer::{FileWriter, StreamWriter};
 use plenora_core::arrow::schema::SchemaRef;
 
 use super::error::ArrowTransportError;
@@ -443,6 +443,39 @@ pub fn encode_ipc(
     let mut payload = Vec::new();
     {
         let mut writer = StreamWriter::try_new(&mut payload, schema)
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+        for batch in batches {
+            writer
+                .write(batch)
+                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+    }
+    if payload.len() as u64 > MAX_STREAM_BYTES {
+        return Err(ArrowTransportError::StreamTooLarge);
+    }
+    Ok(payload)
+}
+
+/// Codifica gli stessi batch come Arrow IPC **file**, il formato ammesso dai
+/// consumer path-based (nessun envelope o unwrap privato necessario).
+///
+/// # Errors
+///
+/// Restituisce `TooManyBatches` o `StreamTooLarge` quando vengono superati i
+/// limiti del trasporto; propaga come `Arrow` gli errori del writer IPC.
+pub fn encode_ipc_file(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+) -> Result<Vec<u8>, ArrowTransportError> {
+    if batches.len() > MAX_BATCHES {
+        return Err(ArrowTransportError::TooManyBatches(batches.len()));
+    }
+    let mut payload = Vec::new();
+    {
+        let mut writer = FileWriter::try_new(&mut payload, schema)
             .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
         for batch in batches {
             writer

@@ -11,6 +11,15 @@ use super::error::ArrowTransportError;
 use super::protocol::MAX_ROWS;
 use super::transport::{DEFAULT_GEOMETRY_COLUMN, DEFAULT_X_COLUMN, DEFAULT_Y_COLUMN};
 
+/// Formato pubblico dell'output dei comandi Arrow legacy. Il default resta
+/// PLNGEO3 per compatibilita'; `IpcFile` compone direttamente con consumer IO.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ArrowOutputFormat {
+    #[default]
+    PlnGeo3,
+    IpcFile,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArrowOperation {

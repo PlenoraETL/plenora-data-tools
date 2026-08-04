@@ -70,18 +70,18 @@ pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
 // nessun percorso `transport::...` esterno cambia.
 pub use super::envelope::{EnvelopeReader, EnvelopeWriter};
 pub use super::error::ArrowTransportError;
-pub use super::ipc::{decode_ipc, encode_ipc};
+pub use super::ipc::{decode_ipc, encode_ipc, encode_ipc_file};
 pub use super::pair::{
-    decode_geometry_batches, pair_arrow, preflight_decoded_bytes, GeometryDecodeError,
-    PairArrowSchema, PairArrowSummary, PairOperation,
+    decode_geometry_batches, pair_arrow, pair_arrow_with_format, preflight_decoded_bytes,
+    GeometryDecodeError, PairArrowSchema, PairArrowSummary, PairOperation,
 };
 pub use super::schema::{
-    ArrowOperation, ArrowShape, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
-    TransformArrowSummary,
+    ArrowOperation, ArrowOutputFormat, ArrowShape, BufferCap, SimplifyPolicyParam,
+    TransformArrowSchema, TransformArrowSummary,
 };
 pub use super::unary::{
-    one_to_one_batch_prepared, prepare_one_to_one, transform_arrow, transform_batches,
-    OneToOnePrepared,
+    one_to_one_batch_prepared, prepare_one_to_one, transform_arrow, transform_arrow_with_format,
+    transform_batches, OneToOnePrepared,
 };
 
 #[cfg(test)]
@@ -402,11 +402,22 @@ mod tests {
                 .map(String::as_str),
             Some("unknown")
         );
-        // encoding non dichiarato dal trasporto (B1.4) e tipi mai inventati
-        // (R3.4.1): le chiavi restano assenti.
-        assert!(!canonical.contains_key("plenora.geometry.encoding"));
-        assert!(!canonical.contains_key("plenora.geometry.types"));
-        assert!(!canonical.contains_key("plenora.geometry.types_declaration"));
+        assert_eq!(
+            canonical
+                .get("plenora.geometry.encoding")
+                .map(String::as_str),
+            Some("wkb")
+        );
+        assert_eq!(
+            canonical.get("plenora.geometry.types").map(String::as_str),
+            Some("point")
+        );
+        assert_eq!(
+            canonical
+                .get("plenora.geometry.types_declaration")
+                .map(String::as_str),
+            Some("exact")
+        );
         // Doppia emissione: le chiavi GeoArrow standard restano invariate.
         assert_eq!(
             field
@@ -429,7 +440,11 @@ mod tests {
 
     #[test]
     fn transform_arrow_canonical_block_is_byte_identical_to_v4_form() {
-        use plenora_core::contract::{ContractCrs, FieldId, GeometryColumnContract};
+        use plenora_core::contract::{
+            ContractCrs, ContractProperty, FieldId, GeometryColumnContract, GeometryEncoding,
+            GeometryType, GeometryTypesProperty, PropertyConfidence, PropertyScope,
+            TypesDeclaration,
+        };
         use plenora_core::crs::{CrsKind, ResolvedCrs};
         use plenora_kernels_geo::arrow_adapter::{
             canonical_geometry_metadata, GeometryMetadataDetails,
@@ -471,9 +486,15 @@ mod tests {
                 Some(1.0),
             )),
             dimensions: plenora_core::contract::GeometryDimensions::Xy,
-            encoding: None,
+            encoding: Some(GeometryEncoding::Wkb),
             nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
+            types: ContractProperty::new(
+                PropertyConfidence::Declared(
+                    GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point])
+                        .expect("tipo esatto coerente"),
+                ),
+                PropertyScope::Schema,
+            ),
         };
         let expected = canonical_geometry_metadata(&contract, &GeometryMetadataDetails::default());
         assert_eq!(canonical_block(field), expected);
@@ -598,6 +619,13 @@ mod tests {
             "plenora.geometry.axis_order".to_owned(),
             "lon_lat".to_owned(),
         );
+        field_metadata.insert("plenora.geometry.encoding".to_owned(), "wkb".to_owned());
+        field_metadata.insert(
+            "plenora.geometry.types_declaration".to_owned(),
+            "exact".to_owned(),
+        );
+        field_metadata.insert("plenora.geometry.types".to_owned(), "point".to_owned());
+        field_metadata.insert("plenora.geometry.srid".to_owned(), "4326".to_owned());
         let expected = field_metadata.clone();
         let schema_metadata =
             HashMap::from([("plenora.contract.version".to_owned(), "1".to_owned())]);
@@ -625,6 +653,41 @@ mod tests {
                 .map(String::as_str),
             Some("1")
         );
+    }
+
+    #[test]
+    fn pair_passthrough_does_not_attach_observed_types_to_unresolved_declaration() {
+        let mut field_metadata = geoarrow_field_metadata();
+        field_metadata.insert(
+            "plenora.geometry.types_declaration".to_owned(),
+            "unresolved".to_owned(),
+        );
+        let left = side_envelope_with_metadata(
+            field_metadata,
+            HashMap::new(),
+            &[Some(&point_wkb(0.5, 0.5))],
+        );
+        let right = side_envelope(&[Some(&shifted_square_wkb(0.0, 0.0, 2.0))]);
+        let schema = PairArrowSchema {
+            max_pairs: Some(10),
+            ..pair_schema(PairOperation::Within, 1, 1)
+        };
+
+        let output = run_pair(&schema, &left, &right).expect("within");
+        let (out_schema, _) = decode_output(&output);
+        let field = out_schema
+            .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+            .expect("geometry column")
+            .1;
+
+        assert_eq!(
+            field
+                .metadata()
+                .get("plenora.geometry.types_declaration")
+                .map(String::as_str),
+            Some("unresolved")
+        );
+        assert!(!field.metadata().contains_key("plenora.geometry.types"));
     }
 
     #[test]

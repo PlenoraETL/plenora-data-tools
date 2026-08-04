@@ -8,6 +8,7 @@ use plenora_core::arrow::array::{BinaryArray, Float64Array, RecordBatch, UInt64A
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use rayon::prelude::*;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::pair_protocol::MAX_PAIRS;
 use super::protocol::MAX_ROWS;
@@ -33,7 +34,8 @@ use plenora_kernels_geo::topology::{
 
 use super::envelope::{EnvelopeReader, EnvelopeWriter};
 use super::error::ArrowTransportError;
-use super::ipc::{decode_ipc, encode_ipc};
+use super::ipc::{decode_ipc, encode_ipc, encode_ipc_file};
+use super::schema::ArrowOutputFormat;
 use super::transport::{
     COUNT_COLUMN, DEFAULT_GEOMETRY_COLUMN, DISTANCE_COLUMN, LEFT_INDEX_COLUMN, MAX_CELL_BYTES,
     RIGHT_INDEX_COLUMN, WITHIN_COLUMN,
@@ -783,6 +785,31 @@ pub fn pair_arrow(
     writer: impl Write,
     schema: &PairArrowSchema,
 ) -> Result<PairArrowSummary, ArrowTransportError> {
+    pair_arrow_with_format(
+        left_reader,
+        right_reader,
+        writer,
+        schema,
+        ArrowOutputFormat::PlnGeo3,
+    )
+}
+
+/// Variante pubblica con formato d'output esplicito; il wrapper storico
+/// [`pair_arrow`] conserva PLNGEO3 come default.
+///
+/// # Errors
+///
+/// Propaga gli stessi errori di validazione, decodifica, kernel e limiti di
+/// [`pair_arrow`]; per `IpcFile` propaga inoltre gli errori del writer IPC e
+/// dell'output pubblico.
+#[allow(clippy::too_many_lines)]
+pub fn pair_arrow_with_format(
+    left_reader: impl Read,
+    right_reader: impl Read,
+    mut writer: impl Write,
+    schema: &PairArrowSchema,
+    output_format: ArrowOutputFormat,
+) -> Result<PairArrowSummary, ArrowTransportError> {
     if schema.schema_version != PairArrowSchema::VERSION {
         return Err(ArrowTransportError::UnsupportedSchemaVersion(
             schema.schema_version,
@@ -1383,10 +1410,19 @@ pub fn pair_arrow(
         .iter()
         .map(|batch| batch.num_rows() as u64)
         .sum();
-    let output_payload = encode_ipc(&output_schema, &output_batches)?;
-    let mut envelope = EnvelopeWriter::new(writer, output_payload.len() as u64)?;
-    envelope.write_payload(&output_payload)?;
-    let (_, checksum) = envelope.finish()?;
+    let checksum = match output_format {
+        ArrowOutputFormat::PlnGeo3 => {
+            let output_payload = encode_ipc(&output_schema, &output_batches)?;
+            let mut envelope = EnvelopeWriter::new(writer, output_payload.len() as u64)?;
+            envelope.write_payload(&output_payload)?;
+            envelope.finish()?.1
+        }
+        ArrowOutputFormat::IpcFile => {
+            let output_payload = encode_ipc_file(&output_schema, &output_batches)?;
+            writer.write_all(&output_payload)?;
+            Sha256::digest(&output_payload).into()
+        }
+    };
     Ok(PairArrowSummary {
         left_rows,
         right_rows,

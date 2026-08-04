@@ -2526,6 +2526,7 @@ fn scan_row_diagnostic_segment(
 ) -> StagingOutcome {
     let mut diagnostics = None;
     let mut diagnostic_context = None;
+    let mut input_rejected = false;
     let mut source_offset = 0_u64;
     let mut terminal_error = None;
     let mut staged_meta: std::collections::VecDeque<StagedBatchMeta> =
@@ -2538,6 +2539,33 @@ fn scan_row_diagnostic_segment(
             Ok(governed) => governed,
             Err(error) => {
                 if let Some(report) = error.row_diagnostics().cloned() {
+                    if diagnostic_context.is_none() {
+                        diagnostic_context = error.execution_location().map_or_else(
+                            || {
+                                plan.segments()[segment_index]
+                                    .kernels
+                                    .first()
+                                    .map(|kernel| {
+                                        (
+                                            kernel.node_id.clone(),
+                                            kernel.operation.to_owned(),
+                                            state.execution_id.clone(),
+                                        )
+                                    })
+                            },
+                            |(node, operation, execution_id)| {
+                                Some((
+                                    node.to_owned(),
+                                    operation.to_owned(),
+                                    execution_id.map_or_else(
+                                        || state.execution_id.clone(),
+                                        ToOwned::to_owned,
+                                    ),
+                                ))
+                            },
+                        );
+                    }
+                    input_rejected = true;
                     if let Err(error) = merge_row_diagnostics(&mut diagnostics, report, 0) {
                         terminal_error = Some(attach_partial_row_diagnostics(
                             error,
@@ -2574,10 +2602,10 @@ fn scan_row_diagnostic_segment(
             break;
         };
         source_offset = offset;
-        // Una rejection di validazione input (WKB) non ha contesto di
-        // nodo: si continua a drenare/validare l'input per completare
-        // i conteggi, senza eseguire alcun kernel downstream.
-        if diagnostics.is_some() && diagnostic_context.is_none() {
+        // Una rejection di validazione input (WKB) e' attribuita al primo
+        // kernel consumatore del segmento, ma continua a drenare/validare
+        // l'input per completare i conteggi senza eseguire kernel downstream.
+        if diagnostics.is_some() && input_rejected {
             continue;
         }
         let diagnostic_node = diagnostic_context

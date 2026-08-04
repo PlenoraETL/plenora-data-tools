@@ -11,9 +11,13 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 
 use super::protocol::MAX_ROWS;
-use plenora_core::contract::{CrsResolution, GeometryDimensions, GeometryEncoding};
+use plenora_core::contract::{
+    CrsResolution, GeometryDimensions, GeometryEncoding, GeometryType, GeometryTypesProperty,
+    TypesDeclaration,
+};
 use plenora_core::crs::MAX_CRS_DEFINITION_BYTES;
 use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
@@ -52,10 +56,10 @@ use plenora_kernels_geo::{
 
 use super::envelope::{EnvelopeReader, EnvelopeWriter};
 use super::error::ArrowTransportError;
-use super::ipc::{decode_ipc, encode_ipc};
+use super::ipc::{decode_ipc, encode_ipc, encode_ipc_file};
 use super::schema::{
-    ArrowOperation, ArrowShape, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
-    TransformArrowSummary,
+    ArrowOperation, ArrowOutputFormat, ArrowShape, BufferCap, SimplifyPolicyParam,
+    TransformArrowSchema, TransformArrowSummary,
 };
 #[cfg(feature = "geos-backend")]
 use super::transport::MAX_NODING_WORK;
@@ -67,7 +71,8 @@ use super::transport::{
 use plenora_kernels_geo::arrow_adapter::{
     canonical_geometry_metadata_for_resolved_definition, field_declares_wkb_geometry,
     GeometryMetadataDetails, PLENORA_CONTRACT_VERSION, PLENORA_CONTRACT_VERSION_KEY,
-    PLENORA_GEOMETRY_NAMESPACE_PREFIX,
+    PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
+    PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
 };
 
 #[cfg(feature = "proj-backend")]
@@ -165,11 +170,9 @@ pub(in crate::geo_transport) fn geometry_output_field(
 ///
 /// - solo i campi con estensione `geoarrow.wkb` sono colonne geometriche:
 ///   ogni altro campo e' restituito invariato;
-/// - un campo che porta GIA' chiavi canoniche (lineage dal produttore, es.
-///   input dal percorso v4 propagato invariato dalle op pass-through come
-///   `within`/`count`) le conserva invariate — R2.4: il trasporto non
-///   interpreta le chiavi canoniche, le propaga; la coerenza R2.6 con il
-///   `geo.crs` era responsabilita' del produttore;
+/// - le chiavi canoniche gia' presenti sono conservate; quelle obbligatorie
+///   mancanti sono completate dalle autorita' locali (estensione WKB e tipi
+///   osservati nei batch), senza sovrascrivere dichiarazioni di lineage;
 /// - altrimenti il blocco e' derivato dal metadato legacy `geo` del campo
 ///   stesso (la dichiarazione che il trasporto ha sempre emesso/propagato):
 ///   `geo.crs` → stato `resolved` con la stessa definizione (forma v4,
@@ -180,26 +183,65 @@ pub(in crate::geo_transport) fn geometry_output_field(
 /// - nessuna dichiarazione CRS (`geo.crs` assente o vuota) →
 ///   `crs_resolution = missing` senza chiavi CRS (R4.6.3/R4.6.4: lo stato
 ///   mancante si propaga invariato, mai un CRS inventato — R4.4);
-/// - i tipi NON sono mai emessi (il trasporto non li dichiara, R3.4.1).
+/// - i tipi sono derivati dai byte d'output: `exact` per un solo tipo,
+///   `mixed` per piu' tipi e `unresolved` senza elenco se non esistono celle
+///   non-null da osservare (R3.4.1).
 ///
 /// La derivazione non introduce rifiuti nuovi sui metadati di lineage: un
 /// `geo` malformato resta propagato com'e' (la sua lettura fail-closed e'
 /// della discovery v4, non del trasporto legacy).
-fn canonical_legacy_field(field: &Field) -> Field {
+fn merge_canonical_geometry_types(
+    metadata: &mut std::collections::HashMap<String, String>,
+    observed: &GeometryTypesProperty,
+) -> Result<(), ArrowTransportError> {
+    match (
+        metadata
+            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
+            .cloned(),
+        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).cloned(),
+    ) {
+        (Some(declaration), canonical_types) => {
+            let declaration = declaration.parse::<TypesDeclaration>().map_err(|_| {
+                ArrowTransportError::Arrow(
+                    "types_declaration canonica non riconosciuta sul campo geometrico".to_owned(),
+                )
+            })?;
+            GeometryTypesProperty::from_canonical_list(
+                declaration,
+                canonical_types.as_deref().unwrap_or(""),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+        }
+        (None, Some(_)) => {
+            return Err(ArrowTransportError::Arrow(
+                "types canonici presenti senza types_declaration sul campo geometrico".to_owned(),
+            ));
+        }
+        (None, None) => {
+            metadata.insert(
+                PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+                observed.declaration().as_str().to_owned(),
+            );
+            let canonical_types = observed.to_canonical_list();
+            if !canonical_types.is_empty() {
+                metadata.insert(PLENORA_GEOMETRY_TYPES_KEY.to_owned(), canonical_types);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn canonical_legacy_field(
+    field: &Field,
+    types: &GeometryTypesProperty,
+) -> Result<Field, ArrowTransportError> {
     if field
         .metadata()
         .get(GEOARROW_EXTENSION_KEY)
         .map(String::as_str)
         != Some(GEOARROW_WKB_EXTENSION)
     {
-        return field.clone();
-    }
-    if field
-        .metadata()
-        .keys()
-        .any(|key| key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX))
-    {
-        return field.clone();
+        return Ok(field.clone());
     }
     let geo = field
         .metadata()
@@ -257,8 +299,63 @@ fn canonical_legacy_field(field: &Field) -> Field {
         },
     );
     let mut metadata = field.metadata().clone();
-    metadata.extend(canonical);
-    field.clone().with_metadata(metadata)
+    for (key, value) in canonical {
+        metadata.entry(key).or_insert(value);
+    }
+    match metadata.get(PLENORA_GEOMETRY_ENCODING_KEY) {
+        Some(value) if value != GeometryEncoding::Wkb.as_str() => {
+            return Err(ArrowTransportError::Arrow(
+                "estensione geoarrow.wkb divergente dal metadato canonico encoding".to_owned(),
+            ));
+        }
+        Some(_) => {}
+        None => {
+            metadata.insert(
+                PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
+                GeometryEncoding::Wkb.as_str().to_owned(),
+            );
+        }
+    }
+    merge_canonical_geometry_types(&mut metadata, types)?;
+    Ok(field.clone().with_metadata(metadata))
+}
+
+fn observed_geometry_types(
+    batches: &[RecordBatch],
+    geometry_index: usize,
+    geometry_column: &str,
+) -> Result<GeometryTypesProperty, ArrowTransportError> {
+    let mut types = Vec::new();
+    for batch in batches {
+        let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
+        for row in 0..cells.len() {
+            if cells.is_null(row) {
+                continue;
+            }
+            let geometry = geometry_from_wkb(cells.value(row))?;
+            let geometry_type = match geometry {
+                Geometry::Point(_) => GeometryType::Point,
+                Geometry::LineString(_) | Geometry::Line(_) => GeometryType::LineString,
+                Geometry::Polygon(_) | Geometry::Rect(_) | Geometry::Triangle(_) => {
+                    GeometryType::Polygon
+                }
+                Geometry::MultiPoint(_) => GeometryType::MultiPoint,
+                Geometry::MultiLineString(_) => GeometryType::MultiLineString,
+                Geometry::MultiPolygon(_) => GeometryType::MultiPolygon,
+                Geometry::GeometryCollection(_) => GeometryType::GeometryCollection,
+            };
+            types.push(geometry_type);
+        }
+    }
+    types.sort_unstable();
+    types.dedup();
+    let declaration = match types.len() {
+        0 => TypesDeclaration::Unresolved,
+        1 => TypesDeclaration::Exact,
+        _ => TypesDeclaration::Mixed,
+    };
+    GeometryTypesProperty::new(declaration, types)
+        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
 }
 
 /// Post-processo CENTRALE della doppia emissione BLOCK-06 sugli output del
@@ -286,8 +383,14 @@ pub(in crate::geo_transport) fn canonical_legacy_output(
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     let mut canonical_present = false;
     let mut fields = Vec::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        let field = canonical_legacy_field(field);
+    for (index, field) in schema.fields().iter().enumerate() {
+        let types = if field_declares_wkb_geometry(field) {
+            observed_geometry_types(&batches, index, field.name())?
+        } else {
+            GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new())
+                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?
+        };
+        let field = canonical_legacy_field(field, &types)?;
         canonical_present |= field
             .metadata()
             .keys()
@@ -2903,6 +3006,23 @@ pub fn transform_arrow(
     writer: impl Write,
     schema: &TransformArrowSchema,
 ) -> Result<TransformArrowSummary, ArrowTransportError> {
+    transform_arrow_with_format(reader, writer, schema, ArrowOutputFormat::PlnGeo3)
+}
+
+/// Variante pubblica con formato d'output esplicito; il wrapper storico
+/// [`transform_arrow`] conserva PLNGEO3 come default.
+///
+/// # Errors
+///
+/// Propaga gli stessi errori di schema, decodifica, kernel e limiti di
+/// [`transform_arrow`]; per `IpcFile` propaga inoltre gli errori del writer
+/// IPC e dell'output pubblico.
+pub fn transform_arrow_with_format(
+    reader: impl Read,
+    mut writer: impl Write,
+    schema: &TransformArrowSchema,
+    output_format: ArrowOutputFormat,
+) -> Result<TransformArrowSummary, ArrowTransportError> {
     if schema.schema_version != TransformArrowSchema::VERSION {
         return Err(ArrowTransportError::UnsupportedSchemaVersion(
             schema.schema_version,
@@ -2934,10 +3054,19 @@ pub fn transform_arrow(
         .iter()
         .map(|batch| batch.num_rows() as u64)
         .sum();
-    let output_payload = encode_ipc(&output_schema, &output_batches)?;
-    let mut envelope = EnvelopeWriter::new(writer, output_payload.len() as u64)?;
-    envelope.write_payload(&output_payload)?;
-    let (_, checksum) = envelope.finish()?;
+    let checksum = match output_format {
+        ArrowOutputFormat::PlnGeo3 => {
+            let output_payload = encode_ipc(&output_schema, &output_batches)?;
+            let mut envelope = EnvelopeWriter::new(writer, output_payload.len() as u64)?;
+            envelope.write_payload(&output_payload)?;
+            envelope.finish()?.1
+        }
+        ArrowOutputFormat::IpcFile => {
+            let output_payload = encode_ipc_file(&output_schema, &output_batches)?;
+            writer.write_all(&output_payload)?;
+            Sha256::digest(&output_payload).into()
+        }
+    };
     Ok(TransformArrowSummary {
         rows,
         output_rows,

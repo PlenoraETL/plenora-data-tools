@@ -635,15 +635,11 @@ fn bowtie_wkb() -> Vec<u8> {
 
 /// (c) ADR-0012: WKB malformato in input -> stesso errore nei due percorsi.
 ///
-/// Esito rilevato dall'oracolo (diverso dalla lettera del caso ADR, che
-/// attende l'attribuzione al primo nodo): il WKB STRUTTURALMENTE invalido
-/// (byte troncati, NaN, anello non chiuso) e' rifiutato dalla validazione
-/// dell'ARCO DI INPUT (`validate_wkb_contract_for_dimensions_with_depth`)
-/// prima che qualunque nodo sia eseguito — variante `InvalidPlan`, nessun
-/// nodo, riga nel motivo — identicamente nei due percorsi (la fusione non
-/// e' ancora in gioco). L'attribuzione al primo nodo vale per cio' che
-/// supera l'arco: il sottocaso "bowtie" (OGC-invalido ma strutturalmente
-/// valido) fallisce al decode del primo nodo `t` in entrambi i percorsi.
+/// Il pre-gate dell'arco e' eseguito nel contesto del primo consumer `t`, che
+/// e' quindi il nodo autorevole anche per WKB strutturalmente invalido (byte
+/// troncati, NaN, anello non chiuso). L'attribuzione resta identica nei due
+/// percorsi; il sottocaso "bowtie" supera il gate strutturale e fallisce al
+/// decode dello stesso primo nodo `t`.
 /// Il sottocaso "prima riga" verifica la selezione del primo errore in
 /// ordine di riga: con due celle malformate l'errore e' quello della riga 0.
 #[test]
@@ -666,11 +662,11 @@ fn c_malformed_wkb_attributed_to_first_node() {
                     &[Some(cell.clone()), Some(point_wkb(3.0, 4.0))],
                 )]
             },
-            None,
+            Some("t"),
         );
         assert_eq!(
-            signature.variant, "DataMapping",
-            "{label}: rifiuto strutturale all'arco di input"
+            signature.variant, "Replayed",
+            "{label}: rifiuto strutturale attribuito al primo consumer"
         );
         if label == "c-troncati" {
             first_reason = signature.reason;
@@ -687,7 +683,7 @@ fn c_malformed_wkb_attributed_to_first_node() {
                 &[Some(truncated_point_wkb()), Some(nan_point_wkb())],
             )]
         },
-        None,
+        Some("t"),
     );
     assert_eq!(
         signature.reason, first_reason,
