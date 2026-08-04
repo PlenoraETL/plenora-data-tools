@@ -299,11 +299,13 @@ entrano nel perimetro come `TransformInPlace`: le liste chiuse diventano
    `CancellationBehavior` di catalogo — davanti a `make_valid`/
    `reproject` il check e' saltato in entrambi i percorsi e il
    `Cancelled` e' osservato al primo confine cooperativo successivo. Il
-   comportamento e' coperto dal test unitario deterministico
-   `non_interruptible_op_is_never_interrupted`; il caso m3-d dell'oracolo
-   differenziale copre invece la cancellazione durante lo staging WKB
-   atomico, osservata a `main` prima che il gruppo inizi, con attribuzione
-   identica nei due percorsi.
+   comportamento generico e' coperto da
+   `non_interruptible_op_is_never_interrupted`; il callback del runner fuso
+   e il ramo positivo `FusedStepError::Control` sono coperti direttamente da
+   `fused_control_observes_cancellation_after_non_interruptible_make_valid`.
+   Il caso m3-d dell'oracolo differenziale copre invece la cancellazione
+   durante lo staging WKB atomico, osservata a `main` prima che il gruppo
+   inizi, con attribuzione identica nei due percorsi.
 
 ## Oracolo (gate di M1)
 

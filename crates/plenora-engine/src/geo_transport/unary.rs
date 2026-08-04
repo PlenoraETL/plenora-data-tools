@@ -3444,6 +3444,47 @@ mod tests {
         ])
     }
 
+    #[cfg(feature = "geos-backend")]
+    #[test]
+    fn fused_control_observes_cancellation_after_non_interruptible_make_valid() {
+        let make_valid = fused_params(ArrowOperation::MakeValid);
+        let mut translate = fused_params(ArrowOperation::Translate);
+        translate.x_offset = Some(1.0);
+        translate.y_offset = Some(2.0);
+        let group: Vec<&TransformArrowSchema> = [&make_valid, &translate].to_vec();
+        let cells = cells_array(&[Some(wkb(&Geometry::Point(Point::new(3.0, 4.0))))]);
+        let mut visited = Vec::new();
+
+        let Err(error) = transform_cells_fused(&group, None, &cells, &mut |index| {
+            visited.push(index);
+            if index == 0 {
+                // Il caller executor salta la cancellazione davanti al nodo
+                // `NonInterruptible`; il kernel deve completare.
+                Ok(())
+            } else {
+                Err(PlenoraError::Cancelled {
+                    node: "t".to_owned(),
+                    operation: "geo.translate".to_owned(),
+                    execution_id: "exec-fused-control".to_owned(),
+                    reason: "cancellazione richiesta".to_owned(),
+                })
+            }
+        }) else {
+            panic!("cancellazione non osservata al primo confine cooperativo");
+        };
+
+        assert_eq!(visited, vec![0, 1], "make_valid completa prima del cancel");
+        match error {
+            FusedStepError::Control(PlenoraError::Cancelled {
+                node, operation, ..
+            }) => {
+                assert_eq!(node, "t");
+                assert_eq!(operation, "geo.translate");
+            }
+            other => panic!("atteso Control(Cancelled), ottenuto {other:?}"),
+        }
+    }
+
     /// M3, trappola 1 — il caso centrale: `make_valid` in testa al gruppo
     /// riceve un input OGC-INVALIDO (il farfalla, che supera il solo gate
     /// strutturale). Il percorso fuso NON deve rifiutarlo al decode iniziale

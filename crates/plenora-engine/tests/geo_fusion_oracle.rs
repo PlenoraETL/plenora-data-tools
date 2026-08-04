@@ -1368,7 +1368,7 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
 /// quindi osservata deterministicamente a `main`, prima che `make_valid`
 /// `NonInterruptible` inizi; i percorsi fuso e non fuso devono produrre la
 /// stessa firma. Il confine post-`NonInterruptible` e' coperto dal test
-/// unitario deterministico `non_interruptible_op_is_never_interrupted`.
+/// unitario fuso `fused_control_observes_cancellation_after_non_interruptible_make_valid`.
 #[cfg(feature = "geos-backend")]
 #[test]
 fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
