@@ -930,7 +930,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plenora-cli"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ctrlc",
  "geo",
@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-engine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono-tz",
  "geo",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-geo"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "geo",
  "geos",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-table"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono",
  "chrono-tz",

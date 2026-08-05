@@ -1,0 +1,81 @@
+{
+  "manifest_version": 1,
+  "component": "plenora-data-tools",
+  "component_version": "1.0.3",
+  "revision": "7d23b09c2ccd027f94188f2da563294c60d56ed5",
+  "icd": {
+    "repository": "plenora-contracts",
+    "tag": "v2.0-rc10",
+    "revision": "3598259bbe07d1c853453ff34ca2c1d1d28a0272",
+    "normative_status": "partially_ratified"
+  },
+  "claims": {
+    "component_rc": true,
+    "system_rc": false,
+    "avionic_certification": false
+  },
+  "release_state": "metadata_candidate_pending_same_sha_ci",
+  "verification_claim": "verified_internally",
+  "independent_review": false,
+  "supersedes": {
+    "manifest": "release/1.0.2.json",
+    "component_version": "1.0.2",
+    "tag": "v1.0.2",
+    "tag_object": "94177cb78be94808909a524f5c2f541e8e829d46",
+    "revision": "f4b669867b195dd20cf7cf4a76980d26a61b9629"
+  },
+  "candidate": {
+    "evidence_base_revision": "7d23b09c2ccd027f94188f2da563294c60d56ed5",
+    "evidence_base_ci_run": 31022398237,
+    "evidence_base_ci_url": "https://github.com/PlenoraETL/plenora-data-tools/actions/runs/31022398237",
+    "evidence_base_result": "passed",
+    "metadata_delta_requires_new_same_sha_ci": true,
+    "release_tag_created": false,
+    "intended_release_tag": "v1.0.3",
+    "publish": false,
+    "declared_delta": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "fuzz/Cargo.lock",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "release/1.0.3.json",
+      "scripts/check_release_candidate.py",
+      "scripts/test_check_release_candidate.py"
+    ]
+  },
+  "open_blocks": [
+    {
+      "id": "BLOCK-1.0.3-SAME-SHA-CI",
+      "title": "CI GitHub sulla SHA metadata non ancora eseguita",
+      "detail": "La base funzionale e GREEN, ma il commit metadata 1.0.3 deve superare tutti i job CI e la review sulla propria SHA esatta prima del tag."
+    },
+    {
+      "id": "BLOCK-05",
+      "title": "Catena bordo-centro-bordo separata dalla release del componente",
+      "detail": "La qualifica di sistema resta di proprieta di plenora-contracts/conformance e non autorizza claim system_rc."
+    }
+  ],
+  "evidence": {
+    "functional_revision": {
+      "revision": "7d23b09c2ccd027f94188f2da563294c60d56ed5",
+      "same_sha_ci_run": 31022398237,
+      "result": "passed",
+      "gates": [
+        "release-manifest",
+        "ubuntu-latest",
+        "windows-latest",
+        "full-backends-linux"
+      ],
+      "independent_reviewers": [
+        "Hermes independent reviewer deleg_b89b9e3b"
+      ],
+      "blocking_findings": 0
+    },
+    "metadata_candidate": {
+      "status": "pending_same_sha_ci",
+      "transferable_from_evidence_base": false
+    }
+  },
+  "notes": "Patch candidate 1.0.3 del solo componente con i finding black-box corretti. I tag v1.0.2 e precedenti restano immutabili. Il tag e la pubblicazione 1.0.3 richiedono CI same-SHA, review del delta metadata e verifica dell'artifact finale."
+}

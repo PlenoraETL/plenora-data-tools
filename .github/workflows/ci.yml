@@ -155,13 +155,22 @@ jobs:
       - name: Installa toolchain (baseline ICD R13.1)
         uses: dtolnay/rust-toolchain@1.92.0
 
+      - name: Mutation test checker release 1.0.3
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_candidate
+
+      - name: Verifica identita candidato release 1.0.3
+        run: PYTHONDONTWRITEBYTECODE=1 python scripts/check_release_candidate.py release/1.0.3.json --repo . --verify-github-run
+
       - name: Verifica lockfile fuzz
         run: cargo check --manifest-path fuzz/Cargo.toml --locked
 
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
 
-      - name: Verifica manifesto candidato 1.0.2
+      - name: Verifica manifesto candidato 1.0.3
+        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.3.json --repo .
+
+      - name: Verifica manifesto storico 1.0.2
         run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.2.json --repo .
 
       - name: Verifica manifesto storico 1.0.1

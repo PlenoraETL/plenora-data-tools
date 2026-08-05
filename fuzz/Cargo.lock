@@ -761,7 +761,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "plenora-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-engine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono-tz",
  "geo",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-geo"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "geo",
  "geozero",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-table"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono",
  "chrono-tz",
