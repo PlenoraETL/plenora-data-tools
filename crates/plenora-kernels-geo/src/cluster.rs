@@ -42,7 +42,7 @@
 //!
 //! Errori: le condizioni del kernel puro usano [`ClusterError`].
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use geo::algorithm::validation::Validation;
 use geo::{CoordsIter, Geometry, Point};
@@ -68,6 +68,8 @@ pub enum ClusterError {
     NonFiniteCoordinate { index: usize },
     #[error("conteggio non rappresentabile come uint64")]
     IndexOverflow,
+    #[error("invariante interna DBSCAN violata: {0}")]
+    InternalInvariant(&'static str),
 }
 
 const fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
@@ -121,13 +123,89 @@ impl PointDistance for IndexedPoint {
     }
 }
 
-/// DBSCAN su punti gia' validati. Deterministico: visita per indice di riga,
-/// vicini ordinati per indice, cluster numerati in ordine di scoperta.
-fn dbscan_core(
+/// Chiave bitwise delle coordinate. `-0.0` e `0.0` rappresentano lo stesso
+/// punto euclideo e vengono quindi canonicalizzati nello stesso gruppo.
+fn coordinate_key(coords: [f64; 2]) -> (u64, u64) {
+    let bits = |value: f64| if value == 0.0 { 0 } else { value.to_bits() };
+    (bits(coords[0]), bits(coords[1]))
+}
+
+fn coordinate_groups(points: &[[f64; 2]]) -> (Vec<usize>, Vec<usize>) {
+    // Gli indici dei gruppi seguono la prima occorrenza nella colonna; la
+    // HashMap serve solo per lookup e non viene mai iterata, preservando il
+    // determinismo delle label.
+    let mut group_by_coordinate = HashMap::new();
+    let mut group_of_point = Vec::with_capacity(points.len());
+    let mut representatives = Vec::new();
+    for (index, &coords) in points.iter().enumerate() {
+        let key = coordinate_key(coords);
+        let group = if let Some(&group) = group_by_coordinate.get(&key) {
+            group
+        } else {
+            let group = representatives.len();
+            group_by_coordinate.insert(key, group);
+            representatives.push(index);
+            group
+        };
+        group_of_point.push(group);
+    }
+    (group_of_point, representatives)
+}
+
+#[derive(Clone, Copy)]
+enum NeighborhoodClass {
+    Core,
+    NonCore,
+}
+
+#[derive(Clone, Copy)]
+struct NeighborhoodParameters {
+    radius_2: f64,
+    min_points: usize,
+}
+
+fn load_core_neighbors(
+    tree: &RTree<IndexedPoint>,
+    points: &[[f64; 2]],
+    parameters: NeighborhoodParameters,
+    representatives: &[usize],
+    group: usize,
+    cache: &mut [Option<NeighborhoodClass>],
+    range_queries: &mut usize,
+) -> Result<Option<Vec<usize>>, ClusterError> {
+    match cache[group] {
+        Some(NeighborhoodClass::NonCore) => return Ok(None),
+        Some(NeighborhoodClass::Core) => {
+            return Err(ClusterError::InternalInvariant(
+                "vicinato core richiesto piu' di una volta",
+            ));
+        }
+        None => {}
+    }
+    let representative = representatives[group];
+    let mut found: Vec<usize> = tree
+        .locate_within_distance(points[representative], parameters.radius_2)
+        .map(|element| element.index)
+        .collect();
+    found.sort_unstable();
+    *range_queries += 1;
+    if found.len() < parameters.min_points {
+        cache[group] = Some(NeighborhoodClass::NonCore);
+        Ok(None)
+    } else {
+        cache[group] = Some(NeighborhoodClass::Core);
+        Ok(Some(found))
+    }
+}
+
+/// DBSCAN su punti gia' validati. Restituisce anche il numero di range query
+/// R-tree, usato dal regression test per impedire la riespansione quadratica
+/// di coordinate duplicate.
+fn dbscan_core_with_query_count(
     points: &[[f64; 2]],
     eps: f64,
     min_points: usize,
-) -> Result<Vec<Option<u64>>, ClusterError> {
+) -> Result<(Vec<Option<u64>>, usize, usize), ClusterError> {
     let tree = RTree::bulk_load(
         points
             .iter()
@@ -135,37 +213,48 @@ fn dbscan_core(
             .map(|(index, &coords)| IndexedPoint { index, coords })
             .collect(),
     );
-    // rstar ragiona in distanza quadrata; l'overflow a +inf per eps enormi
-    // e' innocuo (ogni coppia rientra), l'underflow a 0 per eps minuscoli
-    // lascia dentro solo i duplicati esatti (distanza 0 <= eps).
-    let radius_2 = eps * eps;
-    let neighbors = |index: usize| -> Vec<usize> {
-        let mut found: Vec<usize> = tree
-            .locate_within_distance(points[index], radius_2)
-            .map(|element| element.index)
-            .collect();
-        found.sort_unstable();
-        found
+    let neighborhood_parameters = NeighborhoodParameters {
+        radius_2: eps * eps,
+        min_points,
     };
+
+    let (group_of_point, representatives) = coordinate_groups(points);
+
+    let mut neighborhood_class = vec![None; representatives.len()];
+    let mut range_queries = 0;
+    let mut peak_retained_neighbor_indices = 0;
+
     let mut labels = vec![None; points.len()];
     let mut visited = vec![false; points.len()];
     let mut queued = vec![false; points.len()];
+    let mut expanded_group = vec![false; representatives.len()];
     let mut next_cluster = 0_u64;
     for index in 0..points.len() {
         if visited[index] {
             continue;
         }
         visited[index] = true;
-        let seed = neighbors(index);
-        if seed.len() < min_points {
+        let group = group_of_point[index];
+        let Some(seed) = load_core_neighbors(
+            &tree,
+            points,
+            neighborhood_parameters,
+            &representatives,
+            group,
+            &mut neighborhood_class,
+            &mut range_queries,
+        )?
+        else {
             continue; // noise provvisorio: puo' diventare border
-        }
+        };
+        peak_retained_neighbor_indices = peak_retained_neighbor_indices.max(seed.len());
         let cluster = next_cluster;
         next_cluster = next_cluster
             .checked_add(1)
             .ok_or(ClusterError::IndexOverflow)?;
         labels[index] = Some(cluster);
         queued[index] = true;
+        expanded_group[group] = true;
         let mut queue: VecDeque<usize> = VecDeque::new();
         for &member in &seed {
             if member != index {
@@ -176,14 +265,28 @@ fn dbscan_core(
         while let Some(member) = queue.pop_front() {
             if !visited[member] {
                 visited[member] = true;
-                let expanded = neighbors(member);
-                if expanded.len() >= min_points {
-                    for &reach in &expanded {
-                        if !queued[reach] {
-                            queued[reach] = true;
-                            queue.push_back(reach);
+                let member_group = group_of_point[member];
+                if !expanded_group[member_group] {
+                    let expanded = load_core_neighbors(
+                        &tree,
+                        points,
+                        neighborhood_parameters,
+                        &representatives,
+                        member_group,
+                        &mut neighborhood_class,
+                        &mut range_queries,
+                    )?;
+                    if let Some(expanded) = expanded {
+                        peak_retained_neighbor_indices =
+                            peak_retained_neighbor_indices.max(expanded.len());
+                        for &reach in &expanded {
+                            if !queued[reach] {
+                                queued[reach] = true;
+                                queue.push_back(reach);
+                            }
                         }
                     }
+                    expanded_group[member_group] = true;
                 }
             }
             if labels[member].is_none() {
@@ -191,7 +294,17 @@ fn dbscan_core(
             }
         }
     }
-    Ok(labels)
+    Ok((labels, range_queries, peak_retained_neighbor_indices))
+}
+
+/// DBSCAN su punti gia' validati. Deterministico: visita per indice di riga,
+/// vicini ordinati per indice, cluster numerati in ordine di scoperta.
+fn dbscan_core(
+    points: &[[f64; 2]],
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, ClusterError> {
+    dbscan_core_with_query_count(points, eps, min_points).map(|(labels, _, _)| labels)
 }
 
 /// Punti preparati per il clustering: riga di origine per punto e
@@ -243,6 +356,7 @@ fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints
 /// - `UnsupportedGeometry`: una geometria non e' puntuale (attesa `Point`).
 /// - `IndexOverflow`: guardia interna sul numero di cluster (non
 ///   raggiungibile: i cluster sono al piu' quanti i punti in input).
+/// - `InternalInvariant`: cache di vicinato incoerente (guardia fail-closed).
 pub fn dbscan_nullable(
     geometries: &[Option<Geometry<f64>>],
     eps: f64,
@@ -277,7 +391,12 @@ pub fn dbscan(
 }
 
 fn cluster_error(error: &ClusterError) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {error}"))
+    match error {
+        ClusterError::InternalInvariant(reason) => {
+            PlenoraError::Internal(format!("geo.cluster_dbscan: {reason}"))
+        }
+        other => PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {other}")),
+    }
 }
 
 /// Adapter di colonna per `geo.cluster_dbscan`: un'etichetta `UInt64`
@@ -312,6 +431,71 @@ mod tests {
 
     fn points(coords: &[(f64, f64)]) -> Vec<Point<f64>> {
         coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
+    }
+
+    // L'oracle replica intenzionalmente l'aritmetica non-FMA del kernel per
+    // confrontare la semantica di bordo bit-esatta.
+    #[allow(clippy::suboptimal_flops)]
+    fn dbscan_bruteforce_reference(
+        points: &[[f64; 2]],
+        eps: f64,
+        min_points: usize,
+    ) -> Vec<Option<u64>> {
+        let radius_2 = eps * eps;
+        let neighbors = |index: usize| -> Vec<usize> {
+            points
+                .iter()
+                .enumerate()
+                .filter_map(|(other, coords)| {
+                    let dx = points[index][0] - coords[0];
+                    let dy = points[index][1] - coords[1];
+                    (dx * dx + dy * dy <= radius_2).then_some(other)
+                })
+                .collect()
+        };
+        let mut labels = vec![None; points.len()];
+        let mut visited = vec![false; points.len()];
+        let mut queued = vec![false; points.len()];
+        let mut next_cluster = 0_u64;
+        for index in 0..points.len() {
+            if visited[index] {
+                continue;
+            }
+            visited[index] = true;
+            let seed = neighbors(index);
+            if seed.len() < min_points {
+                continue;
+            }
+            let cluster = next_cluster;
+            next_cluster += 1;
+            labels[index] = Some(cluster);
+            queued[index] = true;
+            let mut queue = VecDeque::new();
+            for &member in &seed {
+                if member != index {
+                    queued[member] = true;
+                    queue.push_back(member);
+                }
+            }
+            while let Some(member) = queue.pop_front() {
+                if !visited[member] {
+                    visited[member] = true;
+                    let expanded = neighbors(member);
+                    if expanded.len() >= min_points {
+                        for reach in expanded {
+                            if !queued[reach] {
+                                queued[reach] = true;
+                                queue.push_back(reach);
+                            }
+                        }
+                    }
+                }
+                if labels[member].is_none() {
+                    labels[member] = Some(cluster);
+                }
+            }
+        }
+        labels
     }
 
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
@@ -412,6 +596,73 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_heavy_input_queries_each_unique_coordinate_once() {
+        let unique = [(0.0, 0.0), (2.0, 2.0), (4.0, 0.0), (1.0, 3.0)];
+        let coords: Vec<[f64; 2]> = (0..100_000)
+            .map(|index| unique[index % unique.len()].into())
+            .collect();
+
+        let (labels, range_queries, _) =
+            dbscan_core_with_query_count(&coords, 3.0, 2).expect("dbscan");
+
+        assert!(labels.iter().all(|label| *label == Some(0)));
+        assert_eq!(range_queries, unique.len());
+    }
+
+    #[test]
+    fn non_core_neighborhoods_do_not_accumulate_quadratic_memory() {
+        let coords: Vec<[f64; 2]> = (0..256)
+            .map(|index| [f64::from(index) / 1_000.0, 0.0])
+            .collect();
+
+        let (labels, range_queries, peak_retained_neighbor_indices) =
+            dbscan_core_with_query_count(&coords, 1.0, coords.len() + 1).expect("dbscan");
+
+        assert!(labels.iter().all(Option::is_none));
+        assert_eq!(range_queries, coords.len());
+        assert!(
+            peak_retained_neighbor_indices <= coords.len(),
+            "picco quadratico: {peak_retained_neighbor_indices} indici per {} punti",
+            coords.len()
+        );
+    }
+
+    #[test]
+    fn optimized_duplicate_handling_matches_bruteforce_row_order_semantics() {
+        let coordinate_pool = [
+            [0.0, 0.0],
+            [-0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 1.0],
+            [10.0, 10.0],
+        ];
+        for seed in 0..64_u64 {
+            let mut state = seed.wrapping_add(1);
+            let coords: Vec<[f64; 2]> = (0..48)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    let pool_len = u64::try_from(coordinate_pool.len()).expect("pool piccolo");
+                    let pool_index =
+                        usize::try_from(state % pool_len).expect("indice ridotto al pool");
+                    coordinate_pool[pool_index]
+                })
+                .collect();
+            for eps in [0.5, 1.0, 1.5, 3.0] {
+                for min_points in 1..=6 {
+                    let expected = dbscan_bruteforce_reference(&coords, eps, min_points);
+                    let actual = dbscan_core(&coords, eps, min_points).expect("dbscan");
+                    assert_eq!(actual, expected, "seed={seed}, eps={eps}, min={min_points}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn empty_and_single_point_inputs() {
         assert_eq!(dbscan(&[], 1.0, 2).expect("dbscan"), Vec::new());
         // Un punto solo con min_points 2 non ha vicinato sufficiente.
@@ -448,6 +699,12 @@ mod tests {
         let coords = cloud((0.0, 0.0), 10);
         let labels = dbscan(&points(&coords), 1e-9, 2).expect("dbscan");
         assert!(labels.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn internal_cache_invariant_is_never_reported_as_invalid_input() {
+        let mapped = cluster_error(&ClusterError::InternalInvariant("cache assente"));
+        assert!(matches!(mapped, PlenoraError::Internal(_)));
     }
 
     #[test]

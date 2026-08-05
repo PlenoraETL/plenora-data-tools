@@ -52,8 +52,8 @@ use plenora_engine::geo_transport::publish::{
     PublishProfile,
 };
 use plenora_engine::geo_transport::transport::{
-    pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, PairArrowSchema,
-    PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
+    pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, ArrowTransportError,
+    PairArrowSchema, PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
 };
 use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
 use plenora_engine::planner::{self, ValidatedGraph};
@@ -1702,6 +1702,33 @@ fn help_text() -> String {
     )
 }
 
+fn subcommand_help_text(command: &str) -> Option<&'static str> {
+    match command {
+        "catalog" => Some("Usage: plenora-data-tools catalog [--family table|geo]"),
+        "validate" => Some(
+            "Usage: plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow... [--no-geo-fusion]",
+        ),
+        "run" => Some(
+            "Usage:\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]",
+        ),
+        "capabilities" => Some("Usage: plenora-data-tools capabilities"),
+        "transform" => Some(
+            "Usage: plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT",
+        ),
+        "spatial-join" => Some(
+            "Usage: plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS",
+        ),
+        "transform-arrow" => Some(
+            "Usage: plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT [--output-format plngeo3|ipc-file]",
+        ),
+        "pair-arrow" => Some(
+            "Usage: plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output OUTPUT [--output-format plngeo3|ipc-file]",
+        ),
+        "self-test" => Some("Usage: plenora-data-tools self-test [--output RESULT.bin]"),
+        _ => None,
+    }
+}
+
 fn print_help() {
     eprintln!("{}", help_text());
 }
@@ -1712,6 +1739,18 @@ fn print_help() {
 // strutturali).
 #[allow(clippy::too_many_lines)]
 fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args
+        .get(1)
+        .is_some_and(|argument| matches!(argument.as_str(), "--help" | "-h"))
+    {
+        if let Some(help) = args
+            .first()
+            .and_then(|command| subcommand_help_text(command))
+        {
+            println!("{help}");
+            return Ok(());
+        }
+    }
     match args.first().map(String::as_str) {
         Some("--help" | "-h") => {
             println!("{}", help_text());
@@ -1870,14 +1909,29 @@ fn error_exit_code(envelope: &serde_json::Value) -> i32 {
 /// messaggio. Gli exit code restano 2 (errore) e 130 (cancellazione).
 ///
 /// Mapping dichiarato: `PlenoraError` -> i quattro assi del tipo; errori
-/// I/O nudi (lettura piano/argomenti) -> `io`/`read`/`none`/`safe`;
-/// errori di parse JSON del piano -> `data_mapping`/`validate`/`none`/
-/// `never`; qualunque altro tipo -> `internal`/`validate`/`none`/`never`.
+/// di parametro pubblico del trasporto Arrow -> `invalid_plan`/`validate`/
+/// `none`/`never`; errori I/O nudi (lettura piano/argomenti) ->
+/// `io`/`read`/`none`/`safe`; errori di parse JSON del piano ->
+/// `data_mapping`/`validate`/`none`/`never`; qualunque altro tipo ->
+/// `internal`/`validate`/`none`/`never`.
 fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
     let plenora_error = error.downcast_ref::<PlenoraError>();
+    let public_transport_parameter_error =
+        error
+            .downcast_ref::<ArrowTransportError>()
+            .is_some_and(|transport| {
+                matches!(
+                    transport.source_error(),
+                    ArrowTransportError::MissingParameter { .. }
+                        | ArrowTransportError::UnexpectedParameter { .. }
+                        | ArrowTransportError::InvalidParameter { .. }
+                )
+            });
     let (category, phase, remote_effect, disposition) = plenora_error.map_or_else(
         || {
-            if error.downcast_ref::<std::io::Error>().is_some() {
+            if public_transport_parameter_error {
+                ("invalid_plan", "validate", "none", RetryDisposition::Never)
+            } else if error.downcast_ref::<std::io::Error>().is_some() {
                 ("io", "read", "none", RetryDisposition::Safe)
             } else if error.downcast_ref::<serde_json::Error>().is_some() {
                 ("data_mapping", "validate", "none", RetryDisposition::Never)
@@ -1916,10 +1970,10 @@ fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json:
         "message": message,
     });
     if let Some((node, operation, execution_id)) =
-        plenora_error.and_then(PlenoraError::execution_context)
+        plenora_error.and_then(PlenoraError::execution_location)
     {
         let mut context = serde_json::json!({ "node": node, "operation": operation });
-        if !execution_id.is_empty() {
+        if let Some(execution_id) = execution_id {
             context["execution_id"] = serde_json::Value::String(execution_id.to_owned());
         }
         body["context"] = context;
@@ -2006,7 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn error_envelope_omits_context_and_empty_execution_id() {
+    fn error_envelope_omits_context_for_non_execution_and_omits_empty_execution_id() {
         let contract = PlenoraError::Unsupported("operazione sconosciuta".to_owned());
         let envelope = error_envelope(&contract, false);
         assert_eq!(envelope["error"]["category"], "unsupported");
@@ -2289,6 +2343,41 @@ mod tests {
         let json = serde_json::from_str::<u32>("\"non-un-numero\"").expect_err("json invalido");
         let envelope = error_envelope(&json, false);
         assert_eq!(envelope["error"]["category"], "data_mapping");
+        assert_eq!(envelope["error"]["phase"], "validate");
+        assert_eq!(
+            envelope["error"]["retry"],
+            serde_json::json!({"kind": "never"})
+        );
+    }
+
+    #[test]
+    fn legacy_execution_without_id_keeps_node_and_operation_context() {
+        let error = PlenoraError::Execution {
+            node: "0".to_owned(),
+            operation: "table.transpose".to_owned(),
+            execution_id: String::new(),
+            reason: "transpose supera i limiti".to_owned(),
+        };
+
+        let envelope = error_envelope(&error, false);
+
+        assert_eq!(envelope["error"]["context"]["node"], "0");
+        assert_eq!(envelope["error"]["context"]["operation"], "table.transpose");
+        assert!(envelope["error"]["context"].get("execution_id").is_none());
+    }
+
+    #[test]
+    fn pair_arrow_invalid_public_parameter_is_invalid_plan() {
+        let error =
+            plenora_engine::geo_transport::transport::ArrowTransportError::InvalidParameter {
+                operation: "haversine_distance",
+                name: "max_output_rows",
+                reason: "oltre il limite righe del trasporto",
+            };
+
+        let envelope = error_envelope(&error, false);
+
+        assert_eq!(envelope["error"]["category"], "invalid_plan");
         assert_eq!(envelope["error"]["phase"], "validate");
         assert_eq!(
             envelope["error"]["retry"],
@@ -3177,6 +3266,27 @@ mod tests {
     // -------------------------------------------------------------------
     // Helper di presentazione e parsing argomenti
     // -------------------------------------------------------------------
+
+    #[test]
+    fn every_declared_subcommand_accepts_help() {
+        for command in [
+            "catalog",
+            "validate",
+            "run",
+            "capabilities",
+            "transform",
+            "spatial-join",
+            "transform-arrow",
+            "pair-arrow",
+            "self-test",
+        ] {
+            let args = vec![command.to_owned(), "--help".to_owned()];
+            assert!(
+                run_with_args(&args).is_ok(),
+                "{command} --help deve terminare con successo"
+            );
+        }
+    }
 
     #[test]
     fn hex_digest_renders_every_byte_as_two_lowercase_hex_digits() {
