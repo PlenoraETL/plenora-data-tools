@@ -5,9 +5,9 @@ tabellare e geografica. Valida integralmente il piano e i contratti prima
 dell'esecuzione, applica limiti di risorsa e pubblica gli output in modo
 atomico.
 
-> Stato: patch candidate `1.0.2` in preparazione, senza tag né pubblicazione.
-> La versione e le evidenze effettivamente qualificate sono registrate nei
-> manifesti sotto `release/`; questo README non sostituisce il gate di release.
+> Versione workspace: `1.0.3`.
+> Versione, evidenze e stato di pubblicazione sono registrati nei manifesti
+> sotto `release/` e nelle release GitHub; questo README non sostituisce i gate.
 
 ## Ruolo nell'ecosistema Plenora
 
