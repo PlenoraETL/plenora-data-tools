@@ -157,6 +157,40 @@ pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
         .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))
 }
 
+/// Zero con segno normalizzato: `-0.0` diventa `+0.0`, ogni altro valore
+/// resta bit-identico (NaN e infiniti inclusi).
+///
+/// IEEE 754 ha due codifiche dello stesso valore zero e `-0.0 == 0.0` e' vero,
+/// quindi la normalizzazione non cambia alcuna semantica numerica.
+fn normalize_signed_zero(value: f64) -> f64 {
+    // Confronto float voluto: e' esattamente la definizione di "questo valore
+    // e' zero", e per lo zero il confronto IEEE e' esatto per costruzione.
+    #[allow(clippy::float_cmp)]
+    if value == 0.0 {
+        0.0
+    } else {
+        value
+    }
+}
+
+/// `true` se una qualsiasi coordinata porta uno zero negativo.
+///
+/// Serve a evitare la copia della geometria nel caso normale: la scansione non
+/// alloca.
+fn has_negative_zero(geometry: &Geometry<f64>) -> bool {
+    geometry
+        .coords_iter()
+        .any(|coord| is_negative_zero(coord.x) || is_negative_zero(coord.y))
+}
+
+fn is_negative_zero(value: f64) -> bool {
+    // `is_sign_negative` da solo e' vero anche per i negativi ordinari: serve
+    // la congiunzione con "vale zero".
+    #[allow(clippy::float_cmp)]
+    let zero = value == 0.0;
+    zero && value.is_sign_negative()
+}
+
 /// Punto interno alla geometria (garantito sulla superficie); `None` per
 /// geometrie senza coordinate.
 ///
@@ -165,6 +199,35 @@ pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
+
+    // `geo` 0.33.1 (ultima release al 2026-08-06) calcola il punto interno con
+    // una sweep line che ordina gli eventi per coordinata. Con `-0.0` e `0.0`
+    // presenti insieme — due codifiche IEEE dello stesso valore — l'invariante
+    // sugli intervalli salta:
+    //
+    //   assertion failed: intervals_overlap(current_interval, overlapping_interval)
+    //   geo-0.33.1/src/algorithm/sweep/mod.rs:169
+    //
+    // E' un `debug_assert!`, quindi in release viene compilato via e il calcolo
+    // prosegue sull'invariante violata: il punto restituito sarebbe sbagliato
+    // in silenzio. Il fuzzing lo vede solo perche' cargo-fuzz attiva le
+    // debug-assertions.
+    //
+    // `check_validation()` non intercetta il caso, ed e' corretto che non lo
+    // faccia: il poligono e' valido: `-0.0` non e' una coordinata malformata.
+    // La normalizzazione avviene su una copia di lavoro, quindi la geometria
+    // del chiamante e il round-trip WKT restano intatti. Trovato dal fuzz
+    // target `wkt_operations`; il corpus non e' versionato, quindi la
+    // copertura permanente e' il test
+    // `point_on_surface_survives_negative_zero_coordinates`.
+    if has_negative_zero(geometry) {
+        let normalized = geometry.map_coords(|coord| Coord {
+            x: normalize_signed_zero(coord.x),
+            y: normalize_signed_zero(coord.y),
+        });
+        return Ok(normalized.interior_point().map(Geometry::Point));
+    }
+
     Ok(geometry.interior_point().map(Geometry::Point))
 }
 
@@ -456,6 +519,55 @@ mod tests {
             (x: 4.0, y: 2.0), (x: 0.0, y: 2.0),
             (x: 0.0, y: 0.0),
         ])
+    }
+
+    /// Regressione del crash trovato dal fuzz target `wkt_operations` il
+    /// 2026-08-06, rosso su `main` a ogni run schedulata dal 2026-07-27.
+    ///
+    /// Il poligono contiene `-0.0` accanto a `0.0`: due codifiche IEEE dello
+    /// stesso valore. `geo` 0.33.1 lo dichiara valido — correttamente — ma la
+    /// sweep line di `interior_point()` viola la propria invariante sugli
+    /// intervalli. Con le debug-assertions e' un panico; in release sarebbe un
+    /// punto sbagliato restituito in silenzio.
+    #[test]
+    fn point_on_surface_survives_negative_zero_coordinates() {
+        let with_negative_zero = Geometry::Polygon(polygon![
+            (x: 5.0, y: 22.0), (x: 2.0, y: 7.0), (x: -0.0, y: 423.0),
+            (x: 0.0, y: 3.0), (x: 9.0, y: 0.0), (x: 5.0, y: 22.0),
+        ]);
+        let with_positive_zero = Geometry::Polygon(polygon![
+            (x: 5.0, y: 22.0), (x: 2.0, y: 7.0), (x: 0.0, y: 423.0),
+            (x: 0.0, y: 3.0), (x: 9.0, y: 0.0), (x: 5.0, y: 22.0),
+        ]);
+
+        let interior = point_on_surface(&with_negative_zero)
+            .expect("il poligono e' valido")
+            .expect("un poligono con area ha un punto interno");
+
+        // Le due geometrie sono numericamente identiche, quindi devono
+        // produrre lo stesso punto: la normalizzazione non sposta il risultato.
+        let reference = point_on_surface(&with_positive_zero)
+            .expect("il poligono e' valido")
+            .expect("un poligono con area ha un punto interno");
+        assert_eq!(interior, reference);
+
+        // Il punto appartiene davvero alla superficie.
+        assert!(with_positive_zero.contains(&interior));
+    }
+
+    /// La normalizzazione tocca solo lo zero negativo e lascia tutto il resto
+    /// bit-identico: non e' un arrotondamento.
+    #[test]
+    fn signed_zero_normalization_touches_only_negative_zero() {
+        assert!(normalize_signed_zero(-0.0).is_sign_positive());
+        assert_eq!(normalize_signed_zero(-0.0), 0.0);
+        for value in [1.0_f64, -1.0, 0.0, f64::MIN, f64::MAX, 1e-308, -1e-308] {
+            assert_eq!(normalize_signed_zero(value).to_bits(), value.to_bits());
+        }
+        assert!(normalize_signed_zero(f64::NAN).is_nan());
+        assert!(is_negative_zero(-0.0));
+        assert!(!is_negative_zero(0.0));
+        assert!(!is_negative_zero(-1.0));
     }
 
     #[test]
