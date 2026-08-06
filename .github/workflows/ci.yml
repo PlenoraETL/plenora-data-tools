@@ -155,11 +155,23 @@ jobs:
       - name: Installa toolchain (baseline ICD R13.1)
         uses: dtolnay/rust-toolchain@1.92.0
 
-      - name: Mutation test checker release 1.0.3
+      # Il checker del candidato resta nel repo e i suoi test girano sempre:
+      # serve al prossimo candidato in volo, non a una versione specifica.
+      - name: Mutation test checker del candidato
         run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_candidate
 
-      - name: Verifica identita candidato release 1.0.3
-        run: PYTHONDONTWRITEBYTECODE=1 python scripts/check_release_candidate.py release/1.0.3.json --repo . --verify-github-run
+      # Nessun candidato in volo. `check_release_candidate.py` va invocato solo
+      # finche' il tag non esiste: verifica proprio che il tag intended NON sia
+      # ancora stato creato. Ritirato il 2026-08-06, quando si e' visto che lo
+      # step era sopravvissuto al tag v1.0.3 (ac52a15) e faceva fallire ogni
+      # push su main con "candidate tag v1.0.3 must not already exist". Stesso
+      # trattamento gia' dato a 1.0.2, 1.0.1, 1.0.0 e rc1: a tag creato il
+      # manifesto passa nella lista storica qui sotto.
+      #
+      # Quando si apre il prossimo candidato, reintrodurre qui lo step:
+      #   - name: Verifica identita candidato release X.Y.Z
+      #     run: PYTHONDONTWRITEBYTECODE=1 python scripts/check_release_candidate.py release/X.Y.Z.json --repo . --verify-github-run
+      # e spostarlo nella lista storica appena il tag e' creato.
 
       - name: Verifica lockfile fuzz
         run: cargo check --manifest-path fuzz/Cargo.toml --locked
@@ -167,7 +179,7 @@ jobs:
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
 
-      - name: Verifica manifesto candidato 1.0.3
+      - name: Verifica manifesto storico 1.0.3
         run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.3.json --repo .
 
       - name: Verifica manifesto storico 1.0.2
