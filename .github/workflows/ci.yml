@@ -63,17 +63,25 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
 
-      # Gate R6 (ICD): nei target --lib nessuna primitiva di panic e
+      # Gate R6 (ICD): nel codice di produzione nessuna primitiva di panic e
       # nessun unsafe. Bloccante. MAI aggiungere --cap-lints=warn: cappera'
       # anche i -D espliciti declassandoli a warn (regressione trovata il
       # 2026-07-29 — il gate non bloccava nulla, 27 siti accumulati). I
       # lint di stile sono gia' deny da workspace.lints con zero warning,
       # non serve alcun cap.
+      #
+      # Perimetro esteso il 2026-08-06 a plenora-cli con --bins: la CLI e'
+      # codice di produzione a tutti gli effetti (e' l'unico eseguibile
+      # distribuito) ma non ha target --lib, quindi restava fuori dal gate.
+      # L'estensione ha scoperto 3 expect() nel binario (hex_digest,
+      # graph_summary_json x2), corretti alla fonte. `--lib --bins` copre
+      # entrambe le forme senza allargare il gate ai target di test, dove le
+      # primitive di panic restano legittime.
       - name: Gate anti-panic (R6)
         run: >
           cargo clippy -p plenora-core -p plenora-engine
-          -p plenora-kernels-table -p plenora-kernels-geo
-          --lib --locked --
+          -p plenora-kernels-table -p plenora-kernels-geo -p plenora-cli
+          --lib --bins --locked --
           -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
@@ -128,10 +136,94 @@ jobs:
           cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli
           --all-targets --locked --features full-backends
 
+      # Gate R6 sul perimetro feature-gated: i rami geos/proj non sono
+      # compilati dal job `test` (default features), quindi una primitiva di
+      # panic dietro `cfg(feature = "geos-backend")` o `"proj-backend"`
+      # sfuggirebbe al gate principale. Stessa lista di lint, stessa regola
+      # sul cap-lints: il gate deve restare bloccante.
+      - name: Gate anti-panic full-backends (R6)
+        run: >
+          cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli
+          --lib --bins --locked --features full-backends --
+          -D unsafe-code
+          -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+
       - name: Test full-backends
         run: >
           cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli
           --locked --features full-backends
+
+  # Gate di coverage. Fino al 2026-08-06 `scripts/coverage.sh` esisteva ma
+  # nessun workflow lo invocava: la coverage era una misura facoltativa, non
+  # un vincolo — l'unico dei tre repo Plenora senza gate (plenora-IO-tools e
+  # plenora-database-tools lo hanno da tempo, soglia lines 80).
+  #
+  # Il job non riusa scripts/coverage.sh perche' quello script gira dentro il
+  # container rust:1.92 (toolchain riproducibile in locale): sul runner la
+  # toolchain pinnata c'e' gia' e il docker-in-docker sarebbe solo overhead.
+  # Le soglie sono le stesse nei due punti — se cambiano qui, vanno cambiate
+  # anche nello script, che e' il modo di riprodurre il verdetto in locale.
+  #
+  # Perimetro: feature di default. I backend nativi (geos static, proj
+  # bundled) NON sono strumentati — il loro codice feature-gated e' compilato
+  # e testato dal job `backends`, ma resta fuori dalla misura di coverage.
+  # Coprirlo qui raddoppierebbe il tempo del job per compilare C/C++ da
+  # sorgente sotto strumentazione.
+  #
+  # Soglie: misura reale del 2026-08-06 su rust:1.92, feature di default
+  # (lines 93.44%, functions 87.61%, regions 92.43%), arrotondata per difetto
+  # con ~3 punti di margine. Sono deliberatamente piu' alte del minimo dei
+  # repo gemelli (80): a 80 il gate sarebbe inerte su questo codebase e non
+  # segnalerebbe alcuna regressione. Ogni futuro spostamento delle soglie va
+  # fatto con la misura in mano, mai a stima.
+  coverage:
+    name: gate coverage (linux)
+    runs-on: ubuntu-latest
+    env:
+      # Stessa directory usata da scripts/coverage.sh: gli artefatti
+      # strumentati non sono riusabili dalle build normali.
+      CARGO_TARGET_DIR: target-cov
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Installa toolchain (baseline ICD R13.1)
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo (coverage)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target-cov
+          # Chiave separata: gli artefatti strumentati non sono riusabili
+          # dai job di test.
+          key: cargo-ci-cov-1.92.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-cov-1.92.0-
+
+      # Versione pinnata come ogni altra dipendenza (R13.2): un aggiornamento
+      # del tool puo' spostare i conteggi e quindi il verdetto del gate.
+      - name: Installa cargo-llvm-cov (pin 0.8.7)
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      - name: Misura coverage del workspace
+        run: cargo llvm-cov --workspace --locked --no-report
+
+      - name: Gate coverage (lines 90 / functions 85 / regions 89)
+        run: >
+          cargo llvm-cov report --summary-only
+          --fail-under-lines 90
+          --fail-under-functions 85
+          --fail-under-regions 89
 
   # Gate del manifesto di rilascio (PLENORA-CRITERI-RC, criteri C1-C5):
   # verifica forma e revisioni di release/*.json con il checker ufficiale,

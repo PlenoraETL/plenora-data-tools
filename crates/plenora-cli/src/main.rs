@@ -127,11 +127,20 @@ fn report_publish_outcome(outcome: PublishOutcome, output_path: &Path) {
     }
 }
 
+/// Digest esadecimale minuscolo, senza primitive di panic (gate R6).
+///
+/// La formattazione su `String` non puo' fallire, ma `write!` restituisce
+/// comunque un `Result` che andrebbe scartato con `expect`. La tabella dei
+/// nibble e' indicizzata da un valore provabilmente in `0..16` (shift e
+/// maschera su `u8`): esatta per costruzione, nessun `Result` da gestire.
 fn hex_digest(digest: &[u8; 32]) -> String {
+    const NIBBLE: [char; 16] = [
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    ];
     let mut output = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    for &byte in digest {
+        output.push(NIBBLE[usize::from(byte >> 4)]);
+        output.push(NIBBLE[usize::from(byte & 0x0f)]);
     }
     output
 }
@@ -1389,7 +1398,18 @@ fn contract_json(contract: &DataContract) -> serde_json::Value {
 
 /// Riepilogo JSON di `validate` per un piano v4: nodi, archi con contratti,
 /// segmenti con modo e strategia, capability e identita' ADR 4.
-fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serde_json::Value {
+///
+/// # Errors
+///
+/// `Internal` se un arco del grafo manca dai contratti: impossibile per
+/// costruzione su un grafo validato (stessa invariante di
+/// [`ValidatedGraph::output_contract`]), ma il compilatore non puo'
+/// dimostrarlo — l'invariante violata diventa un errore esplicito, mai un
+/// panic (R6).
+fn graph_summary_json(
+    graph: &ValidatedGraph,
+    execution: &ExecutionPlan,
+) -> Result<serde_json::Value, PlenoraError> {
     let plan = graph.plan().plan();
     let nodes: Vec<serde_json::Value> = plan
         .nodes
@@ -1404,17 +1424,23 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
         .collect();
     let mut edges: Vec<serde_json::Value> = Vec::new();
     for name in &plan.inputs {
+        let contract = graph.edge_contract(name).ok_or_else(|| {
+            PlenoraError::Internal("l'input e' un arco del grafo validato".into())
+        })?;
         edges.push(serde_json::json!({
             "edge": name,
             "kind": "input",
-            "contract": contract_json(graph.edge_contract(name).expect("input del grafo validato")),
+            "contract": contract_json(contract),
         }));
     }
     for node_id in graph.topological_order() {
+        let contract = graph.edge_contract(node_id).ok_or_else(|| {
+            PlenoraError::Internal("il nodo e' un arco del grafo validato".into())
+        })?;
         edges.push(serde_json::json!({
             "edge": node_id,
             "kind": "node",
-            "contract": contract_json(graph.edge_contract(node_id).expect("arco del grafo validato")),
+            "contract": contract_json(contract),
         }));
     }
     let segments: Vec<serde_json::Value> = execution
@@ -1430,7 +1456,7 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
             })
         })
         .collect();
-    serde_json::json!({
+    Ok(serde_json::json!({
         "status": "ok",
         "schema_version": PLAN_SCHEMA_VERSION_V4,
         "plan_hash": graph.plan_hash().to_hex(),
@@ -1446,7 +1472,7 @@ fn graph_summary_json(graph: &ValidatedGraph, execution: &ExecutionPlan) -> serd
             .iter()
             .map(plenora_engine::planner::ContractFingerprint::to_hex)
             .collect::<Vec<_>>(),
-    })
+    }))
 }
 
 /// Metriche JSON di un `run` v4: per nodo logico e per segmento (righe,
@@ -1548,7 +1574,7 @@ fn validate_dag_v4(
     )?;
     println!(
         "{}",
-        serde_json::to_string_pretty(&graph_summary_json(&graph, &execution))?
+        serde_json::to_string_pretty(&graph_summary_json(&graph, &execution)?)?
     );
     Ok(())
 }

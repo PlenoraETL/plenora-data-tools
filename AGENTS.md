@@ -49,14 +49,23 @@ agente — segue queste regole. Non sono opzionali.
 ```sh
 # test completi (container, toolchain del progetto)
 docker run --rm -v $PWD:/work -w /work rust:1.92 cargo test --workspace --no-fail-fast
-# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nei lib.
+# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nel
+# codice di produzione — lib di tutti i crate + bin della CLI.
 # MAI aggiungere --cap-lints=warn: cappera' anche i -D espliciti (li
 # declassa a warn) e il gate smette di bloccare — regressione trovata il
 # 2026-07-29, 27 siti accumulati mentre il gate era inefficace.
 cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
-  -p plenora-kernels-geo --lib --locked -- -D unsafe-code \
+  -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+# stesso gate sul perimetro feature-gated (rami geos/proj, non compilati
+# dal comando sopra): richiede cmake + sqlite3, vedi ADR-0012.
+cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --lib --bins --locked --features full-backends -- -D unsafe-code \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
+  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+# gate di coverage (soglie identiche alla CI: lines 90/functions 85/regions 89)
+scripts/coverage.sh
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
 scripts/fuzz-smoke.sh
 # gate clippy anche per il target Windows (la CI gira su Linux+Windows e
