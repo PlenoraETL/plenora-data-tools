@@ -218,6 +218,18 @@ jobs:
       - name: Misura coverage del workspace
         run: cargo llvm-cov --workspace --locked --no-report
 
+      # Il report LCOV e' l'unico modo per capire *dove* la coverage e'
+      # scesa quando il gate qui sotto fallisce: senza artifact resta solo
+      # un numero. Stesso trattamento in plenora-IO-tools.
+      - name: Esporta report LCOV
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-lcov
+          path: lcov.info
+          if-no-files-found: error
+
       - name: Gate coverage (lines 90 / functions 85 / regions 89)
         run: >
           cargo llvm-cov report --summary-only
@@ -267,6 +279,29 @@ jobs:
 
       - name: Verifica lockfile fuzz
         run: cargo check --manifest-path fuzz/Cargo.toml --locked
+
+      # Audit supply-chain sui lockfile. Fino al 2026-08-06 questo repo non
+      # aveva alcun controllo sulle advisory RUSTSEC: era l'unico gate di
+      # sicurezza presente in plenora-IO-tools e assente qui. Entrambi i
+      # lockfile sono coperti — quello del fuzz ha un grafo suo e non e'
+      # verificato dall'audit del workspace.
+      #
+      # Versione pinnata (R13.2): il verdetto dipende dal tool oltre che dal
+      # database. Misura del 2026-08-06 con 0.22.2: workspace 187 dipendenze
+      # e fuzz 152, zero advisory, nessun --ignore necessario.
+      #
+      # `--deny warnings` fa fallire anche unmaintained e yanked, non solo le
+      # vulnerabilita'. Quando una advisory nuova rende rosso il gate, la
+      # deroga si scrive come `--ignore RUSTSEC-YYYY-NNNN` con la motivazione
+      # accanto, come fa plenora-IO-tools: mai abbassando --deny.
+      - name: Installa cargo-audit (pin 0.22.2)
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit advisory del workspace
+        run: cargo audit --deny warnings
+
+      - name: Audit advisory del progetto fuzz
+        run: cargo audit --deny warnings --file fuzz/Cargo.lock
 
       - name: Clone plenora-contracts (pin v2.0-rc10)
         run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
