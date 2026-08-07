@@ -93,6 +93,19 @@ pub enum ArrowTransportError {
     Internal(&'static str),
     #[error("decodifica Arrow IPC fallita: {0}")]
     Arrow(String),
+    /// `arrow-ipc` e' andato in panico decodificando lo schema del payload.
+    ///
+    /// Non e' un errore nostro ne' un difetto del chiamante: `fb_to_schema`
+    /// contiene venti `panic!`/`unimplemented!` raggiungibili da un `FlatBuffer`
+    /// non fidato, e i reader la chiamano sempre. Le API che la avvolgono si
+    /// chiamano `try_*` ma sono fallibili solo sul parsing esterno: appena
+    /// ottengono lo schema fanno `.map(fb_to_schema)`.
+    ///
+    /// La variante esiste per distinguerlo da `Arrow(String)`, che rappresenta
+    /// un errore che la libreria ha *restituito*. Qui la libreria e' abortita,
+    /// e la differenza va resa visibile invece che appiattita.
+    #[error("arrow-ipc in panico sullo schema del payload: {0}")]
+    ArrowPanic(String),
     #[error("geometria non valida: {0}")]
     Geometry(String),
     #[error("kernel fallito: {0}")]

@@ -401,6 +401,69 @@ fn validate_ipc_framing(payload: &[u8]) -> Result<(), ArrowTransportError> {
 /// limiti di risorse.
 pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     validate_ipc_framing(payload)?;
+    // `arrow-ipc` 59.1.0 va in panico dentro `convert::fb_to_schema` su schemi
+    // che il decoder FlatBuffer accetta: `fields` e' opzionale e viene scartato
+    // con `unwrap()` (convert.rs:198), e la conversione dei tipi ha una
+    // ventina fra `panic!` e `unimplemented!` sui valori di enum che non
+    // riconosce. Ogni reader chiama quella funzione. Le API che la avvolgono
+    // si chiamano `try_*` ma sono fallibili solo sul parsing esterno: appena
+    // ottengono lo schema fanno `.map(fb_to_schema)`. Non esiste quindi un
+    // percorso per leggere Arrow IPC che non possa abortire il processo su
+    // input ostile.
+    //
+    // Segnalato a monte: apache/arrow-rs#10575. Questa barriera va rimossa
+    // quando quella issue e' chiusa e il pin di arrow sale a una versione che
+    // rende fallibile la conversione dello schema.
+    //
+    // Il confine e' qui perche' e' l'unico punto in cui `&[u8]` non fidati
+    // entrano nel trasporto: catturare piu' in profondita' significherebbe
+    // sparpagliare `catch_unwind` sui call site, piu' in alto significherebbe
+    // avvolgere anche codice nostro, dove un panico e' un difetto da non
+    // nascondere.
+    //
+    // Correttezza dell'unwind safety: il payload e' un `&[u8]` immutabile e
+    // tutto lo stato costruito qui dentro viene scartato se il panico avviene,
+    // perche' la funzione ritorna `Err` e non espone nulla di parzialmente
+    // costruito. Nessun invariante osservabile puo' restare rotto.
+    //
+    // Nota: l'hook di panico globale resta quello del processo, quindi il
+    // messaggio finisce comunque su stderr. Sostituirlo sarebbe stato
+    // scorretto per una libreria, e il messaggio e' informazione utile.
+    //
+    // ATTENZIONE per chi legge in futuro: il fuzz target `arrow_transform` e'
+    // in quarantena e resta rosso anche con questa barriera attiva. Non e' un
+    // segno che non funzioni. `libfuzzer-sys` installa un hook che chiama
+    // `std::process::abort()` prima che l'unwinding cominci (0.4.10,
+    // src/lib.rs:92-95), apposta perche' un `catch_unwind` nel codice sotto
+    // test non possa nascondere difetti al fuzzer. La barriera e' verificata
+    // dal test `ipc_decode_converte_il_panico_di_arrow_in_errore` in
+    // transport.rs, che e' l'unica copertura possibile.
+    let esito = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_ipc_unguarded(payload)
+    }));
+    match esito {
+        Ok(risultato) => risultato,
+        Err(panico) => Err(ArrowTransportError::ArrowPanic(descrivi_panico(&panico))),
+    }
+}
+
+/// Estrae il messaggio dal payload di un panico, senza assumerne il tipo.
+fn descrivi_panico(panico: &Box<dyn std::any::Any + Send>) -> String {
+    panico.downcast_ref::<&'static str>().map_or_else(
+        || {
+            panico
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "panico senza messaggio".to_owned())
+        },
+        |testo| (*testo).to_owned(),
+    )
+}
+
+/// Corpo storico di [`decode_ipc`], senza la rete di protezione.
+fn decode_ipc_unguarded(
+    payload: &[u8],
+) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     let reader = StreamReader::try_new(payload, None)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
     let schema = reader.schema();

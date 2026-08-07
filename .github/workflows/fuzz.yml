@@ -46,7 +46,24 @@ jobs:
           - wkt_operations
           - arrow_envelope
           - arrow_ipc_decode
-          - arrow_transform
+          # arrow_transform e' in quarantena dal 2026-08-07. NON e' un difetto
+          # non corretto: la barriera esiste ed e' verificata dal test
+          # `ipc_decode_converte_il_panico_di_arrow_in_errore`, che asserisce
+          # `ArrowTransportError::ArrowPanic` sullo stesso payload.
+          #
+          # Il target non puo' osservarla. `libfuzzer-sys` installa un hook di
+          # panico che chiama `std::process::abort()` prima che l'unwinding
+          # cominci (0.4.10, src/lib.rs:92-95), deliberatamente, perche' un
+          # `catch_unwind` nel codice sotto test nasconderebbe i difetti al
+          # fuzzer. Il target resterebbe quindi rosso a barriera funzionante, e
+          # un job perennemente rosso smette di essere letto: e' cosi' che il
+          # disallineamento della matrice SQL Server e' sopravvissuto tre
+          # giorni e il panico WKT undici.
+          #
+          # Va riattivato quando arrow-rs rende fallibile la conversione dello
+          # schema, cioe' quando la barriera non servira' piu'. Segnalato a
+          # monte: apache/arrow-rs#10575.
+          # - arrow_transform
           - plan_v4_parse
           - analyze_table
           - analyze_geo

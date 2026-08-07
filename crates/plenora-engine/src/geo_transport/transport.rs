@@ -1373,6 +1373,48 @@ mod tests {
         ));
     }
 
+    /// Regressione fuzz: `arrow-ipc` va in panico decodificando lo schema, e
+    /// `decode_ipc` deve restituire un errore invece di far abortire il
+    /// processo.
+    ///
+    /// Questo test e' l'UNICA copertura possibile della barriera. Il fuzz
+    /// target `arrow_transform` non puo' verificarla: `libfuzzer-sys` installa
+    /// un hook di panico che chiama `std::process::abort()` prima che
+    /// l'unwinding cominci (libfuzzer-sys 0.4.10, src/lib.rs:92-95), proprio
+    /// perche' un `catch_unwind` nel codice sotto test nasconderebbe i difetti
+    /// al fuzzer. Quel target resta quindi in quarantena e restera' rosso
+    /// anche a barriera funzionante: non e' un difetto della mitigazione, e'
+    /// lo strumento progettato per non farsi ingannare da essa.
+    #[test]
+    fn ipc_decode_converte_il_panico_di_arrow_in_errore() {
+        // 81 byte trovati dalla campagna schedulata del 2026-08-07, artefatto
+        // crash-c20d19d3e3323f54d3831c09d611143c5d8f82c1. Superano il framing
+        // e fanno arrivare ad `arrow-ipc` uno schema FlatBuffer con un valore
+        // di enum che `convert::fb_to_schema` non riconosce: la funzione ha
+        // venti `panic!`/`unimplemented!` e i reader la chiamano sempre.
+        let payload = [
+            0x2c, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x3d, 0x08, 0x00, 0x22, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x60,
+            0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x08,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        // L'hook di panico del processo stampa comunque su stderr: lo
+        // silenziamo per la durata del test, altrimenti l'output della suite
+        // sembra un fallimento. Ripristinato subito dopo.
+        let precedente = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let esito = decode_ipc(&payload);
+        std::panic::set_hook(precedente);
+
+        assert!(
+            matches!(esito, Err(ArrowTransportError::ArrowPanic(_))),
+            "atteso ArrowPanic, ottenuto {esito:?}"
+        );
+    }
+
     #[test]
     fn ipc_decode_rejects_oversized_metadata_and_truncation_without_oom() {
         // Regressione fuzz (OOM): 4 byte che dichiarano ~709 MiB di metadati
