@@ -8,8 +8,8 @@ use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
 use crate::{
-    column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_f64,
-    scalar_as_string, select_rows, NumericBound,
+    column_index, compare_f64, compare_i64, compare_u64, replace_or_append, scalar_as_string,
+    scalar_compare, select_rows, NumericBound,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -161,9 +161,12 @@ impl PreparedCondition {
 fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Result<bool> {
     let operator = &condition.operator;
     match operator {
-        Operator::Isnull => return Ok(array.is_null(row)),
-        Operator::Notnull => return Ok(!array.is_null(row)),
-        _ if array.is_null(row) => return Ok(false),
+        // Null LOGICO: per una dictionary una chiave valida puo' puntare a
+        // una entry nulla, e `is_null` risponderebbe `false` su una riga che
+        // e' nulla — `isnull` la perdeva e `notnull` la teneva.
+        Operator::Isnull => return Ok(crate::is_logically_null(array, row)),
+        Operator::Notnull => return Ok(!crate::is_logically_null(array, row)),
+        _ if crate::is_logically_null(array, row) => return Ok(false),
         _ => {}
     }
     let expected = condition.expected.as_str();
@@ -211,20 +214,11 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             let bound =
                 condition.numeric_bound("confronto ordinato richiede un valore numerico")?;
-            // Int64/UInt64 nativi esatti; Float64 in misto esatto contro i
-            // letterali interi; gli altri tipi numerici (Decimal128, Date32,
-            // Timestamp(ms), Utf8 numerico) restano sul profilo f64 storico.
-            let ordering = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                compare_i64(values.value(row), bound)
-            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                compare_u64(values.value(row), bound)
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                compare_f64(values.value(row), bound)
-            } else {
-                scalar_as_f64(array, row)?
-                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?
-                    .partial_cmp(&bound_as_f64(bound))
-            };
+            // Confronto nel dominio nativo di ogni tipo (Int64/UInt64/Float64,
+            // Date32, Timestamp(ms), Decimal128 scalato in i128, Utf8 numerico
+            // via `NumericBound`): nessun passaggio per f64, quindi nessun
+            // collasso oltre 2^53 e nessun arrotondamento sui decimal.
+            let ordering = scalar_compare(array, row, bound)?;
             let operator = OrderedOperator::from_operator(operator).ok_or_else(|| {
                 PlenoraError::Internal("operatore non ordinato nel ramo ordinato".into())
             })?;
@@ -247,27 +241,10 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
         }
         Operator::Between => {
             let (low, high) = condition.between_bounds()?;
-            let within = if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-                within_bounds(
-                    compare_i64(values.value(row), low),
-                    compare_i64(values.value(row), high),
-                )
-            } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-                within_bounds(
-                    compare_u64(values.value(row), low),
-                    compare_u64(values.value(row), high),
-                )
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-                within_bounds(
-                    compare_f64(values.value(row), low),
-                    compare_f64(values.value(row), high),
-                )
-            } else {
-                let actual = scalar_as_f64(array, row)?
-                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-                actual >= bound_as_f64(low) && actual <= bound_as_f64(high)
-            };
-            Ok(within)
+            Ok(within_bounds(
+                scalar_compare(array, row, low)?,
+                scalar_compare(array, row, high)?,
+            ))
         }
         Operator::Isnull | Operator::Notnull => Err(PlenoraError::Internal(
             "isnull/notnull sono valutati prima del confronto scalare".into(),
@@ -293,7 +270,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
 /// Righe non nulle di `array` per cui `pred` e' vera, in ordine crescente.
 fn rows_where<A: Array>(array: &A, mut pred: impl FnMut(usize) -> bool) -> Vec<usize> {
     (0..array.len())
-        .filter(|row| !array.is_null(*row) && pred(*row))
+        .filter(|row| !crate::is_logically_null(array, *row) && pred(*row))
         .collect()
 }
 
@@ -348,18 +325,6 @@ const fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
     !matches!(low, None | Some(Ordering::Less)) && !matches!(high, None | Some(Ordering::Greater))
 }
 
-/// Forma f64 di un bound, per i tipi rimasti sul profilo f64 storico
-/// (Decimal128, Date32, Timestamp(ms), Utf8 numerico): stesso valore del
-/// parse f64 diretto del percorso originale.
-#[allow(clippy::cast_precision_loss)] // qui la conversione a f64 e' voluta: profilo storico
-const fn bound_as_f64(bound: NumericBound) -> f64 {
-    match bound {
-        NumericBound::I64(value) => value as f64,
-        NumericBound::U64(value) => value as f64,
-        NumericBound::F64(value) => value,
-    }
-}
-
 #[allow(clippy::too_many_lines)] // specchio di `evaluate`: la simmetria riga a riga e' la garanzia di parita'
 fn fast_rows(
     array: &ArrayRef,
@@ -367,12 +332,16 @@ fn fast_rows(
     value: &serde_json::Value,
 ) -> Option<Result<Vec<usize>>> {
     let rows = match operator {
+        // Stessa nozione di null del percorso generico: due risposte diverse
+        // sulla stessa riga sarebbero peggio di entrambe.
         Operator::Isnull => {
-            return Some(Ok((0..array.len()).filter(|r| array.is_null(*r)).collect()))
+            return Some(Ok((0..array.len())
+                .filter(|r| crate::is_logically_null(array.as_ref(), *r))
+                .collect()))
         }
         Operator::Notnull => {
             return Some(Ok((0..array.len())
-                .filter(|r| !array.is_null(*r))
+                .filter(|r| !crate::is_logically_null(array.as_ref(), *r))
                 .collect()))
         }
         Operator::Eq | Operator::Ne => {

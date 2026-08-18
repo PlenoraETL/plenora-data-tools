@@ -173,6 +173,36 @@ impl ValidatedPlan {
         &self.limits
     }
 
+    /// Copia del piano con `max_memory_bytes` **ridotto** al valore indicato.
+    ///
+    /// Serve al percorso legacy della CLI, dove `max_memory_bytes` deve
+    /// essere un tetto GLOBALE del piano e non il tetto di ogni singola
+    /// fase: caricato un input, la memoria che quell'input trattiene non e'
+    /// piu' disponibile per l'esecuzione, e i kernel — che consultano
+    /// `limits.max_memory_bytes` per le proprie tabelle di lavoro — devono
+    /// vedere cio' che RESTA, non il budget iniziale.
+    ///
+    /// Il budget puo' solo scendere: passare un valore maggiore di quello
+    /// corrente lo lascia invariato, cosi' la funzione non puo' essere usata
+    /// per allargare un limite dichiarato nel piano.
+    ///
+    /// # Errors
+    ///
+    /// [`PlenoraError::ResourceLimit`] se il budget residuo e' zero: un piano
+    /// con `max_memory_bytes = 0` non e' valido (`validate_limits`), e la
+    /// condizione «non resta memoria» e' un limite di risorsa, non un piano
+    /// sbagliato.
+    pub fn with_memory_budget(&self, bytes: usize) -> Result<Self> {
+        if bytes == 0 {
+            return Err(PlenoraError::ResourceLimit(
+                "budget di memoria esaurito: nessuna memoria residua per l'esecuzione".into(),
+            ));
+        }
+        let mut ridotto = self.clone();
+        ridotto.limits.max_memory_bytes = bytes.min(self.limits.max_memory_bytes);
+        Ok(ridotto)
+    }
+
     #[must_use]
     pub fn steps(&self) -> &[Step] {
         &self.steps

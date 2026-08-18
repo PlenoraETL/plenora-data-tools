@@ -34,8 +34,10 @@ fn write_ipc(path: &std::path::Path, schema: &SchemaRef, batches: &[RecordBatch]
     writer.finish().expect("finish");
 }
 
+/// L'envelope d'errore viaggia su STDOUT (stderr resta vuoto), come in
+/// `plenora-database-tools`.
 fn stderr_of(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 #[test]

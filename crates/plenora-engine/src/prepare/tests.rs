@@ -1326,24 +1326,38 @@ fn geo_binary_caps_follow_edge_position_and_plan_limits() {
 }
 
 #[test]
-fn geo_binary_prepare_revalidates_resolved_caps() {
-    // max_output_rows = 0: il tetto risolto viola il dominio della tabella
-    // per-op (max_pairs > 0) — rifiuto fail-closed in prepare, mai a meta'
-    // esecuzione (la tabella pura e' la stessa del trasporto v3).
-    let graph = geo_binary_graph_with_limits(
-        "geo.sjoin",
-        &json!({"predicate": "intersects"}),
-        &json!({"max_output_rows": 0}),
-    );
-    match prepare(&graph, &RuntimeContext::default()) {
-        Err(PlenoraError::InvalidPlan(message)) => {
-            assert!(
-                message.contains("rivalidazione fisica dei parametri"),
-                "{message}"
-            );
-        }
-        other => panic!("atteso InvalidPlan, ottenuto {other:?}"),
-    }
+fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
+    // `max_output_rows = 0` descrive un piano che non puo' emettere nulla.
+    // Prima veniva accettato in validazione e intercettato solo in `prepare`,
+    // dalla rivalidazione fisica dei parametri della coppia (`max_pairs > 0`),
+    // con un messaggio che parlava del kernel invece che del limite.
+    //
+    // Ora `Limits::validate` lo rifiuta all'ingresso del planner, per TUTTI i
+    // piani — geo compresi, che il preparer tabellare non attraversano. La
+    // rivalidazione in `prepare` resta come difesa in profondita': non e' piu'
+    // raggiungibile da un piano, ed e' il verso giusto.
+    let error = validate(
+        &json!({
+            "schema_version": 4,
+            "limits": {"max_output_rows": 0},
+            "inputs": ["left_in", "right_in"],
+            "nodes": [
+                {"id": "j", "op": "geo.sjoin", "in": ["left_in", "right_in"],
+                 "config": {"predicate": "intersects"}},
+            ],
+            "output": "j",
+        })
+        .to_string(),
+        &[
+            ("left_in".to_owned(), geo_contract()),
+            ("right_in".to_owned(), geo_contract()),
+        ],
+    )
+    .expect_err("limite fuori dominio");
+    let PlenoraError::InvalidPlan(message) = &error else {
+        panic!("atteso InvalidPlan, ottenuto {error:?}");
+    };
+    assert!(message.contains("max_output_rows"), "{message}");
 }
 
 #[test]

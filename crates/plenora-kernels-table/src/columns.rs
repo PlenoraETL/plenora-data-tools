@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{
     new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    Float64Array, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
-    TimestampMillisecondArray, UInt64Array,
+    Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
 use serde::Deserialize;
@@ -45,10 +44,10 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
         fields,
         batch.schema().metadata().clone(),
     ));
-    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-    Ok(RecordBatch::try_new_with_options(
-        schema, columns, &options,
-    )?)
+    // Dichiarava gia' la cardinalita', ma duplicava il costruttore
+    // condiviso: una seconda copia della stessa cura e' una copia che puo'
+    // divergere.
+    crate::batch_with_rows(schema, columns, batch.num_rows())
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,10 +90,13 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
         fields.push(schema.field(index).clone());
         columns.push(Arc::clone(batch.column(index)));
     }
-    Ok(RecordBatch::try_new(
+    // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
+    // essere vuota (batch a zero colonne, legittimi in Arrow).
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
         columns,
-    )?)
+        batch.num_rows(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -371,10 +373,13 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
             }
         }
     }
-    Ok(RecordBatch::try_new(
+    // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
+    // essere vuota (batch a zero colonne, legittimi in Arrow).
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
         columns,
-    )?)
+        batch.num_rows(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -421,10 +426,9 @@ pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
         fields.push(field.as_ref().clone().with_name(name));
     }
     let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
-    Ok(RecordBatch::try_new(
-        Arc::new(schema),
-        batch.columns().to_vec(),
-    )?)
+    // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
+    // essere vuota (batch a zero colonne, legittimi in Arrow).
+    crate::batch_with_rows(Arc::new(schema), batch.columns().to_vec(), batch.num_rows())
 }
 
 #[derive(Debug, Deserialize)]
@@ -477,10 +481,13 @@ pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<R
         .iter()
         .map(|index| Arc::clone(batch.column(*index)))
         .collect();
-    Ok(RecordBatch::try_new(
+    // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
+    // essere vuota (batch a zero colonne, legittimi in Arrow).
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
         columns,
-    )?)
+        batch.num_rows(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,9 +520,9 @@ const fn default_true() -> bool {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: elenco `columns` vuoto, nome di output non valido
-///   (come `validate_output_name`) o valore concatenato oltre
-///   `limits.max_string_bytes`;
+/// - `InvalidPlan`: elenco `columns` vuoto o nome di output non valido
+///   (come `validate_output_name`);
+/// - `ResourceLimit`: valore concatenato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8 (come `utf8_column`);
 /// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
 ///   di `replace_or_append`).
@@ -558,7 +565,7 @@ pub fn concat_columns(
         if config.skip_null && included == 0 {
             output.push(None);
         } else if joined.len() > limits.max_string_bytes {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "concat_columns supera max_string_bytes".into(),
             ));
         } else {

@@ -132,6 +132,9 @@ fn runtime(geo_fusion: bool) -> RuntimeContext {
     }
 }
 
+// Percorso permissivo (`Inputs::with`), deprecato ma ancora supportato: qui
+// serve perche' questi oracoli non dichiarano contratti.
+#[allow(deprecated)]
 fn single_input(batches: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
         .with(
@@ -205,6 +208,7 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
         | PlenoraError::Schema(reason)
         | PlenoraError::DataMapping(reason)
         | PlenoraError::Crs(reason)
+        | PlenoraError::ResourceLimit(reason)
         | PlenoraError::Internal(reason) => (variant_name(error), None, None, reason.clone()),
         PlenoraError::Execution {
             node,
@@ -266,6 +270,7 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Crs(_) => "Crs",
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
+        PlenoraError::ResourceLimit(_) => "ResourceLimit",
         PlenoraError::Internal(_) => "Internal",
         PlenoraError::Replayed(_) => "Replayed",
         PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
@@ -845,6 +850,9 @@ impl Iterator for CancellingGeoInput {
     }
 }
 
+// Percorso permissivo (`Inputs::with`), deprecato ma ancora supportato:
+// questi oracoli non dichiarano contratti e ne coprono il comportamento.
+#[allow(deprecated)]
 fn run_cancellation(
     plan: &Value,
     batches: Vec<RecordBatch>,

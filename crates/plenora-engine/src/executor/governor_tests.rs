@@ -279,9 +279,15 @@ fn memory_budget_exhaustion_fails_fast_with_contract_error() {
     let error = output
         .collect_batches()
         .expect_err("budget esaurito: fail-fast");
+    // Nono giro: categoria `resource_limit`, non `invalid_plan`. Attraversa
+    // gli involucri, quindi si guarda `category()` e non la variante esterna.
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "errore ResourceLimit max_memory_bytes: {error}"
+    );
     assert!(
-        matches!(error, PlenoraError::InvalidPlan(_))
-            && error.to_string().contains("max_memory_bytes"),
-        "errore Contract max_memory_bytes: {error}"
+        error.to_string().contains("max_memory_bytes"),
+        "il testo dice quale tetto: {error}"
     );
 }

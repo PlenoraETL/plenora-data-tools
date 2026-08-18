@@ -71,17 +71,23 @@ pub const MAX_CELL_BYTES: u64 = 64 * 1024 * 1024;
 ///
 /// Obbligatoria per colonne geometriche, ma resta assente se il contratto
 /// non la dichiara — R5.2, mai un default al posto dell'assente.
-pub const PLENORA_GEOMETRY_ENCODING_KEY: &str = "plenora.geometry.encoding";
+pub const PLENORA_GEOMETRY_ENCODING_KEY: &str =
+    plenora_core::contract::PLENORA_GEOMETRY_ENCODING_KEY;
 /// Chiave canonica della dimensionalita' (R2.1/R2.2: `xy` | `xyz` | `xym` |
 /// `xyzm` | `unknown`; obbligatoria, `unknown` e' valore canonico R3.4).
-pub const PLENORA_GEOMETRY_DIMENSIONS_KEY: &str = "plenora.geometry.dimensions";
+pub const PLENORA_GEOMETRY_DIMENSIONS_KEY: &str =
+    plenora_core::contract::PLENORA_GEOMETRY_DIMENSIONS_KEY;
 /// Chiave canonica dell'elenco dei tipi (R2.2/R3.4.1: valori unici in ordine
 /// §3.1 separati da `,` senza spazi; obbligatoria e non vuota se
 /// `types_declaration = exact`).
-pub const PLENORA_GEOMETRY_TYPES_KEY: &str = "plenora.geometry.types";
+///
+/// Definita in `plenora-core`, dove serve alla validazione del contratto:
+/// riesposta qui per il lato emissione, senza duplicare la stringa.
+pub const PLENORA_GEOMETRY_TYPES_KEY: &str = plenora_core::contract::PLENORA_GEOMETRY_TYPES_KEY;
 /// Chiave canonica dello stato di dichiarazione dei tipi (R2.2/R3.4.1:
 /// `exact` | `mixed` | `unresolved`).
-pub const PLENORA_GEOMETRY_TYPES_DECLARATION_KEY: &str = "plenora.geometry.types_declaration";
+pub const PLENORA_GEOMETRY_TYPES_DECLARATION_KEY: &str =
+    plenora_core::contract::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY;
 /// Chiave canonica dello SRID (R2.2: intero decimale senza segno; opzionale,
 /// emessa solo se noto).
 pub const PLENORA_GEOMETRY_SRID_KEY: &str = "plenora.geometry.srid";
@@ -90,7 +96,8 @@ pub const PLENORA_GEOMETRY_SRID_KEY: &str = "plenora.geometry.srid";
 pub const PLENORA_GEOMETRY_CRS_ID_KEY: &str = "plenora.geometry.crs_id";
 /// Chiave canonica dello stato di risoluzione del CRS (R2.2: `resolved` |
 /// `declared_unresolved` | `missing`; obbligatoria).
-pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_resolution";
+pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str =
+    plenora_core::contract::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY;
 /// Chiave canonica della definizione CRS testuale (R2.2: WKT o PROJJSON;
 /// opzionale, richiede `crs_definition_format`).
 pub const PLENORA_GEOMETRY_CRS_DEFINITION_KEY: &str = "plenora.geometry.crs_definition";
@@ -161,7 +168,7 @@ fn geometry_column_not_binary(name: &str, actual: impl std::fmt::Display) -> Ple
 }
 
 fn cell_too_large(bytes: u64) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!(
+    PlenoraError::ResourceLimit(format!(
         "cella WKB da {bytes} byte oltre il limite {MAX_CELL_BYTES}"
     ))
 }
@@ -363,7 +370,7 @@ pub fn geometry_output_field_with_encoding(
 /// non riconosciuto un errore esplicito; questa lettura non decide.
 #[must_use]
 pub fn geometry_dimensions_from_metadata(field: &Field) -> GeometryDimensions {
-    geo_metadata_value(field)
+    geo_metadata_value_lenient(field)
         .and_then(|value| {
             value
                 .get("dimensions")
@@ -381,7 +388,7 @@ pub fn geometry_dimensions_from_metadata(field: &Field) -> GeometryDimensions {
 /// R3.5: valori fuori dall'enum chiuso non sono rappresentabili).
 #[must_use]
 pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding> {
-    geo_metadata_value(field).and_then(|value| {
+    geo_metadata_value_lenient(field).and_then(|value| {
         value
             .get("encoding")
             .and_then(serde_json::Value::as_str)
@@ -407,7 +414,7 @@ pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding
 pub fn geometry_encoding_from_metadata_strict(
     field: &Field,
 ) -> Result<Option<GeometryEncoding>, PlenoraError> {
-    let Some(value) = geo_metadata_value(field) else {
+    let Some(value) = geo_metadata_value(field)? else {
         return Ok(None);
     };
     let Some(raw) = value.get("encoding") else {
@@ -426,10 +433,54 @@ pub fn geometry_encoding_from_metadata_strict(
     )
 }
 
-/// Il metadato `geo` di un campo come valore JSON, se presente e valido.
-fn geo_metadata_value(field: &Field) -> Option<serde_json::Value> {
-    let raw = field.metadata().get(GEO_METADATA_KEY)?;
-    serde_json::from_str::<serde_json::Value>(raw).ok()
+/// Il metadato legacy `geo` di un campo come valore JSON.
+///
+/// `Ok(None)` = chiave ASSENTE. JSON malformato = `Err`.
+///
+/// La distinzione e' il punto: ADR-0009 (R5.1) impone che «illeggibile» non
+/// equivalga ad «assente». Con il `.ok()` che questa funzione usava prima, un
+/// metadato `geo` malformato diventava indistinguibile da uno mancante, e la
+/// risoluzione del contratto proseguiva completando le nozioni dalle sole
+/// chiavi canoniche — ignorando in silenzio un legacy coesistente che non era
+/// riuscita a leggere. Un input corrotto veniva cosi' accettato come se
+/// dichiarasse solo cio' che si era capito di lui.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` se la chiave e' presente ma non contiene JSON
+/// valido. Il messaggio non riporta il valore («errori senza dati»).
+fn geo_metadata_value(field: &Field) -> Result<Option<serde_json::Value>, PlenoraError> {
+    let Some(raw) = field.metadata().get(GEO_METADATA_KEY) else {
+        return Ok(None);
+    };
+    // Metadato contrattuale: le chiavi duplicate lo rendono ambiguo e vanno
+    // rifiutate, non risolte con «vince l'ultima».
+    plenora_core::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+        PlenoraError::InvalidPlan(
+            "metadato legacy `geo`: chiavi duplicate, documento ambiguo".to_owned(),
+        )
+    })?;
+    serde_json::from_str::<serde_json::Value>(raw)
+        .map(Some)
+        .map_err(|_| {
+            PlenoraError::InvalidPlan(
+                "metadato legacy `geo`: JSON non valido (R5.1: illeggibile non e' assente)"
+                    .to_owned(),
+            )
+        })
+}
+
+/// Lettura opportunistica del metadato `geo`, per i soli lettori che
+/// dichiarano di NON decidere ([`geometry_dimensions_from_metadata`],
+/// [`geometry_encoding_from_metadata`]): un metadato illeggibile vale come
+/// «nozione non dichiarata».
+///
+/// E' ammesso solo qui perche' quei lettori non costruiscono contratti e non
+/// applicano precedenze: alimentano l'analisi a secco, dove una nozione non
+/// risolta e' un esito legittimo. Ogni percorso che costruisce o confronta un
+/// contratto usa la forma fallibile.
+fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
+    geo_metadata_value(field).ok().flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -1267,13 +1318,14 @@ struct LegacyGeoKeys {
     encoding: Option<GeometryEncoding>,
 }
 
-/// Lettura STRICT del metadato legacy `geo`: chiave assente o JSON non
-/// valido → metadato assente (come i reader esistenti); chiave presente ma
-/// valore non canonico → errore esplicito (R5.1 applicato al rango legacy
-/// nella lettura di contratto).
+/// Lettura STRICT del metadato legacy `geo`: chiave assente → metadato
+/// assente; JSON non valido o valore non canonico → errore esplicito (R5.1
+/// applicato al rango legacy nella lettura di contratto — «illeggibile» non
+/// e' «assente», e un legacy malformato non va scavalcato dalle chiavi
+/// canoniche nel completamento per precedenza R2.7).
 fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
     let encoding = geometry_encoding_from_metadata_strict(field)?;
-    let Some(value) = geo_metadata_value(field) else {
+    let Some(value) = geo_metadata_value(field)? else {
         return Ok(LegacyGeoKeys {
             crs: None,
             dimensions: None,
@@ -1525,7 +1577,7 @@ pub fn batch_geometry_cells<'a>(
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se il payload supera [`MAX_CELL_BYTES`]; in piu'
+/// `PlenoraError::ResourceLimit` se il payload supera [`MAX_CELL_BYTES`]; in piu'
 /// gli errori di [`geometry_from_wkb`] (contratto WKB strutturale e
 /// validazione OGC).
 pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
@@ -1541,7 +1593,8 @@ pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraErro
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` se la serializzazione WKB della geometria
-/// fallisce o se il payload prodotto supera [`MAX_CELL_BYTES`].
+/// fallisce; `PlenoraError::ResourceLimit` se il payload prodotto supera
+/// [`MAX_CELL_BYTES`].
 pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError> {
     let payload = geometry.to_wkb(CoordDimensions::xy()).map_err(|error| {
         PlenoraError::InvalidPlan(format!("geometria prodotta non valida: {error}"))
@@ -1560,30 +1613,35 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se una cella non-null supera [`MAX_CELL_BYTES`];
+/// `PlenoraError::ResourceLimit` se una cella non-null supera [`MAX_CELL_BYTES`];
 /// in piu' l'errore restituito da `f` sulla prima cella IN ORDINE DI RIGA
 /// che fallisce (deterministico, ADR-0001).
 pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
-    let cell_values: Vec<Option<&[u8]>> = cells.iter().collect();
     // ADR-0001: il collect parallelo di `Result` sceglie l'errore in modo
     // NON deterministico (il primo che acquisisce il mutex interno di
     // rayon). Qui i `Result` sono raccolti per riga (l'ordine del collect
     // parallelo indicizzato e' preservato) e il primo errore IN ORDINE DI
     // RIGA e' selezionato dal collect sequenziale: stesso input, stesso
     // errore, sempre. L'identita' dell'errore e' output.
-    let results: Vec<Result<Option<T>, PlenoraError>> = cell_values
+    //
+    // La parallelizzazione e' sugli INDICI: la versione precedente
+    // materializzava prima un `Vec<Option<&[u8]>>` di tutte le celle solo per
+    // avere un iteratore indicizzato: un'allocazione da una riga per elemento
+    // su ogni colonna geometrica, in un percorso che gia' scorre l'array.
+    let results: Vec<Result<Option<T>, PlenoraError>> = (0..cells.len())
         .into_par_iter()
-        .map(|cell| match cell {
-            None => Ok(None),
-            Some(payload) => {
-                if payload.len() as u64 > MAX_CELL_BYTES {
-                    return Err(cell_too_large(payload.len() as u64));
-                }
-                f(payload)
+        .map(|row| {
+            if cells.is_null(row) {
+                return Ok(None);
             }
+            let payload = cells.value(row);
+            if payload.len() as u64 > MAX_CELL_BYTES {
+                return Err(cell_too_large(payload.len() as u64));
+            }
+            f(payload)
         })
         .collect();
     results.into_iter().collect()
@@ -1898,13 +1956,17 @@ mod tests {
         }
         let bare = Field::new("geom", DataType::Binary, true);
         assert_eq!(geometry_encoding_from_metadata_strict(&bare).unwrap(), None);
+        // Metadato `geo` illeggibile: ERRORE, non «assente» (R5.1). Il
+        // lettore strict e' quello di contratto: se non riesce a leggere il
+        // rango legacy non puo' dichiararlo vuoto e lasciare che le chiavi
+        // canoniche completino al suo posto.
         let mut metadata = HashMap::new();
         metadata.insert(GEO_METADATA_KEY.to_owned(), "non json".to_owned());
         let broken = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
-        assert_eq!(
-            geometry_encoding_from_metadata_strict(&broken).unwrap(),
-            None
-        );
+        assert!(geometry_encoding_from_metadata_strict(&broken).is_err());
+        // Il lettore opportunistico, che dichiara di non decidere, resta
+        // tollerante: la nozione risulta non dichiarata.
+        assert_eq!(geometry_encoding_from_metadata(&broken), None);
         let mut metadata = HashMap::new();
         metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(CRS).unwrap());
         let crs_only = Field::new("geom", DataType::Binary, true).with_metadata(metadata);
@@ -2002,11 +2064,13 @@ mod tests {
         let cells = BinaryArray::from_iter([Some(oversized.as_slice())]);
         assert!(matches!(
             map_nullable(&cells, |payload| decode_geometry_cell(payload).map(Some)),
-            Err(PlenoraError::InvalidPlan(_))
+            // Decimo giro: una cella oltre il tetto e' un limite di RISORSA
+            // (il volume del dato), non un piano sbagliato.
+            Err(PlenoraError::ResourceLimit(_))
         ));
         assert!(matches!(
             decode_geometry_cell(&oversized),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::ResourceLimit(_))
         ));
     }
 
@@ -2965,13 +3029,22 @@ mod tests {
             CanonicalGeometryKeys::default()
         );
 
-        // Metadato legacy rotto: rango legacy assente, nessun errore (come i
-        // reader esistenti).
+        // Metadato legacy ILLEGGIBILE: errore, non rango legacy assente
+        // (R5.1/ADR-0009). Prima il JSON malformato era indistinguibile
+        // dall'assenza, e la risoluzione completava per precedenza dalle sole
+        // chiavi canoniche scavalcando in silenzio un legacy che non era
+        // riuscita a leggere.
         let broken = field_with_pairs(&[(GEO_METADATA_KEY, "non json")]);
-        assert_eq!(
-            read_geometry_contract_keys(&broken).expect("rotto"),
-            CanonicalGeometryKeys::default()
-        );
+        assert!(read_geometry_contract_keys(&broken).is_err());
+
+        // Vale anche in presenza di chiavi canoniche valide: sono proprio i
+        // casi in cui il legacy rotto veniva ignorato.
+        let broken_with_canonical = field_with_pairs(&[
+            (GEO_METADATA_KEY, "non json"),
+            (PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+        ]);
+        assert!(read_geometry_contract_keys(&broken_with_canonical).is_err());
 
         // Legacy presente ma non canonico -> errore anche nel rango legacy.
         for raw in [

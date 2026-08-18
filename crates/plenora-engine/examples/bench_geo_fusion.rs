@@ -17,6 +17,10 @@
 //! se il percorso fuso registra fallback governor o se gli output delle due
 //! modalita' non sono identici (stesso oracolo dei test di ADR-0012).
 
+// Benchmark: usano il percorso permissivo di `Inputs`, deprecato ma
+// ancora supportato. Non e' codice di produzione.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 use std::time::Instant;
 

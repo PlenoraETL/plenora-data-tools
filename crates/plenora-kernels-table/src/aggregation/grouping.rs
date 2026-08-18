@@ -3,7 +3,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
@@ -11,7 +10,8 @@ use rayon::prelude::*;
 
 use plenora_core::{PlenoraError, Result};
 
-use crate::{scalar_as_f64, scalar_as_string};
+use crate::hashing::FastHasher;
+use crate::{exact_f64_from_i64, exact_f64_from_u64, scalar_as_f64_rounded, scalar_as_string};
 
 // ---------------------------------------------------------------------------
 // Fast path di `table.aggregate` (ottimizzazione kernel, secondo batch).
@@ -24,7 +24,7 @@ use crate::{scalar_as_f64, scalar_as_string};
 // 2. aggregazioni numeriche su valori nativi Arrow (Int64/UInt64/Float64)
 //    con la stessa sequenza di operazioni del generico (stesso ordine di
 //    somma, `total_cmp` per distinct/quantile, null esclusi o gruppo nullo
-//    secondo `skip_null`); gli altri tipi ricadono su `scalar_as_f64`;
+//    secondo `skip_null`); gli altri tipi ricadono su `scalar_as_f64_rounded`;
 // 3. nunique/concat su Utf8 con valori presi in prestito (nessuna copia);
 //    gli altri tipi ricadono su `scalar_as_string`.
 // ---------------------------------------------------------------------------
@@ -194,49 +194,7 @@ fn push_key_value(key: &mut String, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64
-/// per le chiavi di gruppo.
-///
-/// `SipHash` (default std) domina il costo di raggruppamento su milioni di
-/// righe; qui il throughput conta piu' della resistenza a input avversari,
-/// come gia' accettato da `distinct` (`HashMap` sulle stesse chiavi). Il
-/// finalizer e' necessario: senza, le chiavi con prefisso comune lungo
-/// (stesso tipo, stessa lunghezza) si concentrano in pochi bucket
-/// (verificato: max 328 contro 7 con finalizer).
-#[derive(Default)]
-pub struct KeyHasher(u64);
-
-impl std::hash::Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            // chunks_exact(8) garantisce blocchi pieni: la copia su array
-            // fisso non puo' fallire e non serve alcuna conversione.
-            let mut block = [0_u8; 8];
-            block.copy_from_slice(chunk);
-            let value = u64::from_le_bytes(block);
-            self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
-        }
-        let remainder = chunks.remainder();
-        if !remainder.is_empty() {
-            let mut tail = 0_u64;
-            for &byte in remainder {
-                tail = (tail << 8) | u64::from(byte);
-            }
-            self.0 = (self.0.rotate_left(5) ^ tail).wrapping_mul(K);
-        }
-    }
-}
-
-type KeyMap = HashMap<String, usize, std::hash::BuildHasherDefault<KeyHasher>>;
+type KeyMap = HashMap<String, usize, FastHasher>;
 
 /// Soglia condivisa per l'uso di rayon (ordinamento chiavi e calcolo per
 /// gruppo): sotto soglia l'overhead non ripaga.
@@ -315,8 +273,7 @@ pub(in crate::aggregation) fn build_native_groups<K: Copy + Eq + std::hash::Hash
     key_at: impl Fn(usize) -> Option<K> + Sync,
     cmp: impl Fn(&K, &K) -> Ordering + Sync,
 ) -> Vec<Vec<usize>> {
-    let mut lookup: HashMap<K, usize, std::hash::BuildHasherDefault<KeyHasher>> =
-        HashMap::default();
+    let mut lookup: HashMap<K, usize, FastHasher> = HashMap::default();
     let mut null_group: Option<usize> = None;
     let mut group_rows: Vec<Vec<usize>> = Vec::new();
     for row in 0..rows {
@@ -403,7 +360,7 @@ pub(in crate::aggregation) fn build_string_groups(
 }
 
 /// Sorgente numerica per le aggregazioni Float64: valori nativi Arrow per i
-/// tipi principali, `scalar_as_f64` (invariato) per gli altri.
+/// tipi principali, `scalar_as_f64_rounded` (invariato) per gli altri.
 pub(in crate::aggregation) enum NumericSource<'a> {
     Float64(&'a Float64Array),
     Int64(&'a Int64Array),
@@ -436,19 +393,23 @@ impl<'a> NumericSource<'a> {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values.value(row).to_f64().map(Some).ok_or_else(|| {
-                    PlenoraError::Schema("intero non rappresentabile come f64".into())
-                })
+                exact_f64_from_i64(values.value(row))
+                    .map(Some)
+                    .ok_or_else(|| {
+                        PlenoraError::Schema("intero non rappresentabile come f64".into())
+                    })
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values.value(row).to_f64().map(Some).ok_or_else(|| {
-                    PlenoraError::Schema("uint64 non rappresentabile come f64".into())
-                })
+                exact_f64_from_u64(values.value(row))
+                    .map(Some)
+                    .ok_or_else(|| {
+                        PlenoraError::Schema("uint64 non rappresentabile come f64".into())
+                    })
             }
-            Self::Generic(array) => scalar_as_f64(array.as_ref(), row),
+            Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
         }
     }
 }
@@ -516,8 +477,7 @@ pub(in crate::aggregation) fn build_partitions(
     group: Option<usize>,
 ) -> Result<KeyPartitions<'_>> {
     let source = group.map(|index| TextSource::new(batch.column(index)));
-    let mut lookup: HashMap<Option<Cow<'_, str>>, usize, std::hash::BuildHasherDefault<KeyHasher>> =
-        HashMap::default();
+    let mut lookup: HashMap<Option<Cow<'_, str>>, usize, FastHasher> = HashMap::default();
     let mut partitions: Vec<(Option<Cow<'_, str>>, Vec<usize>)> = Vec::new();
     for row in 0..batch.num_rows() {
         let key = source

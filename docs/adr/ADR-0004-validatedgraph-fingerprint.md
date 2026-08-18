@@ -91,6 +91,15 @@ L'executor rifiuta il grafo su qualunque mismatch (catalogo, versione Arrow,
 backend, profilo di publish non supportato, contratto di input diverso) con
 errore di mismatch esplicito — mai procedere "alla cieca".
 
+Sul **contratto di input** la garanzia va detta per esteso, perche' dipende da
+cosa il chiamante fornisce e non e' uniforme (vedi l'emendamento in fondo):
+quando l'input porta il proprio `DataContract` il confronto e' sul fingerprint
+completo; quando non lo porta, il confronto e' sullo schema Arrow completo —
+campi *e* metadati di campo. Il secondo e' il minimo garantito, non lo stesso
+controllo: due contratti distinti che condividono lo schema (CRS risolto
+contro mancante) lo superano entrambi. Chi ha bisogno del confine chiuso usa
+`Inputs::add_with_contract`.
+
 ### Serializzazione
 
 Nella v1 il `ValidatedGraph` vive **solo in memoria** (validate → execute nello
@@ -106,3 +115,110 @@ dell'engine, e non è necessaria per i casi d'uso attuali.
   omessa vs esplicita → stesso hash.
 - Quando sarà introdotta la serializzazione, questo ADR va esteso con il
   formato e le regole di compatibilità.
+
+## Emendamento 2026-08-16 — `plan_hash` e proprieta' tipizzate della geometria
+
+La review statica del 2026-08-16 ha trovato due modi diversi in cui
+l'identita' del grafo non distingueva contratti o piani distinti.
+
+**Canonicalizzazione dei numeri del piano.** `canonical_number` passava ogni
+numero JSON per `f64` prima di deciderne la forma canonica. Gli interi oltre
+2^53 non hanno un `f64` esatto: `9007199254740993` arrotondava a
+`9007199254740992.0`, superava la guardia `|v| <= 2^53` e veniva
+canonicalizzato come `9007199254740992`. Due config semanticamente diverse
+ottenevano lo stesso piano canonico e **lo stesso `plan_hash`**, rendendo
+insicuri cache e riuso del piano. La canonicalizzazione si applica ora solo
+ai numeri *originariamente* in virgola mobile: un intero JSON e' gia'
+canonico e passa invariato a qualunque magnitudo, `u64::MAX` incluso.
+
+**Chiavi JSON duplicate.** Il piano veniva deserializzato con la regola
+`serde_json` «vince l'ultima», che risolve i duplicati **prima** della
+validazione e del `plan_hash`: due testi diversi producevano lo stesso hash,
+e la chiave scartata poteva essere quella che l'autore intendeva. Un
+documento con chiavi ripetute e' ora rifiutato
+(`plenora_core::json::ensure_no_duplicate_keys`), non risolto.
+
+**`input_contract_fingerprints`.** Le proprieta' tipizzate della geometria
+(`encoding`, `types`) non riferiscono `FieldId` e non sono identita' interna
+del grafo: sono parte del contratto osservabile e ora entrano nel
+fingerprint. Restandone fuori, due contratti che dichiaravano tipi
+geometrici diversi — `exact:point` ed `exact:polygon` — condividevano il
+fingerprint, e un grafo validato sul primo veniva riusato sul secondo senza
+rivalidazione. Un contratto che non dichiara nulla produce lo stesso JSON di
+prima: i fingerprint esistenti restano stabili.
+
+**`check_input_compatibility`** invoca ora `DataContract::validate()` sul
+contratto fornito prima di confrontarne il fingerprint: un contratto
+strutturalmente invalido ha comunque un fingerprint, e senza questo passo
+poteva superare il controllo di compatibilita' per poi fallire a runtime.
+
+## Emendamento 2026-08-16 (secondo giro) — scope, `row_count`, binding all'esecuzione
+
+**Nel fingerprint entrano anche `scope` di `geometry.types` e `row_count`.**
+Lo scope distingue una dichiarazione valida per lo schema da una valida per
+il dataset intero: sono garanzie di forza diversa, e due contratti che le
+dichiarano diverse non sono lo stesso contratto. `row_count` non riferisce
+`FieldId` — a differenza di `sorted_by`, che resta escluso — ed entra
+nell'analisi (`map_row_count` lo propaga nei contratti d'arco): due input che
+dichiarano cardinalita' diverse producono analisi diverse. Entrambi entrano
+solo quando ci sono, quindi i fingerprint dei contratti che non li dichiarano
+restano invariati.
+
+**Il confine dell'esecuzione si puo' chiudere davvero.** `execute` confrontava
+solo `provided.fields()` con i campi del contratto validato: i METADATI di
+campo — che portano le chiavi canoniche della geometria — restavano fuori, e
+due sorgenti con gli stessi campi e geometrie diverse passavano identiche. Ora
+il confronto e' sullo schema completo, metadati inclusi.
+
+Resta che uno schema uguale non implica un contratto uguale (CRS risolto
+contro mancante, tipi dichiarati diversi). Per questo `Inputs::add_with_contract`
+permette all'input di portare il proprio `DataContract`: l'esecuzione ne
+verifica allora il **fingerprint completo** contro quello registrato nel
+grafo, la stessa garanzia di `check_input_compatibility`, applicata al
+momento in cui i dati entrano. La CLI passa sempre i contratti della
+discovery; per chi incorpora l'engine come libreria e' la forma da usare, e
+il confronto sullo schema resta il minimo garantito per chi non lo fa.
+
+## Emendamento 2026-08-16 (terzo giro) — `-0.0` non e' `0`
+
+`canonical_number` emette come intero i double che coincidono con la propria
+parte troncata. `-0.0` supera quel test — `(-0.0).trunc() == -0.0` e
+`-0.0 == 0.0` — e diventava `0`: due piani con segni diversi ottenevano lo
+stesso testo canonico e quindi lo **stesso `plan_hash`**, che e' la stessa
+classe di difetto degli interi oltre 2^53. Il segno dello zero e' osservabile
+(divisione, `atan2`, formattazione), quindi non e' un dettaglio da
+normalizzare: `-0.0` resta in forma floating e i due piani restano distinti.
+
+## Emendamento 2026-08-16 (quarto giro) — profilo stretto degli input
+
+Dichiarare onestamente il profilo debole non lo rende adatto a una garanzia
+safety-critical: chi ha bisogno del confine chiuso deve poterlo ESIGERE, non
+ricordarsi di usare la variante giusta a ogni chiamata. `Inputs::strict()`
+costruisce un insieme in cui `Inputs::add` — l'ingresso senza contratto —
+fallisce, e passa solo `add_with_contract`.
+
+E' additivo di proposito: rendere stretto il comportamento di `Inputs::new()`
+romperebbe ogni chiamante che oggi compila, ed e' una decisione di rilascio
+(semver) che non spetta a questa API.
+
+**Decisioni di rilascio applicate (2026-08-16).** Il maintainer le ha prese, e
+sono ora nel codice:
+
+- `Inputs::add` e `Inputs::with` sono **deprecate** (`#[deprecated]`) e
+  restano in vigore solo per non rompere i chiamanti esistenti. Il percorso
+  permissivo continua a funzionare e a essere testato finche' esiste; i test
+  che lo coprono dichiarano un `#[allow(deprecated)]` mirato, cosi' la
+  rimozione futura ha un elenco esatto di punti da toccare;
+- la **CLI** costruisce ora `Inputs::strict()`: non puo' piu' inviare un input
+  senza contratto neanche per errore di manutenzione, e non e' piu' solo una
+  convenzione rispettata;
+- il **futuro SDK Python** non esporra' affatto il percorso permissivo: li'
+  non esistono chiamanti da non rompere, quindi il profilo stretto e' l'unico
+  (vincolo registrato in `docs/piano-usabilita.md`);
+- le struct pubbliche di metriche (`ExecutionMetrics`, `NodeMetrics`,
+  `SegmentMetrics`, `MemoryMetrics`, `SpillMetrics`) sono
+  `#[non_exhaustive]`: crescono con l'osservabilita' del componente e ogni
+  campo nuovo non deve essere una rottura semver per chi le legge.
+
+L'inventario completo della superficie rotta e' in
+`docs/api-breaking-2026-08-16.md`.

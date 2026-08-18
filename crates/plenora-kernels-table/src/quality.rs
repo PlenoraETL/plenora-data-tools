@@ -11,10 +11,10 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::governance::RowKeyEncoder;
-use crate::joins::FastHasher;
+use crate::hashing::FastHasher;
 use crate::{
-    column_index, compare_i64, compare_u64, reject_rows, replace_or_append, scalar_as_f64,
-    scalar_as_string, validate_output_name, NumericBound, RowRejection,
+    column_index, reject_rows, replace_or_append, scalar_as_string, scalar_compare,
+    validate_output_name, NumericBound, RowRejection,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -163,7 +163,12 @@ pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<Re
     let mut rejections = Vec::new();
     for name in &config.columns {
         let index = column_index(batch, name)?;
-        for row in (0..batch.num_rows()).filter(|row| batch.column(index).is_null(*row)) {
+        // Null LOGICO: per una dictionary una chiave valida puo' puntare a
+        // una entry nulla, e `is_null` non la vedrebbe — `assert_not_null`
+        // dichiarerebbe conforme una riga senza valore.
+        for row in (0..batch.num_rows())
+            .filter(|row| crate::is_logically_null(batch.column(index).as_ref(), *row))
+        {
             rejections.push(RowRejection {
                 row,
                 cause: "validation.required_value_missing",
@@ -245,7 +250,7 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         if !config.nulls_equal
             && indices
                 .iter()
-                .any(|index| batch.column(*index).is_null(row))
+                .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
         {
             continue;
         }
@@ -350,7 +355,7 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         if !config.nulls_equal
             && indices
                 .iter()
-                .any(|index| batch.column(*index).is_null(row))
+                .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
         {
             continue;
         }
@@ -434,52 +439,68 @@ fn range_outside(config: &AssertRange, compare: &mut dyn FnMut(f64) -> Option<Or
     below || above
 }
 
+/// `true` se la cella e' un valore non finito (inf/NaN).
+///
+/// Viola sempre l'intervallo, e va deciso PRIMA del confronto: con NaN
+/// `partial_cmp` non e' definito, quindi il valore non risulterebbe ne' sotto
+/// il minimo ne' sopra il massimo e passerebbe come "dentro".
+fn non_finite_cell(array: &dyn Array, row: usize) -> bool {
+    if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+        return !values.value(row).is_finite();
+    }
+    if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+        return matches!(
+            NumericBound::parse(values.value(row).trim()),
+            Some(NumericBound::F64(value)) if !value.is_finite()
+        );
+    }
+    false
+}
+
 /// Verifica che i valori della colonna rientrino nei limiti configurati;
 /// restituisce il batch invariato.
 ///
-/// I confronti sulle colonne intere (Int64/UInt64) sono esatti anche oltre
-/// 2^53; gli altri tipi seguono il profilo f64 storico. I valori non finiti
-/// (inf/NaN) violano sempre l'intervallo; i null sono ammessi solo con
-/// `allow_null=true`.
+/// I confronti avvengono nel dominio NATIVO di ogni tipo (`scalar_compare`):
+/// esatti oltre 2^53 per gli interi, esatti sui decimal, sull'istante per i
+/// timestamp. I valori non finiti (inf/NaN) violano sempre l'intervallo; i
+/// null sono ammessi solo con `allow_null=true`.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
-///   non convertibile in numero (come `scalar_as_f64`);
+///   non confrontabile numericamente (come `scalar_compare`);
 /// - `DataMapping`: null non ammesso o valore fuori intervallo, con row
 ///   diagnostics.
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
-    // Confronti esatti sulle colonne intere (classe "confronti via f64",
-    // review 2026-07-27): i limiti restano f64 di configurazione, ma il
-    // misto intero<->double e' esatto — un intero oltre 2^53 non collassa
-    // piu' sull'estremo. Gli altri tipi restano sul profilo f64 storico.
-    let int64 = array.as_any().downcast_ref::<Int64Array>();
-    let uint64 = array.as_any().downcast_ref::<UInt64Array>();
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         // `None` = riga null (gestita sotto); `Some(true)` = fuori intervallo.
-        let outside = if let Some(values) = int64 {
-            if values.is_null(row) {
-                None
-            } else {
-                Some(range_outside(config, &mut |bound| {
-                    compare_i64(values.value(row), NumericBound::F64(bound))
-                }))
-            }
-        } else if let Some(values) = uint64 {
-            if values.is_null(row) {
-                None
-            } else {
-                Some(range_outside(config, &mut |bound| {
-                    compare_u64(values.value(row), NumericBound::F64(bound))
-                }))
-            }
+        // Un vincolo e' una DECISIONE sui dati: il confronto non passa mai da
+        // `f64` (che oltre 2^53 collassa interi distinti e sui decimal
+        // sbaglia l'ordine), ma dal comparatore tipizzato.
+        let outside = if crate::is_logically_null(array, row) {
+            None
+        } else if non_finite_cell(array, row) {
+            Some(true)
         } else {
-            scalar_as_f64(array, row)?.map(|value| {
-                !value.is_finite() || range_outside(config, &mut |bound| value.partial_cmp(&bound))
-            })
+            let mut esito = Ok(false);
+            let fuori = range_outside(config, &mut |bound| match scalar_compare(
+                array,
+                row,
+                NumericBound::F64(bound),
+            ) {
+                Ok(ordering) => ordering,
+                Err(error) => {
+                    if esito.is_ok() {
+                        esito = Err(error);
+                    }
+                    None
+                }
+            });
+            esito?;
+            Some(fuori)
         };
         let Some(outside) = outside else {
             if config.allow_null {
@@ -579,9 +600,10 @@ pub struct Coalesce {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome di output non valido (come `validate_output_name`),
-///   lista di colonne vuota o overflow degli indici interni del percorso
-///   generico;
+/// - `InvalidPlan`: nome di output non valido (come `validate_output_name`)
+///   o lista di colonne vuota;
+/// - `ResourceLimit`: overflow degli indici interni del percorso generico
+///   (cresce col numero di righe);
 /// - `Schema`: colonna assente dallo schema (come `column_index`), tipi
 ///   Arrow non identici fra le colonne, errore Arrow nella concat/take del
 ///   percorso generico o batch risultante incoerente (come
@@ -628,17 +650,19 @@ pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result
         .map(|row| {
             indices
                 .iter()
-                .position(|index| !batch.column(*index).is_null(row))
+                .position(|index| !crate::is_logically_null(batch.column(*index).as_ref(), row))
                 .map(|position| {
                     position
                         .checked_mul(batch.num_rows())
                         .and_then(|offset| offset.checked_add(row))
-                        .ok_or_else(|| PlenoraError::InvalidPlan("overflow indice coalesce".into()))
+                        .ok_or_else(|| {
+                            PlenoraError::ResourceLimit("overflow indice coalesce".into())
+                        })
                 })
                 .transpose()?
                 .map(u64::try_from)
                 .transpose()
-                .map_err(|_| PlenoraError::InvalidPlan("indice coalesce oltre u64".into()))
+                .map_err(|_| PlenoraError::ResourceLimit("indice coalesce oltre u64".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(plenora_core::arrow::select::take::take(
@@ -831,7 +855,7 @@ mod tests {
             if !config.nulls_equal
                 && indices
                     .iter()
-                    .any(|index| batch.column(*index).is_null(row))
+                    .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
             {
                 continue;
             }

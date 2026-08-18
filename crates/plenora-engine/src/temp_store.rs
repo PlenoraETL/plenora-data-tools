@@ -248,7 +248,13 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
     match mtime {
-        Some(mtime_secs) if now.saturating_sub(mtime_secs.as_secs()) > ttl.as_secs() * 2 => {
+        // `saturating_mul`: un TTL enorme non deve avvolgere la soglia e
+        // trasformare «non abbastanza vecchio» in «da cancellare». Saturando,
+        // la soglia resta il massimo esprimibile e la directory viene tenuta —
+        // la direzione prudente per uno scavenger che cancella file.
+        Some(mtime_secs)
+            if now.saturating_sub(mtime_secs.as_secs()) > ttl.as_secs().saturating_mul(2) =>
+        {
             ScavengeAction::Remove
         }
         _ => ScavengeAction::KeepConservative,

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
     ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
@@ -119,10 +120,21 @@ fn run(
     execute(&graph, inputs, RuntimeContext::default())
 }
 
+/// `Inputs` SENZA contratto: il percorso permissivo, deprecato ma ancora
+/// supportato e quindi ancora da testare. Il `allow` sta qui, una volta sola,
+/// invece di essere sparso su ogni test: quando la deprecazione diventera'
+/// rimozione, questo e' l'unico punto da cancellare.
+#[allow(deprecated)]
 fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
         .with(name, Input::from_batches(batches).expect("input non vuoto"))
         .expect("input unico")
+}
+
+/// Come [`single_input`], per i test che hanno gia' un [`Input`] costruito.
+#[allow(deprecated)]
+fn single_input_from(name: &str, input: Input) -> Inputs {
+    Inputs::new().with(name, input).expect("input unico")
 }
 
 fn output_rows(output: Output) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
@@ -247,6 +259,85 @@ fn stored_edge_error_preserves_row_diagnostics_and_axes() {
     let aggregate = aggregate.expect("aggregato");
     assert_eq!(aggregate.input_total, None);
     assert_eq!(aggregate.observed_total, 2);
+}
+
+/// Attribuzione di un errore di passo: nodo, operazione e testo.
+///
+/// Dopo che la propagazione ha smesso di sostituire la categoria con
+/// `Execution`, il contesto del passo viaggia nei CAMPI di `Replayed` invece
+/// che nel testo di `Execution`. I test che verificavano l'attribuzione
+/// leggendo la stringa non possono piu' farlo: leggono i campi, che e' anche
+/// cio' che finisce nel blocco `context` dell'envelope.
+fn attribuzione(error: &PlenoraError) -> (String, String, String) {
+    match error {
+        PlenoraError::Replayed(inner) => (
+            inner.node.clone().unwrap_or_default(),
+            inner.operation.clone().unwrap_or_default(),
+            inner.message.clone(),
+        ),
+        PlenoraError::Execution {
+            node,
+            operation,
+            reason,
+            ..
+        } => (node.clone(), operation.clone(), reason.clone()),
+        PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
+            attribuzione(source)
+        }
+        other => (String::new(), String::new(), other.to_string()),
+    }
+}
+
+#[test]
+fn il_dettaglio_diagnostico_sopravvive_all_assegnazione_dell_execution_id() {
+    // Nono giro, finding 3. `with_diagnostics` aggiungeva il suffisso al solo
+    // `message`; `with_execution_id`, chiamata subito dopo, RIGENERA il
+    // messaggio da `execution_reason` per le categorie `Execution` e
+    // `Cancelled` — e il suffisso spariva.
+    //
+    // Il test esercita la SEQUENZA reale delle due funzioni, non uno stato
+    // costruito a mano: partendo da un `Replayed` senza suffisso, applica
+    // l'arricchimento e poi l'assegnazione dell'id. Ripristinando la vecchia
+    // implementazione — che scriveva solo in `message` — cade.
+    //
+    // Nota di raggiungibilita': con la politica di propagazione attuale non
+    // ho individuato un percorso in cui un errore che passa da
+    // `with_diagnostics` porti categoria `Execution` o `Cancelled` (le
+    // cancellazioni usano `?` e non attraversano l'arricchimento). Il difetto
+    // e' quindi LATENTE: si manifesterebbe appena un errore di quelle
+    // categorie passasse di li'. Un test sulla composizione e' l'unico modo
+    // di fissarlo prima che accada.
+    for categoria in [
+        plenora_core::ErrorCategory::Execution,
+        plenora_core::ErrorCategory::Cancelled,
+    ] {
+        let errore = PlenoraError::Replayed(Box::new(plenora_core::error::ReplayedError {
+            category: categoria,
+            phase: ErrorPhase::Write,
+            remote_effect: plenora_core::RemoteEffect::None,
+            retry: plenora_core::RetryDisposition::Never,
+            message: "motivo".into(),
+            node: Some("n".into()),
+            operation: Some("table.filter".into()),
+            execution_id: None,
+            execution_reason: Some("motivo".into()),
+        }));
+        let arricchito = super::arricchisci_con_dettaglio(errore, "batch_seq=7");
+        assert!(
+            arricchito.to_string().contains("[batch_seq=7]"),
+            "{categoria:?}: l'arricchimento aggiunge il dettaglio"
+        );
+        let finale = arricchito.with_execution_id("exec-1");
+        let testo = finale.to_string();
+        assert!(
+            testo.contains("exec-1"),
+            "{categoria:?}: l'id viene inserito: {testo}"
+        );
+        assert!(
+            testo.contains("[batch_seq=7]"),
+            "{categoria:?}: il dettaglio sopravvive alla rigenerazione: {testo}"
+        );
+    }
 }
 
 #[test]
@@ -380,8 +471,8 @@ fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
     let (node, operation, execution_id) = error
         .execution_context()
         .expect("contesto DAG sul report terminale");
-    assert_eq!(node, "cast");
-    assert_eq!(operation, "table.type_cast");
+    assert_eq!(node, "cast", "attribuzione al nodo");
+    assert_eq!(operation, "table.type_cast", "attribuzione all'operazione");
     assert!(!execution_id.is_empty());
     assert_eq!(output.metrics().nodes["after"].batches_in, 0);
 }
@@ -444,8 +535,8 @@ fn formula_collects_complete_row_diagnostics_across_input_batches() {
     let (node, operation, execution_id) = error
         .execution_context()
         .expect("contesto DAG sul report terminale");
-    assert_eq!(node, "calc");
-    assert_eq!(operation, "table.formula");
+    assert_eq!(node, "calc", "attribuzione al nodo");
+    assert_eq!(operation, "table.formula", "attribuzione all'operazione");
     assert!(!execution_id.is_empty());
     assert_eq!(output.metrics().nodes["after"].batches_in, 0);
 }
@@ -516,8 +607,8 @@ fn expression_collects_complete_row_diagnostics_across_input_batches() {
     let (node, operation, execution_id) = error
         .execution_context()
         .expect("contesto DAG sul report terminale");
-    assert_eq!(node, "calc");
-    assert_eq!(operation, "table.expression");
+    assert_eq!(node, "calc", "attribuzione al nodo");
+    assert_eq!(operation, "table.expression", "attribuzione all'operazione");
     assert!(!execution_id.is_empty());
     assert_eq!(output.metrics().nodes["after"].batches_in, 0);
 }
@@ -601,7 +692,7 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
         schema.clone(),
         vec![Ok(batch), Err(interrupted)].into_iter(),
     );
-    let inputs = Inputs::new().with("main", input).expect("input fallibile");
+    let inputs = single_input_from("main", input);
     let plan = json!({
         "schema_version": 4,
         "inputs": ["main"],
@@ -1049,7 +1140,7 @@ fn streaming_segment_flows_batch_by_batch_without_full_materialization() {
             pulled: Rc::clone(&pulled),
         },
     );
-    let inputs = Inputs::new().with("main", input).expect("input");
+    let inputs = single_input_from("main", input);
     let mut output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
 
     assert_eq!(
@@ -1100,7 +1191,7 @@ fn blocking_segment_materializes_before_emitting() {
             pulled: Rc::clone(&pulled),
         },
     );
-    let inputs = Inputs::new().with("main", input).expect("input");
+    let inputs = single_input_from("main", input);
     let mut output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
 
     let first = output.next().expect("output aggregate").expect("batch ok");
@@ -1138,7 +1229,7 @@ fn error_mid_stream_publishes_nothing() {
         ]
         .into_iter(),
     );
-    let inputs = Inputs::new().with("main", failing).expect("input");
+    let inputs = single_input_from("main", failing);
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
 
     let directory = tempfile::tempdir().expect("tempdir");
@@ -1573,8 +1664,16 @@ fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
         Ok(_) => panic!("encoding field/contratto incoerenti accettati"),
     };
     assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
-    assert!(error.to_string().contains("encoding field"), "{error}");
-    assert!(error.to_string().contains("encoding contratto"), "{error}");
+    // Il rifiuto arriva ora dalla validazione del contratto, PRIMA di aprire
+    // gli input: `DataContract::validate` confronta l'encoding dichiarato dal
+    // contratto con quello dei metadati canonici della colonna. Il controllo
+    // dell'executor su field/contratto resta come difesa in profondita', ma
+    // non e' piu' raggiungibile da un piano — ed e' il verso giusto: la
+    // stessa incoerenza si vedeva solo dopo aver cominciato a leggere.
+    assert!(
+        error.to_string().contains("encoding del contratto"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2020,9 +2119,7 @@ fn input_schema_mismatch_is_rejected_before_execution() {
         vec![Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef],
     )
     .expect("batch");
-    let inputs = Inputs::new()
-        .with("main", Input::from_batches(vec![batch]).expect("input"))
-        .expect("inputs");
+    let inputs = single_input_from("main", Input::from_batches(vec![batch]).expect("input"));
     let result = run(&plan, inputs, &[("main".to_owned(), table_contract())]);
     assert!(matches!(result, Err(PlenoraError::Schema(_))));
 }
@@ -2053,7 +2150,7 @@ fn ipc_roundtrip_through_publish_atomic() {
 
     // Rilettura: lo stesso piano pass-through sul file pubblicato.
     let input = Input::read_ipc_file(&destination).expect("lettore IPC");
-    let inputs = Inputs::new().with("main", input).expect("input");
+    let inputs = single_input_from("main", input);
     let (batches, _) =
         output_rows(run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute"))
             .expect("stream ok");
@@ -4121,19 +4218,14 @@ fn blocking_concat_error_is_attributed_to_the_node() {
         vec![GovernedBatch::new(wrong, None, None)],
     )
     .expect_err("concat con schema incoerente");
-    match error {
-        PlenoraError::Execution {
-            node,
-            operation,
-            reason,
-            ..
-        } => {
-            assert_eq!(node, "g");
-            assert_eq!(operation, "table.aggregate");
-            assert!(reason.contains("arrow"), "{reason}");
-        }
-        other => panic!("atteso Step con attribuzione nodo: {other:?}"),
-    }
+    // Errore Arrow dentro il kernel: la categoria che portava — `Arrow`,
+    // mappata su `data_mapping` — viene ora CONSERVATA, e il contesto del
+    // passo si aggiunge invece di sostituirla. Prima l'errore usciva come
+    // `execution` e la sua natura si perdeva.
+    let (node, operation, reason) = attribuzione(&error);
+    assert_eq!(node, "g", "attribuzione al nodo");
+    assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
+    assert!(reason.contains("arrow"), "{reason}");
 }
 
 #[test]
@@ -4270,25 +4362,28 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    match error {
-        PlenoraError::Execution {
-            node,
-            operation,
-            reason,
-            ..
-        } => {
-            assert_eq!(
-                node, "boom_stream",
-                "attribuzione al nodo che e' andato in panic"
-            );
-            assert_eq!(operation, "table.filter");
-            assert!(
-                reason.contains("panic di test iniettato"),
-                "il motivo riporta il messaggio del panic: {reason}"
-            );
-        }
-        other => panic!("atteso Step, ottenuto {other}"),
-    }
+    // Un panico dentro un kernel e' un difetto NOSTRO: categoria `Internal`
+    // (exit 70), non `execution` (exit 6) e non `invalid_plan` (exit 2, che
+    // accuserebbe il piano di chi ci chiama).
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "un panico di kernel e' un difetto interno: {error}"
+    );
+    let (node, operation, reason) = attribuzione(&error);
+    assert_eq!(
+        node, "boom_stream",
+        "attribuzione al nodo che e' andato in panic"
+    );
+    assert_eq!(operation, "table.filter", "attribuzione all'operazione");
+    assert!(
+        !reason.contains("panic di test iniettato"),
+        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
+    );
+    assert!(
+        reason.contains("panic nel kernel"),
+        "il motivo dichiara comunque che si tratta di un panic: {reason}"
+    );
 }
 
 #[test]
@@ -4308,18 +4403,27 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    match error {
-        PlenoraError::Execution {
-            node,
-            operation,
-            reason,
-            ..
-        } => {
-            assert_eq!(node, "boom_block");
-            assert_eq!(operation, "table.aggregate");
-            assert!(reason.contains("panic di test iniettato"), "{reason}");
-        }
-        other => panic!("atteso Step, ottenuto {other}"),
+    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
+    // `Internal` (exit 70), non `execution` (exit 6) e non
+    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
+    // chiama). Il contesto del passo resta: e' il motivo per cui il
+    // propagatore usa `Replayed` invece di lasciar passare l'errore
+    // nudo.
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "un panico di kernel e' un difetto interno: {error}"
+    );
+    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
+    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
+    let (node, operation, reason) = attribuzione(&error);
+    {
+        assert_eq!(node, "boom_block", "attribuzione al nodo");
+        assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
+        assert!(
+            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
+            "il testo del panic non va pubblicato: {reason}"
+        );
     }
 }
 
@@ -4354,21 +4458,30 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    match error {
-        PlenoraError::Execution {
-            node,
-            operation,
-            reason,
-            ..
-        } => {
-            assert_eq!(
-                node, "boom_join",
-                "attribuzione anche per i segmenti BinaryBlocking"
-            );
-            assert_eq!(operation, "table.join");
-            assert!(reason.contains("panic di test iniettato"), "{reason}");
-        }
-        other => panic!("atteso Step, ottenuto {other}"),
+    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
+    // `Internal` (exit 70), non `execution` (exit 6) e non
+    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
+    // chiama). Il contesto del passo resta: e' il motivo per cui il
+    // propagatore usa `Replayed` invece di lasciar passare l'errore
+    // nudo.
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "un panico di kernel e' un difetto interno: {error}"
+    );
+    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
+    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
+    let (node, operation, reason) = attribuzione(&error);
+    {
+        assert_eq!(
+            node, "boom_join",
+            "attribuzione anche per i segmenti BinaryBlocking"
+        );
+        assert_eq!(operation, "table.join", "attribuzione all'operazione");
+        assert!(
+            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
+            "il testo del panic non va pubblicato: {reason}"
+        );
     }
 }
 
@@ -4494,7 +4607,7 @@ fn execute_with_token(
     token: CancellationToken,
 ) -> Result<Output> {
     let graph = validate(&plan.to_string(), &[("main".to_owned(), table_contract())])?;
-    let inputs = Inputs::new().with("main", input).expect("input");
+    let inputs = single_input_from("main", input);
     let runtime = RuntimeContext {
         cancellation: token,
         ..RuntimeContext::default()
@@ -4521,7 +4634,7 @@ fn cancel_between_batches_in_streaming_chain() {
                 node, "f",
                 "attribuzione al primo kernel della catena (Cooperative: check a ogni batch)"
             );
-            assert_eq!(operation, "table.filter");
+            assert_eq!(operation, "table.filter", "attribuzione all'operazione");
             assert_eq!(execution_id, output.execution_id());
         }
         other => panic!("atteso Cancelled: {other:?}"),
@@ -4576,7 +4689,7 @@ fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
         &[("main".to_owned(), DataContract::tabular(schema))],
     )
     .expect("validate");
-    let inputs = Inputs::new().with("main", input).expect("input");
+    let inputs = single_input_from("main", input);
     let mut output = execute(
         &graph,
         inputs,
@@ -4624,8 +4737,8 @@ fn cancel_during_blocking_drain() {
         Some(Err(PlenoraError::Cancelled {
             node, operation, ..
         })) => {
-            assert_eq!(node, "g");
-            assert_eq!(operation, "table.aggregate");
+            assert_eq!(node, "g", "attribuzione al nodo");
+            assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
         }
         other => panic!("atteso Cancelled durante il drenaggio: {other:?}"),
     }
@@ -4667,7 +4780,7 @@ fn non_interruptible_op_is_never_interrupted() {
             node, operation, ..
         })) => {
             assert_eq!(node, "ni_r", "confine di output del piano");
-            assert_eq!(operation, "output");
+            assert_eq!(operation, "output", "attribuzione all'operazione");
         }
         other => panic!("atteso Cancelled al confine di piano: {other:?}"),
     }
@@ -4828,24 +4941,23 @@ fn diagnostics_off_leaves_step_error_unchanged() {
     )
     .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito");
-    match error {
-        PlenoraError::Execution {
-            reason,
-            execution_id,
-            ..
-        } => {
-            assert_eq!(
-                reason,
-                "contract violation: panic nel kernel: panic di test iniettato al nodo `diag_off`",
-                "diagnostics spento: motivo invariato (retrocompatibile)"
-            );
-            assert!(
-                !execution_id.is_empty(),
-                "execution_id sempre presente negli errori DAG (M1d)"
-            );
-        }
-        other => panic!("atteso Step: {other:?}"),
-    }
+    let (_, _, reason) = attribuzione(&error);
+    assert_eq!(
+        reason, "internal error: panic nel kernel: payload dinamico (contenuto non pubblicato)",
+        "diagnostics spento: motivo invariato salvo la categoria"
+    );
+    // `execution_id` resta assegnato anche fuori dall'involucro `Execution`:
+    // e' il `Replayed` a portarlo (M1d).
+    let PlenoraError::Replayed(inner) = &error else {
+        panic!("atteso Replayed con attribuzione: {error:?}");
+    };
+    assert!(
+        inner
+            .execution_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty()),
+        "execution_id sempre presente negli errori DAG (M1d)"
+    );
 }
 
 #[test]
@@ -4867,16 +4979,18 @@ fn diagnostics_on_enriches_step_error_with_batch_index() {
     )
     .expect("execute");
     let error = output.collect_batches().expect_err("panic convertito");
-    match error {
-        PlenoraError::Execution { reason, .. } => {
-            assert!(reason.contains("panic di test iniettato"), "{reason}");
-            assert!(
-                reason.contains("[batch_seq=0]"),
-                "contesto strutturale aggiunto (indice di batch, mai valori): {reason}"
-            );
-        }
-        other => panic!("atteso Step: {other:?}"),
-    }
+    let (_, _, reason) = attribuzione(&error);
+    assert!(
+        !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
+        "il testo del panic non va pubblicato: {reason}"
+    );
+    // Il contesto strutturale (indice di batch) resta nel testo, che ora e'
+    // quello del `Replayed` invece di quello di `Execution`: l'arricchimento
+    // segue l'errore, non l'involucro.
+    assert!(
+        reason.contains("[batch_seq=0]"),
+        "contesto strutturale aggiunto (indice di batch, mai valori): {reason}"
+    );
 }
 
 #[test]
@@ -5273,22 +5387,18 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     let fused_error = run(true);
     let plain_error = run(false);
     for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
-        match error {
-            PlenoraError::Execution {
-                node,
-                operation,
-                reason,
-                ..
-            } => {
-                assert_eq!(node, "g_s", "{label}: attribuzione al nodo in panic");
-                assert_eq!(operation, "geo.simplify", "{label}: operazione");
-                assert!(
-                    reason.contains("panic di test iniettato"),
-                    "{label}: il motivo riporta il messaggio del panic: {reason}"
-                );
-            }
-            other => panic!("{label}: atteso Execution, ottenuto {other}"),
-        }
+        let (node, operation, reason) = attribuzione(error);
+        assert_eq!(
+            error.category(),
+            plenora_core::ErrorCategory::Internal,
+            "{label}: un panico di kernel e' un difetto interno: {error}"
+        );
+        assert_eq!(node, "g_s", "{label}: attribuzione al nodo in panic");
+        assert_eq!(operation, "geo.simplify", "{label}: operazione");
+        assert!(
+            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
+            "{label}: il testo del panic non va pubblicato: {reason}"
+        );
     }
 }
 
@@ -5510,10 +5620,14 @@ fn input_batch_schema_mismatch_is_tagged_read() {
 }
 
 #[test]
-fn governor_errors_at_the_input_boundary_keep_the_derived_phase() {
-    // Regressione: il governor (max_input_rows) scatta allo stesso confine
-    // ma resta validazione di vincoli — NESSUN tag, fase derivata Validate
-    // (decisione confermata in ADR-0009).
+fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
+    // Ottavo giro, finding 2. Prima: nessun tag e fase derivata `Validate`,
+    // perche' il limite era modellato come vincolo del piano. Da quando i
+    // limiti di risorsa hanno una variante propria, questo tetto scatta
+    // LEGGENDO la sorgente, allo stesso confine dei tetti del trasporto — che
+    // dichiarano `Read`. Due limiti sulla stessa lettura non possono
+    // dichiarare fasi diverse: il tag esplicito vince sulla derivazione
+    // (ADR-0009, emendamento del 2026-08-17).
     let plan = json!({
         "schema_version": 4,
         "limits": {"max_input_rows": 1},
@@ -5525,8 +5639,13 @@ fn governor_errors_at_the_input_boundary_keep_the_derived_phase() {
     let output = run(&plan, inputs, &[("main".to_owned(), table_contract())]).expect("execute");
     let error = output.collect_batches().expect_err("limite input");
     assert!(error.to_string().contains("max_input_rows"), "{error}");
-    assert_eq!(error.phase(), ErrorPhase::Validate);
-    assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::ResourceLimit);
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert_eq!(
+        error.phase_tag(),
+        Some(ErrorPhase::Read),
+        "la fase e' dichiarata dal confine, non derivata dalla variante"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -5907,22 +6026,22 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
     .expect("execute")
     .collect_batches()
     .expect_err("panic convertito in errore");
-    match &error {
-        PlenoraError::Execution {
-            node,
-            operation,
-            reason,
-            ..
-        } => {
-            assert_eq!(node, "gb_panic", "attribuzione al nodo in panic");
-            assert_eq!(operation, "geo.sjoin");
-            assert!(
-                reason.contains("panic di test iniettato"),
-                "il motivo riporta il messaggio del panic: {reason}"
-            );
-        }
-        other => panic!("atteso Execution, ottenuto {other}"),
-    }
+    let (node, operation, reason) = attribuzione(&error);
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "un panico di kernel e' un difetto interno: {error}"
+    );
+    assert_eq!(node, "gb_panic", "attribuzione al nodo in panic");
+    assert_eq!(operation, "geo.sjoin", "attribuzione all'operazione");
+    assert!(
+        !reason.contains("panic di test iniettato"),
+        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
+    );
+    assert!(
+        reason.contains("panic nel kernel"),
+        "il motivo dichiara comunque che si tratta di un panic: {reason}"
+    );
     assert_eq!(
         error.phase(),
         ErrorPhase::Write,
@@ -6010,4 +6129,68 @@ fn atomic_input_gate_rejects_late_invalid_with_zero_accepted_over_budget() {
     assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
     assert_eq!(report.examples[0].source_index, 3999);
     assert!(report.validate_for_emission().is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Quinto giro — un errore di `Inputs` non deve lasciare tracce
+// ---------------------------------------------------------------------------
+
+#[test]
+fn un_inserimento_duplicato_lascia_inputs_invariato() {
+    // `insert` scriveva PRIMA di accorgersi del duplicato: la chiamata
+    // restituiva `Err` ma il reader precedente era gia' stato sostituito, e
+    // con `add_with_contract` restava appaiato al contratto vecchio. Il test
+    // guarda lo stato interno perche' e' esattamente li' che il difetto
+    // viveva: `is_err()` da solo lo mancava.
+    let primo =
+        || Input::from_batches(vec![geo_batch(&[1], &[Some(point_wkb(1.0, 1.0))])]).expect("primo");
+    let secondo = || {
+        Input::from_batches(vec![geo_batch(&[2], &[Some(point_wkb(2.0, 2.0))])]).expect("secondo")
+    };
+    let righe = |inputs: &Inputs| match &inputs.readers["main"] {
+        Input::Batches { batches } => batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("colonna id")
+            .value(0),
+        Input::Stream { .. } => panic!("variante inattesa"),
+    };
+
+    // Percorso permissivo.
+    let mut inputs = Inputs::new();
+    inputs.add("main", primo()).expect("primo inserimento");
+    assert!(
+        inputs.add("main", secondo()).is_err(),
+        "duplicato accettato"
+    );
+    assert_eq!(
+        righe(&inputs),
+        1,
+        "il reader e' stato sostituito da un errore"
+    );
+    assert_eq!(inputs.readers.len(), 1);
+
+    // Percorso col contratto: il contratto NON deve cambiare, ne' restare
+    // appaiato a un reader diverso.
+    let mut inputs = Inputs::new();
+    inputs
+        .add_with_contract("main", primo(), geo_contract())
+        .expect("primo inserimento");
+    let mut altro = geo_contract();
+    altro.geometries[0].name = "altra_geometria".to_owned();
+    assert!(
+        inputs.add_with_contract("main", secondo(), altro).is_err(),
+        "duplicato accettato"
+    );
+    assert_eq!(
+        righe(&inputs),
+        1,
+        "il reader e' stato sostituito da un errore"
+    );
+    assert_eq!(
+        inputs.contracts["main"].geometries[0].name, "geom",
+        "il contratto e' stato sostituito da un errore"
+    );
+    assert_eq!(inputs.contracts.len(), 1);
 }

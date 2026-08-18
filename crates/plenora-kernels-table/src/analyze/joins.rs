@@ -11,9 +11,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    check_output_name, clone_fields, contract_error, field_of, finish, is_scalar_string,
-    merge_geometry, merge_schema_metadata, merge_schema_metadata_many, propagate_geometry,
-    require_utf8, sorted_only, typed,
+    check_output_name, clone_fields, contract_error, field_of, finish, merge_geometry,
+    merge_schema_metadata, merge_schema_metadata_many, propagate_geometry, require_utf8,
+    sorted_only, typed,
 };
 use super::quality::check_foreign_keys;
 use crate::{fuzzy, joins, setops, Limits};
@@ -140,6 +140,24 @@ pub(in crate::analyze) fn analyze_join(
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
     check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
+    // Con `right`/`outer` la chiave di output e' la fusione dei due lati, e
+    // `coalesce` non copre tutti i tipi: il controllo va fatto QUI, non a
+    // meta' esecuzione dopo aver aperto gli input.
+    if matches!(config.how, joins::JoinHow::Right | joins::JoinHow::Outer) {
+        for name in &config.left_keys {
+            let field = field_of(op, left, name)?;
+            if !joins::coalesce_supported(field.data_type()) {
+                return contract_error(
+                    op,
+                    format!(
+                        "chiave {name} di tipo {:?} non fondibile con how={:?}:                          il coalesce delle chiavi non copre questo tipo",
+                        field.data_type(),
+                        config.how
+                    ),
+                );
+            }
+        }
+    }
     let left_indices: Vec<usize> = config
         .left_keys
         .iter()
@@ -609,7 +627,7 @@ pub(in crate::analyze) fn analyze_set_operation(
     check_same_schema(op, left, right)?;
     // L'encoder delle chiavi di riga scatta prima dei dati: fail-closed.
     for field in left.schema.fields() {
-        if !is_scalar_string(field.data_type()) {
+        if !crate::setops::key_encodable(field.data_type()) {
             return contract_error(
                 op,
                 format!(

@@ -49,8 +49,8 @@ fn default_fill() -> String {
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `fill_char` vuoto
-///   o piu' di un carattere Unicode, risultato oltre
-///   `limits.max_string_bytes`;
+///   o piu' di un carattere Unicode;
+/// - `ResourceLimit`: risultato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8.
 pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> Result<RecordBatch> {
     let output_name = config.output_column.as_deref().unwrap_or(&config.column);
@@ -90,7 +90,7 @@ pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> R
             }
         }
         if padded.len() > limits.max_string_bytes {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "string_pad supera max_string_bytes".into(),
             ));
         }
@@ -133,7 +133,7 @@ pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<Recor
             } else {
                 i64::try_from(input.value(row).chars().count())
                     .map(Some)
-                    .map_err(|_| PlenoraError::InvalidPlan("stringa troppo lunga".into()))
+                    .map_err(|_| PlenoraError::ResourceLimit("stringa troppo lunga".into()))
             }
         })
         .collect();
@@ -413,8 +413,9 @@ fn normalize_into(value: &str, operation: &NormalizeOperation, out: &mut String)
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `columns` vuoto, nome della colonna di output non valido,
-///   risultato oltre `limits.max_string_bytes`;
+/// - `InvalidPlan`: `columns` vuoto o nome della colonna di output non
+///   valido;
+/// - `ResourceLimit`: risultato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non Utf8.
 pub fn text_normalize(
     batch: &RecordBatch,
@@ -447,7 +448,7 @@ pub fn text_normalize(
             scratch.reserve(value.len());
             normalize_into(value, &config.operations, &mut scratch);
             if scratch.len() > limits.max_string_bytes {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "text_normalize supera max_string_bytes".into(),
                 ));
             }

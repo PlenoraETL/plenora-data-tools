@@ -75,7 +75,9 @@ use plenora_core::catalog::{
     ExpansionConstraint, Family, Maturity, OperationDescriptor, Origin, ResultShape,
     SourceRowProvenance,
 };
-use plenora_core::contract::{ContractCrs, DataContract, FieldAllocator};
+use plenora_core::contract::{
+    ContractCrs, DataContract, FieldAllocator, PropertyConfidence, PropertyScope,
+};
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
@@ -414,6 +416,11 @@ pub fn validate(
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
     // risoluzione alias (PlanV4::parse, ADR 6).
     let plan = PlanV4::parse(plan_json, &PlanLimits::default())?;
+    // Validazione dei limiti effettivi in un punto solo, prima di qualunque
+    // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
+    // che non passano dal preparer tabellare dove il controllo viveva prima
+    // (e dove correggeva in silenzio invece di rifiutare).
+    plan.effective_limits().validate()?;
     let plan_ref = plan.plan();
 
     // Passo 2: contratti di input — corrispondenza esatta con i nomi
@@ -506,7 +513,7 @@ pub fn validate(
     for declared in &plan_ref.inputs {
         let mut contract = provided[declared.as_str()].clone();
         for geometry in &mut contract.geometries {
-            let remapped = fields.alloc();
+            let remapped = fields.alloc()?;
             if contract.active_geometry == Some(geometry.field_id) {
                 contract.active_geometry = Some(remapped);
             }
@@ -668,6 +675,49 @@ pub fn check_compatibility(
     Ok(())
 }
 
+/// Verifica i contratti DICHIARATI dal chiamante all'esecuzione contro i
+/// fingerprint del grafo.
+///
+/// A differenza di [`check_input_compatibility`] non pretende che siano
+/// presenti tutti gli input: `execute` la chiama sui soli input per cui il
+/// chiamante ha passato un contratto ([`crate::Inputs::add_with_contract`]),
+/// e per gli altri resta il confronto sullo schema.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` con prefisso `GRAPH_MISMATCH` per un contratto
+/// non valido, non dichiarato dal piano o con fingerprint diverso.
+pub fn check_declared_input_contracts(
+    graph: &ValidatedGraph,
+    declared: &[(String, DataContract)],
+) -> Result<()> {
+    let mismatch = |reason: String| PlenoraError::InvalidPlan(format!("GRAPH_MISMATCH: {reason}"));
+    for (name, contract) in declared {
+        let position = graph
+            .plan
+            .plan()
+            .inputs
+            .iter()
+            .position(|declared| declared == name)
+            .ok_or_else(|| mismatch(format!("input `{name}` non dichiarato dal piano")))?;
+        let fingerprint = graph
+            .input_contract_fingerprints
+            .get(position)
+            .ok_or_else(|| {
+                PlenoraError::Internal(format!("fingerprint mancante per l'input `{name}`"))
+            })?;
+        contract
+            .validate()
+            .map_err(|error| mismatch(format!("contratto dell'input `{name}`: {error}")))?;
+        if &contract_fingerprint(contract)? != fingerprint {
+            return Err(mismatch(format!(
+                "il contratto dell'input `{name}` e' diverso da quello validato"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Riverifica i contratti di input contro i fingerprint registrati nel grafo
 /// (ADR 4): un input con contratto diverso non riusa il grafo.
 ///
@@ -699,6 +749,14 @@ pub fn check_input_compatibility(
         let contract = provided
             .get(declared.as_str())
             .ok_or_else(|| mismatch(format!("manca il contratto per l'input `{declared}`")))?;
+        // Il contratto fornito va validato PRIMA di confrontarne il
+        // fingerprint: un contratto strutturalmente invalido — geometria non
+        // Binary, nomi di campo ripetuti, tipi incoerenti coi metadati — ha
+        // comunque un fingerprint, e senza questo passo poteva superare il
+        // controllo di compatibilita' per poi fallire a runtime.
+        contract
+            .validate()
+            .map_err(|error| mismatch(format!("contratto dell'input `{declared}`: {error}")))?;
         if &contract_fingerprint(contract)? != fingerprint {
             return Err(mismatch(format!(
                 "il contratto dell'input `{declared}` e' diverso da quello validato"
@@ -841,9 +899,17 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
 /// Fingerprint di un contratto di input: schema + geometria (ADR 4).
 ///
 /// I `FieldId` sono esclusi: identita' interna del grafo (rimappata
-/// all'ingresso, D16), non dell'input. Anche `active_geometry` e le proprieta'
-/// sono escluse per lo stesso motivo (riferiscono `FieldId`).
-fn contract_fingerprint(contract: &DataContract) -> Result<ContractFingerprint> {
+/// all'ingresso, D16), non dell'input. `active_geometry` e le proprieta' di
+/// `ContractProperties` sono escluse per lo stesso motivo (riferiscono
+/// `FieldId`). Le proprieta' tipizzate della GEOMETRIA — `encoding`, `types` —
+/// non riferiscono `FieldId` e sono invece parte del contratto osservabile:
+/// entrano nel fingerprint.
+///
+/// # Errors
+///
+/// `Internal` se il contratto non e' serializzabile: impossibile per
+/// costruzione, ma non dimostrabile al compilatore.
+pub fn contract_fingerprint(contract: &DataContract) -> Result<ContractFingerprint> {
     let canonical = serde_json::to_vec(&contract_canonical(contract)).map_err(|error| {
         PlenoraError::Internal(format!(
             "serializzazione del contratto di input fallita: {error}"
@@ -928,16 +994,80 @@ fn contract_canonical(contract: &DataContract) -> Value {
                     );
                 }
             }
+            // La dichiarazione dei tipi geometrici e' parte del contratto, non
+            // un'identita' interna del grafo: entra nel fingerprint quando c'e'.
+            // Restandone fuori, due contratti che dichiaravano tipi diversi —
+            // `exact:point` e `exact:polygon` — condividevano il fingerprint, e
+            // un grafo validato sul primo veniva riusato sul secondo senza
+            // rivalidazione. Come per `encoding`, un contratto che non dichiara
+            // nulla produce lo stesso JSON di prima.
+            if let Some(types) = geometry.types.value() {
+                if let Value::Object(map) = &mut canonical {
+                    map.insert(
+                        "types".to_owned(),
+                        json!({
+                            // La confidence distingue una dichiarazione esterna
+                            // da una dimostrata: sono contratti diversi.
+                            "confidence": confidence_label(&geometry.types.confidence),
+                            // Anche lo scope: la stessa dichiarazione vale per
+                            // lo schema, per il batch o per il dataset intero,
+                            // e sono garanzie di forza diversa.
+                            "scope": scope_label(geometry.types.scope),
+                            "declaration": types.declaration().as_str(),
+                            "list": types.to_canonical_list(),
+                        }),
+                    );
+                }
+            }
             canonical
         })
         .collect();
-    json!({
+    let mut canonical = json!({
         "schema": {
             "fields": fields,
             "metadata": sorted_metadata(contract.schema.metadata()),
         },
         "geometries": geometries,
-    })
+    });
+    // `row_count` NON riferisce `FieldId` — a differenza di `sorted_by`, che
+    // resta escluso — ed entra nell'analisi: `map_row_count` lo propaga nei
+    // contratti d'arco e quindi nelle decisioni a valle. Due input che
+    // dichiarano cardinalita' diverse producono analisi diverse e non sono
+    // lo stesso contratto. Entra solo quando c'e': un contratto che non lo
+    // dichiara produce lo stesso JSON di prima.
+    if let Some(row_count) = &contract.properties.row_count {
+        if let (Value::Object(map), Some(value)) = (&mut canonical, row_count.value()) {
+            map.insert(
+                "row_count".to_owned(),
+                json!({
+                    "confidence": confidence_label(&row_count.confidence),
+                    "scope": scope_label(row_count.scope),
+                    "value": value,
+                }),
+            );
+        }
+    }
+    canonical
+}
+
+/// Etichetta stabile del livello di fiducia di una proprieta' tipizzata.
+const fn confidence_label<T>(confidence: &PropertyConfidence<T>) -> &'static str {
+    match confidence {
+        PropertyConfidence::Declared(_) => "declared",
+        PropertyConfidence::Proven(_) => "proven",
+        PropertyConfidence::Estimated(_) => "estimated",
+        PropertyConfidence::Unknown => "unknown",
+    }
+}
+
+/// Etichetta stabile dello scope di una proprieta' tipizzata.
+const fn scope_label(scope: PropertyScope) -> &'static str {
+    match scope {
+        PropertyScope::Schema => "schema",
+        PropertyScope::Batch => "batch",
+        PropertyScope::Stream => "stream",
+        PropertyScope::Dataset => "dataset",
+    }
 }
 
 /// Metadati Arrow (nome/valore) come oggetto JSON a chiavi ordinate.

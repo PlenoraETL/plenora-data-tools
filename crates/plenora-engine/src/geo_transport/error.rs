@@ -21,7 +21,7 @@ use plenora_kernels_geo::proj_backend::ProjBackendError;
 use plenora_kernels_geo::spatial_join::SpatialJoinError;
 use plenora_kernels_geo::topology::TopologyError;
 
-use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS, MAX_IPC_METADATA_BYTES};
+use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS};
 
 #[derive(Debug, Error)]
 pub enum ArrowTransportError {
@@ -82,10 +82,42 @@ pub enum ArrowTransportError {
         operation: &'static str,
         feature: &'static str,
     },
-    #[error("metadati messaggio IPC da {0} byte oltre il limite {MAX_IPC_METADATA_BYTES}")]
-    IpcMetadataTooLarge(usize),
+    /// Metadati oltre il tetto EFFETTIVO (`{1}`), che non e' sempre il
+    /// default: quando i limiti derivano da un piano, il tetto e' il budget
+    /// di memoria. Il messaggio riportava la costante invece del valore
+    /// applicato, e diceva quindi «168 oltre il limite 16777216».
+    #[error("metadati messaggio IPC da {0} byte oltre il limite {1}")]
+    IpcMetadataTooLarge(usize, usize),
     #[error("stream IPC troncato o non allineato")]
     IpcTruncated,
+    /// Body di un messaggio IPC oltre il tetto applicato dal confine PRIMA
+    /// che arrow allochi: e' il controllo che `max_batch_bytes` non puo'
+    /// fare, perche' misura un `RecordBatch` gia' materializzato.
+    #[error("body del messaggio IPC da {declared} byte oltre il limite {limit}")]
+    IpcBodyTooLarge { declared: u64, limit: u64 },
+    /// Messaggi (o blocchi del footer) oltre il numero ammesso.
+    #[error("messaggi IPC {0} oltre il limite {1}")]
+    IpcTooManyMessages(usize, usize),
+    /// Schema IPC oltre il budget di nodi, oppure con sottoalberi condivisi:
+    /// entrambi fanno esplodere l'espansione, qui e dentro arrow.
+    #[error("schema IPC oltre il budget di {0} nodi, o con sottoalberi condivisi")]
+    IpcSchemaTooComplex(usize),
+    /// Record batch oltre il limite semantico del piano (`max_batches`).
+    #[error("record batch IPC {0} oltre il limite {1}")]
+    IpcTooManyRecordBatches(usize, usize),
+    /// Byte o messaggi dopo il marcatore di fine stream: il reader li
+    /// ignorerebbe, il validatore non li ha visti.
+    #[error("byte dopo il marcatore di fine stream IPC")]
+    IpcTrailingAfterEos,
+    /// Costrutto IPC che il confine non sa limitare, e che quindi rifiuta
+    /// invece di lasciar passare non misurato. Il messaggio nomina il
+    /// costrutto, mai i dati.
+    #[error("costrutto IPC non ammesso dal confine: {0}")]
+    IpcUnsupportedFeature(&'static str),
+    /// Footer del file format incoerente: blocchi fuori dalla regione dati,
+    /// sovrapposti o non allineati.
+    #[error("footer IPC incoerente: {0}")]
+    IpcFooterInvalid(&'static str),
     /// Invariante interna violata: parametro gia' validato a monte o caso
     /// gia' ristretto dal dispatch. Indica un difetto del trasporto, non
     /// dell'input; il messaggio nomina solo il parametro o il caso, mai dati.

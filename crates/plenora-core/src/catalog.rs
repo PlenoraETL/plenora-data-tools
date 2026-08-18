@@ -209,12 +209,59 @@ impl ExpansionConstraint {
             _ => max_expansion_factor,
         }
     }
+
+    /// `true` se l'espansione osservata supera la soglia di questo vincolo.
+    ///
+    /// E' la DECISIONE del limite, e non passa per le metriche `f64` di
+    /// [`JoinExpansion`]: i conteggi restano interi e il fattore viene
+    /// decomposto ([`crate::limits::expansion_exceeded`]). Decidere sul
+    /// rapporto in doppia precisione arrotonda i conteggi, e con
+    /// `left = right = 2^53` e `output = 2^53+1` il rapporto reale — maggiore
+    /// di 1 — diventava esattamente `1.0`: il limite non scattava. Le
+    /// metriche restano osservabili, ma non decidono.
+    ///
+    /// Base per vincolo: la somma degli input (`SumRelative`, `Custom`), il
+    /// solo lato sinistro o destro, e per `MaxRelative` il massimo delle tre
+    /// metriche — che supera la soglia **se e solo se** almeno una la supera,
+    /// e la metrica sulla somma e' sempre dominata dalle altre due.
+    ///
+    /// Denominatore nullo: coerente con [`JoinExpansion::compute`] — con
+    /// output non nullo la metrica e' infinita, quindi il vincolo scatta; con
+    /// output nullo vale zero e non scatta.
+    #[must_use]
+    pub fn exceeded(
+        self,
+        output_rows: u64,
+        left_rows: u64,
+        right_rows: u64,
+        max_expansion_factor: f64,
+    ) -> bool {
+        let threshold = self.binding_threshold(max_expansion_factor);
+        let left = u128::from(left_rows);
+        let right = u128::from(right_rows);
+        let exceeded =
+            |base: u128| crate::limits::expansion_exceeded_wide(output_rows, base, threshold);
+        match self {
+            // La somma in `u128` non satura: due conteggi a 64 bit ci stanno
+            // sempre, e saturare abbasserebbe il denominatore proprio dove
+            // deciderebbe il limite.
+            Self::SumRelative | Self::Custom(_) => exceeded(left + right),
+            Self::LeftRelative => exceeded(left),
+            Self::RightRelative => exceeded(right),
+            Self::MaxRelative => exceeded(left) || exceeded(right),
+        }
+    }
 }
 
 /// Metriche di espansione di un'operazione binaria (ADR 6).
 ///
 /// Il runtime le calcola tutte e tre; il vincolo dichiarato in catalogo
 /// ([`ExpansionConstraint`]) seleziona quella vincolante.
+///
+/// Sono metriche **osservabili**, non la base della decisione: i rapporti
+/// sono `f64` e sopra 2^53 righe arrotondano i conteggi. Il limite si decide
+/// in aritmetica esatta con [`ExpansionConstraint::exceeded`]; questi valori
+/// servono a raccontare l'esito, non a stabilirlo.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JoinExpansion {
     /// Righe output / (righe left + righe right).
@@ -245,7 +292,11 @@ impl JoinExpansion {
             }
         }
         Self {
-            output_over_sum_inputs: ratio(output_rows, left_rows + right_rows),
+            // Somma SATURANTE: e' un denominatore di una metrica che decide
+            // un limite, e avvolgere lo abbasserebbe — cioe' alzerebbe il
+            // rapporto e potrebbe far scattare il vincolo a sproposito (o in
+            // debug far abortire con `overflow-checks`).
+            output_over_sum_inputs: ratio(output_rows, left_rows.saturating_add(right_rows)),
             output_over_left: ratio(output_rows, left_rows),
             output_over_right: ratio(output_rows, right_rows),
         }
@@ -3235,6 +3286,54 @@ mod tests {
             all_empty.binding_metric(ExpansionConstraint::MaxRelative),
             0.0
         );
+    }
+
+    #[test]
+    fn la_decisione_binaria_e_esatta_anche_dove_le_metriche_arrotondano() {
+        // Quarto giro della review. `left = right = 2^53`, `output = 2^53+1`,
+        // fattore 1: il rapporto reale e' > 1, ma `output as f64` arrotonda a
+        // 2^53 e la metrica diventa esattamente 1.0 — il limite NON scattava.
+        const DUE_53: u64 = 1 << 53;
+        let output = DUE_53 + 1;
+        let metrica = JoinExpansion::compute(output, DUE_53, DUE_53);
+        // La metrica osservabile e' ancora (e resta) arrotondata: e' il
+        // motivo per cui non decide piu' lei.
+        assert!(
+            metrica.binding_metric(ExpansionConstraint::MaxRelative) <= 1.0,
+            "il rapporto in f64 dovrebbe collassare su 1.0"
+        );
+        // La decisione, invece, e' esatta.
+        assert!(
+            ExpansionConstraint::MaxRelative.exceeded(output, DUE_53, DUE_53, 1.0),
+            "un'espansione oltre la soglia deve essere rifiutata anche sopra 2^53"
+        );
+        // E non e' diventata rigida: la stessa cardinalita' pari alla soglia
+        // resta accettata, in tutte le basi.
+        for constraint in [
+            ExpansionConstraint::MaxRelative,
+            ExpansionConstraint::LeftRelative,
+            ExpansionConstraint::RightRelative,
+        ] {
+            assert!(
+                !constraint.exceeded(DUE_53, DUE_53, DUE_53, 1.0),
+                "{constraint:?}: output uguale alla soglia non e' un superamento"
+            );
+        }
+        // Base «somma degli input»: la somma non deve saturare prima del
+        // confronto. Con due lati a `u64::MAX` la soglia vale 2^65, che
+        // nessun output a 64 bit puo' superare.
+        assert!(!ExpansionConstraint::SumRelative.exceeded(u64::MAX, u64::MAX, u64::MAX, 1.0));
+        // Denominatore nullo, coerente con le metriche: output non nullo da
+        // input vuoti e' espansione infinita, output nullo non lo e'.
+        assert!(ExpansionConstraint::MaxRelative.exceeded(1, 0, 0, 1.0));
+        assert!(!ExpansionConstraint::MaxRelative.exceeded(0, 0, 0, 1.0));
+        // `Custom` sovrascrive la soglia, non la base.
+        assert!(ExpansionConstraint::Custom(2.0).exceeded(7, 3, 0, 100.0));
+        assert!(!ExpansionConstraint::Custom(2.0).exceeded(6, 3, 0, 100.0));
+        // Un fattore frazionario resta esatto: 3 righe da 2 con soglia 1.5
+        // e' il limite, 4 lo supera.
+        assert!(!ExpansionConstraint::LeftRelative.exceeded(3, 2, 0, 1.5));
+        assert!(ExpansionConstraint::LeftRelative.exceeded(4, 2, 0, 1.5));
     }
 
     #[test]

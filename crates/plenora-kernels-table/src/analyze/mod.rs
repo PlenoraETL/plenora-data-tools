@@ -364,6 +364,16 @@ mod tests {
         DataContract::tabular(Arc::new(Schema::new(base_fields())))
     }
 
+    /// Contratto con un `Timestamp` fuori dall'unita' che il runtime sa
+    /// convertire (solo i millisecondi hanno un percorso).
+    fn non_ms_contract() -> DataContract {
+        DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
+            "tsec",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )])))
+    }
+
     /// Contratto right per le op binarie: chiave `rid` Int64, colonne
     /// condivise `name`/`value` e colonna propria `rname`.
     fn right_contract() -> DataContract {
@@ -1816,12 +1826,30 @@ mod tests {
 
     #[test]
     fn expression_uses_declared_or_inferred_output_type() {
-        let declared = ok(
+        // Questo caso era ACCETTATO: una colonna Utf8 dichiarata booleana.
+        // Il runtime applica `boolean()`, che non converte, quindi ogni riga
+        // non nulla falliva. Il tipo dichiarato non e' un lasciapassare.
+        let incompatibile = err(
             "table.expression",
             &[tabular_contract()],
             json!({
                 "output_column": "e",
                 "expression": {"kind": "column", "name": "name"},
+                "output_type": "boolean"
+            }),
+        );
+        assert!(
+            incompatibile
+                .to_string()
+                .contains("il runtime non converte"),
+            "{incompatibile}"
+        );
+        let declared = ok(
+            "table.expression",
+            &[tabular_contract()],
+            json!({
+                "output_column": "e",
+                "expression": {"kind": "column", "name": "flag"},
                 "output_type": "boolean"
             }),
         );
@@ -2045,7 +2073,10 @@ mod tests {
             &[tabular_contract()],
             json!({"new_column": "f", "formula": "lst + 1"}),
         );
-        assert!(error.to_string().contains("non valutabile"), "{error}");
+        assert!(
+            error.to_string().contains("non convertibile in testo"),
+            "{error}"
+        );
     }
 
     // Batteria lineare: un caso per ramo dell'inferenza statica dell'AST.
@@ -2073,8 +2104,21 @@ mod tests {
 
         // Colonne: Boolean resta Boolean; i tipi fuori profilo sono errori.
         assert_field(&infer(col("flag")), "e", &DataType::Boolean, true);
-        assert!(infer_err(col("lst")).to_string().contains("non valutabile"));
-        assert!(infer_err(col("st")).to_string().contains("non valutabile"));
+        assert!(infer_err(col("lst"))
+            .to_string()
+            .contains("non convertibile in testo"));
+        assert!(infer_err(col("st"))
+            .to_string()
+            .contains("non convertibile in testo"));
+        // `Timestamp` non-millisecondo: `column` lo manda al percorso
+        // numerico e li' non c'e' downcast. Il runtime fallisce sempre.
+        assert!(err(
+            "table.expression",
+            &[non_ms_contract()],
+            json!({"output_column": "e", "expression": col("tsec")})
+        )
+        .to_string()
+        .contains("millisecondi"));
 
         // Letterali scalari: null -> Any (Utf8 in auto), bool, numero, testo.
         assert_field(&infer(lit(Value::Null)), "e", &DataType::Utf8, true);
@@ -2222,13 +2266,31 @@ mod tests {
                 true,
             );
         }
-        // `year` legge le colonne temporali come Number (come il kernel).
+        // `year` sta nel ramo TESTUALE dell'interprete: legge una stringa e
+        // ne fa il parsing come `%Y-%m-%d`, poi restituisce un numero. Su una
+        // colonna temporale il runtime fallisce, perche' `column` la converte
+        // in `Scalar::Number` e `text()` non converte.
         assert_field(
-            &infer(func("year", vec![col("d")])),
+            &infer(func("year", vec![col("name")])),
             "e",
             &DataType::Float64,
             true,
         );
+        assert!(infer_err(func("year", vec![col("d")]))
+            .to_string()
+            .contains("operando Text"));
+        // `concat` chiama `text()` su ogni argomento: un numero e' un errore.
+        assert!(infer_err(func("concat", vec![col("name"), col("value")]))
+            .to_string()
+            .contains("operando Text"));
+        // `case when` passa da `boolean()`: la condizione dev'essere booleana.
+        assert!(infer_err(json!({
+            "kind": "case",
+            "branches": [{"when": col("value"), "then": lit(json!(1))}],
+            "else_value": lit(json!(2))
+        }))
+        .to_string()
+        .contains("operando Boolean"));
         assert_field(
             &infer(func("power", vec![col("value"), lit(json!(2))])),
             "e",
@@ -2337,19 +2399,63 @@ mod tests {
         .to_string()
         .contains("eterogenei"));
 
-        // output_type dichiarato: nessuna inferenza, tipo rispettato.
+        // output_type dichiarato: l'AST si analizza LO STESSO, e il tipo
+        // dichiarato dev'essere quello che l'espressione produce — il kernel
+        // non converte, applica `number()`/`boolean()`/... e rifiuta il
+        // resto.
         let declared_number = ok(
             "table.expression",
             &[tabular_contract()],
-            json!({"output_column": "e", "expression": col("flag"), "output_type": "number"}),
+            json!({"output_column": "e", "expression": col("value"), "output_type": "number"}),
         );
         assert_field(&declared_number, "e", &DataType::Float64, true);
+        assert!(err(
+            "table.expression",
+            &[tabular_contract()],
+            json!({"output_column": "e", "expression": col("flag"), "output_type": "number"})
+        )
+        .to_string()
+        .contains("il runtime non converte"));
+        // `date32` lo produce solo `date_trunc`: una colonna Date32 letta
+        // direttamente diventa `Scalar::Number`, che `scalar_date32` rifiuta.
         let declared_date = ok(
             "table.expression",
             &[tabular_contract()],
-            json!({"output_column": "e", "expression": col("d"), "output_type": "date32"}),
+            json!({
+                "output_column": "e",
+                "expression": func("date_trunc", vec![lit(json!("day")), col("d")]),
+                "output_type": "date32"
+            }),
         );
         assert_field(&declared_date, "e", &DataType::Date32, true);
+        assert!(err(
+            "table.expression",
+            &[tabular_contract()],
+            json!({"output_column": "e", "expression": col("d"), "output_type": "date32"})
+        )
+        .to_string()
+        .contains("il runtime non converte"));
+        // Una colonna inesistente non passa neanche col tipo dichiarato.
+        assert!(err(
+            "table.expression",
+            &[tabular_contract()],
+            json!({"output_column": "e", "expression": col("missing"), "output_type": "text"})
+        )
+        .to_string()
+        .contains("missing"));
+        // L'eterogeneita' resta invece AMMESSA col tipo dichiarato: il
+        // messaggio di `auto` indica proprio questa via d'uscita, e il
+        // runtime decide riga per riga.
+        let eterogenea = ok(
+            "table.expression",
+            &[tabular_contract()],
+            json!({
+                "output_column": "e",
+                "expression": func("coalesce", vec![col("value"), col("name")]),
+                "output_type": "text"
+            }),
+        );
+        assert_field(&eterogenea, "e", &DataType::Utf8, true);
     }
 
     // -- quality / governance ----------------------------------------------------
@@ -3361,12 +3467,12 @@ mod tests {
     #[test]
     fn field_allocator_avoids_collisions_with_input_ids() {
         let mut allocator = FieldAllocator::default();
-        let fresh = allocator.alloc();
+        let fresh = allocator.alloc().expect("id fresco");
         assert_eq!(fresh, FieldId(0));
         // L'allocatore osserva gli id degli input (geometria FieldId(7),
         // chiavi FieldId(0)) prima di internare.
         let _ = ok_with_allocator(&mut allocator);
-        let id = allocator.alloc();
+        let id = allocator.alloc().expect("id fresco");
         assert!(
             id.0 > 7,
             "alloc dopo observe deve superare gli id di input: {id}"

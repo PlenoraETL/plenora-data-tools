@@ -1387,6 +1387,10 @@ mod tests {
     /// lo strumento progettato per non farsi ingannare da essa.
     #[test]
     fn ipc_decode_converte_il_panico_di_arrow_in_errore() {
+        /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
+        /// commento sul troncamento, piu' sotto.
+        const FINE_STREAM: usize = 52;
+
         // 81 byte trovati dalla campagna schedulata del 2026-08-07, artefatto
         // crash-c20d19d3e3323f54d3831c09d611143c5d8f82c1. Superano il framing
         // e fanno arrivare ad `arrow-ipc` uno schema FlatBuffer con un valore
@@ -1401,12 +1405,21 @@ mod tests {
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
+        // L'artefatto originale porta 29 byte DOPO il marcatore di fine
+        // stream, che il confine ora rifiuta come smuggling (il reader li
+        // ignorerebbe, il validatore non li ha visti). Il messaggio che fa
+        // panicare arrow e' il primo — lo Schema, byte 0..48 — seguito
+        // dall'EOS a 48: si tronca li', cosi' il framing e' pulito e il
+        // payload arriva ad `arrow-ipc` esattamente come prima. La barriera
+        // resta l'oggetto del test, non il framing.
+        let payload = &payload[..FINE_STREAM];
+
         // L'hook di panico del processo stampa comunque su stderr: lo
         // silenziamo per la durata del test, altrimenti l'output della suite
         // sembra un fallimento. Ripristinato subito dopo.
         let precedente = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let esito = decode_ipc(&payload);
+        let esito = decode_ipc(payload);
         std::panic::set_hook(precedente);
 
         assert!(
@@ -1419,11 +1432,19 @@ mod tests {
     fn ipc_decode_rejects_oversized_metadata_and_truncation_without_oom() {
         // Regressione fuzz (OOM): 4 byte che dichiarano ~709 MiB di metadati
         // in formato legacy; prima della pre-validazione arrow-rs allocava
-        // quanto dichiarato.
+        // quanto dichiarato. Il rifiuto avviene ancora leggendo solo il
+        // prefisso — e' la proprieta' che questa regressione difende.
+        //
+        // Ottavo giro: la DIAGNOSI e' cambiata. Quattro byte che dichiarano
+        // 709 MiB descrivono un payload troncato, non un payload troppo
+        // grande: nessuno supera un tetto con byte che non esistono. La
+        // verifica di disponibilita' precede ora quella del tetto, cosi' un
+        // input ostile minuscolo non esce piu' come `resource_limit`, che
+        // avrebbe suggerito al chiamante di rilanciare con piu' budget.
         let oom_input = [0x5b, 0x74, 0x32, 0x2a];
         assert!(matches!(
             decode_ipc(&oom_input),
-            Err(ArrowTransportError::IpcMetadataTooLarge(707_949_659))
+            Err(ArrowTransportError::IpcTruncated)
         ));
         // continuazione valida ma metadati troncati.
         let truncated = [0xff, 0xff, 0xff, 0xff, 0x10, 0x00];
@@ -1435,16 +1456,32 @@ mod tests {
             decode_ipc(&[]),
             Err(ArrowTransportError::IpcTruncated)
         ));
-        // metadati oltre il tetto assoluto anche con continuazione moderna.
-        // MAX_IPC_METADATA_BYTES e' una costante da 16 MiB: entra in u32;
-        // la conversione e' totale per contratto.
+        // Metadati oltre il tetto assoluto, con i byte REALMENTE presenti nel
+        // payload: e' l'unico modo di raggiungere il tetto adesso che la
+        // disponibilita' viene verificata per prima, ed e' anche l'unico caso
+        // in cui `resource_limit` e' la diagnosi giusta — il payload esiste,
+        // e' solo piu' grande di quanto ammettiamo.
+        //
+        // MAX_IPC_METADATA_BYTES e' una costante da 16 MiB: entra in u32; la
+        // conversione e' totale per contratto. Il tetto scatta comunque PRIMA
+        // di leggere quei byte: il payload grande serve al test, non al
+        // validatore.
         let declared = u32::try_from(MAX_IPC_METADATA_BYTES).expect("tetto metadati entro u32") + 8;
         let mut oversized = vec![0xff, 0xff, 0xff, 0xff];
         oversized.extend_from_slice(&declared.to_le_bytes());
-        oversized.extend_from_slice(&[0; 16]);
+        oversized.resize(oversized.len() + declared as usize, 0);
         assert!(matches!(
             decode_ipc(&oversized),
-            Err(ArrowTransportError::IpcMetadataTooLarge(_))
+            Err(ArrowTransportError::IpcMetadataTooLarge(_, _))
+        ));
+        // Lo stesso valore dichiarato in un payload che non lo contiene resta
+        // un troncamento: la distinzione e' proprio questa.
+        let mut solo_dichiarato = vec![0xff, 0xff, 0xff, 0xff];
+        solo_dichiarato.extend_from_slice(&declared.to_le_bytes());
+        solo_dichiarato.extend_from_slice(&[0; 16]);
+        assert!(matches!(
+            decode_ipc(&solo_dichiarato),
+            Err(ArrowTransportError::IpcTruncated)
         ));
         // un batch valido continua a decodificare (framing reale coperto dai
         // roundtrip degli altri test).

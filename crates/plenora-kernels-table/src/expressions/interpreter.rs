@@ -6,96 +6,15 @@ use serde_json::Value;
 
 use super::fast::FastProgram;
 use super::scalar::{binary, boolean, column, compare, literal, number, text, Scalar};
-use super::temporal::{check_date32_unit, date_trunc_generic, in_generic, literal_unit};
-use super::{Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
+use super::static_type::{self, Kind};
+use super::temporal::{date_trunc_generic, in_generic, literal_unit};
+use super::{Expression, ExpressionTransform, Function, UnaryOperator};
 use crate::{column_index, replace_or_append, NON_FINITE_RESULT_MESSAGE};
 use plenora_core::arrow::array::{
     BooleanArray, Date32Array, Float64Array, RecordBatch, StringArray, TimestampMillisecondArray,
 };
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
-
-/// Tipo temporale della radice `date_trunc` ricavato dallo schema del batch.
-///
-/// Con `output_type=auto` un input tutto null (o un batch vuoto) deve
-/// produrre comunque Date32/TimestampMs dal tipo della colonna, MAI Utf8.
-/// Gli errori (unita' non valida, colonna non temporale, timezone-aware)
-/// sono gli stessi del percorso di valutazione.
-pub fn root_temporal_type(
-    expression: &Expression,
-    batch: &RecordBatch,
-) -> Result<Option<OutputType>> {
-    let Expression::Function {
-        name: Function::DateTrunc,
-        args,
-    } = expression
-    else {
-        return Ok(None);
-    };
-    if args.len() != 2 {
-        return Err(PlenoraError::InvalidPlan(
-            "date_trunc richiede 2 argomenti".into(),
-        ));
-    }
-    let unit = literal_unit(&args[0])?;
-    let kind = temporal_kind(&args[1], batch)?;
-    if matches!(kind, Some(TemporalKind::Date32)) {
-        check_date32_unit(unit)?;
-    }
-    Ok(kind.map(|kind| match kind {
-        TemporalKind::Date32 => OutputType::Date32,
-        TemporalKind::TimestampMs => OutputType::TimestampMs,
-    }))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TemporalKind {
-    Date32,
-    TimestampMs,
-}
-
-/// Tipo temporale statico della sorgente di `date_trunc` (senza righe).
-fn temporal_kind(expression: &Expression, batch: &RecordBatch) -> Result<Option<TemporalKind>> {
-    match expression {
-        Expression::Column { name } => {
-            let index = column_index(batch, name)?;
-            match batch.column(index).data_type() {
-                DataType::Date32 => Ok(Some(TemporalKind::Date32)),
-                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
-                    if timezone.is_some() {
-                        return Err(PlenoraError::Schema(
-                            "date_trunc: timestamp timezone-aware non supportato".into(),
-                        ));
-                    }
-                    Ok(Some(TemporalKind::TimestampMs))
-                }
-                other => Err(PlenoraError::Schema(format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
-                ))),
-            }
-        }
-        Expression::Function {
-            name: Function::DateTrunc,
-            args,
-        } => {
-            if args.len() != 2 {
-                return Err(PlenoraError::InvalidPlan(
-                    "date_trunc richiede 2 argomenti".into(),
-                ));
-            }
-            let unit = literal_unit(&args[0])?;
-            let kind = temporal_kind(&args[1], batch)?;
-            if matches!(kind, Some(TemporalKind::Date32)) {
-                check_date32_unit(unit)?;
-            }
-            Ok(kind)
-        }
-        Expression::Literal { value: Value::Null } => Ok(None),
-        _ => Err(PlenoraError::InvalidPlan(
-            "date_trunc: il valore deve essere una colonna temporale".into(),
-        )),
-    }
-}
 
 fn exact_args<'a>(args: &'a [Scalar], count: usize, name: &str) -> Result<&'a [Scalar]> {
     if args.len() == count {
@@ -143,7 +62,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Length => Scalar::Number(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
-                        .map_err(|_| PlenoraError::InvalidPlan("testo troppo lungo".into()))?,
+                        .map_err(|_| PlenoraError::ResourceLimit("testo troppo lungo".into()))?,
                 ),
                 Function::Year => {
                     let date =
@@ -488,32 +407,6 @@ pub fn validate(config: &ExpressionTransform, max_nodes: usize) -> Result<()> {
     audit(&config.expression, 1, &mut 0, max_nodes)
 }
 
-fn resolved_output_type(values: &[Scalar], configured: OutputType) -> Result<OutputType> {
-    if !matches!(configured, OutputType::Auto) {
-        return Ok(configured);
-    }
-    let mut resolved = None;
-    for value in values {
-        let current = match value {
-            Scalar::Null => continue,
-            Scalar::Number(_) => OutputType::Number,
-            Scalar::Boolean(_) => OutputType::Boolean,
-            Scalar::Text(_) => OutputType::Text,
-            Scalar::Date32(_) => OutputType::Date32,
-            Scalar::TimestampMs(_) => OutputType::TimestampMs,
-        };
-        if resolved.is_some_and(|previous| {
-            std::mem::discriminant(&previous) != std::mem::discriminant(&current)
-        }) {
-            return Err(PlenoraError::Schema(
-                "expression produce tipi eterogenei; dichiarare output_type".into(),
-            ));
-        }
-        resolved = Some(current);
-    }
-    Ok(resolved.unwrap_or(OutputType::Text))
-}
-
 /// Converte uno `Scalar` in giorni Date32 per l'output `date32`.
 fn scalar_date32(value: &Scalar, context: &str) -> Result<Option<i32>> {
     match value {
@@ -538,36 +431,83 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 /// output.
 ///
 /// Su batch con righe usa il fast path compilato (stessa semantica del
-/// generico, oracolo dei test); su batch vuoti valuta il percorso generico,
-/// che non risolve mai le colonne.
+/// generico, oracolo dei test); su batch vuoti valuta il percorso generico.
+///
+/// Il tipo della colonna prodotta e' deciso dallo SCHEMA prima di valutare
+/// qualunque riga, con la stessa funzione che usa l'analizzatore del
+/// contratto ([`super::static_type`]): non dipende dai valori, quindi batch
+/// pieni, tutti null e vuoti con lo stesso schema producono lo stesso tipo.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente; argomento di tipo errato per operatore o
-///   funzione; confronto fra tipi incompatibili; divisione per zero; numero
-///   non finito in colonna o risultato non finito; `date_trunc` su colonna
-///   non temporale o timestamp timezone-aware; tipi eterogenei con
-///   `output_type = auto`; errore Arrow nella sostituzione;
-/// - `InvalidPlan`: letterale non scalare o non finito; numero di argomenti
-///   errato; regex non valida in `regex_replace`; indice di `substring`
-///   negativo; unita' di `date_trunc` non valida; invarianti interne
+/// - `InvalidPlan` (in TESTA, prima di valutare, dall'analisi statica):
+///   argomento di tipo errato per operatore o funzione; confronto fra tipi
+///   eterogenei; tipi eterogenei con `output_type = auto`; `output_type`
+///   dichiarato che l'espressione non puo' produrre; colonna di tipo non
+///   valutabile (`Timestamp` non-millisecondo, tipo non convertibile in
+///   testo); `date_trunc` su colonna non temporale o timestamp
+///   timezone-aware, o unita' non valida; letterale non scalare o non
+///   finito; numero di argomenti errato;
+/// - `Schema`: colonna assente — anche su un batch VUOTO, perche' senza
+///   risolverla il tipo di output non e' determinabile; divisione per zero;
+///   numero non finito in colonna o risultato non finito; valore di tipo
+///   diverso da quello dichiarato con `output_type` esplicito; errore Arrow
+///   nella sostituzione;
+/// - `InvalidPlan` (durante la valutazione): regex non valida in
+///   `regex_replace`; indice di `substring` negativo; invarianti interne
 ///   violate (errore Internal).
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
     super::reject_literal_zero_divisor(&config.expression)?;
-    // Batch vuoto: il generico non valuta mai i nodi (colonne non risolte,
-    // letterali non convertiti); si mantiene quel comportamento saltando la
-    // compilazione.
+    // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
+    // calcolati: e' la stessa funzione che usa l'analizzatore del contratto,
+    // quindi lo schema promesso e quello prodotto non possono divergere.
+    // Risolverlo dai valori significava che un batch vuoto o tutto null
+    // ripiegava su `Utf8` anche dove il contratto diceva `Boolean` o
+    // `Float64`.
+    let kind = static_output_kind(batch, config)?;
+    // Batch vuoto: non c'e' niente da compilare, quindi si passa dal
+    // generico. Le colonne sono gia' state risolte qui sopra per decidere il
+    // tipo, quindi un batch vuoto non e' piu' un caso permissivo.
     if batch.num_rows() > 0 {
-        return FastProgram::compile(&config.expression, batch).run(batch, config);
+        return FastProgram::compile(&config.expression, batch).run(batch, config, kind);
     }
-    expression_generic(batch, config)
+    expression_generic_kind(batch, config, kind)
+}
+
+/// Tipo della colonna prodotta, dal solo schema del batch.
+///
+/// # Errors
+///
+/// Gli stessi di [`super::static_type::infer`] e
+/// [`super::static_type::resolve_output`], con la colonna assente riportata
+/// come `Schema` (l'errore che i kernel danno da sempre per una colonna che
+/// non c'e').
+pub(super) fn static_output_kind(
+    batch: &RecordBatch,
+    config: &ExpressionTransform,
+) -> Result<Kind> {
+    let possibili = static_type::infer("table.expression", &config.expression, &|name| {
+        let index = column_index(batch, name)?;
+        Ok(batch.schema_ref().field(index).data_type().clone())
+    })?;
+    static_type::resolve_output("table.expression", possibili, config.output_type)
 }
 
 /// Percorso generico originale: interprete ricorsivo sull'AST, usato sui
 /// batch vuoti e come oracolo dei test.
+#[cfg(test)]
 pub fn expression_generic(
     batch: &RecordBatch,
     config: &ExpressionTransform,
+) -> Result<RecordBatch> {
+    expression_generic_kind(batch, config, static_output_kind(batch, config)?)
+}
+
+/// Come [`expression_generic`], col tipo di output gia' risolto.
+fn expression_generic_kind(
+    batch: &RecordBatch,
+    config: &ExpressionTransform,
+    kind: Kind,
 ) -> Result<RecordBatch> {
     let mut values = Vec::with_capacity(batch.num_rows());
     let mut rejections = Vec::new();
@@ -593,21 +533,8 @@ pub fn expression_generic(
         &rejections,
         "valori expression rifiutati; consultare row_diagnostics",
     )?;
-    let mut resolved = resolved_output_type(&values, config.output_type)?;
-    // Auto con tutti i valori null (o batch vuoto): una radice date_trunc
-    // risolve comunque il tipo temporale dallo schema di input, mai Utf8.
-    if matches!(config.output_type, OutputType::Auto)
-        && values.iter().all(|value| matches!(value, Scalar::Null))
-    {
-        if let Some(temporal) = root_temporal_type(&config.expression, batch)? {
-            resolved = temporal;
-        }
-    }
-    match resolved {
-        OutputType::Auto => Err(PlenoraError::Internal(
-            "output_type Auto non risolto".into(),
-        )),
-        OutputType::Number => replace_or_append(
+    match kind {
+        Kind::Number => replace_or_append(
             batch,
             &config.output_column,
             DataType::Float64,
@@ -619,7 +546,7 @@ pub fn expression_generic(
                     .collect::<Result<Vec<_>>>()?,
             )),
         ),
-        OutputType::Boolean => replace_or_append(
+        Kind::Boolean => replace_or_append(
             batch,
             &config.output_column,
             DataType::Boolean,
@@ -631,7 +558,7 @@ pub fn expression_generic(
                     .collect::<Result<Vec<_>>>()?,
             )),
         ),
-        OutputType::Text => replace_or_append(
+        Kind::Text => replace_or_append(
             batch,
             &config.output_column,
             DataType::Utf8,
@@ -643,7 +570,7 @@ pub fn expression_generic(
                     .collect::<Result<Vec<_>>>()?,
             )),
         ),
-        OutputType::Date32 => replace_or_append(
+        Kind::Date32 => replace_or_append(
             batch,
             &config.output_column,
             DataType::Date32,
@@ -657,7 +584,7 @@ pub fn expression_generic(
         ),
         // Timestamp timezone-aware rifiutati in ingresso: l'output e'
         // sempre Timestamp(ms) senza timezone (decisione documentata).
-        OutputType::TimestampMs => replace_or_append(
+        Kind::TimestampMs => replace_or_append(
             batch,
             &config.output_column,
             DataType::Timestamp(TimeUnit::Millisecond, None),

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -10,10 +10,11 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
+use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
-    column_index, compare_f64, compare_i64, compare_u64, reject_rows, replace_or_append,
-    scalar_as_f64, scalar_as_string, NumericBound, RowRejection,
+    column_index, reject_rows, replace_or_append, scalar_as_string, scalar_compare, NumericBound,
+    RowRejection,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -120,10 +121,15 @@ fn validate_key_types(
     Ok(())
 }
 
+/// `true` se una delle colonne indicate e' nulla nella riga.
+///
+/// Null LOGICO: `reconcile` e `assert_foreign_key` decidono da qui se una
+/// riga partecipa al confronto, e una dictionary con chiave valida verso una
+/// entry nulla partecipava come se avesse un valore.
 fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
     indices
         .iter()
-        .any(|index| batch.column(*index).is_null(row))
+        .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
 }
 
 // ---------------------------------------------------------------------------
@@ -236,47 +242,8 @@ pub(crate) struct RowKeyEncoder<'a> {
     text: String,
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
-///
-/// Come nei fast path di `aggregate` e `join`: `SipHash` (default std)
-/// dominerebbe il costo di build/probe su milioni di righe; qui il throughput
-/// conta piu' della resistenza a input avversari. Le mappe che lo usano non
-/// sono mai iterate in modo osservabile: semantica invariata.
-#[derive(Default)]
-struct KeyHasher(u64);
-
-impl Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
-            // la copia e' totale per costruzione, nessun caso fallibile.
-            let mut block = [0_u8; 8];
-            block.copy_from_slice(chunk);
-            let value = u64::from_le_bytes(block);
-            self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
-        }
-        let remainder = chunks.remainder();
-        if !remainder.is_empty() {
-            let mut tail = 0_u64;
-            for &byte in remainder {
-                tail = (tail << 8) | u64::from(byte);
-            }
-            self.0 = (self.0.rotate_left(5) ^ tail).wrapping_mul(K);
-        }
-    }
-}
-
-type KeySet = HashSet<Vec<u8>, BuildHasherDefault<KeyHasher>>;
-type KeyFreqMap = HashMap<Vec<u8>, usize, BuildHasherDefault<KeyHasher>>;
+type KeySet = HashSet<Vec<u8>, FastHasher>;
+type KeyFreqMap = HashMap<Vec<u8>, usize, FastHasher>;
 
 impl<'a> RowKeyEncoder<'a> {
     pub(crate) fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
@@ -325,7 +292,7 @@ impl<'a> RowKeyEncoder<'a> {
 ///   delle chiavi non identici fra i due lati;
 /// - `DataMapping`: chiave null in `left` con `allow_null = false` o chiave
 ///   sinistra non presente in `right`, con row diagnostics;
-/// - `InvalidPlan`: memoria oltre `limits.max_memory_bytes`;
+/// - `ResourceLimit`: memoria oltre `limits.max_memory_bytes`;
 /// - `Internal`: overflow dei contatori.
 pub fn assert_foreign_key(
     left: &RecordBatch,
@@ -349,10 +316,10 @@ pub fn assert_foreign_key(
                 memory_used = memory_used
                     .checked_add(key_bytes.saturating_add(64))
                     .ok_or_else(|| {
-                        PlenoraError::InvalidPlan("overflow memoria foreign key".into())
+                        PlenoraError::ResourceLimit("overflow memoria foreign key".into())
                     })?;
                 if memory_used > limits.max_memory_bytes {
-                    return Err(PlenoraError::InvalidPlan(
+                    return Err(PlenoraError::ResourceLimit(
                         "assert_foreign_key oltre max_memory_bytes".into(),
                     ));
                 }
@@ -411,30 +378,30 @@ fn frequencies(
     let mut key = Vec::new();
     for row in 0..batch.num_rows() {
         if !nulls_equal && has_null(batch, indices, row) {
-            *side_nulls = side_nulls
-                .checked_add(1)
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow null reconciliation".into()))?;
+            *side_nulls = side_nulls.checked_add(1).ok_or_else(|| {
+                PlenoraError::ResourceLimit("overflow null reconciliation".into())
+            })?;
             continue;
         }
         encoder.encode_into(row, &mut key)?;
         if let Some(count) = output.get_mut(key.as_slice()) {
             *count = count
                 .checked_add(1)
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow reconciliation".into()))?;
+                .ok_or_else(|| PlenoraError::ResourceLimit("overflow reconciliation".into()))?;
         } else {
             *memory_used = memory_used
                 .checked_add(key.len().saturating_add(64))
                 .ok_or_else(|| {
-                    PlenoraError::InvalidPlan("overflow memoria reconciliation".into())
+                    PlenoraError::ResourceLimit("overflow memoria reconciliation".into())
                 })?;
             if *memory_used > limits.max_memory_bytes {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "reconcile oltre max_memory_bytes".into(),
                 ));
             }
             output.insert(std::mem::take(&mut key), 1);
             if output.len() > limits.max_rows {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "reconcile supera max_rows chiavi distinte".into(),
                 ));
             }
@@ -444,7 +411,7 @@ fn frequencies(
 }
 
 fn as_u64(value: usize) -> Result<u64> {
-    u64::try_from(value).map_err(|_| PlenoraError::InvalidPlan("conteggio oltre u64".into()))
+    u64::try_from(value).map_err(|_| PlenoraError::ResourceLimit("conteggio oltre u64".into()))
 }
 
 /// Report di riconciliazione fra due tabelle (batch di metriche
@@ -455,7 +422,7 @@ fn as_u64(value: usize) -> Result<u64> {
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
 ///   delle chiavi non identici fra i due lati; errore Arrow nella
 ///   costruzione del batch di output;
-/// - `InvalidPlan`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
+/// - `ResourceLimit`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
 ///   oltre `limits.max_rows`; conteggio oltre `u64`/overflow dei contatori
 ///   (errore Internal).
 pub fn reconcile(
@@ -601,12 +568,11 @@ struct CompiledRule {
     numeric_column: bool,
     severity: RuleSeverity,
     expected: String,
-    expected_number: f64,
-    expected_high: f64,
     /// Estremi in forma esatta (letterale intero preservato).
     ///
-    /// Usati dai confronti tipizzati su Int64/UInt64/Float64, dove la forma
-    /// f64 (`expected_number`) collasserebbe gli interi oltre 2^53.
+    /// Sono l'UNICA forma degli estremi numerici: la copia in `f64` che
+    /// affiancava questi campi collassava gli interi oltre 2^53 ed e' stata
+    /// rimossa insieme ai confronti che la usavano.
     expected_bound: Option<NumericBound>,
     expected_high_bound: Option<NumericBound>,
     regex: Option<regex::Regex>,
@@ -698,8 +664,6 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             )));
         }
         let expected = rule.value.as_ref().map_or_else(String::new, rule_json_text);
-        let mut expected_number = 0.0;
-        let mut expected_high = 0.0;
         let mut expected_bound = None;
         let mut expected_high_bound = None;
         let mut regex = None;
@@ -714,14 +678,12 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                     )));
                 }
                 if numeric_column {
-                    expected_number = expected.parse::<f64>().map_err(|_| {
+                    expected_bound = Some(NumericBound::parse(&expected).ok_or_else(|| {
                         PlenoraError::InvalidPlan(format!(
                             "validate_rules: regola {}: confronto numerico con valore non numerico",
                             rule.name
                         ))
-                    })?;
-                    // Il parse f64 e' riuscito: il bound esatto esiste sempre.
-                    expected_bound = NumericBound::parse(&expected);
+                    })?);
                 }
             }
             RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
@@ -731,13 +693,12 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     )));
                 }
-                expected_number = expected.parse::<f64>().map_err(|_| {
+                expected_bound = Some(NumericBound::parse(&expected).ok_or_else(|| {
                     PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: confronto ordinato richiede un valore numerico",
                         rule.name
                     ))
-                })?;
-                expected_bound = NumericBound::parse(&expected);
+                })?);
             }
             RuleOperator::Range => {
                 if !numeric_column {
@@ -752,22 +713,15 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     )));
                 };
-                expected_bound = NumericBound::parse(low.trim());
-                expected_high_bound = NumericBound::parse(high.trim());
-                let low = low.trim().parse::<f64>().map_err(|_| {
+                let non_numerico = || {
                     PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: estremi range non numerici",
                         rule.name
                     ))
-                })?;
-                let high = high.trim().parse::<f64>().map_err(|_| {
-                    PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: estremi range non numerici",
-                        rule.name
-                    ))
-                })?;
-                expected_number = low;
-                expected_high = high;
+                };
+                expected_bound = Some(NumericBound::parse(low.trim()).ok_or_else(non_numerico)?);
+                expected_high_bound =
+                    Some(NumericBound::parse(high.trim()).ok_or_else(non_numerico)?);
             }
             RuleOperator::Regex => {
                 if data_type != DataType::Utf8 {
@@ -791,8 +745,6 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             numeric_column,
             severity: rule.severity,
             expected,
-            expected_number,
-            expected_high,
             expected_bound,
             expected_high_bound,
             regex,
@@ -826,6 +778,80 @@ const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Opt
     }
 }
 
+/// Esito del confronto fra una cella e l'estremo di una regola.
+///
+/// La distinzione fra `Undefined` e `Invalid` e' il punto di questo tipo. Un
+/// confronto NON DEFINITO (un solo lato NaN) segue la semantica IEEE: `ne`
+/// resta vero. Una cella NON INTERPRETABILE — errore di conversione, estremo
+/// assente — fa invece fallire la regola per OGNI operatore, `ne` compreso.
+/// Appiattendo i due casi su un solo `equal = false`, come faceva la versione
+/// precedente, `ne` passava proprio sui valori che il kernel non era riuscito
+/// a leggere: l'opposto di quanto la regola documenta.
+#[derive(Clone, Copy)]
+enum RuleComparison {
+    /// Ordine definito fra cella ed estremo.
+    Ordered(Ordering),
+    /// Cella ed estremo entrambi NaN: uguali per la semantica storica dei
+    /// double, ma non ordinati.
+    BothNan,
+    /// Confronto non definito (un solo lato NaN). La cella resta leggibile.
+    Undefined,
+    /// Cella o estremo non interpretabili.
+    Invalid,
+}
+
+impl RuleComparison {
+    /// Ordine per gli operatori ordinati; `None` quando il confronto non e'
+    /// definito o la cella non e' interpretabile — in entrambi i casi ogni
+    /// operatore ordinato e' falso.
+    const fn ordering(self) -> Option<Ordering> {
+        match self {
+            Self::Ordered(ordering) => Some(ordering),
+            _ => None,
+        }
+    }
+
+    /// Uguaglianza per `eq`/`ne`; `None` se la cella non e' interpretabile, e
+    /// allora ENTRAMBI gli operatori falliscono.
+    const fn equality(self) -> Option<bool> {
+        match self {
+            Self::Ordered(Ordering::Equal) | Self::BothNan => Some(true),
+            Self::Ordered(_) | Self::Undefined => Some(false),
+            Self::Invalid => None,
+        }
+    }
+}
+
+/// Confronta la cella con un estremo di regola nel dominio nativo del tipo.
+///
+/// Int64/UInt64/Float64, Date32, Timestamp(ms) e Decimal128 passano tutti da
+/// `scalar_compare`, che confronta senza mai convertire a `f64`: nessun
+/// collasso degli interi oltre 2^53, nessun arrotondamento dei decimal.
+fn rule_compare(array: &dyn Array, row: usize, bound: Option<NumericBound>) -> RuleComparison {
+    let Some(bound) = bound else {
+        return RuleComparison::Invalid;
+    };
+    // Semantica storica dei double (NaN uguale a NaN): precede il comparatore
+    // tipizzato, che segue IEEE e non distingue i due casi di NaN.
+    if let (Some(values), NumericBound::F64(expected)) =
+        (array.as_any().downcast_ref::<Float64Array>(), bound)
+    {
+        let actual = values.value(row);
+        if actual.is_nan() || expected.is_nan() {
+            return if actual.is_nan() && expected.is_nan() {
+                RuleComparison::BothNan
+            } else {
+                RuleComparison::Undefined
+            };
+        }
+    }
+    match scalar_compare(array, row, bound) {
+        Ok(Some(ordering)) => RuleComparison::Ordered(ordering),
+        Ok(None) => RuleComparison::Undefined,
+        Err(_) => RuleComparison::Invalid,
+    }
+}
+
 /// Valuta una regola su una riga.
 ///
 /// MAI un errore sui dati: qualunque valore non interpretabile (incluso null
@@ -833,156 +859,51 @@ const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Opt
 /// del kernel. Il `Result` copre solo invarianti interne violate (errore
 /// Internal), mai i dati.
 ///
-/// Confronti numerici: Int64/UInt64 nativi esatti e Float64 in misto esatto
-/// contro i letterali interi (`NumericBound` — nessun collasso oltre 2^53);
-/// Date32/Timestamp(ms)/Decimal128 restano sul profilo f64 storico.
-// Uguaglianze IEEE esatte volute (NaN uguale a NaN): semantica storica
-// del confronto con il valore atteso, dichiarata nel corpo.
-// Dispatcher esaustivo per operatore su una riga: un solo corpo per tipo di
-// confronto, la lunghezza e' nei casi non nella logica.
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::float_cmp)]
+/// Confronti numerici tutti esatti nel dominio nativo del tipo (vedi
+/// [`rule_compare`]); l'uguaglianza sulle colonne non numeriche resta
+/// testuale, come da contratto della regola.
 fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<bool> {
     let array = batch.column(rule.column_index).as_ref();
-    // Dispatch tipizzato via `map_or_else` annidati (nessun if let/else):
-    // ordine di prova invariato Int64, UInt64, Float64, poi ripiego scalare.
-    let any = array.as_any();
     match rule.operator {
-        RuleOperator::Isnull => return Ok(array.is_null(row)),
-        RuleOperator::Notnull => return Ok(!array.is_null(row)),
-        _ if array.is_null(row) => return Ok(false),
+        // Stessa nozione di null del filtro: due kernel che rispondono
+        // diversamente sulla stessa riga sarebbero peggio di entrambi.
+        RuleOperator::Isnull => return Ok(crate::is_logically_null(array, row)),
+        RuleOperator::Notnull => return Ok(!crate::is_logically_null(array, row)),
+        _ if crate::is_logically_null(array, row) => return Ok(false),
         _ => {}
     }
     Ok(match rule.operator {
         RuleOperator::Eq | RuleOperator::Ne => {
-            let equal = any.downcast_ref::<Int64Array>().map_or_else(
-                || {
-                    any.downcast_ref::<UInt64Array>().map_or_else(
-                        || {
-                            any.downcast_ref::<Float64Array>().map_or_else(
-                                || {
-                                    if rule.numeric_column {
-                                        scalar_as_f64(array, row).ok().flatten().is_some_and(
-                                            |actual| {
-                                                actual == rule.expected_number
-                                                    || (actual.is_nan()
-                                                        && rule.expected_number.is_nan())
-                                            },
-                                        )
-                                    } else {
-                                        scalar_as_string(array, row)
-                                            .ok()
-                                            .flatten()
-                                            .is_some_and(|actual| actual == rule.expected)
-                                    }
-                                },
-                                |values| {
-                                    let actual = values.value(row);
-                                    match rule.expected_bound {
-                                        // Semantica IEEE storica sui double (NaN uguale a NaN).
-                                        Some(NumericBound::F64(number)) => {
-                                            actual == number || (actual.is_nan() && number.is_nan())
-                                        }
-                                        Some(bound) => {
-                                            compare_f64(actual, bound) == Some(Ordering::Equal)
-                                        }
-                                        None => false,
-                                    }
-                                },
-                            )
-                        },
-                        |values| {
-                            rule.expected_bound.is_some_and(|bound| {
-                                compare_u64(values.value(row), bound) == Some(Ordering::Equal)
-                            })
-                        },
-                    )
-                },
-                |values| {
-                    rule.expected_bound.is_some_and(|bound| {
-                        compare_i64(values.value(row), bound) == Some(Ordering::Equal)
-                    })
-                },
-            );
-            matches!(rule.operator, RuleOperator::Ne) != equal
+            let equal = if rule.numeric_column {
+                rule_compare(array, row, rule.expected_bound).equality()
+            } else {
+                // Colonna non numerica: uguaglianza testuale. Una cella che
+                // non si riesce a leggere e' `None` (non interpretabile), mai
+                // "diversa dal valore atteso".
+                match scalar_as_string(array, row) {
+                    Ok(Some(actual)) => Some(actual == rule.expected),
+                    Ok(None) | Err(_) => None,
+                }
+            };
+            // `None` = cella non interpretabile: la regola fallisce sia con
+            // `eq` sia con `ne`.
+            equal.is_some_and(|equal| matches!(rule.operator, RuleOperator::Ne) != equal)
         }
-        RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
-            let ordering = any.downcast_ref::<Int64Array>().map_or_else(
-                || {
-                    any.downcast_ref::<UInt64Array>().map_or_else(
-                        || {
-                            any.downcast_ref::<Float64Array>().map_or_else(
-                                || {
-                                    scalar_as_f64(array, row).ok().flatten().and_then(|actual| {
-                                        actual.partial_cmp(&rule.expected_number)
-                                    })
-                                },
-                                |values| {
-                                    rule.expected_bound
-                                        .and_then(|bound| compare_f64(values.value(row), bound))
-                                },
-                            )
-                        },
-                        |values| {
-                            rule.expected_bound
-                                .and_then(|bound| compare_u64(values.value(row), bound))
-                        },
-                    )
-                },
-                |values| {
-                    rule.expected_bound
-                        .and_then(|bound| compare_i64(values.value(row), bound))
-                },
-            );
-            rule_ordered(ordering, rule.operator)
-                .ok_or_else(|| PlenoraError::Internal("operatore di regola non ordinato".into()))?
-        }
-        RuleOperator::Range => any.downcast_ref::<Int64Array>().map_or_else(
-            || {
-                any.downcast_ref::<UInt64Array>().map_or_else(
-                    || {
-                        any.downcast_ref::<Float64Array>().map_or_else(
-                            || {
-                                scalar_as_f64(array, row)
-                                    .ok()
-                                    .flatten()
-                                    .is_some_and(|actual| {
-                                        actual >= rule.expected_number
-                                            && actual <= rule.expected_high
-                                    })
-                            },
-                            |values| match (rule.expected_bound, rule.expected_high_bound) {
-                                (Some(low), Some(high)) => within_rule_range(
-                                    compare_f64(values.value(row), low),
-                                    compare_f64(values.value(row), high),
-                                ),
-                                _ => false,
-                            },
-                        )
-                    },
-                    |values| match (rule.expected_bound, rule.expected_high_bound) {
-                        (Some(low), Some(high)) => within_rule_range(
-                            compare_u64(values.value(row), low),
-                            compare_u64(values.value(row), high),
-                        ),
-                        _ => false,
-                    },
-                )
-            },
-            |values| match (rule.expected_bound, rule.expected_high_bound) {
-                (Some(low), Some(high)) => within_rule_range(
-                    compare_i64(values.value(row), low),
-                    compare_i64(values.value(row), high),
-                ),
-                _ => false,
-            },
+        RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => rule_ordered(
+            rule_compare(array, row, rule.expected_bound).ordering(),
+            rule.operator,
+        )
+        .ok_or_else(|| PlenoraError::Internal("operatore di regola non ordinato".into()))?,
+        RuleOperator::Range => within_rule_range(
+            rule_compare(array, row, rule.expected_bound).ordering(),
+            rule_compare(array, row, rule.expected_high_bound).ordering(),
         ),
         // La colonna di una regola regex e' garantita Utf8 da
         // `compile_rules` (V2): prestito diretto sulla `StringArray`,
         // senza l'allocazione per riga di `scalar_as_string`. Tipi diversi
         // (mai raggiunti per contratto) restano sul percorso scalare.
         RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {
-            any.downcast_ref::<StringArray>().map_or_else(
+            array.as_any().downcast_ref::<StringArray>().map_or_else(
                 || {
                     scalar_as_string(array, row)
                         .ok()
@@ -1153,7 +1074,7 @@ mod tests {
         for row in 0..batch.num_rows() {
             if !nulls_equal && has_null(batch, indices, row) {
                 *side_nulls = side_nulls.checked_add(1).ok_or_else(|| {
-                    PlenoraError::InvalidPlan("overflow null reconciliation".into())
+                    PlenoraError::ResourceLimit("overflow null reconciliation".into())
                 })?;
                 continue;
             }
@@ -1161,21 +1082,21 @@ mod tests {
             if let Some(count) = output.get_mut(&key) {
                 *count = count
                     .checked_add(1)
-                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow reconciliation".into()))?;
+                    .ok_or_else(|| PlenoraError::ResourceLimit("overflow reconciliation".into()))?;
             } else {
                 *memory_used = memory_used
                     .checked_add(key.len().saturating_add(64))
                     .ok_or_else(|| {
-                        PlenoraError::InvalidPlan("overflow memoria reconciliation".into())
+                        PlenoraError::ResourceLimit("overflow memoria reconciliation".into())
                     })?;
                 if *memory_used > limits.max_memory_bytes {
-                    return Err(PlenoraError::InvalidPlan(
+                    return Err(PlenoraError::ResourceLimit(
                         "reconcile oltre max_memory_bytes".into(),
                     ));
                 }
                 output.insert(key, 1);
                 if output.len() > limits.max_rows {
-                    return Err(PlenoraError::InvalidPlan(
+                    return Err(PlenoraError::ResourceLimit(
                         "reconcile supera max_rows chiavi distinte".into(),
                     ));
                 }
@@ -1280,10 +1201,10 @@ mod tests {
                     memory_used = memory_used
                         .checked_add(key_bytes.saturating_add(64))
                         .ok_or_else(|| {
-                            PlenoraError::InvalidPlan("overflow memoria foreign key".into())
+                            PlenoraError::ResourceLimit("overflow memoria foreign key".into())
                         })?;
                     if memory_used > limits.max_memory_bytes {
-                        return Err(PlenoraError::InvalidPlan(
+                        return Err(PlenoraError::ResourceLimit(
                             "assert_foreign_key oltre max_memory_bytes".into(),
                         ));
                     }

@@ -298,7 +298,7 @@ pub(in crate::analyze) fn analyze_align_schema(
             if let Some(default) = &declared.default {
                 columns::check_align_default(default, declared.align_type)?;
             }
-            fields.derive(&declared.name);
+            fields.derive(&declared.name)?;
             fields_out.push(Field::new(
                 &declared.name,
                 data_type,

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
@@ -11,10 +11,11 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
+use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
-    validate_output_name,
+    column_index, exact_f64_from_i64, exact_f64_from_u64, replace_or_append, scalar_as_f64_rounded,
+    scalar_as_string, select_rows, validate_output_name,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -54,7 +55,7 @@ fn default_value() -> String {
 //
 // `TextColumn`/`NumericColumn` preparano una sola volta il downcast Arrow
 // per colonna e iterano sui valori nativi, producendo gli STESSI byte dei
-// percorsi scalari originali (`scalar_as_string` / `scalar_as_f64`):
+// percorsi scalari originali (`scalar_as_string` / `scalar_as_f64_rounded`):
 // stesso formato Display per numerici e booleani (NaN -> "NaN",
 // -0.0 -> "-0" distinto da "0"), stessi null, stessi errori. I tipi fuori
 // dal fast path ricadono sul percorso generico, invariato.
@@ -170,7 +171,7 @@ impl<'a> NumericColumn<'a> {
         Self::Generic(array)
     }
 
-    /// Stesso valore di `scalar_as_f64` (null inclusi), senza downcast per riga.
+    /// Stesso valore di `scalar_as_f64_rounded` (null inclusi), senza downcast per riga.
     fn value(&self, row: usize) -> Result<Option<f64>> {
         match self {
             Self::Float64(values) => Ok(if values.is_null(row) {
@@ -182,19 +183,23 @@ impl<'a> NumericColumn<'a> {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values.value(row).to_f64().map(Some).ok_or_else(|| {
-                    PlenoraError::Schema("intero non rappresentabile come f64".into())
-                })
+                exact_f64_from_i64(values.value(row))
+                    .map(Some)
+                    .ok_or_else(|| {
+                        PlenoraError::Schema("intero non rappresentabile come f64".into())
+                    })
             }
             Self::UInt64(values) => {
                 if values.is_null(row) {
                     return Ok(None);
                 }
-                values.value(row).to_f64().map(Some).ok_or_else(|| {
-                    PlenoraError::Schema("uint64 non rappresentabile come f64".into())
-                })
+                exact_f64_from_u64(values.value(row))
+                    .map(Some)
+                    .ok_or_else(|| {
+                        PlenoraError::Schema("uint64 non rappresentabile come f64".into())
+                    })
             }
-            Self::Generic(array) => scalar_as_f64(array.as_ref(), row),
+            Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
         }
     }
 }
@@ -237,6 +242,30 @@ impl<'a> PivotKeyColumn<'a> {
     }
 }
 
+/// Risolve i due nomi di output di `melt` (`variable` e `value`) evitando le
+/// collisioni con lo schema di input **e fra loro**.
+///
+/// Punto d'ingresso unico per il kernel e per l'analisi del contratto: se le
+/// due parti risolvessero i nomi con algoritmi separati, il contratto
+/// dichiarato e lo schema prodotto potrebbero divergere. E' gia' successo con
+/// una copia dell'algoritmo per ciascuna.
+///
+/// # Errors
+///
+/// Come [`crate::resolve_output_names`]: nome richiesto non valido, oppure
+/// nessuno dei suffissi ammessi produce un nome insieme libero e valido.
+pub fn resolve_melt_names<'a>(
+    occupati: impl IntoIterator<Item = &'a str>,
+    config: &Melt,
+) -> Result<[String; 2]> {
+    let risolti = crate::resolve_output_names(
+        occupati,
+        &[config.var_name.as_str(), config.value_name.as_str()],
+    )?;
+    <[String; 2]>::try_from(risolti)
+        .map_err(|_| PlenoraError::Internal("melt: il risolutore deve restituire due nomi".into()))
+}
+
 /// Trasforma le `value_columns` da wide a long: per ogni riga, una riga per
 /// colonna valore.
 ///
@@ -245,14 +274,19 @@ impl<'a> PivotKeyColumn<'a> {
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna id/value assente;
-/// - `InvalidPlan`: nessuna colonna valore, overflow o righe di output oltre
-///   `max_rows`, valore testuale oltre `max_string_bytes`, colonne valore
-///   eterogenee senza `type_policy='string'`, nome di output non valido o
-///   collisione di naming non risolvibile.
-// Pipeline lineare wide->long (indici, take sulle colonne id, costruzione
-// delle colonne variable/value con fast path per tipo): lunga per
-// costruzione, uno spezzone artificiale peggiorerebbe la leggibilita'.
+/// - `InvalidPlan`: nessuna colonna valore; colonne valore eterogenee senza
+///   `type_policy='string'`; nome di output non valido o collisione di
+///   naming non risolvibile. Tutti decisi in PREPARAZIONE, prima di
+///   qualunque controllo di risorsa: un piano invalido resta tale
+///   qualunque sia il budget.
+/// - `Schema`: colonna id/value assente; sul percorso testuale, tipo non
+///   convertibile o timezone Arrow non valida.
+/// - `ResourceLimit`: overflow o righe di output oltre `max_rows`, stima
+///   dell'output oltre `max_memory_bytes`, valore testuale oltre
+///   `max_string_bytes`.
+// Pipeline lineare wide->long (preparazione, indici, take sulle colonne id,
+// costruzione delle colonne variable/value con fast path per tipo): lunga
+// per costruzione, uno spezzone artificiale peggiorerebbe la leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
     let id_indices = config
@@ -274,19 +308,140 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     if value_indices.is_empty() {
         return Err(PlenoraError::InvalidPlan("melt senza value_columns".into()));
     }
+
+    // ---------------------------------------------------------------------
+    // PREPARAZIONE. Tutto cio' che si decide guardando SOLO configurazione e
+    // schema si decide qui, prima di ogni controllo di risorsa e prima delle
+    // allocazioni PROPORZIONALI ai dati o all'output — gli indici di
+    // ripetizione, i `take`, la colonna dei nomi. Non «prima di qualunque
+    // allocazione»: gli indici delle colonne, l'insieme dei nomi occupati e
+    // le stringhe dei nomi risolti sono gia' stati allocati, e sono
+    // proporzionali allo SCHEMA, non alle righe.
+    //
+    // L'ordine conta due volte:
+    //
+    // 1. un piano invalido deve restare `invalid_plan` QUALUNQUE sia il
+    //    budget. Prima il rifiuto delle colonne eterogenee con
+    //    `type_policy = "reject"` arrivava in fondo, dopo il tetto sulle
+    //    righe e dopo la stima: con un budget stretto usciva prima un
+    //    `resource_limit`, e chi lo leggeva andava ad alzare un budget per
+    //    un piano che non sarebbe comunque stato eseguibile;
+    // 2. rifiutare dopo aver allocato costa la memoria che il rifiuto doveva
+    //    risparmiare.
+    let tipo_valore = batch.column(value_indices[0]).data_type().clone();
+    let omogeneo = value_indices
+        .iter()
+        .all(|index| batch.column(*index).data_type() == &tipo_valore);
+    if !omogeneo {
+        match config.type_policy {
+            HeterogeneousTypePolicy::Reject => {
+                return Err(PlenoraError::InvalidPlan(
+                    "melt: value_columns eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
+                ));
+            }
+            HeterogeneousTypePolicy::String => {
+                // Tipo E timezone: entrambi stanno nello schema. La timezone
+                // veniva risolta a ogni riga durante la scansione, quindi una
+                // timezone non valida faceva fallire l'operazione dopo le
+                // allocazioni pur essendo nota fin da qui.
+                for index in &value_indices {
+                    crate::validate_text_convertible(
+                        batch.column(*index).data_type(),
+                        batch.schema().field(*index).name(),
+                    )
+                    .map_err(|errore| PlenoraError::Schema(format!("melt: {errore}")))?;
+                }
+            }
+        }
+    }
+    // I due nomi di output si risolvono INSIEME e in sequenza: risolverli
+    // indipendentemente lascia passare `var_name = "v"` e
+    // `value_name = "v_1"` su un input che contiene `v`, perche' il primo
+    // diventa `v_1` e il secondo non collide con nulla. I nomi RICHIESTI sono
+    // distinti — il controllo di contratto non se ne accorge — e l'output
+    // esce con due colonne omonime.
+    let schema_ingresso = batch.schema();
+    let [var_name, value_name] = resolve_melt_names(
+        schema_ingresso
+            .fields()
+            .iter()
+            .map(|campo| campo.name().as_str()),
+        config,
+    )?;
+
     let output_rows = batch
         .num_rows()
         .checked_mul(value_indices.len())
-        .ok_or_else(|| PlenoraError::InvalidPlan("overflow righe melt".into()))?;
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow righe melt".into()))?;
     if output_rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("melt supera max_rows".into()));
+        return Err(PlenoraError::ResourceLimit("melt supera max_rows".into()));
     }
+    // MODELLO: l'output ha le colonne id RIPETUTE una volta per colonna
+    // valore, piu' due colonne nuove — `variable`, che ripete il NOME della
+    // colonna di provenienza, e `value`, larga quanto la piu' larga delle
+    // colonne valore. La prima versione misurava la larghezza media
+    // dell'intero batch d'ingresso, che ignora entrambe: con nomi di colonna
+    // lunghi la sola `variable` puo' superare tutto il resto.
+    let byte_id: usize = id_indices
+        .iter()
+        .map(|index| crate::column_bytes_per_row(batch.column(*index).as_ref()))
+        .try_fold(0_usize, |totale, larghezza| {
+            totale.checked_add(larghezza).ok_or_else(|| {
+                PlenoraError::ResourceLimit(
+                    "melt: larghezza di riga non rappresentabile: stima non affidabile".into(),
+                )
+            })
+        })?;
+    // La larghezza della colonna `value` dipende dal PERCORSO. Con colonne
+    // omogenee l'output conserva il tipo e la larghezza e' quella misurata;
+    // con colonne eterogenee e `type_policy = "string"` i valori vengono
+    // CONVERTITI IN TESTO, e la rappresentazione decimale puo' essere molto
+    // piu' larga di quella binaria — un `Int64` da otto byte diventa fino a
+    // venti caratteri. E' memoria del risultato, non un temporaneo: il
+    // modello deve conoscerla, altrimenti sottostima proprio il caso peggiore.
+    //
+    // `tipo_valore` e `omogeneo` sono gia' stati decisi in preparazione: qui
+    // si riusano, cosi' la scelta del percorso e quella della stima non
+    // possono divergere.
+    let byte_valore = value_indices
+        .iter()
+        .map(|index| {
+            let colonna = batch.column(*index);
+            let misurato = crate::column_bytes_per_row(colonna.as_ref());
+            if omogeneo {
+                misurato
+            } else {
+                // Larghezza testuale MISURATA sull'array, non dedotta dal
+                // tipo: per una `Dictionary` il valore vive una volta sola
+                // nel dizionario e l'output `Utf8` lo materializza per ogni
+                // riga. Guardare il `DataType` non basta.
+                crate::text_bytes_per_row(colonna.as_ref())
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    let byte_nome = value_indices
+        .iter()
+        .map(|index| batch.schema().field(*index).name().len())
+        .max()
+        .unwrap_or(0)
+        // Offset piu' validita' della colonna Utf8 che li contiene.
+        .saturating_add(crate::type_bytes_floor(&DataType::Utf8));
+    let byte_per_riga = byte_id
+        .checked_add(byte_valore)
+        .and_then(|somma| somma.checked_add(byte_nome))
+        .ok_or_else(|| {
+            PlenoraError::ResourceLimit(
+                "melt: larghezza di riga non rappresentabile: stima non affidabile".into(),
+            )
+        })?;
+    crate::preflight_output_bytes("melt", output_rows, byte_per_riga, limits)?;
     // Fast path: indici di ripetizione materializzati una sola volta come
     // UInt32 e `take` SOLO sulle colonne id (il percorso originale
     // replicava via `select_rows` l'intero batch, incluse le value_columns
     // poi scartate). Stesso controllo di overflow di `select_rows`.
     let row_count = u32::try_from(batch.num_rows())
-        .map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("indice riga oltre u32".into()))?;
     let mut repeated_indices = Vec::with_capacity(output_rows);
     for _ in 0..value_indices.len() {
         repeated_indices.extend(0..row_count);
@@ -307,8 +462,6 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
             .map_err(PlenoraError::from)
         })
         .collect::<Result<Vec<_>>>()?;
-    let var_name = collision_free(&config.var_name, batch)?;
-    let value_name = collision_free(&config.value_name, batch)?;
     fields.push(Field::new(&var_name, DataType::Utf8, false));
     // Fast path: nomi di colonna presi in prestito dallo schema, senza un
     // clone di String per riga.
@@ -321,11 +474,10 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         ));
     }
     columns.push(Arc::new(StringArray::from(variables)));
-    let value_type = batch.column(value_indices[0]).data_type().clone();
-    let homogeneous = value_indices
-        .iter()
-        .all(|index| batch.column(*index).data_type() == &value_type);
-    if homogeneous {
+    // Gia' calcolati sopra per il modello della stima: qui si riusano, cosi'
+    // la decisione del percorso e quella della stima non possono divergere.
+    let value_type = tipo_valore;
+    if omogeneo {
         let arrays = value_indices
             .iter()
             .map(|index| batch.column(*index).as_ref())
@@ -347,7 +499,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
                 text.clear();
                 if source.write_value(row, &mut text)? {
                     if text.len() > limits.max_string_bytes {
-                        return Err(PlenoraError::InvalidPlan(
+                        return Err(PlenoraError::ResourceLimit(
                             "melt: valore testuale oltre max_string_bytes".into(),
                         ));
                     }
@@ -360,25 +512,19 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         fields.push(Field::new(&value_name, DataType::Utf8, true));
         columns.push(Arc::new(builder.finish()));
     } else {
-        return Err(PlenoraError::InvalidPlan(
-            "melt: value_columns eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
+        // Irraggiungibile: la preparazione rifiuta le colonne eterogenee con
+        // `type_policy = "reject"` prima delle allocazioni proporzionali
+        // ai dati. Resta come
+        // difesa esplicita — il gate R6 vieta `unreachable!` — e come
+        // invariante nostra, non come piano sbagliato del chiamante.
+        return Err(PlenoraError::Internal(
+            "melt: percorso eterogeneo raggiunto dopo la preparazione".into(),
         ));
     }
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(fields)),
         columns,
     )?)
-}
-
-fn collision_free(name: &str, batch: &RecordBatch) -> Result<String> {
-    validate_output_name(name)?;
-    if batch.schema().index_of(name).is_err() {
-        return Ok(name.into());
-    }
-    (1..100)
-        .map(|index| format!("{name}_{index}"))
-        .find(|candidate| batch.schema().index_of(candidate).is_err())
-        .ok_or_else(|| PlenoraError::InvalidPlan(format!("impossibile evitare collisione {name}")))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -433,7 +579,7 @@ fn pivot_column(
                     .copied()
                     .map(u32::try_from)
                     .transpose()
-                    .map_err(|_| PlenoraError::InvalidPlan("indice pivot oltre u32".into()))
+                    .map_err(|_| PlenoraError::ResourceLimit("indice pivot oltre u32".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (
@@ -450,10 +596,14 @@ fn pivot_column(
                 .iter()
                 .map(|rows| {
                     rows.map(|rows| {
-                        i64::try_from(rows.iter().filter(|row| !source.is_null(**row)).count())
-                            .map_err(|_| {
-                                PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
-                            })
+                        i64::try_from(
+                            rows.iter()
+                                .filter(|row| !crate::is_logically_null(source.as_ref(), **row))
+                                .count(),
+                        )
+                        .map_err(|_| {
+                            PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
+                        })
                     })
                     .transpose()
                 })
@@ -526,7 +676,9 @@ fn pivot_column(
                         PivotAgg::Sum => sum,
                         PivotAgg::Mean => {
                             sum / count.to_f64().ok_or_else(|| {
-                                PlenoraError::InvalidPlan("gruppo pivot non rappresentabile".into())
+                                PlenoraError::ResourceLimit(
+                                    "gruppo pivot non rappresentabile".into(),
+                                )
                             })?
                         }
                         PivotAgg::Min | PivotAgg::Max => extremum,
@@ -552,7 +704,7 @@ fn pivot_column(
 /// # Errors
 ///
 /// - `Schema`: colonna indice/pivot/valore assente;
-/// - `InvalidPlan`: chiavi o colonne di output oltre i limiti `max_rows`/
+/// - `ResourceLimit`: chiavi o colonne di output oltre i limiti `max_rows`/
 ///   `max_columns`, nome di colonna di output non valido, oppure gli errori
 ///   di conversione/indice di `pivot_column` (es. intero non rappresentabile
 ///   come f64 nelle aggregazioni numeriche).
@@ -628,7 +780,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     if sorted_keys.len() > limits.max_rows
         || index_indices.len().saturating_add(sorted_pivots.len()) > limits.max_columns
     {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "pivot supera i limiti di output".into(),
         ));
     }
@@ -639,7 +791,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .iter()
         .map(|(_, id)| {
             u32::try_from(representatives[*id])
-                .map_err(|_| PlenoraError::InvalidPlan("indice riga oltre u32".into()))
+                .map_err(|_| PlenoraError::ResourceLimit("indice riga oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     let representative_indices = UInt32Array::from(representative_indices);
@@ -699,7 +851,7 @@ pub struct Transpose {
 /// # Errors
 ///
 /// - `Schema`: colonna `id_column` assente;
-/// - `InvalidPlan`: righe/colonne di output oltre i limiti, colonne dati
+/// - `ResourceLimit`: righe/colonne di output oltre i limiti, colonne dati
 ///   eterogenee senza `type_policy='string'`, valore testuale oltre
 ///   `max_string_bytes`, indice oltre u64, nome di colonna di output non
 ///   valido.
@@ -721,7 +873,7 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
         .collect::<Vec<_>>();
     let output_columns = batch.num_rows().saturating_add(1);
     if data_indices.len() > limits.max_rows || output_columns > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "transpose supera i limiti".into(),
         ));
     }
@@ -779,7 +931,7 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
                         .and_then(|index| u64::try_from(index).ok())
                         .map(Some)
                         .ok_or_else(|| {
-                            PlenoraError::InvalidPlan("indice transpose oltre u64".into())
+                            PlenoraError::ResourceLimit("indice transpose oltre u64".into())
                         })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -799,7 +951,7 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
                 .flatten()
                 .any(|value| value.len() > limits.max_string_bytes)
             {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "transpose: valore testuale oltre max_string_bytes".into(),
                 ));
             }
@@ -843,9 +995,10 @@ pub struct Explode {
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo List, offset List negativo;
-/// - `InvalidPlan`: righe di output oltre `max_rows`, indice elemento oltre
-///   u32, nome di output non valido; inoltre gli errori di
-///   `replace_or_append`.
+/// - `ResourceLimit`: righe di output oltre `max_rows`, indice elemento oltre
+///   u32;
+/// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`; inoltre
+///   gli errori di `replace_or_append`.
 pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result<RecordBatch> {
     if matches!(config.empty_policy, EmptyListPolicy::Drop) {
         return Err(PlenoraError::InvalidPlan(
@@ -877,12 +1030,14 @@ pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result
             for value in start..end {
                 rows.push(row);
                 values.push(Some(u32::try_from(value).map_err(|_| {
-                    PlenoraError::InvalidPlan("indice explode oltre u32".into())
+                    PlenoraError::ResourceLimit("indice explode oltre u32".into())
                 })?));
             }
         }
         if rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("explode supera max_rows".into()));
+            return Err(PlenoraError::ResourceLimit(
+                "explode supera max_rows".into(),
+            ));
         }
     }
     let repeated = select_rows(batch, &rows)?;
@@ -917,7 +1072,8 @@ const fn default_true() -> bool {
 ///
 /// - `Schema`: colonna assente o non di tipo Struct, collisione tra il nome
 ///   di una colonna figlia e una colonna esistente;
-/// - `InvalidPlan`: colonne di output oltre `max_columns`, nome di colonna
+/// - `ResourceLimit`: colonne di output oltre `max_columns`.
+/// - `InvalidPlan`: nome di colonna
 ///   figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
@@ -931,7 +1087,7 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         .saturating_sub(usize::from(config.drop_source))
         .saturating_add(structure.num_columns());
     if projected_columns > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "unnest supera max_columns".into(),
         ));
     }
@@ -1021,45 +1177,7 @@ fn encode_diff_key(
     Ok(())
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
-///
-/// Come nei fast path di `aggregate` e `join`: `SipHash` (default std)
-/// dominerebbe il costo di build/probe su milioni di righe. Le mappe di
-/// `table_diff` non sono mai iterate: semantica invariata.
-#[derive(Default)]
-struct KeyHasher(u64);
-
-impl Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
-            // la copia e' totale per costruzione, nessun caso fallibile.
-            let mut block = [0_u8; 8];
-            block.copy_from_slice(chunk);
-            let value = u64::from_le_bytes(block);
-            self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
-        }
-        let remainder = chunks.remainder();
-        if !remainder.is_empty() {
-            let mut tail = 0_u64;
-            for &byte in remainder {
-                tail = (tail << 8) | u64::from(byte);
-            }
-            self.0 = (self.0.rotate_left(5) ^ tail).wrapping_mul(K);
-        }
-    }
-}
-
-type DiffKeyMap = HashMap<String, usize, BuildHasherDefault<KeyHasher>>;
+type DiffKeyMap = HashMap<String, usize, FastHasher>;
 
 /// Implementazione originale (pre-ottimizzazione) della chiave composta:
 /// resta come oracolo dei test di equivalenza di `table_diff` e `pivot`.
@@ -1104,7 +1222,7 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
             };
             u32::try_from(index)
                 .map(Some)
-                .map_err(|_| PlenoraError::InvalidPlan("indice table_diff oltre u32".into()))
+                .map_err(|_| PlenoraError::ResourceLimit("indice table_diff oltre u32".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(plenora_core::arrow::select::take::take(
@@ -1281,7 +1399,7 @@ pub fn table_diff(
         }
     }
     if rows.len() > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "table_diff supera max_rows".into(),
         ));
     }
@@ -1291,7 +1409,7 @@ pub fn table_diff(
         .saturating_add(compare.len())
         .saturating_add(3);
     if output_count > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "table_diff supera max_columns".into(),
         ));
     }
@@ -1397,9 +1515,9 @@ mod tests {
         let output_rows = batch
             .num_rows()
             .checked_mul(value_indices.len())
-            .ok_or_else(|| PlenoraError::InvalidPlan("overflow righe melt".into()))?;
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow righe melt".into()))?;
         if output_rows > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("melt supera max_rows".into()));
+            return Err(PlenoraError::ResourceLimit("melt supera max_rows".into()));
         }
         let row_indices = value_indices
             .iter()
@@ -1414,8 +1532,18 @@ mod tests {
             .iter()
             .map(|index| repeated.column(*index).clone())
             .collect::<Vec<_>>();
-        let var_name = collision_free(&config.var_name, batch)?;
-        let value_name = collision_free(&config.value_name, batch)?;
+        // Stessa funzione del kernel, non una copia: quando l'oracolo replica
+        // l'algoritmo, replica anche i suoi difetti — e la parita' concorda
+        // su un risultato sbagliato. La correttezza dei nomi la verificano
+        // asserzioni MANUALI, non questa parita'.
+        let schema_ingresso = batch.schema();
+        let [var_name, value_name] = super::resolve_melt_names(
+            schema_ingresso
+                .fields()
+                .iter()
+                .map(|campo| campo.name().as_str()),
+            config,
+        )?;
         fields.push(Field::new(&var_name, DataType::Utf8, false));
         let variables = value_indices
             .iter()
@@ -1447,7 +1575,7 @@ mod tests {
                         .as_ref()
                         .is_some_and(|value| value.len() > limits.max_string_bytes)
                     {
-                        return Err(PlenoraError::InvalidPlan(
+                        return Err(PlenoraError::ResourceLimit(
                             "melt: valore testuale oltre max_string_bytes".into(),
                         ));
                     }
@@ -1493,7 +1621,7 @@ mod tests {
                         .copied()
                         .map(u32::try_from)
                         .transpose()
-                        .map_err(|_| PlenoraError::InvalidPlan("indice pivot oltre u32".into()))
+                        .map_err(|_| PlenoraError::ResourceLimit("indice pivot oltre u32".into()))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 (
@@ -1510,10 +1638,14 @@ mod tests {
                     .iter()
                     .map(|rows| {
                         rows.map(|rows| {
-                            i64::try_from(rows.iter().filter(|row| !source.is_null(**row)).count())
-                                .map_err(|_| {
-                                    PlenoraError::InvalidPlan("conteggio pivot oltre i64".into())
-                                })
+                            i64::try_from(
+                                rows.iter()
+                                    .filter(|row| !crate::is_logically_null(source.as_ref(), **row))
+                                    .count(),
+                            )
+                            .map_err(|_| {
+                                PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
+                            })
                         })
                         .transpose()
                     })
@@ -1544,7 +1676,9 @@ mod tests {
                         let Some(rows) = rows else { return Ok(None) };
                         let values = rows
                             .iter()
-                            .filter_map(|row| scalar_as_f64(source.as_ref(), *row).transpose())
+                            .filter_map(|row| {
+                                scalar_as_f64_rounded(source.as_ref(), *row).transpose()
+                            })
                             .collect::<Result<Vec<_>>>()?;
                         if values.is_empty() {
                             return Ok(None);
@@ -1554,7 +1688,7 @@ mod tests {
                             PivotAgg::Mean => {
                                 values.iter().sum::<f64>()
                                     / values.len().to_f64().ok_or_else(|| {
-                                        PlenoraError::InvalidPlan(
+                                        PlenoraError::ResourceLimit(
                                             "gruppo pivot non rappresentabile".into(),
                                         )
                                     })?
@@ -1615,7 +1749,7 @@ mod tests {
         if index_rows.len() > limits.max_rows
             || index_indices.len().saturating_add(pivot_values.len()) > limits.max_columns
         {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "pivot supera i limiti di output".into(),
             ));
         }
@@ -2449,7 +2583,7 @@ mod tests {
                 };
                 u32::try_from(index)
                     .map(Some)
-                    .map_err(|_| PlenoraError::InvalidPlan("indice table_diff oltre u32".into()))
+                    .map_err(|_| PlenoraError::ResourceLimit("indice table_diff oltre u32".into()))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(plenora_core::arrow::select::take::take(
@@ -2576,7 +2710,7 @@ mod tests {
             }
         }
         if rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "table_diff supera max_rows".into(),
             ));
         }
@@ -2586,7 +2720,7 @@ mod tests {
             .saturating_add(compare.len())
             .saturating_add(3);
         if output_count > limits.max_columns {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "table_diff supera max_columns".into(),
             ));
         }

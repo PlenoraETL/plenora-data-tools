@@ -12,11 +12,14 @@
 //!   interprete ricorsivo sull'AST, validazione statica e percorso generico
 //!   di output;
 //! - [`fast`]: fast path compilato (`FastNode`/`FastProgram`), verificato
-//!   dagli test-oracolo contro il percorso generico.
+//!   dagli test-oracolo contro il percorso generico;
+//! - [`static_type`]: tipo statico dell'AST ricavato dal solo SCHEMA,
+//!   sorgente unica per il kernel e per l'analizzatore del contratto.
 
 mod fast;
 mod interpreter;
 mod scalar;
+pub mod static_type;
 mod temporal;
 
 use serde::Deserialize;
@@ -387,7 +390,7 @@ mod tests {
 
     fn assert_equivalent(batch: &RecordBatch, expression: Value, output_type: Option<&str>) {
         let config = config(expression, output_type);
-        let fast = FastProgram::compile(&config.expression, batch).run(batch, &config);
+        let fast = FastProgram::compile(&config.expression, batch).run_auto(batch, &config);
         let generic = expression_generic(batch, &config);
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
@@ -651,20 +654,36 @@ mod tests {
         }
         assert_equivalent(&batch, left_deep, None);
 
-        // Batch vuoto: nessuna valutazione, colonna mancante e letterale non
-        // scalare non falliscono; output Auto risolto come Utf8 vuoto.
+        // Batch vuoto: il tipo di output si ricava dallo SCHEMA, quindi le
+        // colonne vanno risolte anche senza righe da valutare. Prima un
+        // batch vuoto accettava una colonna inesistente e un letterale non
+        // scalare, cioe' lo stesso piano riusciva o falliva a seconda dei
+        // dati.
         let empty = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("n", DataType::Float64, true)])),
             vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
         )
         .expect("empty");
-        for ast in [col("missing"), lit(json!([1, 2])), col("n")] {
+        for ast in [col("missing"), lit(json!([1, 2]))] {
             let config = config(ast, None);
-            let output = expression(&empty, &config).expect("zero righe: nessun errore");
-            assert_eq!(output.num_rows(), 0);
-            let generic = expression_generic(&empty, &config).expect("generico");
-            assert_eq!(output, generic);
+            expression(&empty, &config)
+                .expect_err("il tipo non e' determinabile: nessuna risposta giusta");
         }
+        // Un'espressione valida resta valida, con lo stesso tipo che
+        // avrebbe su dati pieni.
+        let config = config(col("n"), None);
+        let output = expression(&empty, &config).expect("zero righe");
+        assert_eq!(output.num_rows(), 0);
+        assert_eq!(
+            output
+                .schema()
+                .field_with_name("out")
+                .expect("out")
+                .data_type(),
+            &DataType::Float64
+        );
+        let generic = expression_generic(&empty, &config).expect("generico");
+        assert_eq!(output, generic);
     }
 
     #[test]
@@ -1016,7 +1035,11 @@ mod tests {
                 .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, None)
         );
-        // Radice non date_trunc: comportamento invariato (Utf8 vuoto).
+        // Radice non date_trunc: il tipo viene dallo SCHEMA, non dai valori
+        // osservati. Una colonna Date32 letta direttamente e' un numero per
+        // il runtime, quindi l'output e' Float64 — su batch vuoto come su
+        // batch pieno. Prima qui usciva Utf8, cioe' uno schema diverso a
+        // parita' di configurazione e di schema d'ingresso.
         let cfg = config(col("d"), None);
         let output = expression(&empty, &cfg).expect("vuoto non temporale");
         assert_eq!(
@@ -1025,7 +1048,7 @@ mod tests {
                 .field_with_name("out")
                 .expect("out")
                 .data_type(),
-            &DataType::Utf8
+            &DataType::Float64
         );
     }
 

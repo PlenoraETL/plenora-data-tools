@@ -52,23 +52,18 @@ pub(in crate::analyze) fn field_of<'a>(
         .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
 }
 
-/// Tipi leggibili da `scalar_as_string` (profilo scalare testuale).
-pub(in crate::analyze) fn is_scalar_string(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Utf8
-        | DataType::Int64
-        | DataType::Float64
-        | DataType::Boolean
-        | DataType::UInt64
-        | DataType::Date32
-        | DataType::Binary
-        | DataType::Timestamp(TimeUnit::Millisecond, _)
-        | DataType::Decimal128(_, _) => true,
-        DataType::Dictionary(key, value) => {
-            key.as_ref() == &DataType::Int32 && value.as_ref() == &DataType::Utf8
-        }
-        _ => false,
-    }
+/// Verifica che un campo sia leggibile come scalare testuale, timezone
+/// COMPRESA.
+///
+/// Delega a [`crate::validate_text_convertible`] — la stessa funzione che
+/// usano i kernel — e riporta l'errore nella categoria che questi
+/// analizzatori usano per un contratto non soddisfacibile (`InvalidPlan`).
+pub(in crate::analyze) fn require_scalar_string_field(op: &str, field: &Field) -> Result<()> {
+    crate::validate_text_convertible(field.data_type(), field.name()).map_err(|errore| {
+        PlenoraError::InvalidPlan(format!(
+            "{op}: non leggibile come scalare testuale: {errore}"
+        ))
+    })
 }
 
 /// Tipi leggibili da `scalar_as_f64` (profilo numerico).
@@ -90,18 +85,7 @@ pub(in crate::analyze) fn require_scalar_string(
     input: &DataContract,
     name: &str,
 ) -> Result<()> {
-    let field = field_of(op, input, name)?;
-    if is_scalar_string(field.data_type()) {
-        Ok(())
-    } else {
-        contract_error(
-            op,
-            format!(
-                "colonna {name}: tipo {:?} non leggibile come scalare testuale",
-                field.data_type()
-            ),
-        )
-    }
+    require_scalar_string_field(op, field_of(op, input, name)?)
 }
 
 pub(in crate::analyze) fn require_numeric(
@@ -161,15 +145,20 @@ fn upsert(fields: &mut Vec<Field>, name: &str, data_type: DataType, nullable: bo
 }
 
 /// Come `upsert`, ma assegna anche un `FieldId` nuovo alla colonna derivata.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` a spazio dei `FieldId` esaurito
+/// ([`FieldAllocator::derive`]).
 pub(in crate::analyze) fn produce(
     fields: &mut Vec<Field>,
     alloc: &mut FieldAllocator,
     name: &str,
     data_type: DataType,
     nullable: bool,
-) -> bool {
-    alloc.derive(name);
-    upsert(fields, name, data_type, nullable)
+) -> Result<bool> {
+    alloc.derive(name)?;
+    Ok(upsert(fields, name, data_type, nullable))
 }
 
 pub(in crate::analyze) fn clone_fields(input: &DataContract) -> Vec<Field> {
@@ -386,7 +375,7 @@ pub(in crate::analyze) fn analyze_append(
     let mut overwritten = false;
     let mut geometry_overwritten = false;
     for (name, data_type, nullable) in produced {
-        let replaced = produce(&mut fields, alloc, name, data_type.clone(), *nullable);
+        let replaced = produce(&mut fields, alloc, name, data_type.clone(), *nullable)?;
         overwritten |= replaced;
         if replaced && input.geometries.first().is_some_and(|g| &g.name == name) {
             geometry_overwritten = true;

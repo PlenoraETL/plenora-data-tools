@@ -220,7 +220,8 @@ impl MemoryGovernor {
     /// riprovi il nodo con lo spill (M3; lo spill M2c e' attivato
     /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
     /// resta l'unico esito residuo dell'ADR-0002, il fail-fast "nessuna
-    /// strategia sicura disponibile": errore `InvalidPlan` `max_memory_bytes`.
+    /// strategia sicura disponibile": errore `ResourceLimit` con il testo
+    /// `max_memory_bytes` (il piano e' corretto, il budget no).
     /// Per questo `RetryAfterProgress` e `MustSpill` esistono nell'API ma
     /// non sono MAI emessi da questa implementazione.
     ///
@@ -233,26 +234,37 @@ impl MemoryGovernor {
     /// `PlenoraError::InvalidPlan` se il budget residuo non copre `bytes`
     /// (fail-fast v1, vedi sopra).
     pub fn try_reserve(&self, bytes: u64, owner: &str) -> Result<ReservationResult> {
-        // Prenotazione atomica add-e-controlla con rollback immediato: in v1
-        // seriale un solo produttore alla volta tira lo stream, ma la forma
-        // resta corretta anche in concorso (la quota in eccesso e'
-        // restituita subito) — pronta per M3 senza cambi di API.
-        let reserved = self
-            .shared
-            .reserved_bytes
-            .fetch_add(bytes, Ordering::AcqRel)
-            + bytes;
-        if reserved > self.shared.budget {
-            self.shared
-                .reserved_bytes
-                .fetch_sub(bytes, Ordering::AcqRel);
-            return Err(PlenoraError::InvalidPlan(format!(
-                "max_memory_bytes superato: `{owner}` richiede {bytes} byte, \
-                 {} gia' riservati su un budget di {}",
-                reserved - bytes,
-                self.shared.budget
-            )));
-        }
+        // Prenotazione atomica per compare-and-swap: la somma e' verificata
+        // PRIMA di essere pubblicata nel contatore, quindi il contatore non
+        // assume mai un valore non valido — nemmeno per l'istante fra
+        // l'incremento e il rollback. In v1 seriale un solo produttore alla
+        // volta tira lo stream, ma la forma resta corretta anche in concorso:
+        // pronta per M3 senza cambi di API.
+        //
+        // La versione precedente faceva `fetch_add(bytes) + bytes`: l'addendo
+        // veniva comunque pubblicato (contatore che avvolge in silenzio se la
+        // somma esce da u64) e il totale si calcolava poi in aritmetica non
+        // controllata, che con `overflow-checks` attivo anche in release va in
+        // panico — lasciando la contabilita' della memoria corrotta.
+        let esito = self.shared.reserved_bytes.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|total| *total <= self.shared.budget)
+            },
+        );
+        let reserved = match esito {
+            Ok(previous) => previous.saturating_add(bytes),
+            Err(current) => {
+                return Err(PlenoraError::ResourceLimit(format!(
+                    "max_memory_bytes superato: `{owner}` richiede {bytes} byte, \
+                     {current} gia' riservati su un budget di {}",
+                    self.shared.budget
+                )));
+            }
+        };
         self.shared
             .peak_reserved_bytes
             .fetch_max(reserved, Ordering::AcqRel);
@@ -278,7 +290,7 @@ impl MemoryGovernor {
         }))
     }
 
-    /// Acquisizione v1: il lease, o l'errore `InvalidPlan` fail-fast se il
+    /// Acquisizione v1: il lease, o l'errore `ResourceLimit` fail-fast se il
     /// budget e' esaurito (regola in [`Self::try_reserve`]).
     ///
     /// # Errors
@@ -290,7 +302,12 @@ impl MemoryGovernor {
             // Mai emessi dalla v1 (vedi `try_reserve`); mappati comunque a
             // fail-fast per difesa — mai `unreachable!` su esiti futuri.
             ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => {
-                Err(PlenoraError::InvalidPlan(format!(
+                // Ramo DIFENSIVO: la v1 non emette mai questi esiti (vedi
+                // `try_reserve`). Se ci arrivasse, sarebbe un'invariante
+                // nostra rotta — non un piano sbagliato e non un budget
+                // esaurito. `Internal` lo dice; `InvalidPlan` mandava chi
+                // legge a cercare un errore nel proprio piano.
+                Err(PlenoraError::Internal(format!(
                     "max_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
                 )))
             }
@@ -302,6 +319,7 @@ impl MemoryGovernor {
 /// di esecuzione. Un riferimento trattenuto e' quota occupata e deve essere
 /// diagnosticabile.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct MemoryMetrics {
     /// Budget globale del piano (`max_memory_bytes`).
     pub budget_bytes: u64,
@@ -410,9 +428,13 @@ mod tests {
         let error = governor
             .reserve(60, "nodo_b")
             .expect_err("budget esaurito: fail-fast");
+        // Nono giro: il budget esaurito e' un limite di RISORSA, non un piano
+        // sbagliato. Il piano dichiara un tetto e i dati non ci stanno; la
+        // decisione del chiamante e' «rilancia con piu' budget», che e'
+        // esattamente cio' che `resource_limit` significa.
         assert!(
-            matches!(error, PlenoraError::InvalidPlan(ref reason) if reason.contains("max_memory_bytes")),
-            "errore Contract max_memory_bytes: {error}"
+            matches!(error, PlenoraError::ResourceLimit(ref reason) if reason.contains("max_memory_bytes")),
+            "errore ResourceLimit max_memory_bytes: {error}"
         );
         // Il tentativo fallito non trattiene quota (rollback immediato).
         assert_eq!(governor.reserved_bytes(), 60);

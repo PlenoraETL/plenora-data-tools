@@ -141,7 +141,7 @@ fn run_roundtrip_rename_streaming_e_fail_closed() {
         .output()
         .expect("run again");
     assert!(!again.status.success());
-    assert!(String::from_utf8_lossy(&again.stderr).contains("esistente"));
+    assert!(String::from_utf8_lossy(&again.stdout).contains("esistente"));
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn transform_arrow_v3_roundtrip() {
     assert!(
         result.status.success(),
         "{}",
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stdout)
     );
     let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
         .expect("Arrow IPC file pubblico");
@@ -352,15 +352,14 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
         .output()
         .expect("transform-arrow");
     assert!(!result.status.success(), "coordinata NaN accettata");
-    // P1-5: l'envelope di errore vive sul canale storico stderr; stdout
-    // resta riservato a risultati/metriche.
+    // L'envelope vive su stdout e stderr resta vuoto (ADR-0003 §em.).
     assert!(
-        result.stdout.is_empty(),
-        "stdout: {}",
-        String::from_utf8_lossy(&result.stdout)
+        result.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
     let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stderr).expect("envelope row diagnostics");
+        serde_json::from_slice(&result.stdout).expect("envelope row diagnostics");
     let diagnostics = &envelope["error"]["row_diagnostics"];
     assert_eq!(
         diagnostics["contract"], "plenora-row-diagnostics-v1",
@@ -432,12 +431,12 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
     let result = run_transform();
     assert!(!result.status.success(), "coordinata NaN accettata");
     assert!(
-        result.stdout.is_empty(),
-        "stdout: {}",
-        String::from_utf8_lossy(&result.stdout)
+        result.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
     let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stderr).expect("envelope row diagnostics");
+        serde_json::from_slice(&result.stdout).expect("envelope row diagnostics");
     let error = &envelope["error"];
     assert_eq!(error["category"], "data_mapping", "envelope: {envelope}");
     assert_eq!(error["phase"], "read", "envelope: {envelope}");
@@ -457,9 +456,9 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
     std::fs::write(&input, b"non-un-envelope-plngeo3").expect("input malformato");
     let result = run_transform();
     assert!(!result.status.success(), "envelope malformato accettato");
-    assert!(result.stdout.is_empty());
+    assert!(result.stderr.is_empty());
     let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stderr).expect("envelope errore non row-scoped");
+        serde_json::from_slice(&result.stdout).expect("envelope errore non row-scoped");
     let error = &envelope["error"];
     assert_eq!(error["category"], "invalid_plan", "envelope: {envelope}");
     assert_eq!(error["phase"], "validate", "envelope: {envelope}");
@@ -703,7 +702,7 @@ fn pair_arrow_v3_emits_canonical_keys() {
     assert!(
         result.status.success(),
         "{}",
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stdout)
     );
     let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
         .expect("Arrow IPC file pubblico");
@@ -720,8 +719,11 @@ fn arrow_output_format_rejects_unknown_values_before_publication() {
             .output()
             .expect("invocazione CLI");
         assert_eq!(result.status.code(), Some(2), "{command}");
-        assert!(result.stdout.is_empty(), "{command}");
-        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            result.stderr.is_empty(),
+            "{command}: stderr deve restare vuoto"
+        );
+        let error = String::from_utf8_lossy(&result.stdout);
         assert!(
             error.contains("--output-format non valido"),
             "{command}: {error}"

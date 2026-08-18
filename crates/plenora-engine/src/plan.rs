@@ -321,6 +321,11 @@ impl PlanV4 {
                 plan_limits.max_plan_json_bytes
             )));
         }
+        // Le chiavi duplicate si rifiutano PRIMA della deserializzazione:
+        // `serde_json` le risolverebbe con «vince l'ultima», e la risoluzione
+        // avverrebbe prima della validazione e prima del `plan_hash` — due
+        // testi diversi con lo stesso piano canonico e lo stesso hash.
+        plenora_core::json::ensure_no_duplicate_keys(json_text)?;
         let mut plan: Self = serde_json::from_str(json_text)?;
         let topo_order = plan.validate_structure(plan_limits)?;
         Ok(ValidatedPlanV4 { plan, topo_order })
@@ -846,8 +851,9 @@ const MAX_EXACT_F64_INT: u64 = 1 << 53;
 /// `100.0` denotano lo stesso valore e devono produrre lo stesso piano
 /// canonico. Ogni float a valore intero entro 2^53 (rappresentazione esatta
 /// garantita) e' convertito all'intero corrispondente; i float con frazione
-/// e i numeri oltre 2^53 mantengono la forma originale, cosi' valori
-/// distinti non collassano mai (fail-closed).
+/// e i float oltre 2^53 mantengono la forma originale, cosi' valori
+/// distinti non collassano mai (fail-closed). Gli interi JSON sono gia'
+/// canonici e passano invariati a qualunque magnitudo, `u64::MAX` incluso.
 fn canonical_numbers(value: &Value) -> Value {
     match value {
         Value::Number(number) => canonical_number(number),
@@ -863,6 +869,17 @@ fn canonical_numbers(value: &Value) -> Value {
 
 /// Forma canonica di un numero: float a valore intero esattamente
 /// rappresentabile (|v| <= 2^53) diventa intero; tutto il resto e' invariato.
+///
+/// La canonicalizzazione si applica SOLO ai numeri originariamente in virgola
+/// mobile. Un numero gia' in forma intera (`i64`/`u64`) e' canonico per
+/// costruzione e viene restituito invariato: farlo passare per `f64` — come
+/// faceva la versione precedente, che chiamava `as_f64()` incondizionatamente
+/// — arrotonda le cifre oltre 2^53 e fa collassare interi distinti sulla
+/// stessa forma canonica. L'intero 9007199254740993 (2^53+1) diventava il
+/// double 9007199254740992.0, superava la guardia `|v| <= 2^53` e veniva
+/// canonicalizzato come 9007199254740992: due config semanticamente diverse
+/// con lo stesso `plan_hash` (violazione di ADR 1 / ADR 4, cache e riuso del
+/// piano non piu' sicuri).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -873,8 +890,18 @@ fn canonical_numbers(value: &Value) -> Value {
 // Il confronto `float == float.trunc()` e' esatto volutamente: la
 // canonicalizzazione del plan_hash (ADR 4) richiede uguaglianza per bit.
 fn canonical_number(number: &Number) -> Value {
+    if number.is_i64() || number.is_u64() {
+        return Value::Number(number.clone());
+    }
     if let Some(float) = number.as_f64() {
-        if float == float.trunc() && float.abs() <= MAX_EXACT_F64_INT as f64 {
+        // `-0.0` NON si canonicalizza sull'intero zero: il bit di segno e'
+        // osservabile a valle — `table.align_schema` lo conserva nel default
+        // di una colonna Float64 — quindi due config distinguibili
+        // collasserebbero sullo stesso piano canonico e sullo stesso
+        // `plan_hash`. Resta un float, come ogni altro valore che l'intero
+        // non rappresenta.
+        let zero_negativo = float == 0.0 && float.is_sign_negative();
+        if !zero_negativo && float == float.trunc() && float.abs() <= MAX_EXACT_F64_INT as f64 {
             if float >= 0.0 {
                 return Value::from(float as u64);
             }

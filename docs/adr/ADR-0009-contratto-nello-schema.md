@@ -311,8 +311,11 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   dichiarate: `Io`/`DataMapping` NON taggati (nati nei kernel o nei
   percorsi legacy, dove nessun confine dichiara il momento) restano
   `Write` (il lato con possibile effetto sul supporto, il solo rilevante
-  per R9.7); `InvalidPlan` del governor (scatta a runtime) resta
-  `Validate` per decisione confermata — non si tagga; il tee di fan-out
+  per R9.7); i tetti di risorsa del confine d'ingresso
+  (`max_input_rows`, `max_batches`, `max_payload_bytes`) sono taggati
+  `Read` — vedi l'emendamento del 2026-08-17 in calce, che sostituisce la
+  precedente decisione «`InvalidPlan` del governor resta `Validate`»; il
+  tee di fan-out
   (`StoredEdgeError`) declassa qualunque errore d'arco non
   `Execution`/`Cancelled` a `InvalidPlan` («arco interrotto») come prima
   del tagging — comportamento preesistente, invariato. La disposizione
@@ -677,3 +680,159 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   esecuzione; ora la forma canonica-only e' accettata ovunque e una
   colonna davvero non identificabile e' rifiutata in validazione del
   piano (analyze), mai a meta' stream (ADR-0008).
+
+## Emendamento 2026-08-16 — «illeggibile» non e' «assente», nel codice
+
+R5.1 dice che un metadato illeggibile non equivale a un metadato assente.
+La review statica del 2026-08-16 ha trovato che il parser del metadato
+legacy `geo` non lo rispettava: risolveva il JSON con `.ok()`, rendendo un
+documento malformato **indistinguibile** da una chiave mancante. La
+risoluzione del contratto proseguiva quindi completando le nozioni dalle
+sole chiavi canoniche (precedenza R2.7) e scavalcando in silenzio un rango
+legacy coesistente che non era riuscita a leggere: un input corrotto veniva
+accettato come se dichiarasse solo cio' che si era capito di lui.
+
+Il parser restituisce ora `Result<Option<_>>`: chiave assente e' `Ok(None)`,
+JSON malformato e' `Err`, e l'errore precede l'applicazione delle
+precedenze. Restano tolleranti i soli due lettori che dichiarano di NON
+decidere (`geometry_dimensions_from_metadata`,
+`geometry_encoding_from_metadata`), usati dall'analisi a secco dove una
+nozione non risolta e' un esito legittimo; ogni percorso che costruisce o
+confronta un contratto usa la forma fallibile. Le chiavi duplicate dentro il
+metadato `geo` sono rifiutate per la stessa ragione: un documento ambiguo
+non va risolto con «vince l'ultima».
+
+## Emendamento 2026-08-16 (terzo giro) — una chiave presente si valida sempre
+
+Lo stesso principio R5.1 dell'emendamento precedente, applicato al punto
+speculare: `DataContract::validate` confrontava le chiavi canoniche col
+contratto **solo quando entrambe le fonti dichiaravano qualcosa**. Il
+confronto a due lati e' corretto (R3.4.1: «non dichiarato» e' uno stato
+legittimo, non un'assenza da colmare), ma veniva usato anche come guardia del
+PARSING: se il contratto taceva, la chiave non veniva neppure letta. Un
+`encoding = "twkb"`, un `crs_resolution = "forse"`, un elenco di tipi fuori
+dall'ordine canonico di §3.1 passavano quindi indisturbati — di nuovo
+«illeggibile» trattato come «assente».
+
+I due controlli sono ora separati e distinti:
+
+1. ogni chiave canonica **presente** dev'essere sintatticamente valida,
+   indipendentemente da cosa dichiari il contratto — e la coppia
+   `types`/`types_declaration` si valida insieme, perche' `types` senza il
+   suo dichiarante e' una coppia incompleta;
+2. la **coerenza** fra le due fonti resta a due lati presenti.
+
+Fa eccezione dichiarata `crs_resolution`, che si valida ma non si confronta:
+il contratto puo' divergere legittimamente dai metadati in entrambe le
+direzioni (la discovery declassa a `declared_unresolved` una colonna con
+chiavi CRS in conflitto; una decisione di piano R4.6.3 puo' risolvere un CRS
+che i metadati dichiarano `missing`). Non esistendo una direzione sempre
+valida, un confronto qui rifiuterebbe contratti corretti; la validita'
+sintattica invece non ha direzioni, e vale.
+
+## Emendamento 2026-08-17 (ottavo giro) — i tetti d'ingresso dichiarano `Read`
+
+La decisione precedente diceva: «`InvalidPlan` del governor (scatta a
+runtime) resta `Validate` per decisione confermata — non si tagga». Era
+coerente **finche' quei tetti erano modellati come vincoli del piano**: se
+l'errore dice «il piano e' sbagliato», la fase «validazione» segue.
+
+Da quando i limiti di risorsa hanno una variante propria
+(`PlenoraError::ResourceLimit`, terzo giro) l'affermazione non regge piu'. Il
+messaggio ora dice l'opposto: «il piano e' corretto, i dati non ci stanno».
+E soprattutto, allo **stesso confine** e sulla **stessa lettura** convivevano
+due fasi diverse: un tetto sui byte del trasporto
+(`ipc_boundary::read_error`) dichiarava `Read`, un tetto sulle righe dello
+stesso ingresso dichiarava `Validate`. Due risposte diverse alla domanda
+«quando e' successo» per lo stesso istante.
+
+`max_input_rows`, `max_batches` e `max_payload_bytes` del confine d'ingresso
+sono quindi taggati `ErrorPhase::Read`. Il tag esplicito vince sulla
+derivazione per variante, come da §9.
+
+**Rottura osservabile.** Il campo `phase` di quegli errori passa da
+`validate` a `read`. La categoria era gia' cambiata nel terzo giro
+(`invalid_plan` → `resource_limit`); qui cambia solo la fase. Nessun exit
+code cambia: la proiezione categoria → codice non legge la fase.
+
+Restano `Validate` — e non si taggano — i limiti di FORMA della
+configurazione, che si verificano prima di leggere qualunque dato:
+`max_level` oltre 5, `delimiter` vuoto, `spill_partitions` fuori intervallo.
+La regola resta quella del terzo giro: «il piano e' sbagliato, correggilo» e'
+validazione; «il piano e' corretto, i dati non entrano nel budget» e' una
+risorsa, e nasce nel momento in cui i dati si leggono.
+
+## Emendamento 2026-08-17 bis (nono giro) — la regola di attribuzione, scritta
+
+L'emendamento precedente ha spostato la FASE dei tetti d'ingresso. La lettura
+successiva ha mostrato che mancava la regola per la CATEGORIA: `ResourceLimit`
+era stata introdotta e applicata dove la review l'aveva indicata, ma senza un
+criterio scritto ogni kernel nuovo ricadeva sul default storico
+(`InvalidPlan`), e decine di siti erano rimasti indietro. Un ADR che elenca
+esempi invece di dare un criterio non chiude una classe.
+
+**Criterio.** Decide la PROVENIENZA della quantita' misurata:
+
+| la quantita' viene da | categoria | significato per il chiamante |
+|---|---|---|
+| la configurazione del piano (`config.*`, numero di regole, lunghezza di un pattern, profondita' di un'espressione) | `InvalidPlan` | correggi il piano |
+| i dati (righe, byte, colonne prodotte, chiavi distinte, contatori che crescono col volume) | `ResourceLimit` | il piano e' corretto: rilancia con piu' budget |
+
+Il traboccamento di un contatore che cresce coi dati e' della seconda
+famiglia: «il volume non entra piu' nemmeno nel tipo» e' un limite di
+risorsa, non un piano sbagliato.
+
+**Propagazione.** Chi aggiunge contesto a un errore — `executor::step_error`,
+`table_engine::legacy_step_error` — deve decidere guardando
+`error.category()`, **mai** con un `matches!` sulla variante esterna: la
+categoria puo' arrivare dentro un involucro trasparente (`Tagged`,
+`Replayed`) e il match sulla variante non la vedrebbe.
+
+La regola e' l'inverso di una lista di eccezioni: **un errore che porta gia'
+una classificazione la conserva**, e il contesto del passo gli viene aggiunto
+tramite `Replayed`, che porta categoria e attribuzione insieme. `Execution`
+si costruisce solo per un fallimento che una classificazione propria non ce
+l'ha — cioe' per un errore che e' gia' `Execution`.
+
+Una lista di categorie «da preservare» era la forma sbagliata del problema:
+cancellava decisioni del chiamante (un `Io` ha `RetryDisposition::Safe`, e
+diventando `execution` diventava `Never`: si diceva di non riprovare una cosa
+ritentabile) ed era destinata a restare indietro (quella scritta ne
+enumerava tre su diciotto). Il predicato vive in
+`plenora_engine::error_propagation::categoria_preservata` e vale per
+costruzione anche per le categorie che verranno.
+
+Conseguenza: un panico dentro un kernel e' `Internal`, non `InvalidPlan` —
+prima l'involucro `Execution` nascondeva quella classificazione, e appena le
+categorie hanno smesso di essere sostituite avrebbe accusato il piano di chi
+ci chiama.
+
+**Fase.** `ResourceLimit` deriva `Write` — nasce eseguendo. I confini che
+sanno di piu' taggano: il confine d'ingresso (tetti su righe, batch, byte, e
+la reservation del governor) dichiara `Read`.
+
+**Rottura osservabile.** Circa cento siti passano da `invalid_plan`/exit 2 a
+`resource_limit`/exit 4. Elencati per famiglia in
+`docs/review-5-fix-2026-08-17.md` e in `docs/api-breaking-2026-08-16.md`.
+
+**Terza categoria: `Internal`.** Quando la quantita' non viene ne' dal piano
+ne' dai dati ma da un'INVARIANTE NOSTRA — un file temporaneo che abbiamo
+scritto noi e che risulta incoerente, un ramo difensivo che non dovrebbe
+essere raggiungibile, una conversione che il dominio dei tipi garantisce —
+la categoria e' `Internal`. Dire `resource_limit` manderebbe il chiamante ad
+alzare un budget che non c'entra; dire `invalid_plan` lo manderebbe a
+cercare un errore nel proprio piano. In questa categoria sono ora:
+l'integrita' dei record di spill (lunghezza assente, record non
+rappresentabile, chiave troncata), l'indice di partizione dello spill (il
+modulo per un divisore <= 4096 sta sempre in `usize`) e il ramo difensivo di
+`MemoryGovernor::reserve` sugli esiti che la v1 non emette.
+
+**Come si cerca la classe.** Non basta cercare `PlenoraError::InvalidPlan`:
+i costruttori INDIRETTI sfuggono. La CLI aveva un helper `contract()` che
+produceva `InvalidPlan`, e i suoi tetti erano invisibili al censimento
+letterale; `plenora-kernels-geo` aveva `cell_too_large()`. Il censimento
+va fatto sull'insieme dei costruttori — diretti, helper, alias e conversioni
+— e va fatto anche nel VERSO INVERSO, controllando che ogni
+`ResourceLimit` sia davvero causato dai dati. Per ridurre il problema alla
+radice la CLI ha ora due helper simmetrici e visibili nel punto d'uso,
+`contract()` e `limite_risorsa()`.

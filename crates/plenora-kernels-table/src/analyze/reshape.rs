@@ -18,21 +18,6 @@ use crate::{reshape, Limits};
 // reshape.rs
 // ---------------------------------------------------------------------------
 
-/// Replica `collision_free` del kernel melt: nome libero nello schema di
-/// input, altrimenti `{name}_1..{name}_99`.
-fn collision_free(op: &str, input: &DataContract, name: &str) -> Result<String> {
-    check_output_name(op, name)?;
-    if input.schema.index_of(name).is_err() {
-        return Ok(name.to_owned());
-    }
-    (1..100)
-        .map(|index| format!("{name}_{index}"))
-        .find(|candidate| input.schema.index_of(candidate).is_err())
-        .ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!("{op}: impossibile evitare collisione {name}"))
-        })
-}
-
 pub(in crate::analyze) fn analyze_melt(
     op: &str,
     inputs: &[DataContract],
@@ -77,6 +62,21 @@ pub(in crate::analyze) fn analyze_melt(
     let value_data_type = if homogeneous {
         value_type
     } else if matches!(config.type_policy, reshape::HeterogeneousTypePolicy::String) {
+        // STESSA prevalidazione del kernel, non solo la policy. Dichiarare
+        // `Utf8` perche' `type_policy = "string"` e' scritto nella config non
+        // basta: il kernel rifiuta i tipi che il formatter non sa convertire
+        // e le timezone non risolvibili, e lo fa guardando SOLO lo schema.
+        // L'analisi, che guarda lo stesso schema, accettava quindi piani che
+        // l'esecuzione sapeva gia' impossibili — e un contratto che promette
+        // un output che non verra' mai prodotto e' peggio di un rifiuto.
+        //
+        // La categoria resta `Schema`: e' il tipo della colonna a non essere
+        // convertibile, non il piano a essere malformato.
+        for index in &value_indices {
+            let campo = &source_fields[*index];
+            crate::validate_text_convertible(campo.data_type(), campo.name())
+                .map_err(|errore| PlenoraError::Schema(format!("{op}: {errore}")))?;
+        }
         DataType::Utf8
     } else {
         return contract_error(
@@ -84,8 +84,22 @@ pub(in crate::analyze) fn analyze_melt(
             "value_columns eterogenee; impostare type_policy='string' per la conversione esplicita",
         );
     };
-    let var_name = collision_free(op, input, &config.var_name)?;
-    let value_name = collision_free(op, input, &config.value_name)?;
+    // Stesso risolutore del kernel, e SEQUENZIALE: risolvere i due nomi in
+    // modo indipendente lascia passare `var_name = "v"` e
+    // `value_name = "v_1"` su un input che contiene `v`, producendo due
+    // colonne omonime. Qui `DataContract::new` lo rifiuterebbe piu' avanti,
+    // ma rifiutare non e' risolvere: l'analisi deve calcolare lo stesso
+    // schema che il kernel produce, altrimenti il contratto e l'esecuzione
+    // divergono.
+    let occupati: Vec<&str> = input
+        .schema
+        .fields()
+        .iter()
+        .map(|campo| campo.name().as_str())
+        .collect();
+    let risolti = reshape::resolve_melt_names(occupati, &config)
+        .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: {errore}")))?;
+    let [var_name, value_name] = risolti;
     let mut fields_out: Vec<Field> = id_indices
         .iter()
         .map(|index| source_fields[*index].clone())

@@ -148,7 +148,7 @@ use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, StringArray,
     UInt32Array, UInt64Array,
 };
-use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
+use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::{FileWriter, StreamWriter};
 use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
@@ -190,8 +190,10 @@ use crate::geo_transport::unary::{
 use crate::governor::{
     GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult,
 };
+use crate::ipc_boundary::{self, IpcFormat, IpcLimits};
 use crate::planner::{
-    check_compatibility, local_capabilities, ValidatedGraph, ARROW_VERSION, ENGINE_VERSION,
+    check_compatibility, check_declared_input_contracts, local_capabilities, ValidatedGraph,
+    ARROW_VERSION, ENGINE_VERSION,
 };
 use crate::prepare::{
     prepare, AccessorKind, ExecutionPlan, GeoBinaryPlan, MeasureKind, PhysicalSegment,
@@ -210,9 +212,26 @@ type BatchStream = Box<dyn Iterator<Item = Result<GovernedBatch>>>;
 // ---------------------------------------------------------------------------
 
 /// Un input del piano: lettore Arrow IPC o iteratore di `RecordBatch`.
+///
+/// L'enum e' **opaco**: si costruisce solo dai costruttori, che sono l'unico
+/// punto in cui l'invariante «`Batches` non e' mai vuoto» viene imposta.
+/// Finche' la variante era pubblica un chiamante poteva scrivere
+/// `Input::Batches(vec![])` aggirando [`Input::from_batches`], e [`Input::schema`]
+/// indicizzava `batches[0]` andando in panico su un'API pubblica.
 pub enum Input {
-    /// Batch gia' in memoria.
-    Batches(Vec<RecordBatch>),
+    /// Batch gia' in memoria. Invariante: mai vuoto (vedi
+    /// [`Input::from_batches`]).
+    ///
+    /// `#[non_exhaustive]` rende la variante non costruibile fuori dal crate:
+    /// e' cio' che chiude il bypass del costruttore. E' una variante di
+    /// struttura, non di tupla, perche' su una variante di tupla
+    /// `#[non_exhaustive]` rende privato il costruttore e blocca anche il
+    /// pattern matching dall'esterno, che invece resta legittimo.
+    #[non_exhaustive]
+    Batches {
+        /// I batch, nell'ordine di ingresso.
+        batches: Vec<RecordBatch>,
+    },
     /// Sorgente lazy (lettore IPC o qualunque iteratore di batch).
     Stream {
         /// Schema dichiarato della sorgente (verificato contro il contratto).
@@ -235,7 +254,7 @@ impl Input {
                 "input da batch: vettore vuoto, usare Input::empty con lo schema".into(),
             ));
         }
-        Ok(Self::Batches(batches))
+        Ok(Self::Batches { batches })
     }
 
     /// Input vuoto con schema esplicito.
@@ -274,19 +293,7 @@ impl Input {
     /// l'header IPC non e' valido — taggati [`ErrorPhase::Read`] (BLOCK-03:
     /// nascono leggendo la sorgente).
     pub fn read_ipc_file(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)
-            .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
-        let reader = FileReader::try_new(file, None)
-            .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
-        let schema = reader.schema();
-        Ok(Self::Stream {
-            schema,
-            iter: Box::new(reader.map(|batch| {
-                batch
-                    .map_err(PlenoraError::from)
-                    .map(|batch| GovernedBatch::new(batch, None, None))
-            })),
-        })
+        Self::from_boundary(path, IpcFormat::File, &IpcLimits::default())
     }
 
     /// Lettore Arrow IPC **stream format** (lazy).
@@ -295,26 +302,68 @@ impl Input {
     ///
     /// Come [`Input::read_ipc_file`].
     pub fn read_ipc_stream(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)
-            .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
-        let reader = StreamReader::try_new(file, None)
-            .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
-        let schema = reader.schema();
+        Self::from_boundary(path, IpcFormat::Stream, &IpcLimits::default())
+    }
+
+    /// Lettore Arrow IPC che riconosce il formato dal magic (`ARROW1` →
+    /// file format, altrimenti stream format), con i tetti di confine di
+    /// default.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Input::read_ipc_file`].
+    pub fn read_ipc(path: &Path) -> Result<Self> {
+        Self::read_ipc_with_limits(path, &IpcLimits::default())
+    }
+
+    /// Come [`Input::read_ipc`], ma con i tetti di confine derivati dai
+    /// limiti effettivi del piano
+    /// ([`crate::ipc_boundary::limits_from_plan`]).
+    ///
+    /// E' la forma da usare quando il piano e' gia' validato: i tetti sul
+    /// body e sul numero di messaggi si applicano allora alle lunghezze
+    /// DICHIARATE, prima che arrow allochi, invece che al batch gia'
+    /// materializzato.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Input::read_ipc_file`].
+    pub fn read_ipc_with_limits(path: &Path, limits: &IpcLimits) -> Result<Self> {
+        let format = ipc_boundary::sniff_format(path)?;
+        Self::from_boundary(path, format, limits)
+    }
+
+    /// Apre la sorgente attraverso il lettore di confine condiviso
+    /// ([`crate::ipc_boundary`]): framing e limiti pre-validati prima che
+    /// arrow allochi, panico di `fb_to_schema` convertito in errore. Nessun
+    /// ingresso non fidato apre `FileReader`/`StreamReader` per conto proprio.
+    fn from_boundary(path: &Path, format: IpcFormat, limits: &IpcLimits) -> Result<Self> {
+        let (schema, batches) = ipc_boundary::open_with_format(path, format, limits)?;
         Ok(Self::Stream {
             schema,
-            iter: Box::new(reader.map(|batch| {
-                batch
-                    .map_err(PlenoraError::from)
-                    .map(|batch| GovernedBatch::new(batch, None, None))
-            })),
+            iter: Box::new(
+                batches.map(|batch| batch.map(|batch| GovernedBatch::new(batch, None, None))),
+            ),
         })
     }
 
     /// Schema dichiarato della sorgente.
-    fn schema(&self) -> SchemaRef {
+    ///
+    /// Fallibile invece di indicizzare: l'invariante «`Batches` non e' mai
+    /// vuoto» e' imposta da [`Input::from_batches`] e dalla variante
+    /// `#[non_exhaustive]`, quindi un vettore vuoto qui e' un difetto nostro,
+    /// non un input malformato — e va segnalato, non fatto abortire.
+    fn schema(&self) -> Result<SchemaRef> {
         match self {
-            Self::Batches(batches) => batches[0].schema(),
-            Self::Stream { schema, .. } => schema.clone(),
+            Self::Batches { batches } => {
+                batches.first().map(RecordBatch::schema).ok_or_else(|| {
+                    PlenoraError::Internal(
+                        "input da batch vuoto: invariante di Input::from_batches violata"
+                            .to_owned(),
+                    )
+                })
+            }
+            Self::Stream { schema, .. } => Ok(schema.clone()),
         }
     }
 }
@@ -323,37 +372,174 @@ impl Input {
 #[derive(Default)]
 pub struct Inputs {
     readers: BTreeMap<String, Input>,
+    /// Contratti dichiarati dal chiamante per gli input che li portano
+    /// ([`Inputs::add_with_contract`]).
+    contracts: BTreeMap<String, DataContract>,
+    /// Profilo stretto: ogni input DEVE portare il proprio contratto
+    /// ([`Inputs::strict`]).
+    strict: bool,
 }
 
 impl Inputs {
-    /// Insieme vuoto.
+    /// Insieme vuoto, nel profilo permissivo: gli input possono entrare
+    /// senza contratto e il confine si chiude allora sul solo schema Arrow
+    /// (vedi [`Inputs::add`]).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Aggiunge un input per nome.
+    /// Insieme vuoto nel profilo **stretto**: ogni input deve portare il
+    /// proprio [`DataContract`], e [`Inputs::add`] fallisce invece di
+    /// accettarne uno senza.
+    ///
+    /// E' il profilo da usare quando il confine deve essere chiuso davvero:
+    /// il fingerprint completo del contratto viene confrontato con quello
+    /// registrato nel grafo validato, la stessa garanzia di
+    /// [`crate::planner::check_input_compatibility`]. Nel profilo permissivo
+    /// il confronto e' sullo schema Arrow completo, che non distingue due
+    /// contratti che condividono lo schema (CRS risolto contro mancante,
+    /// tipi dichiarati diversi).
+    ///
+    /// Perche' non e' il default: renderlo tale cambierebbe il comportamento
+    /// di ogni chiamante esistente che oggi compila — una rottura semver che
+    /// spetta a chi rilascia, non a questa API. Chi vuole la garanzia forte
+    /// la chiede qui, esplicitamente.
+    #[must_use]
+    pub fn strict() -> Self {
+        Self {
+            strict: true,
+            ..Self::default()
+        }
+    }
+
+    /// `true` se questo insieme esige il contratto per ogni input.
+    #[must_use]
+    pub const fn is_strict(&self) -> bool {
+        self.strict
+    }
+
+    /// Aggiunge un input per nome, SENZA dichiararne il contratto.
+    ///
+    /// Il confine che l'esecuzione puo' chiudere su questo input e' allora
+    /// quello dello schema Arrow completo (campi e metadati di campo): ferma
+    /// una sorgente con schema diverso, ma NON distingue due contratti che
+    /// condividono lo schema e differiscono nella geometria — CRS risolto
+    /// contro mancante, tipi dichiarati diversi. E' il minimo garantito, non
+    /// la stessa verifica di [`crate::planner::check_input_compatibility`].
+    ///
+    /// Per il confine chiuso — fingerprint completo del contratto — si usa
+    /// [`Inputs::add_with_contract`], e per renderlo obbligatorio su tutto
+    /// l'insieme [`Inputs::strict`]. La CLI passa sempre i contratti della
+    /// discovery; questa variante resta per chi incorpora l'engine e il
+    /// contratto non ce l'ha, non e' la forma da preferire.
+    ///
+    /// # Deprecazione
+    ///
+    /// Il percorso senza contratto e' **deprecato**: resta per non rompere i
+    /// chiamanti esistenti, non perche' sia una forma da usare. La CLI non lo
+    /// usa piu' e l'SDK Python non lo esporra' affatto. Migrare a
+    /// [`Inputs::add_with_contract`], possibilmente su un insieme costruito
+    /// con [`Inputs::strict`], che rende l'omissione un errore invece di una
+    /// dimenticanza.
     ///
     /// # Errors
     ///
-    /// `PlenoraError::InvalidPlan` se il nome e' gia' presente.
+    /// `PlenoraError::InvalidPlan` se il nome e' gia' presente, oppure se
+    /// l'insieme e' nel profilo stretto ([`Inputs::strict`]), dove un input
+    /// senza contratto non e' ammesso.
+    #[deprecated(
+        note = "il confine si chiude solo sullo schema Arrow: usare `add_with_contract` (con `Inputs::strict`)"
+    )]
     pub fn add(&mut self, name: impl Into<String>, input: Input) -> Result<()> {
         let name = name.into();
-        if self.readers.insert(name.clone(), input).is_some() {
+        if self.strict {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "input `{name}` senza contratto: l'insieme e' nel profilo stretto,                  usa `Inputs::add_with_contract`"
+            )));
+        }
+        match self.readers.entry(name) {
+            std::collections::btree_map::Entry::Occupied(occupied) => Err(
+                PlenoraError::InvalidPlan(format!("input duplicato `{}`", occupied.key())),
+            ),
+            std::collections::btree_map::Entry::Vacant(vacant) => {
+                vacant.insert(input);
+                Ok(())
+            }
+        }
+    }
+
+    /// Aggiunge un input DICHIARANDONE il contratto.
+    ///
+    /// L'esecuzione verifica allora il **fingerprint completo** del contratto
+    /// contro quello registrato nel grafo validato: la stessa garanzia di
+    /// [`crate::planner::check_input_compatibility`], applicata al momento in
+    /// cui i dati entrano davvero.
+    ///
+    /// Senza contratto l'esecuzione confronta solo lo schema Arrow (campi e
+    /// metadati) — quanto `Input` sa di se stesso. Basta a fermare uno schema
+    /// diverso, ma NON a distinguere due contratti che condividono lo schema
+    /// e differiscono nella geometria (CRS risolto contro mancante, tipi
+    /// dichiarati diversi). Chi incorpora l'engine come libreria e vuole il
+    /// confine chiuso passa il contratto qui.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Inputs::add`].
+    pub fn add_with_contract(
+        &mut self,
+        name: impl Into<String>,
+        input: Input,
+        contract: DataContract,
+    ) -> Result<()> {
+        let name = name.into();
+        // Il duplicato si rileva PRIMA di scrivere: con `insert` il secondo
+        // inserimento restituiva `Err` ma aveva gia' sostituito il reader —
+        // e qui avrebbe lasciato il vecchio contratto appaiato al nuovo
+        // reader, cioe' proprio la coppia incoerente che il contratto serve
+        // a impedire. Un errore deve lasciare `Inputs` invariato.
+        if self.readers.contains_key(&name) {
             return Err(PlenoraError::InvalidPlan(format!(
                 "input duplicato `{name}`"
             )));
         }
+        self.readers.insert(name.clone(), input);
+        self.contracts.insert(name, contract);
         Ok(())
     }
 
     /// Builder: aggiunge un input e restituisce `self`.
     ///
+    /// # Deprecazione
+    ///
+    /// Come [`Inputs::add`], di cui e' la forma builder: usare
+    /// [`Inputs::with_contract`].
+    ///
     /// # Errors
     ///
     /// Come [`Inputs::add`].
+    #[deprecated(
+        note = "il confine si chiude solo sullo schema Arrow: usare `with_contract` (con `Inputs::strict`)"
+    )]
     pub fn with(mut self, name: impl Into<String>, input: Input) -> Result<Self> {
+        // La deprecazione riguarda i CHIAMANTI: qui la delega e' voluta.
+        #[allow(deprecated)]
         self.add(name, input)?;
+        Ok(self)
+    }
+
+    /// Builder: aggiunge un input col suo contratto e restituisce `self`.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Inputs::add`].
+    pub fn with_contract(
+        mut self,
+        name: impl Into<String>,
+        input: Input,
+        contract: DataContract,
+    ) -> Result<Self> {
+        self.add_with_contract(name, input, contract)?;
         Ok(self)
     }
 }
@@ -364,6 +550,7 @@ impl Inputs {
 
 /// Metriche di un nodo logico (presenti anche dentro ai segmenti fusi, E3).
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct NodeMetrics {
     /// Id canonico dell'operazione del nodo.
     pub operation: String,
@@ -385,6 +572,7 @@ pub struct NodeMetrics {
 
 /// Metriche di un segmento fisico.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SegmentMetrics {
     /// Modalita' fisica del segmento.
     pub mode: SegmentMode,
@@ -407,6 +595,7 @@ pub struct SegmentMetrics {
 /// meta' stream le metriche restano consultabili fino al punto di
 /// fallimento.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct ExecutionMetrics {
     /// Per id nodo.
     pub nodes: BTreeMap<String, NodeMetrics>,
@@ -435,6 +624,46 @@ pub struct ExecutionMetrics {
     /// come rallentamento inspiegabile. Nessun errore nuovo: il risultato e'
     /// identico, cambia solo la scelta fisica.
     pub geo_fusion_fallbacks: u64,
+    /// `true` se almeno un contatore ha raggiunto il proprio fondo scala e i
+    /// valori qui sopra sono quindi LIMITI INFERIORI, non conteggi.
+    ///
+    /// I limiti di riga sono configurabili fino a `u64::MAX`, quindi la somma
+    /// e' rappresentabile solo finche' i conteggi restano piccoli rispetto a
+    /// quel fondo scala. Le tre uscite possibili erano: avvolgere (un
+    /// contatore che riparte da zero e mente), andare in panico
+    /// (`overflow-checks` e' attivo anche in release: una metrica che abbatte
+    /// l'esecuzione) o saturare. Si satura, ma senza tacerlo: questo flag e'
+    /// la differenza fra una degradazione dichiarata e una silenziosa.
+    pub counters_saturated: bool,
+}
+
+/// Accumula una metrica saturando e DICHIARANDO la saturazione.
+const fn accumulate(counter: &mut u64, delta: u64, saturated: &mut bool) {
+    if let Some(value) = counter.checked_add(delta) {
+        *counter = value;
+    } else {
+        *counter = u64::MAX;
+        *saturated = true;
+    }
+}
+
+/// Come [`accumulate`], per i tempi cumulati.
+const fn accumulate_time(counter: &mut Duration, delta: Duration, saturated: &mut bool) {
+    if let Some(value) = counter.checked_add(delta) {
+        *counter = value;
+    } else {
+        *counter = Duration::MAX;
+        *saturated = true;
+    }
+}
+
+/// Somma di due conteggi di riga per una metrica, saturante e dichiarata.
+const fn sum_rows(left: u64, right: u64, saturated: &mut bool) -> u64 {
+    if let Some(value) = left.checked_add(right) {
+        return value;
+    }
+    *saturated = true;
+    u64::MAX
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +716,65 @@ struct ExecState {
 /// costo — un heartbeat al secondo e' di gran lunga piu' frequente del TTL
 /// di scavenging (24 ore di default) anche con batch piccolissimi.
 const HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Aggiunge il contesto strutturale al testo di un errore.
+///
+/// Estratta da `ExecState::with_diagnostics` per poter essere verificata
+/// **insieme** a `with_execution_id`, che e' il punto in cui il difetto
+/// viveva: le due funzioni vanno esercitate in sequenza, e un test che
+/// costruisse a mano lo stato gia' corretto non proverebbe nulla.
+///
+/// Il dettaglio e' contesto STRUTTURALE — indice di batch, riga, colonna —
+/// mai un valore.
+fn arricchisci_con_dettaglio(error: PlenoraError, detail: &str) -> PlenoraError {
+    let suffix = format!(" [{detail}]");
+    match error {
+        PlenoraError::Execution {
+            node,
+            operation,
+            execution_id,
+            reason,
+        } => PlenoraError::Execution {
+            node,
+            operation,
+            execution_id,
+            reason: format!("{reason}{suffix}"),
+        },
+        PlenoraError::InvalidPlan(reason) => PlenoraError::InvalidPlan(format!("{reason}{suffix}")),
+        // Da quando la propagazione conserva la categoria, il contesto del
+        // passo viaggia in `Replayed` invece che in `Execution`: se
+        // l'arricchimento non seguisse anche quell'involucro, attivare
+        // `diagnostics` non aggiungerebbe piu' nulla.
+        //
+        // Si scrive in ENTRAMBI i campi. Per le categorie `Execution` e
+        // `Cancelled`, `with_execution_id` RIGENERA il messaggio da
+        // `execution_reason` per inserirvi l'id: un suffisso che vivesse solo
+        // nel messaggio verrebbe cancellato dalla chiamata immediatamente
+        // successiva, e la diagnostica risulterebbe attiva senza aggiungere
+        // nulla. Scrivendo in entrambi, le due operazioni commutano.
+        PlenoraError::Replayed(mut replayed) => {
+            replayed.message = format!("{}{suffix}", replayed.message);
+            if let Some(reason) = replayed.execution_reason.take() {
+                replayed.execution_reason = Some(format!("{reason}{suffix}"));
+            }
+            PlenoraError::Replayed(replayed)
+        }
+        // Gli involucri trasparenti non sono l'errore: si arricchisce cio'
+        // che contengono.
+        PlenoraError::Tagged { source, phase } => PlenoraError::Tagged {
+            source: Box::new(arricchisci_con_dettaglio(*source, detail)),
+            phase,
+        },
+        PlenoraError::RowDiagnostics {
+            source,
+            diagnostics,
+        } => PlenoraError::RowDiagnostics {
+            source: Box::new(arricchisci_con_dettaglio(*source, detail)),
+            diagnostics,
+        },
+        other => other,
+    }
+}
 
 impl ExecState {
     fn new(
@@ -567,6 +855,7 @@ impl ExecState {
         let mut metrics = self.metrics.borrow().clone();
         metrics.memory = self.governor.snapshot();
         metrics.spill = *self.spill_metrics.borrow();
+        metrics.counters_saturated |= metrics.spill.saturated;
         metrics
     }
 
@@ -579,21 +868,30 @@ impl ExecState {
     }
 
     /// Accumula le metriche di uno spill attivato in un nodo tabellare.
+    ///
+    /// La saturazione viaggia dentro `SpillMetrics` e riemerge in
+    /// `ExecutionMetrics::counters_saturated` quando le metriche vengono
+    /// lette: un contatore di spill a fondo scala non deve poter convivere
+    /// con un flag che dice «nessuna saturazione».
     fn add_spill_metrics(&self, delta: SpillMetrics) {
-        let mut total = self.spill_metrics.borrow_mut();
-        total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
-        total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
-        total.files = total.files.saturating_add(delta.files);
+        self.spill_metrics.borrow_mut().accumulate(delta);
     }
 
     /// Accumula le righe prodotte da un nodo senza clonare la chiave dopo il
     /// primo batch. Il conteggio input viene aggiornato da `check_expansion`.
+    ///
+    /// La somma e' SATURANTE, non avvolgente: questi contatori decidono se un
+    /// limite e' superato, e un contatore che avvolge riaprirebbe il limite
+    /// (in release) o farebbe abortire l'esecuzione (in debug, con
+    /// `overflow-checks`). Saturare tiene il conteggio nel verso giusto — piu'
+    /// alto, quindi piu' restrittivo.
     fn add_node_rows_out(&self, node_id: &str, rows_out: u64) {
         let mut rows = self.node_rows.borrow_mut();
         if let Some(entry) = rows.get_mut(node_id) {
-            entry.1 += rows_out;
+            entry.1 = entry.1.saturating_add(rows_out);
         } else {
-            rows.entry(node_id.to_owned()).or_insert((0, 0)).1 += rows_out;
+            let entry = rows.entry(node_id.to_owned()).or_insert((0, 0));
+            entry.1 = entry.1.saturating_add(rows_out);
         }
     }
 
@@ -601,7 +899,13 @@ impl ExecState {
     /// (ADR-0012 D12.7): contatore dedicato, mai silenzioso — nessun errore
     /// nuovo, il risultato resta identico.
     fn record_geo_fusion_fallback(&self) {
-        self.metrics.borrow_mut().geo_fusion_fallbacks += 1;
+        let mut metrics = self.metrics.borrow_mut();
+        let metrics = &mut *metrics;
+        accumulate(
+            &mut metrics.geo_fusion_fallbacks,
+            1,
+            &mut metrics.counters_saturated,
+        );
     }
 
     /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
@@ -667,24 +971,7 @@ impl ExecState {
         let Some(detail) = detail else {
             return error;
         };
-        let suffix = format!(" [{detail}]");
-        match error {
-            PlenoraError::Execution {
-                node,
-                operation,
-                execution_id,
-                reason,
-            } => PlenoraError::Execution {
-                node,
-                operation,
-                execution_id,
-                reason: format!("{reason}{suffix}"),
-            },
-            PlenoraError::InvalidPlan(reason) => {
-                PlenoraError::InvalidPlan(format!("{reason}{suffix}"))
-            }
-            other => other,
-        }
+        arricchisci_con_dettaglio(error, detail)
     }
 }
 
@@ -1182,7 +1469,11 @@ impl Output {
                     }
                 };
                 let batch = if rewrap {
-                    RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?
+                    // Rivestimento dello schema prima della pubblicazione: le
+                    // colonne sono quelle dell'input, quindi possono essere
+                    // zero e la cardinalita' va dichiarata.
+                    let righe = batch.num_rows();
+                    plenora_core::batch_with_rows(schema.clone(), batch.columns().to_vec(), righe)?
                 } else {
                     batch
                 };
@@ -1245,6 +1536,12 @@ pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) 
         ARROW_VERSION,
         &local_capabilities(),
     )?;
+    // `max_parallelism` si applica QUI, prima di qualunque uso di Rayon:
+    // dimensiona il pool del processo, l'unica leva che vincola davvero tutti
+    // i percorsi paralleli dei kernel (ADR-0006, DER-006). Farlo solo nella
+    // CLI lasciava il limite inapplicato per chi incorpora l'engine come
+    // libreria — cioe' proprio dove nessuno lo avrebbe notato.
+    crate::parallelism::configure(graph.effective_limits().max_parallelism)?;
     let plan = Rc::new(prepare(graph, &runtime)?);
     execute_physical(&plan, graph, inputs, &runtime)
 }
@@ -1275,6 +1572,18 @@ fn execute_physical(
         )));
     }
 
+    // Contratti dichiarati dal chiamante: verifica del fingerprint completo,
+    // la stessa di `check_input_compatibility`. E' il confine forte, ed e'
+    // disponibile a chi lo chiude passando il contratto insieme all'input.
+    if !inputs.contracts.is_empty() {
+        let declared: Vec<(String, DataContract)> = inputs
+            .contracts
+            .iter()
+            .map(|(name, contract)| (name.clone(), contract.clone()))
+            .collect();
+        check_declared_input_contracts(graph, &declared)?;
+    }
+
     // Schemi degli input contro i contratti validati (fail-closed, prima di
     // toccare i dati).
     for (name, input) in &inputs.readers {
@@ -1283,8 +1592,14 @@ fn execute_physical(
                 "l'input `{name}` non ha un contratto nel grafo validato"
             ))
         })?;
-        let provided = input.schema();
-        if provided.fields() != contract.schema.fields() {
+        let provided = input.schema()?;
+        // Schema COMPLETO, metadati compresi: i metadati di campo portano le
+        // chiavi canoniche della geometria (encoding, dimensioni, CRS), che
+        // confrontando i soli `fields()` restavano fuori — due sorgenti con
+        // gli stessi campi e metadati geometrici diversi passavano identiche.
+        if provided.fields() != contract.schema.fields()
+            || provided.metadata() != contract.schema.metadata()
+        {
             return Err(PlenoraError::Schema(format!(
                 "l'input `{name}` ha uno schema diverso dal contratto validato"
             )));
@@ -1366,13 +1681,13 @@ fn execute_physical(
             .checked_add(1)
             .ok_or_else(|| PlenoraError::Internal("overflow conteggio batch output".into()))?;
         if output_counts.0 > limits.rows.max_output_rows {
-            return Err(PlenoraError::InvalidPlan(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "max_output_rows superato: {} righe di output > {}",
                 output_counts.0, limits.rows.max_output_rows
             )));
         }
         if output_counts.1 > limits.max_batches {
-            return Err(PlenoraError::InvalidPlan(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "max_batches superato sull'output: {} batch > {}",
                 output_counts.1, limits.max_batches
             )));
@@ -1459,7 +1774,7 @@ impl Network {
             })?
             .clone();
         let raw: BatchStream = match input {
-            Input::Batches(batches) => Box::new(
+            Input::Batches { batches } => Box::new(
                 batches
                     .into_iter()
                     .map(|batch| Ok(GovernedBatch::new(batch, None, None))),
@@ -1528,30 +1843,49 @@ impl Network {
                 }
                 let entry = &counts[&edge_name];
                 let limits = &state.plan.limits();
+                // Fase `Read` per tutti e tre: questi tetti scattano mentre
+                // si LEGGE la sorgente, allo stesso confine dei tetti del
+                // trasporto (`ipc_boundary::read_error`). Prima uscivano come
+                // `Validate` per derivazione di variante, e al medesimo
+                // confine due limiti sulla stessa lettura dichiaravano fasi
+                // diverse: un tetto di byte diceva «lettura», un tetto di
+                // righe diceva «validazione». Il tag esplicito vince sulla
+                // derivazione, come stabilito in ADR-0009.
                 if entry.0 > limits.rows.max_input_rows {
-                    return Err(PlenoraError::InvalidPlan(format!(
+                    return Err(PlenoraError::ResourceLimit(format!(
                         "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
                         entry.0, limits.rows.max_input_rows
-                    )));
+                    ))
+                    .with_phase(ErrorPhase::Read));
                 }
                 if entry.1 > limits.max_batches {
-                    return Err(PlenoraError::InvalidPlan(format!(
+                    return Err(PlenoraError::ResourceLimit(format!(
                         "max_batches superato sull'input `{edge_name}`: {} batch > {}",
                         entry.1, limits.max_batches
-                    )));
+                    ))
+                    .with_phase(ErrorPhase::Read));
                 }
                 if entry.2 > limits.max_payload_bytes {
-                    return Err(PlenoraError::InvalidPlan(format!(
+                    return Err(PlenoraError::ResourceLimit(format!(
                         "max_payload_bytes superato sull'input `{edge_name}`: {} byte > {}",
                         entry.2, limits.max_payload_bytes
-                    )));
+                    ))
+                    .with_phase(ErrorPhase::Read));
                 }
             }
             // ADR-0002: reservation immediata (v1 seriale — regola in
             // `MemoryGovernor::try_reserve`); i limiti per input sopra sono
             // gia' passati, quindi qui il fallimento e' solo per budget
             // globale esaurito.
-            let lease = state.governor.reserve(bytes, &edge_name)?;
+            //
+            // Fase `Read` come i tre tetti qui sopra: e' lo stesso confine e
+            // lo stesso istante. Senza il tag la derivazione della variante
+            // direbbe `Write`, e due limiti sulla stessa lettura
+            // dichiarerebbero di nuovo fasi diverse.
+            let lease = state
+                .governor
+                .reserve(bytes, &edge_name)
+                .map_err(|error| error.with_phase(ErrorPhase::Read))?;
             // ADR-0001: sequenza logica d'ingresso (contatore seriale).
             let seq = BatchSequence {
                 source_node: edge_name.clone(),
@@ -1680,7 +2014,7 @@ fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Re
     let bytes = batch.get_array_memory_size();
     let max = state.plan.batch_target().max_batch_bytes;
     if bytes > max {
-        return Err(PlenoraError::InvalidPlan(format!(
+        return Err(PlenoraError::ResourceLimit(format!(
             "max_batch_bytes superato su `{where_}`: {bytes} byte > {max}"
         )));
     }
@@ -1795,12 +2129,12 @@ fn replay_staged_batch(
 /// replay): `take` con tutti gli indici, per colonna.
 ///
 /// # Errors
-/// - `InvalidPlan`: righe oltre `u32::MAX` (gia' escluso dai limiti di
+/// - `ResourceLimit`: righe oltre `u32::MAX` (gia' escluso dai limiti di
 ///   piano, difesa);
 /// - `Schema`: errore Arrow nella `take` o nella ricostruzione.
 fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     let indices: UInt32Array = (0..u32::try_from(batch.num_rows())
-        .map_err(|_| PlenoraError::InvalidPlan("batch staging oltre u32 righe".into()))?)
+        .map_err(|_| PlenoraError::ResourceLimit("batch staging oltre u32 righe".into()))?)
         .collect::<Vec<_>>()
         .into();
     let columns = batch
@@ -1808,7 +2142,7 @@ fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
         .iter()
         .map(|column| take(column.as_ref(), &indices, None).map_err(PlenoraError::from))
         .collect::<Result<Vec<_>>>()?;
-    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+    plenora_core::batch_with_rows(batch.schema(), columns, batch.num_rows())
 }
 
 /// Validazione atomica dell'input geometrico (D8/B1.3) con memoria BOUNDED:
@@ -2222,13 +2556,13 @@ fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     let entry = &counts[edge];
     let limits = &state.plan.limits();
     if entry.0 > limits.rows.max_rows_per_edge {
-        return Err(PlenoraError::InvalidPlan(format!(
+        return Err(PlenoraError::ResourceLimit(format!(
             "max_rows_per_edge superato sull'arco `{edge}`: {} righe > {}",
             entry.0, limits.rows.max_rows_per_edge
         )));
     }
     if entry.1 > limits.max_batches {
-        return Err(PlenoraError::InvalidPlan(format!(
+        return Err(PlenoraError::ResourceLimit(format!(
             "max_batches superato sull'arco `{edge}`: {} batch > {}",
             entry.1, limits.max_batches
         )));
@@ -2287,7 +2621,6 @@ fn test_behavior_override(node_id: &str) -> Option<CancellationBehavior> {
 /// Per le op esenti (dichiarato in catalogo, [`expansion_exempt`]) il
 /// controllo sul fattore output/input non si applica: la produzione resta
 /// limitata da `max_rows_per_edge` / `max_output_rows` / `max_batches`.
-#[allow(clippy::cast_precision_loss)] // Il fattore e' f64 per contratto (ADR 6); sotto 2^53 righe il confronto e' esatto.
 fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -> Result<()> {
     if expansion_exempt(kernel) {
         return Ok(());
@@ -2296,14 +2629,15 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
     // Chiave clonata solo al primo batch del nodo (V2): i batch successivi
     // entrano dal `get_mut` sull'id esistente.
     if let Some(entry) = rows.get_mut(&kernel.node_id) {
-        entry.0 += base_rows;
+        entry.0 = entry.0.saturating_add(base_rows);
     } else {
-        rows.entry(kernel.node_id.clone()).or_insert((0, 0)).0 += base_rows;
+        let entry = rows.entry(kernel.node_id.clone()).or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(base_rows);
     }
     let entry = &rows[&kernel.node_id];
     let factor = state.plan.limits().rows.max_expansion_factor;
-    if (entry.1 as f64) > (entry.0 as f64) * factor {
-        return Err(PlenoraError::InvalidPlan(format!(
+    if plenora_core::limits::expansion_exceeded(entry.1, entry.0, factor) {
+        return Err(PlenoraError::ResourceLimit(format!(
             "max_expansion_factor superato al nodo `{}`: {} righe output > {} x {} righe input",
             kernel.node_id, entry.1, factor, entry.0
         )));
@@ -2331,22 +2665,25 @@ fn check_join_expansion(
     }
     let constraint =
         descriptor.map_or(ExpansionConstraint::SumRelative, |d| d.expansion_constraint);
-    let expansion = JoinExpansion::compute(output_rows, left_rows, right_rows);
-    let binding = expansion.binding_metric(constraint);
-    let factor = constraint.binding_threshold(state.plan.limits().rows.max_expansion_factor);
-    if binding > factor {
-        return Err(PlenoraError::InvalidPlan(format!(
-            "max_expansion_factor superato al nodo `{}` (vincolo {constraint:?}): \
-             metrica vincolante {binding} > {factor}; \
-             output/(left+right)={}, output/left={}, output/right={} \
-             (output={output_rows}, left={left_rows}, right={right_rows})",
-            kernel.node_id,
-            expansion.output_over_sum_inputs,
-            expansion.output_over_left,
-            expansion.output_over_right,
-        )));
+    let max_expansion_factor = state.plan.limits().rows.max_expansion_factor;
+    if !constraint.exceeded(output_rows, left_rows, right_rows, max_expansion_factor) {
+        return Ok(());
     }
-    Ok(())
+    // Le metriche si calcolano solo per RACCONTARE l'esito: la decisione e'
+    // gia' presa sui conteggi interi, e i rapporti `f64` che seguono sono
+    // arrotondati sopra 2^53 righe — cioe' proprio dove il difetto stava.
+    let expansion = JoinExpansion::compute(output_rows, left_rows, right_rows);
+    let factor = constraint.binding_threshold(max_expansion_factor);
+    Err(PlenoraError::ResourceLimit(format!(
+        "max_expansion_factor superato al nodo `{}` (vincolo {constraint:?}): \
+         soglia {factor}, output={output_rows}, left={left_rows}, right={right_rows}; \
+         metriche osservate (approssimate): output/(left+right)={}, \
+         output/left={}, output/right={}",
+        kernel.node_id,
+        expansion.output_over_sum_inputs,
+        expansion.output_over_left,
+        expansion.output_over_right,
+    )))
 }
 
 /// Errore di un kernel attribuito al nodo logico (E3), preservando la
@@ -2368,6 +2705,36 @@ fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
         }));
         return replayed.with_row_diagnostics(diagnostics);
     }
+    // Un limite di RISORSA non diventa `Execution`: la categoria e' cio' su
+    // cui il chiamante decide (rilanciare con piu' budget, non correggere il
+    // piano), e avvolgerla in `Execution` la faceva sparire — l'errore usciva
+    // come `execution`/exit 6 invece di `resource_limit`/exit 4. Si conserva
+    // la categoria e si aggiunge il contesto del nodo tramite `Replayed`, che
+    // e' il portatore tipizzato di categoria + attribuzione.
+    // Il riconoscimento passa da `category()`, non da un `matches!` sulla
+    // variante ESTERNA: un `ResourceLimit` puo' arrivare dentro un involucro
+    // trasparente — `Tagged` (fase dichiarata da un confine) o un `Replayed`
+    // gia' costruito da un livello piu' interno — e in quel caso il match
+    // sulla variante non lo vedeva, quindi la categoria si perdeva
+    // esattamente nei casi in cui era stata dichiarata con piu' cura.
+    // `category()` attraversa gli involucri per costruzione.
+    //
+    // QUALI categorie si preservano lo decide `error_propagation`, non questa
+    // funzione: il gemello legacy fa la stessa scelta, e due elenchi scritti
+    // a mano in due file erano gia' divergenti.
+    if crate::error_propagation::categoria_preservata(error.category()) {
+        return PlenoraError::Replayed(Box::new(ReplayedError {
+            category: error.category(),
+            phase: error.phase(),
+            remote_effect: error.remote_effect(),
+            retry: error.retry_disposition(),
+            message: error.to_string(),
+            node: Some(kernel.node_id.clone()),
+            operation: Some(kernel.operation.to_owned()),
+            execution_id: None,
+            execution_reason: error.execution_reason().map(ToOwned::to_owned),
+        }));
+    }
     let reason = match error {
         PlenoraError::Execution { reason, .. } => reason,
         other => other.to_string(),
@@ -2380,80 +2747,17 @@ fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     }
 }
 
+/// Fusione dei report row-scoped: la procedura vive in
+/// [`RowDiagnostics::merge_into`], condivisa con il runner fuso del trasporto
+/// geo. Qui resta solo la traduzione dell'invariante violata nell'errore di
+/// questo perimetro.
 fn merge_row_diagnostics(
     aggregate: &mut Option<RowDiagnostics>,
-    mut incoming: RowDiagnostics,
+    incoming: RowDiagnostics,
     source_offset: u64,
 ) -> Result<()> {
-    for example in &mut incoming.examples {
-        example.source_index = source_offset
-            .checked_add(example.source_index)
-            .ok_or_else(|| PlenoraError::Internal("indice sorgente fuori intervallo".into()))?;
-    }
-    let Some(existing) = aggregate.as_ref() else {
-        *aggregate = Some(incoming);
-        return Ok(());
-    };
-    let mut merged = existing.clone();
-    if merged.contract != incoming.contract
-        || merged.scope != incoming.scope
-        || merged.index_basis != incoming.index_basis
-        || merged.examples_limit != incoming.examples_limit
-    {
-        return Err(PlenoraError::Internal(
-            "report row-scoped incompatibili nello stesso stream".into(),
-        ));
-    }
-    merged.observed_total = merged
-        .observed_total
-        .checked_add(incoming.observed_total)
-        .ok_or_else(|| PlenoraError::Internal("conteggio row-scoped fuori intervallo".into()))?;
-    merged.total =
-        match (merged.total, incoming.total) {
-            (Some(left), Some(right)) => Some(left.checked_add(right).ok_or_else(|| {
-                PlenoraError::Internal("totale row-scoped fuori intervallo".into())
-            })?),
-            _ => None,
-        };
-    merged.input_total = match (merged.input_total, incoming.input_total) {
-        (Some(left), Some(right)) => Some(
-            left.checked_add(right)
-                .ok_or_else(|| PlenoraError::Internal("input_total diagnostico overflow".into()))?,
-        ),
-        _ => None,
-    };
-    for (cause, count) in incoming.counts {
-        let entry = merged.counts.entry(cause).or_default();
-        *entry = entry
-            .checked_add(count)
-            .ok_or_else(|| PlenoraError::Internal("conteggio causa fuori intervallo".into()))?;
-    }
-    let incoming_example_count = incoming.examples.len();
-    let before = merged.examples.len();
-    for example in incoming.examples {
-        if u64::try_from(merged.examples.len())
-            .map_err(|_| PlenoraError::Internal("numero esempi fuori intervallo".into()))?
-            >= merged.examples_limit
-        {
-            break;
-        }
-        merged.examples.push(example);
-    }
-    merged.examples_truncated = merged.examples_truncated
-        || incoming.examples_truncated
-        || merged.examples.len().saturating_sub(before) < incoming_example_count;
-    if incoming.completeness != RowDiagnosticsCompleteness::Complete {
-        merged.completeness = incoming.completeness;
-        let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
-        for limit in incoming.knowledge_limits.unwrap_or_default() {
-            if !knowledge_limits.contains(&limit) {
-                knowledge_limits.push(limit);
-            }
-        }
-        merged.knowledge_limits = (!knowledge_limits.is_empty()).then_some(knowledge_limits);
-    }
-    *aggregate = Some(merged);
-    Ok(())
+    RowDiagnostics::merge_into(aggregate, incoming, source_offset)
+        .map_err(|error| PlenoraError::Internal(error.message().to_owned()))
 }
 
 fn attach_partial_row_diagnostics(
@@ -2461,13 +2765,10 @@ fn attach_partial_row_diagnostics(
     aggregate: &mut Option<RowDiagnostics>,
     knowledge_limit: &str,
 ) -> PlenoraError {
-    let Some(mut report) = aggregate.take() else {
+    let Some(report) = aggregate.take() else {
         return error;
     };
-    report.completeness = RowDiagnosticsCompleteness::Partial;
-    report.total = None;
-    report.knowledge_limits = Some(vec![knowledge_limit.to_owned()]);
-    error.with_row_diagnostics(report)
+    error.with_row_diagnostics(report.into_partial(knowledge_limit))
 }
 
 fn complete_row_diagnostic_error(
@@ -2756,14 +3057,21 @@ fn row_diagnostic_stream(
 /// testuale (`&str`/`String`) diventa il motivo, mai dati dei batch (regola
 /// di error.rs: contesto, non valori). Payload non testuale: motivo generico.
 fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send)) -> PlenoraError {
-    let message = payload
-        .downcast_ref::<&'static str>()
-        .map(|message| (*message).to_owned())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "payload non testuale".to_owned());
+    // Il testo del panico NON viene pubblicato: non e' scritto da noi e puo'
+    // contenere i valori che un `assert` di una dipendenza ha confrontato,
+    // cioe' dati della riga. Si riporta solo la forma del payload; il nodo e
+    // l'operazione, che sono la vera informazione diagnostica, li aggiunge
+    // `step_error`.
+    let forma = plenora_core::panic_policy::forma_payload(payload);
+    // Categoria `Internal`, non `InvalidPlan`. Un panico dentro un kernel e'
+    // un difetto NOSTRO — o di una dipendenza che usiamo — e il chiamante non
+    // ha nulla da correggere nel proprio piano. Finche' `step_error`
+    // avvolgeva tutto in `Execution` la classificazione qui sotto era
+    // invisibile; da quando le categorie si conservano, dire `invalid_plan`
+    // manderebbe chi legge a cercare un errore che non ha commesso.
     step_error(
         kernel,
-        PlenoraError::InvalidPlan(format!("panic nel kernel: {message}")),
+        PlenoraError::Internal(format!("panic nel kernel: {forma}")),
     )
 }
 
@@ -2850,32 +3158,34 @@ fn record_kernel_metrics(
     // processato passa di qui (throttled, vedi `ExecState::heartbeat`).
     state.heartbeat();
     let config = state.plan.metrics_config();
-    let mut metrics = state.metrics.borrow_mut();
+    let mut borrowed = state.metrics.borrow_mut();
+    let metrics = &mut *borrowed;
+    let saturated = &mut metrics.counters_saturated;
     // Metrica obbligatoria ADR 6: sempre aggiornata, indipendente dalla
     // configurazione per-nodo/per-segmento.
-    metrics.total_rows_processed += rows_in;
+    accumulate(&mut metrics.total_rows_processed, rows_in, saturated);
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
-            node.rows_in += rows_in;
-            node.rows_out += rows_out;
-            node.batches_in += 1;
-            node.batches_out += 1;
-            node.bytes_in += bytes_in;
-            node.bytes_out += bytes_out;
-            node.wall_time += elapsed;
+            accumulate(&mut node.rows_in, rows_in, saturated);
+            accumulate(&mut node.rows_out, rows_out, saturated);
+            accumulate(&mut node.batches_in, 1, saturated);
+            accumulate(&mut node.batches_out, 1, saturated);
+            accumulate(&mut node.bytes_in, bytes_in, saturated);
+            accumulate(&mut node.bytes_out, bytes_out, saturated);
+            accumulate_time(&mut node.wall_time, elapsed, saturated);
         }
     }
     if config.per_segment {
         if let Some(seg) = metrics.segments.get_mut(&segment.id) {
             if first {
-                seg.rows_in += rows_in;
-                seg.batches_in += 1;
+                accumulate(&mut seg.rows_in, rows_in, saturated);
+                accumulate(&mut seg.batches_in, 1, saturated);
             }
             if last {
-                seg.rows_out += rows_out;
-                seg.batches_out += 1;
+                accumulate(&mut seg.rows_out, rows_out, saturated);
+                accumulate(&mut seg.batches_out, 1, saturated);
             }
-            seg.wall_time += elapsed;
+            accumulate_time(&mut seg.wall_time, elapsed, saturated);
         }
     }
 }
@@ -3730,8 +4040,9 @@ fn append_output_column(
 ) -> Result<RecordBatch> {
     let mut columns = batch.columns().to_vec();
     columns.push(column);
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = batch.num_rows();
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.from_wkt` (streaming 1:1): colonna WKT → nuova colonna geometria.
@@ -3830,8 +4141,9 @@ fn geo_accessors_batch(
     }
     let mut all_columns = batch.columns().to_vec();
     all_columns.extend(produced);
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), all_columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = batch.num_rows();
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), all_columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.line_locate_point` (streaming 1:1 "add column"): frazione [0,1] del
@@ -3904,9 +4216,12 @@ fn geo_subdivide_batch(
             );
         }
     }
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
     columns.push(std::sync::Arc::new(indices));
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.snap` (streaming 1:1 in place): vertici agganciati al riferimento
@@ -3928,8 +4243,11 @@ fn geo_snap_batch(
             .map(|cell| cell.as_deref())
             .collect::<Vec<_>>(),
     ));
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.collect` (blocking, ManyToOne): raggruppamento canonico per chiavi
@@ -3997,8 +4315,11 @@ fn geo_collect_batch(
                 .map_err(|error| step_error(kernel, PlenoraError::from(error)))?,
         );
     }
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.generate_grid` (blocking, generativa): l'input funge da trigger; lo
@@ -4036,8 +4357,11 @@ fn geo_generate_grid_batch(
             rows.iter().map(|row| row.centroid_y),
         )));
     }
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.coverage_validate` (blocking, WholeToMany): una riga per overlap.
@@ -4070,8 +4394,11 @@ fn geo_coverage_validate_batch(
                 .collect::<Vec<_>>(),
         )),
     ];
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.shared_paths` (blocking, WholeToMany): una riga per coppia con
@@ -4101,8 +4428,11 @@ fn geo_shared_paths_batch(
                 .collect::<Vec<_>>(),
         )),
     ];
-    RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-        .map_err(|error| step_error(kernel, PlenoraError::from(error)))
+    let righe = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
+        .map_err(|error| step_error(kernel, error))
 }
 
 /// `geo.cluster_dbscan` (blocking, output allineato alle righe): etichetta
@@ -4343,27 +4673,33 @@ fn run_binary_blocking(
     // `record_kernel_metrics`, non riusata qui per i conteggi doppi input).
     state.heartbeat();
     let config = state.plan.metrics_config();
-    let mut metrics = state.metrics.borrow_mut();
-    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`).
-    metrics.total_rows_processed += left_rows + right_rows;
+    let mut borrowed = state.metrics.borrow_mut();
+    let metrics = &mut *borrowed;
+    let saturated = &mut metrics.counters_saturated;
+    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`). Le righe
+    // in ingresso di un nodo binario sono la somma dei due lati: con limiti
+    // configurabili fino a `u64::MAX` la somma non e' rappresentabile per
+    // costruzione, e non e' una metrica che possa abortire l'esecuzione.
+    let rows_in = sum_rows(left_rows, right_rows, saturated);
+    accumulate(&mut metrics.total_rows_processed, rows_in, saturated);
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
-            node.rows_in += left_rows + right_rows;
-            node.rows_out += rows_out;
-            node.batches_in += batches_in;
-            node.batches_out += 1;
-            node.bytes_in += bytes_in;
-            node.bytes_out += output_lease.bytes();
-            node.wall_time += elapsed;
+            accumulate(&mut node.rows_in, rows_in, saturated);
+            accumulate(&mut node.rows_out, rows_out, saturated);
+            accumulate(&mut node.batches_in, batches_in, saturated);
+            accumulate(&mut node.batches_out, 1, saturated);
+            accumulate(&mut node.bytes_in, bytes_in, saturated);
+            accumulate(&mut node.bytes_out, output_lease.bytes(), saturated);
+            accumulate_time(&mut node.wall_time, elapsed, saturated);
         }
     }
     if config.per_segment {
         if let Some(seg) = metrics.segments.get_mut(&segment.id) {
-            seg.rows_in += left_rows + right_rows;
-            seg.rows_out += rows_out;
-            seg.batches_in += batches_in;
-            seg.batches_out += 1;
-            seg.wall_time += elapsed;
+            accumulate(&mut seg.rows_in, rows_in, saturated);
+            accumulate(&mut seg.rows_out, rows_out, saturated);
+            accumulate(&mut seg.batches_in, batches_in, saturated);
+            accumulate(&mut seg.batches_out, 1, saturated);
+            accumulate_time(&mut seg.wall_time, elapsed, saturated);
         }
     }
     Ok(GovernedBatch::new(
@@ -4564,27 +4900,33 @@ fn run_geo_binary_blocking(
     // ADR 3: heartbeat del TempStore al punto centrale.
     state.heartbeat();
     let config = state.plan.metrics_config();
-    let mut metrics = state.metrics.borrow_mut();
-    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`).
-    metrics.total_rows_processed += left_rows + right_rows;
+    let mut borrowed = state.metrics.borrow_mut();
+    let metrics = &mut *borrowed;
+    let saturated = &mut metrics.counters_saturated;
+    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`). Le righe
+    // in ingresso di un nodo binario sono la somma dei due lati: con limiti
+    // configurabili fino a `u64::MAX` la somma non e' rappresentabile per
+    // costruzione, e non e' una metrica che possa abortire l'esecuzione.
+    let rows_in = sum_rows(left_rows, right_rows, saturated);
+    accumulate(&mut metrics.total_rows_processed, rows_in, saturated);
     if config.per_node {
         if let Some(node) = metrics.nodes.get_mut(&kernel.node_id) {
-            node.rows_in += left_rows + right_rows;
-            node.rows_out += rows_out;
-            node.batches_in += batches_in;
-            node.batches_out += 1;
-            node.bytes_in += bytes_in;
-            node.bytes_out += output_lease.bytes();
-            node.wall_time += elapsed;
+            accumulate(&mut node.rows_in, rows_in, saturated);
+            accumulate(&mut node.rows_out, rows_out, saturated);
+            accumulate(&mut node.batches_in, batches_in, saturated);
+            accumulate(&mut node.batches_out, 1, saturated);
+            accumulate(&mut node.bytes_in, bytes_in, saturated);
+            accumulate(&mut node.bytes_out, output_lease.bytes(), saturated);
+            accumulate_time(&mut node.wall_time, elapsed, saturated);
         }
     }
     if config.per_segment {
         if let Some(seg) = metrics.segments.get_mut(&segment.id) {
-            seg.rows_in += left_rows + right_rows;
-            seg.rows_out += rows_out;
-            seg.batches_in += batches_in;
-            seg.batches_out += 1;
-            seg.wall_time += elapsed;
+            accumulate(&mut seg.rows_in, rows_in, saturated);
+            accumulate(&mut seg.rows_out, rows_out, saturated);
+            accumulate(&mut seg.batches_in, batches_in, saturated);
+            accumulate(&mut seg.batches_out, 1, saturated);
+            accumulate_time(&mut seg.wall_time, elapsed, saturated);
         }
     }
     Ok(GovernedBatch::new(
@@ -4646,8 +4988,10 @@ fn execute_geo_binary(
             columns.push(std::sync::Arc::new(UInt64Array::from_iter_values(
                 pairs.iter().map(|pair| pair.right),
             )));
-            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-                .map_err(PlenoraError::from)
+            let righe = columns
+                .first()
+                .map_or(0, plenora_core::arrow::array::Array::len);
+            plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
         }
         PairOperation::Nearest => {
             let matches = nearest_matches_validated(
@@ -4670,8 +5014,10 @@ fn execute_geo_binary(
             columns.push(std::sync::Arc::new(Float64Array::from_iter_values(
                 matches.iter().map(|m| m.distance),
             )));
-            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-                .map_err(PlenoraError::from)
+            let righe = columns
+                .first()
+                .map_or(0, plenora_core::arrow::array::Array::len);
+            plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
         }
         PairOperation::Within => {
             let indexes =
@@ -4687,8 +5033,10 @@ fn execute_geo_binary(
                 .collect();
             let mut columns = left.columns().to_vec();
             columns.push(std::sync::Arc::new(BooleanArray::from(flags)));
-            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-                .map_err(PlenoraError::from)
+            let righe = columns
+                .first()
+                .map_or(0, plenora_core::arrow::array::Array::len);
+            plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
         }
         PairOperation::CountPointsInPolygons => {
             // Contratto: left = poligoni (output allineato), right = punti.
@@ -4705,8 +5053,10 @@ fn execute_geo_binary(
                 .collect();
             let mut columns = left.columns().to_vec();
             columns.push(std::sync::Arc::new(UInt64Array::from(values)));
-            RecordBatch::try_new(kernel.output_contract.schema.clone(), columns)
-                .map_err(PlenoraError::from)
+            let righe = columns
+                .first()
+                .map_or(0, plenora_core::arrow::array::Array::len);
+            plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
         }
         _ => Err(PlenoraError::Internal(
             "op binaria geo fuori perimetro M1: invariante di prepare violata".into(),
@@ -4715,6 +5065,13 @@ fn execute_geo_binary(
 }
 
 #[cfg(test)]
+// Come il modulo `tests`: copre anche il percorso permissivo deprecato.
+#[allow(deprecated)]
 mod governor_tests;
 #[cfg(test)]
+// I test coprono anche il percorso permissivo di `Inputs` (`add`/`with`),
+// deprecato ma ancora supportato: finche' esiste, va testato. L'`allow` sta
+// qui, sulla dichiarazione del modulo, cosi' e' un punto solo da cancellare
+// quando la deprecazione diventera' rimozione.
+#[allow(deprecated)]
 mod tests;

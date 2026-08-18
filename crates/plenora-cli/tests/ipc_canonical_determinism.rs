@@ -78,7 +78,7 @@ fn stesso_piano_produce_output_ipc_binariamente_identici() {
         assert!(
             result.status.success(),
             "stderr: {}",
-            String::from_utf8_lossy(&result.stderr)
+            String::from_utf8_lossy(&result.stdout)
         );
     }
 

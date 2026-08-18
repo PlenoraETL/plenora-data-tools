@@ -17,11 +17,12 @@
 //! deliberatamente rimandata: la rappresentazione v1 è la coppia semplice
 //! `ContractProperty<T> { confidence, scope }`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::arrow::schema::DataType;
 use crate::arrow::SchemaRef;
 use crate::crs::ResolvedCrs;
 use crate::error::{PlenoraError, Result};
@@ -1061,10 +1062,24 @@ impl FieldAllocator {
     }
 
     /// Assegna un nuovo `FieldId` garantito fresco e avanza il cursore.
-    pub const fn alloc(&mut self) -> FieldId {
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::InvalidPlan` quando lo spazio degli identificatori e'
+    /// esaurito. L'incremento era saturante: arrivato a `u32::MAX`
+    /// l'allocatore restituiva ripetutamente LO STESSO id, e la garanzia di
+    /// freschezza — su cui poggia l'identita' delle colonne nel grafo (D16) —
+    /// cadeva in silenzio, con due colonne diverse che condividevano
+    /// identita'. Meglio un piano rifiutato che un grafo con identita'
+    /// ambigue.
+    pub fn alloc(&mut self) -> Result<FieldId> {
         let id = FieldId(self.next);
-        self.next = self.next.saturating_add(1);
-        id
+        self.next = self.next.checked_add(1).ok_or_else(|| {
+            PlenoraError::InvalidPlan(
+                "spazio dei FieldId esaurito: nessun identificatore fresco disponibile".to_owned(),
+            )
+        })?;
+        Ok(id)
     }
 
     /// Il prossimo ID che verrà assegnato (ispezione, non consuma).
@@ -1080,13 +1095,18 @@ impl FieldAllocator {
     }
 
     /// ID stabile di una colonna propagata: stesso nome → stesso ID.
-    pub fn intern(&mut self, name: &str) -> FieldId {
+    ///
+    /// # Errors
+    ///
+    /// Come [`FieldAllocator::alloc`], e solo al primo incontro del nome: un
+    /// nome gia' interned non consuma identificatori.
+    pub fn intern(&mut self, name: &str) -> Result<FieldId> {
         if let Some(id) = self.by_name.get(name) {
-            return *id;
+            return Ok(*id);
         }
-        let id = self.alloc();
+        let id = self.alloc()?;
         self.by_name.insert(name.to_owned(), id);
-        id
+        Ok(id)
     }
 
     /// Rinomina: il `FieldId` segue la colonna (D16).
@@ -1098,10 +1118,14 @@ impl FieldAllocator {
 
     /// Colonna derivata: riceve un `FieldId` nuovo, sostituendo l'eventuale
     /// identità precedente associata al nome (D16).
-    pub fn derive(&mut self, name: &str) -> FieldId {
-        let id = self.alloc();
+    ///
+    /// # Errors
+    ///
+    /// Come [`FieldAllocator::alloc`].
+    pub fn derive(&mut self, name: &str) -> Result<FieldId> {
+        let id = self.alloc()?;
         self.by_name.insert(name.to_owned(), id);
-        id
+        Ok(id)
     }
 }
 
@@ -1248,15 +1272,35 @@ impl DataContract {
 
     /// Validazione strutturale del contratto.
     ///
-    /// Regole v1: al massimo una colonna geometrica (D16); ogni colonna
-    /// geometrica deve esistere nello schema con lo stesso nome e la stessa
-    /// nullability; `active_geometry`, se presente, deve riferire una delle
-    /// colonne geometriche dichiarate.
+    /// Regole v1:
+    ///
+    /// - i nomi dei campi dello schema sono univoci — senza questo controllo
+    ///   `field_with_name` risolve al primo omonimo e il contratto puo'
+    ///   descrivere una colonna diversa da quella che verra' letta;
+    /// - al massimo una colonna geometrica (D16);
+    /// - ogni colonna geometrica esiste nello schema con lo stesso nome, la
+    ///   stessa nullability e **tipo fisico `Binary`** — il framing WKB/EWKB
+    ///   e' un vettore di byte, e ogni lettore della geometria fa `downcast`
+    ///   a `BinaryArray`: un contratto che dichiara geometrica una colonna di
+    ///   tipo diverso passava il dry-run e falliva a runtime;
+    /// - se sia il contratto sia i metadati canonici della colonna dichiarano
+    ///   i tipi geometrici, le due dichiarazioni devono coincidere;
+    /// - `active_geometry`, se presente, riferisce una delle colonne
+    ///   geometriche dichiarate.
     ///
     /// # Errors
     ///
     /// Restituisce `PlenoraError::Schema` descrivendo la prima violazione.
     pub fn validate(&self) -> Result<()> {
+        let mut seen: HashSet<&str> = HashSet::with_capacity(self.schema.fields().len());
+        for field in self.schema.fields() {
+            if !seen.insert(field.name().as_str()) {
+                return Err(PlenoraError::Schema(format!(
+                    "schema con nome di campo ripetuto `{}`: l'identita' delle colonne del contratto non sarebbe univoca",
+                    field.name()
+                )));
+            }
+        }
         if self.geometries.len() > 1 {
             return Err(PlenoraError::Schema(format!(
                 "contratto con {} colonne geometriche: la v1 ne ammette al massimo una (D16)",
@@ -1278,6 +1322,14 @@ impl DataContract {
                     field.is_nullable()
                 )));
             }
+            if field.data_type() != &DataType::Binary {
+                return Err(PlenoraError::Schema(format!(
+                    "colonna geometrica `{}`: tipo fisico {:?}, atteso Binary (framing WKB/EWKB)",
+                    geometry.name,
+                    field.data_type()
+                )));
+            }
+            validate_declared_types(geometry, field.metadata())?;
         }
         if let Some(active) = self.active_geometry {
             if !self.geometries.iter().any(|g| g.field_id == active) {
@@ -1291,6 +1343,7 @@ impl DataContract {
 
     /// La colonna geometrica attiva, se presente: `active_geometry` se
     /// dichiarata, altrimenti l'unica geometria del contratto.
+    ///
     #[must_use]
     pub fn active_geometry_column(&self) -> Option<&GeometryColumnContract> {
         self.active_geometry.map_or_else(
@@ -1298,6 +1351,170 @@ impl DataContract {
             |active| self.geometries.iter().find(|g| g.field_id == active),
         )
     }
+}
+
+/// Chiave canonica dell'elenco dei tipi geometrici (R2.2).
+///
+/// Vive qui, nel livello contratto, perche' e' proprio la chiave con cui il
+/// contratto e i metadati Arrow devono concordare; `plenora-kernels-geo` la
+/// riespone per il lato emissione, cosi' esiste una sola definizione.
+pub const PLENORA_GEOMETRY_TYPES_KEY: &str = "plenora.geometry.types";
+
+/// Chiave canonica dello stato di dichiarazione dei tipi (R2.2/R3.4.1).
+pub const PLENORA_GEOMETRY_TYPES_DECLARATION_KEY: &str = "plenora.geometry.types_declaration";
+
+/// Chiave canonica della dimensionalita' (R2.1/R2.2).
+pub const PLENORA_GEOMETRY_DIMENSIONS_KEY: &str = "plenora.geometry.dimensions";
+
+/// Chiave canonica del framing binario delle celle (R3.5).
+pub const PLENORA_GEOMETRY_ENCODING_KEY: &str = "plenora.geometry.encoding";
+
+/// Chiave canonica dello stato di risoluzione del CRS (R2.2).
+pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_resolution";
+
+/// Coerenza fra la proprieta' tipizzata `types` del contratto e i metadati
+/// canonici della colonna.
+///
+/// Due controlli distinti, che non vanno confusi:
+///
+/// 1. **Validita' sintattica di ogni chiave presente.** Una chiave canonica
+///    che c'e' dev'essere leggibile, indipendentemente da cosa dichiari il
+///    contratto: «assente» e «presente ma malformata» sono stati diversi, e
+///    saltare il parsing quando il lato tipizzato tace lasciava passare
+///    `encoding = "twkb"` o un elenco di tipi fuori ordine.
+/// 2. **Coerenza fra le due fonti.** Qui il confronto scatta solo quando
+///    ENTRAMBE dichiarano qualcosa: un contratto senza dichiarazione resta
+///    legittimo (R3.4.1: «non dichiarato» e' uno stato, non un'assenza da
+///    colmare) e cosi' pure una colonna senza chiavi canoniche. Quando
+///    entrambe parlano e si contraddicono, il contratto e' incoerente e va
+///    rifiutato subito: e' il caso in cui il dry-run accettava un contratto
+///    che a runtime avrebbe letto altro.
+fn validate_declared_types(
+    geometry: &GeometryColumnContract,
+    metadata: &HashMap<String, String>,
+) -> Result<()> {
+    // Ogni chiave canonica PRESENTE dev'essere sintatticamente valida, anche
+    // quando il lato tipizzato del contratto tace. «Assente» e «presente ma
+    // malformata» sono stati diversi (R5.1): saltare il controllo quando il
+    // contratto non dichiara nulla lasciava passare `encoding = "twkb"` o
+    // `dimensions = "2d"` senza che nessuno li leggesse.
+    if let Some(declared) = metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY) {
+        let parsed: GeometryDimensions = declared.parse().map_err(|_| {
+            PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: dimensions canonica non riconosciuta",
+                geometry.name
+            ))
+        })?;
+        // Il contratto la dichiara sempre (`Unknown` e' un valore canonico,
+        // non un'assenza), quindi il confronto scatta sempre.
+        if parsed != geometry.dimensions {
+            return Err(PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: dimensions del contratto ({}) diversa dai metadati canonici ({declared})",
+                geometry.name,
+                geometry.dimensions.as_str()
+            )));
+        }
+    }
+    if let Some(declared) = metadata.get(PLENORA_GEOMETRY_ENCODING_KEY) {
+        let parsed: GeometryEncoding = declared.parse().map_err(|_| {
+            PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: encoding canonico non riconosciuto",
+                geometry.name
+            ))
+        })?;
+        // `None` nel contratto significa «non dichiarato» (R5.2), uno stato
+        // legittimo: la DISCREPANZA si controlla solo quando entrambi
+        // parlano, ma la validita' sintattica sopra vale comunque.
+        if geometry.encoding.is_some_and(|encoding| encoding != parsed) {
+            return Err(PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: encoding del contratto diverso dai metadati canonici ({declared})",
+                geometry.name
+            )));
+        }
+    }
+    // Lo stato di risoluzione del CRS non e' confrontabile (vedi sotto), ma
+    // dev'essere comunque un valore canonico: una chiave presente e
+    // illeggibile non e' una chiave assente.
+    if let Some(declared) = metadata.get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY) {
+        declared.parse::<CrsResolution>().map_err(|_| {
+            PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: crs_resolution canonica non riconosciuta",
+                geometry.name
+            ))
+        })?;
+    }
+    // La coppia types/types_declaration si valida per intero: la
+    // dichiarazione dev'essere canonica, l'elenco dev'essere parsabile con
+    // quella dichiarazione (ordine, unicita', coerenza cardinalita'-stato), e
+    // `types` senza `types_declaration` e' una coppia incompleta.
+    let metadata_types = metadata.get(PLENORA_GEOMETRY_TYPES_KEY);
+    let Some(metadata_declaration) = metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY) else {
+        if metadata_types.is_some() {
+            return Err(PlenoraError::Schema(format!(
+                "colonna geometrica `{}`: chiave types senza types_declaration",
+                geometry.name
+            )));
+        }
+        return Ok(());
+    };
+    let metadata_types = metadata_types.map_or("", String::as_str);
+    let parsed_declaration: TypesDeclaration = metadata_declaration.parse().map_err(|_| {
+        PlenoraError::Schema(format!(
+            "colonna geometrica `{}`: types_declaration canonica non riconosciuta",
+            geometry.name
+        ))
+    })?;
+    let parsed_types =
+        GeometryTypesProperty::from_canonical_list(parsed_declaration, metadata_types).map_err(
+            |error| {
+                PlenoraError::Schema(format!(
+                    "colonna geometrica `{}`: elenco dei tipi canonico non valido: {error}",
+                    geometry.name
+                ))
+            },
+        )?;
+    // Lo stato di risoluzione del CRS NON e' confrontabile qui, ed e' una
+    // scelta, non una dimenticanza: il contratto puo' divergere dai metadati
+    // in ENTRAMBE le direzioni, legittimamente.
+    //
+    // Piu' conservativo: la discovery declassa a `declared_unresolved` una
+    // colonna che dichiara `resolved` con chiavi in conflitto (`crs_id` e
+    // `srid` che non concordano) — e' il comportamento fail-closed voluto,
+    // e il contratto e' la vista CORRETTA, non una copia dei metadati.
+    //
+    // Meno conservativo: una decisione di piano (`crs_decisions`, R4.6.3)
+    // risolve un CRS che i metadati dichiarano `missing`; la decisione vive
+    // nel piano ed entra nel `plan_hash`, quindi e' tracciata altrove.
+    //
+    // Non esistendo una direzione sempre valida, un confronto qui
+    // rifiuterebbe contratti corretti. La coerenza del CRS resta dove ha il
+    // contesto per deciderla: la discovery e la risoluzione per precedenza.
+    //
+    // Tipi geometrici: qui il controllo resta a DUE lati presenti, e non e'
+    // una scorciatoia. Per R3.4.1 «non dichiarato» e' uno stato legittimo su
+    // entrambi i lati: un contratto puo' dichiarare tipi che i metadati non
+    // portano ancora (dopo un'op che li cambia, prima dell'emissione), e una
+    // colonna puo' portarli senza che il contratto li abbia letti. Rendere
+    // errore l'asimmetria rifiuterebbe contratti validi; la contraddizione,
+    // invece, e' sempre un errore.
+    let Some(declared) = geometry.types.value() else {
+        return Ok(());
+    };
+    if parsed_declaration != declared.declaration() {
+        return Err(PlenoraError::Schema(format!(
+            "colonna geometrica `{}`: types_declaration del contratto ({}) diversa dai metadati canonici ({metadata_declaration})",
+            geometry.name,
+            declared.declaration().as_str()
+        )));
+    }
+    let declared_types = declared.to_canonical_list();
+    if parsed_types.to_canonical_list() != declared_types {
+        return Err(PlenoraError::Schema(format!(
+            "colonna geometrica `{}`: elenco dei tipi del contratto diverso dai metadati canonici",
+            geometry.name
+        )));
+    }
+    Ok(())
 }
 
 /// Statistica di runtime (ADR 5).
@@ -1399,8 +1616,8 @@ mod tests {
     fn field_allocator_assigns_monotonic_ids_without_consuming_on_peek() {
         let mut allocator = FieldAllocator::new(41);
         assert_eq!(allocator.peek(), FieldId(41));
-        assert_eq!(allocator.alloc(), FieldId(41));
-        assert_eq!(allocator.alloc(), FieldId(42));
+        assert_eq!(allocator.alloc().expect("id fresco"), FieldId(41));
+        assert_eq!(allocator.alloc().expect("id fresco"), FieldId(42));
         assert_eq!(allocator.peek(), FieldId(43));
         assert_eq!(FieldAllocator::default().peek(), FieldId(0));
     }
@@ -1410,7 +1627,7 @@ mod tests {
         let mut allocator = FieldAllocator::default();
         allocator.observe(FieldId(7));
         assert_eq!(allocator.peek(), FieldId(8));
-        assert_eq!(allocator.alloc(), FieldId(8));
+        assert_eq!(allocator.alloc().expect("id fresco"), FieldId(8));
         // Osservare un id gia' coperto non fa arretrare il cursore.
         allocator.observe(FieldId(3));
         assert_eq!(allocator.peek(), FieldId(9));
@@ -1420,21 +1637,21 @@ mod tests {
     fn field_allocator_intern_rename_and_derive_follow_column_identity() {
         let mut allocator = FieldAllocator::default();
         // Interning: stesso nome -> stesso id, nomi diversi -> id diversi.
-        let id = allocator.intern("geom");
-        assert_eq!(allocator.intern("geom"), id);
-        assert_ne!(allocator.intern("other"), id);
+        let id = allocator.intern("geom").expect("id");
+        assert_eq!(allocator.intern("geom").expect("id"), id);
+        assert_ne!(allocator.intern("other").expect("id"), id);
 
         // Rinomina: l'id segue la colonna (D16).
         allocator.rename("geom", "geometry");
-        assert_eq!(allocator.intern("geometry"), id);
+        assert_eq!(allocator.intern("geometry").expect("id"), id);
 
         // Derivazione: nuovo id, sostituisce il binding del nome.
-        let derived = allocator.derive("geometry");
+        let derived = allocator.derive("geometry").expect("id");
         assert_ne!(derived, id);
-        assert_eq!(allocator.intern("geometry"), derived);
+        assert_eq!(allocator.intern("geometry").expect("id"), derived);
         // Gli id internati non collidono con quelli osservati.
         allocator.observe(FieldId(100));
-        assert!(allocator.intern("fresh").0 > 100);
+        assert!(allocator.intern("fresh").expect("id").0 > 100);
     }
 
     #[test]

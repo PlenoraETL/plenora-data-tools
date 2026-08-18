@@ -9,8 +9,8 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, is_scalar_string, require_scalar_string,
-    require_utf8, typed,
+    analyze_append, check_output_name, contract_error, require_scalar_string,
+    require_scalar_string_field, require_utf8, typed,
 };
 use crate::{security, strings, Limits};
 
@@ -169,16 +169,7 @@ pub(in crate::analyze) fn analyze_stable_fingerprint(
         // via `scalar_as_string`, quindi i tipi fuori profilo (List, Struct)
         // fallirebbero a runtime: fail-closed gia' in validazione.
         for field in input.schema.fields() {
-            if !is_scalar_string(field.data_type()) {
-                return contract_error(
-                    op,
-                    format!(
-                        "colonna {}: tipo {:?} non leggibile come scalare testuale",
-                        field.name(),
-                        field.data_type()
-                    ),
-                );
-            }
+            require_scalar_string_field(op, field)?;
         }
     } else {
         let mut seen: HashSet<&str> = HashSet::new();

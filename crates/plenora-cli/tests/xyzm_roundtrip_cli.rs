@@ -200,7 +200,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
 
     let run = run_cli(&plan, &input, &output_path);
     assert!(!run.status.success(), "input XYZ accettato da geo.buffer");
-    let stderr = String::from_utf8_lossy(&run.stderr);
+    let stderr = String::from_utf8_lossy(&run.stdout);
     assert!(
         stderr.contains("geo.buffer"),
         "l'errore cita l'op: {stderr}"
@@ -245,7 +245,7 @@ fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
         "incoerenza metadato/celle passata silenziosamente"
     );
     let envelope: serde_json::Value =
-        serde_json::from_slice(&run.stderr).expect("envelope row diagnostics");
+        serde_json::from_slice(&run.stdout).expect("envelope row diagnostics");
     assert_eq!(envelope["error"]["category"], "data_mapping");
     assert_eq!(
         envelope["error"]["row_diagnostics"]["counts"]["geometry.invalid_wkb"],

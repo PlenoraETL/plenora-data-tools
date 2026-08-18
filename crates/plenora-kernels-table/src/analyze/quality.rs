@@ -506,7 +506,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
             // R2.4: dataset derivato — i metadata di schema dell'input NON si
             // ereditano (come `reconcile`, R5.1). Deroga segnalata.
             for name in ["name", "errors", "warnings"] {
-                fields.derive(name);
+                fields.derive(name)?;
             }
             let schema = Schema::new(vec![
                 Field::new("name", DataType::Utf8, false),

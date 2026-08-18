@@ -3,15 +3,14 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate};
-use num_traits::ToPrimitive;
 use serde_json::Value;
 
-use super::interpreter::root_temporal_type;
+use super::static_type::Kind;
 use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
-use super::{BinaryOperator, Expression, ExpressionTransform, Function, OutputType, UnaryOperator};
+use super::{BinaryOperator, Expression, ExpressionTransform, Function, UnaryOperator};
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, DIVISION_BY_ZERO_MESSAGE,
-    NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
+    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string,
+    DIVISION_BY_ZERO_MESSAGE, NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
 };
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int64Array,
@@ -104,6 +103,28 @@ enum FastColumn<'a> {
     Other(&'a ArrayRef),
 }
 
+// Conversioni con arrotondamento DICHIARATO (DER-005).
+//
+// `table.expression` produce `Float64` per contratto: il double e' il tipo
+// del risultato, non un passaggio intermedio. Le stesse conversioni valgono
+// nel percorso generico (`scalar_as_f64_rounded`), ed e' quel che le tiene
+// d'accordo: un fast path esatto e un generico arrotondato darebbero due
+// risposte diverse sullo stesso input, che e' peggio di entrambe.
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
+const fn integer_rounded(value: i64) -> f64 {
+    value as f64
+}
+
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
+const fn unsigned_rounded(value: u64) -> f64 {
+    value as f64
+}
+
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
+fn decimal_rounded(unscaled: i128, factor: f64) -> f64 {
+    (unscaled as f64) / factor
+}
+
 impl<'a> FastColumn<'a> {
     fn new(array: &'a ArrayRef) -> Self {
         let any = array.as_any();
@@ -156,18 +177,14 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(values.value(row).to_f64().ok_or_else(|| {
-                        PlenoraError::Schema("intero non rappresentabile come f64".into())
-                    })?)
+                    finite_number(integer_rounded(values.value(row)))
                 }
             }
             Self::U64(values) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(values.value(row).to_f64().ok_or_else(|| {
-                        PlenoraError::Schema("uint64 non rappresentabile come f64".into())
-                    })?)
+                    finite_number(unsigned_rounded(values.value(row)))
                 }
             }
             Self::Date32(values) => {
@@ -181,20 +198,19 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(values.value(row).to_f64().ok_or_else(|| {
-                        PlenoraError::Schema("timestamp non rappresentabile come f64".into())
-                    })?)
+                    finite_number(integer_rounded(values.value(row)))
                 }
             }
             Self::Decimal128(values, factor) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(
-                        values.value(row).to_f64().ok_or_else(|| {
-                            PlenoraError::Schema("decimal128 non rappresentabile come f64".into())
-                        })? / factor,
-                    )
+                    // Arrotondamento dichiarato (DER-005): `expression`
+                    // produce `Float64` per contratto, e un decimal
+                    // frazionario non ha un double esatto. Verificare il solo
+                    // `unscaled` — come faceva la versione precedente —
+                    // dichiarava un'esattezza che la divisione non ha.
+                    finite_number(decimal_rounded(values.value(row), *factor))
                 }
             }
             Self::Str(values) => Ok(if values.is_null(row) {
@@ -238,7 +254,7 @@ fn other_column(array: &ArrayRef, row: usize) -> Result<FastValue<'static>> {
             | DataType::Date32
             | DataType::Timestamp(_, _)
     ) {
-        return scalar_as_f64(array.as_ref(), row)?
+        return scalar_as_f64_rounded(array.as_ref(), row)?
             .map_or_else(|| Ok(FastValue::Null), finite_number);
     }
     Ok(scalar_as_string(array.as_ref(), row)?.map_or_else(
@@ -438,7 +454,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Length => FastValue::Number(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
-                        .map_err(|_| PlenoraError::InvalidPlan("testo troppo lungo".into()))?,
+                        .map_err(|_| PlenoraError::ResourceLimit("testo troppo lungo".into()))?,
                 ),
                 Function::Year => {
                     let date =
@@ -1005,36 +1021,6 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
     }
 }
 
-/// Equivalente di `resolved_output_type` su `FastValue`.
-fn resolved_output_type_fast(
-    values: &[FastValue<'_>],
-    configured: OutputType,
-) -> Result<OutputType> {
-    if !matches!(configured, OutputType::Auto) {
-        return Ok(configured);
-    }
-    let mut resolved = None;
-    for value in values {
-        let current = match value {
-            FastValue::Null => continue,
-            FastValue::Number(_) => OutputType::Number,
-            FastValue::Boolean(_) => OutputType::Boolean,
-            FastValue::Text(_) => OutputType::Text,
-            FastValue::Date32(_) => OutputType::Date32,
-            FastValue::TimestampMs(_) => OutputType::TimestampMs,
-        };
-        if resolved.is_some_and(|previous| {
-            std::mem::discriminant(&previous) != std::mem::discriminant(&current)
-        }) {
-            return Err(PlenoraError::Schema(
-                "expression produce tipi eterogenei; dichiarare output_type".into(),
-            ));
-        }
-        resolved = Some(current);
-    }
-    Ok(resolved.unwrap_or(OutputType::Text))
-}
-
 /// Equivalente di `scalar_date32` su `FastValue`.
 fn fast_scalar_date32(value: &FastValue<'_>, context: &str) -> Result<Option<i32>> {
     match value {
@@ -1066,7 +1052,24 @@ impl<'a> FastProgram<'a> {
         }
     }
 
-    pub fn run(&self, batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
+    /// Come [`Self::run`] con il tipo ricavato dallo schema: usato dai
+    /// test-oracolo, che confrontano fast e generico sulla stessa config.
+    #[cfg(test)]
+    pub fn run_auto(
+        &self,
+        batch: &RecordBatch,
+        config: &ExpressionTransform,
+    ) -> Result<RecordBatch> {
+        let kind = super::interpreter::static_output_kind(batch, config)?;
+        self.run(batch, config, kind)
+    }
+
+    pub fn run(
+        &self,
+        batch: &RecordBatch,
+        config: &ExpressionTransform,
+        kind: Kind,
+    ) -> Result<RecordBatch> {
         let mut values = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
@@ -1091,21 +1094,8 @@ impl<'a> FastProgram<'a> {
             &rejections,
             "valori expression rifiutati; consultare row_diagnostics",
         )?;
-        let mut resolved = resolved_output_type_fast(&values, config.output_type)?;
-        // Auto con tutti i valori null: una radice date_trunc risolve il tipo
-        // temporale dallo schema di input, mai Utf8 (come il generico).
-        if matches!(config.output_type, OutputType::Auto)
-            && values.iter().all(|value| matches!(value, FastValue::Null))
-        {
-            if let Some(temporal) = root_temporal_type(&config.expression, batch)? {
-                resolved = temporal;
-            }
-        }
-        match resolved {
-            OutputType::Auto => Err(PlenoraError::Internal(
-                "output_type Auto non risolto".into(),
-            )),
-            OutputType::Number => replace_or_append(
+        match kind {
+            Kind::Number => replace_or_append(
                 batch,
                 &config.output_column,
                 DataType::Float64,
@@ -1117,7 +1107,7 @@ impl<'a> FastProgram<'a> {
                         .collect::<Result<Vec<_>>>()?,
                 )),
             ),
-            OutputType::Boolean => replace_or_append(
+            Kind::Boolean => replace_or_append(
                 batch,
                 &config.output_column,
                 DataType::Boolean,
@@ -1129,7 +1119,7 @@ impl<'a> FastProgram<'a> {
                         .collect::<Result<Vec<_>>>()?,
                 )),
             ),
-            OutputType::Text => replace_or_append(
+            Kind::Text => replace_or_append(
                 batch,
                 &config.output_column,
                 DataType::Utf8,
@@ -1141,7 +1131,7 @@ impl<'a> FastProgram<'a> {
                         .collect::<Result<Vec<_>>>()?,
                 )),
             ),
-            OutputType::Date32 => replace_or_append(
+            Kind::Date32 => replace_or_append(
                 batch,
                 &config.output_column,
                 DataType::Date32,
@@ -1155,7 +1145,7 @@ impl<'a> FastProgram<'a> {
             ),
             // Timestamp timezone-aware rifiutati in ingresso: l'output e'
             // sempre Timestamp(ms) senza timezone (decisione documentata).
-            OutputType::TimestampMs => replace_or_append(
+            Kind::TimestampMs => replace_or_append(
                 batch,
                 &config.output_column,
                 DataType::Timestamp(TimeUnit::Millisecond, None),

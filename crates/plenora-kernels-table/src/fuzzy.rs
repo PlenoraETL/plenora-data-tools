@@ -51,7 +51,8 @@ use plenora_core::arrow::array::{Float64Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
-use crate::joins::{combine_horizontal, FastHasher, HorizontalNames};
+use crate::hashing::FastHasher;
+use crate::joins::{combine_horizontal, HorizontalNames};
 use crate::{utf8_column, validate_output_name, Limits};
 use plenora_core::{PlenoraError, Result};
 
@@ -440,8 +441,10 @@ enum FuzzyRowForm<'a> {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: config non valida (come `validate_config`); blocco destro
-///   oltre `max_candidates`; output oltre `limits.max_rows` o
+/// - `InvalidPlan`: config non valida (come `validate_config`).
+/// - `ResourceLimit`: blocco destro
+///   oltre `max_candidates`;
+/// - `ResourceLimit`: output oltre `limits.max_rows` o
 ///   `limits.max_columns`;
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
 ///   nome della colonna score con lo schema di output; errore Arrow nella
@@ -491,9 +494,24 @@ pub fn fuzzy_join(
         }
     }
     let max_candidates = config.max_candidates();
-    for rows in blocks.values() {
+    // Il blocco segnalato e' scelto deterministicamente: il piu' grande, e a
+    // parita' di dimensione quello con la chiave lessicograficamente minore.
+    // Iterando `blocks.values()` il blocco incontrato per primo dipendeva
+    // dall'ordine di visita della `HashMap` — un dettaglio di implementazione
+    // dell'hasher, non una proprieta' dell'input — e con piu' blocchi
+    // sovradimensionati il conteggio nel messaggio poteva cambiare fra
+    // esecuzioni (ADR-0001: l'identita' dell'errore e' stabile).
+    let worst = blocks
+        .iter()
+        .max_by(|(left_key, left_rows), (right_key, right_rows)| {
+            left_rows
+                .len()
+                .cmp(&right_rows.len())
+                .then_with(|| right_key.cmp(left_key))
+        });
+    if let Some((_, rows)) = worst {
         if rows.len() > max_candidates {
-            return Err(PlenoraError::InvalidPlan(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "fuzzy_join: blocco con {} candidati oltre max_candidates {max_candidates}",
                 rows.len()
             )));
@@ -589,7 +607,7 @@ pub fn fuzzy_join(
             scores.push(None);
         }
         if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "fuzzy_join supera max_rows".into(),
             ));
         }
@@ -625,14 +643,15 @@ pub fn fuzzy_join(
         config.how == FuzzyHow::Left,
     ));
     if fields.len() > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "fuzzy_join supera max_columns".into(),
         ));
     }
     let mut columns = output.columns().to_vec();
     columns.push(Arc::new(Float64Array::from(scores)));
     let schema = Schema::new_with_metadata(fields, output.schema().metadata().clone());
-    output = RecordBatch::try_new(Arc::new(schema), columns)?;
+    let cardinalita = output.num_rows();
+    output = crate::batch_with_rows(Arc::new(schema), columns, cardinalita)?;
     Ok(output)
 }
 

@@ -69,7 +69,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
                 let current = *value;
                 *value = value
                     .checked_add(1)
-                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow row number".into()))?;
+                    .ok_or_else(|| PlenoraError::ResourceLimit("overflow row number".into()))?;
                 Ok(Some(current))
             })
             .collect::<Result<Vec<_>>>()?
@@ -80,7 +80,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
                     .ok()
                     .and_then(|row| config.start.checked_add(row))
                     .map(Some)
-                    .ok_or_else(|| PlenoraError::InvalidPlan("overflow row number".into()))
+                    .ok_or_else(|| PlenoraError::ResourceLimit("overflow row number".into()))
             })
             .collect::<Result<Vec<_>>>()?
     };
@@ -371,17 +371,17 @@ pub struct Limit {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: numero di righe non rappresentabile come u64, `offset` o
+/// - `ResourceLimit`: numero di righe non rappresentabile come u64, `offset` o
 ///   `n` non rappresentabili come usize.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     let rows = u64::try_from(batch.num_rows())
-        .map_err(|_| PlenoraError::InvalidPlan("limit: righe oltre u64".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("limit: righe oltre u64".into()))?;
     let start = config.offset.min(rows);
     let count = config.n.min(rows - start);
     let start = usize::try_from(start)
-        .map_err(|_| PlenoraError::InvalidPlan("limit: offset oltre usize".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("limit: offset oltre usize".into()))?;
     let count = usize::try_from(count)
-        .map_err(|_| PlenoraError::InvalidPlan("limit: n oltre usize".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("limit: n oltre usize".into()))?;
     if start == 0 && count == batch.num_rows() {
         // Finestra che copre l'intero batch: nessuna copia.
         return Ok(batch.clone());

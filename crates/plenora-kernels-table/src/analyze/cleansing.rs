@@ -125,7 +125,7 @@ pub(in crate::analyze) fn analyze_replace(
         &config.column,
         DataType::Utf8,
         true,
-    );
+    )?;
     if let Some(replaced) = fields_out
         .iter_mut()
         .find(|field| field.name() == &config.column)

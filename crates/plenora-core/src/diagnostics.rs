@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +166,219 @@ impl<'de> Deserialize<'de> for RowDiagnostics {
             .validate_for_emission()
             .map_err(serde::de::Error::custom)?;
         Ok(report)
+    }
+}
+
+/// Invariante violata fondendo due report row-scoped.
+///
+/// E' un enum e non una stringa perche' i due chiamanti — l'executor e il
+/// trasporto geo — hanno tipi di errore diversi e devono poterlo tradurre nel
+/// proprio senza inventare messaggi: [`RowDiagnosticsMergeError::message`] e'
+/// la sola forma testuale, `&'static str`, senza dati.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowDiagnosticsMergeError {
+    /// I due report descrivono contratti, scope, basi d'indice o limiti
+    /// diversi: non sono lo stesso report e non vanno sommati.
+    IncompatibleReports,
+    /// L'offset sorgente porta un indice fuori intervallo.
+    SourceIndexOverflow,
+    /// Somma di `observed_total` fuori intervallo.
+    ObservedTotalOverflow,
+    /// Somma di `total` fuori intervallo.
+    TotalOverflow,
+    /// Somma di `input_total` fuori intervallo.
+    InputTotalOverflow,
+    /// Somma dei conteggi per causa fuori intervallo.
+    CauseCountOverflow,
+    /// Numero di esempi non rappresentabile.
+    ExampleCountOverflow,
+    /// Report di scope `Write` con payload di scrittura: non esiste una
+    /// semantica di fusione dichiarata per `diagnostic_state_counts` e
+    /// `write_outcome`, e fonderne solo una parte perderebbe in silenzio
+    /// proprio i campi che distinguono quel report.
+    WriteScopeNotMergeable,
+}
+
+impl RowDiagnosticsMergeError {
+    /// Messaggio stabile dell'invariante violata (nessun valore dei dati).
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::IncompatibleReports => "report row-scoped incompatibili nello stesso stream",
+            Self::SourceIndexOverflow => "indice sorgente fuori intervallo",
+            Self::ObservedTotalOverflow => "conteggio row-scoped fuori intervallo",
+            Self::TotalOverflow => "totale row-scoped fuori intervallo",
+            Self::InputTotalOverflow => "input_total diagnostico overflow",
+            Self::CauseCountOverflow => "conteggio causa fuori intervallo",
+            Self::ExampleCountOverflow => "numero esempi fuori intervallo",
+            Self::WriteScopeNotMergeable => {
+                "report row-scoped di scrittura non fondibile: payload write senza semantica di fusione"
+            }
+        }
+    }
+}
+
+impl fmt::Display for RowDiagnosticsMergeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+/// Peggiore fra due livelli di completeness: `Unknown` > `Partial` >
+/// `Complete`.
+///
+/// Fondere due report non puo' mai aumentare cio' che si sa: il risultato
+/// eredita il livello di conoscenza piu' debole dei due contributi.
+const fn worst_completeness(
+    left: RowDiagnosticsCompleteness,
+    right: RowDiagnosticsCompleteness,
+) -> RowDiagnosticsCompleteness {
+    match (left, right) {
+        (RowDiagnosticsCompleteness::Unknown, _) | (_, RowDiagnosticsCompleteness::Unknown) => {
+            RowDiagnosticsCompleteness::Unknown
+        }
+        (RowDiagnosticsCompleteness::Partial, _) | (_, RowDiagnosticsCompleteness::Partial) => {
+            RowDiagnosticsCompleteness::Partial
+        }
+        (RowDiagnosticsCompleteness::Complete, RowDiagnosticsCompleteness::Complete) => {
+            RowDiagnosticsCompleteness::Complete
+        }
+    }
+}
+
+impl RowDiagnostics {
+    /// Fonde `incoming` nel report accumulato applicando l'offset sorgente
+    /// assoluto: conteggi sommati in aritmetica controllata, esempi limitati
+    /// a `examples_limit`, completeness degradata se un contributo qualunque
+    /// non e' completo.
+    ///
+    /// Vive qui, accanto al tipo, perche' la stessa procedura serviva due
+    /// percorsi — l'executor del DAG e il runner fuso del trasporto geo — e
+    /// ne esistevano due copie parallele, identiche riga per riga a meno del
+    /// tipo di errore. E' logica di contratto (R9.9: mai un indice inventato,
+    /// mai un overflow silenzioso): due copie sono due occasioni di divergere
+    /// su un report che finisce in output.
+    ///
+    /// # Errors
+    ///
+    /// [`RowDiagnosticsMergeError`] su report incompatibili o su qualunque
+    /// somma fuori intervallo.
+    pub fn merge_into(
+        aggregate: &mut Option<Self>,
+        mut incoming: Self,
+        source_offset: u64,
+    ) -> std::result::Result<(), RowDiagnosticsMergeError> {
+        for example in &mut incoming.examples {
+            example.source_index = source_offset
+                .checked_add(example.source_index)
+                .ok_or(RowDiagnosticsMergeError::SourceIndexOverflow)?;
+        }
+        let Some(existing) = aggregate.as_ref() else {
+            *aggregate = Some(incoming);
+            return Ok(());
+        };
+        let mut merged = existing.clone();
+        if merged.contract != incoming.contract
+            || merged.scope != incoming.scope
+            || merged.index_basis != incoming.index_basis
+            || merged.examples_limit != incoming.examples_limit
+        {
+            return Err(RowDiagnosticsMergeError::IncompatibleReports);
+        }
+        merged.observed_total = merged
+            .observed_total
+            .checked_add(incoming.observed_total)
+            .ok_or(RowDiagnosticsMergeError::ObservedTotalOverflow)?;
+        merged.total = match (merged.total, incoming.total) {
+            (Some(left), Some(right)) => Some(
+                left.checked_add(right)
+                    .ok_or(RowDiagnosticsMergeError::TotalOverflow)?,
+            ),
+            _ => None,
+        };
+        merged.input_total = match (merged.input_total, incoming.input_total) {
+            (Some(left), Some(right)) => Some(
+                left.checked_add(right)
+                    .ok_or(RowDiagnosticsMergeError::InputTotalOverflow)?,
+            ),
+            _ => None,
+        };
+        for (cause, count) in incoming.counts {
+            let entry = merged.counts.entry(cause).or_default();
+            *entry = entry
+                .checked_add(count)
+                .ok_or(RowDiagnosticsMergeError::CauseCountOverflow)?;
+        }
+        let incoming_write_payload =
+            incoming.diagnostic_state_counts.is_some() || incoming.write_outcome.is_some();
+        let incoming_example_count = incoming.examples.len();
+        let before = merged.examples.len();
+        for example in incoming.examples {
+            if u64::try_from(merged.examples.len())
+                .map_err(|_| RowDiagnosticsMergeError::ExampleCountOverflow)?
+                >= merged.examples_limit
+            {
+                break;
+            }
+            merged.examples.push(example);
+        }
+        merged.examples_truncated = merged.examples_truncated
+            || incoming.examples_truncated
+            || merged.examples.len().saturating_sub(before) < incoming_example_count;
+        // Reticolo esplicito della completeness: `Unknown` > `Partial` >
+        // `Complete`, e la fusione tiene il PEGGIORE dei due.
+        //
+        // L'assegnazione diretta era dipendente dall'ordine: `Unknown` che
+        // riceveva `Partial` diventava `Partial`, cioe' migliorava
+        // illegittimamente l'informazione — «non so quanto ho visto» tornava
+        // «ho visto una parte» — mentre nell'ordine opposto restava
+        // `Unknown`. Due stream con gli stessi contributi in ordine diverso
+        // producevano due report diversi.
+        merged.completeness = worst_completeness(merged.completeness, incoming.completeness);
+        if incoming.completeness != RowDiagnosticsCompleteness::Complete {
+            let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
+            for limit in incoming.knowledge_limits.unwrap_or_default() {
+                if !knowledge_limits.contains(&limit) {
+                    knowledge_limits.push(limit);
+                }
+            }
+            merged.knowledge_limits = (!knowledge_limits.is_empty()).then_some(knowledge_limits);
+        }
+        // Scope `Write`: i contatori di stato e l'esito di scrittura sono
+        // parte del report e vanno fusi anch'essi. Finche' non esiste una
+        // semantica di fusione dichiarata per questi due campi, un report
+        // `Write` non e' fondibile e va rifiutato invece di essere fuso a
+        // meta' — perdendo in silenzio proprio i campi che lo distinguono.
+        if merged.scope == RowDiagnosticScope::Write
+            && (merged.diagnostic_state_counts.is_some()
+                || merged.write_outcome.is_some()
+                || incoming_write_payload)
+        {
+            return Err(RowDiagnosticsMergeError::WriteScopeNotMergeable);
+        }
+        *aggregate = Some(merged);
+        Ok(())
+    }
+
+    /// Declassa il report a `Partial` con `total` sconosciuto e il knowledge
+    /// limit dichiarato: la scansione completa non e' piu' dimostrabile.
+    #[must_use]
+    pub fn into_partial(mut self, knowledge_limit: &str) -> Self {
+        // `Unknown` non torna `Partial`: declassare non puo' aumentare cio'
+        // che si sa. Il reticolo vale anche qui.
+        self.completeness =
+            worst_completeness(self.completeness, RowDiagnosticsCompleteness::Partial);
+        self.total = None;
+        // I limiti gia' registrati si UNISCONO, non si sostituiscono:
+        // rimpiazzarli con un singoletto cancellava conoscenza gia' acquisita
+        // — il report diceva un solo motivo di incompletezza dove ce n'erano
+        // piu' d'uno.
+        let mut limits = self.knowledge_limits.take().unwrap_or_default();
+        if !limits.iter().any(|limit| limit == knowledge_limit) {
+            limits.push(knowledge_limit.to_owned());
+        }
+        self.knowledge_limits = Some(limits);
+        self
     }
 }
 

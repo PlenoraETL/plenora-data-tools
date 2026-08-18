@@ -20,8 +20,11 @@ mod sort;
 mod window;
 
 pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
-pub(crate) use compare::compare_cells_typed;
-pub(crate) use grouping::{KeyColumn, KeyHasher};
+// Il comparatore tipizzato e' pubblico: e' il contratto d'ordine dei kernel
+// (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
+pub(crate) use crate::hashing::KeyHasher;
+pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
+pub(crate) use grouping::KeyColumn;
 pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, Keep, Sort, TopN};
 pub use window::{
     rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
@@ -31,7 +34,7 @@ pub use window::{
 // `use super::*`, come nel modulo originario).
 #[cfg(test)]
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
+    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
     validate_output_name,
 };
 #[cfg(test)]
@@ -570,7 +573,12 @@ mod tests {
                         .map(|rows| {
                             let count = if matches!(aggregation.function, AggFunction::Count) {
                                 rows.iter()
-                                    .filter(|row| !batch.column(index).is_null(**row))
+                                    .filter(|row| {
+                                        !crate::is_logically_null(
+                                            batch.column(index).as_ref(),
+                                            **row,
+                                        )
+                                    })
                                     .count()
                             } else {
                                 let mut seen = HashSet::new();
@@ -586,7 +594,7 @@ mod tests {
                                 seen.len()
                             };
                             i64::try_from(count).map(Some).map_err(|_| {
-                                PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into())
+                                PlenoraError::ResourceLimit("conteggio gruppo oltre i64".into())
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -643,7 +651,9 @@ mod tests {
                         .map(|rows| {
                             let raw = rows
                                 .iter()
-                                .map(|row| scalar_as_f64(batch.column(index).as_ref(), *row))
+                                .map(|row| {
+                                    scalar_as_f64_rounded(batch.column(index).as_ref(), *row)
+                                })
                                 .collect::<Result<Vec<_>>>()?;
                             if !aggregation.skip_null && raw.iter().any(Option::is_none) {
                                 return Ok(None);
@@ -1756,7 +1766,7 @@ mod tests {
         for rows in partitions.values() {
             let numbers = rows
                 .iter()
-                .map(|row| scalar_as_f64(ordered.column(source).as_ref(), *row))
+                .map(|row| scalar_as_f64_rounded(ordered.column(source).as_ref(), *row))
                 .collect::<Result<Vec<_>>>()?;
             for (position, row) in rows.iter().enumerate() {
                 let start = (position + 1).saturating_sub(config.window);
@@ -1779,13 +1789,15 @@ mod tests {
                     RollingKind::Stddev if values.len() <= config.ddof => None,
                     RollingKind::Stddev => {
                         let length = values.len().to_f64().ok_or_else(|| {
-                            PlenoraError::InvalidPlan(
+                            PlenoraError::ResourceLimit(
                                 "dimensione rolling non rappresentabile".into(),
                             )
                         })?;
                         let mean = values.iter().sum::<f64>() / length;
                         let divisor = (values.len() - config.ddof).to_f64().ok_or_else(|| {
-                            PlenoraError::InvalidPlan("divisore rolling non rappresentabile".into())
+                            PlenoraError::ResourceLimit(
+                                "divisore rolling non rappresentabile".into(),
+                            )
                         })?;
                         Some(
                             (values
@@ -1861,7 +1873,7 @@ mod tests {
         for rows in partitions.values() {
             let numbers = rows
                 .iter()
-                .map(|row| scalar_as_f64(ordered.column(source_index).as_ref(), *row))
+                .map(|row| scalar_as_f64_rounded(ordered.column(source_index).as_ref(), *row))
                 .collect::<Result<Vec<_>>>()?;
             let mut sorted = numbers.iter().flatten().copied().collect::<Vec<_>>();
             sorted.sort_by(f64::total_cmp);

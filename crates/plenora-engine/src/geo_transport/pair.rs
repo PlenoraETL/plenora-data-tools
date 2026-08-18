@@ -710,7 +710,7 @@ fn append_column_batches(
         let mut columns = batch.columns().to_vec();
         columns.push(column);
         out_batches.push(
-            RecordBatch::try_new(out_schema.clone(), columns)
+            plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
                 .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
@@ -749,7 +749,7 @@ fn replace_geometry_batches(
         );
         offset = end;
         out_batches.push(
-            RecordBatch::try_new(out_schema.clone(), columns)
+            plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
                 .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
@@ -892,7 +892,7 @@ pub fn pair_arrow_with_format(
                 let mut columns = batch.columns().to_vec();
                 columns.push(std::sync::Arc::new(Float64Array::from(values)));
                 out_batches.push(
-                    RecordBatch::try_new(out_schema.clone(), columns)
+                    plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
                         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
                 );
             }
@@ -977,7 +977,7 @@ pub fn pair_arrow_with_format(
                 let mut columns = batch.columns().to_vec();
                 columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
                 out_batches.push(
-                    RecordBatch::try_new(out_schema.clone(), columns)
+                    plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
                         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
                 );
             }

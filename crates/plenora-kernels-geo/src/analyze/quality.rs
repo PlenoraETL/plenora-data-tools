@@ -59,7 +59,7 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         None,
         false,
     )?);
-    let field_id = fields_allocator.alloc();
+    let field_id = fields_allocator.alloc()?;
     let output_geometry = GeometryColumnContract {
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),

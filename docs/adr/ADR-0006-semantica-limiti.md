@@ -112,3 +112,32 @@ nogeo-tools.
 - Se in futuro `max_total_rows_processed` diventerà limite operativo, la sua
   semantica dovrà essere ridefinita in modo indipendente dal piano fisico
   (nuovo ADR).
+
+## Emendamento 2026-08-16 — validazione unica dei limiti e `max_parallelism`
+
+**`Limits::validate` e' l'unico punto di validazione dei limiti effettivi**, e
+il planner la invoca su OGNI piano, geo compresi. Prima le regole erano
+sparpagliate: il motore tabellare legacy controllava zeri e
+`spill_partitions` fuori `2..=4096`, ma solo per i piani che lo
+attraversavano; il preparer applicava `spill_partitions.max(2)` **in
+silenzio**, eseguendo con limiti diversi da quelli dichiarati. Un limite
+fuori dominio si rifiuta, non si corregge alle spalle di chi ha scritto il
+piano.
+
+Alle regole legacy si aggiunge `max_expansion_factor`, che dev'essere finito
+e positivo: un `NaN` — non costruibile da JSON ma sì via API Rust — rende
+falso ogni confronto successivo, aprendo il limite invece di chiuderlo.
+
+Il confronto del fattore di espansione non passa piu' per `f64` sui
+CONTATORI: le righe di output si confrontano con la soglia in aritmetica
+esatta intero-contro-double (`compare_u64`), perche' due conteggi distinti
+oltre 2^53 non devono coincidere proprio dove il limite serve.
+
+**`max_parallelism` e' ora applicato davvero**, dimensionando il pool Rayon
+del processo (`plenora_engine::parallelism::configure`), invocato sia dalla
+CLI sia da `execute` — quest'ultimo perche' altrimenti il limite restava
+inapplicato per chi incorpora l'engine come libreria, cioe' proprio dove
+nessuno lo avrebbe notato. E' una configurazione **di processo** e non di
+piano: la deroga corrispondente e' DER-006 in `docs/deroghe.md`, con il
+motivo (lo stato dell'executor e' thread-locale per scelta, e
+`ThreadPool::install` richiede chiusure `Send`) e la condizione di rientro.

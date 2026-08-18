@@ -1,0 +1,7 @@
+[
+  { "nome": "Roma",    "regione": "Lazio",     "abitanti": 2748109 },
+  { "nome": "Milano",  "regione": "Lombardia", "abitanti": 1371498 },
+  { "nome": "Napoli",  "regione": "Campania",  "abitanti":  913462 },
+  { "nome": "Torino",  "regione": "Piemonte",  "abitanti":  848748 },
+  { "nome": "Bologna", "regione": "Emilia",    "abitanti":  392564 }
+]

@@ -75,6 +75,10 @@
 //! piu' una riga di sintesi per scenario con delta percentuale, sovrapposizione
 //! delle bande e note di sanita'.
 
+// Benchmark: usano il percorso permissivo di `Inputs`, deprecato ma
+// ancora supportato. Non e' codice di produzione.
+#![allow(deprecated)]
+
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Instant;

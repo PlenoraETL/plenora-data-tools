@@ -204,7 +204,7 @@ fn run_v4_senza_inputs_fallisce() {
         .output()
         .expect("run");
     assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("input"), "stderr: {stderr}");
     assert!(!output_path.exists(), "nessun output parziale");
 }
@@ -226,13 +226,15 @@ fn errore_cli_emette_envelope_a_quattro_assi() {
         .output()
         .expect("run");
     assert!(!result.status.success());
+    // Golden di canale: l'envelope vive su STDOUT e stderr resta vuoto,
+    // come in `plenora-database-tools`.
     assert!(
-        result.stdout.is_empty(),
-        "stdout libero per risultati: {}",
-        String::from_utf8_lossy(&result.stdout)
+        result.stderr.is_empty(),
+        "stderr deve restare vuoto: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
     let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stderr).expect("stderr deve essere l'envelope JSON par. 9");
+        serde_json::from_slice(&result.stdout).expect("stdout deve essere l'envelope JSON par. 9");
     assert_eq!(envelope["status"], "error");
     assert_eq!(envelope["protocol_version"], 1);
     for axis in ["category", "phase", "remote_effect", "message"] {
@@ -281,7 +283,11 @@ fn run_v4_schema_mismatch_fallisce_in_validazione() {
         .output()
         .expect("run");
     assert!(!result.status.success());
-    assert!(!result.stderr.is_empty(), "errore diagnostico presente");
+    assert!(!result.stdout.is_empty(), "errore diagnostico presente");
+    assert!(
+        result.stderr.is_empty(),
+        "l'envelope va su stdout e stderr resta vuoto"
+    );
     assert!(!output_path.exists(), "nessun output parziale");
 }
 
@@ -302,7 +308,7 @@ fn run_v4_non_sovrascrive_un_output_esistente() {
         .output()
         .expect("run");
     assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("esistente"), "stderr: {stderr}");
     assert_eq!(
         std::fs::read(&output_path).expect("output intatto"),
@@ -613,11 +619,16 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
         .output()
         .expect("run");
 
-    assert_eq!(result.status.code(), Some(2));
-    assert!(result.stdout.is_empty());
+    // WKB invalido: categoria `data_mapping` -> exit 3 (ADR-0003 §em.).
+    assert_eq!(result.status.code(), Some(3));
+    assert!(
+        result.stderr.is_empty(),
+        "stderr deve restare vuoto: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(!output.exists(), "nessun output parziale");
     let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stderr).expect("envelope JSON");
+        serde_json::from_slice(&result.stdout).expect("envelope JSON");
     assert_eq!(
         envelope["error"]["context"]["node"], "centroid-node",
         "{envelope}"
@@ -681,7 +692,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
         !validate.status.success(),
         "geo.buffer su CRS mancante deve fallire"
     );
-    let stderr = String::from_utf8_lossy(&validate.stderr);
+    let stderr = String::from_utf8_lossy(&validate.stdout);
     assert!(
         stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
         "stderr: {stderr}"
@@ -700,7 +711,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
         .output()
         .expect("run");
     assert!(!run.status.success(), "run deve fallire in validazione");
-    let stderr = String::from_utf8_lossy(&run.stderr);
+    let stderr = String::from_utf8_lossy(&run.stdout);
     assert!(
         stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
         "stderr: {stderr}"
@@ -988,7 +999,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         validate.status.success(),
         "stdout: {} — stderr: {}",
         String::from_utf8_lossy(&validate.stdout),
-        String::from_utf8_lossy(&validate.stderr)
+        String::from_utf8_lossy(&validate.stdout)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     let geometry = &summary["edges"][0]["contract"]["geometry"];
@@ -1013,7 +1024,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         run.status.success(),
         "stdout: {} — stderr: {}",
         String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
+        String::from_utf8_lossy(&run.stdout)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
@@ -1054,7 +1065,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         revalidate.status.success(),
         "round-trip stdout: {} — stderr: {}",
         String::from_utf8_lossy(&revalidate.stdout),
-        String::from_utf8_lossy(&revalidate.stderr)
+        String::from_utf8_lossy(&revalidate.stdout)
     );
 }
 
@@ -1212,7 +1223,7 @@ fn dag_v4_geo_op_on_declared_unresolved_fails_with_distinct_cause() {
         .output()
         .expect("validate");
     assert!(!validate.status.success(), "geo.buffer deve fallire");
-    let stderr = String::from_utf8_lossy(&validate.stderr);
+    let stderr = String::from_utf8_lossy(&validate.stdout);
     assert!(
         stderr.contains("declared_unresolved") && stderr.contains("decisione esplicita nel piano"),
         "stderr: {stderr}"
@@ -1248,7 +1259,7 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
         !validate.status.success(),
         "decisione su missing deve fallire"
     );
-    let stderr = String::from_utf8_lossy(&validate.stderr);
+    let stderr = String::from_utf8_lossy(&validate.stdout);
     assert!(stderr.contains("non e' applicabile"), "stderr: {stderr}");
 }
 
@@ -1989,4 +2000,332 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
     // Le righe ci sono tutte (esecuzione completata, mai un rifiuto a meta').
     let rows: usize = reader.map(|batch| batch.expect("batch").num_rows()).sum();
     assert_eq!(rows, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Binding degli input: due input invertiti non devono MAI arrivare
+// all'esecuzione
+// ---------------------------------------------------------------------------
+
+/// Piano v4 con DUE input: left join su `id`. E' asimmetrico, quindi
+/// scambiare i due lati cambia il risultato — ed e' esattamente cio' che la
+/// forma posizionale non poteva intercettare.
+fn plan_due_input() -> serde_json::Value {
+    json!({
+        "schema_version": 4,
+        "inputs": ["sinistra", "destra"],
+        "nodes": [
+            {"id": "j", "op": "table.join", "in": ["sinistra", "destra"],
+             "config": {"left_keys": ["id"], "right_keys": ["id"], "how": "left"}},
+        ],
+        "output": "j",
+    })
+}
+
+/// Due input con lo STESSO schema e contenuti diversi: e' il caso in cui uno
+/// scambio non produce alcun errore di schema.
+fn scrivi_due_input(
+    directory: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let plan = directory.join("plan.json");
+    std::fs::write(&plan, serde_json::to_vec(&plan_due_input()).expect("json")).expect("plan");
+    let sinistra = directory.join("sinistra.arrow");
+    let destra = directory.join("destra.arrow");
+    write_ipc(
+        &sinistra,
+        &table_schema(),
+        &[table_batch(&[1, 2], &["a", "b"])],
+    );
+    write_ipc(
+        &destra,
+        &table_schema(),
+        &[table_batch(&[2, 3], &["x", "y"])],
+    );
+    (plan, sinistra, destra)
+}
+
+fn righe_id(path: &std::path::Path) -> Vec<i64> {
+    let file = std::fs::File::open(path).expect("open output");
+    let reader = FileReader::try_new(file, None).expect("reader");
+    let mut ids = Vec::new();
+    for batch in reader {
+        let batch = batch.expect("batch");
+        let colonna = batch
+            .column_by_name("id")
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .expect("colonna id");
+        ids.extend((0..batch.num_rows()).map(|riga| colonna.value(riga)));
+    }
+    ids
+}
+
+#[test]
+fn due_input_invertiti_non_raggiungono_mai_l_esecuzione() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, sinistra, destra) = scrivi_due_input(directory.path());
+
+    // 1. Forma posizionale con i percorsi INVERTITI: rifiutata, e senza aver
+    //    prodotto alcun output.
+    let output_invertito = directory.path().join("invertito.arrow");
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&destra)
+        .arg(&sinistra)
+        .arg("--output")
+        .arg(&output_invertito)
+        .output()
+        .expect("run");
+    assert!(
+        !esito.status.success(),
+        "la forma posizionale con due input deve fallire"
+    );
+    assert!(
+        !output_invertito.exists(),
+        "nessun output deve essere pubblicato da un binding non verificabile"
+    );
+    let messaggio = String::from_utf8_lossy(&esito.stdout);
+    assert!(
+        messaggio.contains("--input sinistra=PERCORSO")
+            && messaggio.contains("--input destra=PERCORSO"),
+        "l'errore deve indicare il rimedio nominale: {messaggio}"
+    );
+
+    // 2. Anche con i percorsi nell'ordine GIUSTO la forma posizionale e'
+    //    rifiutata: il difetto non e' l'ordine sbagliato, e' che l'ordine non
+    //    e' verificabile. Accettarla quando per caso e' giusta significa
+    //    accettarla sempre.
+    let output_ordinato = directory.path().join("ordinato.arrow");
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&sinistra)
+        .arg(&destra)
+        .arg("--output")
+        .arg(&output_ordinato)
+        .output()
+        .expect("run");
+    assert!(!esito.status.success());
+    assert!(!output_ordinato.exists());
+
+    // 3. `validate` si comporta allo stesso modo: il rifiuto non arriva
+    //    all'ultimo momento, e nemmeno da un percorso diverso.
+    let esito = cli()
+        .arg("validate")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&sinistra)
+        .arg(&destra)
+        .output()
+        .expect("validate");
+    assert!(!esito.status.success());
+
+    // 4. La forma nominale esegue, e il binding conta davvero: con i nomi
+    //    scambiati il risultato e' DIVERSO. E' la dimostrazione che la forma
+    //    posizionale, prima, poteva pubblicare in silenzio l'output sbagliato.
+    let corretto = directory.path().join("corretto.arrow");
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(format!("sinistra={}", sinistra.display()))
+        .arg("--input")
+        .arg(format!("destra={}", destra.display()))
+        .arg("--output")
+        .arg(&corretto)
+        .output()
+        .expect("run");
+    assert!(
+        esito.status.success(),
+        "la forma nominale deve eseguire: {}",
+        String::from_utf8_lossy(&esito.stdout)
+    );
+
+    let scambiato = directory.path().join("scambiato.arrow");
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(format!("sinistra={}", destra.display()))
+        .arg("--input")
+        .arg(format!("destra={}", sinistra.display()))
+        .arg("--output")
+        .arg(&scambiato)
+        .output()
+        .expect("run");
+    assert!(esito.status.success());
+
+    // Left join: le righe sono quelle del lato sinistro. Scambiando i due
+    // file cambia proprio l'insieme delle righe pubblicate.
+    assert_eq!(righe_id(&corretto), vec![1, 2]);
+    assert_eq!(righe_id(&scambiato), vec![2, 3]);
+}
+
+#[test]
+fn un_solo_input_resta_compatibile_con_la_forma_posizionale() {
+    // Con un input dichiarato non c'e' niente da scambiare: la forma
+    // posizionale resta accettata, come deciso per il rilascio.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = write_table_fixture(directory.path());
+    let output_path = directory.path().join("uno.arrow");
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        esito.status.success(),
+        "un solo input deve restare compatibile: {}",
+        String::from_utf8_lossy(&esito.stdout)
+    );
+    assert!(output_path.exists());
+}
+
+// ---------------------------------------------------------------------------
+// Ottavo giro, finding 2 — `ResourceLimit` instradato senza perdite
+// ---------------------------------------------------------------------------
+
+#[test]
+fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
+    // Il difetto: un limite di risorsa alzato DENTRO un passo veniva
+    // riavvolto da `step_error` in un `Replayed` la cui categoria non era
+    // piu' `resource_limit`. L'errore restava, ma cambiava natura: exit code
+    // e categoria dicevano «piano invalido» per un piano corretto i cui dati
+    // non entravano nel budget.
+    //
+    // Il join e' il posto giusto per verificarlo: il limite non lo alza
+    // l'executor ma il kernel, quindi l'errore attraversa `step_error` prima
+    // di diventare un envelope.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "schema_version": 4,
+            "inputs": ["sinistra", "destra"],
+            // Quattro righe per lato entrano (max_input_rows = 8), ma la
+            // chiave e' la stessa per tutte: il join produce 16 righe e il
+            // kernel chiude sul PROPRIO conteggio.
+            "limits": {"max_input_rows": 8},
+            "nodes": [
+                {"id": "j", "op": "table.join", "in": ["sinistra", "destra"],
+                 "config": {"left_keys": ["id"], "right_keys": ["id"], "how": "inner"}},
+            ],
+            "output": "j",
+        }))
+        .expect("json"),
+    )
+    .expect("plan");
+    let sinistra = directory.path().join("sinistra.arrow");
+    let destra = directory.path().join("destra.arrow");
+    write_ipc(
+        &sinistra,
+        &table_schema(),
+        &[table_batch(&[1, 1, 1, 1], &["a", "b", "c", "d"])],
+    );
+    write_ipc(
+        &destra,
+        &table_schema(),
+        &[table_batch(&[1, 1, 1, 1], &["w", "x", "y", "z"])],
+    );
+    let uscita = directory.path().join("out.arrow");
+
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(format!("sinistra={}", sinistra.display()))
+        .arg("--input")
+        .arg(format!("destra={}", destra.display()))
+        .arg("--output")
+        .arg(&uscita)
+        .output()
+        .expect("cli");
+
+    assert!(!esito.status.success(), "il limite deve chiudere");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&esito.stdout).expect("envelope su stdout");
+    assert_eq!(
+        envelope["error"]["category"], "resource_limit",
+        "la categoria non deve perdersi attraversando `step_error`: {envelope}"
+    );
+    assert_eq!(
+        esito.status.code(),
+        Some(4),
+        "e l'exit code dedicato deve seguirla: {envelope}"
+    );
+    // La diagnostica del passo non va persa nel preservare la categoria: il
+    // nodo che ha alzato il limite resta nell'envelope.
+    let testo = envelope.to_string();
+    assert!(
+        testo.contains("\"j\"") || testo.contains("table.join"),
+        "nodo e operazione restano nella diagnostica: {envelope}"
+    );
+    assert!(!uscita.exists(), "nessun output da un limite superato");
+}
+
+#[test]
+fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
+    // Stessa classe dal lato del confine IPC: un messaggio che sfonda un
+    // tetto del trasporto non e' un dato malformato (`data_mapping`) ma una
+    // risorsa esaurita, e la fase e' `read` perche' il tetto scatta mentre si
+    // legge, non mentre si scrive.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": {"max_payload_bytes": 512},
+            "nodes": [{"id": "f", "op": "table.filter", "in": ["main"],
+                       "config": {"column": "id", "operator": ">", "value": 0}}],
+            "output": "f",
+        }))
+        .expect("json"),
+    )
+    .expect("plan");
+    let input = directory.path().join("input.arrow");
+    let ids: Vec<i64> = (0..4_000).collect();
+    let etichette: Vec<String> = ids.iter().map(|id| format!("riga-{id}")).collect();
+    let riferimenti: Vec<&str> = etichette.iter().map(String::as_str).collect();
+    write_ipc(&input, &table_schema(), &[table_batch(&ids, &riferimenti)]);
+    let uscita = directory.path().join("out.arrow");
+
+    let esito = cli()
+        .arg("run")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(format!("main={}", input.display()))
+        .arg("--output")
+        .arg(&uscita)
+        .output()
+        .expect("cli");
+
+    assert!(!esito.status.success(), "il tetto deve chiudere");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&esito.stdout).expect("envelope su stdout");
+    assert_eq!(
+        envelope["error"]["category"], "resource_limit",
+        "un tetto del trasporto e' una risorsa, non una mappatura: {envelope}"
+    );
+    assert_eq!(
+        envelope["error"]["phase"], "read",
+        "la fase e' quella in cui il tetto scatta: {envelope}"
+    );
+    assert!(!uscita.exists(), "nessun output da un tetto superato");
 }

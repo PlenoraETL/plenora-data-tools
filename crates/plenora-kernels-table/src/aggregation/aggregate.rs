@@ -99,7 +99,7 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
         AggFunction::Sum => sum,
         AggFunction::Avg | AggFunction::Mean => {
             sum / len.to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
+                PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?
         }
         AggFunction::Min => raw
@@ -119,11 +119,11 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
                 return Ok(None);
             }
             let length = len.to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
+                PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
             let divisor = (len - aggregation.ddof).to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("divisore statistico non rappresentabile".into())
+                PlenoraError::ResourceLimit("divisore statistico non rappresentabile".into())
             })?;
             let variance = raw
                 .iter()
@@ -169,7 +169,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
         AggFunction::Sum => sum,
         AggFunction::Avg | AggFunction::Mean => {
             sum / values.len().to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
+                PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?
         }
         AggFunction::Min => values.iter().copied().reduce(f64::min).unwrap_or_default(),
@@ -179,11 +179,11 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 return Ok(None);
             }
             let length = values.len().to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("dimensione gruppo non rappresentabile".into())
+                PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
             let divisor = (values.len() - aggregation.ddof).to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("divisore statistico non rappresentabile".into())
+                PlenoraError::ResourceLimit("divisore statistico non rappresentabile".into())
             })?;
             let variance = values
                 .iter()
@@ -202,7 +202,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
             })?;
             values.sort_by(f64::total_cmp);
             let last = (values.len() - 1).to_f64().ok_or_else(|| {
-                PlenoraError::InvalidPlan("dimensione quantile non rappresentabile".into())
+                PlenoraError::ResourceLimit("dimensione quantile non rappresentabile".into())
             })?;
             let position = quantile * last;
             let lower = position
@@ -241,10 +241,10 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// # Errors
 ///
 /// - `InvalidPlan`: `group_by` vuoto; funzione `quantile` senza il parametro
-///   `quantile` o con valore fuori `[0, 1]`; conteggi, dimensioni o indici
-///   non rappresentabili
-///   (`i64`/`f64`/`usize`); nome di output non valido (come
-///   `validate_output_name`);
+///   `quantile` o con valore fuori `[0, 1]`; indice di quantile non valido;
+///   nome di output non valido (come `validate_output_name`);
+/// - `ResourceLimit`: conteggi e dimensioni di gruppo non rappresentabili
+///   (`i64`/`f64`): crescono col numero di righe del gruppo;
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
 ///   schema; valore intero non rappresentabile come `f64`; in piu' gli
 ///   errori di `scalar_as_string`/`scalar_as_f64` (tipi fuori dal fast
@@ -337,9 +337,13 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         .iter()
         .map(|index| batch.schema().field(*index).as_ref().clone())
         .collect::<Vec<_>>();
-    let mut result = RecordBatch::try_new(
+    let righe_gruppi = group_columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    let mut result = crate::batch_with_rows(
         Arc::new(plenora_core::arrow::schema::Schema::new(group_fields)),
         group_columns,
+        righe_gruppi,
     )?;
     if config.aggregations.is_empty() {
         let counts = groups
@@ -388,10 +392,16 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
             AggFunction::Count => {
                 let column = batch.column(index);
                 let values = map_groups(&groups, parallel, |rows| {
-                    let count = rows.iter().filter(|row| !column.is_null(**row)).count();
-                    i64::try_from(count)
-                        .map(Some)
-                        .map_err(|_| PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into()))
+                    // `count` conta i valori, non le chiavi: una chiave
+                    // dictionary valida che punta a una entry nulla e' una
+                    // riga senza valore e non va contata.
+                    let count = rows
+                        .iter()
+                        .filter(|row| !crate::is_logically_null(column.as_ref(), **row))
+                        .count();
+                    i64::try_from(count).map(Some).map_err(|_| {
+                        PlenoraError::ResourceLimit("conteggio gruppo oltre i64".into())
+                    })
                 })?;
                 result = replace_or_append(
                     &result,
@@ -416,9 +426,9 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     // Come il generico: valori distinti piu' una voce per il
                     // null solo quando `skip_null` e' falso.
                     let count = seen.len() + usize::from(null_seen && !aggregation.skip_null);
-                    i64::try_from(count)
-                        .map(Some)
-                        .map_err(|_| PlenoraError::InvalidPlan("conteggio gruppo oltre i64".into()))
+                    i64::try_from(count).map(Some).map_err(|_| {
+                        PlenoraError::ResourceLimit("conteggio gruppo oltre i64".into())
+                    })
                 })?;
                 result = replace_or_append(
                     &result,

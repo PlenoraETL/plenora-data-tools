@@ -9,7 +9,7 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Schema};
 use serde::Deserialize;
 
-use crate::joins::FastHasher;
+use crate::hashing::FastHasher;
 use crate::select_rows;
 use crate::Limits;
 use plenora_core::{PlenoraError, Result};
@@ -38,7 +38,7 @@ enum KeyColumn<'a> {
     TimestampMillis(&'a TimestampMillisecondArray),
     Decimal128(&'a Decimal128Array),
     Binary(&'a BinaryArray),
-    DictionaryUtf8(&'a DictionaryArray<Int32Type>, &'a StringArray),
+    DictionaryUtf8(&'a DictionaryArray<Int32Type>),
 }
 
 impl KeyColumn<'_> {
@@ -53,7 +53,13 @@ impl KeyColumn<'_> {
             Self::TimestampMillis(values) => values.is_null(row),
             Self::Decimal128(values) => values.is_null(row),
             Self::Binary(values) => values.is_null(row),
-            Self::DictionaryUtf8(values, _) => values.is_null(row),
+            // Il null logico della dictionary: una chiave valida puo'
+            // puntare a una entry nulla, e quella riga deve entrare nella
+            // chiave compatta come NULL, non come stringa vuota — altrimenti
+            // due righe distinte diventano lo stesso gruppo.
+            Self::DictionaryUtf8(values) => {
+                matches!(crate::dictionary_utf8_value(values, row), Ok(None))
+            }
         };
         if is_null {
             output.push(0);
@@ -90,13 +96,50 @@ impl KeyColumn<'_> {
                 output.extend_from_slice(&values.value(row).to_be_bytes());
             }
             Self::Binary(values) => encode_variable(values.value(row), output),
-            Self::DictionaryUtf8(values, dictionary) => {
-                let key = usize::try_from(values.keys().value(row))
-                    .map_err(|_| PlenoraError::Schema("chiave dictionary negativa".into()))?;
-                encode_variable(dictionary.value(key).as_bytes(), output);
+            Self::DictionaryUtf8(values) => {
+                // Il ramo null e' gia' stato gestito sopra: qui un `None`
+                // sarebbe un'incoerenza fra i due controlli, non un valore.
+                let testo = crate::dictionary_utf8_value(values, row)?.ok_or_else(|| {
+                    PlenoraError::Internal("cella dictionary nulla nel ramo non nullo".into())
+                })?;
+                encode_variable(testo.as_bytes(), output);
             }
         }
         Ok(())
+    }
+}
+
+/// Tipi che [`CompactRowEncoder`] sa codificare come chiave di riga.
+///
+/// NON e' il profilo scalare testuale, per quanto le due liste si somiglino:
+/// l'encoder non formatta niente, scrive la rappresentazione binaria. Accetta
+/// percio' `Decimal128` a qualunque scala (codifica l'`i128` grezzo) e non
+/// risolve la timezone (codifica i millisecondi). Confondere i due profili
+/// significherebbe rifiutare in validazione piani che il kernel esegue.
+///
+/// Vive QUI, accanto all'encoder che descrive, e non nell'analizzatore: una
+/// copia del `match` altrove e' una copia che puo' divergere, ed e' la classe
+/// di difetti che questa serie di review ha gia' trovato tre volte.
+/// `CompactRowEncoder::try_new` e questo predicato sono tenuti allineati da
+/// `il_predicato_e_l_encoder_accettano_gli_stessi_tipi`, e un tipo dichiarato
+/// codificabile che nessun ramo dell'encoder gestisce produce un errore
+/// `Internal`, non un rifiuto silenzioso.
+#[must_use]
+pub fn key_encodable(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8
+        | DataType::Int64
+        | DataType::Float64
+        | DataType::Boolean
+        | DataType::UInt64
+        | DataType::Date32
+        | DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Binary => true,
+        DataType::Dictionary(key, value) => {
+            key.as_ref() == &DataType::Int32 && value.as_ref() == &DataType::Utf8
+        }
+        _ => false,
     }
 }
 
@@ -181,13 +224,21 @@ impl<'a> CompactRowEncoder<'a> {
                         .ok_or_else(|| {
                             PlenoraError::Schema("array Dictionary incoerente".into())
                         })?;
-                    let dictionary = values
+                    // Il dizionario si risolve riga per riga dal risolutore
+                    // condiviso, che conosce il null logico: tenerne qui una
+                    // copia significherebbe due letture diverse dello stesso
+                    // array.
+                    values
                         .values()
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or_else(|| PlenoraError::Schema("dictionary non Utf8".into()))?;
-                    Ok(KeyColumn::DictionaryUtf8(values, dictionary))
+                    Ok(KeyColumn::DictionaryUtf8(values))
                 }
+                other if key_encodable(other) => Err(PlenoraError::Internal(format!(
+                    "tipo {other:?} dichiarato codificabile da `key_encodable` ma \
+                     non gestito da nessun ramo dell'encoder"
+                ))),
                 other => Err(PlenoraError::Schema(format!(
                     "tipo {other:?} non supportato dalle set operation"
                 ))),
@@ -242,7 +293,7 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`) o errore Arrow
 ///   nella concat o nella costruzione del batch;
-/// - `InvalidPlan`: overflow nel conteggio delle righe o totale oltre
+/// - `ResourceLimit`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn concat_compatible(
     left: &RecordBatch,
@@ -253,9 +304,9 @@ pub fn concat_compatible(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::InvalidPlan("overflow union_distinct".into()))?;
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow union_distinct".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "union_distinct supera max_rows".into(),
         ));
     }
@@ -278,13 +329,14 @@ pub fn concat_compatible(
                 .with_nullable(left.is_nullable() || right.is_nullable())
         })
         .collect::<Vec<_>>();
-    Ok(RecordBatch::try_new(
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(
             fields,
             left.schema().metadata().clone(),
         )),
         columns,
-    )?)
+        rows,
+    )
 }
 
 fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result<Vec<usize>> {
@@ -311,7 +363,7 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
 ///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
 ///   o errore nella selezione o nella concat finale (come `select_rows` e
 ///   `concat_compatible`);
-/// - `InvalidPlan`: overflow nel conteggio delle righe o totale oltre
+/// - `ResourceLimit`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn union_distinct(
     left: &RecordBatch,
@@ -329,9 +381,9 @@ pub fn union_distinct(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::InvalidPlan("overflow union_distinct".into()))?;
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow union_distinct".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "union_distinct supera max_rows".into(),
         ));
     }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
+use plenora_core::error::ReplayedError;
 use plenora_core::{PlenoraError, Result};
 use serde::de::DeserializeOwned;
 
@@ -898,14 +899,14 @@ fn validate_batch(
     names_validated: &mut Option<SchemaRef>,
 ) -> Result<()> {
     if batch.num_rows() > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(format!(
+        return Err(PlenoraError::ResourceLimit(format!(
             "batch con {} righe oltre il limite {}",
             batch.num_rows(),
             limits.max_rows
         )));
     }
     if batch.num_columns() > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(format!(
+        return Err(PlenoraError::ResourceLimit(format!(
             "schema con {} colonne oltre il limite {}",
             batch.num_columns(),
             limits.max_columns
@@ -958,11 +959,11 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
                 .ok_or_else(|| PlenoraError::Schema("downcast LargeUtf8 fallito".into()))?;
             let bytes = strings.iter().flatten().try_fold(0_usize, |total, value| {
                 total.checked_add(value.len()).ok_or_else(|| {
-                    PlenoraError::InvalidPlan("overflow dimensione colonna LargeUtf8".into())
+                    PlenoraError::ResourceLimit("overflow dimensione colonna LargeUtf8".into())
                 })
             })?;
             if bytes > i32::MAX as usize {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow".into(),
                 ));
             }
@@ -973,10 +974,14 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
             columns.push(column.clone());
         }
     }
-    Ok(RecordBatch::try_new(
+    // Le colonne derivano dall'input: con un batch a zero colonne e i
+    // metadata `pandas` da rimuovere, `try_new` RIFIUTAVA di costruire il
+    // batch: un'operazione legittima falliva.
+    plenora_core::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns,
-    )?)
+        batch.num_rows(),
+    )
 }
 
 /// Config tipizzata di un passo tabellare (E1/V2): deserializzata UNA VOLTA
@@ -1397,12 +1402,11 @@ pub fn unary_spill_capable(plan: &ValidatedPlan) -> bool {
     )
 }
 
-/// Accumulatore delle metriche di spill della catena (saturating: contatori
-/// di osservabilita', mai un overflow a bloccare l'esecuzione).
-const fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMetrics) {
-    total.bytes_written = total.bytes_written.saturating_add(delta.bytes_written);
-    total.bytes_read = total.bytes_read.saturating_add(delta.bytes_read);
-    total.files = total.files.saturating_add(delta.files);
+/// Accumulatore delle metriche di spill della catena: satura invece di
+/// avvolgere o abortire, e registra la saturazione in `SpillMetrics` perche'
+/// arrivi fino alle metriche di esecuzione.
+fn accumulate_spill(total: &mut spill::SpillMetrics, delta: spill::SpillMetrics) {
+    total.accumulate(delta);
 }
 
 /// Workspace di spill per un'operazione: sulla directory del chiamante
@@ -1533,6 +1537,46 @@ pub(crate) fn execute_batch_with_spill_row_diagnostics(
     execute_batch_with_spill_impl(batch, plan, spill_dir, true)
 }
 
+/// Contesto del passo per il percorso LEGACY (piani `schema_version <= 3`).
+///
+/// L'equivalente DAG e' `executor::step_error`. Qui vale la stessa regola: un
+/// errore che porta una CATEGORIA da preservare non viene avvolto in
+/// `Execution`, perche' l'involucro la sostituirebbe con `execution` e
+/// l'exit code 6. Prima l'avvolgimento era incondizionato, quindi un limite
+/// di risorsa alzato da un kernel usciva dal percorso legacy come
+/// `execution` anche dopo che il percorso DAG era stato corretto: la stessa
+/// esecuzione dava due categorie diverse a seconda della versione del piano.
+///
+/// Le categorie preservate sono quelle su cui il chiamante DECIDE in modo
+/// diverso da «il passo e' fallito»: `ResourceLimit` (rilancia con piu'
+/// budget, exit 4), `Internal` (un'invariante NOSTRA e' rotta: exit 70, ed e'
+/// un difetto da segnalare a noi) e `Cancelled` (nessuna decisione: e' stato
+/// lui a fermare). Il contesto — indice del passo e operazione — non va
+/// perso: viaggia in `Replayed`, che porta categoria e attribuzione insieme.
+fn legacy_step_error(error: &PlenoraError, index: usize, operation: &str) -> PlenoraError {
+    let categoria = error.category();
+    if crate::error_propagation::categoria_preservata(categoria) {
+        return PlenoraError::Replayed(Box::new(ReplayedError {
+            category: categoria,
+            phase: error.phase(),
+            remote_effect: error.remote_effect(),
+            retry: error.retry_disposition(),
+            message: error.to_string(),
+            node: Some(index.to_string()),
+            operation: Some(operation.to_owned()),
+            execution_id: None,
+            execution_reason: error.execution_reason().map(ToOwned::to_owned),
+        }));
+    }
+    PlenoraError::Execution {
+        node: index.to_string(),
+        operation: operation.to_owned(),
+        // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
+        execution_id: String::new(),
+        reason: error.to_string(),
+    }
+}
+
 fn execute_batch_with_spill_impl(
     mut batch: RecordBatch,
     plan: &ValidatedPlan,
@@ -1569,23 +1613,11 @@ fn execute_batch_with_spill_impl(
                     )
                 }
             } else {
-                PlenoraError::Execution {
-                    node: index.to_string(),
-                    operation: step.operation.clone(),
-                    // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
-                    execution_id: String::new(),
-                    reason: error.to_string(),
-                }
+                legacy_step_error(&error, index, &step.operation)
             }
         })?;
-        validate_batch(&batch, plan.limits(), &mut names_validated).map_err(|error| {
-            PlenoraError::Execution {
-                node: index.to_string(),
-                operation: step.operation.clone(),
-                execution_id: String::new(),
-                reason: error.to_string(),
-            }
-        })?;
+        validate_batch(&batch, plan.limits(), &mut names_validated)
+            .map_err(|error| legacy_step_error(&error, index, &step.operation))?;
     }
     Ok((batch, spill_metrics))
 }

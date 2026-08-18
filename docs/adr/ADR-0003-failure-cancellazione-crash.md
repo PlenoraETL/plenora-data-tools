@@ -147,3 +147,130 @@ Implementato:
 multi-ramo, errori secondari come telemetria, cancellazione di rami concorrenti,
 confini `UnwindSafe` ridisegnati per il parallelo, token passato ai kernel,
 isolamento in processo per backend instabili.
+
+## Emendamento 2026-08-16 — canale dell'envelope ed exit code
+
+Due decisioni sull'uscita della CLI, prese insieme perche' riguardano lo stesso
+confine: come un chiamante viene a sapere che qualcosa e' andato storto.
+
+### L'envelope passa da stderr a stdout
+
+**Stato precedente.** L'envelope a quattro assi (R9.1, `protocol_version` 1)
+veniva emesso su `stderr`, con `stdout` riservato a risultati e metriche. Non
+era una svista: la review P1-5 del 2026-08-03 lo aveva riportato li'
+deliberatamente, come «contratto pubblico storico», e due test di canale
+(`nogeo_cli`, `dag_v4_cli`) asserivano che `stdout` restasse vuoto in caso di
+errore.
+
+**Decisione.** L'envelope e' emesso su `stdout`; `stderr` resta vuoto; l'exit
+code resta non zero.
+
+**Motivo.** `plenora-database-tools` — il componente gemello, gia' in esercizio
+con CLI e SDK Python — emette gli errori su `stdout` e lascia `stderr` vuoto
+(`docs/cli/ERROR-PROTOCOL.md` di quel repository). Un orchestratore che invoca
+entrambi i componenti dovrebbe altrimenti sapere, per ciascuno, dove cercare
+l'errore: due convenzioni opposte nella stessa famiglia sono un difetto di
+prodotto, non una differenza di stile. La decisione del 2026-08-03 precede
+l'esistenza di quel gemello e non aveva questo vincolo da soddisfare.
+
+**Impatto.** Rottura per chi legge gli errori da `stderr`: registrata in
+`docs/api-breaking-2026-08-16.md`. I test di canale sono stati invertiti —
+asseriscono ora che `stderr` resti vuoto — invece di essere rimossi: la
+proprieta' «l'envelope sta in UN canale solo, e i due non si mescolano» e'
+quella che conta, ed e' rimasta.
+
+**Condizione di ripensamento.** Se `plenora-database-tools` tornasse su
+`stderr`, questo emendamento si ritira e la decisione del 2026-08-03 torna in
+vigore: il criterio e' l'uniformita' della famiglia, non la preferenza per un
+canale.
+
+### Gli exit code sono una DIVERGENZA dichiarata, non un allineamento
+
+L'exit code non e' allineato al gemello, e va detto invece di lasciarlo
+credere: `plenora-database-tools` usa `ExitCode::FAILURE` — cioe' **1** — per
+qualunque errore, e il suo contratto documentato e' solo «exit code non-zero».
+
+Qui i codici restano piu' informativi, come proiezione della `category`
+dell'envelope: `2` piano o configurazione invalidi, `3` contratto/schema/
+capability, `4` limite di risorsa, `5` I/O, pubblicazione, rete o
+autorizzazioni, `6` fallimento di esecuzione di un nodo, `70` difetto interno,
+`130` cancellazione (128 + SIGINT, gia' deciso in questo ADR e non
+rinunciabile).
+
+**Perche' non si allinea.** Allinearsi significherebbe collassare tutto su `1`,
+cioe' buttare via informazione che qui esiste — e rinunciare al `130`, che
+questo ADR usa per distinguere la cancellazione cooperativa da un fallimento.
+Un'uniformita' ottenuta impoverendo entrambi non e' un guadagno.
+
+**Cosa resta condiviso, e cosa no.** La garanzia comune e' debole e vale:
+`0` in caso di successo, non zero in caso di errore. Tutto il resto e' una
+convenzione **di questo componente**: codice portabile fra i due deve leggere
+`error.category` dall'envelope, che e' la fonte di verita' condivisa, e non
+confrontare il codice numerico. La divergenza e' registrata come tale nella
+matrice di `docs/piano-usabilita.md`.
+
+## Emendamento 2026-08-16 (secondo giro) — il canale unico e' una garanzia, non un'intenzione
+
+L'emendamento precedente ha spostato l'envelope su `stdout` dichiarando
+`stderr` vuoto. La seconda review indipendente ha trovato che la garanzia
+aveva **due crepe**, entrambe fuori dal percorso dell'envelope:
+
+1. **Ctrl-C.** L'handler scriveva due avvisi su `stderr` («annullamento in
+   corso», «uscita forzata»).
+2. **Hook di panico.** Un panico intercettato da `catch_unwind` diventa un
+   errore, ma l'hook di default aveva gia' stampato su `stderr` prima
+   dell'unwinding.
+3. (terza, minore) **Avviso di durabilita' del publish**, anch'esso su
+   `stderr` — e per giunta invisibile a un consumatore automatico.
+
+Si e' scelta la garanzia reale, non la deviazione dichiarata:
+
+- **Ctrl-C**: gli avvisi restano, ma **solo quando `stderr` e' un terminale**
+  (`IsTerminal`). Per ogni consumatore non interattivo — cioe' per ogni
+  programma — `stderr` e' vuoto senza eccezioni; una persona davanti a un
+  terminale continua a vedere che la cancellazione e' partita. L'esito
+  formale resta comunque l'envelope `cancelled` su `stdout` con exit 130.
+- **Panico**: l'hook di default e' sostituito da un hook silenzioso e `main`
+  avvolge l'intero processo in `catch_unwind`. Un panico che sfugge diventa
+  un envelope `internal` su `stdout` con exit 70, che e' piu' di quanto
+  facesse prima: l'informazione non si perde, cambia canale e acquista un
+  codice.
+- **Durabilita' del publish**: non e' piu' un avviso ma il campo
+  `durability_confirmed` del documento di uscita di `run`. Un esito che
+  interessa a un programma non puo' vivere su un canale che per contratto non
+  porta nulla.
+
+La garanzia dichiarata e' quindi: **su `stderr` non interattivo la CLI non
+scrive nulla, in nessun esito** — successo, errore, cancellazione o panico.
+Verificata da `matrice_cli::stderr_resta_vuoto_su_ogni_esito_incluso_il_panico`
+e dai golden di canale.
+
+## Emendamento 2026-08-16 (terzo giro) — testo dei panici, e la garanzia verificata
+
+**Il testo di un panico non viene piu' pubblicato.** L'emendamento precedente
+convertiva un panico in errore riportandone il messaggio. Quel messaggio non e'
+scritto da noi: un `assert_eq!` dentro una dipendenza puo' includervi i valori
+confrontati, cioe' dati della riga, che finirebbero nei log di chi ci invoca.
+Gli errori da panico riportano ora solo la FORMA del payload (statico,
+dinamico, non testuale); il contesto diagnostico — nodo, operazione,
+`execution_id` — resta invariato ed e' quello che serve davvero.
+
+**La garanzia su `stderr` e' ora verificata, non solo dichiarata.**
+L'emendamento precedente affermava che gli avvisi di Ctrl-C fossero
+condizionati a `is_terminal`. Non lo erano: la modifica era stata scritta ma
+non salvata, e il codice conteneva ancora due `eprintln!` incondizionati. La
+terza review indipendente ha trovato la divergenza fra questo ADR e il codice.
+
+Il controllo e' ora nel codice, e un test **strutturale**
+(`matrice_cli::nessun_eprintln_incondizionato_nel_sorgente_della_cli`) verifica
+che ogni `eprintln!` della CLI stia dentro un ramo governato da `is_terminal`.
+Un test d'integrazione non puo' inviare `SIGINT` in modo portabile: la
+proprieta' si verifica dove e' verificabile, invece di essere solo affermata.
+
+**Exit code: la riga morta e' stata chiusa.** La tabella dei codici prevedeva
+`4` per «limite di risorsa superato», ma nessuna variante di `PlenoraError`
+produceva la categoria `resource_limit`: il codice era irraggiungibile. Ora
+esiste `PlenoraError::ResourceLimit` e i limiti di risorsa a runtime — righe,
+colonne, quota di spill, fattore di espansione, budget di memoria — lo
+producono. Il criterio: `invalid_plan` per un piano sbagliato,
+`resource_limit` per un piano corretto i cui dati non entrano nel budget.

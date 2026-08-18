@@ -283,6 +283,9 @@ fn graph(plan: &Value) -> ValidatedGraph {
     .expect("piano valido")
 }
 
+// Percorso permissivo (`Inputs::with`), deprecato ma ancora supportato:
+// questi oracoli non dichiarano contratti e ne coprono il comportamento.
+#[allow(deprecated)]
 fn two_geo_inputs(left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
         .with(
@@ -358,6 +361,7 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
         | PlenoraError::Schema(reason)
         | PlenoraError::DataMapping(reason)
         | PlenoraError::Crs(reason)
+        | PlenoraError::ResourceLimit(reason)
         | PlenoraError::Internal(reason) => (variant_name(error), None, None, reason.clone()),
         PlenoraError::Execution {
             node,
@@ -415,6 +419,7 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Crs(_) => "Crs",
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
+        PlenoraError::ResourceLimit(_) => "ResourceLimit",
         PlenoraError::Internal(_) => "Internal",
         PlenoraError::Replayed(_) => "Replayed",
         PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {
@@ -1053,8 +1058,13 @@ fn assert_v4_decode_error(
 ) -> ErrorSignature {
     let signature = error_signature(error);
     assert_eq!(
-        signature.variant, "Execution",
-        "{case}: errore di esecuzione (errore osservato: {error})"
+        // Ottavo giro: la propagazione non sostituisce piu' la categoria con
+        // `Execution`. Una geometria non conforme al contratto resta un
+        // errore di CONTRATTO, e il contesto del passo si aggiunge tramite
+        // `Replayed` invece di rimpiazzarlo.
+        signature.variant,
+        "Replayed",
+        "{case}: errore di contratto con attribuzione (errore osservato: {error})"
     );
     assert_eq!(
         signature.node.as_deref(),
@@ -1073,8 +1083,8 @@ fn assert_v4_decode_error(
     );
     assert_eq!(
         signature.category,
-        ErrorCategory::Execution,
-        "{case}: categoria"
+        ErrorCategory::InvalidPlan,
+        "{case}: la categoria dell'errore originale non viene sostituita"
     );
     let expected_reason = format!("contract violation: {v3_text} [side={side} row={row}]");
     assert_eq!(
@@ -1337,6 +1347,9 @@ fn cancellation_fixture() -> (Vec<RecordBatch>, Vec<RecordBatch>) {
     (left, right)
 }
 
+// Percorso permissivo (`Inputs::with`), deprecato ma ancora supportato:
+// questo oracolo non dichiarano contratti e ne coprono il comportamento.
+#[allow(deprecated)]
 fn run_cancellation(
     case: &str,
     cancel_at_pull: Option<usize>,
@@ -1467,19 +1480,26 @@ fn f_expansion_beyond_constraint() {
 
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
+    // Il vincolo ADR 6 e' un limite di RISORSA: il piano e' corretto, sono i
+    // dati a non entrarci. Categoria `resource_limit` (settimo giro, finding
+    // 7), non `invalid_plan`; resta grezzo, non `Execution`.
     assert_eq!(
-        signature.variant, "InvalidPlan",
+        signature.variant, "ResourceLimit",
         "{case} v4: vincolo ADR 6 grezzo, non Execution (vedi header, punto 1)"
     );
     assert_eq!(signature.node, None, "{case} v4: nessun nodo strutturato");
     assert_eq!(
         signature.category,
-        ErrorCategory::InvalidPlan,
+        ErrorCategory::ResourceLimit,
         "{case} v4: categoria"
     );
+    // Fase derivata dalla variante: `ResourceLimit` nasce eseguendo, non
+    // validando — il piano era valido, sono i dati a non entrare nel budget.
+    // `Write` e' la fase runtime di questo codebase (stessa di `Execution`,
+    // `DataMapping`, `Io`).
     assert_eq!(
         signature.phase,
-        ErrorPhase::Validate,
+        ErrorPhase::Write,
         "{case} v4: fase derivata dalla variante"
     );
     assert!(
@@ -1594,18 +1614,24 @@ fn g_governor_rejects_decoded_reservation() {
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
     assert_eq!(
-        signature.variant, "InvalidPlan",
+        // Nono giro: il budget di memoria esaurito e' `ResourceLimit`.
+        signature.variant,
+        "ResourceLimit",
         "{case}: reservation rifiutata grezza dal governor (vedi header, punto 1)"
     );
     assert_eq!(signature.node, None, "{case}: nessun nodo strutturato");
     assert_eq!(
         signature.category,
-        ErrorCategory::InvalidPlan,
+        ErrorCategory::ResourceLimit,
         "{case}: categoria"
     );
     assert_eq!(
         signature.phase,
-        ErrorPhase::Validate,
+        // Nono giro: la variante e' `ResourceLimit`, che deriva `Write` — la
+        // reservation fallisce mentre il nodo PRODUCE, non mentre si valida.
+        // I tetti del confine d'INGRESSO dichiarano invece `Read` con un tag
+        // esplicito (ADR-0009, emendamento 2026-08-17).
+        ErrorPhase::Write,
         "{case}: fase derivata dalla variante"
     );
     assert!(

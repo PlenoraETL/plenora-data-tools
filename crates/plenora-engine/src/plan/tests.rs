@@ -618,6 +618,36 @@ fn canonical_json_normalizes_numbers() {
         big_int["nodes"][0]["config"]["value"],
         big_float["nodes"][0]["config"]["value"]
     );
+
+    // Regressione (collisione plan_hash): 2^53+1 non ha un f64 esatto e
+    // arrotonda su 2^53. Canonicalizzare passando per f64 collassava i due
+    // interi sulla stessa forma canonica. Gli interi devono restare distinti
+    // e conservare le cifre esatte.
+    let odd_int = PlanV4::parse_default(&plan_with(json!(9_007_199_254_740_993_u64)))
+        .unwrap()
+        .canonical_json();
+    let exact_int = PlanV4::parse_default(&plan_with(json!(9_007_199_254_740_992_u64)))
+        .unwrap()
+        .canonical_json();
+    assert_eq!(
+        odd_int["nodes"][0]["config"]["value"],
+        json!(9_007_199_254_740_993_u64)
+    );
+    assert_ne!(
+        odd_int["nodes"][0]["config"]["value"],
+        exact_int["nodes"][0]["config"]["value"]
+    );
+
+    // Gli interi restano invariati fino a u64::MAX / i64::MIN: nessun
+    // passaggio per f64, nessuna perdita di cifre.
+    let umax = PlanV4::parse_default(&plan_with(json!(u64::MAX)))
+        .unwrap()
+        .canonical_json();
+    assert_eq!(umax["nodes"][0]["config"]["value"], json!(u64::MAX));
+    let imin = PlanV4::parse_default(&plan_with(json!(i64::MIN)))
+        .unwrap()
+        .canonical_json();
+    assert_eq!(imin["nodes"][0]["config"]["value"], json!(i64::MIN));
 }
 
 #[test]

@@ -1,18 +1,21 @@
 use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, BooleanArray, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
+use crate::hashing::FastHasher;
 use crate::Limits;
-use crate::{column_index, scalar_as_f64, scalar_as_string, select_rows, validate_output_name};
+use crate::{
+    column_index, exact_f64_from_i64, scalar_as_f64, scalar_as_string, select_rows,
+    validate_output_name,
+};
 use plenora_core::{PlenoraError, Result};
 
 fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<String>> {
@@ -144,48 +147,6 @@ impl<'a> FastKeys<'a> {
     }
 }
 
-/// Hasher moltiplicativo a blocchi (stile `FxHash`) con finalizer splitmix64.
-///
-/// Come nel fast path di `aggregate`: `SipHash` (default std) dominerebbe il
-/// costo di build/probe su milioni di righe; qui il throughput conta piu'
-/// della resistenza a input avversari.
-#[derive(Default)]
-pub(crate) struct KeyHasher(u64);
-
-impl Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            // `chunks_exact(8)` produce blocchi di esattamente 8 byte:
-            // la copia e' totale per costruzione, nessun caso fallibile.
-            let mut block = [0_u8; 8];
-            block.copy_from_slice(chunk);
-            let value = u64::from_le_bytes(block);
-            self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
-        }
-        let remainder = chunks.remainder();
-        if !remainder.is_empty() {
-            let mut tail = 0_u64;
-            for &byte in remainder {
-                tail = (tail << 8) | u64::from(byte);
-            }
-            self.0 = (self.0.rotate_left(5) ^ tail).wrapping_mul(K);
-        }
-    }
-}
-
-/// Hasher condiviso anche dal blocking di `fuzzy.rs` (stesso profilo di
-/// costo: throughput su milioni di chiavi, non resistenza avversaria).
-pub(crate) type FastHasher = BuildHasherDefault<KeyHasher>;
-
 fn take_optional(
     array: &dyn plenora_core::arrow::array::Array,
     rows: &[Option<usize>],
@@ -194,7 +155,8 @@ fn take_optional(
         .iter()
         .map(|row| {
             row.map(|row| {
-                u32::try_from(row).map_err(|_| PlenoraError::InvalidPlan("indice oltre u32".into()))
+                u32::try_from(row)
+                    .map_err(|_| PlenoraError::ResourceLimit("indice oltre u32".into()))
             })
             .transpose()
         })
@@ -257,14 +219,36 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
             ))
         }
         plenora_core::arrow::schema::DataType::Int64 => typed!(Int64Array),
+        plenora_core::arrow::schema::DataType::UInt64 => typed!(UInt64Array),
         plenora_core::arrow::schema::DataType::Float64 => typed!(Float64Array),
         plenora_core::arrow::schema::DataType::Boolean => typed!(BooleanArray),
+        plenora_core::arrow::schema::DataType::Date32 => typed!(Date32Array),
         other => {
             return Err(PlenoraError::Schema(format!(
                 "tipo chiave join non supportato: {other}"
             )))
         }
     })
+}
+
+/// `true` se `coalesce` sa fondere questo tipo di chiave.
+///
+/// `coalesce` serve solo a `right`/`outer`, dove la chiave di output e' la
+/// fusione dei due lati. L'analisi a secco verificava la sola UGUAGLIANZA dei
+/// tipi delle chiavi: un `right join` su una chiave `UInt64` passava
+/// validazione e `prepare`, e falliva a meta' esecuzione. Questo predicato e'
+/// la stessa lista che `coalesce` implementa, letta dallo schema.
+#[must_use]
+pub const fn coalesce_supported(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8
+            | DataType::Int64
+            | DataType::UInt64
+            | DataType::Float64
+            | DataType::Boolean
+            | DataType::Date32
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,7 +346,8 @@ fn join_impl(
             let fallback = take_optional(right.column(*right_index).as_ref(), &right_rows)?;
             columns[*left_index] = coalesce(columns[*left_index].as_ref(), fallback.as_ref())?;
         }
-        output = RecordBatch::try_new(output.schema(), columns)?;
+        let cardinalita = output.num_rows();
+        output = crate::batch_with_rows(output.schema(), columns, cardinalita)?;
     }
     Ok(output)
 }
@@ -370,7 +355,14 @@ fn join_impl(
 /// Coppie di indici di riga (sinistri, destri) prodotte dai percorsi join.
 type JoinRowPairs = (Vec<Option<usize>>, Vec<Option<usize>>);
 
-/// Coppie di righe del percorso generico (chiavi stringa di `key`).
+/// Coppie di righe del percorso generico (chiavi stringa di `key`), in DUE
+/// FASI come il fast path.
+///
+/// La versione precedente inseriva tutte le corrispondenze di una riga nei
+/// vettori e controllava `max_rows` solo dopo: una sola chiave ad alta
+/// molteplicita' materializzava milioni di coppie anche con un limite
+/// bassissimo, e le righe destre non abbinate si aggiungevano dopo ancora. Il
+/// conteggio preventivo copriva soltanto il fast path.
 fn join_rows_generic(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -379,41 +371,85 @@ fn join_rows_generic(
     left_keys: &[usize],
     right_keys: &[usize],
 ) -> Result<JoinRowPairs> {
+    let supera = || PlenoraError::ResourceLimit("join supera max_rows".into());
     let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
     for row in 0..right.num_rows() {
         if let Some(key) = key(right, right_keys, row)? {
             right_map.entry(key).or_default().push(row);
         }
     }
-    let mut left_rows = Vec::new();
-    let mut right_rows = Vec::new();
-    let mut matched_right = HashSet::new();
-    for left_row in 0..left.num_rows() {
-        let matches = key(left, left_keys, left_row)?.and_then(|key| right_map.get(&key));
-        if let Some(matches) = matches {
-            for right_row in matches {
-                left_rows.push(Some(left_row));
-                right_rows.push(Some(*right_row));
-                matched_right.insert(*right_row);
+    let serve_destra = matches!(config.how, JoinHow::Right | JoinHow::Outer);
+
+    // Fase 1: conteggio, nessuna coppia materializzata. Le chiavi sinistre si
+    // calcolano una volta sola e si riusano nella fase 2.
+    let left_keys_by_row: Vec<Option<String>> = (0..left.num_rows())
+        .map(|row| key(left, left_keys, row))
+        .collect::<Result<_>>()?;
+    let mut matched_right = vec![false; right.num_rows()];
+    let mut probe_total = 0_usize;
+    for key_value in &left_keys_by_row {
+        match key_value.as_ref().and_then(|key| right_map.get(key)) {
+            Some(matches) => {
+                probe_total = probe_total.checked_add(matches.len()).ok_or_else(supera)?;
+                if serve_destra {
+                    for &right_row in matches {
+                        if let Some(flag) = matched_right.get_mut(right_row) {
+                            *flag = true;
+                        }
+                    }
+                }
             }
-        } else if matches!(config.how, JoinHow::Left | JoinHow::Outer) {
-            left_rows.push(Some(left_row));
-            right_rows.push(None);
+            None if matches!(config.how, JoinHow::Left | JoinHow::Outer) => {
+                probe_total = probe_total.checked_add(1).ok_or_else(supera)?;
+            }
+            None => {}
         }
-        if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
+        if probe_total > limits.max_rows {
+            return Err(supera());
         }
     }
-    if matches!(config.how, JoinHow::Right | JoinHow::Outer) {
-        for right_row in 0..right.num_rows() {
-            if !matched_right.contains(&right_row) {
+    let unmatched_right = if serve_destra {
+        matched_right.iter().filter(|matched| !**matched).count()
+    } else {
+        0
+    };
+    let total = probe_total
+        .checked_add(unmatched_right)
+        .ok_or_else(supera)?;
+    if total > limits.max_rows {
+        return Err(supera());
+    }
+
+    // Fase 2: allocazione unica ed esatta.
+    let mut left_rows: Vec<Option<usize>> = Vec::with_capacity(total);
+    let mut right_rows: Vec<Option<usize>> = Vec::with_capacity(total);
+    for (left_row, key_value) in left_keys_by_row.iter().enumerate() {
+        match key_value.as_ref().and_then(|key| right_map.get(key)) {
+            Some(matches) => {
+                for &right_row in matches {
+                    left_rows.push(Some(left_row));
+                    right_rows.push(Some(right_row));
+                }
+            }
+            None if matches!(config.how, JoinHow::Left | JoinHow::Outer) => {
+                left_rows.push(Some(left_row));
+                right_rows.push(None);
+            }
+            None => {}
+        }
+    }
+    if serve_destra {
+        for (right_row, matched) in matched_right.iter().enumerate() {
+            if !matched {
                 left_rows.push(None);
                 right_rows.push(Some(right_row));
             }
         }
     }
-    if left_rows.len() > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
+    if left_rows.len() != total {
+        return Err(PlenoraError::Internal(
+            "join generico: conteggio e riempimento non coincidono".to_owned(),
+        ));
     }
     Ok((left_rows, right_rows))
 }
@@ -441,6 +477,23 @@ fn join_rows_fast(
     ))
 }
 
+/// Probe del fast path in DUE FASI: prima si conta, poi si riempie.
+///
+/// La versione precedente faceva del probe parallelo un solo passo: ogni
+/// chunk accumulava le proprie coppie in vettori locali e verificava
+/// `max_rows` sul PROPRIO conteggio. Molti chunk singolarmente sotto soglia
+/// producevano pero' un totale enormemente sopra, e il controllo globale
+/// arrivava solo dopo la concatenazione — quando tutte le coppie erano gia'
+/// materializzate. Il limite non limitava nulla: era una verifica a valle
+/// dell'allocazione che doveva impedire.
+///
+/// Ora la fase di conteggio non materializza niente, il totale si somma in
+/// aritmetica controllata e `max_rows` si applica PRIMA di allocare. La fase
+/// di riempimento scrive poi in un'unica allocazione esatta, per offset di
+/// prefisso, senza vettori intermedi ne' concatenazione finale.
+///
+/// L'ordine dell'output resta quello sequenziale: i chunk coprono intervalli
+/// contigui di righe sinistre e ciascuno scrive nel proprio segmento.
 fn join_rows_fast_inner<'a>(
     config: &Join,
     limits: &Limits,
@@ -448,68 +501,100 @@ fn join_rows_fast_inner<'a>(
     right_keys: &FastKeys<'a>,
 ) -> Result<JoinRowPairs> {
     let right_map = RightMap::build(right_keys);
-    let (mut left_rows, mut right_rows) = if left_keys.rows >= MIN_RIGHE_PROBE_PARALLELO {
-        // Probe in parallelo per chunk di righe sinistre: ogni chunk produce le
-        // sue coppie in ordine sequenziale e i chunk sono concatenati in
-        // ordine, quindi l'output e' identico al sequenziale. Il controllo
-        // max_rows resta per riga dentro ogni chunk (stesso errore del
-        // generico; rayon interrompe la raccolta al primo errore).
-        let chunks = left_keys.rows.div_ceil(CHUNK_PROBE);
-        let outputs = (0..chunks)
-            .into_par_iter()
-            .map(|chunk| {
-                let start = chunk * CHUNK_PROBE;
-                let end = (start + CHUNK_PROBE).min(left_keys.rows);
-                let mut chunk_left = Vec::new();
-                let mut chunk_right = Vec::new();
-                probe_range(
-                    config,
-                    limits,
-                    left_keys,
-                    &right_map,
-                    start..end,
-                    &mut chunk_left,
-                    &mut chunk_right,
-                )?;
-                Ok((chunk_left, chunk_right))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let total = outputs.iter().map(|(chunk, _)| chunk.len()).sum();
-        let mut left_rows = Vec::with_capacity(total);
-        let mut right_rows = Vec::with_capacity(total);
-        for (chunk_left, chunk_right) in outputs {
-            left_rows.extend(chunk_left);
-            right_rows.extend(chunk_right);
-        }
-        (left_rows, right_rows)
+    let parallelo = left_keys.rows >= MIN_RIGHE_PROBE_PARALLELO;
+    let chunk_size = if parallelo {
+        CHUNK_PROBE
     } else {
-        let mut left_rows = Vec::with_capacity(left_keys.rows);
-        let mut right_rows = Vec::with_capacity(left_keys.rows);
-        probe_range(
-            config,
-            limits,
-            left_keys,
-            &right_map,
-            0..left_keys.rows,
-            &mut left_rows,
-            &mut right_rows,
-        )?;
-        (left_rows, right_rows)
+        left_keys.rows.max(1)
     };
-    if matches!(config.how, JoinHow::Right | JoinHow::Outer) {
-        let mut matched_right = vec![false; right_keys.rows];
-        for right_row in right_rows.iter().flatten() {
-            matched_right[*right_row] = true;
-        }
-        for (right_row, matched) in matched_right.iter().enumerate() {
-            if !matched {
-                left_rows.push(None);
-                right_rows.push(Some(right_row));
-            }
-        }
+    let ranges: Vec<std::ops::Range<usize>> = (0..left_keys.rows.div_ceil(chunk_size))
+        .map(|chunk| {
+            let start = chunk * chunk_size;
+            start..start.saturating_add(chunk_size).min(left_keys.rows)
+        })
+        .collect();
+
+    // Con `right`/`outer` servono anche le righe destre SENZA match, e vanno
+    // contate nella fase 1: aggiungerle dopo l'allocazione — come faceva la
+    // versione precedente — rimetteva il controllo del limite a valle di cio'
+    // che deve limitare. La mappa dei match si riempie durante il conteggio,
+    // in scritture idempotenti (solo `true`), quindi l'ordine fra i thread e'
+    // irrilevante.
+    let serve_destra = matches!(config.how, JoinHow::Right | JoinHow::Outer);
+    let matched_right: Vec<AtomicBool> = if serve_destra {
+        (0..right_keys.rows)
+            .map(|_| AtomicBool::new(false))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let matched = serve_destra.then_some(matched_right.as_slice());
+
+    // Fase 1: conteggio, nessuna coppia materializzata.
+    let counts: Vec<Result<usize>> = if parallelo {
+        ranges
+            .par_iter()
+            .map(|range| count_range(config, left_keys, &right_map, range.clone(), matched))
+            .collect()
+    } else {
+        ranges
+            .iter()
+            .map(|range| count_range(config, left_keys, &right_map, range.clone(), matched))
+            .collect()
+    };
+    let counts: Vec<usize> = counts.into_iter().collect::<Result<_>>()?;
+    let supera = || PlenoraError::ResourceLimit("join supera max_rows".into());
+    let probe_total = counts
+        .iter()
+        .try_fold(0_usize, |acc, count| acc.checked_add(*count))
+        .ok_or_else(supera)?;
+    let unmatched_right = matched_right
+        .iter()
+        .filter(|flag| !flag.load(AtomicOrdering::Relaxed))
+        .count();
+    let total = probe_total
+        .checked_add(unmatched_right)
+        .ok_or_else(supera)?;
+    if total > limits.max_rows {
+        return Err(supera());
     }
-    if left_rows.len() > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
+
+    // Fase 2: una sola allocazione, esatta, riempita per offset.
+    let mut left_rows: Vec<Option<usize>> = vec![None; total];
+    let mut right_rows: Vec<Option<usize>> = vec![None; total];
+    let (probe_left, tail_left) = left_rows.split_at_mut(probe_total);
+    let (probe_right, tail_right) = right_rows.split_at_mut(probe_total);
+    fill_ranges(
+        config,
+        left_keys,
+        &right_map,
+        &ranges,
+        &counts,
+        probe_left,
+        probe_right,
+        parallelo,
+    )?;
+    // Coda: le righe destre non abbinate, in ordine di indice.
+    let mut position = 0_usize;
+    for (right_row, flag) in matched_right.iter().enumerate() {
+        if flag.load(AtomicOrdering::Relaxed) {
+            continue;
+        }
+        let (Some(left_slot), Some(right_slot)) =
+            (tail_left.get_mut(position), tail_right.get_mut(position))
+        else {
+            return Err(PlenoraError::Internal(
+                "probe del join: coda delle righe destre incoerente col conteggio".to_owned(),
+            ));
+        };
+        *left_slot = None;
+        *right_slot = Some(right_row);
+        position += 1;
+    }
+    if position != tail_left.len() {
+        return Err(PlenoraError::Internal(
+            "probe del join: coda delle righe destre incoerente col conteggio".to_owned(),
+        ));
     }
     Ok((left_rows, right_rows))
 }
@@ -563,34 +648,148 @@ impl<'a> RightMap<'a> {
     }
 }
 
-/// Probe di un intervallo di righe sinistre: accumula le coppie in
-/// `left_rows`/`right_rows` nello stesso ordine del percorso generico.
-fn probe_range(
+/// Fase 1 del probe: quante coppie produce un intervallo di righe sinistre,
+/// senza materializzarne nessuna.
+///
+/// Deve restare l'esatto specchio di [`fill_range`]: stessa condizione di
+/// match, stesso ramo per le righe sinistre senza match. Se le due divergono
+/// il riempimento se ne accorge (segmento non saturato) e produce `Internal`.
+/// `matched` e' presente solo con `right`/`outer`: registra quali righe
+/// destre hanno trovato un match, cosi' le non abbinate entrano nel conteggio
+/// PRIMA dell'allocazione. Le scritture sono idempotenti (solo `true`),
+/// quindi l'esito non dipende dall'ordine fra i thread.
+///
+/// # Errors
+///
+/// `ResourceLimit` se la somma delle coppie esce da `usize`: un `saturating_add`
+/// trasformerebbe l'overflow in un conteggio apparentemente valido, e la fase
+/// di riempimento allocherebbe meno di quanto poi scrive.
+fn count_range(
     config: &Join,
-    limits: &Limits,
     left_keys: &FastKeys<'_>,
     right_map: &RightMap<'_>,
     range: std::ops::Range<usize>,
-    left_rows: &mut Vec<Option<usize>>,
-    right_rows: &mut Vec<Option<usize>>,
-) -> Result<()> {
+    matched: Option<&[AtomicBool]>,
+) -> Result<usize> {
+    let supera = || PlenoraError::ResourceLimit("join supera max_rows".into());
     let mut buffer = Vec::with_capacity(left_keys.columns.len());
+    let mut count = 0_usize;
     for left_row in range {
-        let matches = right_map.get(left_keys, left_row, &mut buffer);
-        if let Some(matches) = matches {
-            for &right_row in matches {
-                left_rows.push(Some(left_row));
-                right_rows.push(Some(right_row));
+        match right_map.get(left_keys, left_row, &mut buffer) {
+            Some(candidate_rows) => {
+                count = count.checked_add(candidate_rows.len()).ok_or_else(supera)?;
+                if let Some(flags) = matched {
+                    for &right_row in candidate_rows {
+                        if let Some(flag) = flags.get(right_row) {
+                            flag.store(true, AtomicOrdering::Relaxed);
+                        }
+                    }
+                }
             }
-        } else if matches!(config.how, JoinHow::Left | JoinHow::Outer) {
-            left_rows.push(Some(left_row));
-            right_rows.push(None);
-        }
-        if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::InvalidPlan("join supera max_rows".into()));
+            None if matches!(config.how, JoinHow::Left | JoinHow::Outer) => {
+                count = count.checked_add(1).ok_or_else(supera)?;
+            }
+            None => {}
         }
     }
-    Ok(())
+    Ok(count)
+}
+
+/// Fase 2 del probe: scrive le coppie di un intervallo nel proprio segmento
+/// dei buffer finali, nello stesso ordine del percorso generico.
+fn fill_range(
+    config: &Join,
+    left_keys: &FastKeys<'_>,
+    right_map: &RightMap<'_>,
+    range: std::ops::Range<usize>,
+    left_out: &mut [Option<usize>],
+    right_out: &mut [Option<usize>],
+) -> Result<()> {
+    let incoerente = || {
+        PlenoraError::Internal("probe del join: conteggio e riempimento non coincidono".to_owned())
+    };
+    let mut buffer = Vec::with_capacity(left_keys.columns.len());
+    let mut position = 0_usize;
+    let mut write = |left: Option<usize>, right: Option<usize>, position: &mut usize| {
+        // Scrittura guardata invece di indicizzata: un segmento troppo corto
+        // e' un difetto nostro da segnalare, non un panico.
+        let (Some(left_slot), Some(right_slot)) =
+            (left_out.get_mut(*position), right_out.get_mut(*position))
+        else {
+            return Err(incoerente());
+        };
+        *left_slot = left;
+        *right_slot = right;
+        *position += 1;
+        Ok(())
+    };
+    for left_row in range {
+        match right_map.get(left_keys, left_row, &mut buffer) {
+            Some(matches) => {
+                for &right_row in matches {
+                    write(Some(left_row), Some(right_row), &mut position)?;
+                }
+            }
+            None if matches!(config.how, JoinHow::Left | JoinHow::Outer) => {
+                write(Some(left_row), None, &mut position)?;
+            }
+            None => {}
+        }
+    }
+    if position == left_out.len() {
+        Ok(())
+    } else {
+        Err(incoerente())
+    }
+}
+
+/// Segmento dei buffer finali assegnato a un chunk: la fetta sinistra e la
+/// fetta destra, della stessa lunghezza.
+type RowPairSegment<'a> = (&'a mut [Option<usize>], &'a mut [Option<usize>]);
+
+/// Ripartisce i buffer finali nei segmenti dei chunk (offset di prefisso) e
+/// li riempie, in parallelo o in sequenza.
+#[allow(clippy::too_many_arguments)] // Parametri gia' risolti dal chiamante: nessun ricalcolo.
+fn fill_ranges(
+    config: &Join,
+    left_keys: &FastKeys<'_>,
+    right_map: &RightMap<'_>,
+    ranges: &[std::ops::Range<usize>],
+    counts: &[usize],
+    left_rows: &mut [Option<usize>],
+    right_rows: &mut [Option<usize>],
+    parallelo: bool,
+) -> Result<()> {
+    let incoerente =
+        || PlenoraError::Internal("probe del join: offset di prefisso incoerenti".to_owned());
+    let mut segments: Vec<RowPairSegment<'_>> = Vec::with_capacity(counts.len());
+    let mut left_rest: &mut [Option<usize>] = left_rows;
+    let mut right_rest: &mut [Option<usize>] = right_rows;
+    for count in counts {
+        if *count > left_rest.len() || *count > right_rest.len() {
+            return Err(incoerente());
+        }
+        let (left_head, left_tail) = left_rest.split_at_mut(*count);
+        let (right_head, right_tail) = right_rest.split_at_mut(*count);
+        segments.push((left_head, right_head));
+        left_rest = left_tail;
+        right_rest = right_tail;
+    }
+    if !left_rest.is_empty() || !right_rest.is_empty() {
+        return Err(incoerente());
+    }
+    let jobs: Vec<_> = ranges.iter().cloned().zip(segments).collect();
+    if parallelo {
+        jobs.into_par_iter()
+            .try_for_each(|(range, (left_out, right_out))| {
+                fill_range(config, left_keys, right_map, range, left_out, right_out)
+            })
+    } else {
+        jobs.into_iter()
+            .try_for_each(|(range, (left_out, right_out))| {
+                fill_range(config, left_keys, right_map, range, left_out, right_out)
+            })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -629,6 +828,24 @@ pub(crate) fn combine_horizontal(
 ) -> Result<RecordBatch> {
     let left_schema = left.schema();
     let right_schema = right.schema();
+    // `max_columns` PRIMA di qualunque allocazione proporzionale alle righe.
+    // Il numero di colonne di output si conosce dagli schemi e da
+    // `omitted_right`: non serve aver fatto un solo `take` per saperlo. Il
+    // controllo stava in fondo, dopo i take di ENTRAMBI i lati — cioe' dopo
+    // aver materializzato esattamente le colonne che si stava per rifiutare.
+    let colonne_destre = (0..right.num_columns())
+        .filter(|index| !omitted_right.contains(index))
+        .count();
+    let colonne_uscita = left
+        .num_columns()
+        .checked_add(colonne_destre)
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow conteggio colonne join".into()))?;
+    if colonne_uscita > limits.max_columns {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "join supera max_columns: {colonne_uscita} colonne di output > {}",
+            limits.max_columns
+        )));
+    }
     let left_source_names = left_schema
         .fields()
         .iter()
@@ -706,13 +923,13 @@ pub(crate) fn combine_horizontal(
         );
         columns.push(taken_right[position].clone());
     }
-    if fields.len() > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan("join supera max_columns".into()));
-    }
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        columns,
-    )?)
+    // Il tetto sulle colonne e' gia' stato applicato in testa, prima dei
+    // take: qui `fields.len()` vale per costruzione `colonne_uscita`.
+    //
+    // Righe DICHIARATE: con due input a zero colonne l'output ha zero colonne
+    // e arrow non saprebbe da dove dedurre la cardinalita'. Il numero giusto
+    // e' quello degli indici di riga costruiti sopra.
+    crate::batch_with_rows(Arc::new(Schema::new(fields)), columns, left_rows.len())
 }
 
 #[derive(Debug, Deserialize)]
@@ -733,7 +950,7 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch;
-/// - `InvalidPlan`: overflow nel conteggio delle righe o righe totali oltre
+/// - `ResourceLimit`: overflow nel conteggio delle righe o righe totali oltre
 ///   `max_rows`; propaga inoltre gli errori Arrow di concatenazione.
 pub fn concat(
     left: &RecordBatch,
@@ -759,10 +976,16 @@ pub fn concat(
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
-        .ok_or_else(|| PlenoraError::InvalidPlan("overflow concat".into()))?;
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow concat".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan("concat supera max_rows".into()));
+        return Err(PlenoraError::ResourceLimit("concat supera max_rows".into()));
     }
+    // MODELLO: `concat` IMPILA le righe — schemi identici, nessuna colonna
+    // nuova — quindi la larghezza della riga di output e' quella di una riga
+    // di input. Si prende il massimo fra i due lati perche' i tipi a
+    // lunghezza variabile possono avere larghezze medie diverse.
+    let byte_per_riga = crate::batch_bytes_per_row(left)?.max(crate::batch_bytes_per_row(right)?);
+    crate::preflight_output_bytes("concat", rows, byte_per_riga, limits)?;
     let columns = left
         .columns()
         .iter()
@@ -784,7 +1007,9 @@ pub fn concat(
         })
         .collect::<Vec<_>>();
     let schema = Schema::new_with_metadata(fields, left.schema().metadata().clone());
-    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
+    // `rows` e' la somma gia' calcolata sopra: e' la cardinalita' corretta
+    // anche quando non c'e' alcuna colonna da cui dedurla.
+    crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -881,7 +1106,8 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nessun input, overflow nel conteggio delle righe o righe
+/// - `InvalidPlan`: nessun input.
+/// - `ResourceLimit`: overflow nel conteggio delle righe o righe
 ///   totali oltre `max_rows`;
 /// - `Schema`: con `strict` schemi non identici, o tipi incompatibili per
 ///   una stessa colonna (nessun cast); propaga inoltre gli errori Arrow di
@@ -901,14 +1127,62 @@ pub fn concat_by_name(
     for input in inputs {
         rows = rows
             .checked_add(input.num_rows())
-            .ok_or_else(|| PlenoraError::InvalidPlan("overflow concat_by_name".into()))?;
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow concat_by_name".into()))?;
     }
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "concat_by_name supera max_rows".into(),
         ));
     }
+    // Lo schema unione si calcola sui soli SCHEMI: nessuna allocazione
+    // proporzionale alle righe. Va quindi prima del tetto sulle colonne e
+    // prima della stima dei byte, che senza il conteggio reale delle colonne
+    // ignorava proprio le colonne aggiunte dagli input con schemi disgiunti.
     let fields = union_schema_by_name(inputs, config.strict)?;
+    if fields.len() > limits.max_columns {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "concat_by_name supera max_columns: {} colonne di output > {}",
+            fields.len(),
+            limits.max_columns
+        )));
+    }
+
+    // MODELLO: l'output ha lo schema UNIONE, quindi puo' avere colonne che
+    // nessun input misurato possiede — per gli input che non ce l'hanno viene
+    // materializzata una colonna di null lunga quanto le loro righe, che
+    // occupa memoria. La stima si costruisce quindi PER CAMPO DELLO SCHEMA DI
+    // USCITA: per ciascuno, la larghezza massima osservata fra gli input che
+    // lo hanno, e il pavimento del tipo per quelli che non lo hanno o che non
+    // hanno righe da misurare.
+    //
+    // La prima versione misurava solo gli input e prendeva il massimo fra le
+    // loro larghezze TOTALI: un input vuoto che porta venti colonne nello
+    // schema di uscita pesava zero, ed era proprio il caso peggiore.
+    let byte_per_riga = fields
+        .iter()
+        .map(|field| {
+            inputs
+                .iter()
+                .filter_map(|input| {
+                    input
+                        .schema()
+                        .index_of(field.name())
+                        .ok()
+                        .map(|index| crate::column_bytes_per_row(input.column(index).as_ref()))
+                })
+                .max()
+                .unwrap_or_else(|| crate::type_bytes_floor(field.data_type()))
+                .max(crate::type_bytes_floor(field.data_type()))
+        })
+        .try_fold(0_usize, |totale, larghezza| {
+            totale.checked_add(larghezza).ok_or_else(|| {
+                PlenoraError::ResourceLimit(
+                    "concat_by_name: larghezza di riga non rappresentabile: stima non affidabile"
+                        .into(),
+                )
+            })
+        })?;
+    crate::preflight_output_bytes("concat_by_name", rows, byte_per_riga, limits)?;
     let columns = fields
         .iter()
         .map(|field| {
@@ -931,7 +1205,7 @@ pub fn concat_by_name(
         })
         .collect::<Result<Vec<_>>>()?;
     let schema = Schema::new_with_metadata(fields, first.schema().metadata().clone());
-    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
+    crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 
 #[derive(Debug, Deserialize)]
@@ -945,7 +1219,7 @@ pub struct CrossJoin {}
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: overflow nel prodotto delle righe, righe oltre `max_rows`
+/// - `ResourceLimit`: overflow nel prodotto delle righe, righe oltre `max_rows`
 ///   o colonne oltre `max_columns`;
 /// - `Schema`: collisione di nomi nelle colonne di output.
 pub fn cross_join(
@@ -957,12 +1231,39 @@ pub fn cross_join(
     let rows = left
         .num_rows()
         .checked_mul(right.num_rows())
-        .ok_or_else(|| PlenoraError::InvalidPlan("overflow cross_join".into()))?;
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow cross_join".into()))?;
     if rows > limits.max_rows {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "cross_join supera max_rows".into(),
         ));
     }
+    // Preventivo, non consuntivo: `rows` e' esatto (prodotto delle due
+    // cardinalita') e qui non e' stato ancora allocato nulla. E' il punto in
+    // cui `max_memory_bytes` puo' ancora impedire l'allocazione invece di
+    // constatarla.
+    //
+    // MODELLO della riga di output. Ogni riga del prodotto cartesiano
+    // affianca una riga sinistra E una destra: i byte si SOMMANO. La prima
+    // versione prendeva il massimo fra i due lati, che e' il modello di un
+    // impilamento e sottostima di quasi meta' un affiancamento.
+    //
+    // Ai buffer del risultato vanno aggiunti i due vettori di indici che
+    // questa funzione costruisce PRIMA di chiamare `combine_horizontal`: sono
+    // lunghi quanto l'output e non fanno parte di alcun batch, quindi nessuna
+    // misura su `left`/`right` li vedrebbe.
+    let indici_per_riga = 2 * std::mem::size_of::<Option<usize>>();
+    // Somma CONTROLLATA: una stima saturata a `usize::MAX` passerebbe il
+    // confronto con un budget anch'esso a fondo scala, cioe' autorizzerebbe
+    // l'allocazione proprio quando il conto e' andato perduto.
+    let byte_per_riga = crate::batch_bytes_per_row(left)?
+        .checked_add(crate::batch_bytes_per_row(right)?)
+        .and_then(|somma| somma.checked_add(indici_per_riga))
+        .ok_or_else(|| {
+            PlenoraError::ResourceLimit(
+                "cross_join: larghezza di riga non rappresentabile: stima non affidabile".into(),
+            )
+        })?;
+    crate::preflight_output_bytes("cross_join", rows, byte_per_riga, limits)?;
     let left_rows = (0..left.num_rows())
         .flat_map(|left| std::iter::repeat_n(Some(left), right.num_rows()))
         .collect::<Vec<_>>();
@@ -1193,14 +1494,20 @@ pub struct AsOfJoin {
 
 /// Valore `on` della riga da array tipizzato (fast path di `asof_join`).
 ///
-/// Stessa conversione di `scalar_as_f64`: Int64 oltre 2^53 e' un errore
-/// `Schema` (mai arrotondato), null in ingresso -> null in uscita.
+/// Stessa conversione di `scalar_as_f64`: un Int64 senza `f64` esatto e' un
+/// errore `Schema` (mai arrotondato), null in ingresso -> null in uscita.
+///
+/// La verifica e' `exact_f64_from_i64`, non `to_f64()`: quest'ultimo non
+/// fallisce mai e arrotondava silenziosamente. Su una chiave `on` di
+/// `asof_join` l'arrotondamento e' particolarmente dannoso — due istanti
+/// distinti diventano lo stesso valore, i gruppi collassano e la ricerca del
+/// candidato piu' vicino sceglie la riga sbagliata.
 fn asof_on_value(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
         return values
             .is_valid(row)
             .then(|| {
-                values.value(row).to_f64().ok_or_else(|| {
+                exact_f64_from_i64(values.value(row)).ok_or_else(|| {
                     PlenoraError::Schema("intero non rappresentabile come f64".into())
                 })
             })

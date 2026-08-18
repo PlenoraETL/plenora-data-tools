@@ -1,0 +1,19 @@
+{
+  "schema_version": 4,
+  "inputs": ["citta"],
+  "nodes": [
+    {
+      "id": "grandi",
+      "op": "table.filter",
+      "in": ["citta"],
+      "config": { "column": "abitanti", "operator": ">", "value": 300000 }
+    },
+    {
+      "id": "ordinate",
+      "op": "table.sort",
+      "in": ["grandi"],
+      "config": { "columns": ["abitanti"], "ascending": false }
+    }
+  ],
+  "output": "ordinate"
+}

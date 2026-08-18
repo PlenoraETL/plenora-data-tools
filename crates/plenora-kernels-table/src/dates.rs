@@ -3,7 +3,6 @@ use std::sync::Arc;
 use chrono::format::{Item, Parsed, StrftimeItems};
 use chrono::{LocalResult, Months, NaiveDate, NaiveDateTime, TimeDelta, TimeZone};
 use chrono_tz::Tz;
-use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{Array, Float64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
@@ -348,11 +347,24 @@ pub struct DateDiff {
 
 /// Differenza in unita' frazionarie, identica al percorso generico
 /// (errore "intervallo fuori scala" incluso).
+///
+/// # Arrotondamento dichiarato
+///
+/// Il risultato e' per contratto un `Float64` in unita' frazionarie, quindi
+/// la conversione dei nanosecondi a `f64` e' volutamente arrotondata: oltre
+/// 2^53 nanosecondi — circa 104 giorni — il conteggio esatto non entra in un
+/// double, e pretendere l'esattezza qui rifiuterebbe ogni intervallo di
+/// qualche mese, che e' l'uso normale dell'operazione.
+///
+/// «Fuori scala» riguarda percio' i soli nanosecondi oltre `i64`
+/// (`num_nanoseconds` restituisce `None`): circa 292 anni. La versione
+/// precedente affiancava un `to_f64()` che non fallisce mai, dichiarando un
+/// controllo di rappresentabilita' inesistente.
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: l'output e' Float64 per contratto.
 fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usize) -> Result<f64> {
     end.signed_duration_since(start)
         .num_nanoseconds()
-        .and_then(|nanoseconds| nanoseconds.to_f64())
-        .map(|nanoseconds| nanoseconds / 1_000_000_000.0 / divisor)
+        .map(|nanoseconds| nanoseconds as f64 / 1_000_000_000.0 / divisor)
         .ok_or_else(|| PlenoraError::InvalidPlan("date_diff: intervallo fuori scala".into()))
 }
 

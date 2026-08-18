@@ -1086,7 +1086,10 @@ fn legacy_limits(limits: &Limits) -> table_engine::Limits {
         max_split_columns: defaults.max_split_columns,
         max_memory_bytes: usize::try_from(limits.max_memory_bytes).unwrap_or(usize::MAX),
         max_temp_bytes: limits.max_temp_bytes,
-        spill_partitions: usize::try_from(limits.spill_partitions.max(2)).unwrap_or(usize::MAX),
+        // Nessuna correzione qui: il minimo e' imposto da `Limits::validate`
+        // all'ingresso del planner, che RIFIUTA un valore fuori dominio invece
+        // di modificarlo alle spalle di chi ha scritto il piano.
+        spill_partitions: usize::try_from(limits.spill_partitions).unwrap_or(usize::MAX),
     }
 }
 

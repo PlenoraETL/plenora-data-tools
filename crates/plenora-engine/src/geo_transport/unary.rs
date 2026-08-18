@@ -420,8 +420,12 @@ pub(in crate::geo_transport) fn canonical_legacy_output(
     let batches = batches
         .into_iter()
         .map(|batch| {
-            RecordBatch::try_new(output_schema.clone(), batch.columns().to_vec())
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+            plenora_core::batch_with_rows(
+                output_schema.clone(),
+                batch.columns().to_vec(),
+                batch.num_rows(),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok((output_schema, batches))
@@ -1847,7 +1851,10 @@ pub fn one_to_one_batch_fused(
     // percorso non fuso (`one_to_one_batch_prepared`), stessa attribuzione;
     // lo schema e' quello dell'ULTIMA trasformazione (M3: `reproject` puo'
     // cambiare il CRS del campo geometria a meta' gruppo).
-    let output = RecordBatch::try_new(output.output_schema.clone(), columns)
+    let righe_uscita = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
+    let output = plenora_core::batch_with_rows(output.output_schema.clone(), columns, righe_uscita)
         .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
         .map_err(|error| FusedStepError::Kernel { index: last, error })?;
     let Some(terminal) = terminal else {
@@ -1872,13 +1879,14 @@ pub fn one_to_one_batch_fused(
         }
     };
     let mut columns = output.columns().to_vec();
+    let righe_misura = output.num_rows();
     columns.push(column);
-    RecordBatch::try_new(terminal.output_schema.clone(), columns)
-        .map_err(PlenoraError::from)
-        .map_err(|error| FusedStepError::Measure {
+    plenora_core::batch_with_rows(terminal.output_schema.clone(), columns, righe_misura).map_err(
+        |error| FusedStepError::Measure {
             index: group.len(),
             error,
-        })
+        },
+    )
 }
 
 /// Aggrega un report batch-locale in quello accumulato applicando l'offset
@@ -1891,78 +1899,12 @@ fn merge_report_with_offset(
     incoming: &RowDiagnostics,
     source_offset: u64,
 ) -> Result<(), ArrowTransportError> {
-    let mut shifted = incoming.clone();
-    for example in &mut shifted.examples {
-        example.source_index = source_offset.checked_add(example.source_index).ok_or(
-            ArrowTransportError::Internal("indice sorgente fuori intervallo"),
-        )?;
-    }
-    let Some(existing) = aggregate.as_ref() else {
-        *aggregate = Some(shifted);
-        return Ok(());
-    };
-    let mut merged = existing.clone();
-    if merged.contract != shifted.contract
-        || merged.scope != shifted.scope
-        || merged.index_basis != shifted.index_basis
-        || merged.examples_limit != shifted.examples_limit
-    {
-        return Err(ArrowTransportError::Internal(
-            "report row-scoped incompatibili nello stesso stream",
-        ));
-    }
-    merged.observed_total = merged
-        .observed_total
-        .checked_add(shifted.observed_total)
-        .ok_or(ArrowTransportError::Internal(
-            "conteggio row-scoped fuori intervallo",
-        ))?;
-    merged.total = match (merged.total, shifted.total) {
-        (Some(left), Some(right)) => Some(left.checked_add(right).ok_or(
-            ArrowTransportError::Internal("totale row-scoped fuori intervallo"),
-        )?),
-        _ => None,
-    };
-    merged.input_total = match (merged.input_total, shifted.input_total) {
-        (Some(left), Some(right)) => Some(left.checked_add(right).ok_or(
-            ArrowTransportError::Internal("input_total diagnostico overflow"),
-        )?),
-        _ => None,
-    };
-    for (cause, count) in shifted.counts {
-        let entry = merged.counts.entry(cause).or_insert(0_u64);
-        *entry = entry
-            .checked_add(count)
-            .ok_or(ArrowTransportError::Internal(
-                "conteggio causa fuori intervallo",
-            ))?;
-    }
-    let incoming_example_count = shifted.examples.len();
-    let before = merged.examples.len();
-    for example in shifted.examples {
-        if u64::try_from(merged.examples.len())
-            .map_err(|_| ArrowTransportError::Internal("numero esempi fuori intervallo"))?
-            >= merged.examples_limit
-        {
-            break;
-        }
-        merged.examples.push(example);
-    }
-    merged.examples_truncated = merged.examples_truncated
-        || shifted.examples_truncated
-        || merged.examples.len().saturating_sub(before) < incoming_example_count;
-    if shifted.completeness != RowDiagnosticsCompleteness::Complete {
-        merged.completeness = shifted.completeness;
-        let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
-        for limit in shifted.knowledge_limits.unwrap_or_default() {
-            if !knowledge_limits.contains(&limit) {
-                knowledge_limits.push(limit);
-            }
-        }
-        merged.knowledge_limits = (!knowledge_limits.is_empty()).then_some(knowledge_limits);
-    }
-    *aggregate = Some(merged);
-    Ok(())
+    // Stessa identica procedura dell'executor, perche' e' letteralmente la
+    // stessa funzione: vive accanto a `RowDiagnostics` in `plenora-core`. Qui
+    // resta solo la traduzione dell'invariante violata nell'errore del
+    // trasporto — `message()` e' `&'static str`, come vuole `Internal`.
+    RowDiagnostics::merge_into(aggregate, incoming.clone(), source_offset)
+        .map_err(|error| ArrowTransportError::Internal(error.message()))
 }
 
 /// Allega il report accumulato a un errore tardivo non row-scoped (R9.9):
@@ -1976,13 +1918,10 @@ fn attach_partial_report(
     aggregate: &mut Option<RowDiagnostics>,
     knowledge_limit: &str,
 ) -> ArrowTransportError {
-    let Some(mut report) = aggregate.take() else {
+    let Some(report) = aggregate.take() else {
         return error;
     };
-    report.completeness = RowDiagnosticsCompleteness::Partial;
-    report.total = None;
-    report.knowledge_limits = Some(vec![knowledge_limit.to_owned()]);
-    error.with_row_diagnostics(report)
+    error.with_row_diagnostics(report.into_partial(knowledge_limit))
 }
 
 /// Operazioni 1:1: la colonna geometria e' sostituita dal risultato (Binary
@@ -2162,8 +2101,12 @@ fn explode_batches(
         }
         columns.push(std::sync::Arc::new(UInt64Array::from(parents)));
         output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+            plenora_core::batch_with_rows(
+                std::sync::Arc::new(output_schema.clone()),
+                columns,
+                batch.num_rows(),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
         row_offset += batch.num_rows() as u64;
     }
@@ -2321,8 +2264,12 @@ fn voronoi_batches(
         let mut columns = batch.columns().to_vec();
         columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
         output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+            plenora_core::batch_with_rows(
+                std::sync::Arc::new(output_schema.clone()),
+                columns,
+                batch.num_rows(),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
     Ok((std::sync::Arc::new(output_schema), output_batches))
@@ -2409,8 +2356,12 @@ fn clean_topology_batches(
         let mut columns = batch.columns().to_vec();
         columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
         output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+            plenora_core::batch_with_rows(
+                std::sync::Arc::new(output_schema.clone()),
+                columns,
+                batch.num_rows(),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
     Ok((std::sync::Arc::new(output_schema), output_batches))
@@ -2514,8 +2465,12 @@ fn diagnostics_batches(
         ];
         columns.splice(geometry_index..=geometry_index, diagnostic_columns);
         output_batches.push(
-            RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+            plenora_core::batch_with_rows(
+                std::sync::Arc::new(output_schema.clone()),
+                columns,
+                batch.num_rows(),
+            )
+            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
     Ok((std::sync::Arc::new(output_schema), output_batches))
@@ -2884,9 +2839,16 @@ fn from_coords_one_batch<'a>(
             .map(|point| point.as_deref())
             .collect::<BinaryArray>(),
     ));
+    let righe_uscita = columns
+        .first()
+        .map_or(0, plenora_core::arrow::array::Array::len);
     output_batches.push(
-        RecordBatch::try_new(std::sync::Arc::new(output_schema.clone()), columns)
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+        plenora_core::batch_with_rows(
+            std::sync::Arc::new(output_schema.clone()),
+            columns,
+            righe_uscita,
+        )
+        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
     );
     Ok(())
 }

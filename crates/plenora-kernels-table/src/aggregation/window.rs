@@ -50,8 +50,9 @@ pub struct RollingWindow {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `window` o `min_periods` nulli, `min_periods > window`,
-///   oppure dimensioni/divisori non rappresentabili come `f64`;
+/// - `InvalidPlan`: `window` o `min_periods` nulli, `min_periods > window`;
+/// - `ResourceLimit`: dimensioni/divisori della finestra non rappresentabili
+///   come `f64` (dipendono dal numero di righe nella finestra);
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
 ///   schema; valore intero non rappresentabile come `f64`; in piu' gli
 ///   errori di `sort`, `scalar_as_string`/`scalar_as_f64` e
@@ -125,11 +126,11 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
                 RollingKind::Stddev if count <= config.ddof => None,
                 RollingKind::Stddev => {
                     let length = count.to_f64().ok_or_else(|| {
-                        PlenoraError::InvalidPlan("dimensione rolling non rappresentabile".into())
+                        PlenoraError::ResourceLimit("dimensione rolling non rappresentabile".into())
                     })?;
                     let mean = sum / length;
                     let divisor = (count - config.ddof).to_f64().ok_or_else(|| {
-                        PlenoraError::InvalidPlan("divisore rolling non rappresentabile".into())
+                        PlenoraError::ResourceLimit("divisore rolling non rappresentabile".into())
                     })?;
                     Some(
                         (window

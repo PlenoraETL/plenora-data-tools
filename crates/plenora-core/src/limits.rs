@@ -6,6 +6,8 @@
 
 use serde::Deserialize;
 
+use crate::error::{PlenoraError, Result};
+
 /// Limiti di righe, semanticamente distinti (ADR 6).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +77,13 @@ pub struct Limits {
     /// Partizioni di spill.
     pub spill_partitions: u32,
     /// Grado massimo di parallelismo (risorsa, non proprietà dei nodi).
+    ///
+    /// `0` significa «numero di core logici». Il tetto e' applicato
+    /// dimensionando il pool Rayon del processo
+    /// (`plenora_engine::parallelism::configure`), che e' l'unica leva che
+    /// copre insieme tutti i percorsi paralleli dei kernel; e' quindi una
+    /// configurazione **di processo**, fatta dal binario prima
+    /// dell'esecuzione, non una proprieta' per-piano.
     pub max_parallelism: u32,
     /// Limite per cella WKB (da geo-tools-arrow).
     pub max_wkb_cell_bytes: u64,
@@ -88,6 +97,95 @@ pub struct Limits {
     pub max_string_bytes: usize,
     /// Limite per pattern regex.
     pub max_regex_bytes: usize,
+}
+
+impl Limits {
+    /// Numero minimo di partizioni di spill: con una sola partizione il
+    /// merge non ha nulla da fondere e lo spill non riduce la memoria.
+    pub const MIN_SPILL_PARTITIONS: u32 = 2;
+
+    /// Numero massimo di partizioni di spill: oltre, i file aperti e i buffer
+    /// per partizione costano piu' della memoria che lo spill libera.
+    pub const MAX_SPILL_PARTITIONS: u32 = 4_096;
+
+    /// Validazione dei limiti effettivi, in un punto solo.
+    ///
+    /// Un limite fuori dominio va RIFIUTATO, non corretto. Il preparer
+    /// applicava `spill_partitions.max(2)` in silenzio: un piano che
+    /// dichiarava `spill_partitions: 1` veniva eseguito con 2, cioe' con
+    /// limiti diversi da quelli dichiarati e senza che nulla lo segnalasse.
+    /// Per un componente fail-closed la correzione silenziosa di un input e'
+    /// il verso sbagliato, e sparpagliata sui punti d'uso non copriva i piani
+    /// che quel percorso non attraversano (i piani solo-geo).
+    ///
+    /// Le regole ricalcano quelle del motore tabellare legacy — un limite a
+    /// zero rende il componente incapace di fare alcunche', e va detto subito
+    /// invece che scoperto al primo batch — e vi aggiungono
+    /// `max_expansion_factor`, che dev'essere finito e positivo: un `NaN`
+    /// costruito via API Rust rende falso ogni confronto successivo e apre il
+    /// limite invece di chiuderlo.
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::InvalidPlan` alla prima violazione, nominando il limite.
+    pub fn validate(&self) -> Result<()> {
+        let nullo = |nome: &str| {
+            Err(PlenoraError::InvalidPlan(format!(
+                "{nome} a zero: nessuna esecuzione sarebbe possibile"
+            )))
+        };
+        if self.rows.max_input_rows == 0 {
+            return nullo("max_input_rows");
+        }
+        if self.rows.max_output_rows == 0 {
+            return nullo("max_output_rows");
+        }
+        if self.rows.max_rows_per_edge == 0 {
+            return nullo("max_rows_per_edge");
+        }
+        if !self.rows.max_expansion_factor.is_finite() || self.rows.max_expansion_factor <= 0.0 {
+            return Err(PlenoraError::InvalidPlan(
+                "max_expansion_factor deve essere finito e positivo: un valore non ordinabile \
+                 renderebbe vero ogni confronto di espansione"
+                    .to_owned(),
+            ));
+        }
+        if self.max_memory_bytes == 0 {
+            return nullo("max_memory_bytes");
+        }
+        if self.max_temp_bytes == 0 {
+            return nullo("max_temp_bytes");
+        }
+        if self.max_payload_bytes == 0 {
+            return nullo("max_payload_bytes");
+        }
+        if self.max_batches == 0 {
+            return nullo("max_batches");
+        }
+        if self.max_wkb_cell_bytes == 0 {
+            return nullo("max_wkb_cell_bytes");
+        }
+        if self.max_geometry_depth == 0 {
+            return nullo("max_geometry_depth");
+        }
+        if self.max_string_bytes == 0 {
+            return nullo("max_string_bytes");
+        }
+        if self.max_regex_bytes == 0 {
+            return nullo("max_regex_bytes");
+        }
+        if self.spill_partitions < Self::MIN_SPILL_PARTITIONS
+            || self.spill_partitions > Self::MAX_SPILL_PARTITIONS
+        {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "spill_partitions {} fuori dall'intervallo {}..={}",
+                self.spill_partitions,
+                Self::MIN_SPILL_PARTITIONS,
+                Self::MAX_SPILL_PARTITIONS
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for Limits {
@@ -106,5 +204,135 @@ impl Default for Limits {
             max_string_bytes: 16 * 1024 * 1024,
             max_regex_bytes: 64 * 1024,
         }
+    }
+}
+
+/// `true` se `output_rows` supera `base_rows * factor`.
+///
+/// NESSUN conteggio passa per `f64`. Il fattore e' un double per contratto
+/// (ADR 6), quindi lo si decompone in `mantissa * 2^esponente` e il confronto
+/// resta fra interi:
+///
+/// ```text
+///   output_rows  >  base_rows * mantissa * 2^esponente
+/// ```
+///
+/// Calcolare la soglia come `(base_rows as f64) * factor` arrotonda i
+/// CONTEGGI: con `base_rows = output_rows = 2^53+1` e fattore `1` una
+/// cardinalita' valida veniva rifiutata, e — nel verso opposto, quello che
+/// conta per un limite — `base = 2^53`, `output = 2^53+1` e fattore `1`
+/// collassavano sullo stesso double, lasciando passare un'espansione oltre
+/// la soglia.
+///
+/// Un fattore non finito o non positivo e' **fail-closed**: la funzione
+/// risponde `true`, cioe' «limite superato».
+///
+/// [`Limits::validate`] esclude quei fattori a monte, quindi il caso non
+/// dovrebbe presentarsi; se si presenta, la soglia non e' ordinabile e non si
+/// puo' dire che il limite sia rispettato. Rispondere `false` — «tutto bene»
+/// — su una soglia che non si sa confrontare e' esattamente il modo in cui un
+/// limite smette di limitare: un `NaN` in configurazione avrebbe aperto ogni
+/// espansione invece di chiuderla.
+///
+/// La base e' un `u64` — un conteggio di righe — e su tutto quel dominio la
+/// funzione e' totale: `base * mantissa <= 2^64 * 2^53 = 2^117` non trabocca
+/// mai. La variante interna [`expansion_exceeded_wide`] prende una base a
+/// 128 bit per la somma dei due lati di un'operazione binaria; non e'
+/// pubblica proprio perche' fuori da quel dominio ristretto il prodotto puo'
+/// traboccare, e una funzione pubblica con una precondizione taciuta e' una
+/// trappola.
+#[must_use]
+pub fn expansion_exceeded(output_rows: u64, base_rows: u64, factor: f64) -> bool {
+    expansion_exceeded_wide(output_rows, u128::from(base_rows), factor)
+}
+
+/// Come [`expansion_exceeded`], con base a 128 bit.
+///
+/// **Dominio:** `base_rows < 2^66`, cioe' la somma di due conteggi a 64 bit —
+/// l'unica cosa che i vincoli binari costruiscono. Li' `base * mantissa <
+/// 2^119` e il prodotto non trabocca mai.
+pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor: f64) -> bool {
+    if !factor.is_finite() || factor <= 0.0 {
+        // Fail-closed: soglia non ordinabile, nessuna espansione dichiarabile
+        // accettabile. Con `output_rows == 0` non c'e' alcuna espansione da
+        // rifiutare e la risposta resta `false`.
+        return output_rows > 0;
+    }
+    let bits = factor.to_bits();
+    let raw_exponent = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    let (mantissa, exponent) = if raw_exponent == 0 {
+        (fraction, -1074_i32)
+    } else {
+        (fraction | (1_u64 << 52), raw_exponent - 1075)
+    };
+    let Some(scaled) = base_rows.checked_mul(u128::from(mantissa)) else {
+        // Irraggiungibile sul dominio dichiarato. Se lo diventasse, con
+        // esponente negativo la soglia potrebbe essere PICCOLA e rispondere
+        // «non superato» sarebbe aprire il limite: si risponde fail-closed.
+        return true;
+    };
+    let output = u128::from(output_rows);
+    if scaled == 0 {
+        // Soglia NULLA: la base e' vuota. La metrica e' allora infinita se
+        // l'output non lo e' (espansione da niente) e zero altrimenti — la
+        // stessa convenzione di `JoinExpansion::compute`. Va deciso qui,
+        // prima degli spostamenti: con un fattore enorme l'esponente esce
+        // dai 128 bit e la guardia sullo shift rispondeva «non superato»
+        // anche se la soglia era zero.
+        return output_rows > 0;
+    }
+    if exponent >= 0 {
+        let shift = u32::try_from(exponent).unwrap_or(u32::MAX);
+        scaled
+            .checked_shl(shift)
+            .filter(|_| shift < 128 && scaled.leading_zeros() >= shift)
+            .is_some_and(|threshold| output > threshold)
+    } else {
+        let shift = u32::try_from(-exponent).unwrap_or(u32::MAX);
+        // `output << shift  >  scaled`: se lo spostamento esce da u128 il
+        // lato sinistro e' certamente maggiore.
+        output
+            .checked_shl(shift)
+            .filter(|_| shift < 128 && output.leading_zeros() >= shift)
+            .map_or(output != 0, |shifted| shifted > scaled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expansion_exceeded;
+
+    #[test]
+    fn il_predicato_e_totale_su_tutto_il_dominio_dei_conteggi() {
+        /// Ultimo intero con un `f64` esatto: oltre, il rapporto arrotonda.
+        const DUE_53: u64 = 1 << 53;
+
+        // Base e output sono conteggi di righe: `u64`. Su quel dominio
+        // `base * mantissa <= 2^117` non trabocca mai, quindi non esistono
+        // combinazioni in cui la funzione debba «arrendersi».
+        assert!(!expansion_exceeded(u64::MAX, u64::MAX, 1.0));
+        assert!(!expansion_exceeded(0, 0, 1.0));
+        // Da input vuoto qualunque output e' espansione infinita.
+        assert!(expansion_exceeded(1, 0, f64::MAX));
+        // Fattori minuscoli: la soglia e' piccola e il superamento va visto.
+        assert!(expansion_exceeded(1, u64::MAX, f64::MIN_POSITIVE));
+        assert!(expansion_exceeded(2, 1, 1.999_999_999_999_999_8));
+        assert!(!expansion_exceeded(2, 1, 2.0));
+        // Fattori enormi: nessun conteggio a 64 bit li raggiunge.
+        assert!(!expansion_exceeded(u64::MAX, 1, f64::MAX));
+        assert!(!expansion_exceeded(u64::MAX, 1, 1.9e19));
+        // Ma la soglia resta esatta anche a ridosso del fondo scala.
+        assert!(expansion_exceeded(u64::MAX, 1, 1.8e19));
+        // Esattezza sopra 2^53, il motivo per cui non si passa da `f64`.
+        assert!(expansion_exceeded(DUE_53 + 1, DUE_53, 1.0));
+        assert!(!expansion_exceeded(DUE_53, DUE_53, 1.0));
+        // Un fattore non ordinabile e' FAIL-CLOSED: non si dichiara
+        // rispettato un limite che non si sa confrontare.
+        assert!(expansion_exceeded(u64::MAX, 1, f64::NAN));
+        assert!(expansion_exceeded(u64::MAX, 1, 0.0));
+        assert!(expansion_exceeded(1, 1, -1.0));
+        // Senza output non c'e' espansione da rifiutare, nemmeno qui.
+        assert!(!expansion_exceeded(0, 1, f64::NAN));
     }
 }

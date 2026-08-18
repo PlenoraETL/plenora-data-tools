@@ -1174,6 +1174,21 @@ fn plan_hash_normalizes_integer_and_float_forms() {
     )
     .expect("float oltre 2^53");
     assert_ne!(big_int.plan_hash(), big_float.plan_hash());
+
+    // Regressione (collisione plan_hash): 2^53 e 2^53+1 sono lo stesso
+    // double. Canonicalizzare gli interi passando per f64 dava a due config
+    // distinte lo stesso hash, rendendo insicuro il riuso del piano.
+    let exact = validate(
+        &plan_with(json!(9_007_199_254_740_992_u64)),
+        &input(table_contract()),
+    )
+    .expect("2^53");
+    let odd = validate(
+        &plan_with(json!(9_007_199_254_740_993_u64)),
+        &input(table_contract()),
+    )
+    .expect("2^53+1");
+    assert_ne!(exact.plan_hash(), odd.plan_hash());
 }
 
 #[test]

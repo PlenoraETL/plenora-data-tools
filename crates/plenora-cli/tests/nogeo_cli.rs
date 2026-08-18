@@ -122,7 +122,7 @@ fn invalid_plan_is_rejected_before_input_is_opened() {
         .expect("run CLI");
     assert!(!result.status.success());
     assert!(!output.exists());
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("fill_char"));
     assert!(!stderr.contains("missing.arrow"));
 }
@@ -375,7 +375,7 @@ fn binary_plan_requires_right_and_publishes_join_atomically() {
         .output()
         .expect("missing right");
     assert!(!missing.status.success());
-    assert!(String::from_utf8_lossy(&missing.stderr).contains("--right"));
+    assert!(String::from_utf8_lossy(&missing.stdout).contains("--right"));
     assert!(!missing_output.exists());
     assert!(Command::new(executable())
         .args(["run", "--plan"])
@@ -558,7 +558,7 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     assert!(
         !result.status.success(),
         "piano legacy blocking+diagnostico accettato: {}",
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stdout)
     );
     assert!(
         !output.exists(),
@@ -566,14 +566,14 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     );
     // Il rifiuto deve venire dal GATE (provenance non attestabile), non
     // dall'esecuzione: nessun report row-scoped con indici post-sort.
-    // Golden di canale (P1-5): l'envelope di errore vive su STDERR e
-    // stdout resta vuoto — mai mescolare envelope e risultati.
+    // Golden di canale: l'envelope di errore vive su STDOUT e stderr
+    // resta vuoto (allineamento a `plenora-database-tools`).
     assert!(
-        result.stdout.is_empty(),
-        "stdout deve restare libero per risultati/metriche: {}",
-        String::from_utf8_lossy(&result.stdout)
+        result.stderr.is_empty(),
+        "stderr deve restare vuoto: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    let envelope_text = String::from_utf8_lossy(&result.stderr).into_owned();
+    let envelope_text = String::from_utf8_lossy(&result.stdout).into_owned();
     assert!(
         envelope_text.contains("DAG v4"),
         "atteso rifiuto fail-closed verso DAG v4, trovato: {envelope_text}"
@@ -647,7 +647,7 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             .arg(&output)
             .output()
             .expect("run legacy formula/expression");
-        let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        let stderr = String::from_utf8_lossy(&result.stdout).into_owned();
         assert!(
             !result.status.success(),
             "{operation}: piano legacy blocking+diagnostico accettato: {stderr}"
@@ -657,9 +657,9 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             "{operation}: nessun output pubblicabile da un piano rifiutato"
         );
         assert!(
-            result.stdout.is_empty(),
-            "{operation}: stdout deve restare libero: {}",
-            String::from_utf8_lossy(&result.stdout)
+            result.stderr.is_empty(),
+            "{operation}: stderr deve restare vuoto: {}",
+            String::from_utf8_lossy(&result.stderr)
         );
         assert!(
             stderr.contains("DAG v4"),
@@ -755,7 +755,7 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
                 .arg(&output)
                 .output()
                 .expect("run legacy gate probe");
-            let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+            let stderr = String::from_utf8_lossy(&result.stdout).into_owned();
             assert!(
                 !result.status.success(),
                 "{} (alias `{alias}`): bypass del gate legacy: {stderr}",
@@ -795,4 +795,223 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
             "{expected}: op diagnostica con alias legacy non coperta dal gate"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Convenzioni condivise con plenora-database: canale dell'envelope, exit code
+// stabili, formato di output, identita' leggibile da un programma
+// ---------------------------------------------------------------------------
+
+#[test]
+fn l_envelope_vive_su_stdout_e_stderr_resta_vuoto() {
+    // Convenzione di famiglia: chi orchestra i due componenti cerca gli
+    // errori in un posto solo. Vale anche per gli errori di INVOCAZIONE,
+    // che nascono prima di qualunque comando.
+    let result = Command::new(executable())
+        .args(["run", "--plan"])
+        .output()
+        .expect("invocazione CLI");
+    assert!(!result.status.success());
+    assert!(
+        result.stderr.is_empty(),
+        "stderr deve restare vuoto: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("stdout deve essere l'envelope");
+    assert_eq!(envelope["status"], "error");
+    assert_eq!(envelope["protocol_version"], 1);
+    assert!(envelope["error"]["category"].is_string());
+    assert!(envelope["error"]["phase"].is_string());
+    assert!(envelope["error"]["remote_effect"].is_string());
+    assert!(envelope["error"]["retry"]["kind"].is_string());
+}
+
+#[test]
+fn gli_exit_code_seguono_la_categoria_dell_envelope() {
+    // Il codice e' una proiezione della categoria, non un numero a parte:
+    // uno script che non vuole parsare JSON deve poter distinguere almeno le
+    // classi. Ogni caso verifica ENTRAMBI — categoria e codice — cosi' una
+    // divergenza fra i due non passa.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("input.arrow");
+    write_input(&input);
+
+    // Piano malformato -> invalid_plan -> 2.
+    let plan = directory.path().join("plan.json");
+    std::fs::write(&plan, "{ non json").expect("plan");
+    let result = Command::new(executable())
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--input")
+        .arg(&input)
+        .arg("--output")
+        .arg(directory.path().join("out.arrow"))
+        .output()
+        .expect("run");
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "data_mapping");
+    assert_eq!(result.status.code(), Some(3), "data_mapping -> 3");
+
+    // File inesistente -> io -> 5.
+    let result = Command::new(executable())
+        .args(["describe", "--input"])
+        .arg(directory.path().join("assente.arrow"))
+        .output()
+        .expect("describe");
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "io");
+    assert_eq!(result.status.code(), Some(5), "io -> 5");
+
+    // Argomento mancante -> invalid_plan -> 2.
+    let result = Command::new(executable())
+        .args(["describe"])
+        .output()
+        .expect("describe");
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "invalid_plan");
+    assert_eq!(result.status.code(), Some(2), "invalid_plan -> 2");
+}
+
+#[test]
+fn il_formato_globale_e_json_per_default_e_rifiuta_cio_che_non_rende() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("input.arrow");
+    write_input(&input);
+
+    // Default: JSON, senza dover chiedere nulla.
+    let result = Command::new(executable())
+        .args(["describe", "--input"])
+        .arg(&input)
+        .output()
+        .expect("describe");
+    assert!(result.status.success());
+    serde_json::from_slice::<serde_json::Value>(&result.stdout).expect("JSON per default");
+
+    // Markdown dove esiste una resa leggibile, e il flag vale anche PRIMA
+    // del sottocomando.
+    for args in [vec!["describe"], vec!["--format", "markdown", "describe"]] {
+        let mut command = Command::new(executable());
+        command.args(&args);
+        if args.len() == 1 {
+            command.args(["--format", "markdown"]);
+        }
+        let result = command
+            .args(["--input"])
+            .arg(&input)
+            .output()
+            .expect("describe markdown");
+        assert!(result.status.success(), "{args:?}");
+        let testo = String::from_utf8_lossy(&result.stdout);
+        assert!(testo.contains("## Campi"), "{args:?}: {testo}");
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&result.stdout).is_err(),
+            "in markdown l'output non deve essere JSON"
+        );
+    }
+
+    // Dove una resa leggibile non c'e', il flag e' RIFIUTATO invece di
+    // essere ignorato: un flag accettato e disatteso e' peggio.
+    let result = Command::new(executable())
+        .args(["--format", "markdown", "run", "--plan", "x.json"])
+        .output()
+        .expect("run markdown");
+    assert!(!result.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("non e' disponibile per `run`")),
+        "{envelope}"
+    );
+
+    // Un formato sconosciuto e' un errore, non un ripiego silenzioso su json.
+    let result = Command::new(executable())
+        .args(["--format", "yaml", "catalog"])
+        .output()
+        .expect("catalog yaml");
+    assert!(!result.status.success());
+    assert_eq!(result.status.code(), Some(2));
+}
+
+#[test]
+fn la_versione_e_leggibile_da_un_programma() {
+    let result = Command::new(executable())
+        .args(["--version"])
+        .output()
+        .expect("version");
+    assert!(result.status.success());
+    let documento: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("--version emette JSON");
+    assert_eq!(documento["component"], "plenora-data-tools");
+    assert_eq!(documento["component_version"], env!("CARGO_PKG_VERSION"));
+    assert!(documento["arrow_version"].is_string());
+    assert!(documento["backends"].is_array());
+    assert_eq!(documento["operations"], CATALOG.len());
+
+    // `capabilities` porta la stessa identita' accanto al documento
+    // dichiarativo: chi interroga le capability non deve chiedere altrove
+    // con quale binario sta parlando.
+    let result = Command::new(executable())
+        .args(["capabilities"])
+        .output()
+        .expect("capabilities");
+    assert!(result.status.success());
+    let documento: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("capabilities JSON");
+    assert_eq!(documento["component_version"], env!("CARGO_PKG_VERSION"));
+    assert!(documento["backends"].is_array());
+}
+
+#[test]
+fn ogni_sottocomando_del_dispatch_ha_un_help_che_lo_nomina() {
+    // Un help che non elenca un comando, o che ne elenca uno inesistente, e'
+    // un difetto: e' la prima cosa che legge chi non conosce il tool. La
+    // lista e' quella del dispatch, non una copia — se il dispatch cambia e
+    // l'help no, questo test cade.
+    const COMANDI: [&str; 10] = [
+        "catalog",
+        "describe",
+        "inspect-dataset",
+        "validate",
+        "run",
+        "capabilities",
+        "transform",
+        "spatial-join",
+        "transform-arrow",
+        "pair-arrow",
+    ];
+    let generale = Command::new(executable())
+        .args(["--help"])
+        .output()
+        .expect("help");
+    assert!(generale.status.success());
+    let generale = String::from_utf8_lossy(&generale.stdout).into_owned();
+    for comando in COMANDI {
+        // `inspect-dataset` compare come alias sulla riga di `describe`.
+        assert!(
+            generale.contains(comando),
+            "l'help generale non nomina `{comando}`"
+        );
+        let specifico = Command::new(executable())
+            .args([comando, "--help"])
+            .output()
+            .expect("help del sottocomando");
+        assert!(
+            specifico.status.success(),
+            "`{comando} --help` deve funzionare"
+        );
+        let testo = String::from_utf8_lossy(&specifico.stdout);
+        assert!(
+            testo.contains(comando) || testo.contains("describe"),
+            "`{comando} --help` non nomina il comando: {testo}"
+        );
+    }
+    // Ogni comando accetta `--format` senza che l'help debba ripeterlo: e'
+    // globale, e viene tolto prima del dispatch.
+    let result = Command::new(executable())
+        .args(["--format", "json", "--help"])
+        .output()
+        .expect("help con formato");
+    assert!(result.status.success());
 }

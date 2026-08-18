@@ -225,7 +225,7 @@ pub(in crate::analyze) fn analyze_from_coords(
         None,
         false,
     )?);
-    let field_id = fields_allocator.alloc();
+    let field_id = fields_allocator.alloc()?;
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
@@ -310,7 +310,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
         None,
         true,
     )?);
-    let field_id = fields_allocator.alloc();
+    let field_id = fields_allocator.alloc()?;
     let output_types = GeometryTypesProperty::new(
         TypesDeclaration::Mixed,
         vec![
@@ -444,7 +444,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
         fields.push(Field::new(CENTROID_X_COLUMN, DataType::Float64, false));
         fields.push(Field::new(CENTROID_Y_COLUMN, DataType::Float64, false));
     }
-    let field_id = fields_allocator.alloc();
+    let field_id = fields_allocator.alloc()?;
     let output_types =
         GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
             .map_err(|error| PlenoraError::Internal(error.to_string()))?;

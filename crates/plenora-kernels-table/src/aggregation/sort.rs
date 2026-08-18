@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
@@ -12,8 +12,9 @@ use plenora_core::{PlenoraError, Result};
 
 use crate::{column_index, select_rows};
 
-use super::compare::compare_at;
-use super::grouping::{KeyColumn, KeyHasher};
+use super::compare::{compare_at, validate_sortable};
+use super::grouping::KeyColumn;
+use crate::hashing::KeyHasher;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,20 +110,43 @@ fn compare_nullable<A: Array>(
     }
 }
 
-// Il guard del mutex nel comparatore e' gia' a scope minimo (blocco
-// `Err`): stringerlo non cambia la concorrenza e la riscrittura suggerita
-// peggiorerebbe il percorso di errore condiviso tra sort seriale e
-// parallela.
-#[allow(clippy::significant_drop_tightening)]
+/// Prevalidazione deterministica delle colonne di ordinamento.
+///
+/// Percorre le colonne nell'ordine dichiarato dal piano: il primo errore e'
+/// quindi sempre lo stesso, a prescindere da come il sort verra' eseguito.
+///
+/// Senza questa passata l'errore nasceva DENTRO il comparatore, e in
+/// `par_sort_by` quale confronto fallisse per primo dipende da come Rayon
+/// spezza il lavoro fra i thread: con piu' celle non valide, identita' e
+/// messaggio dell'errore cambiavano fra esecuzioni sullo stesso input —
+/// violazione di ADR-0001, che impone errori deterministici.
+fn prevalidate_sort_columns(batch: &RecordBatch, indices: &[usize]) -> Result<()> {
+    for index in indices {
+        validate_sortable(batch.column(*index), batch.num_rows())?;
+    }
+    Ok(())
+}
+
+/// Errore di un comparatore che la prevalidazione avrebbe dovuto escludere.
+///
+/// Il testo e' fisso e non dipende dai dati: anche in questo caso — che e' un
+/// difetto nostro, non dell'input — l'identita' dell'errore resta
+/// deterministica.
+fn comparator_after_prevalidation() -> PlenoraError {
+    PlenoraError::Internal(
+        "comparatore del sort fallito dopo la prevalidazione delle colonne".to_owned(),
+    )
+}
+
 /// Batch ordinato per `config.columns` (sort stabile, null in coda in
 /// ascendente).
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `columns` vuoto;
-/// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
-///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
-///   fast path) e di `select_rows`.
+/// - `Schema`: una colonna di `columns` assente dallo schema o non
+///   ordinabile (prevalidazione deterministica), piu' gli errori di
+///   `select_rows`.
 pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
     // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
@@ -135,12 +159,16 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     if indices.is_empty() {
         return Err(PlenoraError::InvalidPlan("sort richiede colonne".into()));
     }
+    prevalidate_sort_columns(batch, &indices)?;
     let comparators = indices
         .iter()
         .map(|index| ColumnComparator::new(*index, batch.column(*index)))
         .collect::<Vec<_>>();
     let mut rows: Vec<usize> = (0..batch.num_rows()).collect();
-    let failure = Mutex::new(None);
+    // Dopo la prevalidazione il comparatore non puo' fallire sui dati: resta
+    // solo un flag di backstop, senza payload e quindi senza dipendenza
+    // dall'ordine in cui i thread hanno incontrato il problema.
+    let unexpected = AtomicBool::new(false);
     let compare = |left: &usize, right: &usize| {
         for comparator in &comparators {
             match comparator.compare(batch, *left, *right) {
@@ -152,13 +180,8 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
                         ordering.reverse()
                     };
                 }
-                Err(error) => {
-                    let mut slot = failure
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if slot.is_none() {
-                        *slot = Some(error);
-                    }
+                Err(_) => {
+                    unexpected.store(true, AtomicOrdering::Relaxed);
                     return Ordering::Equal;
                 }
             }
@@ -170,11 +193,8 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     } else {
         rows.sort_by(compare);
     }
-    if let Some(error) = failure
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
-        return Err(error);
+    if unexpected.load(AtomicOrdering::Relaxed) {
+        return Err(comparator_after_prevalidation());
     }
     select_rows(batch, &rows)
 }
@@ -202,9 +222,9 @@ pub struct TopN {
 ///
 /// - `InvalidPlan`: `columns` vuoto, oppure `n` non rappresentabile come
 ///   `usize`;
-/// - `Schema`: una colonna di `columns` assente dallo schema; in piu' gli
-///   errori di `scalar_as_string` (fallback testuale per i tipi fuori dal
-///   fast path) e di `select_rows`.
+/// - `Schema`: una colonna di `columns` assente dallo schema o non
+///   ordinabile (stessa prevalidazione deterministica di `sort`), piu' gli
+///   errori di `select_rows`.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
     let indices = config
         .columns
@@ -214,6 +234,10 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
     if indices.is_empty() {
         return Err(PlenoraError::InvalidPlan("top_n richiede colonne".into()));
     }
+    // Stessa prevalidazione di `sort`: l'errore nasce dall'ordine dichiarato
+    // delle colonne, non dall'ordine in cui `select_nth_unstable_by` capita
+    // di confrontare le righe.
+    prevalidate_sort_columns(batch, &indices)?;
     let n = usize::try_from(config.n)
         .map_err(|_| PlenoraError::InvalidPlan("top_n: n oltre usize".into()))?
         .min(batch.num_rows());
@@ -226,7 +250,7 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
         .map(|index| ColumnComparator::new(*index, batch.column(*index)))
         .collect::<Vec<_>>();
     let mut rows: Vec<usize> = (0..batch.num_rows()).collect();
-    let mut failure: Option<PlenoraError> = None;
+    let unexpected = AtomicBool::new(false);
     let mut compare = |left: &usize, right: &usize| {
         for comparator in &comparators {
             match comparator.compare(batch, *left, *right) {
@@ -238,10 +262,8 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
                         ordering
                     };
                 }
-                Err(error) => {
-                    if failure.is_none() {
-                        failure = Some(error);
-                    }
+                Err(_) => {
+                    unexpected.store(true, AtomicOrdering::Relaxed);
                     return Ordering::Equal;
                 }
             }
@@ -253,8 +275,8 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
         rows.truncate(n);
     }
     rows.sort_by(&mut compare);
-    if let Some(error) = failure {
-        return Err(error);
+    if unexpected.load(AtomicOrdering::Relaxed) {
+        return Err(comparator_after_prevalidation());
     }
     select_rows(batch, &rows)
 }

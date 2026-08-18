@@ -59,9 +59,12 @@
 //! [`executor::ExecutionMetrics`].
 
 pub mod cancellation;
+mod error_propagation;
 pub mod executor;
 pub mod geo_transport;
 pub mod governor;
+pub mod ipc_boundary;
+pub mod parallelism;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
@@ -71,6 +74,7 @@ pub mod temp_store;
 pub use cancellation::CancellationToken;
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
+pub use ipc_boundary::{BoundaryBatches, IpcFormat, IpcLimits};
 pub use plenora_kernels_table::spill::SpillMetrics;
 pub use prepare::{
     explain, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,

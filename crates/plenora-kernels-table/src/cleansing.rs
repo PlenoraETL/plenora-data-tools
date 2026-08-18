@@ -402,6 +402,15 @@ where
 #[must_use]
 pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef> {
     let first = batch.column(indices[0]);
+    // `null_count()` conta i null FISICI: per una dictionary le righe con
+    // chiave valida verso una entry nulla non sono contate, e la scorciatoia
+    // «nessun null, restituisco la prima colonna» saltava il risolutore
+    // logico restituendo celle nulle come se fossero valori. Il tipo
+    // dictionary non ha comunque un ramo tipizzato qui sotto: si ricade sul
+    // percorso generico, che il null logico lo conosce.
+    if matches!(first.data_type(), DataType::Dictionary(_, _)) {
+        return None;
+    }
     if first.null_count() == 0 {
         return Some(first.clone());
     }
@@ -800,6 +809,19 @@ fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>
 }
 
 /// Target `float` (Float64).
+///
+/// # Arrotondamento dichiarato
+///
+/// `cast(to: "float")` e' l'operazione con cui l'utente CHIEDE un `Float64`:
+/// l'arrotondamento al double piu' vicino e' la sua semantica, non un
+/// difetto. Un `i64`/`u64` oltre 2^53 perde quindi le cifre basse, come in
+/// qualunque cast a virgola mobile. E' l'unico punto del kernel in cui la
+/// conversione intero -> f64 e' volutamente lossy; ovunque altro vale
+/// `exact_f64_from_*` (esatta o errore).
+///
+/// La deroga e' qui e non implicita: i cast espliciti sotto non fingono un
+/// controllo di rappresentabilita' che non c'e'.
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: e' la semantica di `cast(to: "float")`.
 fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione float fallita";
     if let Some(values) = source.as_any().downcast_ref::<Float64Array>() {
@@ -807,13 +829,12 @@ fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRe
     }
     let len = source.len();
     let out: Vec<Option<f64>> = if let Some(values) = source.as_any().downcast_ref::<Int64Array>() {
-        // to_string + parse riesce sempre e arrotonda come `to_f64` (mai None su i64).
         (0..len)
             .map(|row| {
                 Ok(if values.is_null(row) {
                     None
                 } else {
-                    Some(values.value(row).to_f64().unwrap_or(f64::NAN))
+                    Some(values.value(row) as f64)
                 })
             })
             .collect::<Result<_>>()?
@@ -823,7 +844,7 @@ fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRe
                 Ok(if values.is_null(row) {
                     None
                 } else {
-                    Some(values.value(row).to_f64().unwrap_or(f64::NAN))
+                    Some(values.value(row) as f64)
                 })
             })
             .collect::<Result<_>>()?

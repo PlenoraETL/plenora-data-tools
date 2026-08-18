@@ -56,9 +56,9 @@ impl SpillWorkspace {
         self.bytes_written = self
             .bytes_written
             .checked_add(bytes)
-            .ok_or_else(|| PlenoraError::InvalidPlan("overflow quota spill".into()))?;
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow quota spill".into()))?;
         if self.bytes_written > self.max_temp_bytes {
-            return Err(PlenoraError::InvalidPlan(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "spill oltre max_temp_bytes: {} > {}",
                 self.bytes_written, self.max_temp_bytes
             )));
@@ -81,8 +81,13 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
     let mut hasher = KeyHasher::default();
     hasher.write(key);
     let divisor = partitions as u64;
+    // `% divisor` con `divisor <= 4096` (validato da `Limits`) sta in
+    // `usize` su qualunque piattaforma supportata: se questa conversione
+    // fallisse sarebbe un'invariante NOSTRA rotta, non un volume di dati
+    // fuori budget. Categoria `Internal`, non `ResourceLimit`: dire al
+    // chiamante «rilancia con piu' budget» sarebbe un consiglio inutile.
     usize::try_from(hasher.finish() % divisor)
-        .map_err(|_| PlenoraError::InvalidPlan("indice partizione non rappresentabile".into()))
+        .map_err(|_| PlenoraError::Internal("indice partizione non rappresentabile".into()))
 }
 
 /// Capacita' dei buffer di I/O dello spill. Il default (8 KiB) costa ~128
@@ -139,14 +144,14 @@ fn spill_batch(
     for row in 0..batch.num_rows() {
         encoder.encode_into(row, &mut key)?;
         if key.len() > max_record_bytes(limits) {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "singola chiave oltre max_temp_bytes".into(),
             ));
         }
         let index = partition(&key, writers.len())?;
         let ordinal = ordinal_offset
             .checked_add(row)
-            .ok_or_else(|| PlenoraError::InvalidPlan("overflow ordinal spill".into()))?;
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow ordinal spill".into()))?;
         write_record(&mut writers[index], ordinal, &key, workspace)?;
     }
     Ok(())
@@ -159,7 +164,9 @@ fn read_u64(reader: &mut BufReader<File>) -> Result<Option<u64>> {
         count => {
             reader.read_exact(&mut bytes[count..]).map_err(|error| {
                 if error.kind() == ErrorKind::UnexpectedEof {
-                    PlenoraError::InvalidPlan("record spill troncato".into())
+                    // Header di un record scritto da NOI: se e' troncato e'
+                    // un'invariante nostra violata, non un piano sbagliato.
+                    PlenoraError::Internal("record spill troncato".into())
                 } else {
                     PlenoraError::Io(error)
                 }
@@ -177,12 +184,21 @@ fn read_record(
     let Some(ordinal) = read_u64(reader)? else {
         return Ok(None);
     };
+    // I tre errori qui sotto riguardano l'INTEGRITA' di un file temporaneo
+    // scritto da noi: non sono limiti di risorsa (il chiamante non ha nulla
+    // da rilanciare con piu' budget) ne' piani sbagliati. Sono un'invariante
+    // nostra violata, quindi `Internal`. Erano `InvalidPlan` per eredita';
+    // il giro precedente lo aveva dichiarato come residuo, questo lo chiude.
     let length = read_u64(reader)?
-        .ok_or_else(|| PlenoraError::InvalidPlan("record spill senza lunghezza".into()))?;
+        .ok_or_else(|| PlenoraError::Internal("record spill senza lunghezza".into()))?;
     let length = usize::try_from(length)
-        .map_err(|_| PlenoraError::InvalidPlan("record spill non rappresentabile".into()))?;
+        .map_err(|_| PlenoraError::Internal("record spill non rappresentabile".into()))?;
     if length > max_record_bytes {
-        return Err(PlenoraError::InvalidPlan(
+        // Il writer non puo' produrre un record oltre questo tetto: lo
+        // controlla PRIMA di scrivere («singola chiave oltre
+        // max_temp_bytes»). Leggerlo qui significa che il file non e' quello
+        // che abbiamo scritto — invariante nostra, non budget del chiamante.
+        return Err(PlenoraError::Internal(
             "record spill oltre il limite di sicurezza".into(),
         ));
     }
@@ -192,13 +208,15 @@ fn read_record(
     key.resize(length, 0);
     reader.read_exact(key.as_mut_slice()).map_err(|error| {
         if error.kind() == ErrorKind::UnexpectedEof {
-            PlenoraError::InvalidPlan("chiave spill troncata".into())
+            PlenoraError::Internal("chiave spill troncata".into())
         } else {
             PlenoraError::Io(error)
         }
     })?;
+    // Stesso ragionamento: l'ordinal e' stato scritto da noi da un `usize`,
+    // quindi rileggerlo e non poterlo riconvertire e' un'invariante rotta.
     Ok(Some(usize::try_from(ordinal).map_err(|_| {
-        PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into())
+        PlenoraError::Internal("ordinal spill non rappresentabile".into())
     })?))
 }
 
@@ -218,9 +236,9 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
         if keys.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
+                .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
             if estimated > limits.max_memory_bytes {
-                return Err(PlenoraError::InvalidPlan(format!(
+                return Err(PlenoraError::ResourceLimit(format!(
                     "partizione spill oltre max_memory_bytes: {estimated} > {}",
                     limits.max_memory_bytes
                 )));
@@ -239,9 +257,9 @@ fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) ->
         if emitted.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
+                .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
             if estimated > limits.max_memory_bytes {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "partizione union spill oltre max_memory_bytes".into(),
                 ));
             }
@@ -271,9 +289,11 @@ fn collect_membership(
         } else if !right.contains(key.as_slice()) && emitted.insert(key.as_slice().into()) {
             emitted_bytes = emitted_bytes
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
-                .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria except spill".into()))?;
+                .ok_or_else(|| {
+                    PlenoraError::ResourceLimit("overflow memoria except spill".into())
+                })?;
             if emitted_bytes > limits.max_memory_bytes {
-                return Err(PlenoraError::InvalidPlan(
+                return Err(PlenoraError::ResourceLimit(
                     "partizione except spill oltre max_memory_bytes".into(),
                 ));
             }
@@ -317,7 +337,9 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 ///
 /// - `Schema`: schemi dei due input incompatibili (`validate_schema`) o
 ///   errore Arrow in `select_rows`/`concat_compatible`;
-/// - `InvalidPlan`: vincoli dello spill violati (partizioni zero, chiave
+/// - `InvalidPlan`: partizioni zero (vincolo del piano);
+/// - `ResourceLimit`: quote e rappresentabilita' degli ordinali (volume);
+/// - `Internal`: integrita' del file temporaneo scritto da noi (chiave
 ///   oltre `max_temp_bytes`, working set di una partizione oltre
 ///   `max_memory_bytes`, overflow interni di accounting);
 /// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
@@ -419,10 +441,40 @@ const SPILL_CHUNK_ROWS: usize = 8_192;
 /// Metriche di spill richieste da ADR-0002: byte scritti e letti sui file
 /// temporanei e numero di file (partizioni/run) materializzati.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SpillMetrics {
     pub bytes_written: u64,
     pub bytes_read: u64,
     pub files: usize,
+    /// `true` se accumulando queste metriche un contatore ha raggiunto il
+    /// proprio fondo scala: i valori qui sopra sono allora limiti inferiori,
+    /// non conteggi. Chi le aggrega deve propagarlo, altrimenti la
+    /// degradazione resta vera ma invisibile.
+    pub saturated: bool,
+}
+
+impl SpillMetrics {
+    /// Accumula `delta` in `self`, saturando e DICHIARANDO la saturazione.
+    pub fn accumulate(&mut self, delta: Self) {
+        let mut saturated = self.saturated || delta.saturated;
+        let mut somma_u64 = |totale: &mut u64, parte: u64| {
+            if let Some(value) = totale.checked_add(parte) {
+                *totale = value;
+            } else {
+                *totale = u64::MAX;
+                saturated = true;
+            }
+        };
+        somma_u64(&mut self.bytes_written, delta.bytes_written);
+        somma_u64(&mut self.bytes_read, delta.bytes_read);
+        if let Some(value) = self.files.checked_add(delta.files) {
+            self.files = value;
+        } else {
+            self.files = usize::MAX;
+            saturated = true;
+        }
+        self.saturated = saturated;
+    }
 }
 
 enum SpillRoot {
@@ -444,6 +496,18 @@ pub struct RowSpillWorkspace {
     files_created: usize,
     bytes_written: Rc<Cell<u64>>,
     bytes_read: Rc<Cell<u64>>,
+    /// Vero se un contatore ha raggiunto il fondo scala. Vive nello stato
+    /// CONDIVISO perche' a saturare sono i writer e i reader conteggiati, non
+    /// il workspace: senza, `SpillMetrics::saturated` restava `false` mentre
+    /// `bytes_written` era gia' a `u64::MAX`.
+    ///
+    /// Sono DUE stati distinti perche' hanno conseguenze diverse: la
+    /// saturazione dei byte SCRITTI invalida la quota (`check_quota` non puo'
+    /// piu' decidere), quella dei byte letti e del numero di file e' solo
+    /// osservabilita' degradata. Con un flag solo, un contatore di lettura a
+    /// fondo scala avrebbe chiuso la quota con una diagnosi falsa.
+    scritti_saturi: Rc<Cell<bool>>,
+    osservabilita_satura: Rc<Cell<bool>>,
     max_temp_bytes: u64,
 }
 
@@ -462,6 +526,8 @@ impl RowSpillWorkspace {
             ),
             files: Vec::new(),
             files_created: 0,
+            scritti_saturi: Rc::new(Cell::new(false)),
+            osservabilita_satura: Rc::new(Cell::new(false)),
             bytes_written: Rc::new(Cell::new(0)),
             bytes_read: Rc::new(Cell::new(0)),
             max_temp_bytes,
@@ -483,6 +549,8 @@ impl RowSpillWorkspace {
             root: SpillRoot::External(directory.to_path_buf()),
             files: Vec::new(),
             files_created: 0,
+            scritti_saturi: Rc::new(Cell::new(false)),
+            osservabilita_satura: Rc::new(Cell::new(false)),
             bytes_written: Rc::new(Cell::new(0)),
             bytes_read: Rc::new(Cell::new(0)),
             max_temp_bytes,
@@ -499,15 +567,36 @@ impl RowSpillWorkspace {
 
     fn register(&mut self, path: PathBuf) {
         self.files.push(path);
-        self.files_created += 1;
+        // Anche questo contatore satura invece di avvolgere: `+= 1` a fondo
+        // scala tornerebbe a zero (o abortirebbe con `overflow-checks`).
+        if let Some(valore) = self.files_created.checked_add(1) {
+            self.files_created = valore;
+        } else {
+            self.files_created = usize::MAX;
+            self.osservabilita_satura.set(true);
+        }
     }
 
     /// Verifica la quota dopo l'ultimo chunk scritto: errore dedicato
     /// `Contract`, stessa forma dello spill set-op.
     fn check_quota(&self) -> Result<()> {
         let written = self.bytes_written.get();
+        // Con `max_temp_bytes == u64::MAX` la saturazione porta `written` a
+        // `u64::MAX`: il confronto `written > max` e' allora FALSO e la quota
+        // resterebbe aperta proprio dopo aver perso il conto. La saturazione
+        // e' quindi essa stessa una violazione: da quel momento non si sa
+        // piu' quanto e' stato scritto, e un budget non misurabile non e' un
+        // budget.
+        // SOLO i byte scritti: la saturazione di un contatore di lettura o
+        // del numero di file degrada l'osservabilita', non la quota, e
+        // chiudere per quella sarebbe una diagnosi falsa.
+        if self.scritti_saturi.get() {
+            return Err(PlenoraError::ResourceLimit(
+                "contatore dei byte scritti in spill saturo: quota non piu' verificabile".into(),
+            ));
+        }
         if written > self.max_temp_bytes {
-            return Err(PlenoraError::InvalidPlan(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "spill oltre max_temp_bytes: {} > {}",
                 written, self.max_temp_bytes
             )));
@@ -523,6 +612,10 @@ impl RowSpillWorkspace {
             bytes_written: self.bytes_written.get(),
             bytes_read: self.bytes_read.get(),
             files: self.files_created,
+            // La metrica dichiara la saturazione di QUALUNQUE contatore: chi
+            // legge i numeri deve sapere che sono limiti inferiori, da
+            // qualunque contatore venga la degradazione.
+            saturated: self.scritti_saturi.get() || self.osservabilita_satura.get(),
         }
     }
 
@@ -557,13 +650,16 @@ impl Drop for RowSpillWorkspace {
 struct CountingWriter {
     inner: BufWriter<File>,
     counter: Rc<Cell<u64>>,
+    /// Saturazione dei byte SCRITTI: chiude la quota.
+    saturated: Rc<Cell<bool>>,
 }
 
 impl CountingWriter {
-    fn create(path: &Path, counter: &Rc<Cell<u64>>) -> Result<Self> {
+    fn create(path: &Path, counter: &Rc<Cell<u64>>, saturated: &Rc<Cell<bool>>) -> Result<Self> {
         Ok(Self {
             inner: BufWriter::with_capacity(SPILL_IO_BUFFER_BYTES, File::create(path)?),
             counter: Rc::clone(counter),
+            saturated: Rc::clone(saturated),
         })
     }
 }
@@ -571,8 +667,7 @@ impl CountingWriter {
 impl Write for CountingWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         let written = self.inner.write(buffer)?;
-        self.counter
-            .set(self.counter.get().saturating_add(written as u64));
+        accumula(&self.counter, &self.saturated, written as u64);
         Ok(written)
     }
 
@@ -586,13 +681,16 @@ impl Write for CountingWriter {
 struct CountingReader {
     inner: BufReader<File>,
     counter: Rc<Cell<u64>>,
+    /// Saturazione dei byte LETTI: solo osservabilita', nessuna quota.
+    saturated: Rc<Cell<bool>>,
 }
 
 impl CountingReader {
-    fn open(path: &Path, counter: &Rc<Cell<u64>>) -> Result<Self> {
+    fn open(path: &Path, counter: &Rc<Cell<u64>>, saturated: &Rc<Cell<bool>>) -> Result<Self> {
         Ok(Self {
             inner: BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?),
             counter: Rc::clone(counter),
+            saturated: Rc::clone(saturated),
         })
     }
 }
@@ -600,16 +698,30 @@ impl CountingReader {
 impl Read for CountingReader {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buffer)?;
-        self.counter
-            .set(self.counter.get().saturating_add(read as u64));
+        accumula(&self.counter, &self.saturated, read as u64);
         Ok(read)
+    }
+}
+
+/// Accumula un contatore di spill saturando e DICHIARANDO la saturazione.
+///
+/// La saturazione, non l'avvolgimento: `bytes_written` decide anche la quota
+/// (`check_quota`), e un contatore che avvolgesse la riaprirebbe a zero. A
+/// fondo scala il valore resta `u64::MAX` — la quota resta chiusa — e il
+/// flag dice che il numero e' un limite inferiore, non un conteggio.
+fn accumula(contatore: &Rc<Cell<u64>>, saturated: &Rc<Cell<bool>>, delta: u64) {
+    if let Some(valore) = contatore.get().checked_add(delta) {
+        contatore.set(valore);
+    } else {
+        contatore.set(u64::MAX);
+        saturated.set(true);
     }
 }
 
 /// Scrive un batch in un file IPC stream a chunk di `SPILL_CHUNK_ROWS`,
 /// verificando la quota a ogni chunk.
 fn write_ipc_chunks(workspace: &RowSpillWorkspace, path: &Path, batch: &RecordBatch) -> Result<()> {
-    let writer = CountingWriter::create(path, &workspace.bytes_written)?;
+    let writer = CountingWriter::create(path, &workspace.bytes_written, &workspace.scritti_saturi)?;
     let mut writer = StreamWriter::try_new(writer, &batch.schema())?;
     workspace.check_quota()?;
     let mut offset = 0;
@@ -674,7 +786,8 @@ fn read_partition(
     path: &Path,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    let reader = CountingReader::open(path, &workspace.bytes_read)?;
+    let reader =
+        CountingReader::open(path, &workspace.bytes_read, &workspace.osservabilita_satura)?;
     let mut reader = StreamReader::try_new(reader, None)?;
     let schema = reader.schema();
     let mut batches = Vec::new();
@@ -682,9 +795,9 @@ fn read_partition(
     while let Some(batch) = reader.next().transpose()? {
         estimated = estimated
             .checked_add(estimated_batch_bytes(&batch))
-            .ok_or_else(|| PlenoraError::InvalidPlan("overflow memoria spill".into()))?;
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
         if estimated > limits.max_memory_bytes {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "partizione spill oltre max_memory_bytes".into(),
             ));
         }
@@ -727,9 +840,10 @@ pub fn distinct_spilled(
 ///
 /// - `Schema`: colonna di `config.subset` assente (`column_index`) o
 ///   errore Arrow in `replace_or_append`/`select_rows`;
-/// - `InvalidPlan`: colonna riservata allo spill gia' presente, quote
-///   superate (`max_temp_bytes`, `max_memory_bytes`), `spill_partitions`
-///   zero, ordinal/chiave non rappresentabili;
+/// - `InvalidPlan`: colonna riservata allo spill gia' presente,
+///   `spill_partitions` zero;
+/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_memory_bytes`),
+///   ordinal/chiave non rappresentabili;
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
 ///
@@ -773,7 +887,7 @@ pub fn distinct_spilled_in(
     let ordinals = (0..batch.num_rows())
         .map(|row| {
             u64::try_from(row)
-                .map_err(|_| PlenoraError::InvalidPlan("ordinal spill oltre u64".into()))
+                .map_err(|_| PlenoraError::ResourceLimit("ordinal spill oltre u64".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     let with_ordinal = replace_or_append(
@@ -797,7 +911,8 @@ pub fn distinct_spilled_in(
     let mut key = String::new();
     let mut scratch = String::new();
     for path in &paths {
-        let reader = CountingReader::open(path, &workspace.bytes_read)?;
+        let reader =
+            CountingReader::open(path, &workspace.bytes_read, &workspace.osservabilita_satura)?;
         let mut reader = StreamReader::try_new(reader, None)?;
         while let Some(partition_batch) = reader.next().transpose()? {
             let ordinal_column = partition_batch
@@ -828,10 +943,10 @@ pub fn distinct_spilled_in(
                     estimated = estimated
                         .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                         .ok_or_else(|| {
-                            PlenoraError::InvalidPlan("overflow memoria spill".into())
+                            PlenoraError::ResourceLimit("overflow memoria spill".into())
                         })?;
                     if estimated > limits.max_memory_bytes {
-                        return Err(PlenoraError::InvalidPlan(
+                        return Err(PlenoraError::ResourceLimit(
                             "distinct spill oltre max_memory_bytes".into(),
                         ));
                     }
@@ -855,8 +970,9 @@ pub fn distinct_spilled_in(
             Keep::False => (entry.count == 1).then_some(entry.first),
         })
         .map(|ordinal| {
-            usize::try_from(ordinal)
-                .map_err(|_| PlenoraError::InvalidPlan("ordinal spill non rappresentabile".into()))
+            usize::try_from(ordinal).map_err(|_| {
+                PlenoraError::ResourceLimit("ordinal spill non rappresentabile".into())
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     rows.sort_unstable();
@@ -894,9 +1010,9 @@ pub fn aggregate_spilled(
 ///
 /// - `Schema`: colonna di `group_by` assente (`column_index`) o errore
 ///   Arrow in `aggregate`/`concat_batches`/`select_rows`;
-/// - `InvalidPlan`: `group_by` vuoto, quote superate (`max_temp_bytes`,
-///   `max_memory_bytes`), `spill_partitions` zero, output di partizione
-///   incoerente con i gruppi (invariante interna);
+/// - `InvalidPlan`: `group_by` vuoto, `spill_partitions` zero, output di
+///   partizione incoerente con i gruppi (invariante interna);
+/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_memory_bytes`);
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
 ///
@@ -1008,7 +1124,8 @@ struct RunCursor {
 
 impl RunCursor {
     fn open(workspace: &RowSpillWorkspace, path: &Path, base: usize) -> Result<Self> {
-        let reader = CountingReader::open(path, &workspace.bytes_read)?;
+        let reader =
+            CountingReader::open(path, &workspace.bytes_read, &workspace.osservabilita_satura)?;
         let mut cursor = Self {
             reader: StreamReader::try_new(reader, None)?,
             current: None,
@@ -1095,8 +1212,9 @@ pub fn sort_spilled(
 ///
 /// - `Schema`: colonna di sort assente (`column_index`) o errore Arrow in
 ///   `sort`/`select_rows`;
-/// - `InvalidPlan`: nessuna colonna di sort, quota `max_temp_bytes` superata,
-///   confronto tra celle fallito (`compare_cells_typed`);
+/// - `InvalidPlan`: nessuna colonna di sort, confronto tra celle fallito
+///   (`compare_cells_typed`);
+/// - `ResourceLimit`: quota `max_temp_bytes` superata;
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
 ///
@@ -1184,6 +1302,107 @@ pub fn sort_spilled_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn i_contatori_dello_spill_dichiarano_la_saturazione_e_non_riaprono_la_quota() {
+        // Sesto giro, finding 9: i contatori sorgente saturavano in silenzio e
+        // `SpillMetrics::saturated` restava `false` — il flag introdotto per
+        // dichiarare la degradazione non lo diceva mai.
+        let contatore = Rc::new(Cell::new(u64::MAX - 4));
+        let saturo = Rc::new(Cell::new(false));
+        accumula(&contatore, &saturo, 4);
+        assert_eq!(contatore.get(), u64::MAX);
+        assert!(!saturo.get(), "il fondo scala esatto non e' saturazione");
+        accumula(&contatore, &saturo, 1);
+        assert_eq!(contatore.get(), u64::MAX, "satura, non avvolge");
+        assert!(saturo.get(), "la saturazione va dichiarata");
+
+        // La quota NON si riapre a fondo scala, nemmeno quando il tetto E'
+        // `u64::MAX`: li' il confronto `written > max` e' falso, e senza uno
+        // stato dedicato la saturazione avrebbe riaperto la quota proprio
+        // dopo aver perso il conto.
+        for tetto in [1_024_u64, u64::MAX] {
+            let workspace = RowSpillWorkspace::new(tetto).expect("workspace");
+            workspace.bytes_written.set(u64::MAX);
+            workspace.scritti_saturi.set(true);
+            let esito = workspace.check_quota();
+            assert!(
+                esito.is_err(),
+                "tetto {tetto}: la saturazione deve chiudere la quota"
+            );
+            assert!(
+                matches!(esito, Err(PlenoraError::ResourceLimit(_))),
+                "tetto {tetto}: e' un limite di risorsa, non un piano invalido"
+            );
+        }
+        // Senza saturazione il tetto massimo resta permissivo, come deve.
+        let workspace = RowSpillWorkspace::new(u64::MAX).expect("workspace");
+        workspace.bytes_written.set(u64::MAX - 1);
+        assert!(workspace.check_quota().is_ok());
+
+        // La saturazione dell'OSSERVABILITA' (byte letti, numero di file) NON
+        // chiude la quota: sarebbe una diagnosi falsa, perche' i byte scritti
+        // restano contati esattamente. La metrica pero' la dichiara.
+        let workspace = RowSpillWorkspace::new(1_024).expect("workspace");
+        workspace.bytes_written.set(10);
+        workspace.osservabilita_satura.set(true);
+        assert!(
+            workspace.check_quota().is_ok(),
+            "un contatore di lettura saturo non chiude la quota di scrittura"
+        );
+        assert!(
+            workspace.metrics().saturated,
+            "la degradazione resta comunque dichiarata nelle metriche"
+        );
+    }
+
+    #[test]
+    fn l_accumulo_delle_metriche_di_spill_dichiara_la_saturazione() {
+        // I contatori di spill saturavano in silenzio, quindi
+        // `ExecutionMetrics::counters_saturated` poteva restare `false` con
+        // `bytes_written` gia' a fondo scala: un flag che smentiva i numeri
+        // accanto a se'.
+        let mut totale = SpillMetrics::default();
+        totale.accumulate(SpillMetrics {
+            bytes_written: 10,
+            bytes_read: 20,
+            files: 2,
+            saturated: false,
+        });
+        assert_eq!(totale.bytes_written, 10);
+        assert_eq!(totale.files, 2);
+        assert!(!totale.saturated, "nessuna saturazione da dichiarare");
+
+        totale.accumulate(SpillMetrics {
+            bytes_written: u64::MAX,
+            bytes_read: 0,
+            files: 0,
+            saturated: false,
+        });
+        assert_eq!(totale.bytes_written, u64::MAX, "satura, non avvolge");
+        assert_eq!(totale.bytes_read, 20, "gli altri contatori restano esatti");
+        assert!(totale.saturated, "la saturazione va dichiarata");
+
+        // La saturazione gia' dichiarata da un delta non si perde per strada.
+        let mut totale = SpillMetrics::default();
+        totale.accumulate(SpillMetrics {
+            saturated: true,
+            ..SpillMetrics::default()
+        });
+        assert!(totale.saturated);
+
+        // Anche il conteggio dei file, che e' `usize`.
+        let mut totale = SpillMetrics {
+            files: usize::MAX,
+            ..SpillMetrics::default()
+        };
+        totale.accumulate(SpillMetrics {
+            files: 1,
+            ..SpillMetrics::default()
+        });
+        assert_eq!(totale.files, usize::MAX);
+        assert!(totale.saturated);
+    }
 
     fn reader_with(bytes: &[u8]) -> (TempDir, BufReader<File>) {
         let directory = tempfile::tempdir().expect("tempdir");

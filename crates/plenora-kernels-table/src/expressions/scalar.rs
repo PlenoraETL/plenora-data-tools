@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::BinaryOperator;
 use crate::{
-    column_index, scalar_as_f64, scalar_as_string, DIVISION_BY_ZERO_MESSAGE,
+    column_index, scalar_as_f64_rounded, scalar_as_string, DIVISION_BY_ZERO_MESSAGE,
     NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
 };
 use plenora_core::{PlenoraError, Result};
@@ -61,7 +61,7 @@ pub fn column(batch: &RecordBatch, name: &str, row: usize) -> Result<Scalar> {
             | DataType::Date32
             | DataType::Timestamp(_, _)
     ) {
-        return scalar_as_f64(value.as_ref(), row)?.map_or(Ok(Scalar::Null), |value| {
+        return scalar_as_f64_rounded(value.as_ref(), row)?.map_or(Ok(Scalar::Null), |value| {
             if value.is_finite() {
                 Ok(Scalar::Number(value))
             } else {

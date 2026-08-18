@@ -123,6 +123,19 @@ pub enum PlenoraError {
         reason: String,
     },
 
+    /// Limite di RISORSA superato durante l'esecuzione: righe, byte in
+    /// memoria, byte temporanei, fattore di espansione.
+    ///
+    /// Distinta da [`PlenoraError::InvalidPlan`] per una ragione operativa,
+    /// non estetica: `invalid_plan` dice «il piano e' sbagliato, correggilo»,
+    /// mentre qui il piano e' corretto e sono i DATI a non entrare nel budget
+    /// dichiarato. Chi orchestra reagisce diversamente ai due casi — il primo
+    /// si corregge, il secondo si rilancia con piu' budget o meno dati — e
+    /// senza questa variante la categoria `resource_limit` di R9.1 non era
+    /// prodotta da nulla: l'exit code corrispondente era irraggiungibile.
+    #[error("resource limit: {0}")]
+    ResourceLimit(String),
+
     /// Errore di I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -185,78 +198,122 @@ impl From<serde_json::Error> for PlenoraError {
     }
 }
 
-/// Categoria stabile di un [`PlenoraError`]: enumerazione canonica §9
-/// (R9.5 — il sottoinsieme usato dal componente, mai valori propri).
+/// Genera insieme l'enum delle categorie, l'elenco canonico, l'indice e il
+/// nome stabile: **una sola dichiarazione**, quattro derivati.
 ///
-/// L'errore primario conserva la categoria; pensata per telemetria e report
-/// machine-readable, non per il matching di controllo di flusso (per quello
-/// ci sono le varianti).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ErrorCategory {
-    /// Piano o configurazione malformati o incoerenti.
-    InvalidPlan,
-    /// Configurazione del componente invalida.
-    InvalidConfiguration,
-    /// Schema Arrow o contratto dati incoerente.
-    Schema,
-    /// Un valore non e' rappresentabile nella destinazione.
-    DataMapping,
-    /// CRS assente, irrisolto o incoerente.
-    Crs,
-    /// Capability non offerta dal componente.
-    Unsupported,
-    /// Risorsa, layer o tabella inesistente.
-    NotFound,
-    /// Destinazione gia' esistente o conflitto di scrittura.
-    Conflict,
-    /// Credenziali assenti o rifiutate.
-    Authentication,
-    /// Permessi insufficienti.
-    Authorization,
-    /// Scadenza superata.
-    Timeout,
-    /// Annullato dal chiamante.
-    Cancelled,
-    /// Limite di byte, righe, profondita' o quota superato.
-    ResourceLimit,
-    /// Errore del filesystem o del dispositivo.
-    Io,
-    /// Violazione del protocollo di trasporto o di rete.
-    Protocol,
-    /// Condizione temporanea, ritentabile per natura.
-    Transient,
-    /// Fallimento di un nodo durante la trasformazione.
-    Execution,
-    /// Invariante interna violata.
-    Internal,
+/// Non e' zucchero sintattico. Le quattro cose erano scritte a mano e
+/// tenerle allineate era una raccomandazione:
+///
+/// - un `match` esaustivo (`index`, `as_str`) costringe il compilatore a
+///   pretendere un braccio per ogni variante nuova, ma NON costringe nessuno
+///   ad aggiungerla anche a un elenco;
+/// - un elenco costante (`ALL`) puo' quindi restare indietro, e i test che
+///   iterano `ALL` restano verdi: non esiste un test che possa accorgersi di
+///   una variante che nessuno nomina.
+///
+/// Il controesempio e' concreto: si aggiunge `Nuova`, le si da' indice 18
+/// perche' il compilatore lo esige, si dimentica `ALL`, e tutto passa. Con
+/// la macro il caso non esiste: `ALL` e `index` nascono dalla stessa lista,
+/// quindi non possono divergere per costruzione — che e' l'unica forma di
+/// garanzia che valga la pena dichiarare.
+macro_rules! categorie_errore {
+    (
+        $(
+            $(#[$attributo:meta])*
+            $variante:ident => $nome:literal
+        ),+ $(,)?
+    ) => {
+        /// Categoria stabile di un [`PlenoraError`]: enumerazione canonica §9
+        /// (R9.5 — il sottoinsieme usato dal componente, mai valori propri).
+        ///
+        /// L'errore primario conserva la categoria; pensata per telemetria e
+        /// report machine-readable, non per il matching di controllo di flusso
+        /// (per quello ci sono le varianti).
+        ///
+        /// Enum, [`ErrorCategory::ALL`], [`ErrorCategory::index`] e
+        /// [`ErrorCategory::as_str`] sono generati da un'unica dichiarazione:
+        /// vedi la macro `categorie_errore`.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum ErrorCategory {
+            $(
+                $(#[$attributo])*
+                $variante,
+            )+
+        }
+
+        impl ErrorCategory {
+            /// Elenco canonico di TUTTE le categorie, in ordine di
+            /// dichiarazione.
+            ///
+            /// Generato dalla stessa lista dell'enum: non puo' restare
+            /// indietro rispetto alle varianti.
+            pub const ALL: &'static [Self] = &[$(Self::$variante),+];
+
+            /// Nome stabile della categoria (telemetria, report JSON):
+            /// `snake_case` canonico §9.
+            ///
+            /// Generato dalla stessa lista dell'enum: un nome nuovo non puo'
+            /// mancare ne' divergere dall'elenco.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variante => $nome,)+
+                }
+            }
+
+            /// Posizione della categoria in [`Self::ALL`].
+            #[must_use]
+            pub const fn index(self) -> usize {
+                let mut posizione = 0;
+                $(
+                    if matches!(self, Self::$variante) {
+                        return posizione;
+                    }
+                    posizione += 1;
+                )+
+                posizione
+            }
+        }
+    };
 }
 
-impl ErrorCategory {
-    /// Nome stabile della categoria (telemetria, report JSON): `snake_case`
-    /// canonico §9.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidPlan => "invalid_plan",
-            Self::InvalidConfiguration => "invalid_configuration",
-            Self::Schema => "schema",
-            Self::DataMapping => "data_mapping",
-            Self::Crs => "crs",
-            Self::Unsupported => "unsupported",
-            Self::NotFound => "not_found",
-            Self::Conflict => "conflict",
-            Self::Authentication => "authentication",
-            Self::Authorization => "authorization",
-            Self::Timeout => "timeout",
-            Self::Cancelled => "cancelled",
-            Self::ResourceLimit => "resource_limit",
-            Self::Io => "io",
-            Self::Protocol => "protocol",
-            Self::Transient => "transient",
-            Self::Execution => "execution",
-            Self::Internal => "internal",
-        }
-    }
+categorie_errore! {
+    /// Piano o configurazione malformati o incoerenti.
+    InvalidPlan => "invalid_plan",
+    /// Configurazione del componente invalida.
+    InvalidConfiguration => "invalid_configuration",
+    /// Schema Arrow o contratto dati incoerente.
+    Schema => "schema",
+    /// Un valore non e' rappresentabile nella destinazione.
+    DataMapping => "data_mapping",
+    /// CRS assente, irrisolto o incoerente.
+    Crs => "crs",
+    /// Capability non offerta dal componente.
+    Unsupported => "unsupported",
+    /// Risorsa, layer o tabella inesistente.
+    NotFound => "not_found",
+    /// Destinazione gia' esistente o conflitto di scrittura.
+    Conflict => "conflict",
+    /// Credenziali assenti o rifiutate.
+    Authentication => "authentication",
+    /// Permessi insufficienti.
+    Authorization => "authorization",
+    /// Scadenza superata.
+    Timeout => "timeout",
+    /// Annullato dal chiamante.
+    Cancelled => "cancelled",
+    /// Limite di byte, righe, profondita' o quota superato.
+    ResourceLimit => "resource_limit",
+    /// Errore del filesystem o del dispositivo.
+    Io => "io",
+    /// Violazione del protocollo di trasporto o di rete.
+    Protocol => "protocol",
+    /// Condizione temporanea, ritentabile per natura.
+    Transient => "transient",
+    /// Fallimento di un nodo durante la trasformazione.
+    Execution => "execution",
+    /// Invariante interna violata.
+    Internal => "internal",
 }
 
 /// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
@@ -440,6 +497,7 @@ impl PlenoraError {
             Self::Execution { .. } => ErrorCategory::Execution,
             Self::Crs(_) => ErrorCategory::Crs,
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
+            Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
             Self::Io(_) => ErrorCategory::Io,
             Self::Internal(_) => ErrorCategory::Internal,
             Self::Replayed(error) => error.category,
@@ -496,6 +554,7 @@ impl PlenoraError {
             | Self::Execution { .. }
             | Self::Crs(_)
             | Self::Cancelled { .. }
+            | Self::ResourceLimit(_)
             | Self::Internal(_) => RetryDisposition::Never,
             Self::Replayed(error) => error.retry,
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
@@ -576,6 +635,11 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::DataMapping(_)
             | Self::Io(_)
+            // `ResourceLimit` deriva `Write` come le altre varianti di
+            // runtime, ma la fase VERA dipende da dove il limite scatta: chi
+            // lo produce leggendo un input lo tagga `Read` con `with_phase`,
+            // e il tag del confine vince sulla derivazione (vedi sotto).
+            | Self::ResourceLimit(_)
             | Self::Internal(_) => ErrorPhase::Write,
             Self::Replayed(error) => error.phase,
             // Il tag del confine vince sulla derivazione per variante.
@@ -814,6 +878,7 @@ impl PlenoraError {
             | Self::Crs(_)
             | Self::Cancelled { .. }
             | Self::Io(_)
+            | Self::ResourceLimit(_)
             | Self::Internal(_) => RemoteEffect::None,
             Self::Replayed(error) => error.remote_effect,
             // Delegato alla sorgente (comunque `None` per costruzione):
@@ -1042,6 +1107,99 @@ mod tests {
             assert_eq!(tagged.to_string(), expected_text, "Display delegato");
         }
         assert_eq!(source().phase_tag(), None, "non taggato: fase derivata");
+    }
+
+    #[test]
+    fn l_elenco_canonico_e_coerente_con_gli_indici_e_i_nomi() {
+        // Che `ALL` contenga TUTTE le varianti non e' piu' una proprieta' da
+        // verificare: enum ed elenco nascono dalla stessa lista della macro
+        // `categorie_errore`, quindi non possono divergere per costruzione.
+        // La versione precedente di questo test lo prometteva senza poterlo
+        // fare — iterava `ALL`, e una variante fuori da `ALL` non veniva
+        // nominata da nessuno.
+        //
+        // Restano da verificare le proprieta' che la macro NON garantisce da
+        // sola: che gli indici siano le posizioni reali e che i nomi stabili
+        // siano distinti (due varianti potrebbero ricevere lo stesso
+        // letterale nella dichiarazione).
+        for (posizione, categoria) in ErrorCategory::ALL.iter().enumerate() {
+            assert_eq!(
+                categoria.index(),
+                posizione,
+                "{categoria:?} e' in posizione {posizione} ma dichiara indice {}",
+                categoria.index()
+            );
+        }
+        let nomi: std::collections::BTreeSet<&str> =
+            ErrorCategory::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(
+            nomi.len(),
+            ErrorCategory::ALL.len(),
+            "due categorie condividono lo stesso nome stabile"
+        );
+        // Il conteggio e' un'informazione, non un presidio: se cambia, e'
+        // perche' qualcuno ha aggiunto una categoria, ed e' giusto che
+        // questo test glielo faccia notare insieme alla tabella degli exit
+        // code, che va aggiornata a mano.
+        assert_eq!(
+            ErrorCategory::ALL.len(),
+            18,
+            "categorie dichiarate: aggiornare anche la tabella degli exit code"
+        );
+    }
+
+    #[test]
+    fn la_rigenerazione_del_messaggio_conserva_il_dettaglio_diagnostico() {
+        // `with_execution_id` rigenera il messaggio dei `Replayed` di
+        // categoria `Execution` e `Cancelled` per inserirvi l'id. La
+        // rigenerazione parte da `execution_reason`: qualunque dettaglio che
+        // vivesse solo in `message` verrebbe cancellato.
+        //
+        // E' successo davvero: la diagnostica opt-in dell'executor aggiungeva
+        // l'indice di batch al solo `message`, e la chiamata immediatamente
+        // successiva lo faceva sparire — la funzione risultava attiva senza
+        // aggiungere nulla. Il contratto e' quindi: chi arricchisce un
+        // `Replayed` deve scrivere in ENTRAMBI i campi, e questo test lo
+        // fissa dal lato che rigenera.
+        let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
+            category: ErrorCategory::Execution,
+            phase: ErrorPhase::Write,
+            remote_effect: RemoteEffect::None,
+            retry: RetryDisposition::Never,
+            message: "motivo [batch_seq=3]".into(),
+            node: Some("n".into()),
+            operation: Some("table.filter".into()),
+            execution_id: None,
+            execution_reason: Some("motivo [batch_seq=3]".into()),
+        }));
+        let con_id = replayed.with_execution_id("exec-1");
+        let testo = con_id.to_string();
+        assert!(testo.contains("exec-1"), "l'id viene inserito: {testo}");
+        assert!(
+            testo.contains("[batch_seq=3]"),
+            "e il dettaglio diagnostico sopravvive alla rigenerazione: {testo}"
+        );
+
+        // Controprova: se il dettaglio sta solo nel messaggio, la
+        // rigenerazione lo perde. E' la premessa del difetto, verificata.
+        let solo_messaggio = PlenoraError::Replayed(Box::new(ReplayedError {
+            category: ErrorCategory::Execution,
+            phase: ErrorPhase::Write,
+            remote_effect: RemoteEffect::None,
+            retry: RetryDisposition::Never,
+            message: "motivo [batch_seq=3]".into(),
+            node: Some("n".into()),
+            operation: Some("table.filter".into()),
+            execution_id: None,
+            execution_reason: Some("motivo".into()),
+        }));
+        assert!(
+            !solo_messaggio
+                .with_execution_id("exec-1")
+                .to_string()
+                .contains("[batch_seq=3]"),
+            "premessa: la rigenerazione parte da execution_reason"
+        );
     }
 
     #[test]

@@ -9,15 +9,38 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, field_of, finish, is_scalar_string,
-    map_row_count, produce, propagate_geometry, proven_sorted, require_numeric,
-    require_scalar_string, sorted_only, typed,
+    analyze_append, check_output_name, contract_error, field_of, finish, map_row_count, produce,
+    propagate_geometry, proven_sorted, require_numeric, require_scalar_string,
+    require_scalar_string_field, sorted_only, typed,
 };
 use crate::aggregation;
 
 // ---------------------------------------------------------------------------
 // aggregation.rs
 // ---------------------------------------------------------------------------
+
+/// Le colonne di ordinamento esistono e hanno un confronto nativo.
+///
+/// Il runtime rifiuta i tipi senza confronto nativo (`validate_sortable`);
+/// senza questo controllo il piano superava la validazione e falliva solo in
+/// esecuzione, cioe' dopo aver aperto gli input e forse dopo aver gia'
+/// prodotto lavoro. `is_sortable` e' lo stesso elenco di tipi del
+/// comparatore, letto a secco dallo schema.
+fn require_sortable(op: &str, input: &DataContract, columns: &[String]) -> Result<()> {
+    for name in columns {
+        let field = field_of(op, input, name)?;
+        if !aggregation::is_sortable(field.data_type()) {
+            return contract_error(
+                op,
+                format!(
+                    "colonna {name} di tipo {:?} non ordinabile: nessun confronto nativo definito",
+                    field.data_type()
+                ),
+            );
+        }
+    }
+    Ok(())
+}
 
 pub(in crate::analyze) fn analyze_sort(
     op: &str,
@@ -30,14 +53,12 @@ pub(in crate::analyze) fn analyze_sort(
     if config.columns.is_empty() {
         return contract_error(op, "columns vuoto");
     }
-    for name in &config.columns {
-        field_of(op, input, name)?;
-    }
+    require_sortable(op, input, &config.columns)?;
     let keys: Vec<FieldId> = config
         .columns
         .iter()
         .map(|name| fields.intern(name))
-        .collect();
+        .collect::<Result<_>>()?;
     let mut output = input.clone();
     // Sort blocking: l'intero stream di output e' ordinato sulle chiavi.
     output.properties = ContractProperties {
@@ -58,14 +79,12 @@ pub(in crate::analyze) fn analyze_top_n(
     if config.columns.is_empty() {
         return contract_error(op, "columns vuoto");
     }
-    for name in &config.columns {
-        field_of(op, input, name)?;
-    }
+    require_sortable(op, input, &config.columns)?;
     let keys: Vec<FieldId> = config
         .columns
         .iter()
         .map(|name| fields.intern(name))
-        .collect();
+        .collect::<Result<_>>()?;
     let mut output = input.clone();
     // Come sort, ma emesse esattamente min(n, righe) righe.
     output.properties = ContractProperties {
@@ -110,7 +129,7 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
     let sorted_by = if let Some(order_column) = &config.order_column {
         field_of(op, input, order_column)?;
         // Sort interno ascendente su order_column prima della deduplica.
-        Some(proven_sorted(vec![fields.intern(order_column)]))
+        Some(proven_sorted(vec![fields.intern(order_column)?]))
     } else {
         input.properties.sorted_by.clone()
     };
@@ -150,12 +169,7 @@ pub(in crate::analyze) fn analyze_aggregate(
             | aggregation::AggFunction::Concat
             | aggregation::AggFunction::First
             | aggregation::AggFunction::Last => {
-                if !is_scalar_string(field.data_type()) {
-                    return contract_error(
-                        op,
-                        format!("colonna {} non aggregabile come testo", aggregation.column),
-                    );
-                }
+                require_scalar_string_field(op, field)?;
             }
             aggregation::AggFunction::Quantile => {
                 if aggregation.quantile.is_none() {
@@ -205,10 +219,10 @@ pub(in crate::analyze) fn analyze_aggregate(
             | aggregation::AggFunction::Last => (DataType::Utf8, true),
             _ => (DataType::Float64, true),
         };
-        produce(&mut fields_out, fields, &name, data_type, nullable);
+        produce(&mut fields_out, fields, &name, data_type, nullable)?;
     }
     if config.aggregations.is_empty() {
-        produce(&mut fields_out, fields, "count", DataType::Int64, false);
+        produce(&mut fields_out, fields, "count", DataType::Int64, false)?;
     }
     // R2.4: i metadata dello schema di input si conservano sempre (le chiavi
     // sconosciute non sono giudicabili dal centro; perderle rompe i
@@ -244,7 +258,7 @@ pub(in crate::analyze) fn analyze_rolling_window(
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
         field_of(op, input, order_column)?;
-        Some(proven_sorted(vec![fields.intern(order_column)]))
+        Some(proven_sorted(vec![fields.intern(order_column)?]))
     } else {
         input.properties.sorted_by.clone()
     };
@@ -304,10 +318,10 @@ pub(in crate::analyze) fn analyze_window_function(
     let name = config
         .output_column
         .unwrap_or_else(|| format!("{}_{suffix}", config.column));
-    let sorted_by = config.order_column.as_ref().map_or_else(
-        || input.properties.sorted_by.clone(),
-        |order_column| Some(proven_sorted(vec![fields.intern(order_column)])),
-    );
+    let sorted_by = match config.order_column.as_ref() {
+        Some(order_column) => Some(proven_sorted(vec![fields.intern(order_column)?])),
+        None => input.properties.sorted_by.clone(),
+    };
     let mut output = analyze_append(input, fields, &[(name, DataType::Float64, true)])?;
     output.properties = ContractProperties {
         sorted_by,

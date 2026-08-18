@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::Limits;
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, select_rows,
+    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
     validate_output_name,
 };
 use plenora_core::diagnostics::{
@@ -178,12 +178,12 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 ///   numero di `labels` diverso dal numero di bin;
 /// - `Schema`: colonna `column` assente dallo schema; nessun valore
 ///   numerico su cui calcolare i bordi; in piu' gli errori di
-///   `scalar_as_f64` e `replace_or_append`.
+///   `scalar_as_f64_rounded` e `replace_or_append`.
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     let numeric = (0..batch.num_rows())
-        .map(|row| scalar_as_f64(source.as_ref(), row))
+        .map(|row| scalar_as_f64_rounded(source.as_ref(), row))
         .collect::<Result<Vec<_>>>()?;
     let edges = match &config.bins {
         Bins::Count(count) => equal_width_edges(&numeric, *count)?,
@@ -620,9 +620,9 @@ fn flatten_row(
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `max_level` oltre 5; totale colonne oltre
-///   `limits.max_columns`; nome di output non valido o privo del `prefix`
-///   atteso;
+/// - `InvalidPlan`: `max_level` oltre 5; nome di output non valido o privo
+///   del `prefix` atteso;
+/// - `ResourceLimit`: totale colonne oltre `limits.max_columns`;
 /// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
 ///   di `scalar_as_string` (colonne non Utf8) e `replace_or_append`.
 // La raccolta completa per riga (R9.9) rende la funzione una sequenza
@@ -752,7 +752,7 @@ pub fn flatten_json(
         config.output_columns.clone()
     };
     if batch.num_columns().saturating_add(keys.len()) > limits.max_columns {
-        return Err(PlenoraError::InvalidPlan(
+        return Err(PlenoraError::ResourceLimit(
             "flatten_json supera max_columns".into(),
         ));
     }
@@ -912,7 +912,7 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
 /// # Errors
 ///
 /// - `Schema`: colonna `column` o `group_by` assente dallo schema; in
-///   piu' gli errori di `scalar_as_string`/`scalar_as_f64` e
+///   piu' gli errori di `scalar_as_string`/`scalar_as_f64_rounded` e
 ///   `replace_or_append`.
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
     let value_index = column_index(batch, &config.column)?;
@@ -933,7 +933,7 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
         let value_column = batch.column(value_index);
         for row in 0..batch.num_rows() {
             let key = scalar_as_string(group_column.as_ref(), row)?;
-            let value = scalar_as_f64(value_column.as_ref(), row)?;
+            let value = scalar_as_f64_rounded(value_column.as_ref(), row)?;
             let id = *intern.entry(key).or_insert_with(|| {
                 groups.push(Vec::new());
                 groups.len() - 1
@@ -947,7 +947,7 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
         groups.push(Vec::new());
         let value_column = batch.column(value_index);
         for row in 0..batch.num_rows() {
-            if let Some(value) = scalar_as_f64(value_column.as_ref(), row)? {
+            if let Some(value) = scalar_as_f64_rounded(value_column.as_ref(), row)? {
                 groups[0].push(value);
             }
             row_group.push(0);
@@ -1030,8 +1030,9 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `fraction` fuori da 0..=1; dimensioni di gruppo, dataset
-///   o campione non rappresentabili;
+/// - `InvalidPlan`: `fraction` fuori da 0..=1;
+/// - `ResourceLimit`: dimensioni di gruppo, dataset o campione non
+///   rappresentabili;
 /// - `Schema`: colonna `stratify_column` assente dallo schema; in piu' gli
 ///   errori di `scalar_as_string` e `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
@@ -1057,21 +1058,20 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
                 rows,
                 seed.wrapping_add(u64::try_from(offset).unwrap_or(u64::MAX)),
             );
-            let count = match config.fraction {
-                None => config.n.saturating_mul(rows.len()) / batch.num_rows().max(1),
-                Some(fraction) => (rows
-                    .len()
-                    .to_f64()
-                    .ok_or_else(|| PlenoraError::InvalidPlan("gruppo troppo grande".into()))?
-                    * fraction)
-                    .floor()
-                    .to_usize()
-                    .ok_or_else(|| {
-                        PlenoraError::InvalidPlan("campione non rappresentabile".into())
-                    })?,
-            }
-            .max(1)
-            .min(rows.len());
+            let count =
+                match config.fraction {
+                    None => config.n.saturating_mul(rows.len()) / batch.num_rows().max(1),
+                    Some(fraction) => (rows.len().to_f64().ok_or_else(|| {
+                        PlenoraError::ResourceLimit("gruppo troppo grande".into())
+                    })? * fraction)
+                        .floor()
+                        .to_usize()
+                        .ok_or_else(|| {
+                            PlenoraError::ResourceLimit("campione non rappresentabile".into())
+                        })?,
+                }
+                .max(1)
+                .min(rows.len());
             selected.extend_from_slice(&rows[..count]);
         }
     } else {
@@ -1082,11 +1082,13 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
             Some(fraction) => (batch
                 .num_rows()
                 .to_f64()
-                .ok_or_else(|| PlenoraError::InvalidPlan("dataset troppo grande".into()))?
+                .ok_or_else(|| PlenoraError::ResourceLimit("dataset troppo grande".into()))?
                 * fraction)
                 .round()
                 .to_usize()
-                .ok_or_else(|| PlenoraError::InvalidPlan("campione non rappresentabile".into()))?,
+                .ok_or_else(|| {
+                    PlenoraError::ResourceLimit("campione non rappresentabile".into())
+                })?,
         }
         .min(batch.num_rows());
         selected.truncate(count);
@@ -1155,7 +1157,7 @@ mod tests {
                 .map(|index| scalar_as_string(batch.column(index).as_ref(), row))
                 .transpose()?
                 .flatten();
-            if let Some(value) = scalar_as_f64(batch.column(value_index).as_ref(), row)? {
+            if let Some(value) = scalar_as_f64_rounded(batch.column(value_index).as_ref(), row)? {
                 groups.entry(key).or_default().push(value);
             }
         }
@@ -1240,7 +1242,7 @@ mod tests {
             config.output_columns.clone()
         };
         if batch.num_columns().saturating_add(keys.len()) > limits.max_columns {
-            return Err(PlenoraError::InvalidPlan(
+            return Err(PlenoraError::ResourceLimit(
                 "flatten_json supera max_columns".into(),
             ));
         }

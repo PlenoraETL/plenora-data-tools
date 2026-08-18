@@ -60,7 +60,7 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
         if let Some((column, _)) = columns
             .iter()
             .zip(indices)
-            .find(|(_, index)| batch.column(**index).is_null(row))
+            .find(|(_, index)| crate::is_logically_null(batch.column(**index).as_ref(), row))
         {
             rejections.push(RowRejection {
                 row,
@@ -165,7 +165,7 @@ fn default_sha256_name() -> String {
 
 fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::InvalidPlan("sha256_hash: valore troppo grande".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("sha256_hash: valore troppo grande".into()))?;
     digest.update(length.to_be_bytes());
     digest.update(value);
     Ok(())
@@ -283,7 +283,7 @@ fn default_fingerprint_name() -> String {
 /// messaggi per riga di `stable_fingerprint`.
 fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: valore troppo grande")))?;
+        .map_err(|_| PlenoraError::ResourceLimit(format!("{op}: valore troppo grande")))?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value);
     Ok(())
@@ -607,7 +607,7 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
 
 fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
     let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::InvalidPlan("hmac_sha256: valore troppo grande".into()))?;
+        .map_err(|_| PlenoraError::ResourceLimit("hmac_sha256: valore troppo grande".into()))?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value);
     Ok(())

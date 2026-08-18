@@ -1,13 +1,12 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
 use crate::{
-    column_index, replace_or_append, scalar_as_f64, scalar_as_string, validate_output_name,
+    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, validate_output_name,
     DIVISION_BY_ZERO_MESSAGE,
 };
 use plenora_core::{PlenoraError, Result};
@@ -191,6 +190,14 @@ impl Parser<'_> {
     }
 }
 
+/// Valore intero come double, con arrotondamento DICHIARATO (DER-005):
+/// `formula` produce `Float64` per contratto e il tier generico applica la
+/// stessa conversione, cosi' i due percorsi non divergono.
+#[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi doc.
+const fn integer_rounded(value: i64) -> f64 {
+    value as f64
+}
+
 /// Vero se l'espressione e' un letterale numerico zero (anche negato,
 /// `-0.0 == 0.0`): un divisore costante zero e' una proprieta' del piano,
 /// non delle righe.
@@ -253,14 +260,16 @@ fn evaluate(expression: &Expr, batch: &RecordBatch, row: usize) -> Result<Evalua
         Expr::Text(value) => Evaluated::Text(value.clone()),
         Expr::Column(name) => {
             let index = column_index(batch, name)?;
-            if batch.column(index).is_null(row) {
+            // Null LOGICO: senza, una cella dictionary nulla entrava nella
+            // formula come stringa vuota invece che come null.
+            if crate::is_logically_null(batch.column(index).as_ref(), row) {
                 Evaluated::Null
             } else if matches!(
                 batch.column(index).data_type(),
                 DataType::Int64 | DataType::Float64
             ) {
                 Evaluated::Number(
-                    scalar_as_f64(batch.column(index).as_ref(), row)?.unwrap_or_default(),
+                    scalar_as_f64_rounded(batch.column(index).as_ref(), row)?.unwrap_or_default(),
                 )
             } else {
                 Evaluated::Text(
@@ -330,8 +339,10 @@ fn display(value: Evaluated) -> String {
 // stessi errori nello stesso ordine di valutazione (postfix = ordine
 // sinistra-destra del generico; una colonna mancante errore al suo op, non
 // in compilazione). Ricade sul percorso generico quando una colonna non e'
-// Int64/Float64/Utf8 o quando il batch e' vuoto (colonne mai risolte dal
-// generico su zero righe).
+// Int64/Float64/Utf8 o quando il batch e' vuoto (nessuna riga da
+// compilare). Le colonne referenziate sono comunque risolte prima, per
+// decidere il tipo di output dallo schema: un batch vuoto non e' piu' un
+// caso permissivo.
 // ---------------------------------------------------------------------------
 
 /// Accessore di colonna pre-risolto (indice + downcast fatti una volta).
@@ -463,11 +474,33 @@ impl<'a> FastProgram<'a> {
         }
     }
 
-    fn run(&self, batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
+    /// Come [`Self::run`] col tipo ricavato dallo schema (test-oracolo).
+    #[cfg(test)]
+    fn run_auto(
+        &self,
+        batch: &RecordBatch,
+        config: &Formula,
+        expression: &Expr,
+    ) -> Result<RecordBatch> {
+        let kind = infer_expr_type(expression, &|name| {
+            let index = column_index(batch, name)?;
+            column_formula_type(batch.schema_ref().field(index).data_type(), name)
+        })?;
+        self.run(batch, config, kind)
+    }
+
+    fn run(&self, batch: &RecordBatch, config: &Formula, kind: FormulaType) -> Result<RecordBatch> {
         if self.numeric {
+            // Un programma `numeric` nasce solo da colonne Int64/Float64 e
+            // letterali numerici: il tipo statico non puo' che essere Number.
+            if kind != FormulaType::Number {
+                return Err(PlenoraError::Internal(format!(
+                    "formula: tier numerico con tipo statico {kind:?}"
+                )));
+            }
             self.run_numeric(batch, config)
         } else {
-            self.run_slots(batch, config)
+            self.run_slots(batch, config, kind)
         }
     }
 
@@ -512,6 +545,12 @@ impl<'a> FastProgram<'a> {
     /// Valutazione di una riga sul tier numerico (estratta per la raccolta
     /// row-scoped: semantica identica al loop originale).
     fn eval_numeric_row(&self, stack: &mut Vec<(f64, bool)>, row: usize) -> Result<(f64, bool)> {
+        // Underflow dello stack: il programma e' costruito dal parser, che
+        // garantisce l'arieta' di ogni operatore. Uno stack vuoto qui e'
+        // quindi un difetto NOSTRO, e va segnalato: mascherarlo con
+        // `unwrap_or_default()` trasformava un'invariante violata in uno zero
+        // silenzioso, pubblicato come risultato della formula.
+        let underflow = || PlenoraError::Internal("stack della formula in underflow".to_owned());
         stack.clear();
         for op in &self.ops {
             match *op {
@@ -521,10 +560,20 @@ impl<'a> FastProgram<'a> {
                         stack.push((values.value(row), values.is_null(row)));
                     }
                     FastColumn::I64(values) => {
-                        stack.push((
-                            values.value(row).to_f64().unwrap_or_default(),
-                            values.is_null(row),
-                        ));
+                        // Nullo: il valore non viene letto, il posto sullo
+                        // stack lo tiene lo zero. Non nullo: conversione
+                        // esatta o errore, in parita' con `scalar_as_f64_rounded` del
+                        // tier generico (che dal canto suo non arrotonda piu').
+                        // Arrotondamento dichiarato (DER-005): `formula`
+                        // produce `Float64` per contratto, come il tier
+                        // generico (`scalar_as_f64_rounded`) — e i due
+                        // percorsi devono dare la stessa risposta.
+                        let value = if values.is_null(row) {
+                            0.0
+                        } else {
+                            integer_rounded(values.value(row))
+                        };
+                        stack.push((value, values.is_null(row)));
                     }
                     FastColumn::Str(_) => {
                         return Err(PlenoraError::Internal(
@@ -533,12 +582,12 @@ impl<'a> FastProgram<'a> {
                     }
                 },
                 FastOp::Neg => {
-                    let (value, null) = stack.pop().unwrap_or_default();
+                    let (value, null) = stack.pop().ok_or_else(underflow)?;
                     stack.push((-value, null));
                 }
                 FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
-                    let (right, right_null) = stack.pop().unwrap_or_default();
-                    let (left, left_null) = stack.pop().unwrap_or_default();
+                    let (right, right_null) = stack.pop().ok_or_else(underflow)?;
+                    let (left, left_null) = stack.pop().ok_or_else(underflow)?;
                     if left_null || right_null {
                         stack.push((0.0, true));
                         continue;
@@ -566,12 +615,28 @@ impl<'a> FastProgram<'a> {
                 }
             }
         }
-        Ok(stack.pop().unwrap_or_default())
+        // Lo stack deve contenere ESATTAMENTE il risultato: operandi
+        // residui significano bytecode malformato o un difetto del
+        // compilatore, e scartarli produrrebbe un risultato apparentemente
+        // valido calcolato su una parte sola dell'espressione.
+        let value = stack.pop().ok_or_else(underflow)?;
+        if stack.is_empty() {
+            Ok(value)
+        } else {
+            Err(PlenoraError::Internal(
+                "stack della formula con operandi residui".to_owned(),
+            ))
+        }
     }
 
     /// Tier generale: stack di `Slot` con testo in prestito; replica
     /// `evaluate` + logica di output del generico.
-    fn run_slots(&self, batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
+    fn run_slots(
+        &self,
+        batch: &RecordBatch,
+        config: &Formula,
+        kind: FormulaType,
+    ) -> Result<RecordBatch> {
         let mut stack: Vec<Slot<'a>> = Vec::with_capacity(self.depth);
         let mut values: Vec<Slot<'a>> = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
@@ -597,17 +662,20 @@ impl<'a> FastProgram<'a> {
             &rejections,
             "valori formula rifiutati; consultare row_diagnostics",
         )?;
-        if values
-            .iter()
-            .all(|value| matches!(value, Slot::Number(_) | Slot::Null))
-        {
+        if kind == FormulaType::Number {
             let values = values
                 .into_iter()
                 .map(|value| match value {
-                    Slot::Number(value) => Some(value),
-                    _ => None,
+                    Slot::Number(value) => Ok(Some(value)),
+                    Slot::Null => Ok(None),
+                    // L'inferenza e' derivata dalle stesse regole di
+                    // `eval_slot_row`: se diverge, e' un'invariante nostra.
+                    other @ Slot::Text(_) => Err(PlenoraError::Internal(format!(
+                        "formula: tipo statico Number ma valore {}",
+                        display_slot(other)
+                    ))),
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             replace_or_append(
                 batch,
                 &config.new_column,
@@ -619,10 +687,18 @@ impl<'a> FastProgram<'a> {
             let values = values
                 .into_iter()
                 .map(|value| match value {
-                    Slot::Null => None,
-                    other => Some(display_slot(other)),
+                    Slot::Null => Ok(None),
+                    // `display_slot` su un `Text` e' esattamente questo.
+                    Slot::Text(testo) => Ok(Some(testo.into_owned())),
+                    // Simmetrica alla guardia del ramo Number: formattare qui
+                    // un numero sarebbe una conversione silenziosa, cioe' il
+                    // tipo che si adatta ai dati invece dei dati che
+                    // rispettano il tipo.
+                    Slot::Number(_) => Err(PlenoraError::Internal(
+                        "formula: tipo statico Text ma valore Number".to_owned(),
+                    )),
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             replace_or_append(
                 batch,
                 &config.new_column,
@@ -639,6 +715,10 @@ impl<'a> FastProgram<'a> {
     where
         'a: 'b,
     {
+        // Vedi `eval_numeric_row`: un underflow qui e' un'invariante nostra
+        // violata, non un dato mancante — `Slot::Null` lo avrebbe pubblicato
+        // come un null legittimo.
+        let underflow = || PlenoraError::Internal("stack della formula in underflow".to_owned());
         stack.clear();
         for op in &self.ops {
             match *op {
@@ -649,7 +729,7 @@ impl<'a> FastProgram<'a> {
                     return Err(PlenoraError::Schema(format!("colonna non trovata: {name}")));
                 }
                 FastOp::Neg => {
-                    let value = stack.pop().unwrap_or(Slot::Null);
+                    let value = stack.pop().ok_or_else(underflow)?;
                     stack.push(match value {
                         Slot::Number(value) => Slot::Number(-value),
                         Slot::Null => Slot::Null,
@@ -659,13 +739,20 @@ impl<'a> FastProgram<'a> {
                     });
                 }
                 FastOp::Add | FastOp::Subtract | FastOp::Multiply | FastOp::Divide => {
-                    let right = stack.pop().unwrap_or(Slot::Null);
-                    let left = stack.pop().unwrap_or(Slot::Null);
+                    let right = stack.pop().ok_or_else(underflow)?;
+                    let left = stack.pop().ok_or_else(underflow)?;
                     stack.push(binary_slot(*op, left, right)?);
                 }
             }
         }
-        Ok(stack.pop().unwrap_or(Slot::Null))
+        let value = stack.pop().ok_or_else(underflow)?;
+        if stack.is_empty() {
+            Ok(value)
+        } else {
+            Err(PlenoraError::Internal(
+                "stack della formula con operandi residui".to_owned(),
+            ))
+        }
     }
 }
 
@@ -678,6 +765,11 @@ enum Slot<'a> {
 }
 
 impl<'a> FastColumn<'a> {
+    /// Valore della cella come slot del tier generale.
+    ///
+    /// Infallibile: `formula` produce `Float64` per contratto e le
+    /// conversioni sono arrotondate per dichiarazione (DER-005), come nel
+    /// tier generico — non c'e' un caso di errore da propagare.
     fn slot(&self, row: usize) -> Slot<'a> {
         match self {
             Self::F64(values) => {
@@ -691,7 +783,7 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Slot::Null
                 } else {
-                    Slot::Number(values.value(row).to_f64().unwrap_or_default())
+                    Slot::Number(integer_rounded(values.value(row)))
                 }
             }
             Self::Str(values) => {
@@ -772,32 +864,70 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 /// compilato (stessa semantica del generico, oracolo dei test); negli altri
 /// casi valuta il percorso generico.
 ///
+/// Il tipo della colonna prodotta e' deciso dallo SCHEMA prima di valutare
+/// qualunque riga (stessa classificazione dell'analizzatore del contratto),
+/// quindi non dipende dai valori: batch pieni, tutti null e vuoti con lo
+/// stesso schema producono lo stesso tipo.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: errori di sintassi della formula (come `validate`);
-///   invarianti interne violate (errore Internal);
-/// - `Schema`: colonna assente; divisione per zero; negazione di testo;
+///   invarianti interne violate (errore Internal), fra cui un valore
+///   calcolato di tipo diverso da quello statico — in ENTRAMBI i versi;
+/// - `Schema`: colonna assente — anche su un batch VUOTO, perche' senza
+///   risolverla il tipo di output non e' determinabile; tipo non convertibile
+///   in testo (tipo o timezone); divisione per zero; negazione di testo;
 ///   operatore aritmetico su testo; valore non convertibile (via
-///   `scalar_as_f64`/`scalar_as_string`); errore Arrow nella sostituzione.
+///   `scalar_as_f64_rounded`/`scalar_as_string`); errore Arrow nella sostituzione.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
     let expression = parse(&config.formula)?;
-    // Batch vuoto: il generico non risolve mai le colonne (zero valutazioni),
-    // quindi anche una formula con colonne assenti ha successo; si mantiene
-    // quel comportamento saltando la compilazione.
+    // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
+    // osservati. Deciderlo dai valori significava che un batch vuoto o tutto
+    // null produceva un tipo diverso dallo stesso piano su dati pieni — e
+    // diverso da quello che l'analisi aveva dichiarato nel contratto.
+    //
+    // Conseguenza voluta: una formula che nomina una colonna assente ora
+    // fallisce anche su un batch VUOTO. Senza risolvere le colonne non
+    // esiste un tipo di output da dichiarare, quindi non esiste una risposta
+    // giusta da dare.
+    let kind = infer_expr_type(&expression, &|name| {
+        let index = column_index(batch, name)?;
+        column_formula_type(batch.schema_ref().field(index).data_type(), name)
+    })?;
     if batch.num_rows() > 0 {
         if let Some(program) = FastProgram::compile(&expression, batch) {
-            return program.run(batch, config);
+            return program.run(batch, config, kind);
         }
     }
-    formula_generic(batch, config, &expression)
+    formula_generic(batch, config, &expression, kind)
+}
+
+/// Come [`formula_generic`] col tipo ricavato dallo schema: usato dai
+/// test-oracolo, che confrontano fast e generico sulla stessa config.
+#[cfg(test)]
+fn formula_generic_auto(
+    batch: &RecordBatch,
+    config: &Formula,
+    expression: &Expr,
+) -> Result<RecordBatch> {
+    let kind = infer_expr_type(expression, &|name| {
+        let index = column_index(batch, name)?;
+        column_formula_type(batch.schema_ref().field(index).data_type(), name)
+    })?;
+    formula_generic(batch, config, expression, kind)
 }
 
 /// Percorso generico originale: interprete ricorsivo sull'AST, usato come
 /// fallback per le colonne non Int64/Float64/Utf8 e come oracolo dei test.
+///
+/// `kind` e' il tipo gia' deciso dallo SCHEMA dal chiamante: qui non si
+/// guardano i valori per sceglierlo, li si converte al tipo dichiarato e si
+/// fallisce fail-closed se non corrispondono.
 fn formula_generic(
     batch: &RecordBatch,
     config: &Formula,
     expression: &Expr,
+    kind: FormulaType,
 ) -> Result<RecordBatch> {
     let mut values = Vec::with_capacity(batch.num_rows());
     let mut rejections = Vec::new();
@@ -823,17 +953,18 @@ fn formula_generic(
         &rejections,
         "valori formula rifiutati; consultare row_diagnostics",
     )?;
-    if values
-        .iter()
-        .all(|value| matches!(value, Evaluated::Number(_) | Evaluated::Null))
-    {
+    if kind == FormulaType::Number {
         let values = values
             .into_iter()
             .map(|value| match value {
-                Evaluated::Number(value) => Some(value),
-                _ => None,
+                Evaluated::Number(value) => Ok(Some(value)),
+                Evaluated::Null => Ok(None),
+                other @ Evaluated::Text(_) => Err(PlenoraError::Internal(format!(
+                    "formula: tipo statico Number ma valore {}",
+                    display(other)
+                ))),
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         replace_or_append(
             batch,
             &config.new_column,
@@ -845,10 +976,15 @@ fn formula_generic(
         let values = values
             .into_iter()
             .map(|value| match value {
-                Evaluated::Null => None,
-                other => Some(display(other)),
+                Evaluated::Null => Ok(None),
+                // `display` su un `Text` e' esattamente questo.
+                Evaluated::Text(testo) => Ok(Some(testo)),
+                // Simmetrica alla guardia del ramo Number.
+                Evaluated::Number(_) => Err(PlenoraError::Internal(
+                    "formula: tipo statico Text ma valore Number".to_owned(),
+                )),
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         replace_or_append(
             batch,
             &config.new_column,
@@ -874,6 +1010,37 @@ fn formula_generic(
 pub(crate) enum FormulaType {
     Number,
     Text,
+}
+
+impl FormulaType {
+    /// Tipo Arrow della colonna prodotta.
+    pub(crate) const fn data_type(self) -> DataType {
+        match self {
+            Self::Number => DataType::Float64,
+            Self::Text => DataType::Utf8,
+        }
+    }
+}
+
+/// Tipo statico di una colonna referenziata da una formula.
+///
+/// Le stesse due righe di [`evaluate`]: numero solo per `Int64`/`Float64`,
+/// tutto il resto letto via `scalar_as_string` — quindi profilo testuale
+/// COMPLETO, timezone inclusa.
+///
+/// Vive qui, accanto al kernel che la applica, e la usa anche l'analizzatore
+/// del contratto: una seconda copia sarebbe una copia che puo' divergere.
+///
+/// # Errors
+///
+/// `Schema`: il tipo non e' convertibile in testo (tipo o timezone).
+pub(crate) fn column_formula_type(data_type: &DataType, name: &str) -> Result<FormulaType> {
+    if matches!(data_type, DataType::Int64 | DataType::Float64) {
+        Ok(FormulaType::Number)
+    } else {
+        crate::validate_text_convertible(data_type, name)?;
+        Ok(FormulaType::Text)
+    }
 }
 
 /// Classifica il tipo prodotto senza leggere dati. `column_kind` decide il
@@ -983,6 +1150,73 @@ mod tests {
         .expect("fixture")
     }
 
+    /// La guardia sul tipo statico e' SIMMETRICA, in entrambi i percorsi.
+    ///
+    /// Con un AST inferito correttamente il caso non e' raggiungibile: e'
+    /// proprio per questo che il test forza il tipo, invece di cercare una
+    /// formula che lo produca. L'invariante che si sta fissando e' «il tipo
+    /// dichiarato non si adatta ai dati», e vale nei due versi — prima il
+    /// ramo Text formattava in silenzio un valore numerico, e una futura
+    /// divergenza dell'inferenza sarebbe passata inosservata.
+    #[test]
+    fn la_guardia_sul_tipo_statico_e_simmetrica() {
+        let batch = fixture();
+
+        // Percorso generico, tipo statico Text su valori Number.
+        let numerica = parse("f * 2").expect("parse");
+        let errore = formula_generic(&batch, &config("f * 2"), &numerica, FormulaType::Text)
+            .expect_err("Text dichiarato, valori Number");
+        assert!(
+            matches!(errore, PlenoraError::Internal(_)),
+            "categoria: {errore}"
+        );
+
+        // Percorso generico, verso opposto.
+        let testuale = parse("s + '!'").expect("parse");
+        let errore = formula_generic(&batch, &config("s + '!'"), &testuale, FormulaType::Number)
+            .expect_err("Number dichiarato, valori Text");
+        assert!(
+            matches!(errore, PlenoraError::Internal(_)),
+            "categoria: {errore}"
+        );
+
+        // Fast path, tier generale (`run_slots`), entrambi i versi.
+        let programma = FastProgram::compile(&testuale, &batch).expect("programma compilato");
+        let errore = programma
+            .run_slots(&batch, &config("s + '!'"), FormulaType::Number)
+            .expect_err("Number dichiarato, valori Text");
+        assert!(
+            matches!(errore, PlenoraError::Internal(_)),
+            "categoria: {errore}"
+        );
+        let programma = FastProgram::compile(&numerica, &batch).expect("programma compilato");
+        let errore = programma
+            .run_slots(&batch, &config("f * 2"), FormulaType::Text)
+            .expect_err("Text dichiarato, valori Number");
+        assert!(
+            matches!(errore, PlenoraError::Internal(_)),
+            "categoria: {errore}"
+        );
+
+        // Il tier numerico rifiuta un tipo statico che non sia Number.
+        let errore = programma
+            .run(&batch, &config("f * 2"), FormulaType::Text)
+            .expect_err("tier numerico con tipo statico Text");
+        assert!(
+            matches!(errore, PlenoraError::Internal(_)),
+            "categoria: {errore}"
+        );
+
+        // E col tipo GIUSTO i due percorsi continuano a coincidere.
+        let via_generico =
+            formula_generic(&batch, &config("f * 2"), &numerica, FormulaType::Number)
+                .expect("generico");
+        let via_fast = programma
+            .run(&batch, &config("f * 2"), FormulaType::Number)
+            .expect("fast");
+        assert_eq!(via_generico, via_fast);
+    }
+
     fn config(text: &str) -> Formula {
         Formula {
             new_column: "out".into(),
@@ -996,14 +1230,15 @@ mod tests {
         expression: &Expr,
         config: &Formula,
     ) -> Option<Result<RecordBatch>> {
-        FastProgram::compile(expression, batch).map(|program| program.run(batch, config))
+        FastProgram::compile(expression, batch)
+            .map(|program| program.run_auto(batch, config, expression))
     }
 
     fn assert_equivalent(batch: &RecordBatch, text: &str) {
         let config = config(text);
         let expression = parse(text).expect("formula valida");
         let fast = fast(batch, &expression, &config).expect("caso coperto dal fast path");
-        let generic = formula_generic(batch, &config, &expression);
+        let generic = formula_generic_auto(batch, &config, &expression);
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic, "output diverso: {text}"),
             (fast, generic) => {
@@ -1057,7 +1292,7 @@ mod tests {
         );
         // Controllo: il fast path ha lo stesso esito (parita' fail-closed).
         let expression = parse("s - s").expect("formula valida");
-        let generic = formula_generic(&batch, &config("s - s"), &expression)
+        let generic = formula_generic_auto(&batch, &config("s - s"), &expression)
             .expect_err("sottrazione fra testi (generico)");
         assert!(generic.row_diagnostics().is_none());
         assert_eq!(
@@ -1113,7 +1348,8 @@ mod tests {
         assert!(report.validate_for_emission().is_ok());
         // Parita' fast/generico anche sul payload, non solo sul testo.
         let expression = parse("i / (i * 0)").expect("formula valida");
-        let generic = formula_generic(&batch, &cfg, &expression).expect_err("divisione per zero");
+        let generic =
+            formula_generic_auto(&batch, &cfg, &expression).expect_err("divisione per zero");
         assert_eq!(error.row_diagnostics(), generic.row_diagnostics());
     }
 
@@ -1184,17 +1420,21 @@ mod tests {
         assert!(fast(&batch, &expression, &config("b + ''")).is_none());
         let via_kernel = formula(&batch, &config("b + ''")).expect("fallback generico");
         let via_generic =
-            formula_generic(&batch, &config("b + ''"), &expression).expect("generico");
+            formula_generic_auto(&batch, &config("b + ''"), &expression).expect("generico");
         assert_eq!(via_kernel, via_generic);
 
-        // Batch vuoto: il generico non risolve le colonne; la formula con
-        // colonna assente ha comunque successo con output Float64 vuoto.
+        // Batch vuoto: il tipo di output si ricava dallo SCHEMA, quindi la
+        // colonna va risolta anche senza righe. Prima una formula con una
+        // colonna inesistente riusciva sul batch vuoto e falliva su quello
+        // pieno.
         let empty = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)])),
             vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
         )
         .expect("empty");
-        let output = formula(&empty, &config("missing + 1")).expect("zero righe: nessun errore");
+        formula(&empty, &config("missing + 1"))
+            .expect_err("colonna assente: il tipo non e' determinabile");
+        let output = formula(&empty, &config("f + 1")).expect("zero righe");
         assert_eq!(output.num_rows(), 0);
         assert_eq!(
             output
@@ -1204,5 +1444,39 @@ mod tests {
                 .data_type(),
             &DataType::Float64
         );
+    }
+
+    #[test]
+    fn lo_stack_con_operandi_residui_e_un_errore_non_un_risultato() {
+        // Bytecode malformato: due costanti e nessun operatore. Prendendo
+        // solo la cima dello stack la formula avrebbe pubblicato `2` — un
+        // valore plausibile calcolato su una parte sola dell'espressione, cioe'
+        // esattamente il difetto che un componente fail-closed non deve
+        // produrre. Il programma non e' costruibile dal parser: il test
+        // protegge l'invariante contro un difetto futuro del compilatore.
+        let program = FastProgram {
+            ops: vec![FastOp::Number(1.0), FastOp::Number(2.0)],
+            depth: 2,
+            numeric: true,
+        };
+        let mut stack = Vec::with_capacity(program.depth);
+        let error = program
+            .eval_numeric_row(&mut stack, 0)
+            .expect_err("operandi residui");
+        assert!(error.to_string().contains("operandi residui"), "{error}");
+
+        // Stesso controllo sul tier generico, che condivide l'invariante.
+        let generic = FastProgram {
+            ops: vec![FastOp::Number(1.0), FastOp::Number(2.0)],
+            depth: 2,
+            numeric: false,
+        };
+        let mut slots = Vec::with_capacity(generic.depth);
+        // `Slot` non e' `Debug` (contiene prestiti sul batch): niente
+        // `expect_err`, si ispeziona l'esito a mano.
+        let Err(error) = generic.eval_slot_row(&mut slots, 0) else {
+            panic!("il tier generico ha accettato operandi residui");
+        };
+        assert!(error.to_string().contains("operandi residui"), "{error}");
     }
 }

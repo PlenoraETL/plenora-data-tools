@@ -33,15 +33,14 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use plenora_core::arrow::array::RecordBatch;
-use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, Family, OperationDescriptor, CATALOG};
 use plenora_core::contract::{
     ContractCrs, ContractProperties, ContractProperty, CrsDefinitionFormat, CrsResolution,
-    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, PropertyConfidence,
-    PropertyScope,
+    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, GeometryEncoding,
+    GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
 use plenora_core::{ErrorPhase, PlenoraError, RetryDisposition};
@@ -59,8 +58,8 @@ use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
 use plenora_engine::planner::{self, ValidatedGraph};
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
 use plenora_engine::{
-    execute, explain, CancellationToken, ExecutionMetrics, ExecutionPlan, Input, Inputs,
-    RuntimeContext,
+    execute, explain, ipc_boundary, parallelism, CancellationToken, ExecutionMetrics,
+    ExecutionPlan, Input, Inputs, IpcFormat, IpcLimits, RuntimeContext,
 };
 use plenora_kernels_geo::arrow_adapter::{
     read_contract_version, read_geometry_contract_keys, CanonicalGeometryKeys,
@@ -85,9 +84,109 @@ fn contract(message: impl Into<String>) -> PlenoraError {
     PlenoraError::InvalidPlan(message.into())
 }
 
+/// Costruttore esplicito dei limiti di RISORSA della CLI.
+///
+/// Esiste per la stessa ragione per cui esiste `contract`: rendere la
+/// categoria visibile nel punto d'uso. Prima i tetti e i traboccamenti della
+/// CLI passavano da `contract`, cioe' uscivano come `invalid_plan` — e il
+/// censimento della classe, che cercava le occorrenze di
+/// `PlenoraError::InvalidPlan`, non li vedeva nemmeno: erano nascosti dietro
+/// un helper. Due costruttori distinti rendono la scelta leggibile a chi
+/// scrive e cercabile a chi verifica.
+fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
+    PlenoraError::ResourceLimit(message.into())
+}
+
 /// Exit code dedicato alla cancellazione (ADR 3, M1c): 128 + SIGINT,
-/// convenzione POSIX — distinto dal 2 generico degli errori.
+/// convenzione POSIX — distinto dagli altri codici di errore.
 const EXIT_CANCELLED: i32 = 130;
+
+/// Formato dell'output dei comandi, scelto dal flag globale `--format`.
+///
+/// Stessa convenzione di `plenora-database-tools`: il flag e' globale, viene
+/// tolto dagli argomenti PRIMA del dispatch e vale per il comando che segue.
+/// `junit` non c'e': un formato senza un consumatore e' codice non provato, e
+/// qui nessun gate lo legge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    /// JSON: il default, ed e' cio' che uno script deve poter assumere.
+    Json,
+    /// Markdown: leggibile da una persona, per i comandi che descrivono.
+    Markdown,
+}
+
+static ACTIVE_FORMAT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+impl OutputFormat {
+    fn set_active(self) {
+        let value = match self {
+            Self::Json => 0,
+            Self::Markdown => 1,
+        };
+        ACTIVE_FORMAT.store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn active() -> Self {
+        if ACTIVE_FORMAT.load(std::sync::atomic::Ordering::Relaxed) == 1 {
+            Self::Markdown
+        } else {
+            Self::Json
+        }
+    }
+
+    /// Esige il formato JSON: i comandi che non hanno una resa leggibile
+    /// rifiutano `--format markdown` invece di ignorarlo. Un flag accettato e
+    /// disatteso e' peggio di un flag rifiutato.
+    fn require_json(comando: &str) -> Result<(), PlenoraError> {
+        if Self::active() == Self::Markdown {
+            return Err(contract(format!(
+                "`--format markdown` non e' disponibile per `{comando}`: \
+                 formati supportati `json`"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Toglie `--format VALORE` dagli argomenti e lo registra come formato
+/// attivo. Il flag e' globale: puo' precedere o seguire il sottocomando.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` se il valore manca o non e' riconosciuto.
+fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, PlenoraError> {
+    let mut rimanenti = Vec::with_capacity(args.len());
+    let mut visto = false;
+    let mut iteratore = args.into_iter();
+    while let Some(argument) = iteratore.next() {
+        if argument != "--format" {
+            rimanenti.push(argument);
+            continue;
+        }
+        let valore = iteratore
+            .next()
+            .ok_or_else(|| contract("valore mancante per --format (json|markdown)"))?;
+        if visto {
+            // Due `--format` con valori diversi sono due richieste diverse:
+            // farne vincere una in silenzio significa eseguire quella che
+            // l'utente non ha scritto.
+            return Err(contract(
+                "flag `--format` ripetuto: se ne accetta una sola occorrenza",
+            ));
+        }
+        visto = true;
+        match valore.as_str() {
+            "json" => OutputFormat::Json.set_active(),
+            "markdown" => OutputFormat::Markdown.set_active(),
+            altro => {
+                return Err(contract(format!(
+                    "formato `{altro}` non riconosciuto: attesi `json` o `markdown`"
+                )));
+            }
+        }
+    }
+    Ok(rimanenti)
+}
 
 /// Handler Ctrl-C (ADR 3, M1c): il primo Ctrl-C cancella il token —
 /// l'executor si ferma al prossimo confine cooperativo con
@@ -103,28 +202,41 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
     let token = token.clone();
     let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     ctrlc::set_handler(move || {
+        // Gli avvisi sono per una PERSONA davanti a un terminale. Se stderr
+        // non e' un terminale c'e' un programma dall'altro lato, e per lui il
+        // canale resta vuoto: l'esito della cancellazione arriva comunque
+        // come envelope su stdout con categoria `cancelled` ed exit 130.
+        // La garanzia «stderr vuoto» di ADR-0003 vale quindi senza eccezioni
+        // per ogni consumatore non interattivo.
+        let interattivo = std::io::IsTerminal::is_terminal(&std::io::stderr());
         if requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            eprintln!("plenora-data-tools: secondo ctrl-c: uscita forzata");
+            if interattivo {
+                eprintln!("plenora-data-tools: secondo ctrl-c: uscita forzata");
+            }
             std::process::exit(EXIT_CANCELLED);
         }
-        eprintln!("plenora-data-tools: ctrl-c: annullamento in corso (un secondo ctrl-c forza l'uscita)...");
+        if interattivo {
+            eprintln!(
+                "plenora-data-tools: ctrl-c: annullamento in corso (un secondo ctrl-c forza l'uscita)..."
+            );
+        }
         token.cancel();
     })
     .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
-/// Presenta l'esito tipizzato del publish (ADR 7): se il file e' stato
-/// pubblicato ma la durabilita' non e' confermata, avvisa su stderr. Con il
-/// profilo `Atomic` l'esito e' sempre `Published`; il ramo warning serve ai
-/// chiamanti che useranno il profilo `DurableAtomic`.
-fn report_publish_outcome(outcome: PublishOutcome, output_path: &Path) {
-    if outcome == PublishOutcome::PublishedButDurabilityUnconfirmed {
-        eprintln!(
-            "avviso: {} pubblicato, ma la durabilita' non e' confermata \
-             (fsync della directory non supportato o fallito)",
-            output_path.display()
-        );
-    }
+/// Esito tipizzato del publish (ADR 7) in forma verificabile, **senza
+/// scrivere su stderr**.
+///
+/// Era un avviso su stderr: invisibile a un consumatore automatico e insieme
+/// una crepa nel contratto «stderr vuoto» (ADR-0003). Ora il chiamante lo
+/// riporta nel proprio documento di uscita, dove chi legge le metriche lo
+/// trova senza intercettare un canale che per contratto non porta nulla.
+///
+/// Con il profilo `Atomic` l'esito e' sempre `Published`; il ramo non
+/// confermato serve ai chiamanti che useranno `DurableAtomic`.
+const fn durabilita_confermata(outcome: PublishOutcome) -> bool {
+    !matches!(outcome, PublishOutcome::PublishedButDurabilityUnconfirmed)
 }
 
 /// Digest esadecimale minuscolo, senza primitive di panic (gate R6).
@@ -200,28 +312,151 @@ fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraErro
 // Pipeline tabellare (port da plenora-nogeo-tools/src/main.rs)
 // ---------------------------------------------------------------------------
 
-fn load_complete(path: &Path, plan: &ValidatedPlan) -> Result<RecordBatch, PlenoraError> {
-    let reader = FileReader::try_new(File::open(path)?, None)?;
-    let schema = reader.schema();
+/// Materializza un input completo entro un budget di memoria RESIDUO,
+/// restituendo il consumo che resta vivo dopo la concatenazione.
+///
+/// Il budget dev'essere globale, non per input: con la contabilita' per
+/// singolo input i due lati di un piano binario potevano occupare ciascuno
+/// l'intero `max_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
+/// scala il residuo e passa quello.
+///
+/// La CONCATENAZIONE finale duplica temporaneamente i dati — i batch di
+/// partenza restano vivi finche' `concat_batches` non ha finito — quindi si
+/// verifica il PICCO, non solo la somma dei batch accumulati.
+/// Memoria che resta del budget dichiarato dal piano dopo `trattenuti` byte.
+///
+/// Fallisce CHIUSO, e la soglia e' lo ZERO, non il segno. La versione
+/// precedente rifiutava solo la sottrazione negativa e restituiva `0` quando
+/// il budget era esattamente esaurito: il passo successivo partiva comunque e
+/// veniva fermato piu' tardi, da `with_memory_budget(0)`. Fra i due momenti
+/// c'era spazio per allocare. Zero memoria residua e' gia' l'esaurimento:
+/// l'errore va dato qui.
+///
+/// Il testo dice chi ha trattenuto la memoria, perche' e' l'informazione che
+/// serve a chi deve alzare il budget.
+fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, PlenoraError> {
+    // `saturating_sub`: la sottrazione sotto zero e lo zero esatto sono lo
+    // stesso caso — nessuna memoria residua — e vanno trattati insieme.
+    let residuo = budget.saturating_sub(trattenuti);
+    if residuo == 0 {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "{chi} esaurisce il budget di memoria ({budget} byte): \
+             {trattenuti} gia' trattenuti, nessuna memoria residua"
+        )));
+    }
+    Ok(residuo)
+}
+
+/// Controllo di AMMISSIONE dell'output, **dopo** che il kernel l'ha
+/// costruito.
+///
+/// Il nome dice cosa e' e cosa non e'. L'output e' memoria trattenuta:
+/// finche' non e' pubblicato convive con gli input, quindi la somma
+/// dev'essere dentro il budget dichiarato, e senza questo controllo il
+/// caricamento era limitato e la produzione no. Ma il controllo avviene
+/// **dopo l'allocazione**: se il kernel alloca oltre la memoria disponibile,
+/// il processo esaurisce la memoria e questo errore non viene mai raggiunto.
+///
+/// Non e' quindi un tetto duro sulla memoria: e' un'ammissione a valle, che
+/// impedisce di PUBBLICARE un risultato fuori budget e rende l'eccesso
+/// diagnosticabile quando la macchina regge. Il rifiuto PREVENTIVO, dove
+/// esiste, vive nei kernel (`preflight_output_bytes`) ed e' applicato alle
+/// operazioni il cui numero di righe di output e' noto prima di allocare.
+/// Le altre restano coperte solo da qui: residuo dichiarato in
+/// `docs/deroghe.md`, DER-011.
+fn ammissione_output(
+    output: &RecordBatch,
+    budget: usize,
+    trattenuti: usize,
+) -> Result<(), PlenoraError> {
+    let prodotti = output.get_array_memory_size();
+    let totale = trattenuti.checked_add(prodotti).ok_or_else(|| {
+        PlenoraError::ResourceLimit(
+            "overflow nel conteggio della memoria di input piu' output".into(),
+        )
+    })?;
+    if totale > budget {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "l'output supera il budget di memoria dichiarato ({budget} byte): \
+             {trattenuti} trattenuti dagli input piu' {prodotti} prodotti"
+        )));
+    }
+    Ok(())
+}
+
+fn load_complete_within(
+    path: &Path,
+    plan: &ValidatedPlan,
+    budget: usize,
+) -> Result<(RecordBatch, usize), PlenoraError> {
+    // Ingresso non fidato: passa dal lettore di confine condiviso (framing e
+    // limiti pre-validati, panico di arrow convertito in errore). I tetti
+    // derivano dal budget residuo, non dai default del confine.
+    let limits = plan.limits();
+    let (schema, reader) = ipc_boundary::open_with_format(
+        path,
+        IpcFormat::File,
+        &ipc_boundary::limits_from_memory_budget(budget),
+    )?;
     let mut batches = Vec::new();
     let mut rows = 0_usize;
+    let mut bytes = 0_usize;
     for batch in reader {
         let batch = batch?;
         rows = rows
             .checked_add(batch.num_rows())
-            .ok_or_else(|| contract("overflow conteggio righe"))?;
-        if rows > plan.limits().max_rows {
-            return Err(contract(format!(
+            .ok_or_else(|| limite_risorsa("overflow conteggio righe"))?;
+        if rows > limits.max_rows {
+            // Limite di RISORSA: il piano e' corretto, sono i dati a non
+            // entrare nel budget dichiarato (categoria `resource_limit`).
+            return Err(PlenoraError::ResourceLimit(format!(
                 "file con oltre {} righe",
-                plan.limits().max_rows
-            )));
+                limits.max_rows
+            ))
+            .with_phase(ErrorPhase::Read));
+        }
+        // Questo percorso MATERIALIZZA l'intero input (i piani blocking e
+        // binari lo richiedono): il budget di memoria va quindi verificato
+        // mentre si accumula, non dopo. Prima nessuno lo guardava e un file
+        // grande a piacere veniva concatenato in memoria fino all'esaurimento
+        // della macchina.
+        bytes = bytes
+            .checked_add(batch.get_array_memory_size())
+            .ok_or_else(|| limite_risorsa("overflow nel conteggio dei byte"))?;
+        // Il picco include la copia che `concat_batches` produce: i batch di
+        // partenza restano vivi mentre la concatenazione alloca il risultato.
+        //
+        // Aritmetica CONTROLLATA, non saturante: `saturating_mul` a fondo
+        // scala restituisce `usize::MAX`, e se il budget fosse anch'esso a
+        // fondo scala il confronto `picco > budget` sarebbe falso proprio
+        // quando la stima non e' piu' misurabile. Un numero che ha perso il
+        // conto non puo' autorizzare nulla: il traboccamento e' esso stesso
+        // il superamento del budget.
+        let Some(picco) = bytes.checked_mul(2) else {
+            return Err(PlenoraError::ResourceLimit(format!(
+                "stima del picco di memoria non piu' rappresentabile a {bytes} byte \
+                 accumulati: budget ({budget} byte) considerato superato"
+            ))
+            .with_phase(ErrorPhase::Read));
+        };
+        if picco > budget {
+            return Err(PlenoraError::ResourceLimit(format!(
+                "l'input materializzato supera il budget di memoria residuo \
+                 ({budget} byte): {bytes} accumulati, picco stimato {picco} \
+                 con la concatenazione"
+            ))
+            .with_phase(ErrorPhase::Read));
         }
         batches.push(batch);
     }
     if batches.is_empty() {
-        return Ok(RecordBatch::new_empty(schema));
+        return Ok((RecordBatch::new_empty(schema), 0));
     }
-    Ok(concat_batches(&schema, &batches)?)
+    let unito = concat_batches(&schema, &batches)?;
+    // Consumo dichiarato al chiamante: cio' che resta vivo dopo la
+    // concatenazione, cioe' il batch unito.
+    let consumo = unito.get_array_memory_size();
+    Ok((unito, consumo))
 }
 
 fn publish_one(output_path: &Path, output: &RecordBatch) -> Result<(), PlenoraError> {
@@ -249,21 +484,63 @@ fn run_pipeline(
             output_path.display()
         )));
     }
-    let plan: Plan = serde_json::from_reader(File::open(plan_path)?)?;
+    let plan: Plan = read_control_json(plan_path)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {
-        let left = load_complete(input_path, &plan)?;
+        // Contabilita' GLOBALE del budget, non per input: il secondo lato
+        // riceve cio' che resta dopo il primo. Chiamando due volte
+        // `load_complete` ciascun lato riceveva l'intero `max_memory_bytes`,
+        // cioe' il doppio del dichiarato.
+        //
+        // ATTENZIONE a cosa questo garantisce. Il CARICAMENTO e' limitato
+        // davvero: i batch si contano mentre si accumulano e si smette prima
+        // di superare il budget. L'ESECUZIONE no: i kernel ricevono il
+        // budget residuo, e alcuni lo usano per rifiutare in anticipo
+        // (`preflight_output_bytes`), ma gli altri costruiscono l'output e
+        // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
+        // controllo di ammissione a valle, non un tetto duro: vedi DER-011.
+        // Non chiamarlo «budget globale» senza questa distinzione.
+        let budget = plan.limits().max_memory_bytes;
+        let (left, usati) = load_complete_within(input_path, &plan, budget)?;
         let output = if plan.requires_secondary() {
             let right_path = right_path.ok_or_else(|| contract("il piano richiede --right"))?;
-            let right = load_complete(right_path, &plan)?;
-            execute_binary(&left, &right, &plan)?
+            let residuo = residuo_di(budget, usati, "il primo input")?;
+            let (right, usati_destra) = load_complete_within(right_path, &plan, residuo)?;
+            // Durante l'esecuzione ENTRAMBI gli input restano vivi: sono
+            // prestati al kernel, non consumati. Il budget dell'esecuzione e'
+            // quindi cio' che resta dopo averli trattenuti tutti e due, e i
+            // kernel devono vedere quel numero — non il budget iniziale —
+            // perche' e' con `limits.max_memory_bytes` che dimensionano le
+            // proprie tabelle di lavoro.
+            let trattenuti = usati.checked_add(usati_destra).ok_or_else(|| {
+                PlenoraError::ResourceLimit(
+                    "overflow nel conteggio della memoria trattenuta dagli input".into(),
+                )
+            })?;
+            let esecuzione =
+                plan.with_memory_budget(residuo_di(budget, trattenuti, "i due input insieme")?)?;
+            let output = execute_binary(&left, &right, &esecuzione)?;
+            ammissione_output(&output, budget, trattenuti)?;
+            output
         } else {
-            plenora_engine::execute_complete_batch(left, &plan)?
+            // Qui l'input e' CONSUMATO dal kernel, ma resta vivo come batch
+            // di lavoro per tutta la catena: va addebitato lo stesso.
+            let esecuzione = plan.with_memory_budget(residuo_di(budget, usati, "l'input")?)?;
+            let output = plenora_engine::execute_complete_batch(left, &esecuzione)?;
+            ammissione_output(&output, budget, usati)?;
+            output
         };
         return publish_one(output_path, &output);
     }
-    let reader = FileReader::try_new(File::open(input_path)?, None)?;
-    let input_schema = reader.schema();
+    // Percorso streaming: un batch alla volta, ma il tetto del confine deve
+    // comunque derivare dal budget del piano — e' quello che impedisce ad
+    // arrow di allocare un messaggio piu' grande del budget prima ancora che
+    // il batch esista.
+    let (input_schema, reader) = ipc_boundary::open_with_format(
+        input_path,
+        IpcFormat::File,
+        &ipc_boundary::limits_from_memory_budget(plan.limits().max_memory_bytes),
+    )?;
 
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
@@ -275,9 +552,9 @@ fn run_pipeline(
         let input = input?;
         total_rows = total_rows
             .checked_add(input.num_rows())
-            .ok_or_else(|| contract("overflow nel conteggio complessivo delle righe"))?;
+            .ok_or_else(|| limite_risorsa("overflow nel conteggio complessivo delle righe"))?;
         if total_rows > plan.limits().max_rows {
-            return Err(contract(format!(
+            return Err(PlenoraError::ResourceLimit(format!(
                 "file con oltre {} righe",
                 plan.limits().max_rows
             )));
@@ -453,10 +730,7 @@ fn execute_transform(
         )
         .into());
     }
-    let schema: TransformSchema = serde_json::from_reader(BufReader::with_capacity(
-        64 * 1024,
-        File::open(schema_path)?,
-    ))?;
+    let schema: TransformSchema = read_control_json(schema_path)?;
     if schema.schema_version != 2 {
         return Err(contract(format!(
             "schema_version {} non supportata",
@@ -477,7 +751,7 @@ fn execute_transform(
             transform_stream(&mut input_reader, output_writer, &schema)
                 .map_err(|error| contract(error.to_string()))
         })?;
-    report_publish_outcome(outcome, output_path);
+    let _ = durabilita_confermata(outcome);
     Ok(result)
 }
 
@@ -493,10 +767,7 @@ fn execute_transform_arrow(
         )
         .into());
     }
-    let schema: TransformArrowSchema = serde_json::from_reader(BufReader::with_capacity(
-        64 * 1024,
-        File::open(schema_path)?,
-    ))?;
+    let schema: TransformArrowSchema = read_control_json(schema_path)?;
     if schema.schema_version != TransformArrowSchema::VERSION {
         return Err(contract(format!(
             "schema_version {} non supportata",
@@ -534,7 +805,7 @@ fn execute_transform_arrow(
                     )
                 })
         })?;
-    report_publish_outcome(outcome, output_path);
+    let _ = durabilita_confermata(outcome);
     Ok(summary)
 }
 
@@ -545,10 +816,7 @@ fn execute_pair_arrow(
     output_path: &Path,
     output_format: ArrowOutputFormat,
 ) -> Result<PairArrowSummary, Box<dyn Error>> {
-    let schema: PairArrowSchema = serde_json::from_reader(BufReader::with_capacity(
-        64 * 1024,
-        File::open(schema_path)?,
-    ))?;
+    let schema: PairArrowSchema = read_control_json(schema_path)?;
     if schema.schema_version != PairArrowSchema::VERSION {
         return Err(contract(format!(
             "schema_version {} non supportata",
@@ -572,7 +840,7 @@ fn execute_pair_arrow(
             )
             .map_err(|error| contract(error.to_string()))
         })?;
-    report_publish_outcome(outcome, output_path);
+    let _ = durabilita_confermata(outcome);
     Ok(summary)
 }
 
@@ -612,10 +880,7 @@ fn execute_spatial_join(
     const MAX_JOIN_ROWS_PER_SIDE: u64 = 2_000_000;
     const MAX_JOIN_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
-    let schema: SpatialJoinSchema = serde_json::from_reader(BufReader::with_capacity(
-        64 * 1024,
-        File::open(schema_path)?,
-    ))?;
+    let schema: SpatialJoinSchema = read_control_json(schema_path)?;
     if schema.schema_version != 2 {
         return Err(contract(format!(
             "schema_version {} non supportata",
@@ -630,7 +895,7 @@ fn execute_spatial_join(
     if schema.left_row_count > MAX_JOIN_ROWS_PER_SIDE
         || schema.right_row_count > MAX_JOIN_ROWS_PER_SIDE
     {
-        return Err(contract(format!(
+        return Err(limite_risorsa(format!(
             "spatial-join oltre il limite di {MAX_JOIN_ROWS_PER_SIDE} righe per lato"
         ))
         .into());
@@ -638,7 +903,7 @@ fn execute_spatial_join(
     for path in [left_path, right_path] {
         let bytes = path.metadata()?.len();
         if bytes > MAX_JOIN_INPUT_BYTES {
-            return Err(contract(format!(
+            return Err(limite_risorsa(format!(
                 "input spatial-join {} oltre il limite di {MAX_JOIN_INPUT_BYTES} byte",
                 path.display()
             ))
@@ -661,7 +926,7 @@ fn execute_spatial_join(
                 write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
             Ok(checksum)
         })?;
-    report_publish_outcome(outcome, output_path);
+    let _ = durabilita_confermata(outcome);
     Ok(SpatialJoinSummary {
         pairs: pair_count,
         checksum,
@@ -707,6 +972,76 @@ fn descriptor_json(descriptor: &OperationDescriptor) -> serde_json::Value {
     })
 }
 
+/// Identita' del binario in forma leggibile da un programma: versione del
+/// componente, versione Arrow, backend compilati.
+///
+/// I backend derivano dalle feature con cui QUESTO binario e' stato
+/// compilato, non da una lista scritta a mano: e' l'unica risposta che non
+/// puo' mentire.
+fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "protocol_version": 1,
+        "component": "plenora-data-tools",
+        "component_version": env!("CARGO_PKG_VERSION"),
+        "arrow_version": plenora_core::capabilities::component_capabilities().arrow_version,
+        "backends": backends_compilati(),
+        "operations": CATALOG.len(),
+    })
+}
+
+/// Backend geografici effettivamente compilati in questo binario.
+fn backends_compilati() -> Vec<&'static str> {
+    let mut backends = Vec::new();
+    if cfg!(feature = "geos-backend") {
+        backends.push("geos");
+    }
+    if cfg!(feature = "proj-backend") {
+        backends.push("proj");
+    }
+    backends
+}
+
+/// `capabilities`: il documento dichiarativo di `plenora-core` piu'
+/// l'identita' di questo binario (versione e backend), che il documento non
+/// puo' conoscere.
+fn capabilities_command() -> Result<(), Box<dyn Error>> {
+    // ICD §10 R10.2: capability dichiarative interrogabili prima
+    // dell'esecuzione, in forma leggibile da un programma.
+    let documento = plenora_core::capabilities::component_capabilities();
+    let mut valore = serde_json::to_value(&documento)?;
+    if let Some(oggetto) = valore.as_object_mut() {
+        oggetto.insert(
+            "component_version".to_owned(),
+            serde_json::Value::String(env!("CARGO_PKG_VERSION").to_owned()),
+        );
+        oggetto.insert(
+            "backends".to_owned(),
+            serde_json::json!(backends_compilati()),
+        );
+    }
+    match OutputFormat::active() {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&valore)?),
+        OutputFormat::Markdown => {
+            println!("# Capability di plenora-data-tools\n");
+            println!("| | |");
+            println!("|---|---|");
+            println!("| versione | {} |", env!("CARGO_PKG_VERSION"));
+            println!("| Arrow | {} |", documento.arrow_version);
+            println!(
+                "| backend | {} |",
+                if backends_compilati().is_empty() {
+                    "nessuno".to_owned()
+                } else {
+                    backends_compilati().join(", ")
+                }
+            );
+            println!("| operazioni a catalogo | {} |", CATALOG.len());
+        }
+    }
+    Ok(())
+}
+
 fn catalog_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     let family = optional_value_after(args, "--family")?;
     let family = family
@@ -723,34 +1058,52 @@ fn catalog_command(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .ok_or_else(|| contract("famiglia sconosciuta: attesa `table` o `geo`".to_owned()))
         })
         .transpose()?;
-    let entries: Vec<serde_json::Value> = CATALOG
+    let descrittori: Vec<&OperationDescriptor> = CATALOG
         .iter()
         .filter(|descriptor| family.is_none_or(|wanted| descriptor.family == wanted))
-        .map(descriptor_json)
         .collect();
-    println!("{}", serde_json::to_string_pretty(&entries)?);
+    match OutputFormat::active() {
+        OutputFormat::Json => {
+            let entries: Vec<serde_json::Value> =
+                descrittori.iter().copied().map(descriptor_json).collect();
+            println!("{}", serde_json::to_string_pretty(&entries)?);
+        }
+        OutputFormat::Markdown => {
+            println!("| operazione | famiglia | arieta' | maturita' |");
+            println!("|---|---|---|---|");
+            for descriptor in descrittori {
+                println!(
+                    "| `{}` | {:?} | {:?} | {:?} |",
+                    descriptor.id, descriptor.family, descriptor.arity, descriptor.maturity
+                );
+            }
+        }
+    }
     Ok(())
 }
 
 fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
+    OutputFormat::require_json("validate")?;
     let plan_path = value_after(args, "--plan")?;
-    // `--inputs i1 i2 ...`: tutti i valori fino al prossimo flag. Per i piani
-    // v4 sono accoppiati in ordine agli input dichiarati dal piano; per i
-    // piani legacy sono solo elencati nel riepilogo.
-    let inputs: Vec<PathBuf> = args
-        .iter()
-        .position(|argument| argument == "--inputs")
-        .map_or_else(Vec::new, |index| {
-            args[index + 1..]
-                .iter()
-                .take_while(|argument| !argument.starts_with("--"))
-                .map(PathBuf::from)
-                .collect()
-        });
-    let plan_text = std::fs::read_to_string(&plan_path)?;
+    // Stesso parser di `run`: le due forme — `--input nome=percorso` e
+    // `--inputs` posizionale — devono comportarsi allo stesso modo nei due
+    // comandi, altrimenti si valida un accoppiamento e se ne esegue un altro.
+    let inputs = v4_inputs(args)?;
+    let plan_text = read_control_plan_text(Path::new(&plan_path))?;
     if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
         return validate_dag_v4(&plan_text, &inputs, !has_flag(args, "--no-geo-fusion"));
     }
+    let inputs: Vec<PathBuf> = match inputs {
+        V4Inputs::Positional(paths) => paths,
+        // I piani legacy non hanno input nominati: il riepilogo elenca i soli
+        // percorsi, e accettare una forma che non sanno usare confonderebbe.
+        V4Inputs::Named(_) => {
+            return Err(contract(
+                "`--input nome=percorso` richiede un piano DAG v4; per i piani legacy                  usare `--input PERCORSO`",
+            )
+            .into());
+        }
+    };
     let plan: Plan = serde_json::from_str(&plan_text)?;
     let plan = plan.validate()?;
     println!(
@@ -849,54 +1202,95 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
     Ok(serde_json::from_str::<PlanVersionProbe>(plan_text)?.schema_version)
 }
 
-/// `true` se il file inizia con il magic dell'Arrow IPC **file format**
-/// (`ARROW1`); altrimenti e' trattato come IPC stream format.
+/// Tetto sui byte di un documento JSON di controllo letto da file.
 ///
-/// Confine di lettura (BLOCK-03): gli errori I/O dello sniffing nascono
-/// leggendo la sorgente — tag [`ErrorPhase::Read`].
-fn is_ipc_file_format(path: &Path) -> Result<bool, PlenoraError> {
-    let sniffed = (|| -> Result<bool, PlenoraError> {
-        const MAGIC: &[u8; 6] = b"ARROW1";
-        let mut file = File::open(path)?;
-        let mut buffer = [0_u8; 6];
-        let mut read = 0_usize;
-        while read < buffer.len() {
-            let count = file.read(&mut buffer[read..])?;
-            if count == 0 {
-                break;
-            }
-            read += count;
+/// Coincide con `PlanLimits::max_plan_json_bytes` di default: i piani legacy
+/// e gli schemi di comando sono documenti di controllo della stessa classe, e
+/// non c'e' ragione perche' abbiano un tetto diverso — o nessun tetto.
+const MAX_CONTROL_JSON_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Legge un documento JSON di CONTROLLO da file: limitato nei byte e
+/// rifiutato se contiene chiavi duplicate.
+///
+/// E' l'unico lettore dei documenti di controllo della CLI. Prima ogni sito
+/// chiamava `serde_json::from_reader` per conto proprio: nessun tetto sui
+/// byte, e chiavi duplicate risolte con «vince l'ultima» — la stessa
+/// ambiguita' che il piano v4 rifiuta, lasciata aperta sui piani legacy,
+/// sugli schemi di comando e sulle sonde di instradamento.
+///
+/// Confine di lettura (BLOCK-03): gli errori nascono leggendo la sorgente.
+fn read_control_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, PlenoraError> {
+    let text = read_control_json_text(path)?;
+    plenora_core::json::ensure_no_duplicate_keys(&text)?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// Testo di un documento JSON di controllo, entro [`MAX_CONTROL_JSON_BYTES`].
+fn read_control_json_text(path: &Path) -> Result<String, PlenoraError> {
+    let read = (|| -> Result<String, PlenoraError> {
+        let file = File::open(path)?;
+        let declared = file.metadata()?.len();
+        if declared > MAX_CONTROL_JSON_BYTES {
+            return Err(contract(format!(
+                "documento di controllo da {declared} byte oltre il limite {MAX_CONTROL_JSON_BYTES}"
+            )));
         }
-        Ok(read == MAGIC.len() && &buffer == MAGIC)
+        // Il tetto si applica anche alla lettura, non solo alla dimensione
+        // dichiarata: fra `metadata()` e la lettura il file puo' crescere.
+        let mut text = String::new();
+        BufReader::with_capacity(64 * 1024, file)
+            .take(MAX_CONTROL_JSON_BYTES.saturating_add(1))
+            .read_to_string(&mut text)?;
+        if text.len() as u64 > MAX_CONTROL_JSON_BYTES {
+            return Err(contract(format!(
+                "documento di controllo oltre il limite {MAX_CONTROL_JSON_BYTES} byte"
+            )));
+        }
+        Ok(text)
     })();
-    sniffed.map_err(|error| error.with_phase(ErrorPhase::Read))
+    read.map_err(|error| error.with_phase(ErrorPhase::Read))
+}
+
+/// Contratto assente per un input gia' accoppiato: invariante nostra, non un
+/// errore del chiamante.
+fn contract_error_missing(name: &str) -> PlenoraError {
+    PlenoraError::Internal(format!(
+        "contratto di discovery assente per l'input `{name}`"
+    ))
+}
+
+/// Testo del piano, letto una volta e gia' verificato contro le chiavi
+/// duplicate.
+///
+/// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
+/// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
+/// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
+/// sonda lo legge per prima. Per i piani v4 `PlanV4::parse` ripete la
+/// verifica: e' idempotente e copre anche chi non passa dalla CLI.
+fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
+    let text = read_control_json_text(path)?;
+    plenora_core::json::ensure_no_duplicate_keys(&text)?;
+    Ok(text)
 }
 
 /// Schema Arrow dell'header IPC di un input (file o stream format): nessuna
 /// riga di dati letta.
 ///
+/// Passa dal lettore di confine condiviso ([`plenora_engine::ipc_boundary`]):
+/// framing e limiti pre-validati prima che arrow allochi, panico di
+/// `fb_to_schema` convertito in errore. La CLI non apre piu'
+/// `FileReader`/`StreamReader` per conto proprio su input non fidati.
+///
 /// Confine di lettura (BLOCK-03): gli errori `Io`/`DataMapping` di apertura
 /// e parse dell'header nascono leggendo la sorgente — tag
-/// [`ErrorPhase::Read`] (lo sniffing del formato e' gia' taggato da
-/// [`is_ipc_file_format`], il primo tag vince).
+/// [`ErrorPhase::Read`].
 fn ipc_header_schema(path: &Path) -> Result<SchemaRef, PlenoraError> {
-    let header = (|| -> Result<SchemaRef, PlenoraError> {
-        if is_ipc_file_format(path)? {
-            Ok(FileReader::try_new(File::open(path)?, None)?.schema())
-        } else {
-            Ok(StreamReader::try_new(File::open(path)?, None)?.schema())
-        }
-    })();
-    header.map_err(|error| error.with_phase(ErrorPhase::Read))
+    ipc_boundary::header_schema(path, &IpcLimits::default())
 }
 
 /// Input lazy per l'executor: IPC file o stream format, sniffato dal magic.
-fn open_input(path: &Path) -> Result<Input, PlenoraError> {
-    if is_ipc_file_format(path)? {
-        Input::read_ipc_file(path)
-    } else {
-        Input::read_ipc_stream(path)
-    }
+fn open_input(path: &Path, limits: &IpcLimits) -> Result<Input, PlenoraError> {
+    Input::read_ipc_with_limits(path, limits)
 }
 
 /// Definizione CRS dal metadato `geo` di una colonna `GeoArrow`: stringa
@@ -1268,13 +1662,80 @@ fn geometry_contract_from_field(
     }
 }
 
-/// Accoppia i percorsi CLI agli input dichiarati dal piano v4, in ordine di
-/// dichiarazione (posizionale, deterministico). Un conteggio diverso e' un
-/// errore esplicito, prima ancora di toccare i file.
+/// Accoppia gli input della riga di comando a quelli dichiarati dal piano v4.
+///
+/// Nella forma NOMINALE l'accoppiamento e' quello scritto: ogni nome dev'essere
+/// dichiarato dal piano e ogni input dichiarato dev'essere fornito, una volta
+/// sola.
+///
+/// La forma POSIZIONALE e' ammessa **solo con un input dichiarato**. Con due o
+/// piu' input non e' verificabile: due file scambiati con lo stesso schema
+/// producono un risultato sbagliato invece di un errore — il piano gira, i
+/// contratti combaciano, e nessuno se ne accorge. Era l'unico posto della CLI
+/// in cui uno scambio dell'utente non era intercettabile dal componente; ora
+/// quella forma non arriva all'esecuzione.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` su nome non dichiarato, input dichiarato ma non
+/// fornito, forma posizionale con piu' di un input dichiarato, o conteggio
+/// diverso nella forma posizionale.
 fn pair_v4_inputs(
     probe: &PlanInputsProbe,
-    paths: &[PathBuf],
+    inputs: &V4Inputs,
 ) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
+    let paths = match inputs {
+        V4Inputs::Named(named) => {
+            for (name, _) in named {
+                if !probe.inputs.iter().any(|declared| declared == name) {
+                    return Err(contract(format!(
+                        "input `{name}` non dichiarato dal piano (dichiarati: {})",
+                        probe.inputs.join(", ")
+                    )));
+                }
+            }
+            // L'ordine restituito e' quello del PIANO, non quello della riga
+            // di comando: cosi' l'ordine degli argomenti non e' osservabile a
+            // valle e non puo' diventare una dipendenza implicita.
+            return probe
+                .inputs
+                .iter()
+                .map(|declared| {
+                    named
+                        .iter()
+                        .find(|(name, _)| name == declared)
+                        .map(|(name, path)| (name.clone(), path.clone()))
+                        .ok_or_else(|| {
+                            contract(format!(
+                                "input `{declared}` dichiarato dal piano ma non fornito: \
+                                 aggiungere `--input {declared}=PERCORSO`"
+                            ))
+                        })
+                })
+                .collect();
+        }
+        V4Inputs::Positional(paths) => paths,
+    };
+    if probe.inputs.len() > 1 {
+        // Con piu' di un input la forma posizionale non e' VERIFICABILE: due
+        // percorsi scambiati sono indistinguibili da due percorsi giusti, e
+        // se gli schemi coincidono il piano gira producendo il risultato
+        // sbagliato. Un avviso non basta — nei log di una pipeline non lo
+        // legge nessuno — quindi si rifiuta prima di toccare i file,
+        // indicando la forma che chiude il problema. Resta ammessa con un
+        // input solo, dove non c'e' niente da scambiare.
+        return Err(contract(format!(
+            "`--inputs` accoppia i percorsi per POSIZIONE e non e' ammesso con {} input \
+             dichiarati: usare la forma nominale `{}`",
+            probe.inputs.len(),
+            probe
+                .inputs
+                .iter()
+                .map(|name| format!("--input {name}=PERCORSO"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )));
+    }
     if probe.inputs.len() != paths.len() {
         return Err(contract(format!(
             "il piano dichiara {} input ({}) ma ne sono stati forniti {}",
@@ -1394,6 +1855,141 @@ fn contract_json(contract: &DataContract) -> serde_json::Value {
         "fields": fields,
         "geometry": geometry,
     })
+}
+
+/// Descrizione completa di un input: cio' che serve per SCRIVERE un piano
+/// contro quel file, e il fingerprint con cui il piano sara' poi verificato.
+///
+/// I campi non geometrici non hanno un `field_id` nel contratto — l'identita'
+/// interna e' assegnata dal grafo, non dall'input — e non se ne inventa uno.
+fn describe_json(path: &Path, contract: &DataContract) -> Result<serde_json::Value, PlenoraError> {
+    let fingerprint = planner::contract_fingerprint(contract)?;
+    let geometries: Vec<serde_json::Value> = contract
+        .geometries
+        .iter()
+        .map(|geometry| {
+            serde_json::json!({
+                "name": geometry.name,
+                "field_id": geometry.field_id.0,
+                "nullable": geometry.nullable,
+                "dimensions": geometry.dimensions.as_str(),
+                "encoding": geometry.encoding.map(GeometryEncoding::as_str),
+                "crs_resolution": geometry.crs.resolution().as_str(),
+                "crs": match &geometry.crs {
+                    ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) =>
+                        serde_json::Value::String(crs.definition().to_owned()),
+                    ContractCrs::DeclaredUnresolved { .. } | ContractCrs::Missing =>
+                        serde_json::Value::Null,
+                },
+                "types_declaration": geometry
+                    .types
+                    .value()
+                    .map(|types| types.declaration().as_str()),
+                "types": geometry
+                    .types
+                    .value()
+                    .map(GeometryTypesProperty::to_canonical_list),
+                "active": contract
+                    .active_geometry_column()
+                    .is_some_and(|active| active.name == geometry.name),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "status": "ok",
+        "protocol_version": 1,
+        "input": path.display().to_string(),
+        "contract_fingerprint": fingerprint.to_hex(),
+        "fields": contract_json(contract)["fields"],
+        "geometries": geometries,
+    }))
+}
+
+/// `describe`: cosa contiene un input, senza eseguire nulla.
+///
+/// E' il primo comando da invocare per scrivere un piano: senza, i nomi delle
+/// colonne, il CRS e l'encoding si scoprono solo facendo fallire un `run`.
+/// L'input passa dal confine IPC come in esecuzione — framing pre-validato,
+/// barriera anti-panico — quindi cio' che `describe` accetta e' cio' che `run`
+/// accettera'.
+fn describe_command(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let input = value_after(args, "--input")?;
+    let contract = discover_input_contract(Path::new(&input))?;
+    let documento = describe_json(Path::new(&input), &contract)?;
+    match OutputFormat::active() {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&documento)?),
+        OutputFormat::Markdown => print!("{}", describe_markdown(&documento)),
+    }
+    Ok(())
+}
+
+/// Resa leggibile di [`describe_json`]. Stesso contenuto, altra forma: un
+/// campo che compare nel JSON e non qui sarebbe una descrizione parziale
+/// travestita da descrizione.
+fn describe_markdown(documento: &serde_json::Value) -> String {
+    use std::fmt::Write as _;
+    let mut testo = String::new();
+    let vuoto = Vec::new();
+    // `write!` su `String` non fallisce; l'esito si ignora esplicitamente
+    // invece di propagarlo per un canale che non ha errori.
+    let _ = writeln!(
+        testo,
+        "# {}\n",
+        documento["input"].as_str().unwrap_or("(input)")
+    );
+    let _ = writeln!(
+        testo,
+        "Fingerprint del contratto: `{}`\n",
+        documento["contract_fingerprint"].as_str().unwrap_or("?")
+    );
+    let _ = writeln!(testo, "## Campi\n");
+    let _ = writeln!(testo, "| nome | tipo | nullable |");
+    let _ = writeln!(testo, "|---|---|---|");
+    for campo in documento["fields"].as_array().unwrap_or(&vuoto) {
+        let _ = writeln!(
+            testo,
+            "| `{}` | {} | {} |",
+            campo["name"].as_str().unwrap_or("?"),
+            campo["data_type"].as_str().unwrap_or("?"),
+            campo["nullable"]
+        );
+    }
+    let geometrie = documento["geometries"].as_array().unwrap_or(&vuoto);
+    if geometrie.is_empty() {
+        let _ = writeln!(testo, "\nNessuna colonna geometrica.");
+        return testo;
+    }
+    let _ = writeln!(testo, "\n## Geometrie\n");
+    for geometria in geometrie {
+        let _ = writeln!(
+            testo,
+            "- `{}` (field_id {}){}",
+            geometria["name"].as_str().unwrap_or("?"),
+            geometria["field_id"],
+            if geometria["active"] == serde_json::Value::Bool(true) {
+                " — attiva"
+            } else {
+                ""
+            }
+        );
+        let _ = writeln!(
+            testo,
+            "  - dimensioni: {} · encoding: {} · CRS: {} ({})",
+            geometria["dimensions"].as_str().unwrap_or("?"),
+            geometria["encoding"].as_str().unwrap_or("non dichiarato"),
+            geometria["crs"].as_str().unwrap_or("assente"),
+            geometria["crs_resolution"].as_str().unwrap_or("?")
+        );
+        let _ = writeln!(
+            testo,
+            "  - tipi: {} ({})",
+            geometria["types"].as_str().unwrap_or("non dichiarati"),
+            geometria["types_declaration"]
+                .as_str()
+                .unwrap_or("non dichiarata")
+        );
+    }
+    testo
 }
 
 /// Riepilogo JSON di `validate` per un piano v4: nodi, archi con contratti,
@@ -1557,11 +2153,11 @@ fn has_flag(args: &[String], flag: &str) -> bool {
 /// fusa.
 fn validate_dag_v4(
     plan_text: &str,
-    paths: &[PathBuf],
+    inputs: &V4Inputs,
     geo_fusion: bool,
 ) -> Result<(), Box<dyn Error>> {
     let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, paths)?;
+    let pairs = pair_v4_inputs(&probe, inputs)?;
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
@@ -1586,7 +2182,7 @@ fn validate_dag_v4(
 /// kill switch D12.9 (flag `--no-geo-fusion`).
 fn run_dag_v4(
     plan_text: &str,
-    paths: &[PathBuf],
+    inputs: &V4Inputs,
     output_path: &Path,
     geo_fusion: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -1598,48 +2194,150 @@ fn run_dag_v4(
         .into());
     }
     let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, paths)?;
+    let pairs = pair_v4_inputs(&probe, inputs)?;
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
-    let mut inputs = Inputs::new();
-    for (name, path) in &pairs {
-        inputs.add(name.clone(), open_input(path)?)?;
-    }
+    // `max_parallelism` si applica QUI, prima di aprire gli input e prima di
+    // qualunque uso di Rayon: dimensiona il pool del processo, che e' l'unica
+    // leva che vincola davvero tutti i percorsi paralleli dei kernel. Senza
+    // questo passo il limite era una promessa di risorsa, non un tetto.
+    parallelism::configure(graph.effective_limits().max_parallelism)?;
     let token = CancellationToken::new();
     install_ctrlc_handler(&token)?;
     let runtime = RuntimeContext {
         cancellation: token,
         geo_fusion,
+        max_parallelism: graph.effective_limits().max_parallelism,
         ..RuntimeContext::default()
     };
+    // I tetti del confine IPC derivano dai limiti EFFETTIVI del piano: il
+    // body dichiarato di ogni messaggio e' confrontato con `max_batch_bytes`
+    // prima che arrow allochi, non dopo che il batch e' stato costruito.
+    let ipc_limits = ipc_boundary::limits_from_plan(
+        graph.effective_limits(),
+        runtime.batch_target.max_batch_bytes,
+    );
+    // Gli input portano il proprio contratto: l'esecuzione verifica allora il
+    // fingerprint COMPLETO contro quello registrato nel grafo, non il solo
+    // schema Arrow. E' lo stesso contratto su cui il piano e' stato validato,
+    // quindi il confine si chiude senza rileggere nulla.
+    // Profilo STRETTO: un input senza contratto non e' un'omissione tollerata
+    // ma un errore. La CLI ha sempre i contratti della discovery, quindi il
+    // profilo permissivo non le serve — e non averlo a disposizione e' cio'
+    // che impedisce a una modifica futura di reintrodurlo per distrazione.
+    let mut inputs = Inputs::strict();
+    for (name, path) in &pairs {
+        let contract = contracts
+            .iter()
+            .find(|(declared, _)| declared == name)
+            .map(|(_, contract)| contract.clone())
+            .ok_or_else(|| contract_error_missing(name))?;
+        inputs.add_with_contract(name.clone(), open_input(path, &ipc_limits)?, contract)?;
+    }
     let output = execute(&graph, inputs, runtime)?;
     let (metrics, outcome) =
         output.write_ipc_file_with_profile(output_path, PublishProfile::Atomic)?;
-    report_publish_outcome(outcome, output_path);
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&metrics_json(&graph, &metrics))?
-    );
+    let mut documento = metrics_json(&graph, &metrics);
+    if let Some(oggetto) = documento.as_object_mut() {
+        oggetto.insert(
+            "durability_confirmed".to_owned(),
+            serde_json::Value::Bool(durabilita_confermata(outcome)),
+        );
+    }
+    println!("{}", serde_json::to_string_pretty(&documento)?);
     Ok(())
 }
 
 /// Percorsi di input per un piano v4: `--input` singolo e/o `--inputs`
 /// multiplo (valori fino al prossimo flag).
-fn v4_input_paths(args: &[String]) -> Result<Vec<PathBuf>, PlenoraError> {
-    let mut paths = Vec::new();
-    if let Some(single) = optional_value_after(args, "--input")? {
-        paths.push(single);
+/// Sorgenti degli input di un piano v4, come dichiarate sulla riga di
+/// comando.
+///
+/// Le due forme non si mescolano: o l'accoppiamento e' esplicito, o e'
+/// posizionale. Accettarle insieme darebbe una riga di comando in cui meta'
+/// degli input e' verificabile a colpo d'occhio e meta' no.
+#[derive(Debug, PartialEq, Eq)]
+enum V4Inputs {
+    /// Forma NOMINALE `--input nome=percorso`, ripetibile: l'accoppiamento e'
+    /// scritto, non dedotto.
+    Named(Vec<(String, PathBuf)>),
+    /// Forma POSIZIONALE `--inputs a.arrow b.arrow` (deprecata): i percorsi
+    /// seguono l'ordine di dichiarazione degli input nel piano.
+    Positional(Vec<PathBuf>),
+}
+
+/// `true` se il valore di `--input` e' nella forma `nome=percorso`.
+///
+/// Il nome e' cio' che precede il PRIMO `=`: dev'essere non vuoto e non
+/// contenere separatori di percorso ne' due punti, cosi' un percorso assoluto
+/// resta un percorso anche se contenesse un `=` piu' avanti. Un file che si
+/// chiama davvero `nome=x.arrow` si passa con `--inputs`, oppure prefissato
+/// (`./nome=x.arrow`).
+fn is_named_input(value: &str) -> bool {
+    value.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && !name.contains(['/', '\\', ':']) && !name.starts_with('-')
+    })
+}
+
+/// Raccoglie gli input di un piano v4 dalla riga di comando.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` se le due forme sono mescolate, se un nome e'
+/// ripetuto, se il percorso di una coppia e' vuoto, o se manca il valore di
+/// un flag.
+fn v4_inputs(args: &[String]) -> Result<V4Inputs, PlenoraError> {
+    let mut named: Vec<(String, PathBuf)> = Vec::new();
+    let mut positional: Vec<PathBuf> = Vec::new();
+
+    // `--input` e' ripetibile nella forma nominale; in quella posizionale
+    // resta il singolo percorso di un piano a un solo input.
+    for (index, argument) in args.iter().enumerate() {
+        if argument != "--input" {
+            continue;
+        }
+        let value = args
+            .get(index + 1)
+            .filter(|value| !value.starts_with("--"))
+            .ok_or_else(|| contract("valore mancante per --input"))?;
+        if !is_named_input(value) {
+            positional.push(PathBuf::from(value));
+            continue;
+        }
+        let (name, path) = value
+            .split_once('=')
+            .ok_or_else(|| contract("forma --input nome=percorso non riconosciuta"))?;
+        if path.is_empty() {
+            return Err(contract(format!(
+                "input `{name}`: percorso vuoto in `--input {name}=`"
+            )));
+        }
+        if named.iter().any(|(declared, _)| declared == name) {
+            return Err(contract(format!("input `{name}` indicato due volte")));
+        }
+        named.push((name.to_owned(), PathBuf::from(path)));
     }
+
     if let Some(index) = args.iter().position(|argument| argument == "--inputs") {
-        paths.extend(
+        positional.extend(
             args[index + 1..]
                 .iter()
                 .take_while(|argument| !argument.starts_with("--"))
                 .map(PathBuf::from),
         );
     }
-    Ok(paths)
+
+    if !named.is_empty() && !positional.is_empty() {
+        return Err(contract(
+            "forma nominale e posizionale mescolate: usare `--input nome=percorso` per \
+             tutti gli input, oppure `--inputs` per tutti",
+        ));
+    }
+    if named.is_empty() {
+        return Ok(V4Inputs::Positional(positional));
+    }
+    Ok(V4Inputs::Named(named))
 }
 
 fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraError> {
@@ -1690,9 +2388,10 @@ fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraErro
 /// Dispatch di `run`: DAG v4 se il piano dichiara `schema_version: 4`,
 /// pipeline tabellare legacy altrimenti (comportamento invariato).
 fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
+    OutputFormat::require_json("run")?;
     let plan_path = value_after(args, "--plan")?;
     let output_path = value_after(args, "--output")?;
-    let plan_text = std::fs::read_to_string(&plan_path)?;
+    let plan_text = read_control_plan_text(Path::new(&plan_path))?;
     if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
         if args.iter().any(|argument| argument == "--right") {
             return Err(contract(
@@ -1703,7 +2402,7 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         return run_dag_v4(
             &plan_text,
-            &v4_input_paths(args)?,
+            &v4_inputs(args)?,
             &output_path,
             !has_flag(args, "--no-geo-fusion"),
         );
@@ -1723,7 +2422,21 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn help_text() -> String {
     format!(
-        "plenora-data-tools {}\n\n  plenora-data-tools catalog [--family table|geo]\n  plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow... [--no-geo-fusion]\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow   (piani legacy, schema_version <= 3)\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v4: percorsi nell'ordine degli input dichiarati)\n  plenora-data-tools capabilities\n  plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT\n  plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS\n  plenora-data-tools self-test [--output RESULT.bin]\n  plenora-data-tools --version",
+        "plenora-data-tools {}
+
+  plenora-data-tools catalog [--family table|geo]
+  plenora-data-tools describe --input INPUT.arrow                          (alias: inspect-dataset)
+  plenora-data-tools validate --plan PLAN.json --input NOME=INPUT.arrow...
+  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v4)
+  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow       (piani legacy, schema_version <= 3)
+  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow --output OUTPUT.arrow                            (posizionale: solo piani a UN input)
+  plenora-data-tools capabilities
+  plenora-data-tools transform --input INPUT --schema SCHEMA.json --output OUTPUT                               (deprecato: usare run con un piano)
+  plenora-data-tools spatial-join --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS                  (deprecato: usare run con un piano)
+  plenora-data-tools transform-arrow --input INPUT --schema SCHEMA.json --output OUTPUT                          (deprecato: usare run con un piano)
+  plenora-data-tools pair-arrow --left LEFT --right RIGHT --schema SCHEMA.json --output PAIRS                    (deprecato: usare run con un piano)
+  plenora-data-tools self-test [--output RESULT.bin]
+  plenora-data-tools --version",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -1731,11 +2444,26 @@ fn help_text() -> String {
 fn subcommand_help_text(command: &str) -> Option<&'static str> {
     match command {
         "catalog" => Some("Usage: plenora-data-tools catalog [--family table|geo]"),
+        "describe" | "inspect-dataset" => Some(
+            "Usage: plenora-data-tools describe --input INPUT.arrow
+
+Stampa in JSON il contratto dell'input: campi, colonna geometrica, CRS,
+encoding, tipi dichiarati e fingerprint del contratto. Non esegue nulla.",
+        ),
         "validate" => Some(
-            "Usage: plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow... [--no-geo-fusion]",
+            "Usage:
+  plenora-data-tools validate --plan PLAN.json --input NOME=INPUT.arrow... [--no-geo-fusion]
+  plenora-data-tools validate --plan PLAN.json --inputs INPUT.arrow   (posizionale: solo piani a UN input)",
         ),
         "run" => Some(
-            "Usage:\n  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow\n  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]",
+            "Usage:
+  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]
+  plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow   (piani legacy)
+  plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow --output OUTPUT.arrow                        (posizionale: solo piani a UN input)
+
+La forma nominale lega ogni percorso al nome dell'input dichiarato dal piano:
+due file scambiati diventano un errore invece di un risultato sbagliato. Con
+piu' di un input dichiarato e' l'unica forma ammessa.",
         ),
         "capabilities" => Some("Usage: plenora-data-tools capabilities"),
         "transform" => Some(
@@ -1755,8 +2483,210 @@ fn subcommand_help_text(command: &str) -> Option<&'static str> {
     }
 }
 
-fn print_help() {
-    eprintln!("{}", help_text());
+/// Flag accettati da ciascun sottocomando, e quali possono ripetersi.
+///
+/// E' l'unico posto in cui la superficie degli argomenti e' dichiarata: il
+/// controllo di §1.4 la confronta con l'help, e il dispatch la usa per
+/// rifiutare cio' che non conosce. Tre elenchi separati divergerebbero.
+///
+/// `--format` non compare: e' globale e viene tolto dagli argomenti prima
+/// del dispatch (`strip_output_format`).
+struct SuperficieComando {
+    /// Flag ammessi, compresi quelli senza valore.
+    flag: &'static [&'static str],
+    /// Flag che possono comparire piu' di una volta.
+    ripetibili: &'static [&'static str],
+}
+
+const fn superficie(comando: &str) -> Option<SuperficieComando> {
+    Some(match comando.as_bytes() {
+        b"catalog" => SuperficieComando {
+            flag: &["--family"],
+            ripetibili: &[],
+        },
+        b"describe" | b"inspect-dataset" => SuperficieComando {
+            flag: &["--input"],
+            ripetibili: &[],
+        },
+        b"validate" => SuperficieComando {
+            flag: &["--plan", "--input", "--inputs", "--no-geo-fusion"],
+            // `--input NOME=PERCORSO` si ripete: un input per occorrenza.
+            ripetibili: &["--input"],
+        },
+        b"run" => SuperficieComando {
+            flag: &[
+                "--plan",
+                "--input",
+                "--inputs",
+                "--right",
+                "--output",
+                "--no-geo-fusion",
+            ],
+            ripetibili: &["--input"],
+        },
+        b"capabilities" => SuperficieComando {
+            flag: &[],
+            ripetibili: &[],
+        },
+        b"transform" => SuperficieComando {
+            flag: &["--input", "--schema", "--output"],
+            ripetibili: &[],
+        },
+        b"spatial-join" => SuperficieComando {
+            flag: &["--left", "--right", "--schema", "--output"],
+            ripetibili: &[],
+        },
+        b"transform-arrow" => SuperficieComando {
+            flag: &["--input", "--schema", "--output", "--output-format"],
+            ripetibili: &[],
+        },
+        b"pair-arrow" => SuperficieComando {
+            flag: &[
+                "--left",
+                "--right",
+                "--schema",
+                "--output",
+                "--output-format",
+            ],
+            ripetibili: &[],
+        },
+        b"self-test" => SuperficieComando {
+            flag: &["--output"],
+            ripetibili: &[],
+        },
+        _ => return None,
+    })
+}
+
+/// Convalida la riga di comando di un sottocomando: nessun token puo'
+/// restare inosservato.
+///
+/// Un parser che ignora cio' che non riconosce pubblica un output basato su
+/// un'invocazione DIVERSA da quella che l'utente ha scritto. Qui ogni
+/// argomento deve essere o un flag dichiarato, o il valore di un flag che ne
+/// prende uno: tutto il resto e' un errore.
+///
+/// Casi chiusi, tutti verificati dalla matrice:
+///
+/// - flag sconosciuto (`--boh`), anche in forma breve (`-x`);
+/// - flag a valore singolo ripetuto;
+/// - **posizionale inatteso** (`run pippo --plan ...`);
+/// - **flag usato come valore** (`--plan --output`), che silenziosamente
+///   rendeva `--output` il nome del piano;
+/// - **argomenti extra** dopo `--version` e `--help`.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` con l'elenco dei flag ammessi.
+fn reject_unknown_flags(comando: &str, args: &[String]) -> Result<(), PlenoraError> {
+    // `--help` e `--version` non prendono argomenti: qualunque token in piu'
+    // e' un'invocazione che non si sta eseguendo.
+    if matches!(comando, "--help" | "-h" | "--version" | "-V") {
+        // `--json` e' il modificatore di formato di `--version` E SOLO SUO:
+        // su `--help` veniva accettato e ignorato, cioe' un'invocazione che
+        // il parser non eseguiva ma dichiarava valida.
+        let ammette_json = matches!(comando, "--version" | "-V");
+        let mut json_visto = false;
+        for argument in args.iter().skip(1) {
+            if ammette_json && argument.as_str() == "--json" && !json_visto {
+                json_visto = true;
+                continue;
+            }
+            return Err(contract(format!(
+                "`{comando}` non accetta argomenti: `{argument}` di troppo"
+            )));
+        }
+        return Ok(());
+    }
+    let Some(superficie) = superficie(comando) else {
+        return Ok(());
+    };
+    let mut visti: Vec<&str> = Vec::new();
+    let mut indice = 1;
+    while indice < args.len() {
+        let argument = args[indice].as_str();
+        if argument == "--help" || argument == "-h" {
+            // Ammesso, ma NON e' un lasciapassare per il resto della riga:
+            // `run --help junk` deve fallire come qualunque altra
+            // invocazione con un token estraneo.
+            //
+            // `--help` e `-h` sono lo STESSO flag: si registra la forma
+            // canonica, altrimenti `run --help -h` non risultava una
+            // ripetizione e passava.
+            if visti.contains(&"--help") {
+                return Err(contract(format!(
+                    "flag `{argument}` ripetuto: `{comando}` ne accetta una sola occorrenza"
+                )));
+            }
+            visti.push("--help");
+            indice += 1;
+            continue;
+        }
+        if !argument.starts_with('-') {
+            return Err(contract(format!(
+                "argomento posizionale `{argument}` non atteso da `{comando}`: \
+                 ogni valore va introdotto dal proprio flag"
+            )));
+        }
+        if !argument.starts_with("--") {
+            // Forma breve: nessun sottocomando ne dichiara, e accettarla in
+            // silenzio significherebbe ignorarla.
+            return Err(contract(format!(
+                "flag `{argument}` non riconosciuto da `{comando}`: le opzioni \
+                 sono nella forma lunga `--nome`"
+            )));
+        }
+        if !superficie.flag.contains(&argument) {
+            return Err(contract(format!(
+                "flag `{argument}` non riconosciuto da `{comando}` (ammessi: {})",
+                if superficie.flag.is_empty() {
+                    "nessuno".to_owned()
+                } else {
+                    superficie.flag.join(", ")
+                }
+            )));
+        }
+        if visti.contains(&argument) && !superficie.ripetibili.contains(&argument) {
+            return Err(contract(format!(
+                "flag `{argument}` ripetuto: `{comando}` ne accetta una sola occorrenza"
+            )));
+        }
+        visti.push(argument);
+        indice += 1;
+        if argument == "--no-geo-fusion" {
+            // Flag senza valore.
+            continue;
+        }
+        if argument == "--inputs" {
+            // Lista: consuma i valori fino al prossimo flag, ma almeno uno.
+            let inizio = indice;
+            while indice < args.len() && !(args[indice].starts_with('-') && args[indice].len() > 1)
+            {
+                indice += 1;
+            }
+            if indice == inizio {
+                return Err(contract(format!("valore mancante per {argument}")));
+            }
+            continue;
+        }
+        // Flag a valore singolo: il valore deve esserci e NON deve essere un
+        // altro flag. `--plan --output out.arrow` prendeva `--output` come
+        // nome del piano e falliva molto piu' tardi, con un errore che non
+        // parlava del vero problema.
+        let Some(valore) = args.get(indice) else {
+            return Err(contract(format!("valore mancante per {argument}")));
+        };
+        // Anche la forma breve e' un flag: `--plan -x` consumava `-x` come
+        // nome del piano e falliva molto piu' tardi, con un errore che non
+        // parlava del vero problema.
+        if valore.starts_with('-') && valore.len() > 1 {
+            return Err(contract(format!(
+                "valore mancante per {argument}: `{valore}` e' un flag, non un valore"
+            )));
+        }
+        indice += 1;
+    }
+    Ok(())
 }
 
 // Dispatch unico dei sottocomandi: la lunghezza e' data dalla sequenza
@@ -1765,6 +2695,13 @@ fn print_help() {
 // strutturali).
 #[allow(clippy::too_many_lines)]
 fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
+    // La validazione precede QUALUNQUE uscita anticipata, help compreso:
+    // `run --help junk` stampava l'aiuto e usciva con successo, ignorando
+    // `junk`. Un parser che risponde «va bene» a un'invocazione che non ha
+    // capito e' fail-open anche quando non pubblica nulla.
+    if let Some(comando) = args.first() {
+        reject_unknown_flags(comando, args)?;
+    }
     if args
         .get(1)
         .is_some_and(|argument| matches!(argument.as_str(), "--help" | "-h"))
@@ -1783,23 +2720,21 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some("--version" | "-V") => {
-            println!("plenora-data-tools {}", env!("CARGO_PKG_VERSION"));
+            // `--version --json` (o `--format json` esplicito) per gli
+            // orchestratori: una versione che si legge solo a occhio non e'
+            // verificabile da uno script.
+            if has_flag(args, "--json") || OutputFormat::active() == OutputFormat::Json {
+                println!("{}", serde_json::to_string_pretty(&version_json())?);
+            } else {
+                println!("plenora-data-tools {}", env!("CARGO_PKG_VERSION"));
+            }
             Ok(())
         }
         Some("catalog") => catalog_command(args),
+        Some("describe" | "inspect-dataset") => describe_command(args),
         Some("validate") => validate_command(args),
         Some("run") => run_command(args),
-        Some("capabilities") => {
-            // ICD §10 R10.2: capability dichiarative interrogabili prima
-            // dell'esecuzione, in forma leggibile da un programma — il
-            // documento completo (modello geometrico + catalogo, fonte
-            // unica in plenora-core::capabilities).
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&plenora_core::capabilities::component_capabilities())?
-            );
-            Ok(())
-        }
+        Some("capabilities") => capabilities_command(),
         Some("transform") => {
             let input = argument_value(args, "--input")?;
             let schema = argument_value(args, "--schema")?;
@@ -1880,15 +2815,89 @@ fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some("self-test") => self_test_command(args),
-        _ => {
-            print_help();
-            Err(contract("comando non valido").into())
-        }
+        _ => Err(contract(
+            "comando non valido: `plenora-data-tools --help` elenca i comandi disponibili",
+        )
+        .into()),
     }
 }
 
 fn main() {
+    // Ultima barriera del processo: un panico che sfugge — nostro o di una
+    // dipendenza — deve diventare un ENVELOPE su stdout, non testo su stderr.
+    //
+    // Il gate R6 vieta le primitive di panico nelle nostre librerie, ma non
+    // puo' vietarle ad arrow; e l'hook di default stampa su stderr prima
+    // dell'unwinding, rompendo il contratto «stderr vuoto» proprio nel
+    // momento peggiore. L'hook viene quindi silenziato e l'informazione
+    // recuperata qui, dove ha un canale e un exit code.
+    //
+    // La politica vive in `plenora_core::panic_policy` perche' non riguarda
+    // solo la CLI: un embedder — il futuro binding PyO3 compreso — ha lo
+    // stesso problema su uno stderr che non e' nemmeno suo, e installa
+    // `Sanitized`.
+    //
+    // L'ESITO va guardato, non ignorato. `install` risponde `false` se un
+    // hook era gia' stato installato passando da quella API. Qui siamo il
+    // processo e siamo la prima istruzione di `main`, quindi `false`
+    // significa che qualcosa e' arrivato prima del nostro ingresso — e
+    // allora il contratto «stderr vuoto» non e' piu' garantito, perche'
+    // l'hook attivo non e' il nostro. Non e' un errore da cui uscire: e' un
+    // fatto da DICHIARARE se poi un panico succede davvero. Silenziarlo
+    // significherebbe promettere un canale pulito senza piu' governarlo.
+    //
+    // Nota di ambito: nemmeno un `true` rende l'hook inamovibile — un
+    // `std::panic::set_hook` successivo, da qualunque componente, lo
+    // sostituisce. Vedi la sezione «Che cosa questo modulo NON garantisce»
+    // di `panic_policy`.
+    let politica_nostra =
+        plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
+    let esito = std::panic::catch_unwind(esegui_processo);
+    let codice = match esito {
+        Ok(codice) => codice,
+        Err(panico) => {
+            let avvertenza = if politica_nostra {
+                ""
+            } else {
+                "; hook di panico non installato da questo processo: \
+                 il contenuto su stderr non e' sotto il nostro controllo"
+            };
+            let envelope = error_envelope(
+                &PlenoraError::Internal(format!(
+                    "panico non gestito: {}{avvertenza}",
+                    descrivi_panico_locale(&panico)
+                )),
+                false,
+            );
+            let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
+            EXIT_INTERNO
+        }
+    };
+    std::process::exit(codice);
+}
+
+/// Descrizione PUBBLICA del payload di un panico: la forma, mai il contenuto.
+///
+/// Il testo di un panico non e' scritto da noi. Un `assert_eq!` dentro una
+/// dipendenza puo' includere i valori confrontati, cioe' dati della riga:
+/// pubblicarlo nell'envelope significherebbe esfiltrare contenuto dell'input
+/// nei log di chi ci invoca. Stessa scelta del confine IPC e dell'executor.
+fn descrivi_panico_locale(panico: &Box<dyn std::any::Any + Send>) -> &'static str {
+    plenora_core::panic_policy::forma_payload(panico.as_ref())
+}
+
+/// Il processo vero e proprio: restituisce l'exit code invece di uscire, cosi'
+/// la barriera anti-panico di `main` puo' avvolgerlo.
+fn esegui_processo() -> i32 {
     let args: Vec<String> = env::args().skip(1).collect();
+    let args = match strip_output_format(args) {
+        Ok(args) => args,
+        Err(error) => {
+            let envelope = error_envelope(&error, false);
+            let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
+            return error_exit_code(&envelope);
+        }
+    };
     if let Err(error) = run_with_args(&args) {
         // Cancellazione cooperativa (ADR 3, M1c): exit code dedicato; il
         // publish atomico garantisce che nessun output parziale sia stato
@@ -1899,40 +2908,82 @@ fn main() {
             .is_some_and(PlenoraError::is_cancelled);
         let envelope = error_envelope(error.as_ref(), cancelled);
         let exit_code = error_exit_code(&envelope);
-        if emit_error_envelope(std::io::stderr().lock(), &envelope).is_err() {
-            std::process::exit(2);
+        if emit_error_envelope(std::io::stdout().lock(), &envelope).is_err() {
+            return EXIT_INTERNO;
         }
-        std::process::exit(exit_code);
+        return exit_code;
     }
+    0
 }
 
-/// Envelope di errore §9 sul canale storico: STDERR. Su stdout passano solo
-/// risultati/metriche dei comandi — mai l'envelope di errore (P1-5 review
-/// 2026-08-03: il contratto pubblico storico e' ripristinato).
+/// Envelope di errore §9 su **stdout**, con `stderr` lasciato vuoto.
+///
+/// **Inversione dichiarata rispetto alla review P1-5 del 2026-08-03**, che
+/// aveva riportato l'envelope su stderr come «contratto pubblico storico».
+/// Quella decisione precede l'esistenza di `plenora-database-tools`, che
+/// emette gli errori su stdout e lascia stderr vuoto: due componenti della
+/// stessa famiglia, orchestrati dallo stesso codice, non possono avere due
+/// convenzioni opposte su dove cercare un errore. La rottura per chi oggi
+/// parsa stderr e' registrata in `docs/api-breaking-2026-08-16.md`.
 fn emit_error_envelope(
-    mut stderr: impl Write,
+    mut stdout: impl Write,
     envelope: &serde_json::Value,
 ) -> std::io::Result<()> {
-    writeln!(stderr, "{envelope}")
+    writeln!(stdout, "{envelope}")
 }
 
+/// Difetto interno (convenzione `sysexits`: `EX_SOFTWARE`).
+const EXIT_INTERNO: i32 = 70;
+
+/// Exit code stabile derivato dalla CATEGORIA dell'envelope.
+///
+/// La categoria resta la fonte di verita': il codice e' una sua proiezione
+/// grossolana, per gli script che non vogliono parsare JSON. Il mapping e'
+/// totale su `plenora_core::ErrorCategory` — una categoria nuova che finisse
+/// qui senza un codice sarebbe un errore silenzioso, quindi il caso di
+/// default e' `70` e un test copre l'intero enum.
+///
+/// **Non e' allineato a `plenora-database-tools`**, che restituisce `1` per
+/// qualunque errore: e' una divergenza dichiarata (emendamento a ADR-0003).
+/// L'unica garanzia condivisa dalla famiglia e' «0 successo, non-zero
+/// errore»; chi scrive codice portabile fra i due componenti legge
+/// `error.category`, non questo numero.
+///
+/// | codice | significato |
+/// |---|---|
+/// | 0 | successo |
+/// | 2 | piano o configurazione invalidi |
+/// | 3 | contratto, schema o capability incompatibili |
+/// | 4 | limite di risorsa superato |
+/// | 5 | I/O, pubblicazione, rete o autorizzazioni |
+/// | 6 | fallimento di esecuzione di un nodo |
+/// | 70 | difetto interno |
+/// | 130 | cancellato (128 + SIGINT) |
 fn error_exit_code(envelope: &serde_json::Value) -> i32 {
-    if envelope["error"]["category"].as_str() == Some("cancelled") {
-        EXIT_CANCELLED
-    } else {
-        2
+    match envelope["error"]["category"].as_str() {
+        Some("cancelled") => EXIT_CANCELLED,
+        Some("invalid_plan" | "invalid_configuration") => 2,
+        Some("schema" | "data_mapping" | "crs" | "unsupported") => 3,
+        Some("resource_limit") => 4,
+        Some(
+            "io" | "not_found" | "conflict" | "protocol" | "authentication" | "authorization"
+            | "timeout" | "transient",
+        ) => 5,
+        Some("execution") => 6,
+        _ => EXIT_INTERNO,
     }
 }
 
 /// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1): l'uscita
 /// CLI riporta categoria, fase, effetto remoto e disposizione di retry
-/// espliciti — mai dedotti dal messaggio (R9.2). Una riga JSON su stderr;
+/// espliciti — mai dedotti dal messaggio (R9.2). Una riga JSON su stdout;
 /// `message` porta il testo dell'errore invariato. `retry` e' nella forma
 /// taggata condivisa (conformance/components.json): `{"kind": ...}` piu'
 /// `delay_ms` solo per `after(durata)`. `context` (presente
 /// solo per errori nati in un'esecuzione DAG) riporta nodo, operazione ed
 /// `execution_id` — la risposta a «quale step ha rotto» senza parsare il
-/// messaggio. Gli exit code restano 2 (errore) e 130 (cancellazione).
+/// messaggio. L'exit code e' la proiezione della categoria
+/// ([`error_exit_code`]): 2, 3, 4, 5, 6, 70, piu' 130 per la cancellazione.
 ///
 /// Mapping dichiarato: `PlenoraError` -> i quattro assi del tipo; errori
 /// di parametro pubblico del trasporto Arrow -> `invalid_plan`/`validate`/
@@ -2043,12 +3094,96 @@ mod tests {
     };
 
     #[test]
-    fn error_envelope_is_capturable_on_declared_stderr_channel() {
+    fn error_envelope_is_capturable_on_declared_stdout_channel() {
         let envelope = error_envelope(&PlenoraError::InvalidPlan("piano invalido".into()), false);
-        let mut stderr = Vec::new();
-        emit_error_envelope(&mut stderr, &envelope).expect("stderr catturabile");
-        let decoded: serde_json::Value = serde_json::from_slice(&stderr).expect("envelope JSON");
+        let mut stdout = Vec::new();
+        emit_error_envelope(&mut stdout, &envelope).expect("stdout catturabile");
+        let decoded: serde_json::Value = serde_json::from_slice(&stdout).expect("envelope JSON");
         assert_eq!(decoded, envelope);
+    }
+
+    /// Ogni categoria di `plenora_core::ErrorCategory` ha un exit code, e i
+    /// codici sono quelli dichiarati: la tabella e' un contratto, non una
+    /// tendenza. Il caso di default e' `70`, quindi una categoria nuova non
+    /// resta senza codice in silenzio.
+    #[test]
+    fn un_errore_interno_di_passo_esce_come_interno_non_come_esecuzione() {
+        // Settimo giro, finding 3. I due propagatori aggiungono il contesto
+        // del passo avvolgendo l'errore in `Replayed`, che porta con se' la
+        // categoria. Questo test chiude l'ULTIMO anello della catena: che una
+        // categoria `Internal` arrivata fin qui dentro un `Replayed` diventi
+        // `internal`/exit 70 e non `execution`/exit 6.
+        //
+        // Gli anelli precedenti sono verificati altrove: la scelta di quali
+        // categorie preservare sta in `plenora_engine::error_propagation`, con
+        // il proprio test, e i due propagatori usano quel predicato invece di
+        // due elenchi scritti a mano. Non esiste un test end-to-end da un
+        // piano perche' nessun `Internal` dei kernel e' raggiungibile da un
+        // piano valido — sono rami difensivi e invarianti di file temporanei
+        // — quindi la catena e' verificata a segmenti, e questo e' l'ultimo.
+        let replayed = PlenoraError::Replayed(Box::new(plenora_core::error::ReplayedError {
+            category: plenora_core::ErrorCategory::Internal,
+            phase: ErrorPhase::Write,
+            remote_effect: plenora_core::RemoteEffect::None,
+            retry: plenora_core::RetryDisposition::Never,
+            message: "invariante nostra violata al passo".into(),
+            node: Some("n".into()),
+            operation: Some("table.sort".into()),
+            execution_id: None,
+            execution_reason: None,
+        }));
+        let envelope = error_envelope(&replayed, false);
+        assert_eq!(
+            envelope["error"]["category"], "internal",
+            "la categoria non si perde nell'involucro: {envelope}"
+        );
+        assert_eq!(
+            error_exit_code(&envelope),
+            EXIT_INTERNO,
+            "e proietta su 70, non su 6: {envelope}"
+        );
+        // Il contesto del passo resta: preservare la categoria non deve
+        // costare l'attribuzione.
+        let testo = envelope.to_string();
+        assert!(
+            testo.contains("table.sort"),
+            "nodo e operazione restano nella diagnostica: {envelope}"
+        );
+    }
+
+    #[test]
+    fn ogni_categoria_ha_l_exit_code_dichiarato() {
+        let atteso: [(&str, i32); 18] = [
+            ("invalid_plan", 2),
+            ("invalid_configuration", 2),
+            ("schema", 3),
+            ("data_mapping", 3),
+            ("crs", 3),
+            ("unsupported", 3),
+            ("resource_limit", 4),
+            ("io", 5),
+            ("not_found", 5),
+            ("conflict", 5),
+            ("protocol", 5),
+            ("authentication", 5),
+            ("authorization", 5),
+            ("timeout", 5),
+            ("transient", 5),
+            ("execution", 6),
+            ("internal", 70),
+            ("cancelled", 130),
+        ];
+        for (categoria, codice) in atteso {
+            let envelope = serde_json::json!({"error": {"category": categoria}});
+            assert_eq!(
+                error_exit_code(&envelope),
+                codice,
+                "categoria `{categoria}`"
+            );
+        }
+        // Una categoria sconosciuta non passa per «successo».
+        let ignota = serde_json::json!({"error": {"category": "categoria-nuova"}});
+        assert_eq!(error_exit_code(&ignota), EXIT_INTERNO);
     }
 
     use super::*;
@@ -2347,7 +3482,10 @@ mod tests {
         };
         let cancelled_fail_closed = error_envelope(&cancelled_direct, true);
         assert_eq!(cancelled_fail_closed["error"]["category"], "internal");
-        assert_eq!(error_exit_code(&cancelled_fail_closed), 2);
+        // Il declassamento fail-closed cambia la categoria in `internal`, e
+        // con essa il codice: 70, non 130. Il codice segue la categoria
+        // pubblicata, mai l'intenzione originale.
+        assert_eq!(error_exit_code(&cancelled_fail_closed), 70);
 
         let rejected = PlenoraError::DataMapping("righe non conformi".to_owned())
             .with_row_diagnostics(invalid);
@@ -3257,7 +4395,7 @@ mod tests {
     fn ipc_probes_tag_read_errors_at_the_input_boundary() {
         // File assente: Io dello sniffing -> fase Read; testo invariato.
         let missing = Path::new("input-che-non-esiste.arrow");
-        let error = is_ipc_file_format(missing).expect_err("file assente");
+        let error = ipc_boundary::sniff_format(missing).expect_err("file assente");
         assert_eq!(error.phase(), ErrorPhase::Read);
         assert_eq!(error.phase_tag(), Some(ErrorPhase::Read));
         assert!(error.to_string().starts_with("io error: "), "{error}");
@@ -3271,7 +4409,15 @@ mod tests {
         std::fs::write(&garbage, b"non-e-un-flusso-ipc").expect("fixture");
         let error = ipc_header_schema(&garbage).expect_err("header malformato");
         assert_eq!(error.phase(), ErrorPhase::Read);
-        assert!(matches!(error.untag(), PlenoraError::DataMapping(_)));
+        // Diciannove byte di spazzatura: il file e' ROTTO, non troppo
+        // grande. La lunghezza dichiarata dai primi quattro byte non e'
+        // contenuta nel file, quindi il confine la tratta come troncamento
+        // (`data_mapping`) e non come tetto superato (`resource_limit`).
+        let senza_tag = error.untag();
+        assert!(
+            matches!(senza_tag, PlenoraError::DataMapping(_)),
+            "{senza_tag:?}"
+        );
     }
 
     #[test]
@@ -3632,11 +4778,17 @@ mod tests {
         // Piu' corto del magic: lettura parziale, nessun errore, non-file.
         let short = directory.path().join("short.bin");
         std::fs::write(&short, b"ARR").expect("fixture");
-        assert!(!is_ipc_file_format(&short).expect("sniffing"));
+        assert_eq!(
+            ipc_boundary::sniff_format(&short).expect("sniffing"),
+            IpcFormat::Stream
+        );
         // Sei byte ma magic diverso: non e' IPC file format.
         let other = directory.path().join("other.bin");
         std::fs::write(&other, b"ARROW2").expect("fixture");
-        assert!(!is_ipc_file_format(&other).expect("sniffing"));
+        assert_eq!(
+            ipc_boundary::sniff_format(&other).expect("sniffing"),
+            IpcFormat::Stream
+        );
     }
 
     #[test]
@@ -3657,7 +4809,10 @@ mod tests {
             .expect("writer");
         writer.write(&batch).expect("write");
         writer.finish().expect("finish");
-        assert!(is_ipc_file_format(&file_path).expect("sniff"));
+        assert_eq!(
+            ipc_boundary::sniff_format(&file_path).expect("sniff"),
+            IpcFormat::File
+        );
         // IPC stream format.
         let stream_path = directory.path().join("in.stream");
         let mut writer = plenora_core::arrow::ipc::writer::StreamWriter::try_new(
@@ -3667,47 +4822,134 @@ mod tests {
         .expect("writer");
         writer.write(&batch).expect("write");
         writer.finish().expect("finish");
-        assert!(!is_ipc_file_format(&stream_path).expect("sniff"));
+        assert_eq!(
+            ipc_boundary::sniff_format(&stream_path).expect("sniff"),
+            IpcFormat::Stream
+        );
         // Entrambi si aprono come input lazy con lo schema dichiarato.
         for path in [&file_path, &stream_path] {
-            let input = open_input(path).expect("open_input");
+            let input = open_input(path, &IpcLimits::default()).expect("open_input");
             match input {
                 Input::Stream {
                     schema: declared, ..
                 } => assert_eq!(declared, schema),
-                Input::Batches(_) => panic!("gli input da percorso sono lazy"),
+                Input::Batches { .. } => panic!("gli input da percorso sono lazy"),
             }
         }
     }
 
     #[test]
     fn v4_input_paths_combines_single_and_multiple_flags() {
-        let single: Vec<String> = ["run", "--input", "a.arrow"]
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let argv =
+            |args: &[&str]| -> Vec<String> { args.iter().map(ToString::to_string).collect() };
+        let posizionali = |args: &[&str]| match v4_inputs(&argv(args)).expect("inputs") {
+            V4Inputs::Positional(paths) => paths,
+            V4Inputs::Named(_) => panic!("attesa forma posizionale"),
+        };
         assert_eq!(
-            v4_input_paths(&single).expect("paths"),
+            posizionali(&["run", "--input", "a.arrow"]),
             vec![PathBuf::from("a.arrow")]
         );
-        let multiple: Vec<String> = [
-            "run", "--inputs", "b.arrow", "c.arrow", "--output", "o.arrow",
-        ]
-        .iter()
-        .map(ToString::to_string)
-        .collect();
         assert_eq!(
-            v4_input_paths(&multiple).expect("paths"),
+            posizionali(&["run", "--inputs", "b.arrow", "c.arrow", "--output", "o.arrow"]),
             vec![PathBuf::from("b.arrow"), PathBuf::from("c.arrow")],
             "i valori si fermano al prossimo flag"
         );
-        let both: Vec<String> = ["run", "--input", "a.arrow", "--inputs", "b.arrow"]
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(v4_input_paths(&both).expect("paths").len(), 2);
-        let dangling: Vec<String> = vec!["--input".to_string()];
-        assert!(v4_input_paths(&dangling).is_err());
+        assert_eq!(
+            posizionali(&["run", "--input", "a.arrow", "--inputs", "b.arrow"]).len(),
+            2
+        );
+        assert!(v4_inputs(&argv(&["--input"])).is_err());
+    }
+
+    #[test]
+    fn la_forma_nominale_lega_ogni_input_al_suo_nome() {
+        let argv =
+            |args: &[&str]| -> Vec<String> { args.iter().map(ToString::to_string).collect() };
+        let inputs = v4_inputs(&argv(&[
+            "run",
+            "--input",
+            "destra=b.arrow",
+            "--input",
+            "sinistra=a.arrow",
+            "--output",
+            "o.arrow",
+        ]))
+        .expect("inputs");
+        assert_eq!(
+            inputs,
+            V4Inputs::Named(vec![
+                ("destra".to_owned(), PathBuf::from("b.arrow")),
+                ("sinistra".to_owned(), PathBuf::from("a.arrow")),
+            ])
+        );
+
+        // L'ordine restituito e' quello del PIANO, non della riga di comando:
+        // e' il punto del difetto — con la forma posizionale questi due file
+        // sarebbero finiti sugli input sbagliati.
+        let probe = PlanInputsProbe {
+            inputs: vec!["sinistra".to_owned(), "destra".to_owned()],
+            crs_decisions: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(
+            pair_v4_inputs(&probe, &inputs).expect("accoppiamento"),
+            vec![
+                ("sinistra".to_owned(), PathBuf::from("a.arrow")),
+                ("destra".to_owned(), PathBuf::from("b.arrow")),
+            ]
+        );
+
+        // Un nome che il piano non dichiara e' un errore, e il messaggio dice
+        // quali sono i nomi buoni.
+        let sconosciuto = v4_inputs(&argv(&["run", "--input", "centro=c.arrow"])).expect("inputs");
+        let error = pair_v4_inputs(&probe, &sconosciuto).expect_err("nome non dichiarato");
+        assert!(
+            error.to_string().contains("non dichiarato dal piano"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("sinistra, destra"), "{error}");
+
+        // Un input dichiarato ma non fornito e' un errore, con il rimedio.
+        let parziale = v4_inputs(&argv(&["run", "--input", "sinistra=a.arrow"])).expect("inputs");
+        let error = pair_v4_inputs(&probe, &parziale).expect_err("input mancante");
+        assert!(
+            error.to_string().contains("--input destra=PERCORSO"),
+            "{error}"
+        );
+
+        // Nome ripetuto, percorso vuoto, forme mescolate: tutti errori.
+        assert!(v4_inputs(&argv(&[
+            "run",
+            "--input",
+            "sinistra=a.arrow",
+            "--input",
+            "sinistra=b.arrow"
+        ]))
+        .is_err());
+        assert!(v4_inputs(&argv(&["run", "--input", "sinistra="])).is_err());
+        assert!(v4_inputs(&argv(&[
+            "run",
+            "--input",
+            "sinistra=a.arrow",
+            "--inputs",
+            "b.arrow"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn un_percorso_non_e_scambiato_per_una_coppia_nominale() {
+        // Un percorso assoluto o relativo non contiene `=` prima di un
+        // separatore: resta un percorso. La regola e' quella documentata su
+        // `is_named_input`, e vale su entrambi gli stili di separatore.
+        assert!(!is_named_input("/dati/x.arrow"));
+        assert!(!is_named_input(r"C:\dati\x.arrow"));
+        assert!(!is_named_input("x.arrow"));
+        assert!(!is_named_input("=x.arrow"));
+        assert!(!is_named_input("/dati/a=b.arrow"));
+        assert!(is_named_input("main=x.arrow"));
+        assert!(is_named_input("main=/dati/x.arrow"));
+        assert!(is_named_input(r"main=C:\dati\x.arrow"));
     }
 
     // -------------------------------------------------------------------
