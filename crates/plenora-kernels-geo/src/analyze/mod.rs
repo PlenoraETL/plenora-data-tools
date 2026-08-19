@@ -468,6 +468,64 @@ mod tests {
         })
     }
 
+    /// Replay deterministico dell'invariante di `fuzz_targets/analyze_geo.rs`
+    /// («mai panic») sui soli parametri WKB esadecimali.
+    ///
+    /// NON e' una campagna libFuzzer: non esplora, ripete un elenco scritto a
+    /// mano. Copre pero' esattamente il percorso su cui la campagna notturna
+    /// e' andata in panic — `analyze_geo_contract` -> `validate_wkb_hex` —
+    /// per ogni operazione che accetta un WKB da configurazione, e serve
+    /// dove la campagna vera non e' eseguibile (immagine nightly e
+    /// `cargo-fuzz` assenti: DER-001).
+    #[test]
+    fn nessun_wkb_di_config_ostile_manda_in_panic_l_analisi() {
+        let ostili = [
+            // Il caso del crash: lunghezza pari in byte, taglio dentro `\u{e9}`.
+            "a\u{e9}b",
+            "\u{e9}\u{e9}",
+            "0\u{e9}0",
+            "\u{1F642}",
+            "\u{1F642}\u{1F642}",
+            "ab\u{e9}",
+            // Lunghezza dispari, cifre non esadecimali, vuoto.
+            "",
+            "0",
+            "abc",
+            "zz",
+            "0g",
+            "\u{0}\u{0}",
+            // Esadecimale ben formato ma non un WKB valido.
+            "00",
+            "ffffffff",
+        ];
+        // Ogni operazione che legge un WKB dalla configurazione.
+        let parametri: [(&str, &str); 3] = [
+            ("geo.within", "other_wkb"),
+            ("geo.line_locate_point", "point_wkb"),
+            ("geo.snap", "reference_wkb"),
+        ];
+
+        for (op, parametro) in parametri {
+            for ostile in ostili {
+                let mut config = serde_json::Map::new();
+                config.insert(parametro.to_owned(), Value::String(ostile.to_owned()));
+                // `snap` ha un secondo parametro obbligatorio.
+                config.insert("tolerance".to_owned(), json!(0.5));
+                let esito = analyze_geo_contract(
+                    op,
+                    &[geo_contract(projected_crs())],
+                    &Value::Object(config),
+                    None,
+                    &mut FieldAllocator::new(100),
+                );
+                // L'esito puo' essere Ok o Err a seconda dell'operazione e
+                // del parametro: l'invariante e' che NON si arrivi mai a un
+                // panic, cioe' che questa riga venga raggiunta.
+                let _ = esito;
+            }
+        }
+    }
+
     fn other_wkb_config() -> Value {
         json!({ "other_wkb": point_wkb_hex() })
     }

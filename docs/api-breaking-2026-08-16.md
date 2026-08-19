@@ -402,6 +402,10 @@ l'analizzatore del contratto.
 - `plenora_kernels_table::setops::key_encodable` — predicato dei tipi che
   l'encoder di chiave di riga sa codificare, esposto accanto all'encoder che
   descrive invece di essere ricopiato nell'analizzatore.
+- `plenora_kernels_geo::wkb_hex_to_bytes` — decodifica di un WKB esadecimale
+  sui BYTE, sorgente unica per i kernel geo e per `prepare` dell'engine (che
+  ne avevano due copie, entrambe capaci di andare in panic su un input non
+  ASCII).
 - `plenora_core::contract` — costanti delle chiavi canoniche
   (`PLENORA_GEOMETRY_*_KEY`), ora la fonte unica anche per `plenora-kernels-geo`.
 - `plenora_core::diagnostics` — `RowDiagnosticsMergeError`,

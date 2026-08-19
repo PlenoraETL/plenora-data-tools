@@ -237,16 +237,34 @@ jobs:
           --fail-under-functions 85
           --fail-under-regions 89
 
-  # Gate del manifesto di rilascio (PLENORA-CRITERI-RC, criteri C1-C5):
-  # verifica forma e revisioni di release/*.json con il checker ufficiale,
-  # clonato da plenora-contracts pinnato alla revisione ICD citata dal
-  # manifesto stesso (aggiornare il pin quando il manifesto riallinea).
+  # Verifica dei manifesti di rilascio STORICI (rc-1.0.3), con il checker che
+  # vive in QUESTO repository (`scripts/check_release_manifest.py`).
+  #
+  # Fino al 2026-08-18 il checker era clonato da `plenora-contracts` al tag
+  # `v2.0-rc10`. Quel repository e' stato sostituito quel giorno — storia,
+  # branch e tag non sono stati riportati — e il suo contenuto attuale e' una
+  # NUOVA linea normativa. Non lo si clona e non lo si consulta: i manifesti
+  # storici sono documenti immutabili e non vanno reinterpretati con regole
+  # nate dopo di loro. I manifesti futuri richiederanno un profilo separato del
+  # checker, costruito sulla nuova struttura.
+  #
+  # Tre gate distinti (manifesti, audit, compilazione fuzz) in JOB separati.
+  # Erano step dello stesso job, e il 2026-08-18 un errore di compilazione del
+  # crate fuzz ha reso `skipped` i sei step successivi. Spostare l'ordine non
+  # basta: con controlli in serie il primo fallimento nasconde sempre tutto
+  # cio' che segue.
   release-manifest:
-    name: gate manifesto di rilascio
+    name: gate manifesto storico ${{ matrix.manifest }}
     runs-on: ubuntu-latest
+    strategy:
+      # I cinque manifesti sono indipendenti: quello rotto non deve impedire
+      # di sapere lo stato degli altri quattro.
+      fail-fast: false
+      matrix:
+        manifest: ["rc", "1.0.0", "1.0.1", "1.0.2", "1.0.3"]
     steps:
-      # fetch-depth 0: il checker verifica che le revisioni citate esistano
-      # nella storia (git cat-file).
+      # fetch-depth 0: il checker verifica che le revisioni e i tag citati
+      # esistano nella storia (git cat-file, rev-parse, merge-base).
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
@@ -256,67 +274,112 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-      - name: Installa toolchain (baseline ICD R13.1)
-        uses: dtolnay/rust-toolchain@1.92.0
+      - name: Verifica manifesto storico ${{ matrix.manifest }}
+        run: python scripts/check_release_manifest.py release/${{ matrix.manifest }}.json --repo .
 
-      # Il checker del candidato resta nel repo e i suoi test girano sempre:
-      # serve al prossimo candidato in volo, non a una versione specifica.
+  # I test dei due checker stanno in un job PROPRIO: un manifesto rotto non
+  # deve nascondere un checker rotto, ne' viceversa.
+  #
+  # Nessun candidato in volo. `check_release_candidate.py` va invocato solo
+  # finche' il tag non esiste: verifica proprio che il tag intended NON sia
+  # ancora stato creato. Ritirato il 2026-08-06, quando si e' visto che lo step
+  # era sopravvissuto al tag v1.0.3 (ac52a15) e faceva fallire ogni push su
+  # main con "candidate tag v1.0.3 must not already exist".
+  #
+  # Quando si apre il prossimo candidato, reintrodurre qui lo step:
+  #   - name: Verifica identita candidato release X.Y.Z
+  #     run: PYTHONDONTWRITEBYTECODE=1 python scripts/check_release_candidate.py release/X.Y.Z.json --repo . --verify-github-run
+  # e aggiungere la nuova versione alla matrix dei manifesti storici appena il
+  # tag e' creato.
+  release-checkers:
+    name: gate test dei checker di rilascio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
       - name: Mutation test checker del candidato
         run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_candidate
 
-      # Nessun candidato in volo. `check_release_candidate.py` va invocato solo
-      # finche' il tag non esiste: verifica proprio che il tag intended NON sia
-      # ancora stato creato. Ritirato il 2026-08-06, quando si e' visto che lo
-      # step era sopravvissuto al tag v1.0.3 (ac52a15) e faceva fallire ogni
-      # push su main con "candidate tag v1.0.3 must not already exist". Stesso
-      # trattamento gia' dato a 1.0.2, 1.0.1, 1.0.0 e rc1: a tag creato il
-      # manifesto passa nella lista storica qui sotto.
-      #
-      # Quando si apre il prossimo candidato, reintrodurre qui lo step:
-      #   - name: Verifica identita candidato release X.Y.Z
-      #     run: PYTHONDONTWRITEBYTECODE=1 python scripts/check_release_candidate.py release/X.Y.Z.json --repo . --verify-github-run
-      # e spostarlo nella lista storica appena il tag e' creato.
+      # `if: always()`: i due checker sono indipendenti.
+      - name: Mutation test checker dei manifesti storici
+        if: always()
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_manifest
 
-      - name: Verifica lockfile fuzz
-        run: cargo check --manifest-path fuzz/Cargo.toml --locked
+  # Audit supply-chain sui lockfile. Fino al 2026-08-06 questo repo non aveva
+  # alcun controllo sulle advisory RUSTSEC: era l'unico gate di sicurezza
+  # presente in plenora-IO-tools e assente qui. Entrambi i lockfile sono
+  # coperti — quello del fuzz ha un grafo suo e non e' verificato dall'audit
+  # del workspace.
+  #
+  # Versione pinnata (R13.2): il verdetto dipende dal tool oltre che dal
+  # database. Misura del 2026-08-06 con 0.22.2: workspace 187 dipendenze e
+  # fuzz 152, zero advisory, nessun --ignore necessario.
+  #
+  # `--deny warnings` fa fallire anche unmaintained e yanked, non solo le
+  # vulnerabilita'. Quando una advisory nuova rende rosso il gate, la deroga si
+  # scrive come `--ignore RUSTSEC-YYYY-NNNN` con la motivazione accanto, come
+  # fa plenora-IO-tools: mai abbassando --deny.
+  supply-chain-audit:
+    name: gate audit supply-chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
 
-      # Audit supply-chain sui lockfile. Fino al 2026-08-06 questo repo non
-      # aveva alcun controllo sulle advisory RUSTSEC: era l'unico gate di
-      # sicurezza presente in plenora-IO-tools e assente qui. Entrambi i
-      # lockfile sono coperti — quello del fuzz ha un grafo suo e non e'
-      # verificato dall'audit del workspace.
-      #
-      # Versione pinnata (R13.2): il verdetto dipende dal tool oltre che dal
-      # database. Misura del 2026-08-06 con 0.22.2: workspace 187 dipendenze
-      # e fuzz 152, zero advisory, nessun --ignore necessario.
-      #
-      # `--deny warnings` fa fallire anche unmaintained e yanked, non solo le
-      # vulnerabilita'. Quando una advisory nuova rende rosso il gate, la
-      # deroga si scrive come `--ignore RUSTSEC-YYYY-NNNN` con la motivazione
-      # accanto, come fa plenora-IO-tools: mai abbassando --deny.
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Installa toolchain (baseline ICD R13.1)
+        uses: dtolnay/rust-toolchain@1.92.0
+
       - name: Installa cargo-audit (pin 0.22.2)
         run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit advisory del workspace
         run: cargo audit --deny warnings
 
+      # `if: always()`: i due lockfile sono indipendenti e una advisory
+      # sull'uno non deve impedire di sapere lo stato dell'altro.
       - name: Audit advisory del progetto fuzz
+        if: always()
         run: cargo audit --deny warnings --file fuzz/Cargo.lock
 
-      - name: Clone plenora-contracts (pin v2.0-rc10)
-        run: git clone --depth 1 --branch v2.0-rc10 https://github.com/PlenoraETL/plenora-contracts.git "$RUNNER_TEMP/plenora-contracts"
+  # Compilazione dell'INTERO progetto fuzz (tutti i `[[bin]]` dei target), su
+  # toolchain stabile e `--locked`: niente campagna libFuzzer, niente nightly,
+  # niente sanitizer.
+  #
+  # E' il solo gate che compila questo crate: `fuzz/` e' fuori dai `members`
+  # del workspace, quindi `cargo check/clippy/test --workspace` non lo tocca, e
+  # i target sono consumatori delle API pubbliche dei cinque crate. Il
+  # 2026-08-18 una variante aggiunta a un enum pubblico ha rotto un `match`
+  # esaustivo in `diff_kernels` senza che nessun gate del workspace se ne
+  # accorgesse.
+  #
+  # Il compilatore C++ serve al build script di `libfuzzer-sys`: sui runner
+  # GitHub c'e' gia'; in container va installato (`g++`).
+  fuzz-build:
+    name: gate compilazione target fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
 
-      - name: Verifica manifesto storico 1.0.3
-        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.3.json --repo .
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-      - name: Verifica manifesto storico 1.0.2
-        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.2.json --repo .
+      - name: Installa toolchain (baseline ICD R13.1)
+        uses: dtolnay/rust-toolchain@1.92.0
 
-      - name: Verifica manifesto storico 1.0.1
-        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.1.json --repo .
-
-      - name: Verifica manifesto storico 1.0.0
-        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/1.0.0.json --repo .
-
-      - name: Verifica manifesto storico rc1
-        run: python "$RUNNER_TEMP/plenora-contracts/scripts/check_release_manifest.py" release/rc.json --repo .
+      - name: Compilazione dei target fuzz (stabile, --locked)
+        run: cargo check --manifest-path fuzz/Cargo.toml --locked

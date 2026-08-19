@@ -508,6 +508,59 @@ fn validate_wkb_geometry_with_dimensions(
     Ok(geometry_type)
 }
 
+/// Byte di un WKB scritto in esadecimale; `None` se la stringa non lo e'.
+///
+/// # Perche' sui byte e non su `&str`
+///
+/// Le due implementazioni precedenti — una qui nei kernel geo, una
+/// nell'engine — affettavano la stringa per indici di byte
+/// (`&hex[index..index + 2]`) dopo aver controllato che la LUNGHEZZA IN BYTE
+/// fosse pari. Le due cose non si implicano: `"a\u{e9}b"` e' lungo quattro
+/// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di
+/// `\u{e9}`, e affettare fuori da un confine di carattere e' un **panic**,
+/// non un errore. L'input arriva dalla configurazione di un piano, quindi da
+/// fuori.
+///
+/// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
+/// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
+/// non lo copriva: non c'e' nessun `unwrap`/`expect`/`panic!` — il panic e'
+/// dentro l'indicizzazione.
+///
+/// Un esadecimale valido e' per definizione ASCII, quindi ogni byte fuori da
+/// quell'insieme e' gia' un input non valido, non un carattere da
+/// interpretare: la decodifica lavora sui byte e non affetta mai la stringa.
+///
+/// Vive QUI, accanto al validatore che la accompagna sempre, e non in due
+/// copie: due copie della stessa decodifica sono due copie dello stesso
+/// difetto.
+///
+/// `None` per stringa vuota, di lunghezza dispari, o con un byte che non e'
+/// una cifra esadecimale ASCII. Il chiamante lo traduce nel proprio errore.
+#[must_use]
+pub fn wkb_hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    const fn cifra(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let cifre = hex.as_bytes();
+    if cifre.is_empty() || !cifre.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(cifre.len() / 2);
+    for coppia in cifre.chunks_exact(2) {
+        let (Some(alto), Some(basso)) = (cifra(coppia[0]), cifra(coppia[1])) else {
+            return None;
+        };
+        bytes.push((alto << 4) | basso);
+    }
+    Some(bytes)
+}
+
 /// Valida un payload WKB contro il contratto strutturale.
 ///
 /// Verifica limiti di byte, annidamento, conteggi e finitezza delle
@@ -812,6 +865,50 @@ mod tests {
     /// la condizione e' identificata dal messaggio, preservato verbatim.
     fn is_contract_error(result: &Result<Geometry<f64>, PlenoraError>, message: &str) -> bool {
         matches!(result, Err(PlenoraError::InvalidPlan(reason)) if reason == message)
+    }
+
+    /// Il crash della campagna fuzz notturna (`analyze_geo`, artefatto
+    /// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`).
+    ///
+    /// La decodifica affettava la stringa per indici di byte dopo aver
+    /// controllato la sola PARITA' della lunghezza in byte: `"a\u{e9}b"` e'
+    /// lungo quattro byte — pari — ma l'indice 2 cade in mezzo alla codifica
+    /// UTF-8 di `\u{e9}`, e affettare fuori da un confine di carattere e' un
+    /// panic. L'input viene dalla configurazione di un piano.
+    #[test]
+    fn il_wkb_esadecimale_non_va_mai_in_panic_su_input_ostile() {
+        // Il caso del crash: lunghezza pari in byte, confine di carattere no.
+        assert_eq!(wkb_hex_to_bytes("a\u{e9}b"), None, "il caso del crash");
+
+        // La stessa forma con altri caratteri multi-byte, di lunghezza pari.
+        for ostile in [
+            "\u{e9}\u{e9}",       // 4 byte, nessun indice pari e' un confine oltre lo 0
+            "0\u{e9}0",           // 4 byte, indice 2 dentro la codifica
+            "\u{1F642}",          // 4 byte, un solo carattere
+            "\u{1F642}\u{1F642}", // 8 byte
+            "ab\u{e9}",           // 4 byte, il taglio cade dentro l'ultimo
+        ] {
+            assert_eq!(wkb_hex_to_bytes(ostile), None, "input ostile: {ostile:?}");
+        }
+
+        // Lunghezza dispari e cifre non esadecimali: errore, non panic.
+        for invalido in ["", "0", "abc", "zz", "0g", "00 ", " 00", "-1", "0\u{0}"] {
+            assert_eq!(wkb_hex_to_bytes(invalido), None, "invalido: {invalido:?}");
+        }
+
+        // Gli esadecimali VALIDI continuano a decodificare, maiuscoli inclusi.
+        assert_eq!(wkb_hex_to_bytes("00"), Some(vec![0x00]));
+        assert_eq!(wkb_hex_to_bytes("ff"), Some(vec![0xff]));
+        assert_eq!(wkb_hex_to_bytes("FF"), Some(vec![0xff]));
+        assert_eq!(wkb_hex_to_bytes("0aFf"), Some(vec![0x0a, 0xff]));
+        assert_eq!(
+            wkb_hex_to_bytes("0101000000000000000000f03f0000000000000040"),
+            Some(vec![
+                0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+            ]),
+            "un POINT(1 2) reale attraversa la decodifica"
+        );
     }
 
     #[test]

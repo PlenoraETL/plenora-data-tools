@@ -1868,14 +1868,9 @@ fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>>
             "nodo `{node_id}`: {name} non e' WKB esadecimale valido"
         ))
     };
-    if !hex.len().is_multiple_of(2) || hex.is_empty() {
-        return Err(invalid());
-    }
-    let bytes: std::result::Result<Vec<u8>, _> = (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16))
-        .collect();
-    let bytes = bytes.map_err(|_| invalid())?;
+    // Stesso panic UTF-8 dei kernel geo, stessa cura: la decodifica e' una
+    // sola (`wkb_hex_to_bytes`), sui byte, e qui si traduce solo l'esito.
+    let bytes = plenora_kernels_geo::wkb_hex_to_bytes(hex).ok_or_else(invalid)?;
     plenora_kernels_geo::geometry_from_wkb(&bytes).map_err(|error| {
         PlenoraError::InvalidPlan(format!(
             "nodo `{node_id}`: {name} non decodificabile: {error}"

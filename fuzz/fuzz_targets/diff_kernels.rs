@@ -31,7 +31,7 @@ use plenora_core::PlenoraError;
 use plenora_kernels_table::cleansing::coalesce_fast;
 use plenora_kernels_table::filtering::{filter, Filter, Operator};
 use plenora_kernels_table::{
-    compare_f64, compare_i64, compare_u64, scalar_as_f64, scalar_as_string, select_rows,
+    compare_bounds, compare_f64, compare_i64, compare_u64, scalar_as_string, select_rows,
     NumericBound,
 };
 use serde_json::Value;
@@ -79,14 +79,40 @@ fn edge_uint(byte: u8) -> u64 {
     }
 }
 
+/// Letterali numerici testuali che separano il confronto esatto da quello
+/// via `f64`: e' su questi che la vecchia semantica e quella attuale danno
+/// risposte diverse.
+const EDGE_NUMERIC_TEXT: [&str; 12] = [
+    // Scala positiva: due scritture dello stesso valore, e due valori che
+    // `f64` non distingue.
+    "10.5",
+    "10.50",
+    "0.1",
+    "0.10000000000000001",
+    // Scala negativa (notazione esponenziale con esponente positivo).
+    "1e3",
+    "-2.5e2",
+    // Oltre 2^53: interi distinti che `f64` collassa sullo stesso double.
+    "9007199254740992",
+    "9007199254740993",
+    "-9007199254740993",
+    "18446744073709551615",
+    // Decimale con piu' cifre di quante ne tenga un i128: non rappresentabile
+    // in forma esatta, deve ricadere su `F64` senza rompere il confronto.
+    "0.123456789012345678901234567890123456789012345",
+    "-0.000000000000000000000000000000000000001",
+];
+
 fn edge_string(index: usize, chunk: &[u8]) -> String {
-    match index % 9 {
+    match index % 11 {
         0 => "true".to_owned(),
         1 => "false".to_owned(),
         2 => "0".to_owned(),
         3 => "-0.0".to_owned(),
         4 => "NaN".to_owned(),
         5 => "🙂é\u{0}".to_owned(),
+        6 => EDGE_NUMERIC_TEXT[index % EDGE_NUMERIC_TEXT.len()].to_owned(),
+        7 => EDGE_NUMERIC_TEXT[(index / 3) % EDGE_NUMERIC_TEXT.len()].to_owned(),
         _ => String::from_utf8_lossy(chunk).into_owned(),
     }
 }
@@ -156,6 +182,11 @@ fn filter_value(op: &Operator, payload: &[u8]) -> Value {
         // Oltre 2^53: interi che collassano sullo stesso double.
         "9007199254740992", "9007199254740993", "-9007199254740993",
         "18446744073709551614",
+        // Decimali esatti: costruiscono `NumericBound::Decimal`, confrontato
+        // in `i128` scalato. Scale positive, scala negativa (esponenziale) e
+        // un decimale oltre la capacita' di `i128`, che ricade su `F64`.
+        "10.5", "10.50", "0.1", "0.10000000000000001", "-2.5e2",
+        "0.123456789012345678901234567890123456789012345",
     ];
     let pick = payload.first().copied().unwrap_or_default() as usize;
     match op {
@@ -208,13 +239,37 @@ fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
         && !matches!(high, None | Some(Ordering::Greater))
 }
 
-/// Replica di `filtering::bound_as_f64`.
-fn bound_as_f64(bound: NumericBound) -> f64 {
-    match bound {
-        NumericBound::I64(value) => value as f64,
-        NumericBound::U64(value) => value as f64,
-        NumericBound::F64(value) => value,
-    }
+/// Confronto sul percorso NON tipizzato, come `scalar_compare` del kernel.
+///
+/// Qui c'era `bound_as_f64`, che degradava a `f64` sia il valore sia
+/// l'estremo. Era la replica di un `filtering::bound_as_f64` che il kernel
+/// non ha piu': i confronti sono passati al dominio esatto (`i64`, `i128`
+/// scalato per i decimali) proprio perche' `f64` sopra 2^53 collassa interi
+/// distinti e sui decimali cambia l'esito. Un oracolo differenziale con una
+/// semantica abbandonata non e' un oracolo: o segnala differenze inesistenti,
+/// o concorda per la ragione sbagliata.
+///
+/// **Fail-closed**: cio' che l'oracolo non sa confrontare esattamente e' un
+/// errore, mai un confronto approssimato. Il kernel su quei tipi fallisce a
+/// sua volta (`scalar_compare` non ha un ramo per Boolean), e il target
+/// confronta gli errori come tali.
+fn compare_scalar_exact(
+    array: &dyn Array,
+    row: usize,
+    bound: NumericBound,
+) -> Result<Option<Ordering>, PlenoraError> {
+    let Some(values) = array.as_any().downcast_ref::<StringArray>() else {
+        return Err(PlenoraError::Schema(format!(
+            "tipo {:?} non confrontabile esattamente",
+            array.data_type()
+        )));
+    };
+    // Stessa normalizzazione del kernel (trim, virgola decimale), ma il
+    // letterale resta intero o decimale quando lo e': nessun arrotondamento.
+    let text = values.value(row).trim().replace(',', ".");
+    let actual = NumericBound::parse(&text)
+        .ok_or_else(|| PlenoraError::Schema("valore non convertibile in numero".into()))?;
+    Ok(compare_bounds(actual, bound))
 }
 
 fn json_text(value: &Value) -> String {
@@ -282,9 +337,7 @@ fn oracle_evaluate(
             } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
                 compare_f64(values.value(row), bound)
             } else {
-                scalar_as_f64(array, row)?
-                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?
-                    .partial_cmp(&bound_as_f64(bound))
+                compare_scalar_exact(array, row, bound)?
             };
             Ok(ordered_typed(ordering, operator))
         }
@@ -321,9 +374,10 @@ fn oracle_evaluate(
                     compare_f64(values.value(row), high),
                 )
             } else {
-                let actual = scalar_as_f64(array, row)?
-                    .ok_or_else(|| PlenoraError::Schema("valore nullo inatteso".into()))?;
-                actual >= bound_as_f64(low) && actual <= bound_as_f64(high)
+                within_bounds(
+                    compare_scalar_exact(array, row, low)?,
+                    compare_scalar_exact(array, row, high)?,
+                )
             };
             Ok(within)
         }

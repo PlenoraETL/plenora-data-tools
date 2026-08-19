@@ -3362,3 +3362,141 @@ fn due_batch_consecutivi_producono_lo_stesso_schema() {
         "formula: vuoto poi pieno"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Hotfix 2026-08-18 — la semantica esatta su cui l'oracolo fuzz si appoggia
+// ---------------------------------------------------------------------------
+
+#[test]
+fn il_confronto_di_un_estremo_decimale_e_esatto() {
+    // L'oracolo di `fuzz/fuzz_targets/diff_kernels.rs` degradava valore ed
+    // estremo a `f64` (`bound_as_f64`), replicando una semantica che il
+    // kernel ha abbandonato. Ora delega a `compare_bounds`, quindi questi
+    // casi sono il contratto su cui si appoggia: se cambiano, l'oracolo
+    // cambia con loro.
+    use plenora_kernels_table::{compare_bounds, NumericBound};
+    use std::cmp::Ordering;
+
+    let bound = |testo: &str| NumericBound::parse(testo).expect("letterale numerico");
+
+    // Scala positiva: due scritture dello stesso valore sono uguali.
+    assert_eq!(
+        compare_bounds(bound("10.5"), bound("10.50")),
+        Some(Ordering::Equal),
+        "10.5 e 10.50 sono lo stesso valore"
+    );
+    // Due decimali che `f64` non distingue: 0.1 e 0.1 + 1e-17.
+    assert_eq!(
+        compare_bounds(bound("0.1"), bound("0.10000000000000001")),
+        Some(Ordering::Less),
+        "in f64 questi due collassano sullo stesso double"
+    );
+    // Scala negativa (esponente positivo).
+    assert_eq!(
+        compare_bounds(bound("1e3"), bound("1000")),
+        Some(Ordering::Equal),
+        "1e3 e 1000 sono lo stesso valore"
+    );
+    assert_eq!(
+        compare_bounds(bound("-2.5e2"), bound("-250")),
+        Some(Ordering::Equal)
+    );
+
+    // Oltre 2^53: interi distinti che `f64` collassa.
+    assert_eq!(
+        compare_bounds(bound("9007199254740993"), bound("9007199254740992")),
+        Some(Ordering::Greater),
+        "9007199254740993 e 9007199254740992 sono lo stesso f64, non lo stesso intero"
+    );
+    assert_eq!(
+        compare_bounds(bound("-9007199254740993"), bound("-9007199254740992")),
+        Some(Ordering::Less)
+    );
+    assert_eq!(
+        compare_bounds(bound("18446744073709551615"), bound("18446744073709551614")),
+        Some(Ordering::Greater),
+        "u64::MAX e il suo predecessore"
+    );
+
+    // Intero contro decimale: confronto nel dominio scalato.
+    assert_eq!(
+        compare_bounds(bound("10"), bound("10.5")),
+        Some(Ordering::Less)
+    );
+    assert_eq!(
+        compare_bounds(bound("10"), bound("10.0")),
+        Some(Ordering::Equal)
+    );
+
+    // Decimale con piu' cifre di quante ne tenga un i128: ricade su F64,
+    // dichiaratamente approssimato, ma non deve rompere il confronto.
+    let non_rappresentabile = bound("0.123456789012345678901234567890123456789012345");
+    assert!(
+        matches!(non_rappresentabile, NumericBound::F64(_)),
+        "oltre la capacita' di i128 si ricade su F64: {non_rappresentabile:?}"
+    );
+    assert_eq!(
+        compare_bounds(non_rappresentabile, bound("1")),
+        Some(Ordering::Less)
+    );
+
+    // NaN: confronto non definito, come IEEE.
+    assert_eq!(compare_bounds(bound("NaN"), bound("0")), None);
+}
+
+#[test]
+fn il_filtro_ordinato_su_colonna_testuale_non_passa_da_f64() {
+    // Il percorso NON tipizzato di `filtering` — quello che l'oracolo fuzz
+    // replicava con `bound_as_f64`. Su una colonna Utf8 il kernel confronta
+    // nel dominio esatto: sopra 2^53 due interi distinti restano distinti.
+    use plenora_core::arrow::array::StringArray;
+
+    let ingresso = batch(
+        vec![Field::new("t", DataType::Utf8, true)],
+        vec![Arc::new(StringArray::from(vec![
+            Some("9007199254740992"),
+            Some("9007199254740993"),
+            Some("10.50"),
+        ])) as ArrayRef],
+    );
+
+    // `> 9007199254740992` esclude il primo e include il secondo: in f64
+    // sarebbero lo stesso valore e il secondo sparirebbe.
+    let uscita = plenora_kernels_table::filtering::filter(
+        &ingresso,
+        &serde_json::from_value(json!({
+            "column": "t",
+            "operator": ">",
+            "value": "9007199254740992"
+        }))
+        .expect("config"),
+    )
+    .expect("filter");
+    assert_eq!(
+        uscita.num_rows(),
+        1,
+        "solo 9007199254740993 e' maggiore: in f64 sarebbe zero righe"
+    );
+
+    // L'asimmetria, verificata sul kernel e non assunta: su una colonna
+    // testuale `==` e' un confronto di TESTO (`scalar_as_string`), mentre gli
+    // operatori ORDINATI passano dal confronto numerico esatto
+    // (`scalar_compare`). "10.50" e "10.5" sono quindi lo stesso NUMERO ma
+    // non lo stesso testo.
+    let conta = |operatore: &str, valore: &str| {
+        plenora_kernels_table::filtering::filter(
+            &ingresso,
+            &serde_json::from_value(json!({"column": "t", "operator": operatore, "value": valore}))
+                .expect("config"),
+        )
+        .expect("filter")
+        .num_rows()
+    };
+    assert_eq!(conta("==", "10.5"), 0, "`==` su testo confronta il TESTO");
+    assert_eq!(conta("==", "10.50"), 1, "il testo identico corrisponde");
+    assert_eq!(
+        conta("between", "10.5,10.5"),
+        1,
+        "`between` passa dal numerico esatto: 10.50 e' compreso"
+    );
+}

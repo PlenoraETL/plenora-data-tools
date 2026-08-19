@@ -103,19 +103,36 @@ pub(in crate::analyze) fn short_id(op: &str) -> &str {
 }
 
 /// Decodifica e valida strutturalmente un WKB esadecimale da config.
+///
+/// # Perche' sui byte e non su `&str`
+///
+/// La versione precedente affettava la stringa per indici di byte
+/// (`&hex[index..index + 2]`) dopo aver controllato che la LUNGHEZZA IN BYTE
+/// fosse pari. Le due cose non si implicano: `"a\u{e9}b"` e' lungo quattro
+/// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di `\u{e9}`,
+/// e affettare fuori da un confine di carattere e' un **panic**, non un
+/// errore. L'input arriva dalla configurazione di un piano, quindi da fuori.
+///
+/// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
+/// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
+/// non lo copriva: non c'e' nessun `unwrap`/`expect`/`panic!`, il panic e'
+/// dentro l'indicizzazione.
+///
+/// Ora ogni byte e' esaminato per se': non ASCII o non esadecimale e' un
+/// errore esplicito, mai un panic.
+///
+/// # Errors
+///
+/// `InvalidParam` se la stringa e' vuota, di lunghezza dispari, o contiene un
+/// byte che non e' una cifra esadecimale ASCII; gli errori di
+/// [`crate::validate_wkb_contract`] sul contenuto decodificato.
 pub(in crate::analyze) fn validate_wkb_hex(
     op: &str,
     name: &'static str,
     hex: &str,
 ) -> Result<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) || hex.is_empty() {
-        return Err(invalid_param(op, name, "WKB esadecimale non valido"));
-    }
-    let bytes: std::result::Result<Vec<u8>, _> = (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16))
-        .collect();
-    let bytes = bytes.map_err(|_| invalid_param(op, name, "WKB esadecimale non valido"))?;
+    let bytes = crate::wkb_hex_to_bytes(hex)
+        .ok_or_else(|| invalid_param(op, name, "WKB esadecimale non valido"))?;
     crate::validate_wkb_contract(&bytes)?;
     Ok(bytes)
 }
@@ -480,4 +497,30 @@ pub(in crate::analyze) fn resolve_crs_backend(definition: &str) -> Result<Resolv
 #[cfg(not(feature = "proj-backend"))]
 pub(in crate::analyze) fn resolve_crs_backend(definition: &str) -> Result<ResolvedCrs> {
     plenora_core::crs::resolve_crs(definition, "crs").map_err(PlenoraError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_wkb_hex;
+
+    /// Il percorso completo dell'analizzatore, non solo la decodifica: e' da
+    /// qui che il fuzzer `analyze_geo` arrivava al panic.
+    #[test]
+    fn il_wkb_di_config_ostile_e_un_errore_di_piano() {
+        for ostile in [
+            "a\u{e9}b",
+            "\u{e9}\u{e9}",
+            "\u{1F642}",
+            "0\u{e9}0",
+            "zz",
+            "abc",
+        ] {
+            let errore = validate_wkb_hex("geo.within", "other_wkb", ostile)
+                .expect_err("input ostile rifiutato, mai un panic");
+            assert!(
+                errore.to_string().contains("WKB esadecimale non valido"),
+                "{ostile:?}: {errore}"
+            );
+        }
+    }
 }

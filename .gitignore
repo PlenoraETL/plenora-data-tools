@@ -5,3 +5,6 @@ target-*/
 /fuzz/artifacts
 /fuzz/corpus
 .debug_*.sh
+# I checker di rilascio si invocano anche direttamente, non solo con
+# PYTHONDONTWRITEBYTECODE: il bytecode non deve finire nel diff.
+__pycache__/
