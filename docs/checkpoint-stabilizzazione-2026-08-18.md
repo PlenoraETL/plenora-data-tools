@@ -157,8 +157,8 @@ Esplicitamente **non chiusi**, e non chiudibili qui.
 |---|---|---|
 | **DER-010** — hook di panico non installato d'ufficio per gli embedder | `docs/deroghe.md` | protocollo cooperativo: un embedder che non lo installa non ottiene la politica |
 | **DER-011** — `max_memory_bytes` non e' un tetto duro | `docs/deroghe.md` | vale per entrambi i percorsi e per ogni operazione, preflight comprese |
-| **Clippy MSVC** | `docs/checkpoint-review-2026-08-16.md` §«Clippy Windows» | il target di CI e' `x86_64-pc-windows-msvc` e richiede una macchina Windows con MSVC; da container Linux e' stato verificato solo `x86_64-pc-windows-gnu`, che copre i rami condizionali ma non sostituisce il job |
-| **Campagna fuzz completa** | `docs/checkpoint-review-2026-08-16.md`, `docs/catalog-diff.md` (maturita' `KernelValidated`) | eseguito solo uno smoke ridotto (4 target, 45 s ciascuno); DER-001 registra la toolchain nightly necessaria |
+| ~~**Clippy MSVC**~~ | — | **CHIUSO** (correzione del 2026-08-19): il job `test windows-latest` gira con la toolchain nativa su Windows — quindi MSVC — ed esegue sia R6 sia `cargo clippy --workspace --all-targets --locked`. Il rischio era registrato per la sola impossibilita' di riprodurlo dal container Linux, che e' un limite dell'ambiente locale, non della CI. Resta non verificato il solo **full-backends su Windows**, job Linux-only |
+| ~~**Campagna fuzz completa**~~ | — | **CHIUSA** (2026-08-19, run 32221206230 su `671214c`): 30 minuti per target, **16 target attivi su 16 verdi**. NON include `arrow_transform`, in quarantena dal 2026-08-07 con motivazione accanto alla matrice: quella quarantena e' il residuo che resta |
 
 Limiti minori, gia' dichiarati nei report dei rispettivi giri e non ripetuti
 qui come rischi di rilascio: la permissivita' dichiarata dell'analisi con
@@ -167,8 +167,10 @@ presidio della cardinalita' come filtro sintattico, le categorie disomogenee
 dell'analizzatore, `docs/_build/assemble.py` fuori uso (gia' su `HEAD`), il
 difetto diagnostico latente.
 
-**MSVC e fuzz non bloccano l'inizio dell'orchestratore. Bloccano la
-dichiarazione di produzione.**
+**Aggiornamento del 2026-08-19.** MSVC e la campagna fuzz sono chiusi (sopra).
+I residui reali sono **DER-010**, **DER-011** e la **quarantena di
+`arrow_transform`**: nessuno dei tre blocca l'inizio dell'orchestratore, e
+restano tracciati per la dichiarazione di produzione.
 
 ---
 

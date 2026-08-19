@@ -453,9 +453,8 @@ cui la campagna e' andata in panic, e lo copre in una suite che gira sempre.
 
 ## Che cosa resta aperto
 
-- **La campagna fuzz completa resta non eseguita qui** (DER-001): il verdetto
-  vero sul target `analyze_geo` arrivera' dalla prossima esecuzione notturna.
-  L'artefatto del crash e' salvato in CI e vale come corpus.
+- ~~La campagna fuzz completa resta non eseguita~~ — **eseguita e verde**,
+  vedi la sezione «Verdetto» in coda.
 - **`executor_dag` usa `Inputs::with`, deprecata**: quattro warning. Migrarlo
   a `with_contract` e' un cambiamento agli input del target, fuori perimetro.
 - **`fuzz/` resta fuori dal workspace**: e' una scelta strutturale del
@@ -474,5 +473,57 @@ cui la campagna e' andata in panic, e lo copre in una suite che gira sempre.
 - **I criteri C2.1, C2.3, C3.2, C4.3, C5.1, C5.2 restano non automatizzati**,
   come prima: la verifica li stampa a ogni esecuzione invece di lasciarli
   impliciti.
-- Tutti i rischi del checkpoint di stabilizzazione — DER-010, DER-011, clippy
-  MSVC — restano invariati.
+- **DER-010** e **DER-011** restano invariati.
+- **Clippy MSVC non e' un rischio aperto**, ed era un errore dei verbali
+  precedenti (compreso questo, in prima stesura): il job `test windows-latest`
+  gira su `windows-latest` con la toolchain nativa `1.92.0` — quindi MSVC — ed
+  esegue **sia** il gate anti-panic R6 **sia** `cargo clippy --workspace
+  --all-targets --locked`. Il lint su MSVC e' coperto da quando quel job
+  esiste. Resta non verificato il solo **full-backends su Windows**, perche'
+  quel job e' Linux-only: e' un'altra cosa, e non e' il gate MSVC generico.
+
+---
+
+## Verdetto: CI e campagna fuzz su `671214c`
+
+Il commit e' `671214c`, su `main`.
+
+### CI — 12 job su 12 verdi
+
+`gate manifesto storico` rc / 1.0.0 / 1.0.1 / 1.0.2 / 1.0.3 (cinque celle
+indipendenti), `gate test dei checker di rilascio`, `gate audit supply-chain`,
+`gate compilazione target fuzz`, `gate coverage (linux)`, `test ubuntu-latest`,
+`test windows-latest`, `test full-backends (linux)`.
+
+I due gate che erano rossi o saltati sul commit precedente — compilazione del
+crate fuzz e manifesti storici — sono verdi, e i due `cargo audit` che il
+fallimento in serie teneva nascosti sono stati eseguiti.
+
+Prima esecuzione tentata: **tutti i job morti in 2 secondi con zero step**, per
+fatturazione GitHub («The job was not started because recent account payments
+have failed…»), non per il codice. Rieseguita a repository reso pubblico.
+
+### Campagna fuzz — 16 target ATTIVI su 16 verdi
+
+Run 32221206230, `workflow_dispatch`, 30 minuti per target, 05:54 → 06:28 UTC.
+
+`analyze_geo`, il target che dal 14/08 cadeva entro il primo minuto:
+
+```
+#13303724  DONE  cov: 3339  ft: 9013  corp: 1830/265Kb  exec/s: 7386
+Done 13303724 runs in 1801 second(s)
+```
+
+13,3 milioni di esecuzioni, nessun crash, nessun artefatto. Verde anche
+`diff_kernels`, l'oracolo riscritto in questo hotfix.
+
+**`arrow_transform` NON e' stato eseguito**: e' in quarantena nella matrice di
+`fuzz.yml` dal 2026-08-07, con la motivazione accanto — `libfuzzer-sys`
+installa un hook di panico che chiama `process::abort()` prima dell'unwinding,
+quindi il target non puo' osservare la barriera, che e' invece verificata dal
+test `ipc_decode_converte_il_panico_di_arrow_in_errore`. La quarantena resta un
+residuo dichiarato: **16 su 16 attivi**, non 17 su 17.
+
+### Residui reali dopo questa chiusura
+
+**DER-010**, **DER-011**, e la **quarantena di `arrow_transform`**. Nient'altro.
