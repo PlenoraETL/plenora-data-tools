@@ -131,6 +131,97 @@ Implementato in `plenora-engine/src/governor.rs` e nell'executor:
   ordine globale fisso per i binari (left→right, già pronto per
   l'anti-deadlock parallelo).
 
+### M2d — staging memory-first degli accepted row-diagnostics
+
+I segmenti che emettono diagnostica per riga (R9.9) devono trattenere ogni
+batch accettato fino a scansione completa: una rejection tardiva non deve
+pubblicare righe già consegnate. Fino a M2c quell'attesa era **sempre su
+disco**: staging Arrow IPC su file temporaneo, lease rilasciato per batch,
+replay con decodifica e copia `take` a scansione conclusa.
+
+La barriera non richiede il disco: richiede che nulla esca prima della fine.
+Da M2d gli accepted attendono **in memoria**, come `GovernedBatch` con il
+lease vivo, e si passa al disco solo quando il budget non basta più.
+
+**Soglia, deterministica.** Prima di eseguire la catena sul batch `k` — già
+prelevato, quindi di dimensione nota — si resta in memoria se e solo se:
+
+```text
+governor.reserved_bytes() + max_batch_bytes <= max_memory_bytes
+```
+
+Nessuna percentuale scelta a mano, nessuna decisione temporale, nessuna
+dipendenza dall'ordine di arrivo: solo lease vivi e limiti del piano.
+
+**La fonte è globale, non locale.** La prima stesura sommava i soli accepted
+trattenuti più il batch d'ingresso corrente. Non è tutto ciò che è vivo: in un
+fan-out `EdgeShared` conserva i batch già prelevati per il consumatore più
+lento e ne trattiene i lease, che nessun contatore locale del ramo
+row-diagnostics può vedere.
+
+**Sulla v1 quel buco non era raggiungibile**, verificato invece che supposto:
+in un fan-out i rami devono riconvergere, e qui sempre attraverso un nodo che
+materializza (`concat`/`join` binari, `BinaryBlocking`), il quale drena e
+trattiene comunque tutti i batch del ramo. Il picco governato risulta perciò
+identico nelle due modalità — misurato: 143 744 byte sia in memoria sia su
+disco. Dove il tee trattiene la memoria non aggiunge nulla al picco; dove la
+memoria alza il picco (uscita diretta al piano) non c'è tee. Nessun input
+costruito ha prodotto un falso `ResourceLimit`.
+
+Il difetto era quindi **nella prova, non nel comportamento**: la sicurezza
+della soglia poggiava su un accoppiamento architetturale implicito —
+`max_batch_bytes` finiva per essere maggiore delle prenotazioni non contate —
+che nessun invariante garantisce. Un binario streaming, un nuovo punto di
+ritenzione o lo scheduler parallelo lo romperebbero **in silenzio**, e allora
+il falso `ResourceLimit` diventerebbe reale. `reserved_bytes()` è la fonte
+unica — accepted trattenuti, lease del batch corrente, buffer del tee e
+qualunque altra prenotazione viva, presente o futura — e la garanzia smette di
+dipendere dalla topologia. Un ingresso **senza** lease non è contabilizzato dal
+governor: in quel caso si va su disco, fail-closed.
+
+**Perché non può produrre un falso `ResourceLimit`.** Durante una passata le
+prenotazioni *nuove* sono al più due — input e output, perché
+`run_streaming_chain` acquisisce il secondo prima di rilasciare il primo — e
+l'input è già dentro `reserved_bytes()`. Ogni batch di output attraversa il
+wrapper d'uscita, che applica `max_batch_bytes` (V7): un output che lo supera
+fa fallire il piano **in entrambe le modalità**, quindi per un piano che riesce
+`output_k <= max_batch_bytes` è un maggiorante valido della sola prenotazione
+nuova, e la soglia tiene il picco dentro il budget qualunque altra cosa il
+piano stia già trattenendo.
+
+**Atomicità: vincolo di progetto per lo scheduler parallelo.** Con l'esecuzione
+seriale (`SerialFused`) fra la lettura di `reserved_bytes()` e la reservation
+della passata non si inserisce nessun altro: lo snapshot è stabile e il
+`check` + `reserve` è corretto. **Uno scheduler parallelo non può conservare
+questa forma**: la finestra fra i due diventerebbe un TOCTOU — un altro ramo
+prenota in mezzo e la decisione «memoria» risulta presa su uno stato già
+superato. La sostituzione richiesta è un **permesso atomico** del governor:
+una sola operazione che verifichi la disponibilità e la riservi, oppure
+rifiuti. È un vincolo su M3, non un dettaglio implementativo.
+
+**Passaggio al disco.** Quando la soglia non regge, i trattenuti sono travasati
+**nell'ordine di produzione** nello staging IPC esistente e i lease rilasciati
+uno a uno; da quel momento la modalità è disco in via definitiva, per tutta la
+scansione. Il picco durante il travaso non cresce mai sopra quello già
+concesso.
+
+**Esiti.** A scansione completata senza errori la modalità memoria consegna la
+coda direttamente, con lease e `BatchSequence` originali; quella disco usa il
+replay invariato. Su rejection tardiva, errore, cancellazione o fallimento del
+travaso: **zero accepted pubblicati** e cleanup completo — in memoria i lease
+muoiono con la coda, su disco il `TempDir` cancella il file.
+
+**Perimetro.** Il gate WKB dell'input (`stage_input_batches`) resta su disco:
+non è toccato da M2d. Nessuna operazione è specializzata e
+`emits_row_diagnostics` è invariato: cambia dove gli accepted attendono, non
+chi passa dalla barriera.
+
+**Prezzo dichiarato.** Il picco governato di un segmento row-diagnostics
+cresce dei byte trattenuti: misurato su `streaming_lineare`, da 0,76 MiB a
+10,24 MiB su un budget di 512 MiB. È un aumento reale del picco, non un
+aumento del tetto: la soglia lo tiene sotto `max_memory_bytes` per
+costruzione.
+
 **Deviazioni/rinvii rispetto al design** (documentati nel codice):
 
 - In v1 seriale `try_reserve` emette **solo** `Granted`; se la quota manca,

@@ -1,0 +1,537 @@
+diff --git a/crates/plenora-engine/examples/misura_orchestrazione.rs b/crates/plenora-engine/examples/misura_orchestrazione.rs
+index c9c398b..3a8b610 100644
+--- a/crates/plenora-engine/examples/misura_orchestrazione.rs
++++ b/crates/plenora-engine/examples/misura_orchestrazione.rs
+@@ -884,6 +884,11 @@ const SOGLIA_DECOMPOSIZIONE: Duration = Duration::from_millis(700);
+ /// passata da R² 0,99 a 0,002. Una mediana su un campione non e' una mediana.
+ const RIPETIZIONI_MIN: usize = 5;
+ 
++/// Esecuzioni della fase sonde. Piu' alte del minimo delle celle perche' qui
++/// non c'e' una soglia di tempo a fare da rete: la media su queste ripetizioni
++/// **e'** il numero pubblicato.
++const RIPETIZIONI_SONDE: u32 = 20;
++
+ /// Mediana delle parti su una campagna a soglia.
+ fn campagna_appaiata(acceso: &Banco, spento: &Banco) -> (Vec<Spesa>, Vec<Spesa>) {
+     for _ in 0..WARMUP {
+@@ -1348,6 +1353,166 @@ fn fase_decomposizione(carico: &Carico) -> Value {
+     })
+ }
+ 
++/// Fase SONDE — **temporanea**, dipende dalle sonde in `plenora_engine::sonde`
++/// che non devono entrare in un commit produttivo.
++///
++/// Attribuisce il residuo di `table.formula` alle sottofasi del percorso di
++/// esecuzione, confrontando sullo STESSO percorso tre piani a nodo singolo:
++/// `formula`, `formula` costante e `string_pad`.
++/// Sottofasi che stanno DENTRO `catena_streaming`: sommarle insieme a lei
++/// conterebbe due volte. Sono foglie solo quando la catena non e' strumentata
++/// come contenitore, cioe' sui piani che non passano dal percorso
++/// row-diagnostics.
++const DENTRO_LA_CATENA: [&str; 6] = [
++    "run_kernel",
++    "pre_kernel",
++    "dimensione_output",
++    "controlli_edge",
++    "metriche",
++    "governor",
++];
++const CONTENITORE: &str = "catena_streaming";
++/// La scansione row-diagnostics contiene staging, catena e chiusura.
++const CONTENITORE_SCANSIONE: &str = "scansione_row_diagnostics";
++/// `replay_batch` contiene decodifica, compattazione e reservation.
++const CONTENITORE_REPLAY: &str = "replay_batch";
++const DENTRO_IL_REPLAY: [&str; 3] = [
++    "replay_decodifica_ipc",
++    "replay_compattazione",
++    "replay_governor",
++];
++const DENTRO_LA_SCANSIONE: [&str; 4] = [
++    "lettura_routing",
++    "catena_streaming",
++    "staging_ipc",
++    "staging_chiusura",
++];
++
++fn fase_sonde() -> Value {
++    // Costo di una sonda, misurato con lo stesso meccanismo su corpo vuoto:
++    // serve a dire quanta parte dei numeri sotto e' la misura stessa.
++    let costo_sonda_ns = plenora_engine::sonde::calibra(200_000);
++
++    let mut misure = Vec::new();
++    for (nome, carico) in carichi_per_operazione() {
++        let banco = Banco::nuovo_con(&carico, BATCH, RIGHE_PER_BATCH, true);
++        // Warm-up fuori misura: il primo giro paga temp dir e pool.
++        for _ in 0..WARMUP {
++            drop(banco.esegui());
++        }
++
++        // Un campione per ripetizione, non un cumulato: cosi' si riporta la
++        // MEDIANA di ogni sottofase, come nel resto dell'harness. Una media
++        // su cumulati e' dominata dalla ripetizione peggiore, e su questo
++        // host la ripetizione peggiore e' contesa, non misura.
++        let mut serie: BTreeMap<String, Vec<u64>> = BTreeMap::new();
++        let mut campioni: BTreeMap<String, u64> = BTreeMap::new();
++        let mut walls = Vec::new();
++        let mut kernel = Vec::new();
++        let mut costruzioni = Vec::new();
++        for _ in 0..RIPETIZIONI_SONDE {
++            let inputs = banco.inputs();
++            plenora_engine::sonde::azzera();
++            let spesa = banco.esegui_diviso(inputs);
++            // Wall e sonde vengono dalla STESSA esecuzione: misurarli in
++            // cicli separati li espone a due stati diversi dell'host e la
++            // somma non chiude per ragioni che non riguardano
++            // l'attribuzione (visto: 116% e 84% sullo stesso codice).
++            for (fase, quanti, nanosecondi) in plenora_engine::sonde::leggi() {
++                serie
++                    .entry(fase.clone())
++                    .or_default()
++                    .push(u64::try_from(nanosecondi).unwrap_or(u64::MAX));
++                campioni.insert(fase, quanti);
++            }
++            walls.push(ns(spesa.wall()));
++            kernel.push(ns(spesa.kernel));
++            costruzioni.push(ns(spesa.costruzione));
++        }
++        plenora_engine::sonde::azzera();
++
++        let wall = statistica(&walls).0;
++        let costruzione = statistica(&costruzioni).0;
++        let mediana_fase = |fase: &str| -> u64 { serie.get(fase).map_or(0, |v| statistica(v).0) };
++
++        // La catena e' un contenitore solo se e' stata effettivamente
++        // attraversata: sui piani senza row-diagnostics non esiste, e allora
++        // le sue sottofasi sono le foglie.
++        let catena_presente = serie.contains_key(CONTENITORE);
++        let scansione_presente = serie.contains_key(CONTENITORE_SCANSIONE);
++        // Gerarchia dei contenitori: la scansione row-diagnostics contiene
++        // lettura, catena, staging e chiusura; la catena contiene kernel e
++        // controlli di confine. Si sommano SOLO i contenitori piu' esterni e
++        // le sottofasi che non stanno dentro nessuno.
++        let replay_presente = serie.contains_key(CONTENITORE_REPLAY);
++        let dentro = |fase: &str| -> bool {
++            (scansione_presente && DENTRO_LA_SCANSIONE.contains(&fase))
++                || (catena_presente && DENTRO_LA_CATENA.contains(&fase))
++                || (replay_presente && DENTRO_IL_REPLAY.contains(&fase))
++        };
++        let foglie: u64 = serie
++            .keys()
++            .filter(|fase| !dentro(fase.as_str()))
++            .map(|fase| mediana_fase(fase))
++            .sum::<u64>()
++            + costruzione;
++
++        let sottofasi: Vec<Value> = serie
++            .keys()
++            .map(|fase| {
++                let mediana = mediana_fase(fase);
++                let quanti = campioni.get(fase).copied().unwrap_or(0);
++                json!({
++                    "fase": fase,
++                    "contenitore": (catena_presente && fase == CONTENITORE)
++                        || (scansione_presente && fase == CONTENITORE_SCANSIONE)
++                        || (replay_presente && fase == CONTENITORE_REPLAY),
++                    "dentro_un_contenitore": dentro(fase.as_str()),
++                    "campioni_per_esecuzione": quanti,
++                    "ns_per_esecuzione": mediana,
++                    "quota_wall_pct": quota(
++                        Duration::from_nanos(mediana),
++                        Duration::from_nanos(wall),
++                    ),
++                    // Quanto di questa voce e' costo della sonda stessa.
++                    "sonda_ns": costo_sonda_ns * quanti as f64,
++                })
++            })
++            .collect();
++
++        let kernel = statistica(&kernel).0;
++        misure.push(json!({
++            "operazione": nome,
++            "wall_ns": wall,
++            "kernel_ns": kernel,
++            "costruzione_ns": costruzione,
++            "residuo_ns": wall.saturating_sub(kernel),
++            "ripetizioni": RIPETIZIONI_SONDE,
++            "somma_foglie_ns": foglie,
++            "copertura_wall_pct": quota(
++                Duration::from_nanos(foglie),
++                Duration::from_nanos(wall),
++            ),
++            // La domanda vera: quanto del RESIDUO — cioe' del wall che i
++            // tempi per nodo non coprono — e' attribuito a una sottofase
++            // nominata. Si toglie il kernel da entrambi i lati.
++            "residuo_spiegato_ns": foglie.saturating_sub(kernel),
++            "copertura_residuo_pct": quota(
++                Duration::from_nanos(foglie.saturating_sub(kernel)),
++                Duration::from_nanos(wall.saturating_sub(kernel)),
++            ),
++            "sottofasi": sottofasi,
++        }));
++    }
++
++    json!({
++        "carico": "sonde",
++        "descrizione": "attribuzione del residuo alle sottofasi, 24 x 8192",
++        "costo_sonda_ns": costo_sonda_ns,
++        "misure": misure,
++    })
++}
++
+ /// Fase CATENA: input costante, lunghezza della catena variabile.
+ ///
+ /// Non dipende dal carico — costruisce piani propri — quindi e' una fase a
+@@ -1532,6 +1697,7 @@ fn main() {
+             "memoria" => fase_memoria(carico),
+             "decomposizione" => fase_decomposizione(carico),
+             "catena" => fase_catena(),
++            "sonde" => fase_sonde(),
+             altro => panic!("fase sconosciuta: {altro}"),
+         };
+         println!("{risultato}");
+diff --git a/crates/plenora-engine/src/executor.rs b/crates/plenora-engine/src/executor.rs
+index ca286e8..8be2d38 100644
+--- a/crates/plenora-engine/src/executor.rs
++++ b/crates/plenora-engine/src/executor.rs
+@@ -2085,7 +2085,19 @@ struct StagedReplay {
+     reader: StreamReader<std::fs::File>,
+     staged: std::collections::VecDeque<StagedBatchMeta>,
+     // La directory temporanea vive fino alla fine del replay.
+-    _dir: tempfile::TempDir,
++    // SONDE TEMPORANEE: `Option` solo per poter cronometrare la pulizia,
++    // che altrimenti avverrebbe nel drop implicito del campo. Da riportare a
++    // `TempDir` nudo con la rimozione delle sonde.
++    _dir: Option<tempfile::TempDir>,
++}
++
++// SONDE TEMPORANEE: la rimozione della directory di staging e' I/O, e cade
++// dentro `collect_batches`. Senza cronometrarla resta fuori da ogni voce.
++impl Drop for StagedReplay {
++    #[allow(clippy::used_underscore_binding)] // sonda temporanea
++    fn drop(&mut self) {
++        crate::sonde::misura("staging_pulizia", || drop(self._dir.take()));
++    }
+ }
+ 
+ /// Replay di UN batch dallo staging IPC: compattazione right-sized, lease
+@@ -2097,7 +2109,7 @@ fn replay_staged_batch(
+     replay: &mut StagedReplay,
+     owner: &str,
+ ) -> Option<Result<GovernedBatch>> {
+-    match replay.reader.next() {
++    match crate::sonde::misura("replay_decodifica_ipc", || replay.reader.next()) {
+         Some(Ok(batch)) => {
+             let Some(meta) = replay.staged.pop_front() else {
+                 return Some(Err(PlenoraError::Internal(
+@@ -2109,11 +2121,15 @@ fn replay_staged_batch(
+             // interamente (lease e confini di kernel gonfiati ~3x).
+             // `take` copia ogni colonna in buffer right-sized: una
+             // copia per batch, memoria bounded.
+-            let batch = match compact_staged_batch(&batch) {
+-                Ok(compacted) => compacted,
+-                Err(error) => return Some(Err(error)),
+-            };
+-            match state.governor.reserve(meta.bytes, owner) {
++            let batch =
++                match crate::sonde::misura("replay_compattazione", || compact_staged_batch(&batch))
++                {
++                    Ok(compacted) => compacted,
++                    Err(error) => return Some(Err(error)),
++                };
++            match crate::sonde::misura("replay_governor", || {
++                state.governor.reserve(meta.bytes, owner)
++            }) {
+                 Ok(lease) => Some(Ok(GovernedBatch::new(batch, Some(lease), meta.sequence))),
+                 Err(error) => Some(Err(error)),
+             }
+@@ -2323,7 +2339,7 @@ fn stage_input_batches(
+         Ok(reader) => StagingOutcome::Replay(StagedReplay {
+             reader,
+             staged: staged_meta,
+-            _dir: dir,
++            _dir: Some(dir),
+         }),
+         Err(error) => StagingOutcome::Terminal(Some(error)),
+     }
+@@ -2835,7 +2851,7 @@ fn scan_row_diagnostic_segment(
+     let mut staging: Option<(tempfile::TempDir, std::path::PathBuf)> = None;
+     let mut writer: Option<StreamWriter<CountingFile>> = None;
+     let output_edge = &plan.segments()[segment_index].output_edge;
+-    for item in input {
++    while let Some(item) = crate::sonde::misura("lettura_routing", || input.next()) {
+         let governed = match item {
+             Ok(governed) => governed,
+             Err(error) => {
+@@ -2912,7 +2928,9 @@ fn scan_row_diagnostic_segment(
+         let diagnostic_node = diagnostic_context
+             .as_ref()
+             .map(|(node, _, _): &(String, String, String)| node.as_str());
+-        match run_streaming_chain(plan, segment_index, state, governed, diagnostic_node) {
++        match crate::sonde::misura("catena_streaming", || {
++            run_streaming_chain(plan, segment_index, state, governed, diagnostic_node)
++        }) {
+             Ok(output) => {
+                 if diagnostics.is_none() {
+                     // P1: staging IPC bounded dell'accepted — il lease e'
+@@ -2920,14 +2938,16 @@ fn scan_row_diagnostic_segment(
+                     // ri-riservato per batch solo al replay, a scan
+                     // completato. Se una rejection tardiva arriva dopo, lo
+                     // staged viene scartato senza pubblicare nulla.
+-                    let staged = stage_one_batch(
+-                        &mut writer,
+-                        &mut staging,
+-                        state,
+-                        "output",
+-                        output_edge,
+-                        &output.batch,
+-                    );
++                    let staged = crate::sonde::misura("staging_ipc", || {
++                        stage_one_batch(
++                            &mut writer,
++                            &mut staging,
++                            state,
++                            "output",
++                            output_edge,
++                            &output.batch,
++                        )
++                    });
+                     if let Err(error) = staged {
+                         terminal_error = Some(attach_partial_row_diagnostics(
+                             error,
+@@ -2974,7 +2994,7 @@ fn scan_row_diagnostic_segment(
+     }
+     if terminal_error.is_none() {
+         if let Some(active) = writer.as_mut() {
+-            if let Err(error) = active.finish() {
++            if let Err(error) = crate::sonde::misura("staging_chiusura", || active.finish()) {
+                 terminal_error = Some(attach_partial_row_diagnostics(
+                     PlenoraError::Internal(format!("chiusura staging output: {error}")),
+                     &mut diagnostics,
+@@ -3004,16 +3024,18 @@ fn scan_row_diagnostic_segment(
+     let Some((dir, path)) = staging.take() else {
+         return StagingOutcome::Terminal(None);
+     };
+-    match std::fs::File::open(&path)
+-        .map_err(PlenoraError::Io)
+-        .and_then(|file| {
+-            StreamReader::try_new(file, None)
+-                .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
+-        }) {
++    match crate::sonde::misura("replay_apertura", || {
++        std::fs::File::open(&path)
++            .map_err(PlenoraError::Io)
++            .and_then(|file| {
++                StreamReader::try_new(file, None)
++                    .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
++            })
++    }) {
+         Ok(reader) => StagingOutcome::Replay(StagedReplay {
+             reader,
+             staged: staged_meta,
+-            _dir: dir,
++            _dir: Some(dir),
+         }),
+         Err(error) => StagingOutcome::Terminal(Some(error)),
+     }
+@@ -3033,7 +3055,9 @@ fn row_diagnostic_stream(
+     let mut replay: Option<StagedReplay> = None;
+     Box::new(std::iter::from_fn(move || {
+         if terminal.is_none() && replay.is_none() {
+-            match scan_row_diagnostic_segment(&mut input, &plan, &state, segment_index) {
++            match crate::sonde::misura("scansione_row_diagnostics", || {
++                scan_row_diagnostic_segment(&mut input, &plan, &state, segment_index)
++            }) {
+                 StagingOutcome::Terminal(error) => {
+                     terminal = Some(
+                         error
+@@ -3049,7 +3073,9 @@ fn row_diagnostic_stream(
+         }
+         let active = replay.as_mut()?;
+         let output_edge = &plan.segments()[segment_index].output_edge;
+-        replay_staged_batch(&state, active, output_edge)
++        crate::sonde::misura("replay_batch", || {
++            replay_staged_batch(&state, active, output_edge)
++        })
+     }))
+ }
+ 
+@@ -3287,40 +3313,48 @@ fn run_streaming_chain(
+         // ADR 3, M1c: check cooperativo al confine di kernel — per il primo
+         // kernel della catena e' anche il check "tra batch"; onora il
+         // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
+-        state.check_cancellation(kernel)?;
++        crate::sonde::misura("pre_kernel", || state.check_cancellation(kernel))?;
+         let rows_in = batch.num_rows() as u64;
+         let bytes_in = bytes_at_boundary;
+         let start = Instant::now();
+         batch = run_kernel(kernel, batch, state)
+             .map_err(|error| state.with_diagnostics(error, batch_detail.as_deref()))?;
+         let elapsed = start.elapsed();
++        crate::sonde::aggiungi("run_kernel", elapsed);
+         let rows_out = batch.num_rows() as u64;
+         let is_last = position + 1 == kernels.len();
+-        bytes_at_boundary = if per_node || is_last {
+-            batch.get_array_memory_size() as u64
+-        } else {
+-            0
+-        };
+-        state.add_node_rows_out(&kernel.node_id, rows_out);
+-        check_expansion(state, kernel, rows_in)?;
+-        // Limiti d'arco sugli archi interni e sull'arco di uscita del
+-        // segmento, a meno che non sia l'output del piano (li valgono
+-        // max_output_rows e il wrapper di output).
+-        if !(is_last && output_is_plan_output) {
+-            check_edge_batch(state, &kernel.node_id, &batch)?;
+-        }
+-        record_kernel_metrics(
+-            state,
+-            segment,
+-            kernel,
+-            rows_in,
+-            rows_out,
+-            bytes_in,
+-            bytes_at_boundary,
+-            elapsed,
+-            position == 0,
+-            is_last,
+-        );
++        bytes_at_boundary = crate::sonde::misura("dimensione_output", || {
++            if per_node || is_last {
++                batch.get_array_memory_size() as u64
++            } else {
++                0
++            }
++        });
++        crate::sonde::misura("controlli_edge", || {
++            state.add_node_rows_out(&kernel.node_id, rows_out);
++            check_expansion(state, kernel, rows_in)?;
++            // Limiti d'arco sugli archi interni e sull'arco di uscita del
++            // segmento, a meno che non sia l'output del piano (li valgono
++            // max_output_rows e il wrapper di output).
++            if !(is_last && output_is_plan_output) {
++                check_edge_batch(state, &kernel.node_id, &batch)?;
++            }
++            Ok::<(), PlenoraError>(())
++        })?;
++        crate::sonde::misura("metriche", || {
++            record_kernel_metrics(
++                state,
++                segment,
++                kernel,
++                rows_in,
++                rows_out,
++                bytes_in,
++                bytes_at_boundary,
++                elapsed,
++                position == 0,
++                is_last,
++            );
++        });
+         if stop_after_node == Some(kernel.node_id.as_str()) {
+             stopped_early = true;
+             break;
+@@ -3333,10 +3367,12 @@ fn run_streaming_chain(
+     }
+     // Ricomposizione: quota dell'output acquisita prima di rilasciare
+     // l'input (mai sotto-conteggio al confine, ADR-0002).
+-    let output_lease = state
+-        .governor
+-        .reserve(bytes_at_boundary, &segment.output_edge)?;
+-    drop(input_lease);
++    let output_lease = crate::sonde::misura("governor", || {
++        state
++            .governor
++            .reserve(bytes_at_boundary, &segment.output_edge)
++    })?;
++    crate::sonde::misura("governor", || drop(input_lease));
+     Ok(GovernedBatch::new(batch, Some(output_lease), seq))
+ }
+ 
+diff --git a/crates/plenora-engine/src/lib.rs b/crates/plenora-engine/src/lib.rs
+index ed3ba60..291f3c9 100644
+--- a/crates/plenora-engine/src/lib.rs
++++ b/crates/plenora-engine/src/lib.rs
+@@ -68,6 +68,8 @@ pub mod parallelism;
+ pub mod plan;
+ pub mod planner;
+ pub mod prepare;
++// SONDE TEMPORANEE DI MISURA: da rimuovere prima del commit produttivo.
++pub mod sonde;
+ pub mod table_engine;
+ pub mod temp_store;
+ 
+--- /dev/null
++++ b/crates/plenora-engine/src/sonde.rs
++//! SONDE TEMPORANEE DI MISURA — **NON DEVE ENTRARE IN UN COMMIT PRODUTTIVO**.
++//!
++//! Accumulatori per sottofase del percorso di esecuzione, usati una sola
++//! volta per attribuire il residuo di `table.formula` (vedi
++//! `docs/decomposizione-wall-2026-08-20.md`). Non toccano alcuna API
++//! pubblica gia' esistente ne' la semantica delle metriche: sono un canale
++//! separato, thread-locale, che l'engine alimenta e l'harness legge.
++//!
++//! Il costo delle sonde stesse e' misurabile con [`calibra`] e va sottratto
++//! — o almeno dichiarato — prima di leggere i numeri.
++
++#![allow(clippy::cast_precision_loss)] // solo diagnostica di calibrazione
++
++use std::cell::RefCell;
++use std::collections::BTreeMap;
++use std::time::{Duration, Instant};
++
++thread_local! {
++    /// Per nome di sottofase: numero di campioni e nanosecondi cumulati.
++    static ACCUMULO: RefCell<BTreeMap<&'static str, (u64, u128)>> =
++        const { RefCell::new(BTreeMap::new()) };
++}
++
++/// Aggiunge un campione a una sottofase.
++pub fn aggiungi(fase: &'static str, durata: Duration) {
++    ACCUMULO.with(|a| {
++        let mut mappa = a.borrow_mut();
++        let voce = mappa.entry(fase).or_insert((0, 0));
++        voce.0 += 1;
++        voce.1 += durata.as_nanos();
++    });
++}
++
++/// Cronometra `corpo` attribuendolo a `fase`.
++pub fn misura<T>(fase: &'static str, corpo: impl FnOnce() -> T) -> T {
++    let inizio = Instant::now();
++    let esito = corpo();
++    aggiungi(fase, inizio.elapsed());
++    esito
++}
++
++/// Azzera tutti gli accumulatori.
++pub fn azzera() {
++    ACCUMULO.with(|a| a.borrow_mut().clear());
++}
++
++/// Sottofasi accumulate: `(nome, campioni, nanosecondi)`.
++#[must_use]
++pub fn leggi() -> Vec<(String, u64, u128)> {
++    ACCUMULO.with(|a| {
++        a.borrow()
++            .iter()
++            .map(|(nome, (n, ns))| ((*nome).to_owned(), *n, *ns))
++            .collect()
++    })
++}
++
++/// Costo di UNA sonda (coppia `Instant::now()` + accumulo), in nanosecondi.
++///
++/// Si misura con lo stesso meccanismo che si vuole calibrare, su un corpo
++/// vuoto: la differenza fra il tempo totale e zero e' interamente sonda.
++/// Serve a dire quanta parte dei numeri riportati e' la misura stessa.
++#[must_use]
++pub fn calibra(giri: u32) -> f64 {
++    azzera();
++    let inizio = Instant::now();
++    for _ in 0..giri {
++        misura("calibrazione", || {});
++    }
++    let totale = inizio.elapsed().as_nanos() as f64;
++    azzera();
++    totale / f64::from(giri)
++}

@@ -38,6 +38,14 @@ che nessun meccanismo in-process può intercettare.
   `partial`/`unknown` con `knowledge_limits`; non si dichiara falsa completezza.
   Questa eccezione non avvia altri rami, non modifica la selezione errori del DAG
   parallelo e non autorizza remediation o drop silenziosi.
+  **Dove attendono gli accepted (M2d, ADR-0002):** la barriera impone che
+  nessun accepted esca prima della fine della scansione, non che attenda su
+  disco. Da M2d gli accepted sono trattenuti **in memoria** con il lease vivo
+  finché il budget lo consente, e travasati nello staging IPC — in ordine, con
+  passaggio definitivo — quando non lo consente più. Su rejection tardiva,
+  errore o cancellazione l'esito è identico nelle due modalità: **zero accepted
+  pubblicati** e cleanup completo. La soglia è deterministica e derivata dai
+  limiti del piano: vedi ADR-0002 §M2d.
 - **Modalità diagnostica opt-in** (solo per input fidati): l'errore può
   includere nodo, indice batch, indice riga, colonna e tipo di violazione
   (es. `node=buffer batch=12 row=941 field=geometry reason=WKB_DEPTH_LIMIT`),

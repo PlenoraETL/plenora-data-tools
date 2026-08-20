@@ -1,0 +1,78 @@
+# Misura dell'orchestrazione — linea di base
+
+input: 24 batch x 8192 righe = 196608 righe, 8.28 MiB Arrow; 16 core logici
+3 campagne temporali isolate per carico, piu' un processo dedicato alla memoria con VmHWM azzerato
+
+| carico | tempo mediano | ripetizioni | soglia 1,5 s | parallelismo (mediana su 3 processi) | range |
+|---|---|---|---|---|---|
+| `streaming_lineare` | 21.57 ms | 56 | si | **0.99x** | 0.98–1.00 |
+| `blocking_sort` | 17.22 ms | 88 | si | **3.59x** | 3.00–3.67 |
+| `blocking_aggregate` | 12.01 ms | 128 | si | **1.66x** | 1.60–1.68 |
+| `fan_out_tee` | 6.85 ms | 208 | si | **1.00x** | 0.97–1.00 |
+| `rami_indipendenti` | 222.23 ms | 8 | si | **1.61x** | 1.61–1.63 |
+
+| carico | picco governato | RSS a freddo (max) | RSS a caldo (min) | rapporto a freddo |
+|---|---|---|---|---|
+| `streaming_lineare` | 10.24 MiB | 12.09 MiB | 2.28 MiB | 1.18x |
+| `blocking_sort` | 15.42 MiB | 19.23 MiB | 16.82 MiB | 1.25x |
+| `blocking_aggregate` | 7.71 MiB | 11.51 MiB | 8.00 MiB | 1.49x |
+| `fan_out_tee` | 15.44 MiB | 17.76 MiB | 16.90 MiB | 1.15x |
+| `rami_indipendenti` | 23.71 MiB | 45.01 MiB | 11.47 MiB | 1.90x |
+
+
+## streaming_lineare
+   catena di kernel streaming: nessuna materializzazione
+   determinismo: IDENTICI byte a byte su 6 esecuzioni, 10496456 byte IPC
+   sotto pressione: riuscito
+   byte attraversati dai nodi: 3.73x l'input (30.90 MiB)
+   risoluzione del tick sulla campagna di riferimento: 0.67%
+   profilo per nodo (mediana):
+              s    13.033 ms  [  11.775.. 120.751]    196608 -> 196608    table.string_pad
+              f     4.727 ms  [   4.273.. 125.591]    196608 -> 185023    table.filter
+              c     2.355 ms  [   2.075..   4.720]    196608 -> 196608    table.formula
+
+## blocking_sort
+   materializza l'intero input e ordina
+   determinismo: IDENTICI byte a byte su 6 esecuzioni, 8159944 byte IPC
+   sotto pressione: ResourceLimit
+   byte attraversati dai nodi: 1.00x l'input (8.28 MiB)
+   risoluzione del tick sulla campagna di riferimento: 0.18%
+   profilo per nodo (mediana):
+              o    15.240 ms  [  10.381..  22.331]    196608 -> 196608    table.sort
+
+## blocking_aggregate
+   raggruppa e aggrega: materializzazione piu' hashing
+   determinismo: IDENTICI byte a byte su 6 esecuzioni, 2248 byte IPC
+   sotto pressione: riuscito
+   byte attraversati dai nodi: 1.00x l'input (8.28 MiB)
+   risoluzione del tick sulla campagna di riferimento: 0.38%
+   profilo per nodo (mediana):
+              a     5.473 ms  [   3.618..  12.149]    196608 -> 64        table.aggregate
+
+## fan_out_tee
+   un input, due consumatori: costo del tee (D9/V10)
+   determinismo: IDENTICI byte a byte su 6 esecuzioni, 8159944 byte IPC
+   sotto pressione: ResourceLimit
+   byte attraversati dai nodi: 2.93x l'input (24.30 MiB)
+   risoluzione del tick sulla campagna di riferimento: 0.65%
+   tetto parallelizzazione rami: mediana 40.3%  [23.0..42.6]  su 208 ripetizioni
+   profilo per nodo (mediana):
+         ramo_a     2.055 ms  [   1.887..   3.867]    196608 -> 98304     table.filter
+         ramo_b     1.962 ms  [   1.759..   3.644]    196608 -> 98304     table.filter
+         unione     0.797 ms  [   0.652..   4.661]    196608 -> 196608    table.concat
+
+## rami_indipendenti
+   due catene che non si toccano fino alla fine: il TETTO del guadagno che il parallelismo fra nodi potrebbe dare
+   determinismo: IDENTICI byte a byte su 6 esecuzioni, 9757512 byte IPC
+   sotto pressione: ResourceLimit
+   byte attraversati dai nodi: 4.59x l'input (38.04 MiB)
+   risoluzione del tick sulla campagna di riferimento: 0.35%
+   tetto parallelizzazione rami: mediana 19.4%  [16.6..20.8]  su 8 ripetizioni
+   profilo per nodo (mediana):
+             a2   115.740 ms  [ 100.693.. 121.579]    196608 -> 196608    table.distinct
+           fine    49.706 ms  [  45.727..  64.451]    393216 -> 196608    table.join
+             b1    38.265 ms  [  35.511..  39.754]    196608 -> 196608    table.aggregate
+             a1    10.920 ms  [   8.668..  13.201]    196608 -> 196608    table.sort
+             b2     3.125 ms  [   1.819..   3.344]    196608 -> 196608    table.sort
+
+JSON grezzo (con la tabella Markdown dentro) scritto in /out/baseline.json
