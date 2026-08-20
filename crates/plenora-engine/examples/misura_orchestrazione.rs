@@ -150,9 +150,9 @@ fn schema_sintetico() -> Arc<Schema> {
     ]))
 }
 
-fn batch_sintetico(indice: usize) -> RecordBatch {
-    let base = (indice * RIGHE_PER_BATCH) as i64;
-    let id: Vec<i64> = (0..RIGHE_PER_BATCH as i64).map(|r| base + r).collect();
+fn batch_sintetico_di(indice: usize, righe: usize) -> RecordBatch {
+    let base = (indice * righe) as i64;
+    let id: Vec<i64> = (0..righe as i64).map(|r| base + r).collect();
     let gruppo: Vec<i64> = id.iter().map(|v| v % 64).collect();
     let valore: Vec<Option<f64>> = id
         .iter()
@@ -180,8 +180,22 @@ fn batch_sintetico(indice: usize) -> RecordBatch {
     .expect("batch sintetico")
 }
 
-fn ingresso() -> Vec<RecordBatch> {
-    (0..BATCH).map(batch_sintetico).collect()
+/// Nanosecondi di una durata, saturando invece di troncare in silenzio.
+/// Il fondo scala di `u64` e' ~584 anni: la saturazione non puo' accadere in
+/// questo banco, ma un troncamento tacito non e' comunque un modo accettabile
+/// di produrre una misura.
+fn ns(durata: Duration) -> u64 {
+    u64::try_from(durata.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// Ingresso di forma arbitraria a **righe totali costanti**: serve alla
+/// decomposizione, dove si varia il numero di batch tenendo fermo il lavoro
+/// per riga. Cio' che cresce col numero di batch e' costo per batch, non
+/// costo dei kernel.
+fn ingresso_di(n_batch: usize, righe: usize) -> Vec<RecordBatch> {
+    (0..n_batch)
+        .map(|indice| batch_sintetico_di(indice, righe))
+        .collect()
 }
 
 fn byte_ingresso(batches: &[RecordBatch]) -> u64 {
@@ -363,14 +377,29 @@ struct Banco {
 
 impl Banco {
     fn nuovo(carico: &Carico) -> Self {
+        Self::nuovo_con(carico, BATCH, RIGHE_PER_BATCH, true)
+    }
+
+    /// Banco di forma arbitraria, con la raccolta delle metriche per
+    /// nodo/segmento accendibile o spegnibile.
+    ///
+    /// Spegnerle NON cambia la semantica — `MetricsConfig` e' una manopola
+    /// pubblica di `RuntimeContext` — ma toglie dal percorso caldo
+    /// l'accumulo per nodo e per segmento e il conteggio dei byte ai confini
+    /// interni (`get_array_memory_size` per batch per nodo). La differenza
+    /// fra acceso e spento e' quindi il costo dell'osservabilita' stessa.
+    fn nuovo_con(carico: &Carico, n_batch: usize, righe: usize, metriche: bool) -> Self {
         let contratto = DataContract::tabular(schema_sintetico());
         let contratti = [("main".to_owned(), contratto.clone())];
         let grafo = validate(&carico.piano.to_string(), &contratti).expect("piano valido");
+        let mut contesto = RuntimeContext::default();
+        contesto.metrics.per_node = metriche;
+        contesto.metrics.per_segment = metriche;
         Self {
-            batches: ingresso(),
+            batches: ingresso_di(n_batch, righe),
             contratto,
             grafo,
-            contesto: RuntimeContext::default(),
+            contesto,
         }
     }
 
@@ -388,6 +417,53 @@ impl Banco {
         let uscita =
             execute(&self.grafo, self.inputs(), self.contesto.clone()).expect("esecuzione");
         uscita.collect_batches().expect("raccolta")
+    }
+
+    /// Come [`Banco::esegui`], ma cronometrando separatamente le due meta'
+    /// dell'API pubblica. La somma dei due tempi **e'** il wall dell'
+    /// esecuzione: non c'e' doppio conteggio, e' una partizione.
+    ///
+    /// - `execute` costruisce il piano fisico e lo stream, non tira batch;
+    /// - `collect_batches` drena lo stream: qui dentro sta tutto il resto.
+    fn esegui_diviso(&self, inputs: Inputs) -> Spesa {
+        let inizio = Instant::now();
+        let uscita = execute(&self.grafo, inputs, self.contesto.clone()).expect("esecuzione");
+        let costruzione = inizio.elapsed();
+        let inizio = Instant::now();
+        let (batches, metriche) = uscita.collect_batches().expect("raccolta");
+        let drenaggio = inizio.elapsed();
+        // La distruzione dei batch di uscita sta FUORI dal cronometro: e'
+        // lavoro del consumatore, non dell'esecuzione, e la fase temporale
+        // non la conta. Legandoli a `_` verrebbero distrutti prima di
+        // `elapsed()` e il residuo risulterebbe gonfiato di tutto il costo di
+        // deallocazione dell'output.
+        drop(batches);
+        Spesa {
+            costruzione,
+            drenaggio,
+            kernel: metriche.nodes.values().map(|n| n.wall_time).sum(),
+            segmenti: metriche.segments.values().map(|s| s.wall_time).sum(),
+        }
+    }
+}
+
+/// Una esecuzione, divisa nelle parti che l'API pubblica permette di
+/// cronometrare separatamente.
+#[derive(Clone, Copy)]
+struct Spesa {
+    /// `execute()`: costruzione del piano fisico e dello stream.
+    costruzione: Duration,
+    /// `collect_batches()`: drenaggio dello stream.
+    drenaggio: Duration,
+    /// Somma dei `wall_time` per nodo — zero a metriche spente.
+    kernel: Duration,
+    /// Somma dei `wall_time` per segmento — zero a metriche spente.
+    segmenti: Duration,
+}
+
+impl Spesa {
+    fn wall(self) -> Duration {
+        self.costruzione + self.drenaggio
     }
 }
 
@@ -721,6 +797,547 @@ fn fase_memoria(carico: &Carico) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// Fase DECOMPOSIZIONE: attribuire il wall che i tempi per nodo non coprono
+// ---------------------------------------------------------------------------
+
+/// Forme dell'input a **righe totali costanti** (196 608). Variare il numero
+/// di batch tenendo fermo il lavoro per riga separa il costo fisso per
+/// esecuzione da quello che si paga a ogni batch: e' la distinzione che
+/// decide se un orchestratore parallelo possa toccare quel tempo.
+const FORME: [(usize, usize); 5] = [
+    (6, 32_768),
+    (12, 16_384),
+    (24, 8_192),
+    (48, 4_096),
+    (96, 2_048),
+];
+
+/// Secondo asse: **numero di batch costante**, righe totali variabili.
+///
+/// Serve perche' il primo asse da solo non basta. Tenendo le righe totali
+/// ferme, tutto cio' che e' proporzionale alle righe si comporta come un
+/// costo fisso e i due casi non sono distinguibili — e la differenza conta:
+/// un costo per riga e' lavoro sui dati, un costo fisso per esecuzione e'
+/// preparazione che nessun parallelismo riduce.
+const FORME_RIGHE: [(usize, usize); 5] = [
+    (24, 1_024),
+    (24, 2_048),
+    (24, 4_096),
+    (24, 8_192),
+    (24, 16_384),
+];
+
+/// Soglia cumulata per ogni singola cella (forma x metriche): dieci celle per
+/// carico, quindi piu' bassa di quella della fase temporale.
+const SOGLIA_DECOMPOSIZIONE: Duration = Duration::from_millis(700);
+
+/// Mediana delle parti su una campagna a soglia.
+fn campagna_appaiata(acceso: &Banco, spento: &Banco) -> (Vec<Spesa>, Vec<Spesa>) {
+    for _ in 0..WARMUP {
+        drop(acceso.esegui());
+        drop(spento.esegui());
+    }
+    let mut con: Vec<Spesa> = Vec::new();
+    let mut senza: Vec<Spesa> = Vec::new();
+    let mut cumulato = Duration::ZERO;
+    while cumulato < SOGLIA_DECOMPOSIZIONE && con.len() < RIPETIZIONI_MAX {
+        // Le due configurazioni si alternano DENTRO lo stesso ciclo, e
+        // l'ordine si inverte a ogni giro. Misurarle in due campagne separate
+        // le espone a due stati diversi dell'host: il primo tentativo dava
+        // differenze di segno casuale, cioe' sotto il rumore. Appaiare e'
+        // l'unico modo per cui la differenza significhi qualcosa.
+        //
+        // Gli `Inputs` si costruiscono FUORI dalla finestra cronometrata:
+        // clonare i batch e' lavoro del banco, non dell'engine.
+        let (a, b) = if con.len().is_multiple_of(2) {
+            let ia = acceso.inputs();
+            let ib = spento.inputs();
+            let a = acceso.esegui_diviso(ia);
+            let b = spento.esegui_diviso(ib);
+            (a, b)
+        } else {
+            let ib = spento.inputs();
+            let ia = acceso.inputs();
+            let b = spento.esegui_diviso(ib);
+            let a = acceso.esegui_diviso(ia);
+            (a, b)
+        };
+        cumulato += a.wall() + b.wall();
+        con.push(a);
+        senza.push(b);
+    }
+    (con, senza)
+}
+
+/// Mediana di una serie di durate estratte da una serie di spese.
+fn mediana_di(spese: &[Spesa], estrai: fn(&Spesa) -> Duration) -> Duration {
+    let valori: Vec<u64> = spese.iter().map(|s| ns(estrai(s))).collect();
+    Duration::from_nanos(statistica(&valori).0)
+}
+
+/// Mediana di una serie di differenze **con segno**, in nanosecondi.
+///
+/// Il segno si conserva: una differenza negativa e' l'informazione che
+/// l'effetto cercato e' sotto il rumore, e azzerarla la nasconderebbe.
+fn mediana_con_segno(valori: &[i64]) -> i64 {
+    assert!(!valori.is_empty(), "statistica su una serie vuota");
+    let mut ordinati = valori.to_vec();
+    ordinati.sort_unstable();
+    ordinati[ordinati.len() / 2]
+}
+
+/// Retta ai minimi quadrati `y = intercetta + pendenza * x`.
+///
+/// Serve a leggere il residuo come «tanto fisso piu' tanto per batch». Con
+/// meno di due punti distinti non e' definita e si restituisce `None`: mai un
+/// coefficiente inventato.
+fn retta(punti: &[(f64, f64)]) -> Option<(f64, f64)> {
+    let n = punti.len() as f64;
+    if punti.len() < 2 {
+        return None;
+    }
+    let media_x = punti.iter().map(|p| p.0).sum::<f64>() / n;
+    let media_y = punti.iter().map(|p| p.1).sum::<f64>() / n;
+    let numeratore: f64 = punti
+        .iter()
+        .map(|p| (p.0 - media_x) * (p.1 - media_y))
+        .sum();
+    let denominatore: f64 = punti.iter().map(|p| (p.0 - media_x).powi(2)).sum();
+    if denominatore == 0.0 {
+        return None;
+    }
+    let pendenza = numeratore / denominatore;
+    Some(((-pendenza).mul_add(media_x, media_y), pendenza))
+}
+
+/// Coefficiente di determinazione della retta: dice se «fisso + per batch»
+/// e' una lettura onesta del residuo o una forzatura.
+fn r_quadro(punti: &[(f64, f64)], intercetta: f64, pendenza: f64) -> f64 {
+    let media_y = punti.iter().map(|p| p.1).sum::<f64>() / punti.len() as f64;
+    let totale: f64 = punti.iter().map(|p| (p.1 - media_y).powi(2)).sum();
+    let residua: f64 = punti
+        .iter()
+        .map(|p| (p.1 - pendenza.mul_add(p.0, intercetta)).powi(2))
+        .sum();
+    if totale == 0.0 {
+        return 1.0;
+    }
+    1.0 - residua / totale
+}
+
+/// Terzo asse: catena di `k` nodi identici, input fisso.
+///
+/// `string_pad` a larghezza 20 su una colonna gia' lunga 20 e' idempotente
+/// dopo il primo nodo: righe, schema e dimensione dei dati restano gli stessi
+/// lungo tutta la catena. Cio' che cresce con `k` e' **solo** il numero di
+/// attraversamenti di confine fra nodi. Se il residuo cresce con `k`, e'
+/// lavoro ai confini; se resta piatto, e' gestione di ingresso e uscita.
+fn carico_catena(k: usize) -> Carico {
+    let nodi: Vec<Value> = (0..k)
+        .map(|i| {
+            let ingresso = if i == 0 {
+                "main".to_owned()
+            } else {
+                format!("n{}", i - 1)
+            };
+            json!({
+                "id": format!("n{i}"),
+                "op": "table.string_pad",
+                "in": [ingresso],
+                "config": {
+                    "column": "etichetta", "width": 20,
+                    "side": "left", "fill_char": "0"
+                }
+            })
+        })
+        .collect();
+    Carico {
+        nome: "catena",
+        perche: "catena di nodi identici: isola il costo di attraversamento",
+        piano: json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": nodi,
+            "output": format!("n{}", k - 1),
+            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+        }),
+        rami: None,
+    }
+}
+
+/// Catena di `k` nodi `formula`, ognuno con una colonna nuova.
+///
+/// Se il residuo cresce proporzionalmente a `k`, e' costo **per nodo
+/// formula**; se resta costante, e' costo per esecuzione che la presenza di
+/// un solo nodo formula fa comparire.
+fn carico_catena_formula(k: usize) -> Carico {
+    let nodi: Vec<Value> = (0..k)
+        .map(|i| {
+            let ingresso = if i == 0 {
+                "main".to_owned()
+            } else {
+                format!("n{}", i - 1)
+            };
+            json!({
+                "id": format!("n{i}"),
+                "op": "table.formula",
+                "in": [ingresso],
+                "config": {"new_column": format!("doppio{i}"), "formula": "valore * 2"}
+            })
+        })
+        .collect();
+    Carico {
+        nome: "catena_formula",
+        perche: "catena di nodi formula: il residuo scala col numero di nodi?",
+        piano: json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": nodi,
+            "output": format!("n{}", k - 1),
+            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+        }),
+        rami: None,
+    }
+}
+
+/// Piano a nodo singolo, per attribuire il residuo alla singola operazione.
+fn carico_singolo(nome: &'static str, nodo: &Value) -> Carico {
+    Carico {
+        nome,
+        perche: "nodo singolo: attribuisce il residuo all'operazione",
+        piano: json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "nodes": [nodo],
+            "output": "n0",
+            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+        }),
+        rami: None,
+    }
+}
+
+/// I tre nodi di `streaming_lineare`, ciascuno da solo, piu' la catena
+/// completa: il confronto dice se il residuo e' dell'attraversamento o di
+/// un'operazione precisa.
+fn carichi_per_operazione() -> Vec<(&'static str, Carico)> {
+    let formula = json!({
+        "id": "n0", "op": "table.formula", "in": ["main"],
+        "config": {"new_column": "doppio", "formula": "valore * 2"}
+    });
+    let pad = json!({
+        "id": "n0", "op": "table.string_pad", "in": ["main"],
+        "config": {"column": "etichetta", "width": 20, "side": "left", "fill_char": "0"}
+    });
+    let filtro = json!({
+        "id": "n0", "op": "table.filter", "in": ["main"],
+        "config": {"column": "valore", "operator": ">", "value": "10"}
+    });
+    // Due varianti di formula per separare il costo del CALCOLO da quello
+    // strutturale della presenza del nodo: una costante non legge colonne.
+    let costante = json!({
+        "id": "n0", "op": "table.formula", "in": ["main"],
+        "config": {"new_column": "uno", "formula": "1"}
+    });
+    let intero = json!({
+        "id": "n0", "op": "table.formula", "in": ["main"],
+        "config": {"new_column": "doppio_id", "formula": "id * 2"}
+    });
+    vec![
+        ("solo_formula", carico_singolo("solo_formula", &formula)),
+        (
+            "solo_formula_costante",
+            carico_singolo("solo_formula_costante", &costante),
+        ),
+        (
+            "solo_formula_intero",
+            carico_singolo("solo_formula_intero", &intero),
+        ),
+        ("solo_string_pad", carico_singolo("solo_string_pad", &pad)),
+        ("solo_filter", carico_singolo("solo_filter", &filtro)),
+    ]
+}
+
+/// Metriche complete di UNA esecuzione, per capire dove il tempo NON e'
+/// registrato: nodi e segmenti con i loro contatori, cosi' come l'engine li
+/// espone. Serve alla diagnosi, non alla statistica.
+fn diagnostica(banco: &Banco) -> Value {
+    let (_, m) = banco.esegui();
+    let nodi: Vec<Value> = m
+        .nodes
+        .iter()
+        .map(|(id, n)| {
+            json!({
+                "id": id, "op": n.operation,
+                "batch_in": n.batches_in, "batch_out": n.batches_out,
+                "righe_in": n.rows_in, "righe_out": n.rows_out,
+                "byte_in": n.bytes_in, "byte_out": n.bytes_out,
+                "wall_ns": ns(n.wall_time),
+            })
+        })
+        .collect();
+    let segmenti: Vec<Value> = m
+        .segments
+        .iter()
+        .map(|(id, s)| {
+            json!({
+                "id": id, "modo": format!("{:?}", s.mode),
+                "batch_in": s.batches_in, "batch_out": s.batches_out,
+                "righe_in": s.rows_in, "righe_out": s.rows_out,
+                "wall_ns": ns(s.wall_time),
+            })
+        })
+        .collect();
+    json!({
+        "nodi": nodi,
+        "segmenti": segmenti,
+        "righe_processate": m.total_rows_processed,
+        "batch_uscita": m.output_batches,
+        "righe_uscita": m.output_rows,
+        "contatori_saturati": m.counters_saturated,
+    })
+}
+
+/// Una cella della decomposizione: una forma dell'input, misurata appaiata.
+struct Cella {
+    valore: Value,
+    /// Residuo mediano in nanosecondi, per le regressioni.
+    residuo_ns: f64,
+    /// Differenza appaiata mediana dell'osservabilita', in nanosecondi.
+    osservabilita_ns: f64,
+}
+
+/// Misura una forma: campagna appaiata, partizione esatta, sottodivisione.
+fn cella(carico: &Carico, n_batch: usize, righe: usize) -> Cella {
+    let acceso = Banco::nuovo_con(carico, n_batch, righe, true);
+    let spento = Banco::nuovo_con(carico, n_batch, righe, false);
+    let (con, senza) = campagna_appaiata(&acceso, &spento);
+
+    // A metriche spente i wall_time per nodo non esistono: e' atteso, ed e'
+    // la ragione per cui il tempo dei kernel si prende dalle ripetizioni
+    // accese. Se comparissero, l'assunzione sarebbe sbagliata.
+    assert!(
+        senza.iter().all(|s| s.kernel.is_zero()),
+        "a metriche spente i tempi per nodo devono essere assenti"
+    );
+    // I segmenti accumulano lo STESSO `elapsed` dei nodi (executor.rs:
+    // 3175/3188, 4693/4702, 4920/4929): non aggiungono copertura. Verificato
+    // qui, non solo letto nel codice.
+    assert!(
+        con.iter().all(|s| s.segmenti <= s.kernel),
+        "i segmenti coprono piu' dei nodi"
+    );
+
+    // PARTIZIONE ESATTA, calcolata PER RIPETIZIONE:
+    //   wall = costruzione + kernel + residuo
+    // Le quote si mediano una per una: mediare i termini e poi dividere
+    // darebbe una somma diversa da 100 senza che nulla sia sbagliato, e
+    // sarebbe solo confondente.
+    let residui: Vec<u64> = con
+        .iter()
+        .map(|s| ns(s.wall().saturating_sub(s.costruzione + s.kernel)))
+        .collect();
+    let quote = |estrai: fn(&Spesa) -> Duration| -> f64 {
+        let mut v: Vec<f64> = con.iter().map(|s| quota(estrai(s), s.wall())).collect();
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let mut quote_residuo: Vec<f64> = con
+        .iter()
+        .map(|s| quota(s.wall().saturating_sub(s.costruzione + s.kernel), s.wall()))
+        .collect();
+    quote_residuo.sort_by(f64::total_cmp);
+
+    let costruzione = mediana_di(&con, |s| s.costruzione);
+    let kernel = mediana_di(&con, |s| s.kernel);
+    let residuo = Duration::from_nanos(statistica(&residui).0);
+    let wall = mediana_di(&con, |s: &Spesa| s.wall());
+
+    // SOTTODIVISIONE del residuo, appaiata: quanto ne e' costo
+    // dell'osservabilita' stessa. Differenza per COPPIA, poi mediana — non
+    // differenza di mediane, che mescolerebbe momenti diversi dell'host.
+    let coppie: Vec<i64> = con
+        .iter()
+        .zip(&senza)
+        .map(|(a, b)| {
+            i64::try_from(ns(a.drenaggio)).unwrap_or(i64::MAX)
+                - i64::try_from(ns(b.drenaggio)).unwrap_or(i64::MAX)
+        })
+        .collect();
+    let osservabilita = mediana_con_segno(&coppie);
+    let positive = coppie.iter().filter(|d| **d > 0).count();
+
+    Cella {
+        valore: json!({
+            "batch": n_batch,
+            "righe_per_batch": righe,
+            "righe_totali": n_batch * righe,
+            "ripetizioni": con.len(),
+            "wall_ns": ns(wall),
+            "partizione_ns": {
+                "costruzione": ns(costruzione),
+                "kernel": ns(kernel),
+                "residuo": ns(residuo),
+            },
+            "quote_pct": {
+                "costruzione": quote(|s| s.costruzione),
+                "kernel": quote(|s| s.kernel),
+                "residuo": quote_residuo[quote_residuo.len() / 2],
+            },
+            // Sottodivisione del residuo, non un quarto termine.
+            "osservabilita": {
+                "mediana_appaiata_ns": osservabilita,
+                "coppie": coppie.len(),
+                "coppie_positive": positive,
+                // Senza una maggioranza netta di differenze positive
+                // l'effetto non e' distinguibile dal rumore, e va detto
+                // invece di essere riportato come se fosse una misura.
+                "risolta": positive * 4 >= coppie.len() * 3,
+                "quota_del_residuo_pct": if residuo.is_zero() {
+                    0.0
+                } else {
+                    100.0 * osservabilita as f64 / residuo.as_nanos() as f64
+                },
+            },
+            "segmenti_ns": ns(mediana_di(&con, |s| s.segmenti)),
+        }),
+        residuo_ns: residuo.as_nanos() as f64,
+        osservabilita_ns: osservabilita as f64,
+    }
+}
+
+/// Regressione di una serie di punti, con il nome dell'ascissa.
+fn regressione(punti: &[(f64, f64)], per_unita: &str) -> Value {
+    retta(punti).map_or_else(
+        || json!({"disponibile": false}),
+        |(intercetta, pendenza)| {
+            json!({
+                "disponibile": true,
+                "intercetta_ns": intercetta,
+                per_unita: pendenza,
+                "r_quadro": r_quadro(punti, intercetta, pendenza),
+                "punti": punti.len(),
+            })
+        },
+    )
+}
+
+fn fase_decomposizione(carico: &Carico) -> Value {
+    // ASSE 1 — righe totali costanti, numero di batch variabile: isola cio'
+    // che si paga a ogni batch.
+    let mut celle_batch = Vec::new();
+    let mut punti_residuo_batch = Vec::new();
+    let mut punti_osservabilita = Vec::new();
+    for (n_batch, righe) in FORME {
+        let c = cella(carico, n_batch, righe);
+        punti_residuo_batch.push((n_batch as f64, c.residuo_ns));
+        punti_osservabilita.push((n_batch as f64, c.osservabilita_ns));
+        celle_batch.push(c.valore);
+    }
+
+    // ASSE 2 — numero di batch costante, righe totali variabili: separa il
+    // costo per riga da quello fisso per esecuzione, che sul primo asse sono
+    // indistinguibili.
+    let mut celle_righe = Vec::new();
+    let mut punti_residuo_righe = Vec::new();
+    for (n_batch, righe) in FORME_RIGHE {
+        let c = cella(carico, n_batch, righe);
+        punti_residuo_righe.push(((n_batch * righe) as f64, c.residuo_ns));
+        celle_righe.push(c.valore);
+    }
+
+    json!({
+        "carico": carico.nome,
+        // Modi fisici dei segmenti: dicono quali nodi passano dal percorso
+        // bloccante, dove la materializzazione precede il cronometro.
+        "diagnostica": diagnostica(&Banco::nuovo(carico)),
+        "asse_batch": {
+            "descrizione": "righe totali costanti, numero di batch variabile",
+            "forme": celle_batch,
+            "residuo": regressione(&punti_residuo_batch, "per_batch_ns"),
+            "osservabilita": regressione(&punti_osservabilita, "per_batch_ns"),
+        },
+        "asse_righe": {
+            "descrizione": "numero di batch costante, righe totali variabili",
+            "forme": celle_righe,
+            "residuo": regressione(&punti_residuo_righe, "per_riga_ns"),
+        },
+    })
+}
+
+/// Fase CATENA: input costante, lunghezza della catena variabile.
+///
+/// Non dipende dal carico — costruisce piani propri — quindi e' una fase a
+/// se': ripeterla per ogni carico misurerebbe cinque volte la stessa cosa.
+fn fase_catena() -> Value {
+    let mut celle = Vec::new();
+    let mut punti_residuo = Vec::new();
+    let mut punti_kernel = Vec::new();
+    for k in 1..=4_usize {
+        let catena = carico_catena(k);
+        let c = cella(&catena, BATCH, RIGHE_PER_BATCH);
+        punti_residuo.push((k as f64, c.residuo_ns));
+        punti_kernel.push((
+            k as f64,
+            c.valore["partizione_ns"]["kernel"].as_f64().unwrap_or(0.0),
+        ));
+        celle.push(c.valore);
+    }
+    // Ogni operazione della catena streaming, da sola: se il residuo si
+    // concentra su una, non e' l'attraversamento a costare.
+    let per_operazione: Vec<Value> = carichi_per_operazione()
+        .into_iter()
+        .map(|(nome, carico)| {
+            let c = cella(&carico, BATCH, RIGHE_PER_BATCH);
+            let banco = Banco::nuovo_con(&carico, BATCH, RIGHE_PER_BATCH, true);
+            json!({
+                "operazione": nome,
+                "misura": c.valore,
+                "diagnostica": diagnostica(&banco),
+            })
+        })
+        .collect();
+
+    // Stessa catena, ma di nodi `formula`: il confronto fra le due pendenze
+    // dice se il residuo e' dell'attraversamento o dell'operazione.
+    let mut celle_formula = Vec::new();
+    let mut punti_residuo_formula = Vec::new();
+    let mut punti_kernel_formula = Vec::new();
+    for k in 1..=4_usize {
+        let c = cella(&carico_catena_formula(k), BATCH, RIGHE_PER_BATCH);
+        punti_residuo_formula.push((k as f64, c.residuo_ns));
+        punti_kernel_formula.push((
+            k as f64,
+            c.valore["partizione_ns"]["kernel"].as_f64().unwrap_or(0.0),
+        ));
+        celle_formula.push(c.valore);
+    }
+
+    json!({
+        "carico": "catena",
+        "descrizione": "input costante (24 x 8192), catena di k nodi identici",
+        "catena_string_pad": {
+            "forme": celle,
+            "residuo": regressione(&punti_residuo, "per_nodo_ns"),
+            "kernel": regressione(&punti_kernel, "per_nodo_ns"),
+        },
+        "catena_formula": {
+            "forme": celle_formula,
+            "residuo": regressione(&punti_residuo_formula, "per_nodo_ns"),
+            "kernel": regressione(&punti_kernel_formula, "per_nodo_ns"),
+        },
+        "per_operazione": per_operazione,
+    })
+}
+
+/// Quota percentuale di una parte sul totale, zero se il totale e' nullo.
+fn quota(parte: Duration, totale: Duration) -> f64 {
+    if totale.is_zero() {
+        return 0.0;
+    }
+    100.0 * parte.as_nanos() as f64 / totale.as_nanos() as f64
+}
+
+// ---------------------------------------------------------------------------
 // Genitore
 // ---------------------------------------------------------------------------
 
@@ -810,6 +1427,8 @@ fn main() {
         let risultato = match fase.as_str() {
             "tempo" => fase_tempo(carico),
             "memoria" => fase_memoria(carico),
+            "decomposizione" => fase_decomposizione(carico),
+            "catena" => fase_catena(),
             altro => panic!("fase sconosciuta: {altro}"),
         };
         println!("{risultato}");
