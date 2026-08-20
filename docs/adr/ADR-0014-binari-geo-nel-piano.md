@@ -50,7 +50,7 @@ Fatti di scoping (base del design):
    il CRS dell'operando. Registrato come debito di design del cantiere
    unario (fuori da questo ADR).
 6. RSS collettivi ~3,3 GiB nello sweep: un lato decodificato puo'
-   superare `max_memory_bytes` — serve contabilita' preflight (D14.4).
+   superare `max_governed_memory_bytes` — serve contabilita' preflight (D14.4).
 
 ## Decisione
 

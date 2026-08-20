@@ -1239,7 +1239,7 @@ pub fn cross_join(
     }
     // Preventivo, non consuntivo: `rows` e' esatto (prodotto delle due
     // cardinalita') e qui non e' stato ancora allocato nulla. E' il punto in
-    // cui `max_memory_bytes` puo' ancora impedire l'allocazione invece di
+    // cui `max_governed_memory_bytes` puo' ancora impedire l'allocazione invece di
     // constatarla.
     //
     // MODELLO della riga di output. Ogni riga del prodotto cartesiano

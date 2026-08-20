@@ -71,7 +71,7 @@ pub struct Limits {
     #[serde(default)]
     pub plan: PlanLimits,
     /// Budget memoria globale del piano (perimetro: ADR 2).
-    pub max_memory_bytes: u64,
+    pub max_governed_memory_bytes: u64,
     /// Quota spill su disco.
     pub max_temp_bytes: u64,
     /// Partizioni di spill.
@@ -150,8 +150,8 @@ impl Limits {
                     .to_owned(),
             ));
         }
-        if self.max_memory_bytes == 0 {
-            return nullo("max_memory_bytes");
+        if self.max_governed_memory_bytes == 0 {
+            return nullo("max_governed_memory_bytes");
         }
         if self.max_temp_bytes == 0 {
             return nullo("max_temp_bytes");
@@ -193,7 +193,7 @@ impl Default for Limits {
         Self {
             rows: RowLimits::default(),
             plan: PlanLimits::default(),
-            max_memory_bytes: 512 * 1024 * 1024,
+            max_governed_memory_bytes: 512 * 1024 * 1024,
             max_temp_bytes: 8 * 1024 * 1024 * 1024,
             spill_partitions: 64,
             max_parallelism: 0, // 0 = numero di core logici

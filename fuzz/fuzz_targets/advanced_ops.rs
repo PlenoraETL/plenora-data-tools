@@ -36,7 +36,7 @@ fn limits() -> Limits {
         max_rows: 1_024,
         max_columns: 32,
         max_string_bytes: 4_096,
-        max_memory_bytes: 2_048,
+        max_governed_memory_bytes: 2_048,
         max_temp_bytes: 2 * 1024 * 1024,
         spill_partitions: 16,
         ..Limits::default()

@@ -282,7 +282,7 @@ pub fn resolve_melt_names<'a>(
 /// - `Schema`: colonna id/value assente; sul percorso testuale, tipo non
 ///   convertibile o timezone Arrow non valida.
 /// - `ResourceLimit`: overflow o righe di output oltre `max_rows`, stima
-///   dell'output oltre `max_memory_bytes`, valore testuale oltre
+///   dell'output oltre `max_governed_memory_bytes`, valore testuale oltre
 ///   `max_string_bytes`.
 // Pipeline lineare wide->long (preparazione, indici, take sulle colonne id,
 // costruzione delle colonne variable/value con fast path per tipo): lunga

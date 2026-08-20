@@ -13,7 +13,7 @@
 //!   `pair_protocol.rs` e dal livello comandi di `main.rs`).
 //!
 //! L'unificazione in un DAG unico e' in corso: Fase 2A introduce
-//! [`plan`] — il formato piano v4 (DAG dichiarativo, `PlanLimits` in parsing,
+//! [`plan`] — il formato piano v5 (DAG dichiarativo, `PlanLimits` in parsing,
 //! migrazione dal piano lineare legacy, canonicalizzazione per il futuro
 //! `plan_hash`) — e [`planner`] — la fase 1 `validate` (Architetture.md
 //! par. 6.1, ADR 4/5): inferenza dei contratti arco per arco, identita' del
@@ -36,7 +36,7 @@
 //! directory orfane — difesa strutturale contro i crash non intercettabili.
 //!
 //! Fase 2B M1a/M1b aggiunge [`governor`] (ADR-0002/ADR-0001): budget
-//! memoria globale di piano `max_memory_bytes`, [`MemoryLease`] RAII
+//! memoria globale di piano `max_governed_memory_bytes`, [`MemoryLease`] RAII
 //! reference-counted con reservation a tre vie, e [`GovernedBatch`] con la
 //! sequenza logica ai confini degli archi — i kernel restano su
 //! `RecordBatch` puro.
@@ -53,7 +53,7 @@
 //!
 //! Fase 2B M2c aggiunge il wiring dello spill generalizzato (ADR-0002):
 //! `table.sort`/`distinct`/`aggregate` attivano preventivamente la variante
-//! `*_spilled` sopra la soglia stimata "byte input > `max_memory_bytes`";
+//! `*_spilled` sopra la soglia stimata "byte input > `max_governed_memory_bytes`";
 //! i file di spill vivono nella directory condivisa del [`TempStore`]
 //! dell'esecuzione e le [`SpillMetrics`] aggregate sono esposte in
 //! [`executor::ExecutionMetrics`].

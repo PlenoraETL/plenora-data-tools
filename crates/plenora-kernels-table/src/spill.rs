@@ -237,10 +237,10 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                 .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
-            if estimated > limits.max_memory_bytes {
+            if estimated > limits.max_governed_memory_bytes {
                 return Err(PlenoraError::ResourceLimit(format!(
-                    "partizione spill oltre max_memory_bytes: {estimated} > {}",
-                    limits.max_memory_bytes
+                    "partizione spill oltre max_governed_memory_bytes: {estimated} > {}",
+                    limits.max_governed_memory_bytes
                 )));
             }
         }
@@ -258,9 +258,9 @@ fn collect_distinct(path: &PathBuf, limits: &Limits, output: &mut Vec<usize>) ->
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
                 .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
-            if estimated > limits.max_memory_bytes {
+            if estimated > limits.max_governed_memory_bytes {
                 return Err(PlenoraError::ResourceLimit(
-                    "partizione union spill oltre max_memory_bytes".into(),
+                    "partizione union spill oltre max_governed_memory_bytes".into(),
                 ));
             }
             output.push(ordinal);
@@ -292,9 +292,9 @@ fn collect_membership(
                 .ok_or_else(|| {
                     PlenoraError::ResourceLimit("overflow memoria except spill".into())
                 })?;
-            if emitted_bytes > limits.max_memory_bytes {
+            if emitted_bytes > limits.max_governed_memory_bytes {
                 return Err(PlenoraError::ResourceLimit(
-                    "partizione except spill oltre max_memory_bytes".into(),
+                    "partizione except spill oltre max_governed_memory_bytes".into(),
                 ));
             }
             output.push(ordinal);
@@ -314,15 +314,15 @@ pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
 #[must_use]
 pub fn should_spill(left: &RecordBatch, right: &RecordBatch, limits: &Limits) -> bool {
     estimated_batch_bytes(left).saturating_add(estimated_batch_bytes(right))
-        > limits.max_memory_bytes
+        > limits.max_governed_memory_bytes
 }
 
 /// Variante unaria di `should_spill` per gli operatori a un input (sort,
 /// distinct, hash aggregation; ADR-0002): si spilla quando il solo input
-/// supera il budget `max_memory_bytes`.
+/// supera il budget `max_governed_memory_bytes`.
 #[must_use]
 pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
-    estimated_batch_bytes(batch) > limits.max_memory_bytes
+    estimated_batch_bytes(batch) > limits.max_governed_memory_bytes
 }
 
 /// Set operation binaria con spill su disco delle chiavi compatte.
@@ -330,7 +330,7 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 /// Le chiavi delle righe sono partizionate per hash su file binari con
 /// quota `max_temp_bytes`; il matching per partizione applica
 /// `union_distinct`, `intersect` oppure `except` (default) rispettando
-/// `max_memory_bytes` sul working set, poi le righe sopravvissute sono
+/// `max_governed_memory_bytes` sul working set, poi le righe sopravvissute sono
 /// riselezionate dagli input con `select_rows`.
 ///
 /// # Errors
@@ -341,7 +341,7 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 /// - `ResourceLimit`: quote e rappresentabilita' degli ordinali (volume);
 /// - `Internal`: integrita' del file temporaneo scritto da noi (chiave
 ///   oltre `max_temp_bytes`, working set di una partizione oltre
-///   `max_memory_bytes`, overflow interni di accounting);
+///   `max_governed_memory_bytes`, overflow interni di accounting);
 /// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
 pub fn execute_set_operation(
     operation: &str,
@@ -779,7 +779,7 @@ fn spill_partitioned(
 }
 
 /// Legge una partizione IPC in streaming e la ricompone; fallisce se la
-/// partizione supera `max_memory_bytes` (partizioni troppo poche o skew
+/// partizione supera `max_governed_memory_bytes` (partizioni troppo poche o skew
 /// delle chiavi: aumentare `spill_partitions`).
 fn read_partition(
     workspace: &RowSpillWorkspace,
@@ -796,9 +796,9 @@ fn read_partition(
         estimated = estimated
             .checked_add(estimated_batch_bytes(&batch))
             .ok_or_else(|| PlenoraError::ResourceLimit("overflow memoria spill".into()))?;
-        if estimated > limits.max_memory_bytes {
+        if estimated > limits.max_governed_memory_bytes {
             return Err(PlenoraError::ResourceLimit(
-                "partizione spill oltre max_memory_bytes".into(),
+                "partizione spill oltre max_governed_memory_bytes".into(),
             ));
         }
         batches.push(batch);
@@ -816,7 +816,7 @@ fn read_partition(
 /// (prima/ultima occorrenza globale, conteggio) con gli stessi byte di
 /// `row_key` del percorso in memoria. Output identico a `distinct`: la mappa
 /// delle chiavi resta in RAM (e' dimensionata sull'output, una voce per
-/// chiave distinta) ed e' contabilizzata su `max_memory_bytes`.
+/// chiave distinta) ed e' contabilizzata su `max_governed_memory_bytes`.
 ///
 /// # Errors
 ///
@@ -842,7 +842,7 @@ pub fn distinct_spilled(
 ///   errore Arrow in `replace_or_append`/`select_rows`;
 /// - `InvalidPlan`: colonna riservata allo spill gia' presente,
 ///   `spill_partitions` zero;
-/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_memory_bytes`),
+/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_governed_memory_bytes`),
 ///   ordinal/chiave non rappresentabili;
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
@@ -945,9 +945,9 @@ pub fn distinct_spilled_in(
                         .ok_or_else(|| {
                             PlenoraError::ResourceLimit("overflow memoria spill".into())
                         })?;
-                    if estimated > limits.max_memory_bytes {
+                    if estimated > limits.max_governed_memory_bytes {
                         return Err(PlenoraError::ResourceLimit(
-                            "distinct spill oltre max_memory_bytes".into(),
+                            "distinct spill oltre max_governed_memory_bytes".into(),
                         ));
                     }
                     stats.insert(
@@ -1012,7 +1012,7 @@ pub fn aggregate_spilled(
 ///   Arrow in `aggregate`/`concat_batches`/`select_rows`;
 /// - `InvalidPlan`: `group_by` vuoto, `spill_partitions` zero, output di
 ///   partizione incoerente con i gruppi (invariante interna);
-/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_memory_bytes`);
+/// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_governed_memory_bytes`);
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
 ///
@@ -1109,7 +1109,7 @@ pub fn aggregate_spilled_in(
 fn sort_run_rows(batch: &RecordBatch, limits: &Limits) -> usize {
     let bytes = estimated_batch_bytes(batch).max(1);
     let per_row = (bytes / batch.num_rows().max(1)).max(1);
-    (limits.max_memory_bytes / 4 / per_row).max(1)
+    (limits.max_governed_memory_bytes / 4 / per_row).max(1)
 }
 
 /// Cursore di streaming su una run IPC ordinata: tiene in memoria un solo
@@ -1186,7 +1186,7 @@ fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) ->
 
 /// `table.sort` con spill (ADR-0002): external merge sort.
 ///
-/// L'input e' affettato in run dimensionate su `max_memory_bytes`, ogni run
+/// L'input e' affettato in run dimensionate su `max_governed_memory_bytes`, ogni run
 /// e' ordinata in memoria con `sort` e spillata su IPC; il merge k-way in
 /// streaming (un chunk per run alla volta) produce la permutazione globale e
 /// l'output e' ricostruito con `select_rows` sull'input. A parita' di chiavi
@@ -1458,7 +1458,7 @@ mod tests {
         close_writers(writers).expect("close");
 
         let tight = Limits {
-            max_memory_bytes: 70,
+            max_governed_memory_bytes: 70,
             ..Limits::default()
         };
         assert!(load_key_set(&paths[0], &tight).is_err());
@@ -1483,9 +1483,9 @@ mod tests {
     use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
     use plenora_core::arrow::schema::{Field, Schema};
 
-    fn spill_test_limits(max_memory_bytes: usize) -> Limits {
+    fn spill_test_limits(max_governed_memory_bytes: usize) -> Limits {
         Limits {
-            max_memory_bytes,
+            max_governed_memory_bytes,
             max_temp_bytes: 1 << 30,
             spill_partitions: 8,
             ..Limits::default()
@@ -1737,7 +1737,10 @@ mod tests {
             let tight = spill_test_limits(1);
             let error = distinct_spilled_in(&batch, &config, &tight, &mut workspace)
                 .expect_err("quota memoria superata");
-            assert!(error.to_string().contains("max_memory_bytes"), "{error}");
+            assert!(
+                error.to_string().contains("max_governed_memory_bytes"),
+                "{error}"
+            );
             drop(workspace);
         }
 

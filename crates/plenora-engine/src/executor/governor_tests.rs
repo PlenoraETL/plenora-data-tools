@@ -56,7 +56,7 @@ fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
 
 fn streaming_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -124,7 +124,7 @@ fn tee_fan_out_counts_quota_once_and_releases_after_last_reader() {
 #[test]
 fn input_edge_assigns_lease_and_batch_sequence() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -190,7 +190,7 @@ fn streaming_chain_propagates_sequence_one_to_one() {
 #[test]
 fn blocking_segment_reassigns_sequence_deterministically() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g", "op": "table.aggregate", "in": ["main"],
@@ -268,8 +268,8 @@ fn memory_budget_exhaustion_fails_fast_with_contract_error() {
     let batch = table_batch(&[1, 2], &["a", "b"]);
     let bytes = batch.get_array_memory_size() as u64;
     let plan = json!({
-        "schema_version": 4,
-        "limits": {"max_memory_bytes": bytes - 1},
+        "schema_version": 5,
+        "limits": {"max_governed_memory_bytes": bytes - 1},
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -284,10 +284,10 @@ fn memory_budget_exhaustion_fails_fast_with_contract_error() {
     assert_eq!(
         error.category(),
         plenora_core::ErrorCategory::ResourceLimit,
-        "errore ResourceLimit max_memory_bytes: {error}"
+        "errore ResourceLimit max_governed_memory_bytes: {error}"
     );
     assert!(
-        error.to_string().contains("max_memory_bytes"),
+        error.to_string().contains("max_governed_memory_bytes"),
         "il testo dice quale tetto: {error}"
     );
 }

@@ -160,7 +160,7 @@ fn main() {
         .unwrap_or(3);
     let limits = Limits {
         max_rows: 40_000_000,
-        max_memory_bytes: 6 * 1024 * 1024 * 1024,
+        max_governed_memory_bytes: 6 * 1024 * 1024 * 1024,
         ..Limits::default()
     };
 

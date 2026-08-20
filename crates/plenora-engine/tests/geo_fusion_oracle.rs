@@ -357,7 +357,7 @@ fn run_ok(
 /// -> rotate -> simplify -> scale -> envelope, un solo gruppo.
 fn happy_path_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -524,7 +524,7 @@ fn contract_and_schema_identical_with_fusion_on_and_off() {
 
 fn cell_too_large_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "d1", "op": "geo.densify", "in": ["main"],
@@ -586,7 +586,7 @@ fn b_cell_over_max_cell_bytes_attributed_to_first_node() {
 
 fn malformed_input_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -715,7 +715,7 @@ fn c_malformed_wkb_attributed_to_first_node() {
 
 fn centroid_overflow_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -745,7 +745,7 @@ fn d1_centroid_overflow_attributed_to_producer() {
 
 fn scale_inf_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -784,7 +784,7 @@ fn d2_scale_to_infinite_attributed_to_producer() {
 
 fn ogc_invalid_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -945,7 +945,7 @@ fn f_cancellation_mid_group_same_node() {
 /// Piano M2: due transform fondibili + misura terminale `geo.area`.
 fn terminal_area_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -960,7 +960,7 @@ fn terminal_area_plan() -> Value {
 /// Piano M2: UN transform + misura terminale `geo.to_wkt` (gruppo di due).
 fn terminal_to_wkt_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -1042,7 +1042,7 @@ fn m2_happy_path_terminal_measure_byte_per_byte() {
 #[test]
 fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "d1", "op": "geo.densify", "in": ["main"],
@@ -1071,7 +1071,7 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
 #[test]
 fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -1102,7 +1102,7 @@ fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
 /// che esiste per ripararlo.
 fn make_valid_first_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "mv", "op": "geo.make_valid", "in": ["main"], "config": {}},
@@ -1117,7 +1117,7 @@ fn make_valid_first_plan() -> Value {
 #[cfg(feature = "geos-backend")]
 fn make_valid_mid_chain_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -1136,7 +1136,7 @@ fn make_valid_mid_chain_plan() -> Value {
 /// `Known`, vedi il piano con misura terminale sotto).
 fn reproject_chain_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.reproject", "in": ["main"],
@@ -1153,7 +1153,7 @@ fn reproject_chain_plan() -> Value {
 #[cfg(feature = "proj-backend")]
 fn reproject_geographic_measure_plan() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.reproject", "in": ["main"],
@@ -1251,7 +1251,7 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
 #[test]
 fn m3a2_make_valid_then_measure_boundary_bytes_match() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "mv", "op": "geo.make_valid", "in": ["main"], "config": {}},
@@ -1377,7 +1377,7 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
 #[test]
 fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "mv", "op": "geo.make_valid", "in": ["main"], "config": {}},

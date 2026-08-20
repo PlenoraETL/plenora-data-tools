@@ -14,7 +14,7 @@ use plenora_core::contract::{
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
 
-use crate::plan::PlanV4;
+use crate::plan::PlanV5;
 use crate::table_engine;
 
 use super::*;
@@ -94,7 +94,7 @@ fn input(contract: DataContract) -> Vec<(String, DataContract)> {
 #[test]
 fn row_diagnostics_reject_expression_after_cardinality_change() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "selected", "op": "table.filter", "in": ["main"],
@@ -117,7 +117,7 @@ fn row_diagnostics_reject_expression_after_cardinality_change() {
 #[test]
 fn row_diagnostics_reject_formula_after_cardinality_change() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "ordered", "op": "table.sort", "in": ["main"],
@@ -137,7 +137,7 @@ fn row_diagnostics_reject_formula_after_cardinality_change() {
 #[test]
 fn row_diagnostics_keep_observable_provenance_into_expression_and_formula() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "derived", "op": "table.expression", "in": ["main"],
@@ -160,7 +160,7 @@ fn row_diagnostics_reject_geo_after_cardinality_change() {
     // geo.subdivide espande le righe: una misura geo a valle emetterebbe
     // diagnostica con indici sorgente non osservabili -> piano rifiutato.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "d", "op": "geo.subdivide", "in": ["main"],
@@ -180,7 +180,7 @@ fn row_diagnostics_reject_geo_after_cardinality_change() {
 
     // Stesso vincolo con un nodo tabellare cardinality-changing.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -200,7 +200,7 @@ fn row_diagnostics_reject_geo_after_cardinality_change() {
 
     // Catena geo pura: provenance preservata, piano valido.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
@@ -215,7 +215,7 @@ fn row_diagnostics_reject_geo_after_cardinality_change() {
 #[test]
 fn row_diagnostics_reject_unobservable_provenance_after_filter() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "selected", "op": "table.filter", "in": ["main"],
@@ -239,7 +239,7 @@ fn row_diagnostics_hash_gate_follows_null_policy() {
     // catalogo, non una lista statica.
     let plan_with = |operation: &str, config: serde_json::Value| {
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "ordered", "op": "table.sort", "in": ["main"],
@@ -281,7 +281,7 @@ fn row_diagnostics_gate_ignores_hmac_sha256() {
     // P2: hmac_sha256 non emette MAI diagnostica row-scoped (le null_policy
     // legacy producono output dichiarato): nessun gate provenance.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "ordered", "op": "table.sort", "in": ["main"],
@@ -301,7 +301,7 @@ fn row_diagnostics_type_cast_gate_follows_target_type() {
     // conversione fallibile row-scoped richiedono provenance.
     let plan_with = |config: serde_json::Value| {
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "ordered", "op": "table.sort", "in": ["main"],
@@ -328,7 +328,7 @@ fn row_diagnostics_type_cast_gate_follows_target_type() {
 #[test]
 fn row_diagnostics_keep_observable_provenance_through_schema_only_nodes() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "rename", "op": "table.rename", "in": ["main"],
@@ -412,7 +412,7 @@ fn contract_canonical_omits_encoding_unless_declared() {
 /// (contratto trasversale), quindi non puo' stare a valle di `table.filter`.
 fn mixed_plan_json() -> String {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
@@ -438,7 +438,7 @@ fn validate_mixed() -> ValidatedGraph {
 fn mixed_table_geo_pipeline_validates_end_to_end() {
     let graph = validate_mixed();
 
-    assert_eq!(graph.plan_format_version(), 4);
+    assert_eq!(graph.plan_format_version(), 5);
     assert_eq!(graph.engine_version().0, ENGINE_VERSION);
     assert_eq!(graph.topological_order(), &["b", "f", "g"]);
     assert_eq!(
@@ -472,7 +472,7 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
 #[test]
 fn fan_out_fan_in_validates() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "a", "op": "table.filter", "in": ["main"],
@@ -500,7 +500,7 @@ fn binary_geo_fan_in_remaps_input_field_ids() {
     // Due input con lo stesso FieldId(4) assegnato dal lettore: il planner
     // rimappa nel namespace globale, nessuna collisione (D16).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left", "right"],
         "nodes": [
             {"id": "j", "op": "geo.sjoin", "in": ["left", "right"],
@@ -531,7 +531,7 @@ fn binary_geo_fan_in_remaps_input_field_ids() {
 #[test]
 fn geo_op_after_dropped_geometry_fails_in_validation() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "d", "op": "table.drop_columns", "in": ["main"],
@@ -555,7 +555,7 @@ fn geo_op_after_dropped_geometry_fails_in_validation() {
 fn incompatible_crs_fails_in_validation() {
     // geo.buffer richiede CRS proiettato: input geografico -> errore CRS.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
@@ -679,7 +679,7 @@ fn table_ops_propagate_declared_unresolved_unchanged() {
     // dichiarata INVARIATA (R4.6.4: arriva al bordo di scrittura con le
     // dichiarazioni originali).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -712,7 +712,7 @@ fn table_ops_validate_on_missing_crs_geometry_and_propagate_it() {
     // R4.6.4: lo stato `missing` attraversa invariato il contratto di
     // output (propagare non e' tollerare: le chiavi §2 lo dichiarano).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -737,7 +737,7 @@ fn geo_op_on_missing_crs_fails_with_the_declared_cause() {
     // categoria e' `Crs` come ogni requisito CRS non soddisfatto e il
     // messaggio dichiara la causa, non l'ultimo tentativo di lettura.
     let buffer = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
@@ -761,7 +761,7 @@ fn geo_op_on_missing_crs_fails_with_the_declared_cause() {
     // preserva la provenance (a differenza di `table.filter`, che la
     // invaliderebbe e verrebbe rifiutata dal gate row-diagnostics).
     let chained = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "r", "op": "table.rename", "in": ["main"],
@@ -788,7 +788,7 @@ fn geo_op_on_missing_crs_fails_with_the_declared_cause() {
 #[test]
 fn plan_crs_fails_closed_without_proj_backend() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "crs": "EPSG:32632",
         "inputs": ["main"],
         "nodes": [
@@ -811,7 +811,7 @@ fn plan_crs_fails_closed_without_proj_backend() {
 #[test]
 fn plan_crs_resolves_with_proj_backend() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "crs": "EPSG:32632",
         "inputs": ["main"],
         "nodes": [
@@ -831,7 +831,7 @@ fn missing_capability_fails_in_validation() {
     // geo.make_valid richiede il backend geos: senza la feature compilata il
     // piano fallisce in validazione, non a meta' esecuzione (par. 6.1 passo 5).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "m", "op": "geo.make_valid", "in": ["main"]},
@@ -853,7 +853,7 @@ fn missing_capability_fails_in_validation() {
 #[test]
 fn compiled_capability_validates_and_is_required_by_graph() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "m", "op": "geo.make_valid", "in": ["main"]},
@@ -945,7 +945,7 @@ fn legacy_aliases_in_v4_plan_validate_and_share_plan_hash() {
     // L'op geo precede `table.filter` (cardinality-changing): il gate
     // provenance row-diagnostics rifiuterebbe l'ordine inverso.
     let aliased = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo_buffer", "in": ["main"], "config": {"distance": 100.0}},
@@ -956,7 +956,7 @@ fn legacy_aliases_in_v4_plan_validate_and_share_plan_hash() {
     })
     .to_string();
     let canonical = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
@@ -980,7 +980,7 @@ fn equivalent_plans_share_plan_hash() {
     // Ordine dei nodi nel JSON e config omessa vs `{}` esplicita sono
     // irrilevanti: il piano canonico e' lo stesso (ADR 4).
     let sparse = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 100.0}},
@@ -992,7 +992,7 @@ fn equivalent_plans_share_plan_hash() {
     })
     .to_string();
     let explicit = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["c"],
@@ -1008,7 +1008,7 @@ fn equivalent_plans_share_plan_hash() {
     assert_eq!(first.plan_hash(), second.plan_hash());
 
     let different = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 200.0}},
@@ -1036,10 +1036,13 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
             },
         ],
     };
-    let migrated = PlanV4::from_legacy(&legacy).expect("migrazione");
+    let migrated = PlanV5::from_legacy(&legacy).expect("migrazione");
+    // Un piano legacy arriva al CANONICO, non alla v4: non esiste un formato
+    // intermedio da cui qualcuno possa ripartire.
+    assert_eq!(migrated.schema_version, PLAN_SCHEMA_VERSION_V5);
     let plan_json = serde_json::to_string(&migrated).expect("serializzazione piano migrato");
     let graph = validate(&plan_json, &input(table_contract())).expect("piano migrato valido");
-    assert_eq!(graph.plan_format_version(), 4);
+    assert_eq!(graph.plan_format_version(), 5);
     assert_eq!(graph.topological_order(), &["n0", "n1"]);
     assert!(graph
         .output_contract()
@@ -1145,7 +1148,7 @@ fn plan_hash_normalizes_integer_and_float_forms() {
     // normalizza i numeri (ADR 4) e i due piani producono lo stesso hash.
     let plan_with = |value: serde_json::Value| {
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1299,7 +1302,7 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
 
     // table.formula: baseline semantic 1 / kernel 2 (nuovo reject_rows).
     let formula_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "derived", "op": "table.formula", "in": ["main"],
@@ -1317,7 +1320,7 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
     // table.expression: baseline semantic 2 / kernel 3 (bump preesistente
     // expression-v2; il delta row-diagnostics alza semantic 3 / kernel 4).
     let expression_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "derived", "op": "table.expression", "in": ["main"],
@@ -1339,7 +1342,7 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
     // implementazione diagnostica) — il fingerprint deve vedere ANCHE il
     // bump kernel-only.
     let cast_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "cast", "op": "table.type_cast", "in": ["main"],
@@ -1467,7 +1470,7 @@ fn input_geometry_names_are_not_bound_in_the_field_allocator() {
     // vincerebbe). Le chiavi interned dagli analyze non devono collidere con
     // i FieldId delle geometrie di input.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left", "right"],
         "nodes": [
             {"id": "sl", "op": "table.sort", "in": ["left"], "config": {"columns": ["geom"]}},
@@ -1577,5 +1580,110 @@ fn catalog_matches_committed_snapshot() {
          se il cambiamento e' intenzionale, rigenerare con \
          `PLENORA_UPDATE_SNAPSHOT=1 cargo test -p plenora-engine catalog_matches_committed_snapshot` \
          e committare lo snapshot aggiornato"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Contratto della memoria (ADR 15): migrazione, identita', invalidazione
+// ---------------------------------------------------------------------------
+
+/// Lo stesso piano tabellare nelle due versioni, con lo stesso budget.
+fn piano_di_memoria(versione: u16, chiave: &str) -> String {
+    json!({
+        "schema_version": versione,
+        "inputs": ["main"],
+        "limits": {chiave: 4_194_304},
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["main"],
+             "config": {"column": "id", "operator": ">", "value": 0}}
+        ],
+        "output": "f"
+    })
+    .to_string()
+}
+
+/// Stessa resa esadecimale di `PlanHash::to_hex`: il confronto deve
+/// avvenire nella forma che l'API pubblica espone, non in una parallela.
+fn esadecimale(bytes: [u8; 32]) -> String {
+    PlanHash(bytes).to_hex()
+}
+
+#[test]
+fn un_piano_v4_migra_e_valida_come_il_v5_equivalente() {
+    let da_v4 = validate(
+        &piano_di_memoria(4, "max_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect("piano v4 migrato");
+    let da_v5 = validate(
+        &piano_di_memoria(5, "max_governed_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect("piano v5");
+
+    assert_eq!(da_v4.plan_format_version(), 5);
+    assert_eq!(da_v4.plan().canonical_json(), da_v5.plan().canonical_json());
+    assert_eq!(da_v4.plan_hash().to_hex(), da_v5.plan_hash().to_hex());
+    assert_eq!(
+        da_v4.plan().effective_limits().max_governed_memory_bytes,
+        4_194_304
+    );
+}
+
+#[test]
+fn un_piano_v5_col_nome_della_v4_non_valida() {
+    let errore = validate(
+        &piano_di_memoria(5, "max_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect_err("il nome della v4 non esiste nella v5")
+    .to_string();
+    assert!(errore.contains("max_memory_bytes"), "{errore}");
+}
+
+#[test]
+fn un_piano_v4_col_nome_della_v5_non_valida() {
+    let errore = validate(
+        &piano_di_memoria(4, "max_governed_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect_err("il nome della v5 non esiste nella v4")
+    .to_string();
+    assert!(errore.contains("non ha alias"), "{errore}");
+}
+
+#[test]
+fn il_plan_hash_e_separato_per_dominio_e_invalida_gli_hash_di_prima() {
+    let graph = validate(
+        &piano_di_memoria(5, "max_governed_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect("piano valido");
+    let canonico = serde_json::to_vec(&graph.plan().canonical_json()).expect("canonico");
+
+    // La vecchia regola era SHA256(canonical_json), senza dominio. Se il
+    // plan_hash coincidesse ancora con quella, un consumatore che ha in cache
+    // un hash prodotto prima della v5 potrebbe ritrovarselo valido.
+    let senza_dominio = esadecimale(Sha256::digest(&canonico).into());
+    assert_ne!(graph.plan_hash().to_hex(), senza_dominio);
+
+    let mut hasher = Sha256::new();
+    hasher.update(PLAN_HASH_DOMAIN);
+    hasher.update(&canonico);
+    assert_eq!(
+        graph.plan_hash().to_hex(),
+        esadecimale(hasher.finalize().into()),
+        "il dominio deve essere esattamente il prefisso dichiarato"
+    );
+}
+
+#[test]
+fn il_dominio_del_plan_hash_nomina_la_versione_canonica() {
+    // Se qualcuno cambia il formato canonico senza toccare il dominio,
+    // l'invalidazione torna a essere una proprieta' del contenuto.
+    let dominio = String::from_utf8(PLAN_HASH_DOMAIN.to_vec()).expect("dominio ASCII");
+    assert!(
+        dominio.contains(&format!("v{PLAN_SCHEMA_VERSION_V5}")),
+        "{dominio}"
     );
 }

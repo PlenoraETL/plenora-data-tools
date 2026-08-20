@@ -56,7 +56,7 @@ use crate::geo_transport::pair::{validate_pair_parameters, PairOperation, PairPa
 use crate::geo_transport::transport::{
     ArrowOperation, BufferCap, SimplifyPolicyParam, TransformArrowSchema,
 };
-use crate::plan::NodeV4;
+use crate::plan::NodeV5;
 use crate::planner::ValidatedGraph;
 use crate::table_engine;
 
@@ -702,7 +702,7 @@ pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Resul
         .collect();
 
     // Kernel preparati per nodo (E1): config tipizzate, indici e CRS risolti.
-    let nodes_by_id: HashMap<&str, &NodeV4> = plan
+    let nodes_by_id: HashMap<&str, &NodeV5> = plan
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node))
@@ -812,7 +812,7 @@ fn build_chains<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_segments<'a>(
     graph: &ValidatedGraph,
-    nodes_by_id: &HashMap<&'a str, &'a NodeV4>,
+    nodes_by_id: &HashMap<&'a str, &'a NodeV5>,
     node_meta: &HashMap<&'a str, (ExecutionClass, Arity, Family)>,
     fan_out: &HashMap<&'a str, usize>,
     chains: Vec<Vec<&'a str>>,
@@ -953,7 +953,7 @@ fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
 /// Last consumer per arco (V10): l'ultimo nodo consumatore in ordine
 /// topologico; l'output del piano e' il consumatore finale del suo arco.
 fn compute_last_consumers<'a>(
-    plan: &'a crate::plan::PlanV4,
+    plan: &'a crate::plan::PlanV5,
     topo: &[String],
     consumers: &HashMap<&'a str, Vec<&'a str>>,
 ) -> BTreeMap<String, LastConsumer> {
@@ -992,7 +992,7 @@ fn compute_last_consumers<'a>(
 /// D14.6 dei binari geo: `max_output_rows` vs `max_rows_per_edge`).
 fn prepare_kernel(
     graph: &ValidatedGraph,
-    node: &NodeV4,
+    node: &NodeV5,
     limits: &Limits,
     is_plan_output: bool,
 ) -> Result<PreparedKernel> {
@@ -1084,7 +1084,8 @@ fn legacy_limits(limits: &Limits) -> table_engine::Limits {
         max_string_bytes: limits.max_string_bytes,
         max_regex_bytes: limits.max_regex_bytes,
         max_split_columns: defaults.max_split_columns,
-        max_memory_bytes: usize::try_from(limits.max_memory_bytes).unwrap_or(usize::MAX),
+        max_governed_memory_bytes: usize::try_from(limits.max_governed_memory_bytes)
+            .unwrap_or(usize::MAX),
         max_temp_bytes: limits.max_temp_bytes,
         // Nessuna correzione qui: il minimo e' imposto da `Limits::validate`
         // all'ingresso del planner, che RIFIUTA un valore fuori dominio invece
@@ -1096,7 +1097,7 @@ fn legacy_limits(limits: &Limits) -> table_engine::Limits {
 /// Kernel tabellare: piano legacy di un solo step, validato in `prepare`
 /// (config deserializzata e controllata qui, non nel loop per batch).
 fn prepare_table(
-    node: &NodeV4,
+    node: &NodeV5,
     descriptor: &plenora_core::catalog::OperationDescriptor,
     legacy_limits: &table_engine::Limits,
 ) -> Result<PreparedConfig> {
@@ -1304,7 +1305,7 @@ struct GeoBinaryOutputColumnConfig {
 // D14.6, non da complessita' logica.
 #[allow(clippy::too_many_lines)]
 fn prepare_geo_binary(
-    node: &NodeV4,
+    node: &NodeV5,
     descriptor: &plenora_core::catalog::OperationDescriptor,
     input_contracts: &[DataContract],
     output_contract: &DataContract,
@@ -1472,7 +1473,7 @@ fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
 // logica.
 #[allow(clippy::too_many_lines)]
 fn prepare_geo(
-    node: &NodeV4,
+    node: &NodeV5,
     descriptor: &plenora_core::catalog::OperationDescriptor,
     input_contracts: &[DataContract],
     output_contract: &DataContract,
@@ -1605,7 +1606,7 @@ fn prepare_geo(
 // non da complessita' logica (fase di pulizia: niente refactor strutturali).
 #[allow(clippy::too_many_lines)]
 fn prepare_geo_extension(
-    node: &NodeV4,
+    node: &NodeV5,
     descriptor: &plenora_core::catalog::OperationDescriptor,
     input_contract: &DataContract,
     output_contract: &DataContract,

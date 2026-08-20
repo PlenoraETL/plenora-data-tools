@@ -55,7 +55,7 @@
 //!
 //! Fase 2B M1a/M1b — resource accounting (ADR-0002) e sequenza logica
 //! (ADR-0001): i batch attraversano gli archi come [`GovernedBatch`]
-//! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_memory_bytes`
+//! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_governed_memory_bytes`
 //! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
 //! reference-counted al fan-out; i kernel restano su `RecordBatch` puro — il
 //! wrapper si spacca in ingresso al segmento e si ricompone in uscita. La
@@ -811,7 +811,7 @@ impl ExecState {
         Rc::new(Self {
             plan: Rc::clone(plan),
             metrics: RefCell::new(metrics),
-            governor: MemoryGovernor::new(plan.limits().max_memory_bytes),
+            governor: MemoryGovernor::new(plan.limits().max_governed_memory_bytes),
             execution_id,
             cancellation,
             diagnostics,
@@ -1985,7 +1985,7 @@ impl Network {
                     // la quota governor dei batch drenati e' rilasciata
                     // subito. La soglia di attivazione dello spill ha la
                     // stessa grandezza del budget (byte stimati dell'input vs
-                    // `max_memory_bytes`): trattenere i lease renderebbe lo
+                    // `max_governed_memory_bytes`): trattenere i lease renderebbe lo
                     // spill irraggiungibile (fail-fast al drenaggio, prima
                     // del dispatch). La memoria di lavoro dell'operatore e'
                     // auto-limitata dallo spill su disco; approssimazione v1:

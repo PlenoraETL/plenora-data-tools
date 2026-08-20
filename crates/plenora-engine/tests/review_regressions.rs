@@ -16,7 +16,7 @@ use plenora_core::diagnostics::{
 };
 use plenora_core::limits::Limits;
 use plenora_core::PlenoraError;
-use plenora_engine::plan::PlanV4;
+use plenora_engine::plan::PlanV5;
 use plenora_engine::MemoryGovernor;
 
 fn schema(fields: Vec<Field>) -> Arc<Schema> {
@@ -41,7 +41,7 @@ fn geometry(name: &str) -> GeometryColumnContract {
 
 fn plan_with(value: &str) -> String {
     format!(
-        r#"{{"schema_version": 4, "inputs": ["main"], "output": "a",
+        r#"{{"schema_version": 5, "inputs": ["main"], "output": "a",
             "nodes": [{{"id": "a", "op": "table.filter", "in": ["main"],
                         "config": {{"column": "id", "operator": ">", "value": {value}}}}}]}}"#
     )
@@ -49,10 +49,10 @@ fn plan_with(value: &str) -> String {
 
 #[test]
 fn gli_interi_oltre_2_53_non_collassano_nel_piano_canonico() {
-    let odd = PlanV4::parse_default(&plan_with("9007199254740993"))
+    let odd = PlanV5::parse_default(&plan_with("9007199254740993"))
         .expect("piano")
         .canonical_json();
-    let exact = PlanV4::parse_default(&plan_with("9007199254740992"))
+    let exact = PlanV5::parse_default(&plan_with("9007199254740992"))
         .expect("piano")
         .canonical_json();
     assert_ne!(odd, exact);
@@ -70,10 +70,10 @@ fn gli_interi_oltre_2_53_non_collassano_nel_piano_canonico() {
 fn le_chiavi_duplicate_nel_piano_sono_rifiutate() {
     // Senza il controllo, `serde_json` teneva l'ultima e due testi diversi
     // producevano lo stesso piano canonico e lo stesso `plan_hash`.
-    let duplicated = r#"{"schema_version": 4, "inputs": ["main"], "output": "a",
+    let duplicated = r#"{"schema_version": 5, "inputs": ["main"], "output": "a",
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
                    "config": {"column": "id", "operator": ">", "value": 1, "value": 2}}]}"#;
-    let error = PlanV4::parse_default(duplicated).expect_err("chiave duplicata");
+    let error = PlanV5::parse_default(duplicated).expect_err("chiave duplicata");
     assert!(
         error.to_string().contains("duplicata"),
         "atteso il rifiuto della chiave duplicata, ottenuto: {error}"
@@ -84,8 +84,8 @@ fn le_chiavi_duplicate_nel_piano_sono_rifiutate() {
 fn il_json_malformato_resta_un_errore_di_mappatura() {
     // Il controllo sui duplicati non deve cambiare la categoria degli errori
     // di sintassi, che restano competenza della deserializzazione.
-    let malformed = r#"{"schema_version": 4, "inputs": ["main"#;
-    let error = PlanV4::parse_default(malformed).expect_err("json malformato");
+    let malformed = r#"{"schema_version": 5, "inputs": ["main"#;
+    let error = PlanV5::parse_default(malformed).expect_err("json malformato");
     assert!(
         matches!(error, PlenoraError::DataMapping(_)),
         "atteso DataMapping, ottenuto: {error:?}"
@@ -142,7 +142,7 @@ fn spill_partitions_sotto_il_minimo_e_rifiutato() {
 fn un_piano_con_spill_partitions_invalido_non_viene_corretto() {
     // Il preparer applicava `.max(2)`: il piano veniva eseguito con limiti
     // diversi da quelli dichiarati, senza che nulla lo segnalasse.
-    let plan = r#"{"schema_version": 4, "inputs": ["main"], "output": "a",
+    let plan = r#"{"schema_version": 5, "inputs": ["main"], "output": "a",
         "limits": {"spill_partitions": 1},
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
                    "config": {"column": "id", "operator": ">", "value": 1}}]}"#;
@@ -165,7 +165,10 @@ fn il_governor_non_avvolge_ne_va_in_panico_sui_byte_estremi() {
     let error = governor
         .try_reserve(u64::MAX, "test")
         .expect_err("oltre il budget");
-    assert!(error.to_string().contains("max_memory_bytes"), "{error}");
+    assert!(
+        error.to_string().contains("max_governed_memory_bytes"),
+        "{error}"
+    );
     // Il contatore non e' stato sporcato: una prenotazione legittima passa.
     assert!(governor.try_reserve(512, "test").is_ok());
 }
@@ -187,7 +190,7 @@ fn i_limiti_nulli_e_il_fattore_non_finito_sono_rifiutati() {
             .expect_err("limite fuori dominio")
             .to_string()
     };
-    assert!(zero(|l| l.max_memory_bytes = 0).contains("max_memory_bytes"));
+    assert!(zero(|l| l.max_governed_memory_bytes = 0).contains("max_governed_memory_bytes"));
     assert!(zero(|l| l.rows.max_input_rows = 0).contains("max_input_rows"));
     assert!(zero(|l| l.max_batches = 0).contains("max_batches"));
     assert!(zero(|l| l.max_string_bytes = 0).contains("max_string_bytes"));
@@ -365,10 +368,10 @@ fn lo_zero_negativo_resta_distinto_dallo_zero_nel_piano_canonico() {
     // emettilo come intero» trasformava `-0.0` in `0`, e due piani con segni
     // diversi ottenevano lo stesso `plan_hash`. Il segno e' osservabile
     // (divisione, atan2, formattazione): non e' un dettaglio da normalizzare.
-    let negativo = PlanV4::parse_default(&plan_with("-0.0"))
+    let negativo = PlanV5::parse_default(&plan_with("-0.0"))
         .expect("piano")
         .canonical_json();
-    let positivo = PlanV4::parse_default(&plan_with("0"))
+    let positivo = PlanV5::parse_default(&plan_with("0"))
         .expect("piano")
         .canonical_json();
     assert_ne!(negativo, positivo);

@@ -427,3 +427,96 @@ dettaglio implementativo, e chi sceglie il tetto duro lo sceglie sapendolo.
   presa (§0); l'attuazione — rinominazione, migrazione di versione dei piani
   storici, profilo isolato — è un blocco separato, e questo ADR non ne stima
   il costo né ne fissa l'ordine.
+
+
+---
+
+## 7. Attuazione del livello 1 (2026-08-20)
+
+Il livello 1 è attuato. Il livello 2 **no**: `hard_process_memory_bytes` non
+esiste ancora nel codice, di proposito — introdurre il nome prima del profilo
+isolato che lo realizza ripeterebbe l'errore che questa ADR corregge.
+
+Il titolo di questo documento cita ancora il nome della v4 perché è il nome
+con cui il problema è stato posto. Non è un nome ancora in uso.
+
+### Che cosa è cambiato
+
+| | |
+|---|---|
+| campo Rust | `Limits::max_governed_memory_bytes` (`plenora-core`) e `plenora_kernels_table::Limits::max_governed_memory_bytes` |
+| chiave di piano | `limits.max_governed_memory_bytes` |
+| versione canonica del piano | **5** |
+| v4 | accettata **solo** attraverso `plan::migrazione_v4` |
+| `schema_version <= 3` | migrata da `PlanV5::from_legacy` direttamente al canonico v5 |
+| `plan_hash` | separatore di dominio, ADR 4 emendata |
+| alias | **nessuno**, e un gate lo verifica a ogni CI |
+
+### Come è resa vera l'assenza di alias
+
+Non con un controllo aggiuntivo, che si può dimenticare, ma con **due
+strutture separate**:
+
+- `LimitsOverride` (v5) conosce solo `max_governed_memory_bytes`;
+- `LimitsOverrideV4`, privata del modulo di migrazione, conosce solo il nome
+  della v4.
+
+Entrambe hanno `deny_unknown_fields`. Ne segue, per costruzione: un piano v5
+col nome della v4 è rifiutato, un v4 col nome nuovo è rifiutato, e un piano
+che dichiara entrambe le chiavi è rifiutato in ogni versione — qualunque
+versione dichiari, una delle due chiavi è sconosciuta a chi la deserializza.
+
+La traduzione fra le due non è una riscrittura di chiavi ma una costruzione
+**per campi**: se un limite nuovo viene aggiunto a `LimitsOverride`, il
+letterale della migrazione smette di compilare. Una migrazione che dimentica
+un campo nuovo lo lascerebbe cadere in silenzio, ed è così che un piano
+migrato finisce per girare sotto limiti che non ha chiesto.
+
+### Determinismo, idempotenza, ordine
+
+- un piano v4 e il v5 equivalente producono lo **stesso** piano canonico e lo
+  **stesso** `plan_hash`;
+- la migrazione non riordina né normalizza il resto del piano: normalizzare è
+  compito della canonicalizzazione, e farlo in due posti significa poterlo
+  fare in due modi;
+- l'ingresso di versione è idempotente (applicato al proprio risultato non
+  cambia nulla); la sola funzione di migrazione, invece, **rifiuta** un piano
+  già migrato, perché chiamarla due volte è un errore di chi chiama;
+- l'ordine è fail-closed: tetto sui byte → chiavi duplicate → lettura della
+  `schema_version` → migrazione → parse. Le chiavi duplicate sono rifiutate
+  prima di leggere la versione: risolverle con «vince l'ultima» farebbe
+  dipendere la scelta del percorso da quale duplicato ha vinto.
+
+### Invalidazione esplicita delle identità
+
+Ogni `plan_hash` prodotto prima della v5 è invalidato **per costruzione**, non
+per fortuna: il digest è calcolato su `"plenora/plan_hash/v5\0" ||
+canonical_json` (ADR 4, emendamento 2026-08-20). Senza il dominio
+l'invalidazione sarebbe una proprietà del contenuto — vera oggi, non
+garantita domani.
+
+Il `catalog_fingerprint` e i `ContractFingerprint` degli input **non**
+cambiano: non descrivono il formato del piano, e invalidarli sarebbe rumore.
+
+### Il gate
+
+`scripts/verifica_nome_budget_memoria.py` (in CI) fallisce se il nome della v4
+ricompare nel codice di produzione fuori dal modulo di migrazione, se compare
+in un file di test non dichiarato, se il modulo di migrazione smette di
+nominarlo (allowlist stantia), o se un `serde(alias` compare nelle strutture
+che dichiarano i limiti.
+
+### Rottura non richiesta ma inevitabile, dichiarata qui
+
+Il campo rinominato esiste in **due** strutture: quella di `plenora-core`, che
+è il contratto del piano DAG, e quella di `plenora-kernels-table`, che è anche
+il blocco `limits` dei piani lineari `schema_version <= 3`. Rinominare la
+prima e non la seconda avrebbe lasciato il nome della v4 vivo nel codice di
+produzione, cioè avrebbe reso il gate impossibile e la decisione parziale.
+
+Conseguenza: **un piano legacy che dichiara il vecchio nome ora è rifiutato**
+(`deny_unknown_fields`, quindi fail-closed con errore, non silenziosamente
+ignorato). Per i piani legacy non esiste una migrazione automatica: la loro
+versione non distingue il prima dal dopo, e inventarne una avrebbe voluto dire
+decidere qui una cosa che non è stata chiesta. È registrato in
+`docs/api-breaking-2026-08-16.md`.

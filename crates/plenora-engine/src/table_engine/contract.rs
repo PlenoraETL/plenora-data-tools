@@ -38,7 +38,7 @@ fn validate_limits(limits: &Limits) -> Result<()> {
         || limits.max_string_bytes == 0
         || limits.max_regex_bytes == 0
         || limits.max_split_columns == 0
-        || limits.max_memory_bytes == 0
+        || limits.max_governed_memory_bytes == 0
         || limits.max_temp_bytes == 0
         || limits.spill_partitions < 2
         || limits.spill_partitions > 4_096
@@ -173,13 +173,13 @@ impl ValidatedPlan {
         &self.limits
     }
 
-    /// Copia del piano con `max_memory_bytes` **ridotto** al valore indicato.
+    /// Copia del piano con `max_governed_memory_bytes` **ridotto** al valore indicato.
     ///
-    /// Serve al percorso legacy della CLI, dove `max_memory_bytes` deve
+    /// Serve al percorso legacy della CLI, dove `max_governed_memory_bytes` deve
     /// essere un tetto GLOBALE del piano e non il tetto di ogni singola
     /// fase: caricato un input, la memoria che quell'input trattiene non e'
     /// piu' disponibile per l'esecuzione, e i kernel — che consultano
-    /// `limits.max_memory_bytes` per le proprie tabelle di lavoro — devono
+    /// `limits.max_governed_memory_bytes` per le proprie tabelle di lavoro — devono
     /// vedere cio' che RESTA, non il budget iniziale.
     ///
     /// Il budget puo' solo scendere: passare un valore maggiore di quello
@@ -189,7 +189,7 @@ impl ValidatedPlan {
     /// # Errors
     ///
     /// [`PlenoraError::ResourceLimit`] se il budget residuo e' zero: un piano
-    /// con `max_memory_bytes = 0` non e' valido (`validate_limits`), e la
+    /// con `max_governed_memory_bytes = 0` non e' valido (`validate_limits`), e la
     /// condizione «non resta memoria» e' un limite di risorsa, non un piano
     /// sbagliato.
     pub fn with_memory_budget(&self, bytes: usize) -> Result<Self> {
@@ -199,7 +199,7 @@ impl ValidatedPlan {
             ));
         }
         let mut ridotto = self.clone();
-        ridotto.limits.max_memory_bytes = bytes.min(self.limits.max_memory_bytes);
+        ridotto.limits.max_governed_memory_bytes = bytes.min(self.limits.max_governed_memory_bytes);
         Ok(ridotto)
     }
 

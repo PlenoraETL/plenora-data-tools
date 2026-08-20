@@ -422,7 +422,7 @@ fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
             .expect("batch date")
     };
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {
@@ -485,7 +485,7 @@ fn formula_collects_complete_row_diagnostics_across_input_batches() {
             .expect("batch id")
     };
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {
@@ -549,7 +549,7 @@ fn expression_collects_complete_row_diagnostics_across_input_batches() {
             .expect("batch id")
     };
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {
@@ -629,7 +629,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
         batch(vec!["not-a-date"]),
     ];
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{
             "id": "cast",
@@ -694,7 +694,7 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
     );
     let inputs = single_input_from("main", input);
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{
             "id": "cast",
@@ -753,11 +753,11 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
         )
         .expect("batch valido")
     };
-    let plan_with = |max_memory_bytes: u64| {
+    let plan_with = |max_governed_memory_bytes: u64| {
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
-            "limits": {"max_memory_bytes": max_memory_bytes},
+            "limits": {"max_governed_memory_bytes": max_governed_memory_bytes},
             "nodes": [{
                 "id": "cast",
                 "op": "table.type_cast",
@@ -830,7 +830,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
         .expect("batch")
     };
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{
             "id": "cast",
@@ -898,16 +898,16 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         .expect("batch valido")
     };
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
-        // `max_memory_bytes` basso forza la modalita' DISCO fin dal primo
+        // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
         // batch (ADR-0002 M2d: si resta in memoria solo finche'
         // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
         // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
         // quota temporanea non verrebbe nemmeno interrogata. Il fatto che
         // questo test **debba** ora dichiararlo e' la prova che la modalita'
         // memoria e' quella predefinita.
-        "limits": {"max_temp_bytes": 1, "max_memory_bytes": 1_048_576},
+        "limits": {"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576},
         "nodes": [{
             "id": "cast",
             "op": "table.type_cast",
@@ -946,7 +946,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
 #[test]
 fn linear_table_chain_executes_with_coherent_per_node_metrics() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -998,7 +998,7 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
     // cardinality-changing: il gate provenance rifiuterebbe l'ordine
     // inverso.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -1056,7 +1056,7 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
 #[test]
 fn fan_out_fan_in_join_executes() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "base", "op": "table.filter", "in": ["main"],
@@ -1127,7 +1127,7 @@ impl Iterator for CountingInput {
 #[test]
 fn streaming_segment_flows_batch_by_batch_without_full_materialization() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1178,7 +1178,7 @@ fn streaming_segment_flows_batch_by_batch_without_full_materialization() {
 #[test]
 fn blocking_segment_materializes_before_emitting() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1218,7 +1218,7 @@ fn blocking_segment_materializes_before_emitting() {
 #[test]
 fn error_mid_stream_publishes_nothing() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1252,7 +1252,7 @@ fn error_mid_stream_publishes_nothing() {
 #[test]
 fn invalid_wkb_cell_fails_at_read_before_any_output() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1272,7 +1272,7 @@ fn invalid_wkb_cell_fails_at_read_before_any_output() {
 #[test]
 fn late_wkb_rejections_are_complete_absolute_and_publish_nothing() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1376,7 +1376,7 @@ fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
     // contratto dell'arco — una cella XY su un contratto XYZ e' l'errore
     // dedicato di mismatch, prima di qualunque output.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1400,7 +1400,7 @@ fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
     // (e) B1.3: batch xyz -> filtro tabellare (passthrough) -> celle xyz
     // intatte byte-per-byte; i metadati di output dichiarano ancora xyz.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1510,7 +1510,7 @@ fn geo_batch_with_schema(schema: SchemaRef, ids: &[i64], cells: &[Option<Vec<u8>
 #[test]
 fn matching_ewkb_srid_is_byte_identical_through_table_only_plan() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1555,7 +1555,7 @@ fn matching_ewkb_srid_is_byte_identical_through_table_only_plan() {
 #[test]
 fn mismatching_ewkb_srid_fails_with_crs_error() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1578,7 +1578,7 @@ fn mismatching_ewkb_srid_fails_with_crs_error() {
 #[test]
 fn wkb_encoding_rejects_embedded_srid_even_when_it_matches_authority() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1605,7 +1605,7 @@ fn wkb_encoding_rejects_embedded_srid_even_when_it_matches_authority() {
 #[test]
 fn undeclared_legacy_encoding_defaults_to_wkb_and_rejects_embedded_srid() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1634,7 +1634,7 @@ fn undeclared_legacy_encoding_defaults_to_wkb_and_rejects_embedded_srid() {
 #[test]
 fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1686,7 +1686,7 @@ fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
 #[test]
 fn ewkb_embedded_srid_requires_governed_authority() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1743,7 +1743,7 @@ fn resolved_contract_srid_conflict_fails_before_cell_validation() {
 #[test]
 fn matching_ewkb_srid_still_fails_at_geometry_kernel_decode() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "a", "op": "geo.area", "in": ["main"], "config": {}},
@@ -1787,7 +1787,7 @@ fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
     // accetta e i byte passano invariati (la validazione resta sui type
     // code, mai sulla chiave `encoding` del metadato).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1809,7 +1809,7 @@ fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
 #[test]
 fn pass_through_plan_streams_input_to_output() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -1831,7 +1831,7 @@ fn pass_through_plan_streams_input_to_output() {
 fn row_limits_trigger_on_input_edge_and_output() {
     // max_input_rows
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_input_rows": 2},
         "inputs": ["main"],
         "nodes": [],
@@ -1844,7 +1844,7 @@ fn row_limits_trigger_on_input_edge_and_output() {
 
     // max_rows_per_edge su un arco intermedio
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_rows_per_edge": 2},
         "inputs": ["main"],
         "nodes": [
@@ -1862,7 +1862,7 @@ fn row_limits_trigger_on_input_edge_and_output() {
 
     // max_output_rows sull'arco finale
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_output_rows": 2},
         "inputs": ["main"],
         "nodes": [],
@@ -1877,7 +1877,7 @@ fn row_limits_trigger_on_input_edge_and_output() {
 #[test]
 fn edge_row_limit_accumulates_across_batches() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_rows_per_edge": 3},
         "inputs": ["main"],
         "nodes": [
@@ -1911,7 +1911,7 @@ fn expansion_factor_triggers_on_join() {
     // 3 righe left x 2 righe right con la stessa chiave: 6 righe in uscita,
     // base ADR 6 = left + right = 5 -> 6 > 5 x 1.0 scatta il limite.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
         "inputs": ["left_in", "right_in"],
         "nodes": [
@@ -1956,7 +1956,7 @@ fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
     // (SumRelative, 6/5 = 1.2) NON scatterebbe; table.join dichiara
     // MaxRelative (max(6/3, 6/2) = 3.0 > 1.5) -> scatta (ADR 6).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.5},
         "inputs": ["left_in", "right_in"],
         "nodes": [
@@ -2006,7 +2006,7 @@ fn expansion_constraint_left_relative_allows_lookup_style_join() {
     // esiste; questo test blocca il requisito che un lookup legittimo non
     // venga rifiutato dal vincolo dichiarato in catalogo.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
         "inputs": ["left_in", "right_in"],
         "nodes": [
@@ -2050,7 +2050,7 @@ fn expansion_constraint_sum_relative_on_union_distinct() {
     // 1.5) scatterebbe: il vincolo dichiarato in catalogo e' quello
     // applicato (ADR 6).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
         "inputs": ["left_in", "right_in"],
         "nodes": [
@@ -2093,7 +2093,7 @@ fn total_rows_processed_counts_rows_through_all_nodes() {
     // ingresso a ogni nodo. 3 righe attraversano filter e rename ->
     // 3 + 3 = 6.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -2115,7 +2115,7 @@ fn total_rows_processed_counts_rows_through_all_nodes() {
 #[test]
 fn input_schema_mismatch_is_rejected_before_execution() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -2138,7 +2138,7 @@ fn input_schema_mismatch_is_rejected_before_execution() {
 #[test]
 fn ipc_roundtrip_through_publish_atomic() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -2726,7 +2726,7 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
     let mut contract = geo_contract();
     contract.schema = schema.clone();
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "c", "op": "geo.centroid", "in": ["main"], "config": {}},
@@ -2810,7 +2810,7 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
     let mut contract = geo_contract();
     contract.schema = schema.clone();
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.reproject", "in": ["main"],
@@ -2876,7 +2876,7 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
     // blocco canonico R2.2 sui campi geometria e la versione R2.5 nei
     // metadati dello schema.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -3024,7 +3024,7 @@ fn geo_transform_reports_complete_row_diagnostics_across_input_batches() {
     // difettosa ciascuno -> indici ASSOLUTI 1 e 2 nel report mergiato;
     // nessun accepted, nessun batch downstream.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "sub", "op": "geo.line_substring", "in": ["main"],
@@ -3081,7 +3081,7 @@ fn geo_measure_reports_complete_row_diagnostics_across_input_batches() {
     // geo.area su WKB malformato a meta' del secondo batch: indice assoluto
     // 3 nel report mergiato; il nodo a valle non riceve nulla.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "m", "op": "geo.area", "in": ["main"], "config": {}},
@@ -3129,7 +3129,7 @@ fn geo_snap_subdivide_chain_expands_rows() {
     perturbed[1] = (4.1, 0.0); // Vertice da agganciare a (4,0) con tolleranza 0.5.
     let reference = line_wkb(&reference_line());
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "s", "op": "geo.snap", "in": ["main"],
@@ -3176,7 +3176,7 @@ fn geo_snap_subdivide_chain_expands_rows() {
 #[test]
 fn unary_expansion_factor_accumulates_across_streaming_batches() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.4},
         "inputs": ["main"],
         "nodes": [
@@ -3209,7 +3209,7 @@ fn unary_expansion_factor_accumulates_across_streaming_batches() {
 #[test]
 fn geo_geometry_accessors_adds_canonical_and_prefixed_columns() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "a", "op": "geo.geometry_accessors", "in": ["main"], "config": {}},
@@ -3267,7 +3267,7 @@ fn geo_geometry_accessors_adds_canonical_and_prefixed_columns() {
 fn geo_line_locate_point_adds_fraction() {
     let point = point_wkb(5.0, 3.0);
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.line_locate_point", "in": ["main"],
@@ -3303,7 +3303,7 @@ fn geo_line_locate_point_adds_fraction() {
 #[test]
 fn geo_collect_groups_geometries_by_key() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "c", "op": "geo.collect", "in": ["main"],
@@ -3355,7 +3355,7 @@ fn geo_collect_groups_geometries_by_key() {
 #[test]
 fn geo_coverage_validate_reports_known_overlap() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "v", "op": "geo.coverage_validate", "in": ["main"], "config": {}},
@@ -3390,7 +3390,7 @@ fn geo_coverage_validate_reports_known_overlap() {
 #[test]
 fn geo_shared_paths_finds_shared_border() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "s", "op": "geo.shared_paths", "in": ["main"], "config": {}},
@@ -3427,7 +3427,7 @@ fn geo_shared_paths_finds_shared_border() {
 #[test]
 fn geo_cluster_dbscan_labels_known_points() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "k", "op": "geo.cluster_dbscan", "in": ["main"],
@@ -3470,7 +3470,7 @@ fn geo_cluster_dbscan_labels_known_points() {
 #[test]
 fn table_select_limit_fingerprint_chain_executes() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "s", "op": "table.select_columns", "in": ["main"],
@@ -3495,7 +3495,7 @@ fn table_select_limit_fingerprint_chain_executes() {
 #[test]
 fn table_top_n_selects_highest_rows() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "table.top_n", "in": ["main"],
@@ -3532,7 +3532,7 @@ fn table_align_schema_then_concat_by_name_executes() {
     )
     .expect("batch destro");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "a", "op": "table.align_schema", "in": ["right_in"],
@@ -3580,7 +3580,7 @@ fn table_align_schema_then_concat_by_name_executes() {
 #[test]
 fn table_validate_rules_annotates_rows() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "v", "op": "table.validate_rules", "in": ["main"],
@@ -3611,7 +3611,7 @@ fn table_hmac_sha256_uses_key_from_env() {
     // variabile d'ambiente.
     std::env::set_var("PLENORA_TEST_HMAC_KEY", "chiave-di-test");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "h", "op": "table.hmac_sha256", "in": ["main"],
@@ -3632,7 +3632,7 @@ fn table_hmac_sha256_uses_key_from_env() {
 #[test]
 fn table_fuzzy_join_matches_similar_names() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "j", "op": "table.fuzzy_join", "in": ["left_in", "right_in"],
@@ -3687,7 +3687,7 @@ fn geo_from_wkt_rejects_invalid_rows_before_downstream_cardinality_changes() {
     // (`w`), prima che la cardinalita' cambi.
     let reference = line_wkb(&reference_line());
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "crs": "EPSG:32632",
         "inputs": ["main"],
         "nodes": [
@@ -3728,7 +3728,7 @@ fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
     let cases = [
         (
             json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "crs": "EPSG:32632",
                 "inputs": ["main"],
                 "nodes": [{
@@ -3747,7 +3747,7 @@ fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
         ),
         (
             json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "crs": "EPSG:32632",
                 "inputs": ["main"],
                 "nodes": [{
@@ -3810,7 +3810,7 @@ fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
 #[test]
 fn geo_generate_grid_then_collect_executes() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "crs": "EPSG:32632",
         "inputs": ["main"],
         "nodes": [
@@ -3855,7 +3855,7 @@ fn from_wkt_and_generate_grid_fail_closed_on_crs_without_proj_backend() {
     // Le op generative richiedono un CRS risolto (config o piano): senza
     // proj-backend la risoluzione fallisce chiusa gia' in validate.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "w", "op": "geo.from_wkt", "in": ["main"],
@@ -3869,7 +3869,7 @@ fn from_wkt_and_generate_grid_fail_closed_on_crs_without_proj_backend() {
         "atteso errore CRS fail-closed: {result:?}"
     );
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g", "op": "geo.generate_grid", "in": ["main"],
@@ -3898,7 +3898,7 @@ fn whole_to_many_ops_are_exempt_from_expansion_factor() {
     // esenti (l'input e' un trigger/insieme da analizzare, non una base
     // proporzionale; restano i limiti max_rows_per_edge/max_output_rows).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
         "inputs": ["main"],
         "nodes": [
@@ -3921,7 +3921,7 @@ fn generate_grid_expansion_exempt_with_small_trigger() {
     // Trigger da 5 righe + griglia 100x100 celle (lato 1.0): 10_000 righe
     // prodotte con fattore 1.0 — esente perche' WholeToMany (ADR 6).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "crs": "EPSG:32632",
         "limits": {"max_expansion_factor": 1.0},
         "inputs": ["main"],
@@ -3954,7 +3954,7 @@ fn payload_bytes_limit_triggers_cumulatively_on_input() {
 
     // Il primo batch entra nel budget, il cumulato no: fail-closed.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_payload_bytes": first_bytes},
         "inputs": ["main"],
         "nodes": [],
@@ -3969,7 +3969,7 @@ fn payload_bytes_limit_triggers_cumulatively_on_input() {
 
     // Budget sufficiente per l'intero payload: passa.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_payload_bytes": total_bytes},
         "inputs": ["main"],
         "nodes": [],
@@ -4003,7 +4003,7 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
     // Punto a profondita' 2: con max_geometry_depth 1 fallisce in lettura,
     // con 2 (e col default 64) passa.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_geometry_depth": 1},
         "inputs": ["main"],
         "nodes": [],
@@ -4023,7 +4023,7 @@ fn geometry_depth_limit_applies_to_nested_wkb() {
     assert_eq!(report.counts["geometry.invalid_wkb"], 1);
 
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_geometry_depth": 2},
         "inputs": ["main"],
         "nodes": [],
@@ -4144,7 +4144,7 @@ fn edge_stream_delivers_upstream_error_once_per_reader() {
 #[test]
 fn blocking_segment_fails_closed_when_concatenated_batch_exceeds_byte_cap() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g", "op": "table.aggregate", "in": ["main"],
@@ -4179,7 +4179,7 @@ fn blocking_segment_fails_closed_when_concatenated_batch_exceeds_byte_cap() {
 #[test]
 fn blocking_concat_error_is_attributed_to_the_node() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g", "op": "table.aggregate", "in": ["main"],
@@ -4238,7 +4238,7 @@ fn blocking_concat_error_is_attributed_to_the_node() {
 #[test]
 fn binary_blocking_metrics_count_real_input_batches() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left", "right"],
         "nodes": [
             {"id": "j", "op": "table.join", "in": ["left", "right"],
@@ -4284,7 +4284,7 @@ fn binary_blocking_metrics_count_real_input_batches() {
 #[test]
 fn execute_rejects_a_graph_incompatible_with_the_environment() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -4346,7 +4346,7 @@ impl Drop for PanicHookGuard {
 /// Piano con un nodo `table.filter` (streaming) con id dato.
 fn panic_plan(node: &str) -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": node, "op": "table.filter", "in": ["main"],
@@ -4397,7 +4397,7 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
 fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     let _guard = PanicHookGuard::set("boom_block");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "boom_block", "op": "table.aggregate", "in": ["main"],
@@ -4438,7 +4438,7 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
 fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
     let _guard = PanicHookGuard::set("boom_join");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left", "right"],
         "nodes": [
             {"id": "boom_join", "op": "table.join", "in": ["left", "right"],
@@ -4583,7 +4583,7 @@ impl Drop for CancelBehaviorGuard {
 /// Catena streaming di due op `Cooperative` (`table.filter`, `table.rename`).
 fn streaming_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -4666,7 +4666,7 @@ fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
     )
     .expect("fixture");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{
             "id": "cast_cancel_after_reject",
@@ -4725,7 +4725,7 @@ fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
 #[test]
 fn cancel_during_blocking_drain() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g", "op": "table.aggregate", "in": ["main"],
@@ -4761,7 +4761,7 @@ fn non_interruptible_op_is_never_interrupted() {
     // Id nodo UNIVOCI: l'hook e' globale al processo e i test girano in
     // parallelo (stessa disciplina dei nomi di `PanicHookGuard`).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "ni_f", "op": "table.filter", "in": ["main"],
@@ -4852,7 +4852,7 @@ fn execution_ids_are_unique_per_execute() {
 fn execute_creates_temp_store_and_cleans_it_up() {
     let root = tempfile::tempdir().expect("root");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -4915,7 +4915,7 @@ fn execute_scavenges_stale_temp_dirs_at_startup() {
     std::fs::create_dir(&other).expect("mkdir other");
 
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -5003,7 +5003,7 @@ fn diagnostics_on_enriches_step_error_with_batch_index() {
 #[test]
 fn diagnostics_on_wkb_error_adds_column_context_without_values() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -5049,12 +5049,12 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
 // ---------------------------------------------------------------------------
 
 /// Piano con un `table.distinct` e limiti dati espliciti: con
-/// `max_memory_bytes` sotto i byte stimati dell'input il dispatch attiva
+/// `max_governed_memory_bytes` sotto i byte stimati dell'input il dispatch attiva
 /// `distinct_spilled` (soglia deterministica ADR-0002).
-fn distinct_plan(max_memory_bytes: u64, max_temp_bytes: u64) -> serde_json::Value {
+fn distinct_plan(max_governed_memory_bytes: u64, max_temp_bytes: u64) -> serde_json::Value {
     json!({
-        "schema_version": 4,
-        "limits": {"max_memory_bytes": max_memory_bytes, "max_temp_bytes": max_temp_bytes},
+        "schema_version": 5,
+        "limits": {"max_governed_memory_bytes": max_governed_memory_bytes, "max_temp_bytes": max_temp_bytes},
         "inputs": ["main"],
         "nodes": [
             {"id": "d", "op": "table.distinct", "in": ["main"],
@@ -5208,7 +5208,7 @@ fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
 /// (perimetro M1, capability `TransformInPlace`).
 fn geo_fusion_chain_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
@@ -5333,9 +5333,9 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
     let batch = geo_batch(&[0, 1], &cells());
     let budget = batch.get_array_memory_size() as u64 + 4_096;
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
-        "limits": {"max_memory_bytes": budget},
+        "limits": {"max_governed_memory_bytes": budget},
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
             {"id": "s", "op": "geo.simplify", "in": ["b"], "config": {"tolerance": 0.01}},
@@ -5365,7 +5365,7 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
 #[test]
 fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "g_b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
@@ -5422,7 +5422,7 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
 #[test]
 fn fused_transforms_plus_terminal_area_matches_unfused() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -5482,7 +5482,7 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
 #[test]
 fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -5564,7 +5564,7 @@ fn input_stream_source_errors_are_tagged_read_and_keep_their_text() {
     // Sorgente che fallisce a meta' stream: l'errore emerge al confine
     // Input con fase Read e testo della sorgente, mai riscritto.
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -5600,7 +5600,7 @@ fn input_batch_schema_mismatch_is_tagged_read() {
     // validazione del piano (quella resta al check di `execute`, non
     // taggato — vedi `input_schema_mismatch_is_rejected_before_execution`).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -5636,7 +5636,7 @@ fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
     // dichiarare fasi diverse: il tag esplicito vince sulla derivazione
     // (ADR-0009, emendamento del 2026-08-17).
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "limits": {"max_input_rows": 1},
         "inputs": ["main"],
         "nodes": [],
@@ -5693,7 +5693,7 @@ fn geo_binary_contracts() -> [(String, DataContract); 2] {
 
 fn geo_binary_plan(op: &str, config: &serde_json::Value) -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "j", "op": op, "in": ["left_in", "right_in"], "config": config},
@@ -6013,7 +6013,7 @@ fn geo_binary_output_is_byte_identical_across_runs() {
 #[test]
 fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "gb_panic", "op": "geo.sjoin", "in": ["left_in", "right_in"],
@@ -6063,8 +6063,8 @@ fn atomic_input_gate_streams_valid_input_over_cumulative_memory_budget() {
     // lease di tutti i batch — staging bounded e replay, nessun accepted
     // pubblicato prima della validazione completa.
     let plan = json!({
-        "schema_version": 4,
-        "limits": {"max_memory_bytes": 128 * 1024},
+        "schema_version": 5,
+        "limits": {"max_governed_memory_bytes": 128 * 1024},
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -6099,8 +6099,8 @@ fn atomic_input_gate_rejects_late_invalid_with_zero_accepted_over_budget() {
     // WKB malformato nell'ULTIMO batch — zero accepted, diagnostica completa
     // con indice assoluto, nessun batch pubblicato a valle.
     let plan = json!({
-        "schema_version": 4,
-        "limits": {"max_memory_bytes": 128 * 1024},
+        "schema_version": 5,
+        "limits": {"max_governed_memory_bytes": 128 * 1024},
         "inputs": ["main"],
         "nodes": [],
         "output": "main",
@@ -6244,12 +6244,12 @@ fn m2d_plan(forza_disco: bool) -> serde_json::Value {
     // `trattenuti + input + max_batch_bytes (64 MiB) > 1 MiB` gia' al primo
     // batch: modalita' disco dalla prima passata.
     let limits = if forza_disco {
-        json!({"max_memory_bytes": 1_048_576})
+        json!({"max_governed_memory_bytes": 1_048_576})
     } else {
         json!({})
     };
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "limits": limits,
         "nodes": [{
@@ -6360,7 +6360,7 @@ fn m2d_rejection_tardiva_non_pubblica_nulla_in_memoria() {
     )
     .expect("batch con riga non valutabile");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{
             "id": "c",
@@ -6415,9 +6415,9 @@ fn m2d_soglia_esatta_e_attraversamento() {
     // stretto si passa a disco e quella stessa quota fa fallire.
     let piano = |memoria: u64| {
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
-            "limits": {"max_temp_bytes": 1, "max_memory_bytes": memoria},
+            "limits": {"max_temp_bytes": 1, "max_governed_memory_bytes": memoria},
             "nodes": [{
                 "id": "f",
                 "op": "table.formula",
@@ -6502,9 +6502,9 @@ fn m2d_output_consumato_da_un_segmento_successivo() {
     // oggetto prodotto dalla catena, quindi il consumatore a valle deve
     // vederlo identico a come lo vedrebbe dopo un round-trip IPC.
     let piano = |memoria: Option<u64>| {
-        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_governed_memory_bytes": m}));
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "limits": limits,
             "nodes": [
@@ -6608,9 +6608,10 @@ fn m2d_tre_famiglie_row_diagnostics() {
     ];
     for nodo in nodi {
         let piano = |memoria: Option<u64>| {
-            let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+            let limits =
+                memoria.map_or_else(|| json!({}), |m| json!({"max_governed_memory_bytes": m}));
             json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "limits": limits,
                 "nodes": [nodo.clone()],
@@ -6714,9 +6715,9 @@ fn m2d_dictionary_e_nested() {
     };
 
     let piano = |memoria: Option<u64>| {
-        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_governed_memory_bytes": m}));
         json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "limits": limits,
             "nodes": [{
@@ -6780,9 +6781,9 @@ fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
     // comportamento e' identico a quello precedente a M2d: il piano riesce.
     for budget in [64_u64 * 1024, 256 * 1024, 1024 * 1024] {
         let piano = json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
-            "limits": {"max_memory_bytes": budget},
+            "limits": {"max_governed_memory_bytes": budget},
             "nodes": [{
                 "id": "f",
                 "op": "table.formula",
@@ -6865,7 +6866,7 @@ fn m2d_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
         ("b", "a")
     };
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             cast("a"),
@@ -6884,7 +6885,7 @@ fn m2d_fanout_esito(
     batch: usize,
 ) -> Result<(usize, u64)> {
     let mut piano = m2d_piano_fanout(primo_ramo_diagnostico);
-    piano["limits"] = json!({"max_memory_bytes": budget});
+    piano["limits"] = json!({"max_governed_memory_bytes": budget});
     let contratti = [(
         "main".to_owned(),
         DataContract::tabular(m2d_fanout_schema()),

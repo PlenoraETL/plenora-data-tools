@@ -141,7 +141,7 @@ fn scrivi_input_batch(path: &Path, batch: usize, righe_per_batch: i64) {
 
 fn scrivi_piano(path: &Path) {
     let piano = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{"id": "f", "op": "table.filter", "in": ["main"],
                    "config": {"column": "id", "operator": ">", "value": 0}}],
@@ -833,7 +833,7 @@ fn il_budget_di_memoria_legacy_e_globale_e_include_il_picco() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 4096},
+            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 4096},
             "steps": [{"operation": "sort", "config": {"columns": ["id"], "ascending": true}}]
         }))
         .expect("json"),
@@ -884,7 +884,7 @@ fn il_budget_legacy_e_globale_anche_fra_i_due_lati_di_un_piano_binario() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 5_000},
+            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 5_000},
             "steps": [{
                 "operation": "join",
                 "config": {"left_keys": ["id"], "right_keys": ["id"], "how": "inner"}
@@ -941,7 +941,7 @@ fn un_lato_solo_resta_dentro_lo_stesso_budget() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 5_000},
+            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 5_000},
             "steps": [{"operation": "sort", "config": {"columns": ["id"], "ascending": true}}]
         }))
         .expect("json"),
@@ -1023,7 +1023,7 @@ fn il_percorso_legacy_non_declassa_un_limite_di_risorsa_a_esecuzione() {
 #[test]
 fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
     // Il caricamento era limitato, l'esecuzione no: gli input restavano vivi
-    // e il kernel riceveva `max_memory_bytes` INTERO, e l'output non veniva
+    // e il kernel riceveva `max_governed_memory_bytes` INTERO, e l'output non veniva
     // addebitato a nessuno. Un piano dichiarato a N byte poteva quindi
     // arrivare molto oltre N.
     //
@@ -1047,7 +1047,7 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 8_192},
+            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 8_192},
             "steps": [{"operation": "cross_join", "config": {}}]
         }))
         .expect("json"),
@@ -1102,7 +1102,7 @@ fn lo_stesso_piano_riesce_quando_il_budget_copre_anche_l_output() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 4_194_304},
+            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 4_194_304},
             "steps": [{"operation": "cross_join", "config": {}}]
         }))
         .expect("json"),

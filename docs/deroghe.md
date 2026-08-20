@@ -263,6 +263,47 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   doc di `preflight_output_bytes` dichiara i propri limiti, e questo registro
   copre entrambi i percorsi.
 
+- **Aggiornamento del 2026-08-20 — attuazione del livello 1 (ADR 15 §7):
+  la deroga NON e' chiusa, ma cambia di forma.**
+
+  Il campo si chiama ora `max_governed_memory_bytes`, in tutte le sue facce
+  (API Rust, piano DAG v5, piano lineare), senza alias e con un gate di CI che
+  impedisce al nome precedente di rientrare. La versione canonica del piano e'
+  la 5, i piani v4 passano da una migrazione esplicita, e ogni `plan_hash`
+  prodotto prima e' invalidato per costruzione da un separatore di dominio.
+
+  **Che cosa questo chiude.** La meta' della deroga che era una *promessa
+  falsa*: il nome non dichiara piu' un tetto sulla memoria del processo, e
+  `docs/adr/ADR-0006-semantica-limiti.md` non lo presenta piu' come tale.
+  Chi legge la superficie pubblica non puo' piu' dedurne una garanzia che non
+  c'e'.
+
+  **Che cosa questo NON chiude, e resta il contenuto vero della deroga.**
+
+  1. La rinominazione non ha spostato **una sola** allocazione. I siti
+     censiti in `docs/der011-censimento-2026-08-21.md` sono gli stessi: sul
+     percorso DAG due prenotano prima di allocare e uno non prenota affatto;
+     percorso legacy, kernel senza preflight e allocazioni interne di Arrow
+     restano scoperti. Il verificatore ad ancore continua a passare, il che
+     significa che il codice e' quello descritto — non che il problema sia
+     stato risolto.
+  2. Anche la lettura piu' debole del nome nuovo — «budget di ammissione» —
+     e' garantita solo **in parte**. Dove il lease e' preso dopo
+     l'allocazione, cio' che il budget governa e' la RITENZIONE del risultato,
+     non la sua costruzione: un output molto piu' grande del budget porta
+     all'esaurimento della memoria prima che l'errore esista. La differenza
+     fra «non ammetto» e «non alloco» e' esattamente cio' che manca.
+  3. Il livello 2 non esiste: `hard_process_memory_bytes` non e' stato
+     introdotto, di proposito, perche' il profilo isolato che lo realizza non
+     e' stato scritto. Introdurre il nome prima del meccanismo ripeterebbe
+     l'errore che ADR 15 corregge.
+
+  **Condizione di rientro, riformulata.** Le due strade di sopra restano le
+  uniche; a esse si aggiunge, per il livello 2, un profilo isolato che
+  dimostri contenimento **e** attribuzione su Linux e Windows (ADR 15
+  §5.3–§5.6). Fino ad allora la formula da usare e' quella gia' scritta:
+  controllo di ammissione post-allocazione, non budget globale duro.
+
 ## DER-010 — Hook di panico non installato d'ufficio per gli embedder
 
 - **Regola derogata:** «errori senza dati» (ADR-0001). L'hook di panico di

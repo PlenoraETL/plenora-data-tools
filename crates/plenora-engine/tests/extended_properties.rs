@@ -211,7 +211,7 @@ proptest! {
             let forced = Plan {
                 schema_version: 1,
                 limits: Limits {
-                    max_memory_bytes: 2_048,
+                    max_governed_memory_bytes: 2_048,
                     spill_partitions: 32,
                     ..Limits::default()
                 },

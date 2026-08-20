@@ -507,7 +507,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
 
     // `--right` non ha senso per i piani v4 (accoppiamento posizionale via
     // `--inputs`): rifiutato prima di toccare qualunque file.
-    std::fs::write(&plan, br#"{"schema_version":4}"#).expect("plan");
+    std::fs::write(&plan, br#"{"schema_version":5}"#).expect("plan");
     let result = cli()
         .args(["run", "--plan"])
         .arg(&plan)
@@ -525,7 +525,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
 
     // `--input` singolo: equivalente a `--inputs` per un piano a un input.
     let document = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],

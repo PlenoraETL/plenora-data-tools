@@ -199,7 +199,7 @@ fuzz_target!(|payload: &[u8]| {
             }
             let output = nodes.len() - 1;
             let plan = json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": nodes,
                 "output": format!("n{output}"),
@@ -247,7 +247,7 @@ fuzz_target!(|payload: &[u8]| {
                 output = "f";
             }
             let plan = json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main", "right"],
                 "nodes": nodes,
                 "output": output,
@@ -276,7 +276,7 @@ fuzz_target!(|payload: &[u8]| {
             // Catena geo: buffer (distanza dal payload) -> area.
             let distance = f64::from(payload[1] % 64) * 0.5;
             let plan = json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["geomain"],
                 "nodes": [
                     {"id": "b", "op": "geo.buffer", "in": ["geomain"], "config": {"distance": distance}},

@@ -57,7 +57,7 @@ const RUNS: usize = 5;
 /// (perimetro M1, capability `TransformInPlace`).
 fn chain_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
@@ -72,7 +72,7 @@ fn chain_plan() -> serde_json::Value {
 /// -> area): tre `TransformInPlace` + la misura terminale (M2).
 fn chain_plan_with_area() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 5.0}},
@@ -92,7 +92,7 @@ fn chain_plan_with_area() -> serde_json::Value {
 #[cfg(feature = "proj-backend")]
 fn chain_plan_reproject() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.reproject", "in": ["main"],

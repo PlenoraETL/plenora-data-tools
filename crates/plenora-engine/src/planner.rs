@@ -1,4 +1,4 @@
-//! Planner del DAG v4 — fase 1 `validate` (Architetture.md par. 6.1/6.2,
+//! Planner del DAG v5 — fase 1 `validate` (Architetture.md par. 6.1/6.2,
 //! ADR 4, ADR 5) — Fase 2A-3.
 //!
 //! [`validate`] e' una funzione pura e a secco: legge il piano JSON e i
@@ -11,7 +11,7 @@
 //! Passi (Architetture.md par. 6.1):
 //!
 //! 1. `PlanLimits` di default durante il parsing (ADR 6), poi validazione
-//!    strutturale e risoluzione alias — in [`PlanV4::parse`];
+//!    strutturale e risoluzione alias — in [`PlanV5::parse`];
 //! 2. risoluzione del CRS di piano (campo `crs`): feature-dispatch come
 //!    `geo_transport` — con `proj-backend` la risoluzione PROJ reale, senza
 //!    fail-closed `CRS_BACKEND_UNAVAILABLE`;
@@ -47,7 +47,7 @@
 //!   fingerprint diversi (conservativo, fail-closed) — e lo stato `missing`
 //!   (R4.6.3) entra come valore canonico: un contratto senza CRS non ha lo
 //!   stesso fingerprint di uno con CRS risolto;
-//! - **profilo di publish**: il formato piano v4 non dichiara ancora un
+//! - **profilo di publish**: il formato piano non dichiara ancora un
 //!   profilo (`AtomicPublish`/`DurableAtomicPublish`, ADR 7); finche' non lo
 //!   fara', il default `AtomicPublish` entra nelle `required_capabilities`
 //!   qui raccolte ed e' verificato da [`check_compatibility`] contro le
@@ -92,13 +92,29 @@ use plenora_core::crs::resolve_crs;
 use plenora_kernels_geo::crs::resolve_crs;
 
 use crate::geo_transport::publish::PublishProfile;
-use crate::plan::{PlanV4, ValidatedPlanV4, PLAN_SCHEMA_VERSION_V4};
+use crate::plan::{migrazione_v4, PlanV5, ValidatedPlanV5, PLAN_SCHEMA_VERSION_V5};
 
 #[cfg(test)]
 mod tests;
 
 /// Versione dell'engine che ha prodotto il grafo validato (ADR 4).
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Separatore di dominio del `plan_hash` (ADR 4, esteso da ADR 15).
+///
+/// Il `plan_hash` non e' piu' `SHA256(canonical_json)` ma
+/// `SHA256(dominio || canonical_json)`. Il dominio nomina la versione del
+/// formato canonico, e questo **invalida esplicitamente** ogni hash prodotto
+/// prima della v5.
+///
+/// Senza di esso l'invalidazione sarebbe soltanto probabile: il piano
+/// canonico v5 nomina il budget di memoria diversamente dalla v4 (vedi
+/// [`crate::plan::migrazione_v4`]), quindi in pratica ogni hash cambierebbe
+/// comunque — ma «in pratica» e' una proprieta' del contenuto, non una
+/// garanzia della funzione. Un grafo riusato per sbaglio con un hash di prima
+/// e' un piano eseguito sotto un contratto di memoria che non e' piu' il suo;
+/// quel caso va reso impossibile, non improbabile.
+const PLAN_HASH_DOMAIN: &[u8] = b"plenora/plan_hash/v5\0";
 
 /// Versione dei crate Arrow in questa build (ADR 4: entra nell'identita' del
 /// grafo — un grafo validato con una versione Arrow diversa non e' riusabile).
@@ -271,7 +287,7 @@ pub struct ValidatedGraph {
     input_contract_fingerprints: Vec<ContractFingerprint>,
     plan_format_version: u16,
     // --- Decisioni semantiche stabili ---
-    plan: ValidatedPlanV4,
+    plan: ValidatedPlanV5,
     /// Contratti per arco, chiave = nome input o id nodo (namespace unico,
     /// garantito dalla validazione strutturale).
     edge_contracts: BTreeMap<String, DataContract>,
@@ -329,7 +345,7 @@ impl ValidatedGraph {
 
     /// Il piano validato strutturalmente (alias gia' risolti agli id canonici).
     #[must_use]
-    pub const fn plan(&self) -> &ValidatedPlanV4 {
+    pub const fn plan(&self) -> &ValidatedPlanV5 {
         &self.plan
     }
 
@@ -386,7 +402,10 @@ impl ValidatedGraph {
     }
 }
 
-/// Fase 1 `validate` del DAG v4 (Architetture.md par. 6.1, ADR 4, ADR 5).
+/// Fase 1 `validate` del DAG v5 (Architetture.md par. 6.1, ADR 4, ADR 5).
+///
+/// Un piano `schema_version: 4` entra da qui attraverso la migrazione
+/// esplicita (ADR 15): il resto della fase 1 conosce una sola forma.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
 /// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
@@ -413,9 +432,14 @@ pub fn validate(
     plan_json: &str,
     input_contracts: &[(String, DataContract)],
 ) -> Result<ValidatedGraph> {
+    // Passo 0: versione. Un piano v4 viene migrato al canonico v5 qui, in
+    // un punto solo (ADR 15): il resto della fase 1 conosce una sola forma.
+    // Un piano v5 attraversa senza copia.
+    let plan_limits = PlanLimits::default();
+    let plan_json = migrazione_v4::testo_canonico_v5(plan_json, &plan_limits)?;
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
-    // risoluzione alias (PlanV4::parse, ADR 6).
-    let plan = PlanV4::parse(plan_json, &PlanLimits::default())?;
+    // risoluzione alias (PlanV5::parse, ADR 6).
+    let plan = PlanV5::parse(plan_json.as_ref(), &plan_limits)?;
     // Validazione dei limiti effettivi in un punto solo, prima di qualunque
     // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
     // che non passano dal preparer tabellare dove il controllo viveva prima
@@ -475,7 +499,7 @@ pub fn validate(
         .transpose()?;
 
     // Passo 4: required_capabilities di ogni op contro i backend compilati.
-    // Piu' il profilo di publish (ADR 7): il formato piano v4 non dichiara
+    // Piu' il profilo di publish (ADR 7): il formato piano non dichiara
     // ancora un profilo, quindi si registra il default `AtomicPublish`;
     // quando il piano lo dichiarera' entrera' qui il profilo scelto, senza
     // cambi di API (la verifica resta in `check_compatibility`).
@@ -523,7 +547,7 @@ pub fn validate(
         edge_provenance.insert(declared.clone(), true);
     }
 
-    let nodes_by_id: HashMap<&str, &crate::plan::NodeV4> = plan_ref
+    let nodes_by_id: HashMap<&str, &crate::plan::NodeV5> = plan_ref
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node))
@@ -583,7 +607,10 @@ pub fn validate(
     // Passo 6: identita' ADR 4.
     let canonical = plan.canonical_json();
     let canonical_bytes = serde_json::to_vec(&canonical)?;
-    let plan_hash = PlanHash(Sha256::digest(&canonical_bytes).into());
+    let mut hasher = Sha256::new();
+    hasher.update(PLAN_HASH_DOMAIN);
+    hasher.update(&canonical_bytes);
+    let plan_hash = PlanHash(hasher.finalize().into());
     let used: Vec<&OperationDescriptor> = used_operations
         .iter()
         .map(|id| {
@@ -601,7 +628,7 @@ pub fn validate(
         arrow_version: ArrowVersion(ARROW_VERSION.to_owned()),
         required_capabilities: required,
         input_contract_fingerprints: input_fingerprints,
-        plan_format_version: PLAN_SCHEMA_VERSION_V4,
+        plan_format_version: PLAN_SCHEMA_VERSION_V5,
         effective_limits: plan.effective_limits(),
         plan,
         edge_contracts,

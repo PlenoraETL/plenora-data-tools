@@ -1,15 +1,21 @@
 #![no_main]
 
-//! Parser del piano v4 contro JSON ostili (Fase 2A, ADR 6): byte arbitrari,
-//! JSON malformati, strutture enormi o profondamente annidate, identificatori
-//! lunghi. Invarianti: mai panic, mai hang; ogni input produce `Ok` o un
-//! errore tipizzato; i `PlanLimits` (default o ristretti dal payload) sono
-//! applicati durante il parsing. Se il parse riesce, la serializzazione
-//! canonica deve ri-parsare (idempotenza, ADR 4).
+//! Parser del piano v5 e migrazione di versione contro JSON ostili
+//! (Fase 2A, ADR 6; ADR 15): byte arbitrari, JSON malformati, strutture
+//! enormi o profondamente annidate, identificatori lunghi. Invarianti: mai
+//! panic, mai hang; ogni input produce `Ok` o un errore tipizzato; i
+//! `PlanLimits` (default o ristretti dal payload) sono applicati durante il
+//! parsing. Se il parse riesce, la serializzazione canonica deve ri-parsare
+//! (idempotenza, ADR 4).
+//!
+//! Il target copre **due** ingressi, non uno: il parser canonico e il
+//! dispatcher di versione, che e' l'ingresso reale del planner. Fuzzare solo
+//! il parser lascerebbe fuori la riscrittura v4 -> v5, che e' il pezzo nuovo
+//! e quello che manipola l'albero JSON.
 
 use libfuzzer_sys::fuzz_target;
 use plenora_core::limits::PlanLimits;
-use plenora_engine::plan::PlanV4;
+use plenora_engine::plan::{migrazione_v4, PlanV5};
 
 fn limits_from(payload: &[u8]) -> PlanLimits {
     let mut limits = PlanLimits::default();
@@ -34,7 +40,22 @@ fn limits_from(payload: &[u8]) -> PlanLimits {
 fuzz_target!(|payload: &[u8]| {
     let limits = limits_from(payload);
     let text = String::from_utf8_lossy(payload);
-    if let Ok(plan) = PlanV4::parse(&text, &limits) {
+
+    // Dispatcher di versione: un v4 arriva al parser solo da qui. Se la
+    // migrazione riesce, ripeterla sul risultato non deve cambiare nulla —
+    // altrimenti esisterebbero due piani canonici per lo stesso piano.
+    if let Ok(canonico) = migrazione_v4::testo_canonico_v5(&text, &limits) {
+        if let Ok(due_volte) = migrazione_v4::testo_canonico_v5(canonico.as_ref(), &limits) {
+            assert_eq!(
+                canonico.as_ref(),
+                due_volte.as_ref(),
+                "migrazione non idempotente"
+            );
+        }
+        let _ = PlanV5::parse(canonico.as_ref(), &limits);
+    }
+
+    if let Ok(plan) = PlanV5::parse(&text, &limits) {
         // Limiti strutturali rispettati sul piano validato.
         assert!(plan.plan().nodes.len() <= limits.max_plan_nodes);
         assert!(plan.plan().inputs.len() <= limits.max_inputs);
@@ -42,7 +63,7 @@ fuzz_target!(|payload: &[u8]| {
         // Idempotenza della canonicalizzazione: il JSON canonico ri-parsa
         // con i limiti di default e produce la stessa forma canonica.
         let canonical = plan.canonical_json().to_string();
-        let reparsed = PlanV4::parse_default(&canonical).expect("canonical re-parse");
+        let reparsed = PlanV5::parse_default(&canonical).expect("canonical re-parse");
         assert_eq!(
             reparsed.canonical_json().to_string(),
             canonical,

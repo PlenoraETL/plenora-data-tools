@@ -485,3 +485,87 @@ l'analizzatore del contratto.
   evidenza, come i precedenti;
 - riportare `since = "<versione>"` negli attributi `#[deprecated]`, che oggi
   ne sono privi proprio perche' il numero non era deciso.
+
+
+---
+
+# Aggiunta 2026-08-20 — contratto della memoria (ADR 15, livello 1)
+
+Rotture **ulteriori** rispetto all'inventario del 2026-08-16, dallo stesso
+bump maggiore. Le sezioni sopra restano com'erano scritte: descrivono lo stato
+dell'API a quella data, quando il campo aveva ancora il nome della v4, e
+riscriverle renderebbe l'inventario una cronaca inaffidabile.
+
+## Il campo, in tutte le sue facce
+
+`max_memory_bytes` si chiama ora **`max_governed_memory_bytes`**. Il nome
+precedente prometteva un tetto sull'intero processo che in-process non è
+realizzabile (ADR 15 §3); il nuovo dice che cosa il limite fa davvero.
+**Non c'è alias, in nessuna forma**: né `serde(alias)`, né un campo
+deprecato, né una chiave accettata «solo per compatibilità».
+
+| dove | prima | dopo |
+|---|---|---|
+| `plenora_core::limits::Limits` | `max_memory_bytes: u64` | `max_governed_memory_bytes: u64` |
+| `plenora_kernels_table::Limits` | `max_memory_bytes: usize` | `max_governed_memory_bytes: usize` |
+| piano DAG, `limits` | `"max_memory_bytes"` | `"max_governed_memory_bytes"` |
+| piano lineare (`schema_version <= 3`), `limits` | `"max_memory_bytes"` | `"max_governed_memory_bytes"` |
+| `ValidatedPlan::with_memory_budget` | riduce `max_memory_bytes` | riduce `max_governed_memory_bytes` |
+
+Chi costruisce `Limits` con struct literal, chi legge il campo, e chi scrive
+piani JSON deve aggiornare il nome. Il compilatore segnala i primi due; per il
+terzo la diagnosi è a runtime, ed è un **errore**, non un default silenzioso:
+entrambe le strutture hanno `deny_unknown_fields`.
+
+## Formato del piano: la canonica è la v5
+
+- la `schema_version` canonica passa da **4 a 5**;
+- un piano `schema_version: 4` è ancora accettato, ma **solo** attraverso la
+  migrazione esplicita, che riscrive il nome del budget. Il resto del piano
+  attraversa invariato;
+- un piano v4 che dichiara il nome nuovo è **rifiutato**, come un piano v5 che
+  dichiara il nome vecchio, come un piano che li dichiara entrambi;
+- i piani `schema_version <= 3` migrano **direttamente al canonico v5**: non
+  esiste una forma intermedia da cui ripartire;
+- `validate` e `run` della CLI riportano `"schema_version": 5` anche per un
+  piano v4 in ingresso: è la versione sotto cui il piano viene effettivamente
+  eseguito.
+
+**Nessuna migrazione automatica per i piani lineari.** La loro
+`schema_version` non distingue il prima dal dopo, quindi un piano
+`schema_version: 1` con il nome vecchio viene rifiutato e va aggiornato a
+mano. È l'unica rottura di questo blocco che colpisce un formato che non
+stavamo cambiando; la ragione è che il campo vive in una sola struttura
+condivisa fra i due percorsi, e lasciarla col nome vecchio avrebbe reso la
+decisione parziale (ADR 15 §7).
+
+## `plan_hash`: invalidazione esplicita
+
+```
+plan_hash = SHA256("plenora/plan_hash/v5\0" || canonical_json)
+```
+
+Ogni `plan_hash` calcolato prima di questo cambiamento è **diverso**. Chi lo
+conserva (cache, log di riproducibilità, confronti fra esecuzioni) deve
+considerare invalidati i valori precedenti: non c'è collisione possibile con
+la regola di prima, ed è deliberato — vedi ADR 4, emendamento 2026-08-20.
+
+`catalog_fingerprint` e `ContractFingerprint` **non** cambiano.
+
+## Superficie nuova
+
+- `plenora_engine::plan::migrazione_v4` — `testo_canonico_v5` (ingresso di
+  versione, `Cow`: un piano già v5 attraversa senza copia), `migra_v4_a_v5`,
+  `versione_dichiarata`;
+- `plenora_engine::plan::PLAN_SCHEMA_VERSION_V5` (= 5) e
+  `PLAN_SCHEMA_VERSION_V4` (= 4, accettata solo dalla migrazione). La
+  costante `PLAN_SCHEMA_VERSION_V4` di prima **valeva 4 ed era la canonica**:
+  chi la usava per scrivere piani deve passare a `PLAN_SCHEMA_VERSION_V5`;
+- i tipi `PlanV4`, `NodeV4`, `ValidatedPlanV4` sono rinominati in `PlanV5`,
+  `NodeV5`, `ValidatedPlanV5`.
+
+## Non introdotto
+
+`hard_process_memory_bytes` (livello 2 di ADR 15) **non esiste**: arriverà col
+profilo isolato che lo realizza. Introdurre il nome prima del meccanismo
+ripeterebbe l'errore che ADR 15 corregge.

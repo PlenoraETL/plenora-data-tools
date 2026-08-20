@@ -126,8 +126,8 @@ bench = false
 # ---------------------------------------------------------------------------
 
 [[bin]]
-name = "plan_v4_parse"
-path = "fuzz_targets/plan_v4_parse.rs"
+name = "plan_v5_parse"
+path = "fuzz_targets/plan_v5_parse.rs"
 test = false
 doc = false
 bench = false

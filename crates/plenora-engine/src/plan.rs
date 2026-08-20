@@ -1,16 +1,16 @@
-//! Formato piano v4: DAG dichiarativo (Architetture.md par. 5, ADR 4, ADR 6).
+//! Formato piano v5: DAG dichiarativo (Architetture.md par. 5, ADR 4, ADR 6).
 //!
 //! Fondamenta della Fase 2A — codice NUOVO, non trasloco:
 //!
-//! - [`PlanV4`]/[`NodeV4`]: il formato dichiarativo (solo dipendenze e
+//! - [`PlanV5`]/[`NodeV5`]: il formato dichiarativo (solo dipendenze e
 //!   configurazioni, nessuna annotazione di esecuzione), serde con
 //!   `deny_unknown_fields` a ogni livello;
-//! - [`PlanV4::parse`]: applicazione dei [`PlanLimits`] DURANTE il parsing
+//! - [`PlanV5::parse`]: applicazione dei [`PlanLimits`] DURANTE il parsing
 //!   (ADR 6: il prima possibile, prima di allocazioni guidate dal contenuto),
 //!   poi validazione strutturale (id unici, riferimenti esistenti, aciclicità,
 //!   output raggiungibile, arietà da catalogo) e risoluzione alias verso gli
 //!   id canonici;
-//! - [`PlanV4::from_legacy`]: migrazione del piano lineare legacy
+//! - [`PlanV5::from_legacy`]: migrazione del piano lineare legacy
 //!   (`Plan{steps}`, `schema_version` <= 3) nel caso degenerato del DAG —
 //!   deterministica e idempotente (decisione D20, ADR 4);
 //! - [`canonical_json`]: serializzazione canonica ai fini del `plan_hash`
@@ -36,6 +36,11 @@
 //!   non ha (fuori scope) — qui la config resta `serde_json::Value`
 //!   (l'equivalenza null ≡ `{}` e la normalizzazione dei numeri sono già
 //!   applicate).
+//!
+//! La v4 non ha un percorso di lettura qui dentro: chi presenta un piano v4
+//! passa da [`migrazione_v4::testo_canonico_v5`]. Il nome che la v4 dava al
+//! budget di memoria esiste ancora in un solo modulo del workspace, quello,
+//! ed è lì che è documentato.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -48,10 +53,26 @@ use plenora_core::{PlenoraError, Result};
 
 use crate::table_engine;
 
-/// Versione del formato piano DAG (Architetture.md par. 5).
+pub mod migrazione_v4;
+
+/// Versione CANONICA del formato piano DAG (Architetture.md par. 5).
+///
+/// La v5 differisce dalla v4 per un solo campo, ma il campo cambia il
+/// contratto: il budget di memoria si chiama ora `max_governed_memory_bytes`
+/// (ADR 15). Il nome della v4 prometteva un tetto sull'intero processo che
+/// in-process non e' realizzabile; il nuovo dice quello che il limite fa
+/// davvero, cioe' governare la memoria che la libreria controlla.
+///
+/// **Non c'e' alias.** Un piano v5 con il nome della v4 e' rifiutato, e un
+/// piano v4 con il nome nuovo pure: un nome che continua a funzionare e' un
+/// nome che continua a promettere. I piani v4 passano dalla migrazione
+/// esplicita ([`migrazione_v4`]).
+pub const PLAN_SCHEMA_VERSION_V5: u16 = 5;
+
+/// Versione precedente, accettata **solo** dalla migrazione.
 pub const PLAN_SCHEMA_VERSION_V4: u16 = 4;
 
-/// Override opzionali dei limiti dati/runtime nel piano v4.
+/// Override opzionali dei limiti dati/runtime nel piano v5.
 ///
 /// Specchio di [`Limits`] con tutti i campi opzionali: un piano dichiara solo
 /// ciò che vuole restringere, i default di [`Limits::default`] coprono il
@@ -71,7 +92,7 @@ pub struct LimitsOverride {
     #[serde(default)]
     pub plan: PlanLimitsOverride,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_memory_bytes: Option<u64>,
+    pub max_governed_memory_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_temp_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,8 +131,8 @@ impl LimitsOverride {
             effective.rows.max_expansion_factor = value;
         }
         effective.plan = self.plan.apply_to(&base.plan);
-        if let Some(value) = self.max_memory_bytes {
-            effective.max_memory_bytes = value;
+        if let Some(value) = self.max_governed_memory_bytes {
+            effective.max_governed_memory_bytes = value;
         }
         if let Some(value) = self.max_temp_bytes {
             effective.max_temp_bytes = value;
@@ -208,7 +229,7 @@ impl PlanLimitsOverride {
 /// Nodo del DAG: solo dipendenze e configurazione (Architetture.md par. 5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NodeV4 {
+pub struct NodeV5 {
     /// Identificatore unico nel piano.
     pub id: String,
     /// Id operazione: canonico (`table.*`/`geo.*`) o alias legacy; normalizzato
@@ -224,10 +245,10 @@ pub struct NodeV4 {
     pub config: Value,
 }
 
-/// Piano v4: DAG dichiarativo (Architetture.md par. 5).
+/// Piano v5: DAG dichiarativo (Architetture.md par. 5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PlanV4 {
+pub struct PlanV5 {
     pub schema_version: u16,
     #[serde(default)]
     pub limits: LimitsOverride,
@@ -248,34 +269,34 @@ pub struct PlanV4 {
     /// inventato — R4.4; su `resolved` una contraddizione del piano).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub crs_decisions: BTreeMap<String, String>,
-    pub nodes: Vec<NodeV4>,
+    pub nodes: Vec<NodeV5>,
     /// Id del nodo (o dell'input, per un piano pass-through) che produce
     /// l'output del piano.
     pub output: String,
 }
 
-/// Piano v4 che ha superato parsing, limiti e validazione strutturale.
+/// Piano v5 che ha superato parsing, limiti e validazione strutturale.
 ///
 /// Contiene solo decisioni strutturali stabili: l'inferenza dei contratti
 /// degli archi (`analyze_contract`) è Fase 2A-2 e produrrà il
 /// `ValidatedGraph` completo.
 #[derive(Debug, Clone)]
-pub struct ValidatedPlanV4 {
-    plan: PlanV4,
+pub struct ValidatedPlanV5 {
+    plan: PlanV5,
     /// Id dei nodi in ordine topologico deterministico (Kahn con tie-break
     /// lessicografico): è l'ordine usato da `analyze_contract` e dalla
     /// canonicalizzazione.
     topo_order: Vec<String>,
 }
 
-impl ValidatedPlanV4 {
+impl ValidatedPlanV5 {
     #[must_use]
-    pub const fn plan(&self) -> &PlanV4 {
+    pub const fn plan(&self) -> &PlanV5 {
         &self.plan
     }
 
     #[must_use]
-    pub fn into_plan(self) -> PlanV4 {
+    pub fn into_plan(self) -> PlanV5 {
         self.plan
     }
 
@@ -302,8 +323,8 @@ const fn contract_error(message: String) -> PlenoraError {
     PlenoraError::InvalidPlan(message)
 }
 
-impl PlanV4 {
-    /// Parse completo di un piano v4: limiti durante il parsing (ADR 6),
+impl PlanV5 {
+    /// Parse completo di un piano v5: limiti durante il parsing (ADR 6),
     /// validazione strutturale, risoluzione alias.
     ///
     /// # Errors
@@ -312,7 +333,7 @@ impl PlanV4 {
     /// di struttura, `PlenoraError::DataMapping` per JSON malformato,
     /// `PlenoraError::Unsupported` per operazioni catalogate ma non
     /// disponibili (`Maturity::Planned`).
-    pub fn parse(json_text: &str, plan_limits: &PlanLimits) -> Result<ValidatedPlanV4> {
+    pub fn parse(json_text: &str, plan_limits: &PlanLimits) -> Result<ValidatedPlanV5> {
         // ADR 6: il limite sui byte del JSON si applica PRIMA del parse.
         if json_text.len() > plan_limits.max_plan_json_bytes {
             return Err(contract_error(format!(
@@ -328,14 +349,14 @@ impl PlanV4 {
         plenora_core::json::ensure_no_duplicate_keys(json_text)?;
         let mut plan: Self = serde_json::from_str(json_text)?;
         let topo_order = plan.validate_structure(plan_limits)?;
-        Ok(ValidatedPlanV4 { plan, topo_order })
+        Ok(ValidatedPlanV5 { plan, topo_order })
     }
 
     /// Parse con i `PlanLimits` di default (fail-closed).
     ///
     /// # Errors
-    /// Come [`PlanV4::parse`].
-    pub fn parse_default(json_text: &str) -> Result<ValidatedPlanV4> {
+    /// Come [`PlanV5::parse`].
+    pub fn parse_default(json_text: &str) -> Result<ValidatedPlanV5> {
         Self::parse(json_text, &PlanLimits::default())
     }
 
@@ -346,7 +367,7 @@ impl PlanV4 {
     /// `in = ["left", "right"]`.
     ///
     /// Deterministica (id `n0..nN`, input `main`/`left`/`right` fissi) e
-    /// idempotente (decisione D20, ADR 4): il risultato è già un piano v4
+    /// idempotente (decisione D20, ADR 4): il risultato è già un piano v5
     /// validato con i limiti di default.
     ///
     /// # Errors
@@ -406,7 +427,7 @@ impl PlanV4 {
             .iter()
             .zip(descriptors)
             .enumerate()
-            .map(|(index, (step, descriptor))| NodeV4 {
+            .map(|(index, (step, descriptor))| NodeV5 {
                 id: format!("n{index}"),
                 op: descriptor.id.to_owned(),
                 inputs: if index == 0 {
@@ -422,7 +443,7 @@ impl PlanV4 {
         let limits = legacy_limits_override(&legacy.limits)?;
 
         let mut plan = Self {
-            schema_version: PLAN_SCHEMA_VERSION_V4,
+            schema_version: PLAN_SCHEMA_VERSION_V5,
             limits,
             crs: None,
             inputs: plan_inputs,
@@ -443,9 +464,9 @@ impl PlanV4 {
     // complessita' logica (fase di pulizia: niente refactor strutturali).
     #[allow(clippy::too_many_lines)]
     fn validate_structure(&mut self, plan_limits: &PlanLimits) -> Result<Vec<String>> {
-        if self.schema_version != PLAN_SCHEMA_VERSION_V4 {
+        if self.schema_version != PLAN_SCHEMA_VERSION_V5 {
             return Err(contract_error(format!(
-                "schema_version {} non supportata; attesa {PLAN_SCHEMA_VERSION_V4}",
+                "schema_version {} non supportata; attesa {PLAN_SCHEMA_VERSION_V5}",
                 self.schema_version
             )));
         }
@@ -629,7 +650,7 @@ impl PlanV4 {
     }
 }
 
-/// Mappa i limiti legacy (`plenora_kernels_table::Limits`) sugli override v4.
+/// Mappa i limiti legacy (`plenora_kernels_table::Limits`) sugli override v5.
 /// Conversione totale (R5.4): i campi `usize` della config legacy possono
 /// superare `u32`/`u64` solo per errori di configurazione, che vanno
 /// rifiutati e non troncati.
@@ -639,7 +660,7 @@ fn legacy_limits_override(legacy: &table_engine::Limits) -> Result<LimitsOverrid
         max_input_rows: Some(max_rows),
         max_output_rows: Some(max_rows),
         max_rows_per_edge: Some(max_rows),
-        max_memory_bytes: Some(legacy.max_memory_bytes as u64),
+        max_governed_memory_bytes: Some(legacy.max_governed_memory_bytes as u64),
         max_temp_bytes: Some(legacy.max_temp_bytes),
         spill_partitions: Some(
             u32::try_from(legacy.spill_partitions)
@@ -667,7 +688,7 @@ fn check_identifier(kind: &str, value: &str, plan_limits: &PlanLimits) -> Result
 
 /// Ordinamento topologico deterministico (Kahn con ready-set ordinato
 /// lessicograficamente) con rilevamento dei cicli e della profondità.
-fn topological_order(plan: &PlanV4, plan_limits: &PlanLimits) -> Result<Vec<String>> {
+fn topological_order(plan: &PlanV5, plan_limits: &PlanLimits) -> Result<Vec<String>> {
     let node_ids: HashSet<&str> = plan.nodes.iter().map(|node| node.id.as_str()).collect();
     // indegree conta solo gli archi nodo -> nodo (gli input sono sorgenti).
     let mut indegree: BTreeMap<&str, usize> = plan
@@ -727,8 +748,8 @@ fn topological_order(plan: &PlanV4, plan_limits: &PlanLimits) -> Result<Vec<Stri
 }
 
 /// Insieme dei nodi antenati dell'output (l'output incluso, se è un nodo).
-fn ancestors_of_output(plan: &PlanV4) -> HashSet<&str> {
-    let by_id: HashMap<&str, &NodeV4> = plan
+fn ancestors_of_output(plan: &PlanV5) -> HashSet<&str> {
+    let by_id: HashMap<&str, &NodeV5> = plan
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node))
@@ -759,13 +780,13 @@ fn ancestors_of_output(plan: &PlanV4) -> HashSet<&str> {
 /// config omessa e una con i default resi espliciti producono quindi piani
 /// canonici diversi finche' gli schemi tipizzati non saranno introdotti.
 ///
-/// Il piano si assume strutturalmente valido (prodotto da [`PlanV4::parse`] o
-/// [`PlanV4::from_legacy`]); su un piano non valido l'ordinamento ricade su
+/// Il piano si assume strutturalmente valido (prodotto da [`PlanV5::parse`] o
+/// [`PlanV5::from_legacy`]); su un piano non valido l'ordinamento ricade su
 /// quello lessicografico degli id, mantenendo la funzione totale.
 #[must_use]
-pub fn canonical_json(plan: &PlanV4) -> Value {
+pub fn canonical_json(plan: &PlanV5) -> Value {
     let order = canonical_node_order(plan);
-    let by_id: HashMap<&str, &NodeV4> = plan
+    let by_id: HashMap<&str, &NodeV5> = plan
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node))
@@ -791,7 +812,7 @@ pub fn canonical_json(plan: &PlanV4) -> Value {
         .collect();
 
     let mut root = Map::new();
-    root.insert("schema_version".to_owned(), json!(PLAN_SCHEMA_VERSION_V4));
+    root.insert("schema_version".to_owned(), json!(PLAN_SCHEMA_VERSION_V5));
     root.insert(
         "limits".to_owned(),
         canonical_limits(&plan.limits.effective()),
@@ -829,7 +850,7 @@ fn canonical_limits(limits: &Limits) -> Value {
             "max_config_bytes_per_node": limits.plan.max_config_bytes_per_node,
             "max_identifier_bytes": limits.plan.max_identifier_bytes,
         },
-        "max_memory_bytes": limits.max_memory_bytes,
+        "max_governed_memory_bytes": limits.max_governed_memory_bytes,
         "max_temp_bytes": limits.max_temp_bytes,
         "spill_partitions": limits.spill_partitions,
         "max_parallelism": limits.max_parallelism,
@@ -918,8 +939,8 @@ fn canonical_number(number: &Number) -> Value {
 /// default (parsing con limiti custom, es. profondita' maggiore) deve
 /// canonicalizzare nello stesso ordine topologico, non ricadere sul
 /// lessicografico. Il fallback resta solo per i grafi ciclici (piani non
-/// passati per [`PlanV4::parse`]).
-fn canonical_node_order(plan: &PlanV4) -> Vec<String> {
+/// passati per [`PlanV5::parse`]).
+fn canonical_node_order(plan: &PlanV5) -> Vec<String> {
     let without_limits = PlanLimits {
         max_plan_json_bytes: usize::MAX,
         max_plan_nodes: usize::MAX,

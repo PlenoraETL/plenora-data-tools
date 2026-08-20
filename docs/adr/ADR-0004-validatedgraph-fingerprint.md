@@ -222,3 +222,47 @@ sono ora nel codice:
 
 L'inventario completo della superficie rotta e' in
 `docs/api-breaking-2026-08-16.md`.
+
+
+## Emendamento 2026-08-20 — separatore di dominio del `plan_hash` (ADR 15)
+
+Il `plan_hash` non è più `SHA256(canonical_json)`. È
+
+```
+plan_hash = SHA256("plenora/plan_hash/v5\0" || canonical_json)
+```
+
+dove il prefisso è un **separatore di dominio** che nomina la versione del
+formato canonico.
+
+### Perché
+
+ADR 15 ha rinominato il budget di memoria del piano, e la versione canonica è
+passata da 4 a 5. In pratica ogni `plan_hash` cambia comunque: la chiave dei
+limiti compare nella forma canonica di *ogni* piano, perché la
+canonicalizzazione materializza i default. Ma «in pratica» è una proprietà del
+**contenuto**, non una garanzia della funzione: basterebbe un formato futuro
+in cui la differenza non tocca i byte canonici perché due piani con contratti
+diversi condividano un hash.
+
+Un `ValidatedGraph` può essere conservato in cache (è il contesto di questa
+ADR). Un grafo riusato per sbaglio con un hash prodotto prima della v5 è un
+piano eseguito sotto un contratto di memoria che non è più il suo. Quel caso
+va reso **impossibile**, non improbabile — e un separatore di dominio lo rende
+impossibile per costruzione.
+
+### Regola per il futuro
+
+Il dominio nomina la versione canonica: **cambiare il formato canonico
+significa cambiare il dominio**. Un test lo verifica (il dominio deve
+contenere `v{PLAN_SCHEMA_VERSION_V5}`), così una versione bumped senza dominio
+aggiornato non passa la suite.
+
+### Che cosa NON cambia
+
+- il `catalog_fingerprint` resta `SHA256` dei descrittori serializzati con i
+  prefissi di lunghezza: non ha versioni di formato piano da separare, e
+  toccarlo invaliderebbe l'identità del catalogo senza ragione;
+- il `ContractFingerprint` degli input resta invariato;
+- la canonicalizzazione del piano non cambia regole: ordine, default
+  materializzati e normalizzazione dei numeri sono quelli di sopra.

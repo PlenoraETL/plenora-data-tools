@@ -26,6 +26,7 @@
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
 //! l'uscita immediata.
 
+use std::borrow::Cow;
 use std::env;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
@@ -43,6 +44,7 @@ use plenora_core::contract::{
     GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
+use plenora_core::limits::PlanLimits;
 use plenora_core::{ErrorPhase, PlenoraError, RetryDisposition};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
@@ -54,7 +56,7 @@ use plenora_engine::geo_transport::transport::{
     pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, ArrowTransportError,
     PairArrowSchema, PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
 };
-use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
+use plenora_engine::plan::{migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5};
 use plenora_engine::planner::{self, ValidatedGraph};
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
 use plenora_engine::{
@@ -317,7 +319,7 @@ fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraErro
 ///
 /// Il budget dev'essere globale, non per input: con la contabilita' per
 /// singolo input i due lati di un piano binario potevano occupare ciascuno
-/// l'intero `max_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
+/// l'intero `max_governed_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
 /// scala il residuo e passa quello.
 ///
 /// La CONCATENAZIONE finale duplica temporaneamente i dati — i batch di
@@ -489,7 +491,7 @@ fn run_pipeline(
     if plan.requires_secondary() || plan.requires_blocking() {
         // Contabilita' GLOBALE del budget, non per input: il secondo lato
         // riceve cio' che resta dopo il primo. Chiamando due volte
-        // `load_complete` ciascun lato riceveva l'intero `max_memory_bytes`,
+        // `load_complete` ciascun lato riceveva l'intero `max_governed_memory_bytes`,
         // cioe' il doppio del dichiarato.
         //
         // ATTENZIONE a cosa questo garantisce. Il CARICAMENTO e' limitato
@@ -500,7 +502,7 @@ fn run_pipeline(
         // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
         // controllo di ammissione a valle, non un tetto duro: vedi DER-011.
         // Non chiamarlo «budget globale» senza questa distinzione.
-        let budget = plan.limits().max_memory_bytes;
+        let budget = plan.limits().max_governed_memory_bytes;
         let (left, usati) = load_complete_within(input_path, &plan, budget)?;
         let output = if plan.requires_secondary() {
             let right_path = right_path.ok_or_else(|| contract("il piano richiede --right"))?;
@@ -510,7 +512,7 @@ fn run_pipeline(
             // prestati al kernel, non consumati. Il budget dell'esecuzione e'
             // quindi cio' che resta dopo averli trattenuti tutti e due, e i
             // kernel devono vedere quel numero — non il budget iniziale —
-            // perche' e' con `limits.max_memory_bytes` che dimensionano le
+            // perche' e' con `limits.max_governed_memory_bytes` che dimensionano le
             // proprie tabelle di lavoro.
             let trattenuti = usati.checked_add(usati_destra).ok_or_else(|| {
                 PlenoraError::ResourceLimit(
@@ -539,7 +541,7 @@ fn run_pipeline(
     let (input_schema, reader) = ipc_boundary::open_with_format(
         input_path,
         IpcFormat::File,
-        &ipc_boundary::limits_from_memory_budget(plan.limits().max_memory_bytes),
+        &ipc_boundary::limits_from_memory_budget(plan.limits().max_governed_memory_bytes),
     )?;
 
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
@@ -1090,8 +1092,12 @@ fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     // comandi, altrimenti si valida un accoppiamento e se ne esegue un altro.
     let inputs = v4_inputs(args)?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
-        return validate_dag_v4(&plan_text, &inputs, !has_flag(args, "--no-geo-fusion"));
+    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
+        return validate_dag_v4(
+            plan_text.as_ref(),
+            &inputs,
+            !has_flag(args, "--no-geo-fusion"),
+        );
     }
     let inputs: Vec<PathBuf> = match inputs {
         V4Inputs::Positional(paths) => paths,
@@ -1202,6 +1208,21 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
     Ok(serde_json::from_str::<PlanVersionProbe>(plan_text)?.schema_version)
 }
 
+/// Porta il testo del piano al canonico v5 se il piano dichiara un formato
+/// DAG; `None` se dichiara la forma lineare legacy (`schema_version <= 3`),
+/// che prosegue sul percorso invariato.
+///
+/// La CLI sonda il piano piu' volte (input dichiarati, decisioni CRS) prima
+/// di chiamare il planner: se la migrazione avvenisse solo dentro il planner,
+/// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui
+/// esiste **un** testo, deciso una volta, e da li' in poi e' v5.
+fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
+    if plan_schema_version(plan_text)? < u32::from(PLAN_SCHEMA_VERSION_V4) {
+        return Ok(None);
+    }
+    migrazione_v4::testo_canonico_v5(plan_text, &PlanLimits::default()).map(Some)
+}
+
 /// Tetto sui byte di un documento JSON di controllo letto da file.
 ///
 /// Coincide con `PlanLimits::max_plan_json_bytes` di default: i piani legacy
@@ -1265,7 +1286,7 @@ fn contract_error_missing(name: &str) -> PlenoraError {
 /// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
 /// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
 /// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
-/// sonda lo legge per prima. Per i piani v4 `PlanV4::parse` ripete la
+/// sonda lo legge per prima. Per i piani v4 `PlanV5::parse` ripete la
 /// verifica: e' idempotente e copre anche chi non passa dalla CLI.
 fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
@@ -2054,7 +2075,7 @@ fn graph_summary_json(
         .collect();
     Ok(serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V4,
+        "schema_version": PLAN_SCHEMA_VERSION_V5,
         "plan_hash": graph.plan_hash().to_hex(),
         "engine_version": graph.engine_version().to_string(),
         "inputs": plan.inputs,
@@ -2115,7 +2136,7 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
         .collect();
     serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V4,
+        "schema_version": PLAN_SCHEMA_VERSION_V5,
         "plan_hash": graph.plan_hash().to_hex(),
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,
@@ -2392,16 +2413,16 @@ fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     let plan_path = value_after(args, "--plan")?;
     let output_path = value_after(args, "--output")?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
+    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
         if args.iter().any(|argument| argument == "--right") {
             return Err(contract(
-                "--right non e' ammesso per i piani v4: usare --inputs con i percorsi \
+                "--right non e' ammesso per i piani DAG: usare --inputs con i percorsi \
                  nell'ordine di dichiarazione degli input del piano",
             )
             .into());
         }
         return run_dag_v4(
-            &plan_text,
+            plan_text.as_ref(),
             &v4_inputs(args)?,
             &output_path,
             !has_flag(args, "--no-geo-fusion"),
