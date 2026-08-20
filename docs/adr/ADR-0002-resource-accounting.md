@@ -147,21 +147,40 @@ lease vivo, e si passa al disco solo quando il budget non basta più.
 prelevato, quindi di dimensione nota — si resta in memoria se e solo se:
 
 ```text
-trattenuti + byte_input_k + max_batch_bytes <= max_memory_bytes
+governor.reserved_bytes() + max_batch_bytes <= max_memory_bytes
 ```
 
 Nessuna percentuale scelta a mano, nessuna decisione temporale, nessuna
 dipendenza dall'ordine di arrivo: solo lease vivi e limiti del piano.
 
-**Perché non può produrre un falso `ResourceLimit`.** Durante una passata i
-lease vivi sono al più due — input e output, perché `run_streaming_chain`
-acquisisce il secondo prima di rilasciare il primo. Il picco su disco della
-passata `k` è quindi `input_k + output_k`; in memoria è
-`trattenuti + input_k + output_k`. Ogni batch di output attraversa il wrapper
-d'uscita, che applica `max_batch_bytes` (V7): un output che lo supera fa
-fallire il piano **in entrambe le modalità**, quindi per un piano che riesce
-`output_k <= max_batch_bytes` e la soglia garantisce che il picco in memoria
-resti dentro il budget.
+**La fonte è globale, non locale.** La prima stesura sommava i soli accepted
+trattenuti più il batch d'ingresso corrente. Non è tutto ciò che è vivo: in un
+fan-out `EdgeShared` conserva i batch già prelevati per il consumatore più
+lento e ne trattiene i lease, che nessun contatore locale del ramo
+row-diagnostics può vedere. `reserved_bytes()` è la fonte unica — accepted
+trattenuti, lease del batch corrente, buffer del tee e qualunque altra
+prenotazione viva, presente o futura. Un ingresso **senza** lease non è
+contabilizzato dal governor: in quel caso si va su disco, fail-closed.
+
+**Perché non può produrre un falso `ResourceLimit`.** Durante una passata le
+prenotazioni *nuove* sono al più due — input e output, perché
+`run_streaming_chain` acquisisce il secondo prima di rilasciare il primo — e
+l'input è già dentro `reserved_bytes()`. Ogni batch di output attraversa il
+wrapper d'uscita, che applica `max_batch_bytes` (V7): un output che lo supera
+fa fallire il piano **in entrambe le modalità**, quindi per un piano che riesce
+`output_k <= max_batch_bytes` è un maggiorante valido della sola prenotazione
+nuova, e la soglia tiene il picco dentro il budget qualunque altra cosa il
+piano stia già trattenendo.
+
+**Atomicità: vincolo di progetto per lo scheduler parallelo.** Con l'esecuzione
+seriale (`SerialFused`) fra la lettura di `reserved_bytes()` e la reservation
+della passata non si inserisce nessun altro: lo snapshot è stabile e il
+`check` + `reserve` è corretto. **Uno scheduler parallelo non può conservare
+questa forma**: la finestra fra i due diventerebbe un TOCTOU — un altro ramo
+prenota in mezzo e la decisione «memoria» risulta presa su uno stato già
+superato. La sostituzione richiesta è un **permesso atomico** del governor:
+una sola operazione che verifichi la disponibilità e la riservi, oppure
+rifiuti. È un vincolo su M3, non un dettaglio implementativo.
 
 **Passaggio al disco.** Quando la soglia non regge, i trattenuti sono travasati
 **nell'ordine di produzione** nello staging IPC esistente e i lease rilasciati

@@ -37,15 +37,15 @@ delle righe:
 
 | carico | kernel % | residuo % | costo per riga |
 |---|---|---|---|
-| `streaming_lineare` | 43,3% → **96,7%** | 55,3% → **1,3%** | 90,6 → **1,3** ns |
-| `blocking_sort` | 71,2% → **69,1%** | 26,4% → **28,8%** | 42,5 → **54,6** ns |
-| `blocking_aggregate` | 42,6% → **48,0%** | 52,5% → **47,7%** | 33,1 → **55,8** ns |
-| `fan_out_tee` | 58,4% → **57,8%** | 38,7% → **38,6%** | 37,4 → **60,2** ns |
-| `rami_indipendenti` | 98,6% → **98,3%** | 1,2% → **1,4%** | 12,7 → **17,1** ns |
+| `streaming_lineare` | 43,3% → **94,1%** | 55,3% → **1,7%** | 90,6 → **0,6** ns |
+| `blocking_sort` | 71,2% → **71,3%** | 26,4% → **25,7%** | 42,5 → **39,4** ns |
+| `blocking_aggregate` | 42,6% → **45,2%** | 52,5% → **50,1%** | 33,1 → **40,6** ns |
+| `fan_out_tee` | 58,4% → **57,4%** | 38,7% → **38,8%** | 37,4 → **33,6** ns |
+| `rami_indipendenti` | 98,6% → **98,6%** | 1,2% → **1,1%** | 12,7 → **15,2** ns |
 
 `streaming_lineare` — l'unico dei cinque con un nodo `formula` — passa da
-**55,3%** a **1,3%** di residuo, e il costo per riga da **90,6 ns** a
-**1,3 ns**. Sui quattro controlli la **quota di residuo** resta dov'era,
+**55,3%** a **1,7%** di residuo, e il costo per riga da **90,6 ns** a
+**0,6 ns**. Sui quattro controlli la **quota di residuo** resta dov'era,
 entro pochi punti. Il loro **costo per riga** si muove di piu' (fino a ~60%
 in questa campagna) pur non essendo toccato dal codice: e' la stessa
 oscillazione dell'host che si vede nei tempi assoluti al §3, e va letta come
@@ -57,13 +57,13 @@ altro nel wall:
 
 | piano | wall | kernel | residuo | residuo % |
 |---|---|---|---|---|
-| `solo_formula` | 21,62 → **4,25** ms | 1,87 → 3,53 ms | 17,79 → **0,21** ms | 87,4% → **4,7%** |
-| `solo_formula_costante` | 18,82 → **2,42** ms | 0,93 → 1,83 ms | 17,43 → **0,16** ms | 91,9% → **6,6%** |
-| `solo_formula_intero` | 18,34 → **3,70** ms | 1,40 → 3,04 ms | 16,33 → **0,20** ms | 89,0% → **5,3%** |
-| `solo_string_pad` | 13,69 → **23,39** ms | 11,93 → 22,12 ms | 0,24 → **0,39** ms | 1,8% → **1,6%** |
-| `solo_filter` | 7,58 → **10,71** ms | 6,67 → 9,60 ms | 0,23 → **0,31** ms | 3,0% → **2,8%** |
+| `solo_formula` | 21,62 → **2,42** ms | 1,87 → 1,92 ms | 17,79 → **0,12** ms | 87,4% → **4,6%** |
+| `solo_formula_costante` | 18,82 → **2,32** ms | 0,93 → 1,51 ms | 17,43 → **0,17** ms | 91,9% → **7,1%** |
+| `solo_formula_intero` | 18,34 → **2,46** ms | 1,40 → 1,87 ms | 16,33 → **0,13** ms | 89,0% → **5,0%** |
+| `solo_string_pad` | 13,69 → **14,10** ms | 11,93 → 13,37 ms | 0,24 → **0,25** ms | 1,8% → **1,7%** |
+| `solo_filter` | 7,58 → **8,90** ms | 6,67 → 8,15 ms | 0,23 → **0,31** ms | 3,0% → **3,5%** |
 
-Il residuo di `solo_formula` scende da **17,79 ms** a **0,21 ms**: lo staging
+Il residuo di `solo_formula` scende da **17,79 ms** a **0,12 ms**: lo staging
 IPC e il suo replay, che valevano l'84–86% di quel residuo, non vengono piu'
 eseguiti. `string_pad` e `filter`, che non passavano da quel percorso, non
 cambiano natura.
@@ -77,8 +77,8 @@ campagna**: elimina lo stato dell'host, perche' entrambi lo subiscono.
 
 | soggetto | controllo | rapporto prima | rapporto dopo | guadagno |
 |---|---|---|---|---|
-| `solo_formula` | `solo_string_pad` | 1,580 | 0,182 | **89%** |
-| `streaming_lineare` | `blocking_sort` | 1,905 | 1,048 | **45%** |
+| `solo_formula` | `solo_string_pad` | 1,580 | 0,172 | **89%** |
+| `streaming_lineare` | `blocking_sort` | 1,905 | 1,253 | **34%** |
 
 Entrambi superano largamente la soglia concordata del 15%.
 
@@ -87,16 +87,16 @@ non come misura del guadagno:
 
 | carico | wall prima | wall dopo | variazione del wall |
 |---|---|---|---|
-| `streaming_lineare` | 31,24 ms | 28,77 ms | -7,9% |
-| `blocking_sort` | 16,39 ms | 27,46 ms | +67,5% |
-| `blocking_aggregate` | 14,52 ms | 19,90 ms | +37,0% |
-| `fan_out_tee` | 8,13 ms | 12,77 ms | +57,1% |
-| `rami_indipendenti` | 220,55 ms | 376,38 ms | +70,7% |
+| `streaming_lineare` | 31,24 ms | 21,57 ms | -30,9% |
+| `blocking_sort` | 16,39 ms | 17,22 ms | +5,0% |
+| `blocking_aggregate` | 14,52 ms | 12,01 ms | -17,3% |
+| `fan_out_tee` | 8,13 ms | 6,85 ms | -15,7% |
+| `rami_indipendenti` | 220,55 ms | 222,23 ms | +0,8% |
 
 I quattro controlli si spostano fra il 14% e il 29% **in tempo assoluto** pur
 non essendo toccati dal codice: e' la dimostrazione diretta che su questo host
 il tempo assoluto non misura l'effetto. Le loro quote di residuo, che invece
-sono normalizzate, si muovono al massimo di **4,8 punti**: nessuna
+sono normalizzate, si muovono al massimo di **2,4 punti**: nessuna
 regressione oltre la soglia del 5% concordata.
 
 ---
@@ -175,7 +175,60 @@ quelli di prima della modifica**, con lo stesso conteggio esatto.
 
 ---
 
-## 7. Che cosa NON e' cambiato e che cosa resta aperto
+## 7. La soglia: la fonte era locale, ora e' globale
+
+La prima stesura della soglia sommava i soli accepted trattenuti piu' il
+batch d'ingresso corrente. Non e' tutto cio' che e' vivo nel governor: in un
+fan-out `EdgeShared` conserva i batch gia' prelevati per il consumatore piu'
+lento e ne trattiene i lease, che nessun contatore locale del ramo
+row-diagnostics puo' vedere. La prova di sicurezza aveva quindi un buco: si
+appoggiava a una somma parziale.
+
+La soglia usa ora `governor.reserved_bytes()`, che e' la fonte unica —
+accepted trattenuti, lease del batch corrente, buffer del tee e qualunque
+altra prenotazione viva, presente o futura — piu' il solo headroom per
+`max_batch_bytes`. Il contatore locale era un duplicato **parziale** ed e'
+stato eliminato. Un ingresso senza lease non e' contabilizzato dal governor:
+in quel caso si va su disco, fail-closed.
+
+### Che cosa ho potuto dimostrare, e che cosa no
+
+La regressione `m2d_fanout_nessun_falso_resource_limit` costruisce il fan-out
+descritto — due rami row-diagnostics, il tee che trattiene mentre il primo
+viene drenato, entrambi gli ordini dei rami, uno sweep di budget — e verifica
+l'invariante: dove il percorso disco riesce, quello memory-first deve riuscire
+con lo stesso risultato e senza sfondare il budget.
+
+**Non sono riuscito a costruire un input in cui la soglia precedente
+fallisse davvero**, e il test infatti passa anche con quella ripristinata. Ho
+verificato perche', misurando invece di supporre: in un fan-out i due rami
+devono riconvergere, e in v1 sempre attraverso un nodo che materializza
+(`concat`/`join` binari, `BinaryBlocking`). Quel nodo drena e trattiene
+comunque tutti i batch del ramo, quindi il **picco governato e' identico nelle
+due modalita'** — misurato: 143 744 byte sia in memoria sia su disco. Dove il
+tee trattiene, la memoria non aggiunge nulla al picco; dove la memoria alza il
+picco (uscita diretta al piano, come `streaming_lineare`) non c'e' tee. Sul
+motore attuale le due condizioni sembrano escludersi.
+
+Questo **non rende la correzione superflua**: la sicurezza della soglia
+precedente dipendeva da un accoppiamento accidentale — `max_batch_bytes`
+finiva per essere maggiore delle prenotazioni non contate — che nessun
+invariante garantisce e che un binario streaming, un nuovo punto di ritenzione
+o lo scheduler parallelo romperebbero in silenzio. Il test resta come guardia:
+e' la prima topologia in cui la differenza si vedrebbe.
+
+### Vincolo per lo scheduler parallelo
+
+Con l'esecuzione seriale, fra la lettura di `reserved_bytes()` e la
+reservation della passata non si inserisce nessun altro: lo snapshot e'
+stabile. Uno scheduler parallelo **non puo' conservare questa forma**: la
+finestra fra `check` e `reserve` diventerebbe un TOCTOU. Serve un permesso
+atomico del governor — una sola operazione che verifichi e riservi, o rifiuti.
+Registrato in ADR-0002 §M2d come vincolo su M3.
+
+---
+
+## 8. Che cosa NON e' cambiato e che cosa resta aperto
 
 - **`emits_row_diagnostics` e' invariato**: nessuna operazione e' stata tolta
   dalla lista ne' specializzata. Cambia dove gli accepted attendono, non chi

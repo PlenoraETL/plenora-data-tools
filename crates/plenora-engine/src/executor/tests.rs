@@ -6814,3 +6814,158 @@ fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
         );
     }
 }
+
+/// Schema del fan-out: un identificativo e una colonna TESTUALE lunga che
+/// contiene un numero.
+fn m2d_fanout_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("v", DataType::Utf8, true),
+    ]))
+}
+
+/// Batch del fan-out: 64 righe, testo da 30 caratteri per riga.
+fn m2d_fanout_batch(indice: usize) -> RecordBatch {
+    let base = i64::try_from(indice).expect("indice rappresentabile") * 64;
+    let id: Vec<i64> = (0..64).map(|r| base + r).collect();
+    let v: Vec<Option<String>> = id.iter().map(|n| Some(format!("{n:030}"))).collect();
+    RecordBatch::try_new(
+        m2d_fanout_schema(),
+        vec![
+            Arc::new(Int64Array::from(id)) as ArrayRef,
+            Arc::new(StringArray::from(v)) as ArrayRef,
+        ],
+    )
+    .expect("batch fan-out")
+}
+
+/// Piano a fan-out: un input, due consumatori row-diagnostics, convergenza.
+///
+/// Mentre il primo ramo viene drenato, `EdgeShared` conserva i batch gia'
+/// prelevati per il secondo e ne **trattiene i lease** (buffer del tee,
+/// `executor.rs`). Quelle prenotazioni sono vive nel governor ma invisibili a
+/// qualunque contatore locale del ramo: e' la classe che la prima soglia M2d
+/// non copriva.
+///
+/// I rami usano `table.type_cast` da testo a intero — operazione
+/// row-diagnostics — perche' **riduce** i byte: trenta caratteri diventano
+/// otto. Serve a separare le due grandezze. Se il ramo non riducesse,
+/// l'uscita concatenata alla convergenza sarebbe grande almeno quanto
+/// l'input, `check_batch_bytes` costringerebbe `max_batch_bytes` ad essere
+/// altrettanto grande, e quell'headroom coprirebbe **per caso** proprio le
+/// prenotazioni del tee che questo test deve esporre.
+fn m2d_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
+    let cast = |id: &str| {
+        json!({"id": id, "op": "table.type_cast", "in": ["main"],
+               "config": {"column": "v", "target_type": "int"}})
+    };
+    let (primo, secondo) = if primo_ramo_diagnostico {
+        ("a", "b")
+    } else {
+        ("b", "a")
+    };
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [
+            cast("a"),
+            cast("b"),
+            {"id": "fine", "op": "table.concat", "in": [primo, secondo], "config": {}}
+        ],
+        "output": "fine"
+    })
+}
+
+/// Esegue il piano di fan-out con budget e tetto per batch dati.
+fn m2d_fanout_esito(
+    primo_ramo_diagnostico: bool,
+    budget: u64,
+    max_batch_bytes: usize,
+    batch: usize,
+) -> Result<(usize, u64)> {
+    let mut piano = m2d_piano_fanout(primo_ramo_diagnostico);
+    piano["limits"] = json!({"max_memory_bytes": budget});
+    let contratti = [(
+        "main".to_owned(),
+        DataContract::tabular(m2d_fanout_schema()),
+    )];
+    let graph = validate(&piano.to_string(), &contratti).expect("piano valido");
+    let runtime = RuntimeContext {
+        batch_target: crate::BatchTarget {
+            target_batch_bytes: max_batch_bytes,
+            max_batch_bytes,
+        },
+        ..RuntimeContext::default()
+    };
+    let ingresso: Vec<RecordBatch> = (0..batch).map(m2d_fanout_batch).collect();
+    let mut inputs = Inputs::strict();
+    inputs
+        .add_with_contract(
+            "main",
+            Input::from_batches(ingresso).expect("input"),
+            DataContract::tabular(m2d_fanout_schema()),
+        )
+        .expect("input con contratto");
+    let output = execute(&graph, inputs, runtime)?;
+    let (batches, metriche) = output.collect_batches()?;
+    Ok((
+        batches.iter().map(RecordBatch::num_rows).sum(),
+        metriche.memory.peak_reserved_bytes,
+    ))
+}
+
+#[test]
+fn m2d_fanout_nessun_falso_resource_limit() {
+    // Invariante, non un budget fortunato: per OGNI budget in cui il percorso
+    // disco riesce, deve riuscire anche quello che puo' scegliere la memoria,
+    // con lo stesso risultato e senza sfondare il budget.
+    //
+    // COPERTURA, detta com'e'. Questo test **non discrimina** fra la soglia
+    // attuale e quella precedente: eseguito con la vecchia ripristinata,
+    // passa ugualmente. La ragione e' strutturale ed e' emersa misurando: in
+    // un fan-out i due rami devono riconvergere, e in v1 sempre attraverso un
+    // nodo che materializza (`concat`/`join` binari, `BinaryBlocking`).
+    // Quel nodo drena e trattiene comunque tutti i batch del ramo, quindi il
+    // picco governato e' lo STESSO nelle due modalita' — misurato: 143 744
+    // byte in entrambe. Dove il tee trattiene, la memoria non aggiunge nulla
+    // al picco.
+    //
+    // Il test resta come guardia dell'invariante: se comparisse un binario
+    // streaming, uno scheduler parallelo o un altro punto di ritenzione,
+    // questa e' la prima topologia in cui la differenza si vedrebbe.
+    const PICCOLO: usize = 73_728;
+    const BATCH: usize = 32;
+    for primo_ramo_diagnostico in [true, false] {
+        let mut budget = 80_000_u64;
+        while budget <= 400_000 {
+            // Percorso disco: tetto per batch >= budget, quindi la soglia e'
+            // falsa per costruzione e non si trattiene nulla in memoria.
+            let disco = m2d_fanout_esito(
+                primo_ramo_diagnostico,
+                budget,
+                usize::try_from(budget).unwrap_or(usize::MAX),
+                BATCH,
+            );
+            // Percorso automatico: la memoria e' ammessa.
+            let automatico = m2d_fanout_esito(primo_ramo_diagnostico, budget, PICCOLO, BATCH);
+            if let Ok((righe_disco, _)) = disco {
+                let (righe, picco) = automatico.unwrap_or_else(|errore| {
+                    panic!(
+                        "falso ResourceLimit: budget {budget}, primo ramo diagnostico\
+                         ={primo_ramo_diagnostico}, il percorso disco riesce \
+                         ({righe_disco} righe) ma quello memory-first no: {errore}"
+                    )
+                });
+                assert_eq!(
+                    righe, righe_disco,
+                    "budget {budget}: righe diverse fra disco e memory-first"
+                );
+                assert!(
+                    picco <= budget,
+                    "budget {budget}: picco {picco} oltre il budget in memory-first"
+                );
+            }
+            budget = budget * 5 / 4;
+        }
+    }
+}

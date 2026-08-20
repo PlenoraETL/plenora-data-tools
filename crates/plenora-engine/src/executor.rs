@@ -2211,13 +2211,13 @@ enum StagingOutcome {
 // aggiungerebbe un'indirezione sul percorso caldo dello staging.
 #[allow(clippy::large_enum_variant)]
 enum StagingAccepted {
-    /// Batch trattenuti in ordine, lease vivi, con il totale dei byte tenuto
-    /// aggiornato: ricalcolarlo a ogni batch sarebbe quadratico nel numero di
-    /// batch, e questa e' una funzione di ottimizzazione.
-    Memoria {
-        coda: std::collections::VecDeque<GovernedBatch>,
-        byte: u64,
-    },
+    /// Batch trattenuti in ordine, lease vivi.
+    ///
+    /// Nessun totale locale dei byte: i lease sono gia' contati dal governor,
+    /// che e' la fonte unica della soglia (vedi `accedibile_in_memoria`).
+    /// Tenerne una copia qui sarebbe un duplicato — e un duplicato PARZIALE,
+    /// perche' non vedrebbe le prenotazioni degli altri rami.
+    Memoria(std::collections::VecDeque<GovernedBatch>),
     /// Modalita' disco: definitiva, non si torna indietro.
     Disco {
         writer: Option<StreamWriter<CountingFile>>,
@@ -2228,18 +2228,7 @@ enum StagingAccepted {
 
 impl StagingAccepted {
     const fn nuovo() -> Self {
-        Self::Memoria {
-            coda: std::collections::VecDeque::new(),
-            byte: 0,
-        }
-    }
-
-    /// Byte trattenuti in memoria (zero in modalita' disco).
-    const fn trattenuti(&self) -> u64 {
-        match self {
-            Self::Memoria { byte, .. } => *byte,
-            Self::Disco { .. } => 0,
-        }
+        Self::Memoria(std::collections::VecDeque::new())
     }
 
     /// Modalita' disco definitiva, partendo da una coda gia' trattenuta.
@@ -2248,7 +2237,7 @@ impl StagingAccepted {
     /// lease rilasciati uno a uno: il picco durante il travaso non cresce
     /// mai sopra quello gia' concesso.
     fn passa_a_disco(&mut self, state: &Rc<ExecState>, edge: &str) -> Result<()> {
-        let Self::Memoria { coda, .. } = self else {
+        let Self::Memoria(coda) = self else {
             return Ok(());
         };
         let coda = std::mem::take(coda);
@@ -2287,11 +2276,7 @@ impl StagingAccepted {
         governed: GovernedBatch,
     ) -> Result<()> {
         match self {
-            Self::Memoria { coda, byte } => {
-                // Saturante: un totale che avvolge farebbe passare la soglia
-                // proprio quando non deve. Saturare la fa fallire, cioe'
-                // manda su disco: fail-closed.
-                *byte = byte.saturating_add(governed.accounted_bytes());
+            Self::Memoria(coda) => {
                 coda.push_back(governed);
                 Ok(())
             }
@@ -2964,33 +2949,63 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
 
 /// Si puo' eseguire la prossima passata **trattenendo** cio' che c'e' gia'?
 ///
-/// Condizione, tutta derivata dai limiti del piano e dai lease vivi:
+/// Condizione, sulle prenotazioni **globali** del piano e sui limiti:
 ///
 /// ```text
-/// trattenuti + byte_input_gia_prelevato + max_batch_bytes <= max_memory_bytes
+/// governor.reserved_bytes() + max_batch_bytes <= max_memory_bytes
 /// ```
+///
+/// # Perche' `reserved_bytes()` e non un contatore locale
+///
+/// La prima versione sommava i soli accepted trattenuti piu' il batch
+/// d'ingresso corrente. Non e' tutto cio' che e' vivo: in un fan-out
+/// `EdgeShared` conserva i batch gia' prelevati per il consumatore piu' lento
+/// e ne trattiene i lease, che nessun contatore locale del ramo
+/// row-diagnostics puo' vedere. Con quella soglia un ramo poteva scegliere la
+/// memoria mentre il tee accumulava per il fratello, e la reservation
+/// dell'output falliva — dove il percorso disco, che rilascia gli accepted,
+/// sarebbe riuscito. Esattamente il falso `ResourceLimit` che M2d promette di
+/// non introdurre.
+///
+/// `reserved_bytes()` e' invece la fonte unica: include gli accepted
+/// trattenuti, il lease del batch d'ingresso corrente, i buffer del tee e
+/// qualunque altra prenotazione viva, presente o futura. Il contatore locale
+/// diventa duplicato e sparisce.
+///
+/// # L'headroom
 ///
 /// `max_batch_bytes` (V7) e' il tetto duro per batch che il wrapper d'uscita
 /// applica a OGNI batch di output: un output che lo supera fa fallire il piano
 /// in entrambe le modalita', quindi per un piano che riesce e' un maggiorante
-/// valido dell'uscita della passata. Non c'e' alcuna percentuale scelta a
-/// mano, e la condizione non dipende dal tempo ne' dall'ordine di arrivo.
+/// valido della sola prenotazione nuova che la passata aggiunge. Non c'e'
+/// alcuna percentuale scelta a mano, e la condizione non dipende dal tempo ne'
+/// dall'ordine di arrivo.
 ///
-/// In modalita' disco restituisce sempre `false` senza calcoli: il passaggio
-/// e' definitivo.
-fn accedibile_in_memoria(state: &ExecState, accepted: &StagingAccepted, byte_input: u64) -> bool {
+/// # Atomicita'
+///
+/// Con l'executor seriale (`SerialFused`) fra questa lettura e la
+/// reservation della passata non puo' inserirsi nessun altro: lo snapshot e'
+/// stabile. Uno scheduler parallelo dovra' sostituire questo
+/// `check` + `reserve` con un permesso **atomico** del governor, altrimenti
+/// la finestra fra i due diventa un TOCTOU (ADR-0002 §M2d).
+fn accedibile_in_memoria(
+    state: &ExecState,
+    accepted: &StagingAccepted,
+    ingresso: &GovernedBatch,
+) -> bool {
     if matches!(accepted, StagingAccepted::Disco { .. }) {
+        return false;
+    }
+    // Un ingresso senza lease non e' contabilizzato dal governor: la soglia
+    // non potrebbe vederne i byte e sottostimerebbe il picco. Fail-closed
+    // verso il disco, che e' la modalita' col picco piu' basso.
+    if ingresso.lease.is_none() {
         return false;
     }
     let budget = state.governor.budget_bytes();
     let tetto_batch = state.plan.batch_target().max_batch_bytes as u64;
-    let Some(necessario) = accepted
-        .trattenuti()
-        .checked_add(byte_input)
-        .and_then(|somma| somma.checked_add(tetto_batch))
-    else {
-        // Somma non rappresentabile: fail-closed verso il disco, che e' la
-        // modalita' con il picco piu' basso.
+    let Some(necessario) = state.governor.reserved_bytes().checked_add(tetto_batch) else {
+        // Somma non rappresentabile: fail-closed, come sopra.
         return false;
     };
     necessario <= budget
@@ -3102,7 +3117,7 @@ fn scan_row_diagnostic_segment(
         // PRIMA di eseguire la catena su di esso. Cosi' la passata successiva
         // non puo' superare il budget: se non ci sta, i trattenuti vanno su
         // disco adesso, non dopo il fallimento.
-        if !accedibile_in_memoria(state, &accepted, governed.accounted_bytes()) {
+        if !accedibile_in_memoria(state, &accepted, &governed) {
             if let Err(error) = accepted.passa_a_disco(state, output_edge) {
                 terminal_error = Some(attach_partial_row_diagnostics(
                     error,
@@ -3200,7 +3215,7 @@ fn scan_row_diagnostic_segment(
     let (writer, staging, staged_meta) = match accepted {
         // Modalita' memoria: la coda si consegna com'e', in ordine, con i
         // lease gia' vivi. Nessun IPC, nessuna decodifica, nessuna copia.
-        StagingAccepted::Memoria { coda, .. } => {
+        StagingAccepted::Memoria(coda) => {
             if coda.is_empty() {
                 return StagingOutcome::Terminal(None);
             }

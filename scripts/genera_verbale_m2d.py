@@ -289,7 +289,60 @@ quelli di prima della modifica**, con lo stesso conteggio esatto.
 
 ---
 
-## 7. Che cosa NON e' cambiato e che cosa resta aperto
+## 7. La soglia: la fonte era locale, ora e' globale
+
+La prima stesura della soglia sommava i soli accepted trattenuti piu' il
+batch d'ingresso corrente. Non e' tutto cio' che e' vivo nel governor: in un
+fan-out `EdgeShared` conserva i batch gia' prelevati per il consumatore piu'
+lento e ne trattiene i lease, che nessun contatore locale del ramo
+row-diagnostics puo' vedere. La prova di sicurezza aveva quindi un buco: si
+appoggiava a una somma parziale.
+
+La soglia usa ora `governor.reserved_bytes()`, che e' la fonte unica —
+accepted trattenuti, lease del batch corrente, buffer del tee e qualunque
+altra prenotazione viva, presente o futura — piu' il solo headroom per
+`max_batch_bytes`. Il contatore locale era un duplicato **parziale** ed e'
+stato eliminato. Un ingresso senza lease non e' contabilizzato dal governor:
+in quel caso si va su disco, fail-closed.
+
+### Che cosa ho potuto dimostrare, e che cosa no
+
+La regressione `m2d_fanout_nessun_falso_resource_limit` costruisce il fan-out
+descritto — due rami row-diagnostics, il tee che trattiene mentre il primo
+viene drenato, entrambi gli ordini dei rami, uno sweep di budget — e verifica
+l'invariante: dove il percorso disco riesce, quello memory-first deve riuscire
+con lo stesso risultato e senza sfondare il budget.
+
+**Non sono riuscito a costruire un input in cui la soglia precedente
+fallisse davvero**, e il test infatti passa anche con quella ripristinata. Ho
+verificato perche', misurando invece di supporre: in un fan-out i due rami
+devono riconvergere, e in v1 sempre attraverso un nodo che materializza
+(`concat`/`join` binari, `BinaryBlocking`). Quel nodo drena e trattiene
+comunque tutti i batch del ramo, quindi il **picco governato e' identico nelle
+due modalita'** — misurato: 143 744 byte sia in memoria sia su disco. Dove il
+tee trattiene, la memoria non aggiunge nulla al picco; dove la memoria alza il
+picco (uscita diretta al piano, come `streaming_lineare`) non c'e' tee. Sul
+motore attuale le due condizioni sembrano escludersi.
+
+Questo **non rende la correzione superflua**: la sicurezza della soglia
+precedente dipendeva da un accoppiamento accidentale — `max_batch_bytes`
+finiva per essere maggiore delle prenotazioni non contate — che nessun
+invariante garantisce e che un binario streaming, un nuovo punto di ritenzione
+o lo scheduler parallelo romperebbero in silenzio. Il test resta come guardia:
+e' la prima topologia in cui la differenza si vedrebbe.
+
+### Vincolo per lo scheduler parallelo
+
+Con l'esecuzione seriale, fra la lettura di `reserved_bytes()` e la
+reservation della passata non si inserisce nessun altro: lo snapshot e'
+stabile. Uno scheduler parallelo **non puo' conservare questa forma**: la
+finestra fra `check` e `reserve` diventerebbe un TOCTOU. Serve un permesso
+atomico del governor — una sola operazione che verifichi e riservi, o rifiuti.
+Registrato in ADR-0002 §M2d come vincolo su M3.
+
+---
+
+## 8. Che cosa NON e' cambiato e che cosa resta aperto
 
 - **`emits_row_diagnostics` e' invariato**: nessuna operazione e' stata tolta
   dalla lista ne' specializzata. Cambia dove gli accepted attendono, non chi
