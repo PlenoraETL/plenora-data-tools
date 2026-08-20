@@ -427,7 +427,7 @@ indipendenti: categoria, fase, effetto remoto, ritentativo.
   `ContractCrs::DeclaredUnresolved` in `plenora-core`; discovery CLI che
   preserva lo stato dichiarato e i conflitti decidibili
   (`contract_crs_from_keys`); campo v4 `crs_decisions` (validazione
-  strutturale in `PlanV4`, applicazione in `apply_crs_decisions`, identita'
+  strutturale in `PlanV5`, applicazione in `apply_crs_decisions`, identita'
   ADR 4 nella forma canonica); gate `require_resolved_crs` con messaggio
   distinto per stato; emissione `declared_unresolved` con le dichiarazioni
   originali ed eccezione R2.6 dichiarata in `canonical_output_schema`;

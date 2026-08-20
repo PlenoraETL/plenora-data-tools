@@ -247,9 +247,24 @@ diversi condividano un hash.
 
 Un `ValidatedGraph` può essere conservato in cache (è il contesto di questa
 ADR). Un grafo riusato per sbaglio con un hash prodotto prima della v5 è un
-piano eseguito sotto un contratto di memoria che non è più il suo. Quel caso
-va reso **impossibile**, non improbabile — e un separatore di dominio lo rende
-impossibile per costruzione.
+piano eseguito sotto un contratto di memoria che non è più il suo.
+
+### Che cosa il dominio garantisce, con precisione
+
+Che i due insiemi di input della funzione di hash siano **disgiunti**: ogni
+input della regola nuova comincia col prefisso, nessun input della regola
+vecchia ce l'aveva. Nessun testo canonico può quindi produrre oggi l'hash che
+un testo canonico produceva ieri.
+
+Non di più. Resta in piedi l'assunzione di sempre — la resistenza alle
+collisioni di SHA-256 — e il dominio non la rafforza: **separa** gli spazi,
+non abolisce la crittografia. Chiamarlo «impossibile» sarebbe promettere una
+proprietà matematica al posto di una proprietà di costruzione.
+
+La difesa vera contro il riuso di un grafo validato sotto un'altra versione
+del formato è un confronto esplicito, non un hash: `check_compatibility`
+verifica `plan_format_version` contro la versione canonica corrente, e
+rifiuta con `GRAPH_MISMATCH` se differiscono.
 
 ### Regola per il futuro
 

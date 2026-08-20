@@ -184,8 +184,9 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   (`scripts/verifica_censimento_der011.py`): su undici siti del solo percorso
   DAG, due sono preventivi e uno non ha reservation affatto; percorso legacy,
   kernel senza preflight e allocazioni Arrow interne restano scoperti.
-  **Nessun tetto duro e' dichiarato**: `max_memory_bytes` resta un contatore
-  di cio' che e' gia' stato allocato.
+  **Nessun tetto duro e' dichiarato**: il budget — che dal 2026-08-20 si
+  chiama `max_governed_memory_bytes` (ADR 15) — resta un contatore di cio' che
+  e' gia' stato allocato.
 
   **Percorso DAG v4.** Stesso ordine, in tre punti verificati:
   `concat_batches` costruisce il batch completo e solo dopo arrivano

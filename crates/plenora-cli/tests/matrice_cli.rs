@@ -833,7 +833,7 @@ fn il_budget_di_memoria_legacy_e_globale_e_include_il_picco() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 4096},
+            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 4096},
             "steps": [{"operation": "sort", "config": {"columns": ["id"], "ascending": true}}]
         }))
         .expect("json"),
@@ -884,7 +884,7 @@ fn il_budget_legacy_e_globale_anche_fra_i_due_lati_di_un_piano_binario() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 5_000},
+            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 5_000},
             "steps": [{
                 "operation": "join",
                 "config": {"left_keys": ["id"], "right_keys": ["id"], "how": "inner"}
@@ -941,7 +941,7 @@ fn un_lato_solo_resta_dentro_lo_stesso_budget() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 5_000},
+            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 5_000},
             "steps": [{"operation": "sort", "config": {"columns": ["id"], "ascending": true}}]
         }))
         .expect("json"),
@@ -1047,7 +1047,7 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 8_192},
+            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 8_192},
             "steps": [{"operation": "cross_join", "config": {}}]
         }))
         .expect("json"),
@@ -1102,7 +1102,7 @@ fn lo_stesso_piano_riesce_quando_il_budget_copre_anche_l_output() {
         &piano,
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "limits": {"max_rows": 1_000_000, "max_governed_memory_bytes": 4_194_304},
+            "limits": {"max_rows": 1_000_000, "max_memory_bytes": 4_194_304},
             "steps": [{"operation": "cross_join", "config": {}}]
         }))
         .expect("json"),

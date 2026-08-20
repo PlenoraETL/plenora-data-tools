@@ -338,9 +338,13 @@ Regole:
   e con destinazione il canonico **v5**: non esiste una forma intermedia da
   cui ripartire.
 - La `schema_version` canonica è **5** (ADR 15). Un piano `schema_version: 4`
-  è accettato solo attraverso la migrazione esplicita, che ne riscrive il
-  budget di memoria nel nome corrente. **Non c'è alias**: un piano v5 che usa
-  il nome della v4 è rifiutato, e un piano v4 che usa il nome nuovo pure.
+  è accettato solo attraverso la migrazione esplicita, che ne traduce il nome
+  del budget di memoria. **Non c'è alias**, e il rifiuto è simmetrico: un
+  piano v5 che usa il nome della v4 è rifiutato, un piano v4 (o lineare v1)
+  che usa il nome della v5 pure. Ogni formato conserva il proprio nome —
+  `max_memory_bytes` nella v1 e nella v4, `max_governed_memory_bytes` nel
+  canonico — e la traduzione avviene all'ingresso, mai lasciando che un nome
+  funzioni in due formati.
 - Nessuna annotazione di esecuzione nei nodi: il piano dichiara solo
   dipendenze e configurazioni.
 - `max_parallelism` sta in `limits` (risorsa), non nei nodi.
@@ -690,7 +694,7 @@ effect apparterranno a un futuro modello transazionale separato.
   nuova operazione potenzialmente in conflitto.
 - **Pipeline di migrazione esplicita** (decisione D20): piano legacy → parse
   nella versione originaria → migrazione canonica del piano → migrazione
-  versionata delle config → piano v4 canonico → validazione. Mai dipendere
+  versionata delle config → piano v5 canonico → validazione. Mai dipendere
   implicitamente dai default correnti delle configurazioni. La migrazione è
   **deterministica e idempotente**, coperta da **golden test per ogni versione
   supportata**: piano legacy → migrazione → serializzazione canonica →

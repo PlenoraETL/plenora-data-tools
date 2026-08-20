@@ -26,14 +26,22 @@ al contenuto e alla forma del codice, non al nome del campo.
 ## La regola di lettura
 
 Dove un documento datato prima del 2026-08-20 scrive `max_memory_bytes`,
-intende ciò che oggi si chiama `max_governed_memory_bytes`. Il **numero** non
-è cambiato, il **perimetro** non è cambiato, e nessuna misura è stata
-ripetuta: è cambiato il nome, e con esso la promessa che il nome faceva.
+intende ciò che oggi si chiama `max_governed_memory_bytes` **nel campo Rust e
+nel piano canonico**. Il **numero** non è cambiato, il **perimetro** non è
+cambiato, e nessuna misura è stata ripetuta: è cambiato il nome, e con esso la
+promessa che il nome faceva.
+
+Attenzione a un caso che non è un refuso: nei documenti che mostrano piani
+**lineari** (`schema_version: 1`) il nome vecchio è ancora quello giusto, oggi
+come allora. Quel formato non è stato toccato.
 
 Una conseguenza pratica: un piano preso da uno di quei documenti e incollato
-in un file non funziona più così com'è. Va portato alla v5 — chiave rinominata
-e `schema_version: 5` — oppure lasciato a `schema_version: 4`, e in quel caso
-la migrazione lo converte da sé.
+in un file **continua a funzionare**, purché non se ne cambi la
+`schema_version`. Un piano `schema_version: 4` passa dalla migrazione; un
+piano lineare `schema_version: 1` è nel suo formato, che non è cambiato. Ciò
+che non si può fare è mescolare: portare la versione a 5 lasciando la chiave
+vecchia, o lasciare la versione a 1 o 4 scrivendo la chiave nuova. Il rifiuto
+è simmetrico e in entrambi i versi.
 
 ## Che cosa NON è cambiato nelle misure
 

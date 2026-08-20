@@ -238,7 +238,7 @@ impl PairArrowSchema {
 
 /// Vista pura dei parametri pair (ADR-0014 D14.2): i campi portano i nomi di
 /// parametro del protocollo v3. Alimentata dal trasporto
-/// ([`PairArrowSchema::validate_parameters`]) e dalla prepare del piano v4
+/// ([`PairArrowSchema::validate_parameters`]) e dalla prepare del piano DAG
 /// (`GeoBinaryPlan`), che vi inietta i parametri tipizzati del nodo e i
 /// tetti assoluti risolti dai limiti del piano (D14.6): la tabella per-op
 /// resta un'unica fonte di verita'.
@@ -258,7 +258,7 @@ pub struct PairParameterValues {
 /// Tabella parametri-per-op in forma pura (ADR-0014 D14.2): parametri
 /// ammessi, obbligatori e domini per operazione, senza IO ne' schema di
 /// trasporto. `max_output_rows` resta fuori: e' un limite del trasporto v3,
-/// non un parametro di operazione (nel piano v4 il ruolo e' dei limiti di
+/// non un parametro di operazione (nel piano DAG il ruolo e' dei limiti di
 /// righe del piano).
 ///
 /// # Errors
@@ -517,7 +517,7 @@ fn decode_geometry_side(
 ///
 /// L'errore porta l'indice di riga della cella come campo strutturato
 /// ([`GeometryDecodeError`], D14.5): il trasporto v3 lo scarta
-/// (`decode_geometry_side`, comportamento invariato), il piano v4 lo
+/// (`decode_geometry_side`, comportamento invariato), il piano DAG lo
 /// pubblica nel carrier `GeoBinaryStepError`.
 ///
 /// # Errors

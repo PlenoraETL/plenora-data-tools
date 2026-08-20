@@ -144,8 +144,15 @@ plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUT
 `plenora-database-tools`.
 
 `validate` non esegue il piano. `run` accetta piani legacy fino alla versione 3
-(`--input PERCORSO`, senza nome) e DAG v4 (`--input NOME=PERCORSO`). Per i DAG
-v4 con piu' di un input la forma nominale e' l'unica ammessa.
+(`--input PERCORSO`, senza nome) e piani DAG (`--input NOME=PERCORSO`). Per i
+piani DAG con piu' di un input la forma nominale e' l'unica ammessa.
+
+Il formato DAG corrente e' la **v5** (`"schema_version": 5`). Un piano
+`schema_version: 4` continua a funzionare: viene migrato al canonico prima
+della validazione, e i comandi riportano la versione sotto cui il piano viene
+davvero eseguito. La v4 e la v5 differiscono per un campo — il budget di
+memoria, che si chiama `max_governed_memory_bytes` — e non c'e' alias fra i
+due nomi (ADR 15).
 
 I comandi `transform`, `spatial-join`, `transform-arrow` e `pair-arrow` restano
 disponibili ma sono **deprecati**: la stessa cosa si esprime come piano e si

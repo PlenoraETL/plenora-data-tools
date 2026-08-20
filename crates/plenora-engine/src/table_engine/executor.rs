@@ -1608,7 +1608,7 @@ fn execute_batch_with_spill_impl(
                     error
                 } else {
                     PlenoraError::Unsupported(
-                        "row diagnostics batch-local non pubblicabili: usare l'executor DAG v4"
+                        "row diagnostics batch-local non pubblicabili: usare l'executor DAG"
                             .to_owned(),
                     )
                 }

@@ -2473,13 +2473,12 @@ fn un_piano_v4_esegue_e_produce_lo_stesso_output_del_v5() {
 }
 
 #[test]
-fn un_piano_legacy_col_nome_della_v4_e_rifiutato_fail_closed() {
-    // Conseguenza dichiarata di ADR 15 §7: il campo rinominato vive anche
-    // nella struttura dei limiti del percorso lineare, e per i piani
-    // `schema_version <= 3` non esiste migrazione automatica. Il rifiuto
-    // dev'essere un errore, non un limite ignorato in silenzio: con
-    // `deny_unknown_fields` la chiave sconosciuta ferma la lettura del piano
-    // invece di lasciarlo girare sotto il budget di default.
+fn un_piano_legacy_conserva_il_nome_del_proprio_formato() {
+    // Il formato lineare v1 e' un formato PUBBLICATO, distinguibile dagli
+    // altri proprio da `schema_version: 1`. ADR 15 ha rinominato il campo
+    // della libreria, non quel formato: un piano gia' scritto non cambia
+    // perche' noi abbiamo cambiato idea sul nome. La traduzione avviene
+    // dentro, in `table_engine::contract::limiti_v1`.
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = directory.path().join("plan_legacy.json");
     let input = directory.path().join("input.arrow");
@@ -2503,14 +2502,18 @@ fn un_piano_legacy_col_nome_della_v4_e_rifiutato_fail_closed() {
         .arg(&input)
         .output()
         .expect("validate legacy");
-    assert!(!result.status.success());
-    assert!(result.stderr.is_empty());
-    let envelope = String::from_utf8_lossy(&result.stdout);
-    assert!(envelope.contains("max_memory_bytes"), "{envelope}");
+    assert!(
+        result.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
 }
 
 #[test]
-fn un_piano_legacy_col_nome_corrente_continua_a_funzionare() {
+fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
+    // Il rovescio, ed e' cio' che distingue una traduzione da un alias:
+    // nessuno dei due nomi funziona in entrambi i formati. Se il nome nuovo
+    // passasse anche qui, avremmo scritto un alias e chiamato traduzione.
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = directory.path().join("plan_legacy.json");
     let input = directory.path().join("input.arrow");
@@ -2534,9 +2537,8 @@ fn un_piano_legacy_col_nome_corrente_continua_a_funzionare() {
         .arg(&input)
         .output()
         .expect("validate legacy");
-    assert!(
-        result.status.success(),
-        "stdout: {}",
-        String::from_utf8_lossy(&result.stdout)
-    );
+    assert!(!result.status.success());
+    assert!(result.stderr.is_empty());
+    let envelope = String::from_utf8_lossy(&result.stdout);
+    assert!(envelope.contains("max_governed_memory_bytes"), "{envelope}");
 }

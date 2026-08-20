@@ -328,7 +328,7 @@ pub fn limits_from_plan(
 }
 
 /// Limiti del confine per i percorsi che hanno un solo budget di memoria e
-/// nessun piano v4 alle spalle (piani legacy, `schema_version <= 3`).
+/// nessun piano DAG alle spalle (piani legacy, `schema_version <= 3`).
 ///
 /// Il percorso legacy usava `IpcLimits::default()`: 64 MiB di body e 16 MiB di
 /// metadati indipendentemente da `max_governed_memory_bytes`, cioe' un confine che non

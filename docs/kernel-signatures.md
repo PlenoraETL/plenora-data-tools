@@ -7,7 +7,7 @@ operazioni** del catalogo unificato: 62 tabellari (`table.*`) e 65 geografiche
 
 ## Come si legge una firma
 
-Un piano v4 è un DAG dichiarativo (`PlanV4`): gli **input di dati** di un nodo
+Un piano v5 è un DAG dichiarativo (`PlanV5`): gli **input di dati** di un nodo
 arrivano dagli archi (`in`: riferimenti agli input dichiarati del piano o ad
 altri nodi; per le operazioni binarie ordinate l'ordine è semantico —
 `[left, right]`), mentre la **configurazione** è nominata nel nodo (`config`,
@@ -18,11 +18,11 @@ vincoli ulteriori (campi non vuoti, range, colonne esistenti, tipi ammessi)
 sono verificati in `validate` del kernel e/o nell'analisi di contratto
 (`analyze.rs`), che inferisce anche lo schema dell'arco in uscita.
 
-Esempio di nodo piano v4:
+Esempio di nodo piano v5:
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "crs": "EPSG:32632",
   "inputs": ["sorgente_a"],
   "nodes": [

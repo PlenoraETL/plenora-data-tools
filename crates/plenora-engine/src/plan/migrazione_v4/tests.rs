@@ -268,14 +268,109 @@ fn la_migrazione_non_perde_gli_altri_override() {
 }
 
 #[test]
-fn la_migrazione_non_riordina_ne_normalizza_il_resto_del_piano() {
-    // Normalizzare e' compito della canonicalizzazione: farlo anche qui
-    // significherebbe poterlo fare in due modi. Il testo migrato conserva i
-    // nodi come sono stati scritti.
+fn la_migrazione_conserva_i_valori_non_toccati() {
+    // Quello che si promette e' l'equivalenza dei VALORI, non del testo: il
+    // piano passa da un `serde_json::Value`, quindi ordine delle chiavi,
+    // spaziatura e forma dei letterali numerici possono cambiare. Promettere
+    // «il testo attraversa invariato» sarebbe stato falso, e un test scritto
+    // per confermarlo lo avrebbe nascosto invece di scoprirlo.
     let testo = r#"{"schema_version":4,"output":"a","inputs":["main"],
-        "nodes":[{"id":"a","op":"table.filter","in":["main"],"config":{"z":1,"y":2}}]}"#;
+        "nodes":[{"id":"a","op":"table.filter","in":["main"],
+        "config":{"z":1,"y":2.0,"w":"testo"}}]}"#;
+    let prima: Value = serde_json::from_str(testo).expect("JSON di partenza");
     let migrato = migra_v4_a_v5(testo).expect("migrazione");
-    let valore: Value = serde_json::from_str(&migrato).expect("JSON");
-    assert_eq!(valore["nodes"][0]["config"], json!({"z": 1, "y": 2}));
-    assert_eq!(valore["schema_version"], json!(PLAN_SCHEMA_VERSION_V5));
+    let dopo: Value = serde_json::from_str(&migrato).expect("JSON migrato");
+
+    assert_eq!(dopo["nodes"], prima["nodes"]);
+    assert_eq!(dopo["inputs"], prima["inputs"]);
+    assert_eq!(dopo["output"], prima["output"]);
+    assert_eq!(dopo["schema_version"], json!(PLAN_SCHEMA_VERSION_V5));
+    assert_eq!(dopo.as_object().expect("oggetto").len(), 4);
+}
+
+#[test]
+fn un_v4_al_limite_dei_byte_e_rifiutato_prima_di_riuscire_una_volta_sola() {
+    // Il nome della v5 e' piu' lungo di nove byte: un v4 lungo esattamente
+    // quanto il tetto migra in un testo che lo supera. Senza il controllo sul
+    // migrato, la prima chiamata riuscirebbe e la seconda no — un ingresso
+    // che cambia risposta a input costante.
+    let testo = piano(4, &json!({"max_memory_bytes": 4096}));
+    let al_limite = PlanLimits {
+        max_plan_json_bytes: testo.len(),
+        ..PlanLimits::default()
+    };
+
+    let errore = testo_canonico_v5(&testo, &al_limite)
+        .expect_err("il migrato supera il tetto")
+        .to_string();
+    assert!(errore.contains("max_plan_json_bytes"), "{errore}");
+    assert!(errore.contains("piano migrato"), "{errore}");
+
+    // E il v5 equivalente e' rifiutato allo stesso modo, perche' ha la
+    // stessa dimensione del migrato: le due versioni non divergono mai.
+    let equivalente = piano(5, &json!({"max_governed_memory_bytes": 4096}));
+    assert!(equivalente.len() > al_limite.max_plan_json_bytes);
+    assert!(PlanV5::parse(&equivalente, &al_limite).is_err());
+}
+
+#[test]
+fn l_esito_del_dispatch_non_cambia_fra_la_prima_e_la_seconda_passata() {
+    // L'idempotenza che conta non e' solo sul valore ma sull'ESITO: se la
+    // prima passata riesce, la seconda deve riuscire. Provata su una fascia
+    // di tetti che attraversa il confine critico.
+    let testo = piano(4, &json!({"max_memory_bytes": 4096}));
+    for scarto in 0..24_usize {
+        let limiti = PlanLimits {
+            max_plan_json_bytes: testo.len() + scarto,
+            ..PlanLimits::default()
+        };
+        let prima = testo_canonico_v5(&testo, &limiti);
+        match prima {
+            Ok(canonico) => {
+                let seconda = testo_canonico_v5(canonico.as_ref(), &limiti)
+                    .expect("se la prima passata riesce, la seconda deve riuscire");
+                assert_eq!(canonico.as_ref(), seconda.as_ref(), "scarto {scarto}");
+            }
+            Err(_) => {
+                // Rifiutato: nulla da ripetere, ma il rifiuto dev'essere
+                // stabile.
+                assert!(
+                    testo_canonico_v5(&testo, &limiti).is_err(),
+                    "scarto {scarto}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn un_limite_malformato_da_la_stessa_categoria_nelle_due_versioni() {
+    // Da questa categoria dipende l'exit code della CLI. Se un piano
+    // rifiutato desse categorie diverse a seconda della versione in cui e'
+    // scritto, la migrazione cambierebbe il contratto d'errore invece di
+    // tradurre un nome.
+    let v4 = testo_canonico_v5(
+        &piano(4, &json!({"max_memory_bytes": "non un numero"})),
+        &PlanLimits::default(),
+    )
+    .expect_err("limite malformato");
+    let v5 = PlanV5::parse_default(&piano(
+        5,
+        &json!({"max_governed_memory_bytes": "non un numero"}),
+    ))
+    .expect_err("limite malformato");
+
+    assert_eq!(v4.category(), v5.category(), "v4: {v4} / v5: {v5}");
+    assert_eq!(v4.category(), plenora_core::ErrorCategory::DataMapping);
+
+    // Stessa cosa per la chiave sconosciuta, che e' il caso del nome
+    // sbagliato: il rifiuto e' simmetrico anche nella categoria.
+    let v4 = testo_canonico_v5(
+        &piano(4, &json!({"max_governed_memory_bytes": 4096})),
+        &PlanLimits::default(),
+    )
+    .expect_err("nome della v5 in un piano v4");
+    let v5 = PlanV5::parse_default(&piano(5, &json!({"max_memory_bytes": 4096})))
+        .expect_err("nome della v4 in un piano v5");
+    assert_eq!(v4.category(), v5.category(), "v4: {v4} / v5: {v5}");
 }

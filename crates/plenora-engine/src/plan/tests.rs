@@ -1,4 +1,4 @@
-//! Unit test del formato piano v4 (parsing con limiti, validazione
+//! Unit test del formato piano v5 (parsing con limiti, validazione
 //! strutturale, alias, migrazione legacy, canonicalizzazione).
 
 use serde_json::{json, Value};

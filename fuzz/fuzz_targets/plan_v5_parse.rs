@@ -42,16 +42,26 @@ fuzz_target!(|payload: &[u8]| {
     let text = String::from_utf8_lossy(payload);
 
     // Dispatcher di versione: un v4 arriva al parser solo da qui. Se la
-    // migrazione riesce, ripeterla sul risultato non deve cambiare nulla —
-    // altrimenti esisterebbero due piani canonici per lo stesso piano.
+    // migrazione riesce, ripeterla sul risultato deve riuscire DI NUOVO e
+    // dare lo stesso testo.
+    //
+    // La seconda passata non e' condizionata al suo successo: un `if let Ok`
+    // qui renderebbe il controllo vacuo proprio nel caso interessante — un
+    // migrato che supera `max_plan_json_bytes` sarebbe un `Err` silenzioso
+    // invece che l'idempotenza rotta che e'. E' esattamente il difetto che
+    // questo target ha nascosto finche' e' stato scritto cosi'.
     if let Ok(canonico) = migrazione_v4::testo_canonico_v5(&text, &limits) {
-        if let Ok(due_volte) = migrazione_v4::testo_canonico_v5(canonico.as_ref(), &limits) {
-            assert_eq!(
-                canonico.as_ref(),
-                due_volte.as_ref(),
-                "migrazione non idempotente"
-            );
-        }
+        let due_volte = migrazione_v4::testo_canonico_v5(canonico.as_ref(), &limits)
+            .expect("se la prima passata riesce, la seconda deve riuscire");
+        assert_eq!(
+            canonico.as_ref(),
+            due_volte.as_ref(),
+            "migrazione non idempotente"
+        );
+        assert!(
+            canonico.len() <= limits.max_plan_json_bytes,
+            "il testo canonico restituito supera max_plan_json_bytes"
+        );
         let _ = PlanV5::parse(canonico.as_ref(), &limits);
     }
 

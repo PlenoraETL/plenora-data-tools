@@ -112,8 +112,19 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// [`crate::plan::migrazione_v4`]), quindi in pratica ogni hash cambierebbe
 /// comunque — ma «in pratica» e' una proprieta' del contenuto, non una
 /// garanzia della funzione. Un grafo riusato per sbaglio con un hash di prima
-/// e' un piano eseguito sotto un contratto di memoria che non e' piu' il suo;
-/// quel caso va reso impossibile, non improbabile.
+/// e' un piano eseguito sotto un contratto di memoria che non e' piu' il suo.
+///
+/// Che cosa il dominio garantisce, con precisione: che **nessun testo
+/// canonico** possa produrre, sotto la regola nuova, l'hash che un testo
+/// canonico produceva sotto quella vecchia — i due insiemi di input della
+/// funzione di hash sono disgiunti, perche' uno ha il prefisso e l'altro no.
+/// Resta la resistenza alle collisioni di SHA-256, che e' l'assunzione su cui
+/// il `plan_hash` poggiava gia' prima: il dominio **separa** gli spazi, non
+/// abolisce la crittografia.
+///
+/// La difesa vera contro il riuso di un grafo validato sotto un'altra
+/// versione del formato non e' l'hash ma il confronto esplicito di
+/// `plan_format_version` in [`check_compatibility`].
 const PLAN_HASH_DOMAIN: &[u8] = b"plenora/plan_hash/v5\0";
 
 /// Versione dei crate Arrow in questa build (ADR 4: entra nell'identita' del
@@ -640,9 +651,10 @@ pub fn validate(
 /// Verifica di compatibilita' di un grafo validato con l'ambiente corrente
 /// (ADR 4): qualunque mismatch rifiuta il grafo, mai procedere alla cieca.
 ///
-/// I mismatch rilevati: catalogo cambiato (o op usata rimossa), versione
-/// engine diversa, versione Arrow diversa, capability non piu' disponibili
-/// (backend o profilo di publish, ADR 7).
+/// I mismatch rilevati: **versione del formato piano diversa**, catalogo
+/// cambiato (o op usata rimossa), versione engine diversa, versione Arrow
+/// diversa, capability non piu' disponibili (backend o profilo di publish,
+/// ADR 7).
 ///
 /// `current_catalog` e' il catalogo contro cui riverificare (in produzione
 /// `plenora_core::catalog::CATALOG`); `engine_version` e `arrow_version`
@@ -661,6 +673,18 @@ pub fn check_compatibility(
     capabilities: &CapabilitySet,
 ) -> Result<()> {
     let mismatch = |reason: String| PlenoraError::InvalidPlan(format!("GRAPH_MISMATCH: {reason}"));
+
+    // Per primo, prima di qualunque altra cosa: se il grafo e' stato
+    // validato sotto un'altra versione del formato piano, tutto cio' che
+    // segue lo interpreta con regole che non sono le sue. Il campo era
+    // registrato in `ValidatedGraph` ma non veniva confrontato con nulla —
+    // un'identita' scritta e mai letta e' una garanzia solo apparente.
+    if graph.plan_format_version != PLAN_SCHEMA_VERSION_V5 {
+        return Err(mismatch(format!(
+            "plan_format_version {} del grafo diversa da {PLAN_SCHEMA_VERSION_V5}",
+            graph.plan_format_version
+        )));
+    }
 
     if graph.engine_version.0 != engine_version {
         return Err(mismatch(format!(

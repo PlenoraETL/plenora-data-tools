@@ -14,7 +14,7 @@ use plenora_core::contract::{
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
 
-use crate::plan::PlanV5;
+use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V4};
 use crate::table_engine;
 
 use super::*;
@@ -1686,4 +1686,36 @@ fn il_dominio_del_plan_hash_nomina_la_versione_canonica() {
         dominio.contains(&format!("v{PLAN_SCHEMA_VERSION_V5}")),
         "{dominio}"
     );
+}
+
+#[test]
+fn una_versione_di_formato_piano_diversa_rifiuta_il_grafo() {
+    // `plan_format_version` era registrato in `ValidatedGraph` e non veniva
+    // confrontato con nulla: un grafo validato sotto un altro formato
+    // sarebbe stato dichiarato compatibile, e ogni passo successivo lo
+    // avrebbe interpretato con regole che non sono le sue. Un'identita'
+    // scritta e mai letta e' una garanzia solo apparente.
+    let mut graph = validate_mixed();
+    assert_eq!(graph.plan_format_version(), PLAN_SCHEMA_VERSION_V5);
+    check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    )
+    .expect("il grafo corrente e' compatibile");
+
+    graph.plan_format_version = PLAN_SCHEMA_VERSION_V4;
+    let errore = check_compatibility(
+        &graph,
+        CATALOG,
+        ENGINE_VERSION,
+        ARROW_VERSION,
+        &local_capabilities(),
+    )
+    .expect_err("formato piano diverso")
+    .to_string();
+    assert!(errore.contains("GRAPH_MISMATCH"), "{errore}");
+    assert!(errore.contains("plan_format_version"), "{errore}");
 }

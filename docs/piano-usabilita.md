@@ -172,7 +172,7 @@ silenzio, metriche stampate su stdout a fine `run`.
 
 - **1.3.1 `--input nome=percorso`** — **FATTO** (2026-08-16). *(chiude L2)*
   Forma nominale, ripetibile. La forma posizionale `--inputs` e' **rifiutata**
-  per i piani v4 con piu' di un input dichiarato, con il rimedio nominale nel
+  per i piani DAG con piu' di un input dichiarato, con il rimedio nominale nel
   messaggio; resta accettata con un input solo, dove non c'e' niente da
   scambiare. Un avviso non sarebbe bastato: nei log di una pipeline non lo
   legge nessuno.
@@ -259,7 +259,7 @@ che non si e' capito):
 fallisce con `invalid_plan`/2, e il messaggio nomina il flag), valore mancante
 dopo un flag, file inesistenti e illeggibili (una directory al posto di un
 file: `io`/5 su ogni comando che legge), forme incompatibili (nominale +
-posizionale, `--right` su un piano v4), nessun output pubblicato su nessun
+posizionale, `--right` su un piano DAG), nessun output pubblicato su nessun
 fallimento di `run`, un solo documento JSON su stdout sia in successo sia in
 errore, stderr vuoto in entrambi i casi, e parita' fra help e dispatch — con
 un test che estrae i flag accettati dal messaggio d'errore del comando e
