@@ -153,6 +153,22 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   CLI) rifiuta la PUBBLICAZIONE di un risultato fuori budget, ma corre dopo
   che il kernel ha costruito l'output.
 
+  **Aggiornamento del 2026-08-21 (permesso atomico del governor).** Il
+  `MemoryGovernor` ha ora un permesso che verifica e prenota in **una sola
+  operazione**, e l'unico pattern «leggi il contatore, poi prenota» del codice
+  e' stato eliminato. Per i segmenti **row-diagnostics** la quota dell'uscita
+  e' ora presa PRIMA della passata e ritagliata dopo: e' il secondo punto
+  dell'engine — dopo il gruppo geo fuso (ADR-0012 D12.7) — in cui la
+  reservation precede l'allocazione che deve coprire.
+
+  **La deroga resta aperta.** Il censimento completo dei siti e' in
+  `docs/der011-censimento-2026-08-21.md`, con verificatore ad ancore
+  (`scripts/verifica_censimento_der011.py`): su undici siti del solo percorso
+  DAG, due sono preventivi e uno non ha reservation affatto; percorso legacy,
+  kernel senza preflight e allocazioni Arrow interne restano scoperti.
+  **Nessun tetto duro e' dichiarato**: `max_memory_bytes` resta un contatore
+  di cio' che e' gia' stato allocato.
+
   **Percorso DAG v4.** Stesso ordine, in tre punti verificati:
   `concat_batches` costruisce il batch completo e solo dopo arrivano
   `check_batch_bytes` e la reservation (`executor.rs`, intorno a 4423); il
