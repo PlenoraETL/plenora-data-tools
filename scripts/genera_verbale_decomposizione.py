@@ -53,6 +53,17 @@ MODI = u"\n".join(
 CELLE = [c for n in ORDINE for c in dec[n]['asse_batch']['forme']]
 RISOLTE = sum(1 for c in CELLE if c['osservabilita']['risolta'])
 
+# Chiusura della partizione su TUTTE le celle dei due assi, e peso massimo del
+# termine per batch alla forma canonica: entrambi calcolati, non affermati.
+TUTTE = [c for n in ORDINE
+         for c in dec[n]['asse_batch']['forme'] + dec[n]['asse_righe']['forme']]
+SOMME = [c['quote_pct']['costruzione'] + c['quote_pct']['kernel']
+         + c['quote_pct']['residuo'] for c in TUTTE]
+QUOTA_BATCH = max(
+    100.0 * 24 * dec[n]['asse_batch']['residuo']['per_batch_ns']
+    / max(1.0, float(canonica(n)['partizione_ns']['residuo']))
+    for n in ORDINE)
+
 doc = []
 A = doc.append
 
@@ -86,9 +97,12 @@ misura_orchestrazione --carico streaming_lineare --fase catena
 lo **stesso** `elapsed` del nodo. Un segmento fuso riporta la somma dei suoi
 nodi, non un centesimo di piu'.
 
-Non e' solo lettura del codice: l'harness lo **asserisce** a ogni cella
-(`con.iter().all(|s| s.segmenti <= s.kernel)`). Se un giorno l'executor
-cambiasse, la misura fallirebbe invece di riportare un numero vecchio.
+Non e' solo lettura del codice: l'harness **asserisce l'uguaglianza** delle due
+somme su ogni ripetizione di ogni cella (`assert_eq!(s.segmenti, s.kernel)`).
+E' uguaglianza esatta, non tolleranza: sono le stesse `Duration` sommate nello
+stesso ordine. Se un giorno l'executor registrasse altrove — o smettesse di
+registrare per segmento — la misura **fallirebbe** invece di riportare un
+numero vecchio e questa sezione invece di restare vera.
 
 ---
 
@@ -107,8 +121,9 @@ wall = costruzione + kernel + residuo
 ```
 
 dove `kernel` e' la somma dei `wall_time` per nodo e `residuo` e' cio' che
-resta. Le somme delle quote nelle tabelle che seguono chiudono fra il 98% e il
-101%: lo scarto e' quello fra mediane di serie diverse, non un termine
+resta. Su tutte le SOMME_CELLE celle misurate le quote chiudono fra
+SOMMA_MIN% e SOMMA_MAX%: lo scarto e' quello fra mediane di serie diverse
+(la mediana della somma non e' la somma delle mediane), non un termine
 mancante.
 
 Tre difetti del primo tentativo, corretti prima di produrre questi numeri:
@@ -118,6 +133,19 @@ Tre difetti del primo tentativo, corretti prima di produrre questi numeri:
 | i batch di uscita venivano distrutti **dentro** la finestra cronometrata (`let (_, m) = collect_batches()`) | il residuo includeva la deallocazione dell'output, che la fase temporale non conta | i batch si legano a un nome e si distruggono **dopo** `elapsed()` |
 | `saturating_sub` sulle differenze A/B | le differenze negative diventavano zero e la somma delle quote superava il 100% (fino a 129%) | differenze **con segno**, e partizione ridefinita in modo che non serva alcuna sottrazione satura |
 | metriche accese e spente misurate in **campagne separate** | la differenza aveva segno casuale: era deriva dell'host, non effetto | le due configurazioni si **alternano dentro lo stesso ciclo**, con l'ordine invertito a ogni giro, e si confrontano per coppia |
+
+Poi cinque presidi **fail-open** — controlli che passavano anche quando la
+misura era rotta. Nessuno cambiava i numeri di questo documento (la
+rigenerazione con tutti attivi li lascia entro qualche punto percentuale), ma
+ciascuno poteva nascondere il giorno in cui li avrebbe cambiati:
+
+| presidio | come falliva in silenzio | ora |
+|---|---|---|
+| il residuo usava `saturating_sub` in due punti | `kernel > drenaggio` — cioe' una partizione che non e' una partizione — dava residuo zero, perfettamente credibile | un solo helper con `checked_sub` che **fallisce** dicendo quali termini eccedono |
+| il controllo dei campioni percorreva i nodi **osservati** | un nodo assente da **tutte** le ripetizioni non ha una voce, quindi non viene controllato: sparisce dal profilo e dai rami senza traccia | si confronta l'**insieme** dei nodi metricati con quello dichiarato dal piano, e si stampano differenze in entrambe le direzioni |
+| sui segmenti si verificava `segmenti <= kernel` | il documento dichiara **uguaglianza**: `<=` sarebbe passato anche se i segmenti avessero smesso del tutto di registrare, cioe' proprio quando la conclusione del §0 andrebbe rivista | si asserisce l'**uguaglianza**, che e' esatta perche' sono le stesse `Duration` sommate nello stesso ordine |
+| le campagne di parallelismo erano raccolte con `filter_map` | una campagna che dichiara il parallelismo non misurabile spariva, e si pubblicava un «range su tre processi» calcolato su uno o due | servono **tutte** le campagne, altrimenti il dato e' **non disponibile** e la tabella lo scrive |
+| una cella si chiudeva al **solo** superamento della soglia di tempo | una singola ripetizione abbastanza lenta la soddisfa da sola — ed e' la ripetizione contaminata a essere lenta. E' successo: una cella misurata su **un** campione da 989 ms contro ~20 attesi, con la regressione sull'asse righe passata da R² 0,99 a 0,002 | soglia di tempo **e** minimo di ripetizioni, entrambe da soddisfare |
 
 ---
 
@@ -158,10 +186,12 @@ for n in ORDINE:
     A(u"| `%s` | %.1f µs | %.3f |" % (n, r['per_batch_ns'] / 1e3, r['r_quadro']))
 
 A(u"""
-Alla forma canonica, 24 batch, questo termine vale **meno di un millesimo** del
-residuo su ogni carico. Il costo per batch esiste ma **non e'** il tempo
-mancante — e i R² bassi dicono che su meta' dei carichi la retta non descrive
-nemmeno bene i dati, cioe' il segnale e' sotto il rumore.
+Alla forma canonica, 24 batch, questo termine moltiplicato per 24 vale al
+massimo il **QUOTA_BATCH%** del residuo, e su `fan_out_tee` la pendenza e'
+**negativa** — cioe' li' non c'e' alcun costo per batch da misurare. Il costo
+per batch esiste ma **non e'** il tempo mancante, e i R² bassi dicono che su
+piu' di un carico la retta non descrive nemmeno bene i dati: il segnale e'
+sotto il rumore.
 
 ### Asse 2 — batch costanti (24), righe totali variabili (24 576 -> 393 216)
 
@@ -178,9 +208,11 @@ for n in ORDINE:
         n, r['per_riga_ns'], r['intercetta_ns'] / 1e6, r['r_quadro']))
 
 A(u"""
-**Questa e' la risposta.** Con R² fra 0,94 e 0,995 e intercette prossime allo
+**Questa e' la risposta.** Con R² fra %.3f e %.3f e intercette prossime allo
 zero, il residuo e' **lavoro proporzionale alle righe**, non costo fisso di
-preparazione e non costo per batch.
+preparazione e non costo per batch.""" % (
+    min(dec[n]['asse_righe']['residuo']['r_quadro'] for n in ORDINE),
+    max(dec[n]['asse_righe']['residuo']['r_quadro'] for n in ORDINE)) + u"""
 
 Conta per la decisione sull'orchestratore: un costo fisso per esecuzione un
 esecutore parallelo non lo tocca; un costo **per riga** e' lavoro sui dati, che
@@ -205,10 +237,18 @@ for chiave, etichetta in ((u'catena_string_pad', u'`string_pad` x k'),
         r['r_quadro']))
 
 A(u"""
-Una catena di quattro `string_pad` ha un residuo di **frazioni di
-millisecondo**: l'attraversamento fra nodi, di per se', non costa quasi nulla.
-Una catena di `formula` ne ha uno di **quindici millisecondi piu' tre per
-nodo**. Non e' l'orchestrazione: e' l'operazione.
+Una catena di quattro `string_pad` ha un residuo di **%.2f ms**:
+l'attraversamento fra nodi, di per se', non costa quasi nulla. Una catena di
+quattro `formula` ne ha uno di **%.1f ms**, due ordini di grandezza sopra. Non
+e' l'orchestrazione: e' l'operazione.
+
+Sulla ripartizione fra fisso e per nodo dentro la catena di `formula` questa
+misura e' **debole**: R² %.3f su quattro punti. Il termine costante e' grande e
+solido (compare gia' con un nodo solo, §4), la pendenza per nodo va presa come
+ordine di grandezza e nulla piu'.""" % (
+    cat['catena_string_pad']['forme'][-1]['partizione_ns']['residuo'] / 1e6,
+    cat['catena_formula']['forme'][-1]['partizione_ns']['residuo'] / 1e6,
+    cat['catena_formula']['residuo']['r_quadro']) + u"""
 
 ---
 
@@ -368,6 +408,10 @@ sapere **dove**, dentro `formula`, va quel tempo.
        / max(1.0, sf['misura']['partizione_ns']['kernel'])))
 
 testo = u"\n".join(doc)
+testo = testo.replace('SOMME_CELLE', str(len(TUTTE)))
+testo = testo.replace('SOMMA_MIN', '%.1f' % min(SOMME))
+testo = testo.replace('SOMMA_MAX', '%.1f' % max(SOMME))
+testo = testo.replace('QUOTA_BATCH', '%.1f' % QUOTA_BATCH)
 testo = re.sub(r"(?<=\d)\.(?=\d)", u",", testo)
 testo = re.sub(r"\n{3,}", u"\n\n", testo)
 

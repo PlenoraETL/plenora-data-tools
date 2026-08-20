@@ -61,7 +61,7 @@
     clippy::similar_names
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::process::Command;
 use std::sync::Arc;
@@ -485,6 +485,32 @@ fn byte_ipc(batches: &[RecordBatch]) -> Vec<u8> {
     buffer
 }
 
+/// Gli id dei nodi **dichiarati dal piano**, letti dal piano stesso.
+///
+/// E' il riferimento contro cui confrontare i nodi che hanno prodotto
+/// metriche: senza, l'unico insieme disponibile sarebbe quello osservato, che
+/// non puo' rivelare la propria incompletezza.
+fn nodi_dichiarati(carico: &Carico) -> BTreeSet<String> {
+    let nodi = carico.piano["nodes"]
+        .as_array()
+        .expect("il piano deve dichiarare `nodes`");
+    let insieme: BTreeSet<String> = nodi
+        .iter()
+        .map(|n| {
+            n["id"]
+                .as_str()
+                .expect("ogni nodo del piano deve avere un `id`")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        insieme.len(),
+        nodi.len(),
+        "il piano dichiara id di nodo duplicati"
+    );
+    insieme
+}
+
 // ---------------------------------------------------------------------------
 // Fase TEMPO: ripetizioni a blocchi fino alla soglia effettiva
 // ---------------------------------------------------------------------------
@@ -551,9 +577,26 @@ fn fase_tempo(carico: &Carico) -> Value {
 
     let (prodotti, metriche) = ultima.expect("almeno una ripetizione");
 
-    // Fail-closed: ogni nodo deve avere ESATTAMENTE un campione per
-    // ripetizione. Un nodo con meno campioni renderebbe il tetto dei rami una
-    // somma su indici disallineati, e nessuno se ne accorgerebbe.
+    // Fail-closed, in due tempi.
+    //
+    // Primo: l'INSIEME dei nodi osservati deve essere quello dichiarato dal
+    // piano. Percorrere solo i nodi presenti nella mappa lascia passare il
+    // caso peggiore — un nodo che non compare in NESSUNA ripetizione non ha
+    // una voce da controllare, e sparisce in silenzio dal profilo e dai
+    // rami.
+    let dichiarati = nodi_dichiarati(carico);
+    let osservati: BTreeSet<String> = per_nodo.keys().cloned().collect();
+    assert_eq!(
+        osservati,
+        dichiarati,
+        "i nodi con metriche non sono quelli del piano: mancano {:?}, in piu' {:?}",
+        dichiarati.difference(&osservati).collect::<Vec<_>>(),
+        osservati.difference(&dichiarati).collect::<Vec<_>>(),
+    );
+
+    // Secondo: ogni nodo deve avere ESATTAMENTE un campione per ripetizione.
+    // Un nodo con meno campioni renderebbe il tetto dei rami una somma su
+    // indici disallineati, e nessuno se ne accorgerebbe.
     for (id, serie) in &per_nodo {
         assert_eq!(
             serie.len(),
@@ -831,6 +874,16 @@ const FORME_RIGHE: [(usize, usize); 5] = [
 /// carico, quindi piu' bassa di quella della fase temporale.
 const SOGLIA_DECOMPOSIZIONE: Duration = Duration::from_millis(700);
 
+/// Ripetizioni minime per cella, **oltre** alla soglia di tempo.
+///
+/// Senza questo minimo la soglia cumulata si soddisfa anche con UNA sola
+/// ripetizione, purche' abbastanza lenta — ed e' proprio la ripetizione
+/// contaminata a essere lenta. E' successo: una cella di `streaming_lineare`
+/// e' stata misurata su un solo campione da 989 ms contro i ~20 attesi, la
+/// «mediana» era quel campione e la regressione sull'asse delle righe e'
+/// passata da R² 0,99 a 0,002. Una mediana su un campione non e' una mediana.
+const RIPETIZIONI_MIN: usize = 5;
+
 /// Mediana delle parti su una campagna a soglia.
 fn campagna_appaiata(acceso: &Banco, spento: &Banco) -> (Vec<Spesa>, Vec<Spesa>) {
     for _ in 0..WARMUP {
@@ -840,7 +893,13 @@ fn campagna_appaiata(acceso: &Banco, spento: &Banco) -> (Vec<Spesa>, Vec<Spesa>)
     let mut con: Vec<Spesa> = Vec::new();
     let mut senza: Vec<Spesa> = Vec::new();
     let mut cumulato = Duration::ZERO;
-    while cumulato < SOGLIA_DECOMPOSIZIONE && con.len() < RIPETIZIONI_MAX {
+    // Si esce quando ENTRAMBE le condizioni sono soddisfatte: tempo cumulato
+    // sopra la soglia E almeno RIPETIZIONI_MIN campioni. La sola soglia si
+    // accontenta di un campione lento, che e' esattamente il campione da non
+    // credere.
+    while (cumulato < SOGLIA_DECOMPOSIZIONE || con.len() < RIPETIZIONI_MIN)
+        && con.len() < RIPETIZIONI_MAX
+    {
         // Le due configurazioni si alternano DENTRO lo stesso ciclo, e
         // l'ordine si inverte a ogni giro. Misurarle in due campagne separate
         // le espone a due stati diversi dell'host: il primo tentativo dava
@@ -1057,6 +1116,27 @@ fn carichi_per_operazione() -> Vec<(&'static str, Carico)> {
     ]
 }
 
+/// Residuo di una ripetizione: `wall - (costruzione + kernel)`.
+///
+/// Unico punto in cui la sottrazione della partizione viene fatta, e con
+/// `checked_sub`: se i tempi per nodo superassero il drenaggio la partizione
+/// non sarebbe piu' una partizione, e saturare a zero lo nasconderebbe
+/// producendo un residuo nullo perfettamente credibile. Meglio fermarsi.
+fn residuo_di(s: &Spesa) -> Duration {
+    let parti = s.costruzione + s.kernel;
+    s.wall().checked_sub(parti).unwrap_or_else(|| {
+        panic!(
+            "partizione violata: kernel {:?} + costruzione {:?} superano il wall {:?} \
+             (drenaggio {:?}). I tempi per nodo non possono eccedere il drenaggio: \
+             o l'executor ha cambiato dove registra `elapsed`, o la misura e' rotta.",
+            s.kernel,
+            s.costruzione,
+            s.wall(),
+            s.drenaggio,
+        )
+    })
+}
+
 /// Metriche complete di UNA esecuzione, per capire dove il tempo NON e'
 /// registrato: nodi e segmenti con i loro contatori, cosi' come l'engine li
 /// espone. Serve alla diagnosi, non alla statistica.
@@ -1120,31 +1200,35 @@ fn cella(carico: &Carico, n_batch: usize, righe: usize) -> Cella {
         "a metriche spente i tempi per nodo devono essere assenti"
     );
     // I segmenti accumulano lo STESSO `elapsed` dei nodi (executor.rs:
-    // 3175/3188, 4693/4702, 4920/4929): non aggiungono copertura. Verificato
-    // qui, non solo letto nel codice.
-    assert!(
-        con.iter().all(|s| s.segmenti <= s.kernel),
-        "i segmenti coprono piu' dei nodi"
-    );
+    // 3175/3188, 4693/4702, 4920/4929): non aggiungono copertura. Il
+    // documento dichiara UGUAGLIANZA, quindi qui si verifica l'uguaglianza —
+    // `<=` sarebbe passato anche se i segmenti avessero smesso di registrare,
+    // cioe' proprio nel caso in cui la conclusione andrebbe rivista.
+    //
+    // Sono somme delle stesse `Duration` nello stesso ordine: l'uguaglianza
+    // e' esatta, non approssimata.
+    for s in &con {
+        assert_eq!(
+            s.segmenti, s.kernel,
+            "somma per segmento e somma per nodo devono coincidere: \
+             l'executor accumula lo stesso `elapsed` in entrambe. \
+             Se divergono, o un nodo non e' registrato (vedi il controllo \
+             sull'insieme dei nodi) o l'executor e' cambiato."
+        );
+    }
 
     // PARTIZIONE ESATTA, calcolata PER RIPETIZIONE:
     //   wall = costruzione + kernel + residuo
     // Le quote si mediano una per una: mediare i termini e poi dividere
     // darebbe una somma diversa da 100 senza che nulla sia sbagliato, e
     // sarebbe solo confondente.
-    let residui: Vec<u64> = con
-        .iter()
-        .map(|s| ns(s.wall().saturating_sub(s.costruzione + s.kernel)))
-        .collect();
+    let residui: Vec<u64> = con.iter().map(|s| ns(residuo_di(s))).collect();
     let quote = |estrai: fn(&Spesa) -> Duration| -> f64 {
         let mut v: Vec<f64> = con.iter().map(|s| quota(estrai(s), s.wall())).collect();
         v.sort_by(f64::total_cmp);
         v[v.len() / 2]
     };
-    let mut quote_residuo: Vec<f64> = con
-        .iter()
-        .map(|s| quota(s.wall().saturating_sub(s.costruzione + s.kernel), s.wall()))
-        .collect();
+    let mut quote_residuo: Vec<f64> = con.iter().map(|s| quota(residuo_di(s), s.wall())).collect();
     quote_residuo.sort_by(f64::total_cmp);
 
     let costruzione = mediana_di(&con, |s| s.costruzione);
@@ -1362,9 +1446,31 @@ fn tabella_markdown(risultati: &[Value]) -> String {
     testo.push_str("|---|---|---|---|---|---|\n");
     for r in risultati {
         let p = &r["parallelismo_fra_processi"];
+        // Se il parallelismo non e' disponibile su TUTTE le campagne, la
+        // tabella lo dice: uno zero al posto di un fattore verrebbe letto
+        // come una misura.
+        let (fattore, intervallo) = if p["disponibile"].as_bool().unwrap_or(false) {
+            (
+                format!("**{:.2}x**", p["mediana"].as_f64().unwrap_or(0.0)),
+                format!(
+                    "{:.2}–{:.2}",
+                    p["min"].as_f64().unwrap_or(0.0),
+                    p["max"].as_f64().unwrap_or(0.0)
+                ),
+            )
+        } else {
+            (
+                "**non disponibile**".to_owned(),
+                format!(
+                    "{} campagne su {}",
+                    p["campioni"].as_u64().unwrap_or(0),
+                    p["campagne"].as_u64().unwrap_or(0)
+                ),
+            )
+        };
         let _ = writeln!(
             testo,
-            "| `{}` | {:.2} ms | {} | {} | **{:.2}x** | {:.2}–{:.2} |",
+            "| `{}` | {:.2} ms | {} | {} | {fattore} | {intervallo} |",
             r["carico"].as_str().unwrap_or("?"),
             ms(r["tempo"]["mediana_ns"].as_u64().unwrap_or(0)),
             r["ripetizioni"].as_u64().unwrap_or(0),
@@ -1373,9 +1479,6 @@ fn tabella_markdown(risultati: &[Value]) -> String {
             } else {
                 "**NO**"
             },
-            p["mediana"].as_f64().unwrap_or(0.0),
-            p["min"].as_f64().unwrap_or(0.0),
-            p["max"].as_f64().unwrap_or(0.0),
         );
     }
     testo.push_str(
@@ -1443,14 +1546,33 @@ fn main() {
         let campagne: Vec<Value> = (0..PROCESSI_TEMPO)
             .map(|_| figlio(&eseguibile, carico.nome, "tempo"))
             .collect();
-        let fattori: Vec<f64> = campagne
+        // Fail-closed sul parallelismo: o tutte e PROCESSI_TEMPO le campagne
+        // hanno prodotto un fattore, o il dato e' dichiarato NON DISPONIBILE.
+        // Con `filter_map` una campagna che dichiara il parallelismo non
+        // misurabile (CLK_TCK illeggibile) spariva, e si pubblicava un
+        // «range su 3 processi» calcolato su uno o due: la colonna del
+        // verbale avrebbe detto una cosa che non era vera.
+        let fattori: Vec<Option<f64>> = campagne
             .iter()
-            .filter_map(|c| c["parallelismo"]["fattore"].as_f64())
+            .map(|c| c["parallelismo"]["fattore"].as_f64())
             .collect();
-        let (mediana_p, min_p, max_p) = if fattori.is_empty() {
-            (0.0, 0.0, 0.0)
+        let completi: Vec<f64> = fattori.iter().filter_map(|f| *f).collect();
+        let parallelismo = if completi.len() == PROCESSI_TEMPO {
+            let (mediana_p, min_p, max_p) = mediana_f64(&completi);
+            json!({
+                "disponibile": true,
+                "mediana": mediana_p, "min": min_p, "max": max_p,
+                "campioni": completi.len(), "campagne": PROCESSI_TEMPO,
+            })
         } else {
-            mediana_f64(&fattori)
+            json!({
+                "disponibile": false,
+                "campioni": completi.len(), "campagne": PROCESSI_TEMPO,
+                "motivo": format!(
+                    "{} campagne su {PROCESSI_TEMPO} non hanno misurato il parallelismo",
+                    PROCESSI_TEMPO - completi.len()
+                ),
+            })
         };
         // La campagna di riferimento e' quella con il wall mediano: una sola,
         // identificata, non un miscuglio.
@@ -1461,9 +1583,7 @@ fn main() {
         let mut voce = riferimento;
         voce["perche"] = json!(carico.perche);
         voce["campagne_tempo"] = json!(PROCESSI_TEMPO);
-        voce["parallelismo_fra_processi"] = json!({
-            "mediana": mediana_p, "min": min_p, "max": max_p, "campioni": fattori.len(),
-        });
+        voce["parallelismo_fra_processi"] = parallelismo;
         voce["memoria"] = figlio(&eseguibile, carico.nome, "memoria");
         risultati.push(voce);
     }

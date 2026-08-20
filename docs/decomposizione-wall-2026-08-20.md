@@ -28,9 +28,12 @@ misura_orchestrazione --carico streaming_lineare --fase catena
 lo **stesso** `elapsed` del nodo. Un segmento fuso riporta la somma dei suoi
 nodi, non un centesimo di piu'.
 
-Non e' solo lettura del codice: l'harness lo **asserisce** a ogni cella
-(`con.iter().all(|s| s.segmenti <= s.kernel)`). Se un giorno l'executor
-cambiasse, la misura fallirebbe invece di riportare un numero vecchio.
+Non e' solo lettura del codice: l'harness **asserisce l'uguaglianza** delle due
+somme su ogni ripetizione di ogni cella (`assert_eq!(s.segmenti, s.kernel)`).
+E' uguaglianza esatta, non tolleranza: sono le stesse `Duration` sommate nello
+stesso ordine. Se un giorno l'executor registrasse altrove — o smettesse di
+registrare per segmento — la misura **fallirebbe** invece di riportare un
+numero vecchio e questa sezione invece di restare vera.
 
 ---
 
@@ -49,8 +52,9 @@ wall = costruzione + kernel + residuo
 ```
 
 dove `kernel` e' la somma dei `wall_time` per nodo e `residuo` e' cio' che
-resta. Le somme delle quote nelle tabelle che seguono chiudono fra il 98% e il
-101%: lo scarto e' quello fra mediane di serie diverse, non un termine
+resta. Su tutte le 50 celle misurate le quote chiudono fra
+97,7% e 100,4%: lo scarto e' quello fra mediane di serie diverse
+(la mediana della somma non e' la somma delle mediane), non un termine
 mancante.
 
 Tre difetti del primo tentativo, corretti prima di produrre questi numeri:
@@ -61,17 +65,30 @@ Tre difetti del primo tentativo, corretti prima di produrre questi numeri:
 | `saturating_sub` sulle differenze A/B | le differenze negative diventavano zero e la somma delle quote superava il 100% (fino a 129%) | differenze **con segno**, e partizione ridefinita in modo che non serva alcuna sottrazione satura |
 | metriche accese e spente misurate in **campagne separate** | la differenza aveva segno casuale: era deriva dell'host, non effetto | le due configurazioni si **alternano dentro lo stesso ciclo**, con l'ordine invertito a ogni giro, e si confrontano per coppia |
 
+Poi cinque presidi **fail-open** — controlli che passavano anche quando la
+misura era rotta. Nessuno cambiava i numeri di questo documento (la
+rigenerazione con tutti attivi li lascia entro qualche punto percentuale), ma
+ciascuno poteva nascondere il giorno in cui li avrebbe cambiati:
+
+| presidio | come falliva in silenzio | ora |
+|---|---|---|
+| il residuo usava `saturating_sub` in due punti | `kernel > drenaggio` — cioe' una partizione che non e' una partizione — dava residuo zero, perfettamente credibile | un solo helper con `checked_sub` che **fallisce** dicendo quali termini eccedono |
+| il controllo dei campioni percorreva i nodi **osservati** | un nodo assente da **tutte** le ripetizioni non ha una voce, quindi non viene controllato: sparisce dal profilo e dai rami senza traccia | si confronta l'**insieme** dei nodi metricati con quello dichiarato dal piano, e si stampano differenze in entrambe le direzioni |
+| sui segmenti si verificava `segmenti <= kernel` | il documento dichiara **uguaglianza**: `<=` sarebbe passato anche se i segmenti avessero smesso del tutto di registrare, cioe' proprio quando la conclusione del §0 andrebbe rivista | si asserisce l'**uguaglianza**, che e' esatta perche' sono le stesse `Duration` sommate nello stesso ordine |
+| le campagne di parallelismo erano raccolte con `filter_map` | una campagna che dichiara il parallelismo non misurabile spariva, e si pubblicava un «range su tre processi» calcolato su uno o due | servono **tutte** le campagne, altrimenti il dato e' **non disponibile** e la tabella lo scrive |
+| una cella si chiudeva al **solo** superamento della soglia di tempo | una singola ripetizione abbastanza lenta la soddisfa da sola — ed e' la ripetizione contaminata a essere lenta. E' successo: una cella misurata su **un** campione da 989 ms contro ~20 attesi, con la regressione sull'asse righe passata da R² 0,99 a 0,002 | soglia di tempo **e** minimo di ripetizioni, entrambe da soddisfare |
+
 ---
 
 ## 2. La partizione, alla forma canonica (24 batch x 8192 righe)
 
 | carico | wall | costruzione | kernel | residuo | somma |
 |---|---|---|---|---|---|
-| `streaming_lineare` | 36,37 ms | 1,38% | 47,2% | **51,5%** | 100,1% |
-| `blocking_sort` | 21,13 ms | 2,22% | 70,6% | **27,3%** | 100,0% |
-| `blocking_aggregate` | 12,71 ms | 3,80% | 46,0% | **49,6%** | 99,4% |
-| `fan_out_tee` | 16,59 ms | 2,86% | 58,0% | **39,1%** | 99,9% |
-| `rami_indipendenti` | 237,51 ms | 0,25% | 98,8% | **1,0%** | 100,1% |
+| `streaming_lineare` | 32,93 ms | 1,62% | 43,3% | **55,3%** | 100,2% |
+| `blocking_sort` | 24,32 ms | 2,25% | 71,2% | **26,4%** | 99,9% |
+| `blocking_aggregate` | 11,79 ms | 4,71% | 42,6% | **52,5%** | 99,8% |
+| `fan_out_tee` | 20,03 ms | 2,89% | 58,4% | **38,7%** | 100,0% |
+| `rami_indipendenti` | 210,78 ms | 0,25% | 98,6% | **1,2%** | 100,0% |
 
 `costruzione` e' piccola ovunque in valore assoluto (frazioni di millisecondo):
 appare grande solo sugli input minuscoli, dove non c'e' altro. **Non e' lei** il
@@ -89,16 +106,18 @@ Isola cio' che si paga a ogni batch: dispatch, reservation, controlli d'arco.
 
 | carico | costo per batch | R² |
 |---|---|---|
-| `streaming_lineare` | 57,3 µs | 0,962 |
-| `blocking_sort` | 12,3 µs | 0,934 |
-| `blocking_aggregate` | 1,4 µs | 0,126 |
-| `fan_out_tee` | -54,3 µs | 0,766 |
-| `rami_indipendenti` | 21,3 µs | 0,890 |
+| `streaming_lineare` | 5,9 µs | 0,058 |
+| `blocking_sort` | 10,2 µs | 0,624 |
+| `blocking_aggregate` | 0,5 µs | 0,006 |
+| `fan_out_tee` | -71,8 µs | 0,767 |
+| `rami_indipendenti` | 5,7 µs | 0,856 |
 
-Alla forma canonica, 24 batch, questo termine vale **meno di un millesimo** del
-residuo su ogni carico. Il costo per batch esiste ma **non e'** il tempo
-mancante — e i R² bassi dicono che su meta' dei carichi la retta non descrive
-nemmeno bene i dati, cioe' il segnale e' sotto il rumore.
+Alla forma canonica, 24 batch, questo termine moltiplicato per 24 vale al
+massimo il **5,4%** del residuo, e su `fan_out_tee` la pendenza e'
+**negativa** — cioe' li' non c'e' alcun costo per batch da misurare. Il costo
+per batch esiste ma **non e'** il tempo mancante, e i R² bassi dicono che su
+piu' di un carico la retta non descrive nemmeno bene i dati: il segnale e'
+sotto il rumore.
 
 ### Asse 2 — batch costanti (24), righe totali variabili (24 576 -> 393 216)
 
@@ -107,13 +126,13 @@ sono indistinguibili, perche' le righe totali non cambiano mai.
 
 | carico | costo per riga | intercetta | R² |
 |---|---|---|---|
-| `streaming_lineare` | **85,6 ns** | -0,11 ms | 0,990 |
-| `blocking_sort` | **31,1 ns** | -0,41 ms | 0,986 |
-| `blocking_aggregate` | **32,7 ns** | -1,11 ms | 0,968 |
-| `fan_out_tee` | **32,1 ns** | -1,90 ms | 0,870 |
-| `rami_indipendenti` | **11,7 ns** | 0,57 ms | 0,840 |
+| `streaming_lineare` | **90,6 ns** | -1,91 ms | 0,992 |
+| `blocking_sort` | **42,5 ns** | -1,65 ms | 0,974 |
+| `blocking_aggregate` | **33,1 ns** | -1,27 ms | 0,979 |
+| `fan_out_tee` | **37,4 ns** | -2,13 ms | 0,858 |
+| `rami_indipendenti` | **12,7 ns** | 0,43 ms | 0,988 |
 
-**Questa e' la risposta.** Con R² fra 0,94 e 0,995 e intercette prossime allo
+**Questa e' la risposta.** Con R² fra 0,858 e 0,992 e intercette prossime allo
 zero, il residuo e' **lavoro proporzionale alle righe**, non costo fisso di
 preparazione e non costo per batch.
 
@@ -130,13 +149,18 @@ che cresce con `k` e' **solo** il numero di attraversamenti di confine.
 
 | catena | residuo fisso | residuo per nodo | R² |
 |---|---|---|---|
-| `string_pad` x k | 0,18 ms | 0,053 ms | 0,980 |
-| `formula` x k | 15,01 ms | 3,378 ms | 0,963 |
+| `string_pad` x k | 0,17 ms | 0,073 ms | 0,690 |
+| `formula` x k | 18,46 ms | 1,462 ms | 0,765 |
 
-Una catena di quattro `string_pad` ha un residuo di **frazioni di
-millisecondo**: l'attraversamento fra nodi, di per se', non costa quasi nulla.
-Una catena di `formula` ne ha uno di **quindici millisecondi piu' tre per
-nodo**. Non e' l'orchestrazione: e' l'operazione.
+Una catena di quattro `string_pad` ha un residuo di **0,41 ms**:
+l'attraversamento fra nodi, di per se', non costa quasi nulla. Una catena di
+quattro `formula` ne ha uno di **23,3 ms**, due ordini di grandezza sopra. Non
+e' l'orchestrazione: e' l'operazione.
+
+Sulla ripartizione fra fisso e per nodo dentro la catena di `formula` questa
+misura e' **debole**: R² 0,765 su quattro punti. Il termine costante e' grande e
+solido (compare gia' con un nodo solo, §4), la pendenza per nodo va presa come
+ordine di grandezza e nulla piu'.
 
 ---
 
@@ -147,18 +171,18 @@ Ogni operazione della catena streaming, misurata **da sola** sullo stesso input
 
 | piano a nodo singolo | wall | kernel dichiarato | residuo | residuo % |
 |---|---|---|---|---|
-| `formula` (`valore * 2`) | 22,07 ms | 2,08 ms | 19,52 ms | **88,4%** |
-| `formula` (`1`, costante) | 21,79 ms | 1,16 ms | 20,14 ms | **92,4%** |
-| `formula` (`id * 2`, intero) | 20,08 ms | 1,59 ms | 18,01 ms | **89,8%** |
-| `string_pad` | 14,02 ms | 13,34 ms | 0,23 ms | **1,6%** |
-| `filter` | 7,05 ms | 6,41 ms | 0,21 ms | **2,9%** |
+| `formula` (`valore * 2`) | 21,62 ms | 1,87 ms | 17,79 ms | **87,4%** |
+| `formula` (`1`, costante) | 18,82 ms | 0,93 ms | 17,43 ms | **91,9%** |
+| `formula` (`id * 2`, intero) | 18,34 ms | 1,40 ms | 16,33 ms | **89,0%** |
+| `string_pad` | 13,69 ms | 11,93 ms | 0,24 ms | **1,8%** |
+| `filter` | 7,58 ms | 6,67 ms | 0,23 ms | **3,0%** |
 
-Un nodo `table.formula` dichiara **2,08 ms** di kernel e ne costa **22,07**: il
-88% del suo tempo non e' nel timer del suo kernel. `string_pad` e `filter`,
+Un nodo `table.formula` dichiara **1,87 ms** di kernel e ne costa **21,62**: il
+87% del suo tempo non e' nel timer del suo kernel. `string_pad` e `filter`,
 sullo stesso input e sullo stesso percorso, hanno un residuo dell'1–3%.
 
 **Non e' il calcolo.** Una formula costante (`1`), che non legge alcuna colonna,
-ha lo stesso residuo di `valore * 2`: 20,14 ms contro 19,52. Cambiare tipo
+ha lo stesso residuo di `valore * 2`: 17,43 ms contro 17,79. Cambiare tipo
 (`id * 2`, interi) non lo sposta. Il costo e' **strutturale del nodo**, non
 della sua espressione.
 
@@ -205,7 +229,7 @@ hanno almeno uno. Fra questi, `rami_indipendenti` ha un residuo dell'1% non
 perche' non materializzi — materializza cinque volte — ma perche' i suoi
 kernel sono di due ordini di grandezza piu' costosi della concatenazione: il
 termine c'e', ed e' semplicemente trascurabile li'. `blocking_sort` e
-`blocking_aggregate` hanno un residuo per riga di 31,1–32,7 ns, dello stesso
+`blocking_aggregate` hanno un residuo per riga di 33,1–42,5 ns, dello stesso
 ordine fra loro come ci si aspetta da un costo di concatenazione che dipende
 dai dati e non dall'operazione.
 
@@ -223,11 +247,11 @@ oppure residuo spiegato:
 
 | carico | attribuito da `kernel` + `costruzione` | residuo | spiegazione del residuo |
 |---|---|---|---|
-| `streaming_lineare` | 48,6% | 51,5% | `table.formula` (§4) |
-| `blocking_sort` | 72,8% | 27,3% | materializzazione `concat_batches` (§5) |
-| `blocking_aggregate` | 49,8% | 49,6% | materializzazione `concat_batches` (§5) |
-| `fan_out_tee` | 60,8% | 39,1% | materializzazione del `concat` di convergenza (§5) |
-| `rami_indipendenti` | 99,1% | 1,0% | sotto il 2%: nulla da spiegare |
+| `streaming_lineare` | 44,9% | 55,3% | `table.formula` (§4) |
+| `blocking_sort` | 73,5% | 26,4% | materializzazione `concat_batches` (§5) |
+| `blocking_aggregate` | 47,3% | 52,5% | materializzazione `concat_batches` (§5) |
+| `fan_out_tee` | 61,3% | 38,7% | materializzazione del `concat` di convergenza (§5) |
+| `rami_indipendenti` | 98,8% | 1,2% | sotto il 2%: nulla da spiegare |
 
 Il 90% di attribuzione **per componente nominato** e' raggiunto su
 `rami_indipendenti` soltanto. Sugli altri quattro il residuo e' **spiegato**:
@@ -240,7 +264,7 @@ Cio' che resta esplicitamente aperto:
 - **la riga esatta** del costo di `table.formula`. Serve strumentazione dentro
   l'engine;
 - **il costo dell'osservabilita'**. Il confronto appaiato fra metriche accese e
-  spente e' risolto in **2 celle su 25**: altrove le differenze cambiano
+  spente e' risolto in **3 celle su 25**: altrove le differenze cambiano
   segno e non c'e' maggioranza netta. Si puo' solo dire che e' **sotto la risoluzione
   del metodo**, dell'ordine di un millisecondo sui carichi da ~20 ms, e che
   quindi **non e'** la spiegazione del residuo;
@@ -259,7 +283,7 @@ cause note producono fuori dai timer.
 
 Ne segue che la prima ottimizzazione non e' aggiungere thread:
 
-1. **`table.formula`** costa ~11 volte cio' che dichiara. Su un piano
+1. **`table.formula`** costa ~12 volte cio' che dichiara. Su un piano
    streaming con una formula, e' la voce piu' grossa del wall;
 2. **la materializzazione dei nodi bloccanti** e' invisibile alle metriche e
    quindi non e' mai stata contabilizzata come costo.

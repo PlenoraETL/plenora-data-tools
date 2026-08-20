@@ -187,11 +187,28 @@ Mediana su %d processi isolati, range fra parentesi:
 
 
 def par_val(nome):
-    return per[nome]['parallelismo_fra_processi']['mediana']
+    return parallelismo(nome)['mediana']
+
+
+def parallelismo(nome):
+    """Il blocco del parallelismo fra processi, solo se e' pubblicabile.
+
+    L'harness dichiara `disponibile: false` quando meno di tutte le campagne
+    hanno misurato il parallelismo. Il verbale non ha una forma per dirlo — la
+    §3 e il fatto 1 lo danno per acquisito — quindi qui si **ferma** invece di
+    stampare una mediana su due campagne chiamandola «su tre».
+    """
+    p = per[nome]['parallelismo_fra_processi']
+    if p.get('disponibile') is False:
+        raise SystemExit(
+            'parallelismo non disponibile per %s (%s): il grezzo non e\'\n'
+            'pubblicabile in questo verbale, rieseguire la campagna.'
+            % (nome, p.get('motivo', 'motivo non riportato')))
+    return p
 
 
 def par(nome):
-    p = per[nome]['parallelismo_fra_processi']
+    p = parallelismo(nome)
     return u"`%s` **%.2fx** [%.2f–%.2f]" % (
         nome, p['mediana'], p['min'], p['max'])
 
@@ -214,7 +231,7 @@ A(u"\n".join([
     textwrap.fill(
         u"Nessun carico supera **%.2fx su %d core**. Il parallelismo **fra "
         u"nodi del DAG** e' zero, come dichiarato (`SerialFused`)."
-        % (max(per[n]['parallelismo_fra_processi']['mediana']
+        % (max(par_val(n)
                for n in ORDINE), d['core_logici']), width=76),
 ]))
 
