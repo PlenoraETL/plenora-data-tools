@@ -189,15 +189,49 @@ fa fallire il piano **in entrambe le modalità**, quindi per un piano che riesce
 nuova, e la soglia tiene il picco dentro il budget qualunque altra cosa il
 piano stia già trattenendo.
 
-**Atomicità: vincolo di progetto per lo scheduler parallelo.** Con l'esecuzione
-seriale (`SerialFused`) fra la lettura di `reserved_bytes()` e la reservation
-della passata non si inserisce nessun altro: lo snapshot è stabile e il
-`check` + `reserve` è corretto. **Uno scheduler parallelo non può conservare
-questa forma**: la finestra fra i due diventerebbe un TOCTOU — un altro ramo
-prenota in mezzo e la decisione «memoria» risulta presa su uno stato già
-superato. La sostituzione richiesta è un **permesso atomico** del governor:
-una sola operazione che verifichi la disponibilità e la riservi, oppure
-rifiuti. È un vincolo su M3, non un dettaglio implementativo.
+**Atomicità: risolta dal permesso (2026-08-21).** La prima stesura di M2d
+leggeva `reserved_bytes()` e prenotava altrove: due operazioni, corrette solo
+perché l'esecuzione è seriale, e un TOCTOU non appena non lo sarà. Il
+`MemoryGovernor` espone ora un **permesso atomico** — `permesso(bytes, owner)`
+— che verifica e prenota in una sola operazione e restituisce `Option`, perché
+un diniego è una decisione e non un errore; `try_reserve` e `reserve` ne sono
+involucri, ed è l'unico punto del crate in cui la quota viene presa.
+
+M2d lo usa così: prima della passata si chiede un permesso per
+`max_batch_bytes` — maggiorante valido dell'unica prenotazione che la passata
+aggiunge — e l'uscita si **ritaglia** da quel permesso
+(`MemoryPermit::ritaglia`), che riduce il conteggio dello stesso lease e
+restituisce solo la differenza. Nessuna riprenotazione, quindi nessuna
+finestra. Un permesso negato manda su disco: fail-closed.
+
+**Niente ripieghi.** `ritaglia` e `in_lease` sono fallibili e non ripiegano
+mai su una nuova prenotazione: rilasciare e riprenotare riaprirebbe
+esattamente la finestra che il permesso chiude. Un ritaglio impossibile
+significa che il maggiorante era sbagliato — invariante nostra rotta,
+`Internal` — e un governor già corrotto non concede alcuna trasformazione.
+
+**Contabilità e biiezione.** Tutti gli incrementi e i decrementi passano da
+aritmetica controllata, e la corrispondenza `live == births.len()` è
+verificata nei due versi: id duplicato e nascita mancante marcano entrambi la
+contabilità come incoerente. Il `Drop` non può restituire un errore, quindi
+marca; `verifica_salute` è il cancello che intercetta la marcatura **prima di
+dichiarare conclusa** un'esecuzione, su **tutti e tre** i percorsi pubblici di
+consumo: `collect_batches`, il publish atomico e `Iterator::next` a stream
+esaurito — quest'ultimo emette l'errore una volta sola e poi termina. Senza il
+terzo, `for batch in output` avrebbe trasformato una corruzione in un successo
+silenzioso.
+
+`MemoryMetrics.accounting_corrupted` espone la marcatura: `Output::metrics()`
+è pubblica e leggibile a metà stream, quando l'errore non è ancora stato
+consegnato, e senza quel campo mostrerebbe contatori apparentemente validi.
+Quando è `true` gli altri campi **non sono attendibili**.
+
+Il prezzo è che la quota dichiarata adesso è **davvero trattenuta**: il picco
+governato di un carico row-diagnostics comprende l'headroom (misurato su
+`streaming_lineare`: da 10,24 a 73,83 MiB con `max_batch_bytes` a 64 MiB).
+Non cambia quali piani riescono — la condizione di ingresso in memoria era già
+la stessa — ma il picco riportato è ora una misura di ciò che si tiene, non di
+ciò che si spera di poter tenere.
 
 **Passaggio al disco.** Quando la soglia non regge, i trattenuti sono travasati
 **nell'ordine di produzione** nello staging IPC esistente e i lease rilasciati
@@ -217,10 +251,14 @@ non è toccato da M2d. Nessuna operazione è specializzata e
 chi passa dalla barriera.
 
 **Prezzo dichiarato.** Il picco governato di un segmento row-diagnostics
-cresce dei byte trattenuti: misurato su `streaming_lineare`, da 0,76 MiB a
-10,24 MiB su un budget di 512 MiB. È un aumento reale del picco, non un
-aumento del tetto: la soglia lo tiene sotto `max_memory_bytes` per
-costruzione.
+cresce di due voci: i byte degli accepted trattenuti **e** l'headroom del
+permesso, che con l'atomicità non è più solo verificato ma davvero preso. La
+misura complessiva è quella riportata sopra — `streaming_lineare` da 0,76 a
+73,83 MiB su un budget di 512 MiB — e non va sommata a nessun'altra: è il
+picco finale, non un incremento intermedio. È un aumento reale del picco, non
+un aumento del tetto: il permesso lo tiene sotto `max_memory_bytes` per
+costruzione, perché è il permesso stesso a non essere concesso quando non ci
+starebbe.
 
 **Deviazioni/rinvii rispetto al design** (documentati nel codice):
 

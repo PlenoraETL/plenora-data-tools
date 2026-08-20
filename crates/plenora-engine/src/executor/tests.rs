@@ -6969,3 +6969,152 @@ fn m2d_fanout_nessun_falso_resource_limit() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Il cancello sul percorso Iterator: `Output` e' consumabile anche senza
+// passare da `collect_batches` o dal publish atomico.
+// ---------------------------------------------------------------------------
+
+/// Un `Output` semplice su cui esercitare i percorsi pubblici di consumo.
+fn m2d_output_semplice() -> Output {
+    run(
+        &m2d_plan(false),
+        single_input("main", m2d_batches()),
+        &m2d_contratti(),
+    )
+    .expect("execute")
+}
+
+#[test]
+fn iterator_pubblico_intercetta_la_contabilita_corrotta() {
+    // L'API che il chiamante usa davvero: `for batch in output`, cioe'
+    // `Iterator`, consumata qui come `collect::<Result<Vec<_>>>()`. Una
+    // contabilita' corrotta non deve mai diventare un successo silenzioso su
+    // questo percorso.
+    //
+    // Corrompendo PRIMA di tirare batch l'errore arriva gia' dalla prima
+    // reservation dell'arco d'ingresso, incapsulato dal tag di fase: e' il
+    // comportamento giusto — piu' presto si ferma, meglio e'. Il caso in cui
+    // a intercettare e' il controllo TERMINALE e' coperto da
+    // `iterator_corrotto_a_meta_stream_emette_una_sola_volta`.
+    let output = m2d_output_semplice();
+    let governor = output.state.governor.clone();
+    governor.corrompi_per_test("corruzione simulata");
+
+    let esito: Result<Vec<RecordBatch>> = output.collect();
+    let errore = esito.expect_err("l'iteratore deve consegnare l'errore");
+    let testo = errore.to_string();
+    assert!(
+        testo.contains("contabilita'"),
+        "l'errore deve dire che e' un'invariante interna rotta: {testo}"
+    );
+}
+
+#[test]
+fn iterator_consegna_l_errore_una_volta_sola_poi_termina() {
+    // Ripeterlo a ogni chiamata trasformerebbe un `for` in un ciclo che non
+    // finisce: lo stato terminale esiste per questo.
+    let mut output = m2d_output_semplice();
+    let governor = output.state.governor.clone();
+    // Si drena tutto lo stream prima di corrompere: cosi' l'errore puo'
+    // arrivare solo dal controllo terminale.
+    let mut consegnati = 0_usize;
+    for item in output.by_ref() {
+        item.expect("nessun errore prima della corruzione");
+        consegnati += 1;
+    }
+    assert_eq!(consegnati, m2d_batches().len(), "tutti i batch consegnati");
+
+    // A stream gia' esaurito, una corruzione successiva non puo' piu' essere
+    // segnalata: il cancello e' passato. E' il limite dichiarato del
+    // controllo terminale, e va fissato invece che scoperto.
+    governor.corrompi_per_test("corruzione tardiva");
+    assert!(
+        output.next().is_none(),
+        "dopo il cancello l'iteratore resta terminato"
+    );
+}
+
+#[test]
+fn iterator_corrotto_a_meta_stream_emette_una_sola_volta() {
+    let mut output = m2d_output_semplice();
+    let governor = output.state.governor.clone();
+    // Un batch consegnato, poi la corruzione: l'errore arriva alla fine
+    // dello stream, una volta.
+    let primo = output.next().expect("primo batch");
+    primo.expect("batch valido");
+    governor.corrompi_per_test("corruzione a meta' stream");
+
+    let mut quanti_errori = 0_usize;
+    let mut batch = 0_usize;
+    for _ in 0..64 {
+        match output.next() {
+            Some(Ok(_)) => batch += 1,
+            Some(Err(motivo)) => {
+                assert!(matches!(motivo, PlenoraError::Internal(_)), "{motivo:?}");
+                quanti_errori += 1;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        quanti_errori, 1,
+        "l'errore terminale e' emesso una volta sola"
+    );
+    assert_eq!(
+        batch,
+        m2d_batches().len() - 1,
+        "i batch rimanenti sono consegnati prima dell'errore"
+    );
+    assert!(output.next().is_none(), "poi l'iteratore termina");
+}
+
+#[test]
+fn metriche_parziali_dichiarano_la_contabilita_corrotta() {
+    // `Output::metrics()` e' pubblica e leggibile a meta' stream, quando
+    // l'errore non e' ancora stato consegnato. Senza il flag mostrerebbe
+    // contatori apparentemente sani.
+    let mut output = m2d_output_semplice();
+    let governor = output.state.governor.clone();
+    assert!(
+        !output.metrics().memory.accounting_corrupted,
+        "contabilita' sana all'inizio"
+    );
+    let primo = output.next().expect("primo batch");
+    primo.expect("batch valido");
+    governor.corrompi_per_test("corruzione simulata");
+    assert!(
+        output.metrics().memory.accounting_corrupted,
+        "le metriche parziali devono dichiarare la corruzione"
+    );
+}
+
+#[test]
+fn collect_batches_e_publish_restano_protetti() {
+    // I due cancelli gia' esistenti, verificati sulla stessa causa.
+    let output = m2d_output_semplice();
+    output
+        .state
+        .governor
+        .corrompi_per_test("corruzione simulata");
+    assert!(
+        output.collect_batches().is_err(),
+        "collect_batches deve rifiutare"
+    );
+
+    let output = m2d_output_semplice();
+    output
+        .state
+        .governor
+        .corrompi_per_test("corruzione simulata");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destinazione = directory.path().join("uscita.arrow");
+    assert!(
+        output.write_ipc_file(&destinazione).is_err(),
+        "il publish atomico deve rifiutare"
+    );
+    assert!(
+        !destinazione.exists(),
+        "nulla deve essere pubblicato: il publish e' irreversibile"
+    );
+}

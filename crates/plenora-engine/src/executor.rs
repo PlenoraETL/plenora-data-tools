@@ -188,7 +188,7 @@ use crate::geo_transport::unary::{
     one_to_one_batch_fused, FusedStepError, FusedTerminal, FusedTerminalMeasure,
 };
 use crate::governor::{
-    GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult,
+    GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, MemoryPermit, ReservationResult,
 };
 use crate::ipc_boundary::{self, IpcFormat, IpcLimits};
 use crate::planner::{
@@ -1340,6 +1340,12 @@ pub struct Output {
     schema: SchemaRef,
     stream: BatchStream,
     state: Rc<ExecState>,
+    /// Stato terminale del consumo per iteratore: dopo che lo stream si e'
+    /// esaurito, il controllo di salute finale corre **una sola volta** e il
+    /// suo esito non si ripete. Senza, un iteratore riavviato produrrebbe lo
+    /// stesso errore all'infinito, e chi lo consuma in un `for` lo vedrebbe
+    /// come un ciclo che non finisce.
+    esaurito: bool,
 }
 
 impl Output {
@@ -1390,6 +1396,11 @@ impl Output {
             .stream
             .map(|item| item.map(GovernedBatch::into_batch))
             .collect::<Result<Vec<_>>>()?;
+        // Controllo di salute PRIMA di dichiarare conclusa l'esecuzione: una
+        // corruzione della contabilita' rilevata dentro un `Drop` non puo'
+        // propagare un errore da li', e senza questo l'ultimo output verrebbe
+        // consegnato da un governor che ha gia' perso il conto.
+        self.state.governor.verifica_salute("output")?;
         Ok((batches, self.state.metrics()))
     }
 
@@ -1441,6 +1452,7 @@ impl Output {
         profile: PublishProfile,
     ) -> Result<(ExecutionMetrics, PublishOutcome)> {
         let schema = self.schema.clone();
+        let governor = self.state.governor.clone();
         let mut stream = self.stream;
         let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
@@ -1480,6 +1492,12 @@ impl Output {
                 ipc.write(&batch)?;
             }
             ipc.finish()?;
+            // Controllo di salute PRIMA del publish atomico: una corruzione
+            // della contabilita' rilevata dentro un `Drop` non puo' propagare
+            // un errore da li', e il publish e' irreversibile. Qui il file
+            // temporaneo non e' ancora stato reso visibile (ADR 7), quindi
+            // fallire ora significa non pubblicare nulla.
+            governor.verifica_salute("output")?;
             Ok(())
         })?;
         Ok((self.state.metrics(), outcome))
@@ -1489,10 +1507,30 @@ impl Output {
 impl Iterator for Output {
     type Item = Result<RecordBatch>;
 
+    /// Consumo batch per batch dell'output.
+    ///
+    /// A stream esaurito corre il **controllo di salute terminale**: se la
+    /// contabilita' del governor e' stata marcata incoerente — cosa che puo'
+    /// accadere dentro il `Drop` dell'ultimo lease, dove un errore non puo'
+    /// essere propagato — l'iteratore produce **una volta** `Some(Err(...))` e
+    /// poi `None`.
+    ///
+    /// Senza questo controllo chi consuma con `for batch in output` non
+    /// passerebbe ne' da [`Output::collect_batches`] ne' dal publish atomico,
+    /// e una corruzione rilevata all'ultimo rilascio diventerebbe un successo
+    /// silenzioso: lo stream finirebbe e basta.
+    ///
+    /// L'errore e' emesso una sola volta (`esaurito`): ripeterlo a ogni
+    /// chiamata trasformerebbe un `for` in un ciclo che non termina.
     fn next(&mut self) -> Option<Self::Item> {
-        self.stream
-            .next()
-            .map(|item| item.map(GovernedBatch::into_batch))
+        if self.esaurito {
+            return None;
+        }
+        if let Some(item) = self.stream.next() {
+            return Some(item.map(GovernedBatch::into_batch));
+        }
+        self.esaurito = true;
+        self.state.governor.verifica_salute("output").err().map(Err)
     }
 }
 
@@ -1708,6 +1746,7 @@ fn execute_physical(
         schema,
         stream,
         state,
+        esaurito: false,
     })
 }
 
@@ -1928,7 +1967,7 @@ impl Network {
                     let plan = Rc::clone(&self.plan);
                     let state = Rc::clone(&self.state);
                     Ok(Box::new(input.map(move |item| {
-                        run_streaming_chain(&plan, index, &state, item?, None)
+                        run_streaming_chain(&plan, index, &state, item?, None, None)
                     })))
                 }
             }
@@ -2947,94 +2986,56 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
         .any(|kernel| kernel.emits_row_diagnostics)
 }
 
-/// Si puo' eseguire la prossima passata **trattenendo** cio' che c'e' gia'?
+/// Permesso a eseguire la prossima passata **trattenendo** cio' che c'e' gia'.
 ///
-/// Condizione, sulle prenotazioni **globali** del piano e sui limiti:
+/// Non e' una verifica seguita da una prenotazione: e' **una sola
+/// operazione**. Si chiede al governor un permesso per `max_batch_bytes` —
+/// il tetto duro per batch (V7), che il wrapper d'uscita applica a ogni
+/// batch di output ed e' quindi un maggiorante valido dell'unica prenotazione
+/// che la passata aggiunge. Se il permesso e' concesso, quella quota e'
+/// **gia' nostra**: la passata puo' ritagliarne l'output senza che nessun
+/// altro possa infilarsi nel mezzo, oggi che l'esecuzione e' seriale come
+/// domani che non lo sara'.
 ///
-/// ```text
-/// governor.reserved_bytes() + max_batch_bytes <= max_memory_bytes
-/// ```
+/// `None` significa "non c'e' spazio per un'altra passata trattenendo": si
+/// passa al disco. Non e' un errore ed e' fail-closed — un permesso negato
+/// sceglie sempre la modalita' col picco piu' basso.
 ///
-/// # Perche' `reserved_bytes()` e non un contatore locale
+/// In modalita' disco non si chiede nulla: il passaggio e' definitivo.
 ///
-/// La prima versione sommava i soli accepted trattenuti piu' il batch
-/// d'ingresso corrente. Non e' tutto cio' che e' vivo: in un fan-out
-/// `EdgeShared` conserva i batch gia' prelevati per il consumatore piu' lento
-/// e ne trattiene i lease, che nessun contatore locale del ramo
-/// row-diagnostics puo' vedere.
+/// Un ingresso **senza lease** non e' contabilizzato dal governor: la
+/// decisione poggerebbe su un totale che non comprende i byte in arrivo, e si
+/// va su disco.
 ///
-/// **Sulla v1 quel buco non era raggiungibile**, ed e' stato verificato
-/// invece che supposto: in un fan-out i rami devono riconvergere, e qui
-/// sempre attraverso un nodo che materializza (`concat`/`join` binari,
-/// `BinaryBlocking`). Quel nodo drena e trattiene comunque tutti i batch del
-/// ramo, quindi il picco governato e' lo STESSO nelle due modalita' —
-/// misurato: 143 744 byte sia in memoria sia su disco. Dove il tee trattiene
-/// la memoria non aggiunge nulla al picco; dove la memoria alza il picco
-/// (uscita diretta al piano) non c'e' tee. Nessun input costruito ha prodotto
-/// un falso `ResourceLimit`.
+/// # Errors
 ///
-/// Il difetto era quindi nella PROVA, non nel comportamento: la sicurezza
-/// della soglia poggiava su un accoppiamento architetturale implicito —
-/// `max_batch_bytes` finiva per essere maggiore delle prenotazioni non
-/// contate — che nessun invariante garantisce. Un binario streaming, un nuovo
-/// punto di ritenzione o lo scheduler parallelo lo romperebbero **in
-/// silenzio**, e allora il falso `ResourceLimit` diventerebbe reale.
-///
-/// `reserved_bytes()` e' invece la fonte unica: include gli accepted
-/// trattenuti, il lease del batch d'ingresso corrente, i buffer del tee e
-/// qualunque altra prenotazione viva, presente o futura. Il contatore locale
-/// diventa duplicato — e duplicato PARZIALE — e sparisce. La garanzia smette
-/// di dipendere dalla topologia.
-///
-/// # L'headroom
-///
-/// `max_batch_bytes` (V7) e' il tetto duro per batch che il wrapper d'uscita
-/// applica a OGNI batch di output: un output che lo supera fa fallire il piano
-/// in entrambe le modalita', quindi per un piano che riesce e' un maggiorante
-/// valido della sola prenotazione nuova che la passata aggiunge. Non c'e'
-/// alcuna percentuale scelta a mano, e la condizione non dipende dal tempo ne'
-/// dall'ordine di arrivo.
-///
-/// # Atomicita'
-///
-/// Con l'executor seriale (`SerialFused`) fra questa lettura e la
-/// reservation della passata non puo' inserirsi nessun altro: lo snapshot e'
-/// stabile. Uno scheduler parallelo dovra' sostituire questo
-/// `check` + `reserve` con un permesso **atomico** del governor, altrimenti
-/// la finestra fra i due diventa un TOCTOU (ADR-0002 §M2d).
-fn accedibile_in_memoria(
+/// Propaga l'errore interno del governor se la sua contabilita' e'
+/// incoerente: un diniego di budget (`Ok(None)`) e una contabilita' rotta
+/// (`Err`) restano distinti fino in cima, perche' il primo si gestisce
+/// passando al disco e il secondo no.
+fn permesso_di_trattenere(
     state: &ExecState,
     accepted: &StagingAccepted,
     ingresso: &GovernedBatch,
-) -> bool {
+    edge: &str,
+) -> Result<Option<MemoryPermit>> {
     if matches!(accepted, StagingAccepted::Disco { .. }) {
-        return false;
+        return Ok(None);
     }
-    // Un ingresso senza lease non e' contabilizzato dal governor: la soglia
-    // non potrebbe vederne i byte e sottostimerebbe il picco. Fail-closed
-    // verso il disco, che e' la modalita' col picco piu' basso.
+    // Un ingresso senza lease non e' contabilizzato dal governor.
     if ingresso.lease.is_none() {
-        return false;
+        return Ok(None);
     }
-    let budget = state.governor.budget_bytes();
-    let tetto_batch = state.plan.batch_target().max_batch_bytes as u64;
-    let Some(necessario) = state.governor.reserved_bytes().checked_add(tetto_batch) else {
-        // Somma non rappresentabile: fail-closed, come sopra.
-        return false;
+    let Ok(tetto_batch) = u64::try_from(state.plan.batch_target().max_batch_bytes) else {
+        return Ok(None);
     };
-    necessario <= budget
+    // L'owner e' l'arco, non una costante: ADR-0002 vuole che un lease vivo
+    // sia attribuibile, e `oldest_lease_age` con `owner` e' l'unico modo di
+    // sapere CHI sta trattenendo quota. Un nome generico renderebbe la
+    // diagnosi impossibile proprio sul lease piu' grande del piano.
+    state.governor.permesso(tetto_batch, edge)
 }
 
-/// Scansione completa di un segmento row-diagnostics (R9.9): esegue i
-/// kernel batch per batch, fa merge delle rejection row-scoped con offset
-/// assoluti e trattiene gli accepted fino a fine scansione — **in memoria**
-/// finche' il budget lo consente, poi nello staging IPC bounded su
-/// `max_temp_bytes` (ADR-0002 M2d; [`accedibile_in_memoria`] per la soglia).
-/// A scan completata: report completo (rejection anche tardiva -> zero
-/// accepted; in memoria i lease muoiono con la coda, su disco lo staged e'
-/// scartato dal `Drop` del `TempDir`), consegna diretta della coda oppure
-/// replay degli staged con ri-riserva per batch. Sequenza logica e ordine di
-/// pubblicazione invariati (ADR-0001).
 // Macchina a stati lineare: scansione, decisione memoria/disco, diagnostica e
 // chiusura restano nello stesso scope per rendere evidente il cleanup
 // fail-closed.
@@ -3131,7 +3132,21 @@ fn scan_row_diagnostic_segment(
         // PRIMA di eseguire la catena su di esso. Cosi' la passata successiva
         // non puo' superare il budget: se non ci sta, i trattenuti vanno su
         // disco adesso, non dopo il fallimento.
-        if !accedibile_in_memoria(state, &accepted, &governed) {
+        let permesso = match permesso_di_trattenere(state, &accepted, &governed, output_edge) {
+            Ok(permesso) => permesso,
+            Err(error) => {
+                // Contabilita' del governor incoerente: e' un'invariante
+                // nostra rotta, non un budget esaurito. Termina la scansione
+                // senza pubblicare accepted, come ogni altro errore.
+                terminal_error = Some(attach_partial_row_diagnostics(
+                    error,
+                    &mut diagnostics,
+                    "data_tools.governor_accounting_broken",
+                ));
+                break;
+            }
+        };
+        if permesso.is_none() {
             if let Err(error) = accepted.passa_a_disco(state, output_edge) {
                 terminal_error = Some(attach_partial_row_diagnostics(
                     error,
@@ -3144,7 +3159,14 @@ fn scan_row_diagnostic_segment(
         let diagnostic_node = diagnostic_context
             .as_ref()
             .map(|(node, _, _): &(String, String, String)| node.as_str());
-        match run_streaming_chain(plan, segment_index, state, governed, diagnostic_node) {
+        match run_streaming_chain(
+            plan,
+            segment_index,
+            state,
+            governed,
+            diagnostic_node,
+            permesso,
+        ) {
             Ok(output) => {
                 if diagnostics.is_none() {
                     // La barriera R9.9 non richiede il disco: richiede che
@@ -3480,6 +3502,7 @@ fn run_streaming_chain(
     state: &ExecState,
     governed: GovernedBatch,
     stop_after_node: Option<&str>,
+    permesso: Option<MemoryPermit>,
 ) -> Result<GovernedBatch> {
     let segment = &plan.segments()[segment_index];
     let output_is_plan_output = segment.output_edge == plan.output_edge();
@@ -3584,9 +3607,25 @@ fn run_streaming_chain(
     }
     // Ricomposizione: quota dell'output acquisita prima di rilasciare
     // l'input (mai sotto-conteggio al confine, ADR-0002).
-    let output_lease = state
-        .governor
-        .reserve(bytes_at_boundary, &segment.output_edge)?;
+    //
+    // Se il chiamante ha gia' un permesso, l'output si RITAGLIA da quello:
+    // la quota e' gia' sua, e riprenotarla aprirebbe la finestra che il
+    // permesso esiste per chiudere. Il permesso e' un maggiorante
+    // (`max_batch_bytes`, che il wrapper d'uscita applica a ogni batch di
+    // output), quindi il ritaglio riesce per ogni output che il piano
+    // potrebbe pubblicare.
+    //
+    // **Nessun ripiego su una nuova prenotazione.** Un ritaglio fallito
+    // significa che il maggiorante era sbagliato, cioe' un'invariante nostra
+    // rotta: rilasciare e riprenotare la nasconderebbe e reintrodurrebbe
+    // proprio la finestra che il permesso esiste per chiudere. Si propaga
+    // l'errore.
+    let output_lease = match permesso {
+        Some(permesso) => permesso.ritaglia(bytes_at_boundary)?,
+        None => state
+            .governor
+            .reserve(bytes_at_boundary, &segment.output_edge)?,
+    };
     drop(input_lease);
     Ok(GovernedBatch::new(batch, Some(output_lease), seq))
 }
