@@ -1,7 +1,8 @@
 # ADR 15 — Che cosa promette `max_memory_bytes`: contratto della memoria
 
-- **Stato**: PROPOSTA, in attesa di decisione del maintainer. Nessuna
-  strategia è stata implementata e nessuna API è stata rinominata.
+- **Stato**: **ACCETTATA** dal maintainer il 2026-08-21. Nessuna strategia è
+  ancora implementata e nessuna API è ancora rinominata: questo ADR fissa il
+  contratto, l'attuazione è un blocco separato.
 - **Decisioni collegate**: ADR 2 (resource accounting, §M2d permesso
   atomico), ADR 6 (semantica limiti), ADR 7 (publish atomico), ADR-0012
   (fusione geo, reservation preventiva del gruppo fuso)
@@ -14,6 +15,26 @@ Questa decisione precede il freeze dell'API Rust perché determina il
 significato pubblico di `Limits.max_memory_bytes`. Oggi quel nome promette un
 tetto e DER-011 dichiara che il tetto non c'è: il divario va chiuso scegliendo
 **che cosa vogliamo promettere**, non solo quanto codice convertire.
+
+## 0. La decisione
+
+Il maintainer ha deciso, il 2026-08-21:
+
+- **contratto a due livelli: accettato**;
+- **accounting nell'allocatore: scartato**;
+- **`max_memory_bytes` sarà rinominato `max_governed_memory_bytes`** prima del
+  freeze. Il nome attuale promette un tetto sull'intero processo che
+  in-process non possiamo mantenere; si è già dentro un major bump, e
+  conservare un nome ambiguo per compatibilità sarebbe un errore;
+- **il profilo isolato avrà un limite distinto**, provvisoriamente
+  `hard_process_memory_bytes`, valido **esclusivamente** quando l'esecuzione è
+  isolata;
+- **nessun alias ambiguo** nella nuova versione del piano e dell'API. La
+  compatibilità con i piani storici sarà gestita esplicitamente dalla
+  migrazione di versione, non da un nome che accetta entrambe le letture.
+
+Il resto di questo documento è l'analisi che ha portato alla decisione; la
+§6 fissa le precisazioni che ne fanno parte.
 
 ---
 
@@ -221,14 +242,16 @@ ancora falso — con l'aggravante di essere falso *dopo* averlo promesso.
 
 ---
 
-## 4. Raccomandazione: contratto a due livelli
+## 4. Il contratto a due livelli
 
 Nessuna delle quattro strategie basta da sola, e la scelta non è fra loro ma
 fra **promettere meno e mantenerlo** oppure promettere un tetto e non averlo.
+Il maintainer ha scelto il primo (§0); i confini di ciascun livello sono
+fissati in §5.
 
 ### Livello 1 — Budget di ammissione governato (nella libreria)
 
-`max_memory_bytes` governa la **memoria che la libreria controlla**: i batch
+`max_governed_memory_bytes` governa la **memoria che la libreria controlla**: i batch
 che attraversano gli archi del DAG e le materializzazioni intermedie. È un
 budget di **ammissione**, non un tetto sul processo: rifiuta il lavoro che *sa*
 non starci, e non promette nulla su ciò che non vede.
@@ -250,39 +273,157 @@ scelta globale ai consumatori della libreria.
 ### Livello 2 — Tetto duro solo nel profilo isolato
 
 Il tetto duro esiste **solo** eseguendo il piano in un processo con un limite
-del sistema operativo (strategia 2.4). È l'unica configurazione in cui «questa
-esecuzione non supera N byte» è vero per Arrow, per GEOS, per PROJ e per
-qualunque host futuro, e in cui il fallimento è osservabile invece che
-catastrofico.
+del sistema operativo (strategia 2.4), dichiarato come
+`hard_process_memory_bytes`. È l'unica configurazione in cui il contenimento
+vale anche per Arrow, GEOS, PROJ e per qualunque host futuro, e in cui il
+fallimento è osservabile invece che catastrofico.
 
-### Che cosa comporta per il nome
+«Tetto duro» va però letto con §5.4 accanto: su Linux il kernel ammette
+superamenti temporanei, quindi la promessa è **contenimento e attribuzione**,
+non «mai un byte oltre N». E vale su Linux e Windows, non su macOS (§5.6).
 
-`max_memory_bytes` oggi promette il livello 2 e realizza il livello 1. Le
-opzioni sono due, ed è la decisione da prendere:
+### I nomi
 
-- **mantenere il nome** e cambiare il contratto documentato, dichiarando che è
-  un budget di ammissione della memoria governata e che il tetto duro è del
-  profilo isolato;
-- **rinominare** il campo perché il nome dica ciò che fa, accettando una
-  rottura di API prima del freeze.
+`max_memory_bytes` promette il livello 2 e realizza il livello 1. Il maintainer
+ha scelto di **rinominare** invece di ridefinire il contratto sotto lo stesso
+nome (§0):
 
-Questo ADR **non sceglie** e **non rinomina nulla**: la decisione è del
-maintainer. Segnala però che è il momento giusto per prenderla, perché dopo il
-freeze il nome sarà un impegno pubblico.
+| livello | nome | dove vale |
+|---|---|---|
+| 1 | `max_governed_memory_bytes` | sempre: è il budget di ammissione della memoria che la libreria controlla |
+| 2 | `hard_process_memory_bytes` | **solo** nel profilo isolato; altrove non è applicabile e non va accettato in silenzio |
+
+I due limiti non sono lo stesso numero espresso in modi diversi e non devono
+poter essere confusi: il primo governa ciò che la libreria decide di
+ammettere, il secondo è ciò che il sistema operativo impone al processo
+worker. Un piano che li dichiara entrambi ne usa uno per profilo.
+
+**Nessun alias.** La nuova versione del piano e dell'API non accetta
+`max_memory_bytes`: un nome che continua a funzionare è un nome che continua a
+promettere. I piani storici sono affare della migrazione di versione, che è
+esplicita e può dire che cosa sta traducendo e in che cosa.
 
 ---
 
-## 5. Che cosa questa analisi NON dice
+## 5. Precisazioni che fanno parte della decisione
+
+Sei punti, posti dal maintainer all'accettazione. Non sono chiose: delimitano
+ciò che i due limiti promettono, e senza di essi il contratto tornerebbe a
+promettere piu' di quanto mantiene.
+
+### 5.1 Il limite governato è un budget di ammissione
+
+`max_governed_memory_bytes` **non è** l'RSS del processo e **non è** la
+memoria totale usata dall'esecuzione. È la quota che la libreria decide di
+ammettere per i batch che attraversano gli archi del DAG e per le
+materializzazioni intermedie. Non comprende i temporanei interni dei kernel,
+le allocazioni di Arrow che nessun lease copre, né un solo byte di GEOS o
+PROJ.
+
+Chi confronta questo numero con quello che vede in `top` troverà una
+differenza, e la differenza non è un difetto: è la parte non governata, che
+DER-011 dichiara.
+
+### 5.2 Il limite isolato copre il worker, non il resto
+
+`hard_process_memory_bytes` vale per il **processo worker** che esegue il
+piano. Non copre:
+
+- la memoria del **processo padre**, che resta soggetta al solo livello 1;
+- i **buffer IPC** del trasporto fra i due, che vivono da entrambi i lati del
+  confine e non sono attribuibili al solo worker.
+
+Un piano che usa il livello 2 ha quindi due contabilità distinte, e il tetto
+duro riguarda la prima.
+
+### 5.3 `ResourceLimit` solo con evidenza attribuibile
+
+Un processo che muore non dice **perché**. Un segnale o un codice di uscita
+anomalo, da soli, sono compatibili con un superamento di memoria **e** con un
+crash: dedurne un `ResourceLimit` significherebbe attribuire al budget un
+difetto che potrebbe essere nostro.
+
+La regola è quindi:
+
+- **Linux**: `ResourceLimit` solo con l'evidenza del cgroup —
+  `memory.events.local`, che attribuisce l'evento al cgroup dell'esecuzione e
+  non a un antenato;
+- **Windows**: `ResourceLimit` solo con la **notifica del Job Object**, non
+  dal codice di uscita;
+- **in assenza di evidenza specifica del sistema operativo**: `Internal`. Dire
+  «non so perché il worker è morto» è corretto; dire «ha superato il budget»
+  senza saperlo non lo è.
+
+Riferimenti: [cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html),
+[Job Objects](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information).
+
+### 5.4 Su Linux niente promessa byte-esatta
+
+`memory.max` è un limite del kernel, ma la documentazione cgroup v2 ammette
+**superamenti temporanei**: il kernel reagisce recuperando memoria e, se non
+riesce, invocando l'OOM killer sul cgroup. Non si può quindi promettere
+letteralmente «mai un byte oltre N».
+
+Ciò che si può promettere è **contenimento** — l'esecuzione non può crescere
+indefinitamente e non travolge il resto della macchina — e **attribuzione**,
+tramite `memory.events.local`. È una promessa più debole di quella che il nome
+`hard` suggerisce, e va scritta accanto al nome.
+
+### 5.5 Su Windows conta la memoria *committed*
+
+Il limite del Job Object riguarda la memoria **committed**, che non coincide
+con l'RSS né con la memoria virtuale riservata. Un budget espresso pensando
+all'RSS si comporterà diversamente su Windows, e la differenza va documentata
+invece che scoperta da chi imposta il numero.
+
+### 5.6 macOS: profilo hard non supportato
+
+Non esiste, allo stato, un meccanismo dimostrato equivalente a cgroup o Job
+Object. `setrlimit` da solo **non prova** né copertura completa — non è chiaro
+che cosa contenga rispetto alle allocazioni native — né attribuzione del
+fallimento, che è il requisito di §5.3.
+
+Il profilo isolato è quindi **non supportato su macOS** finché un prototipo
+non dimostri entrambe le cose. Non «supportato con riserva»: non supportato,
+e `hard_process_memory_bytes` va rifiutato lì invece di essere accettato e
+ignorato.
+
+Riferimento: [setrlimit(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/setrlimit.2.html).
+
+### 5.7 PyO3: nessun tetto duro in-process, e il profilo isolato costa lo zero-copy
+
+Quando esisterà un binding Python, in-process **non avrà un tetto duro**:
+l'interprete e le sue estensioni allocano per conto proprio, fuori da
+qualunque contabilità della libreria, e il livello 1 continuerà a governare
+solo ciò che governa oggi.
+
+Il profilo isolato è disponibile anche da Python, ma con un prezzo esplicito:
+i dati attraversano un confine di processo, quindi **si rinuncia allo
+zero-copy** e si paga la serializzazione IPC. È un compromesso, non un
+dettaglio implementativo, e chi sceglie il tetto duro lo sceglie sapendolo.
+
+---
+
+## 6. Che cosa questa analisi NON dice
 
 - **non stima il costo della conversione** dei nove siti: dipende da quanto
   stretto sia il maggiorante di ciascuno, e nessuno è stato analizzato
   singolarmente;
 - **non ha misurato** l'overhead di avvio del processo isolato né il costo del
   trasporto IPC su piani reali: sono affermazioni di struttura, non misure;
+- **non ha prototipato nessun meccanismo del sistema operativo.** Quanto detto
+  in §5.3–§5.6 su cgroup v2, Job Object e `setrlimit` viene dalla
+  documentazione citata, non da un esperimento condotto qui. È esattamente per
+  questo che macOS resta non supportato: la differenza fra «documentato» e
+  «dimostrato» è la ragione della clausola, e vale anche per gli altri due —
+  il primo blocco di attuazione dovrà dimostrarli, non fidarsi di questo
+  documento;
 - **non ha verificato PyO3**, che non esiste nel workspace. Quanto detto è ciò
   che vale per qualunque host che allochi per conto proprio, e andrà
   riverificato quando quel confine esisterà davvero;
 - **non copre il percorso legacy della CLI** oltre a osservare che
   `ammissione_output` rifiuta la pubblicazione *dopo* la costruzione;
-- **non propone un piano di implementazione**: serve prima la decisione sul
-  contratto.
+- **non propone un piano di implementazione**. La decisione sul contratto è
+  presa (§0); l'attuazione — rinominazione, migrazione di versione dei piani
+  storici, profilo isolato — è un blocco separato, e questo ADR non ne stima
+  il costo né ne fissa l'ordine.

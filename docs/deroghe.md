@@ -168,9 +168,16 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   in-process** — Arrow aborta su fallimento di allocazione, GEOS e PROJ
   allocano fuori dall'allocatore Rust, e «per processo» non e' «per
   esecuzione». La raccomandazione e' un contratto a due livelli: budget di
-  ammissione governato nella libreria, tetto duro solo nel profilo isolato. La
-  scelta fra mantenere il nome cambiando il contratto documentato e rinominare
-  il campo prima del freeze e' **del maintainer** e non e' stata presa.
+  ammissione governato nella libreria, tetto duro solo nel profilo isolato.
+
+  **Decisione presa il 2026-08-21** (ADR 15 §0): contratto a due livelli
+  accettato, accounting nell'allocatore scartato, `max_memory_bytes`
+  rinominato **`max_governed_memory_bytes`** prima del freeze, e limite
+  distinto **`hard_process_memory_bytes`** valido solo nel profilo isolato.
+  Nessun alias: la compatibilita' coi piani storici passa dalla migrazione di
+  versione. Il tetto duro promette **contenimento e attribuzione**, non «mai
+  un byte oltre N» (ADR 15 §5.4), e non e' supportato su macOS finche' un
+  prototipo non lo dimostra (§5.6).
 
   **La deroga resta aperta.** Il censimento completo dei siti e' in
   `docs/der011-censimento-2026-08-21.md`, con verificatore ad ancore
