@@ -161,6 +161,17 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   dell'engine — dopo il gruppo geo fuso (ADR-0012 D12.7) — in cui la
   reservation precede l'allocazione che deve coprire.
 
+  **Decisione sul contratto: ADR 15 (proposta).** Il divario fra il nome
+  `max_memory_bytes` e cio' che realizza non si chiude convertendo altri siti:
+  `docs/adr/ADR-0015-contratto-della-memoria.md` confronta quattro strategie e
+  conclude che **un tetto duro per singola esecuzione non e' realizzabile
+  in-process** — Arrow aborta su fallimento di allocazione, GEOS e PROJ
+  allocano fuori dall'allocatore Rust, e «per processo» non e' «per
+  esecuzione». La raccomandazione e' un contratto a due livelli: budget di
+  ammissione governato nella libreria, tetto duro solo nel profilo isolato. La
+  scelta fra mantenere il nome cambiando il contratto documentato e rinominare
+  il campo prima del freeze e' **del maintainer** e non e' stata presa.
+
   **La deroga resta aperta.** Il censimento completo dei siti e' in
   `docs/der011-censimento-2026-08-21.md`, con verificatore ad ancore
   (`scripts/verifica_censimento_der011.py`): su undici siti del solo percorso
