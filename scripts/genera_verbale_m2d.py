@@ -295,8 +295,16 @@ La prima stesura della soglia sommava i soli accepted trattenuti piu' il
 batch d'ingresso corrente. Non e' tutto cio' che e' vivo nel governor: in un
 fan-out `EdgeShared` conserva i batch gia' prelevati per il consumatore piu'
 lento e ne trattiene i lease, che nessun contatore locale del ramo
-row-diagnostics puo' vedere. La prova di sicurezza aveva quindi un buco: si
-appoggiava a una somma parziale.
+row-diagnostics puo' vedere.
+
+**Il difetto era nella prova, non nel comportamento della v1.** Su questo
+motore quel buco non e' raggiungibile, e la verifica sta nella sezione
+seguente: nessun input costruito produce un falso `ResourceLimit`. Cio' che
+mancava era la *garanzia*: la sicurezza della soglia poggiava su un
+accoppiamento architetturale implicito — `max_batch_bytes` finiva per essere
+maggiore delle prenotazioni non contate — che nessun invariante sostiene. E'
+un rischio per le topologie e la concorrenza future, non un comportamento
+attuale.
 
 La soglia usa ora `governor.reserved_bytes()`, che e' la fonte unica —
 accepted trattenuti, lease del batch corrente, buffer del tee e qualunque
@@ -324,12 +332,13 @@ tee trattiene, la memoria non aggiunge nulla al picco; dove la memoria alza il
 picco (uscita diretta al piano, come `streaming_lineare`) non c'e' tee. Sul
 motore attuale le due condizioni sembrano escludersi.
 
-Questo **non rende la correzione superflua**: la sicurezza della soglia
-precedente dipendeva da un accoppiamento accidentale — `max_batch_bytes`
-finiva per essere maggiore delle prenotazioni non contate — che nessun
-invariante garantisce e che un binario streaming, un nuovo punto di ritenzione
-o lo scheduler parallelo romperebbero in silenzio. Il test resta come guardia:
-e' la prima topologia in cui la differenza si vedrebbe.
+La classificazione corretta e' quindi: **non un difetto riproducibile sulla
+v1, ma un accoppiamento implicito e fragile**. La correzione resta necessaria
+— e necessaria *prima* di M3 — perche' un binario streaming, un nuovo punto di
+ritenzione o lo scheduler parallelo romperebbero quell'accoppiamento **in
+silenzio**, e da quel momento il falso `ResourceLimit` sarebbe reale. Con
+`reserved_bytes()` la garanzia smette di dipendere dalla topologia. Il test
+resta come guardia: e' la prima topologia in cui la differenza si vedrebbe.
 
 ### Vincolo per lo scheduler parallelo
 

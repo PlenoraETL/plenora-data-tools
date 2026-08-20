@@ -157,10 +157,27 @@ dipendenza dall'ordine di arrivo: solo lease vivi e limiti del piano.
 trattenuti più il batch d'ingresso corrente. Non è tutto ciò che è vivo: in un
 fan-out `EdgeShared` conserva i batch già prelevati per il consumatore più
 lento e ne trattiene i lease, che nessun contatore locale del ramo
-row-diagnostics può vedere. `reserved_bytes()` è la fonte unica — accepted
-trattenuti, lease del batch corrente, buffer del tee e qualunque altra
-prenotazione viva, presente o futura. Un ingresso **senza** lease non è
-contabilizzato dal governor: in quel caso si va su disco, fail-closed.
+row-diagnostics può vedere.
+
+**Sulla v1 quel buco non era raggiungibile**, verificato invece che supposto:
+in un fan-out i rami devono riconvergere, e qui sempre attraverso un nodo che
+materializza (`concat`/`join` binari, `BinaryBlocking`), il quale drena e
+trattiene comunque tutti i batch del ramo. Il picco governato risulta perciò
+identico nelle due modalità — misurato: 143 744 byte sia in memoria sia su
+disco. Dove il tee trattiene la memoria non aggiunge nulla al picco; dove la
+memoria alza il picco (uscita diretta al piano) non c'è tee. Nessun input
+costruito ha prodotto un falso `ResourceLimit`.
+
+Il difetto era quindi **nella prova, non nel comportamento**: la sicurezza
+della soglia poggiava su un accoppiamento architetturale implicito —
+`max_batch_bytes` finiva per essere maggiore delle prenotazioni non contate —
+che nessun invariante garantisce. Un binario streaming, un nuovo punto di
+ritenzione o lo scheduler parallelo lo romperebbero **in silenzio**, e allora
+il falso `ResourceLimit` diventerebbe reale. `reserved_bytes()` è la fonte
+unica — accepted trattenuti, lease del batch corrente, buffer del tee e
+qualunque altra prenotazione viva, presente o futura — e la garanzia smette di
+dipendere dalla topologia. Un ingresso **senza** lease non è contabilizzato dal
+governor: in quel caso si va su disco, fail-closed.
 
 **Perché non può produrre un falso `ResourceLimit`.** Durante una passata le
 prenotazioni *nuove* sono al più due — input e output, perché

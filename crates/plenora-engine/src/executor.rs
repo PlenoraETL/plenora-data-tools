@@ -2961,16 +2961,30 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
 /// d'ingresso corrente. Non e' tutto cio' che e' vivo: in un fan-out
 /// `EdgeShared` conserva i batch gia' prelevati per il consumatore piu' lento
 /// e ne trattiene i lease, che nessun contatore locale del ramo
-/// row-diagnostics puo' vedere. Con quella soglia un ramo poteva scegliere la
-/// memoria mentre il tee accumulava per il fratello, e la reservation
-/// dell'output falliva — dove il percorso disco, che rilascia gli accepted,
-/// sarebbe riuscito. Esattamente il falso `ResourceLimit` che M2d promette di
-/// non introdurre.
+/// row-diagnostics puo' vedere.
+///
+/// **Sulla v1 quel buco non era raggiungibile**, ed e' stato verificato
+/// invece che supposto: in un fan-out i rami devono riconvergere, e qui
+/// sempre attraverso un nodo che materializza (`concat`/`join` binari,
+/// `BinaryBlocking`). Quel nodo drena e trattiene comunque tutti i batch del
+/// ramo, quindi il picco governato e' lo STESSO nelle due modalita' —
+/// misurato: 143 744 byte sia in memoria sia su disco. Dove il tee trattiene
+/// la memoria non aggiunge nulla al picco; dove la memoria alza il picco
+/// (uscita diretta al piano) non c'e' tee. Nessun input costruito ha prodotto
+/// un falso `ResourceLimit`.
+///
+/// Il difetto era quindi nella PROVA, non nel comportamento: la sicurezza
+/// della soglia poggiava su un accoppiamento architetturale implicito —
+/// `max_batch_bytes` finiva per essere maggiore delle prenotazioni non
+/// contate — che nessun invariante garantisce. Un binario streaming, un nuovo
+/// punto di ritenzione o lo scheduler parallelo lo romperebbero **in
+/// silenzio**, e allora il falso `ResourceLimit` diventerebbe reale.
 ///
 /// `reserved_bytes()` e' invece la fonte unica: include gli accepted
 /// trattenuti, il lease del batch d'ingresso corrente, i buffer del tee e
 /// qualunque altra prenotazione viva, presente o futura. Il contatore locale
-/// diventa duplicato e sparisce.
+/// diventa duplicato — e duplicato PARZIALE — e sparisce. La garanzia smette
+/// di dipendere dalla topologia.
 ///
 /// # L'headroom
 ///
