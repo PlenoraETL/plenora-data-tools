@@ -900,7 +900,14 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     let plan = json!({
         "schema_version": 4,
         "inputs": ["main"],
-        "limits": {"max_temp_bytes": 1},
+        // `max_memory_bytes` basso forza la modalita' DISCO fin dal primo
+        // batch (ADR-0002 M2d: si resta in memoria solo finche'
+        // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
+        // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
+        // quota temporanea non verrebbe nemmeno interrogata. Il fatto che
+        // questo test **debba** ora dichiararlo e' la prova che la modalita'
+        // memoria e' quella predefinita.
+        "limits": {"max_temp_bytes": 1, "max_memory_bytes": 1_048_576},
         "nodes": [{
             "id": "cast",
             "op": "table.type_cast",
@@ -6193,4 +6200,617 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
         "il contratto e' stato sostituito da un errore"
     );
     assert_eq!(inputs.contracts.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0002 M2d: staging memory-first degli accepted row-diagnostics
+//
+// La barriera R9.9 resta invariata: nessun accepted esce prima che la
+// scansione sia completa. Cambia solo DOVE i batch attendono. I test che
+// seguono verificano che le due modalita' siano indistinguibili sul
+// risultato, e che il passaggio al disco sia deterministico e completo.
+// ---------------------------------------------------------------------------
+
+/// Schema e batch delle prove M2d: quattro batch da tre righe.
+fn m2d_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("etichetta", DataType::Utf8, true),
+    ]))
+}
+
+fn m2d_batch(base: i64) -> RecordBatch {
+    RecordBatch::try_new(
+        m2d_schema(),
+        vec![
+            Arc::new(Int64Array::from(vec![base, base + 1, base + 2])) as ArrayRef,
+            Arc::new(StringArray::from(vec![
+                Some(format!("r{base}")),
+                Some(format!("r{}", base + 1)),
+                None,
+            ])) as ArrayRef,
+        ],
+    )
+    .expect("batch M2d")
+}
+
+fn m2d_batches() -> Vec<RecordBatch> {
+    vec![m2d_batch(0), m2d_batch(10), m2d_batch(20), m2d_batch(30)]
+}
+
+/// Piano con un nodo row-diagnostics (`table.formula`), con o senza il
+/// budget di memoria che forza la modalita' disco.
+fn m2d_plan(forza_disco: bool) -> serde_json::Value {
+    // `trattenuti + input + max_batch_bytes (64 MiB) > 1 MiB` gia' al primo
+    // batch: modalita' disco dalla prima passata.
+    let limits = if forza_disco {
+        json!({"max_memory_bytes": 1_048_576})
+    } else {
+        json!({})
+    };
+    json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "limits": limits,
+        "nodes": [{
+            "id": "f",
+            "op": "table.formula",
+            "in": ["main"],
+            "config": {"new_column": "doppio", "formula": "id * 2"}
+        }],
+        "output": "f"
+    })
+}
+
+fn m2d_contratti() -> Vec<(String, DataContract)> {
+    vec![("main".to_owned(), DataContract::tabular(m2d_schema()))]
+}
+
+fn m2d_esegui(forza_disco: bool) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
+    output_rows(run(
+        &m2d_plan(forza_disco),
+        single_input("main", m2d_batches()),
+        &m2d_contratti(),
+    )?)
+}
+
+/// Serializza i batch in IPC: confronto byte a byte fra le due modalita'.
+fn m2d_ipc(batches: &[RecordBatch]) -> Vec<u8> {
+    let Some(primo) = batches.first() else {
+        return Vec::new();
+    };
+    let mut buffer = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, &primo.schema()).expect("writer IPC");
+        for batch in batches {
+            writer.write(batch).expect("scrittura IPC");
+        }
+        writer.finish().expect("chiusura IPC");
+    }
+    buffer
+}
+
+#[test]
+fn m2d_memoria_e_disco_producono_gli_stessi_byte() {
+    let (memoria, metriche_memoria) = m2d_esegui(false).expect("modalita' memoria");
+    let (disco, metriche_disco) = m2d_esegui(true).expect("modalita' disco");
+
+    assert_eq!(
+        m2d_ipc(&memoria),
+        m2d_ipc(&disco),
+        "memoria e disco devono produrre byte IPC identici"
+    );
+    assert_eq!(
+        metriche_memoria.output_rows, metriche_disco.output_rows,
+        "righe di output identiche"
+    );
+    assert_eq!(
+        metriche_memoria.output_batches, metriche_disco.output_batches,
+        "batch di output identici"
+    );
+    // Il numero di batch e' quello dell'input: nessuna ri-pacchettizzazione.
+    assert_eq!(memoria.len(), m2d_batches().len());
+}
+
+#[test]
+fn m2d_ordine_e_sequenza_logica_preservati() {
+    // La sequenza logica non e' esposta da `collect_batches`: si verifica
+    // l'ordine osservabile, che ne e' la proiezione (ADR-0001, propagazione
+    // 1:1 batch per batch).
+    for forza_disco in [false, true] {
+        let (batches, _) = m2d_esegui(forza_disco).expect("esecuzione");
+        let ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("colonna id")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![0, 1, 2, 10, 11, 12, 20, 21, 22, 30, 31, 32],
+            "ordine di produzione alterato (forza_disco={forza_disco})"
+        );
+    }
+}
+
+#[test]
+fn m2d_rejection_tardiva_non_pubblica_nulla_in_memoria() {
+    // Il terzo batch contiene un valore che la formula non sa valutare: la
+    // rejection arriva DOPO che due batch sono gia' stati accettati e
+    // trattenuti in memoria. Nessuno dei due deve uscire.
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, true)]));
+    let buono = |base: i64| {
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some(base.to_string()),
+                Some((base + 1).to_string()),
+            ])) as ArrayRef],
+        )
+        .expect("batch valido")
+    };
+    let cattivo = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec![Some("non-un-numero".to_owned())])) as ArrayRef],
+    )
+    .expect("batch con riga non valutabile");
+    let plan = json!({
+        "schema_version": 4,
+        "inputs": ["main"],
+        "nodes": [{
+            "id": "c",
+            "op": "table.type_cast",
+            "in": ["main"],
+            "config": {"column": "v", "target_type": "int"}
+        }],
+        "output": "c"
+    });
+    let contratti = [(
+        "main".to_owned(),
+        DataContract::tabular(Arc::clone(&schema)),
+    )];
+    let output = run(
+        &plan,
+        single_input("main", vec![buono(0), buono(10), cattivo]),
+        &contratti,
+    )
+    .expect("execute lazy");
+    let esito = output.collect_batches();
+    assert!(
+        esito.is_err(),
+        "una rejection tardiva non deve pubblicare accepted"
+    );
+}
+
+#[test]
+fn m2d_cancellazione_dopo_accepted_trattenuti_non_pubblica_nulla() {
+    let token = CancellationToken::new();
+    let runtime = RuntimeContext {
+        cancellation: token.clone(),
+        ..RuntimeContext::default()
+    };
+    let graph = validate(&m2d_plan(false).to_string(), &m2d_contratti()).expect("piano valido");
+    // Cancellato PRIMA di drenare: la scansione si ferma al confine
+    // cooperativo e i trattenuti muoiono con la coda.
+    token.cancel();
+    let output = execute(&graph, single_input("main", m2d_batches()), runtime);
+    let esito = output.and_then(Output::collect_batches);
+    assert!(
+        esito.is_err(),
+        "la cancellazione non deve pubblicare accepted"
+    );
+}
+
+#[test]
+fn m2d_soglia_esatta_e_attraversamento() {
+    // La soglia e' `trattenuti + input + max_batch_bytes <= budget`, tutta
+    // derivata dal piano. Qui si verifica il comportamento ai due lati:
+    // con budget ampio si resta in memoria (nessun file temporaneo puo'
+    // essere scritto, quindi `max_temp_bytes: 1` non disturba); con budget
+    // stretto si passa a disco e quella stessa quota fa fallire.
+    let piano = |memoria: u64| {
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": {"max_temp_bytes": 1, "max_memory_bytes": memoria},
+            "nodes": [{
+                "id": "f",
+                "op": "table.formula",
+                "in": ["main"],
+                "config": {"new_column": "doppio", "formula": "id * 2"}
+            }],
+            "output": "f"
+        })
+    };
+    // Sopra la soglia: memoria, quindi nessuna scrittura temporanea.
+    let ampio = output_rows(
+        run(
+            &piano(512 * 1024 * 1024),
+            single_input("main", m2d_batches()),
+            &m2d_contratti(),
+        )
+        .expect("execute"),
+    );
+    assert!(
+        ampio.is_ok(),
+        "con budget ampio non si deve toccare la quota temporanea: {:?}",
+        ampio.err()
+    );
+    // Sotto la soglia: disco, e la quota temporanea di 1 byte fa fallire.
+    let stretto = output_rows(
+        run(
+            &piano(1_048_576),
+            single_input("main", m2d_batches()),
+            &m2d_contratti(),
+        )
+        .expect("execute"),
+    );
+    let errore = stretto.expect_err("sotto soglia si passa a disco e la quota fallisce");
+    assert!(
+        errore.to_string().contains("staging"),
+        "errore atteso di staging: {errore}"
+    );
+}
+
+#[test]
+fn m2d_lease_rilasciati_a_fine_esecuzione() {
+    for forza_disco in [false, true] {
+        let graph =
+            validate(&m2d_plan(forza_disco).to_string(), &m2d_contratti()).expect("piano valido");
+        let output = execute(
+            &graph,
+            single_input("main", m2d_batches()),
+            RuntimeContext::default(),
+        )
+        .expect("execute");
+        let (batches, metriche) = output.collect_batches().expect("raccolta");
+        drop(batches);
+        assert_eq!(
+            metriche.memory.live_leases, 0,
+            "nessun lease deve restare vivo a consegna avvenuta (forza_disco={forza_disco})"
+        );
+        assert_eq!(
+            metriche.memory.reserved_bytes, 0,
+            "nessun byte deve restare riservato (forza_disco={forza_disco})"
+        );
+    }
+}
+
+#[test]
+fn m2d_picco_governato_memoria_non_supera_il_budget() {
+    // Il punto delicato: trattenere i lease NON deve far superare il budget.
+    for forza_disco in [false, true] {
+        let (_, metriche) = m2d_esegui(forza_disco).expect("esecuzione");
+        assert!(
+            metriche.memory.peak_reserved_bytes <= metriche.memory.budget_bytes,
+            "picco {} oltre il budget {} (forza_disco={forza_disco})",
+            metriche.memory.peak_reserved_bytes,
+            metriche.memory.budget_bytes
+        );
+    }
+}
+
+#[test]
+fn m2d_output_consumato_da_un_segmento_successivo() {
+    // Il segmento row-diagnostics non e' l'output del piano: un secondo
+    // segmento consuma i suoi accepted. In memoria il batch e' lo stesso
+    // oggetto prodotto dalla catena, quindi il consumatore a valle deve
+    // vederlo identico a come lo vedrebbe dopo un round-trip IPC.
+    let piano = |memoria: Option<u64>| {
+        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": limits,
+            "nodes": [
+                {"id": "f", "op": "table.formula", "in": ["main"],
+                 "config": {"new_column": "doppio", "formula": "id * 2"}},
+                {"id": "o", "op": "table.sort", "in": ["f"],
+                 "config": {"columns": ["id"], "ascending": false}}
+            ],
+            "output": "o"
+        })
+    };
+    let esegui = |memoria: Option<u64>| {
+        output_rows(
+            run(
+                &piano(memoria),
+                single_input("main", m2d_batches()),
+                &m2d_contratti(),
+            )
+            .expect("execute"),
+        )
+        .expect("raccolta")
+    };
+    let (memoria, _) = esegui(None);
+    let (disco, _) = esegui(Some(1_048_576));
+    assert_eq!(
+        m2d_ipc(&memoria),
+        m2d_ipc(&disco),
+        "un segmento a valle deve vedere lo stesso risultato nelle due modalita'"
+    );
+    // L'ordinamento discendente e' effettivo: il consumatore ha visto i dati.
+    let ids: Vec<i64> = memoria
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("colonna id")
+                .values()
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(ids, vec![32, 31, 30, 22, 21, 20, 12, 11, 10, 2, 1, 0]);
+}
+
+#[test]
+fn m2d_zero_colonne_e_batch_vuoti() {
+    // Un batch senza righe attraversa comunque la barriera: le due modalita'
+    // devono concordare anche su questo caso degenere.
+    let vuoto = RecordBatch::new_empty(m2d_schema());
+    let esegui = |forza_disco: bool| {
+        output_rows(
+            run(
+                &m2d_plan(forza_disco),
+                single_input("main", vec![vuoto.clone(), m2d_batch(0), vuoto.clone()]),
+                &m2d_contratti(),
+            )
+            .expect("execute"),
+        )
+        .expect("raccolta")
+    };
+    let (memoria, mm) = esegui(false);
+    let (disco, md) = esegui(true);
+    assert_eq!(m2d_ipc(&memoria), m2d_ipc(&disco));
+    assert_eq!(mm.output_rows, md.output_rows);
+    assert_eq!(mm.output_batches, md.output_batches);
+}
+
+#[test]
+fn m2d_tre_famiglie_row_diagnostics() {
+    // `emits_row_diagnostics` non e' una proprieta' di `table.formula`: tutte
+    // le operazioni della lista prendono lo stesso percorso, e tutte devono
+    // dare lo stesso risultato nelle due modalita'.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("v", DataType::Utf8, true),
+        Field::new("n", DataType::Int64, false),
+    ]));
+    let batch = |base: i64| {
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some(base.to_string()),
+                    Some((base + 1).to_string()),
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![base, base + 1])) as ArrayRef,
+            ],
+        )
+        .expect("batch")
+    };
+    let contratti = [(
+        "main".to_owned(),
+        DataContract::tabular(Arc::clone(&schema)),
+    )];
+    let nodi = [
+        json!({"id": "n", "op": "table.type_cast", "in": ["main"],
+               "config": {"column": "v", "target_type": "int"}}),
+        json!({"id": "n", "op": "table.formula", "in": ["main"],
+               "config": {"new_column": "d", "formula": "n * 2"}}),
+        json!({"id": "n", "op": "table.assert_not_null", "in": ["main"],
+               "config": {"columns": ["n"]}}),
+    ];
+    for nodo in nodi {
+        let piano = |memoria: Option<u64>| {
+            let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+            json!({
+                "schema_version": 4,
+                "inputs": ["main"],
+                "limits": limits,
+                "nodes": [nodo.clone()],
+                "output": "n"
+            })
+        };
+        let esegui = |memoria: Option<u64>| {
+            output_rows(
+                run(
+                    &piano(memoria),
+                    single_input("main", vec![batch(0), batch(10)]),
+                    &contratti,
+                )
+                .expect("execute"),
+            )
+            .expect("raccolta")
+            .0
+        };
+        let operazione = nodo["op"].as_str().unwrap_or("?");
+        assert_eq!(
+            m2d_ipc(&esegui(None)),
+            m2d_ipc(&esegui(Some(1_048_576))),
+            "memoria e disco divergono su `{operazione}`"
+        );
+    }
+}
+
+#[test]
+fn m2d_batch_sequence_identica_fra_modalita() {
+    // L'ordine osservabile e' la proiezione della sequenza logica; qui si
+    // verifica la sequenza STESSA, che il replay IPC ricostruisce dai
+    // metadati e la modalita' memoria porta invariata (ADR-0001).
+    let sequenze = |forza_disco: bool| -> Vec<Option<BatchSequence>> {
+        let graph =
+            validate(&m2d_plan(forza_disco).to_string(), &m2d_contratti()).expect("piano valido");
+        let output = execute(
+            &graph,
+            single_input("main", m2d_batches()),
+            RuntimeContext::default(),
+        )
+        .expect("execute");
+        let (governati, _) = output.collect_governed().expect("raccolta governata");
+        governati.into_iter().map(|g| g.into_parts().2).collect()
+    };
+    let memoria = sequenze(false);
+    let disco = sequenze(true);
+    assert_eq!(
+        memoria.len(),
+        m2d_batches().len(),
+        "un batch di uscita per batch di ingresso"
+    );
+    for (indice, (a, b)) in memoria.iter().zip(&disco).enumerate() {
+        assert_eq!(
+            a.as_ref()
+                .map(|s| (s.source_node.clone(), s.input_partition, s.sequence_number)),
+            b.as_ref()
+                .map(|s| (s.source_node.clone(), s.input_partition, s.sequence_number)),
+            "sequenza logica diversa al batch {indice}"
+        );
+    }
+}
+
+#[test]
+fn m2d_dictionary_e_nested() {
+    // Il round-trip IPC e' il punto in cui memoria e disco potrebbero
+    // divergere: i dizionari vengono ricostruiti dal lettore e le liste
+    // ricopiate da `take`. Se le due modalita' concordano qui, concordano.
+    use plenora_core::arrow::array::{Int32Array, ListArray};
+
+    let dizionario = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+    let elemento = Arc::new(Field::new("item", DataType::Int64, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("categoria", dizionario, true),
+        Field::new("lista", DataType::List(Arc::clone(&elemento)), true),
+    ]));
+
+    let batch = |base: i64| {
+        let chiavi = Int32Array::from(vec![Some(0), Some(1), Some(0)]);
+        let valori = Arc::new(StringArray::from(vec!["alfa", "beta"])) as ArrayRef;
+        let categoria = plenora_core::arrow::array::DictionaryArray::try_new(chiavi, valori)
+            .expect("dizionario valido");
+        let mut costruttore = plenora_core::arrow::array::builder::ListBuilder::new(
+            plenora_core::arrow::array::builder::Int64Builder::new(),
+        );
+        for riga in 0..3_i64 {
+            costruttore.values().append_value(base + riga);
+            costruttore.values().append_value(base + riga + 100);
+            costruttore.append(true);
+        }
+        let lista: ListArray = costruttore.finish();
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![base, base + 1, base + 2])) as ArrayRef,
+                Arc::new(categoria) as ArrayRef,
+                Arc::new(lista) as ArrayRef,
+            ],
+        )
+        .expect("batch dictionary/nested")
+    };
+
+    let piano = |memoria: Option<u64>| {
+        let limits = memoria.map_or_else(|| json!({}), |m| json!({"max_memory_bytes": m}));
+        json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": limits,
+            "nodes": [{
+                "id": "f",
+                "op": "table.formula",
+                "in": ["main"],
+                "config": {"new_column": "doppio", "formula": "id * 2"}
+            }],
+            "output": "f"
+        })
+    };
+    let contratti = [(
+        "main".to_owned(),
+        DataContract::tabular(Arc::clone(&schema)),
+    )];
+    let esegui = |memoria: Option<u64>| {
+        output_rows(
+            run(
+                &piano(memoria),
+                single_input("main", vec![batch(0), batch(10)]),
+                &contratti,
+            )
+            .expect("execute"),
+        )
+        .expect("raccolta")
+        .0
+    };
+    let memoria = esegui(None);
+    let disco = esegui(Some(1_048_576));
+    assert_eq!(
+        memoria.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        disco.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        "righe diverse fra memoria e disco su dictionary/nested"
+    );
+    // Il confronto e' sui VALORI, non sui byte IPC: il replay ricostruisce i
+    // dizionari e puo' legittimamente cambiarne la codifica interna. Cio' che
+    // deve coincidere e' il contenuto osservabile.
+    let valori = |batches: &[RecordBatch]| -> Vec<String> {
+        batches
+            .iter()
+            .map(|b| format!("{:?}", b.columns()))
+            .collect()
+    };
+    assert_eq!(
+        valori(&memoria).len(),
+        valori(&disco).len(),
+        "numero di batch diverso"
+    );
+    for (indice, (a, b)) in valori(&memoria).iter().zip(valori(&disco)).enumerate() {
+        assert_eq!(a, &b, "contenuto diverso al batch {indice}");
+    }
+}
+
+#[test]
+fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
+    // Il rischio dichiarato di M2d: trattenere i lease potrebbe trasformare
+    // un input prima eseguibile in un falso `ResourceLimit`. La soglia lo
+    // impedisce facendo scattare il disco PRIMA della passata che non
+    // starebbe nel budget. Qui il budget e' molto piu' stretto del tetto per
+    // batch (64 MiB), quindi la modalita' disco parte dal primo batch e il
+    // comportamento e' identico a quello precedente a M2d: il piano riesce.
+    for budget in [64_u64 * 1024, 256 * 1024, 1024 * 1024] {
+        let piano = json!({
+            "schema_version": 4,
+            "inputs": ["main"],
+            "limits": {"max_memory_bytes": budget},
+            "nodes": [{
+                "id": "f",
+                "op": "table.formula",
+                "in": ["main"],
+                "config": {"new_column": "doppio", "formula": "id * 2"}
+            }],
+            "output": "f"
+        });
+        let esito = output_rows(
+            run(
+                &piano,
+                single_input("main", m2d_batches()),
+                &m2d_contratti(),
+            )
+            .expect("execute"),
+        );
+        let (batches, metriche) = esito.unwrap_or_else(|errore| {
+            panic!("budget {budget}: il piano deve riuscire come prima di M2d: {errore}")
+        });
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            12,
+            "budget {budget}: righe attese"
+        );
+        assert!(
+            metriche.memory.peak_reserved_bytes <= budget,
+            "budget {budget}: picco {} oltre il budget",
+            metriche.memory.peak_reserved_bytes
+        );
+    }
 }

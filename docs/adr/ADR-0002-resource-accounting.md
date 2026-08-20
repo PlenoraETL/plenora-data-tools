@@ -131,6 +131,61 @@ Implementato in `plenora-engine/src/governor.rs` e nell'executor:
   ordine globale fisso per i binari (left→right, già pronto per
   l'anti-deadlock parallelo).
 
+### M2d — staging memory-first degli accepted row-diagnostics
+
+I segmenti che emettono diagnostica per riga (R9.9) devono trattenere ogni
+batch accettato fino a scansione completa: una rejection tardiva non deve
+pubblicare righe già consegnate. Fino a M2c quell'attesa era **sempre su
+disco**: staging Arrow IPC su file temporaneo, lease rilasciato per batch,
+replay con decodifica e copia `take` a scansione conclusa.
+
+La barriera non richiede il disco: richiede che nulla esca prima della fine.
+Da M2d gli accepted attendono **in memoria**, come `GovernedBatch` con il
+lease vivo, e si passa al disco solo quando il budget non basta più.
+
+**Soglia, deterministica.** Prima di eseguire la catena sul batch `k` — già
+prelevato, quindi di dimensione nota — si resta in memoria se e solo se:
+
+```text
+trattenuti + byte_input_k + max_batch_bytes <= max_memory_bytes
+```
+
+Nessuna percentuale scelta a mano, nessuna decisione temporale, nessuna
+dipendenza dall'ordine di arrivo: solo lease vivi e limiti del piano.
+
+**Perché non può produrre un falso `ResourceLimit`.** Durante una passata i
+lease vivi sono al più due — input e output, perché `run_streaming_chain`
+acquisisce il secondo prima di rilasciare il primo. Il picco su disco della
+passata `k` è quindi `input_k + output_k`; in memoria è
+`trattenuti + input_k + output_k`. Ogni batch di output attraversa il wrapper
+d'uscita, che applica `max_batch_bytes` (V7): un output che lo supera fa
+fallire il piano **in entrambe le modalità**, quindi per un piano che riesce
+`output_k <= max_batch_bytes` e la soglia garantisce che il picco in memoria
+resti dentro il budget.
+
+**Passaggio al disco.** Quando la soglia non regge, i trattenuti sono travasati
+**nell'ordine di produzione** nello staging IPC esistente e i lease rilasciati
+uno a uno; da quel momento la modalità è disco in via definitiva, per tutta la
+scansione. Il picco durante il travaso non cresce mai sopra quello già
+concesso.
+
+**Esiti.** A scansione completata senza errori la modalità memoria consegna la
+coda direttamente, con lease e `BatchSequence` originali; quella disco usa il
+replay invariato. Su rejection tardiva, errore, cancellazione o fallimento del
+travaso: **zero accepted pubblicati** e cleanup completo — in memoria i lease
+muoiono con la coda, su disco il `TempDir` cancella il file.
+
+**Perimetro.** Il gate WKB dell'input (`stage_input_batches`) resta su disco:
+non è toccato da M2d. Nessuna operazione è specializzata e
+`emits_row_diagnostics` è invariato: cambia dove gli accepted attendono, non
+chi passa dalla barriera.
+
+**Prezzo dichiarato.** Il picco governato di un segmento row-diagnostics
+cresce dei byte trattenuti: misurato su `streaming_lineare`, da 0,76 MiB a
+10,24 MiB su un budget di 512 MiB. È un aumento reale del picco, non un
+aumento del tetto: la soglia lo tiene sotto `max_memory_bytes` per
+costruzione.
+
 **Deviazioni/rinvii rispetto al design** (documentati nel codice):
 
 - In v1 seriale `try_reserve` emette **solo** `Granted`; se la quota manca,

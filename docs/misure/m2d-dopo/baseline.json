@@ -1,0 +1,524 @@
+{
+  "carichi": [
+    {
+      "byte": {
+        "attraversati_dai_nodi": 32400864,
+        "input": 8685216
+      },
+      "campagne_tempo": 3,
+      "carico": "streaming_lineare",
+      "contatori_saturati": false,
+      "determinismo": {
+        "byte_confrontati": 10496456,
+        "byte_identici": true,
+        "esecuzioni": 6
+      },
+      "max_raggiunto": false,
+      "memoria": {
+        "a_caldo": {
+          "picco_governato": 10735364,
+          "rapporto": 0.20717769793367044,
+          "rss_baseline": 28319744,
+          "rss_incremento": 2224128,
+          "rss_picco": 30543872
+        },
+        "a_freddo": {
+          "picco_governato": 10735364,
+          "rapporto": 1.1305110846730488,
+          "rss_baseline": 18219008,
+          "rss_incremento": 12136448,
+          "rss_picco": 30355456
+        },
+        "carico": "streaming_lineare",
+        "disponibile": true,
+        "esecuzioni_misurate_per_regime": 1
+      },
+      "nodi": {
+        "c": {
+          "campioni": 56,
+          "max_ns": 3644092,
+          "mediana_ns": 3242673,
+          "min_ns": 3089647,
+          "operazione": "table.formula",
+          "righe_in": 196608,
+          "righe_out": 196608
+        },
+        "f": {
+          "campioni": 56,
+          "max_ns": 9464904,
+          "mediana_ns": 6025437,
+          "min_ns": 5803139,
+          "operazione": "table.filter",
+          "righe_in": 196608,
+          "righe_out": 185023
+        },
+        "s": {
+          "campioni": 56,
+          "max_ns": 21976425,
+          "mediana_ns": 18489794,
+          "min_ns": 18152613,
+          "operazione": "table.string_pad",
+          "righe_in": 196608,
+          "righe_out": 196608
+        }
+      },
+      "parallelismo": {
+        "clk_tck": 100.0,
+        "cpu_ms": 1620.0,
+        "fattore": 0.9944912196977956,
+        "misurabile": true,
+        "risoluzione_tick_pct": 0.6172839506172839,
+        "tick_consumati": 162,
+        "wall_ms": 1628.973658
+      },
+      "parallelismo_fra_processi": {
+        "campagne": 3,
+        "campioni": 3,
+        "disponibile": true,
+        "max": 0.9944912196977956,
+        "mediana": 0.9855602975312846,
+        "min": 0.97997257689505
+      },
+      "perche": "catena di kernel streaming: nessuna materializzazione",
+      "picco_governato_mediano": 10735364,
+      "righe": {
+        "processate": 589824,
+        "uscita": 185023
+      },
+      "ripetizioni": 56,
+      "soglia_raggiunta": true,
+      "sotto_pressione": {
+        "esito": "riuscito",
+        "picco_governato": 794208,
+        "spill_file": 0,
+        "spill_scritti": 0
+      },
+      "spill": {
+        "file": 0,
+        "scritti": 0
+      },
+      "tempo": {
+        "max_ns": 35590675,
+        "mediana_ns": 28769265,
+        "min_ns": 28116428
+      },
+      "tetto_parallelizzazione": null,
+      "wall_cumulato_ms": 1628.973658
+    },
+    {
+      "byte": {
+        "attraversati_dai_nodi": 8685216,
+        "input": 8685216
+      },
+      "campagne_tempo": 3,
+      "carico": "blocking_sort",
+      "contatori_saturati": false,
+      "determinismo": {
+        "byte_confrontati": 8159944,
+        "byte_identici": true,
+        "esecuzioni": 6
+      },
+      "max_raggiunto": false,
+      "memoria": {
+        "a_caldo": {
+          "picco_governato": 16171832,
+          "rapporto": 1.0759330173600616,
+          "rss_baseline": 20865024,
+          "rss_incremento": 17399808,
+          "rss_picco": 38264832
+        },
+        "a_freddo": {
+          "picco_governato": 16171832,
+          "rapporto": 1.23043375667024,
+          "rss_baseline": 18128896,
+          "rss_incremento": 19898368,
+          "rss_picco": 38027264
+        },
+        "carico": "blocking_sort",
+        "disponibile": true,
+        "esecuzioni_misurate_per_regime": 1
+      },
+      "nodi": {
+        "o": {
+          "campioni": 56,
+          "max_ns": 32888638,
+          "mediana_ns": 24428492,
+          "min_ns": 14819420,
+          "operazione": "table.sort",
+          "righe_in": 196608,
+          "righe_out": 196608
+        }
+      },
+      "parallelismo": {
+        "clk_tck": 100.0,
+        "cpu_ms": 6010.0,
+        "fattore": 3.9014747810968182,
+        "misurabile": true,
+        "risoluzione_tick_pct": 0.16638935108153077,
+        "tick_consumati": 601,
+        "wall_ms": 1540.443124
+      },
+      "parallelismo_fra_processi": {
+        "campagne": 3,
+        "campioni": 3,
+        "disponibile": true,
+        "max": 3.960163776313124,
+        "mediana": 3.9014747810968182,
+        "min": 3.8480002851985464
+      },
+      "perche": "materializza l'intero input e ordina",
+      "picco_governato_mediano": 16171832,
+      "righe": {
+        "processate": 196608,
+        "uscita": 196608
+      },
+      "ripetizioni": 56,
+      "soglia_raggiunta": true,
+      "sotto_pressione": {
+        "dettaglio": "resource limit: max_memory_bytes superato: `o` richiede 8085916 byte, 8085916 gia' riservati su un budget di 8085916",
+        "esito": "ResourceLimit"
+      },
+      "spill": {
+        "file": 0,
+        "scritti": 0
+      },
+      "tempo": {
+        "max_ns": 37007466,
+        "mediana_ns": 27463039,
+        "min_ns": 17717051
+      },
+      "tetto_parallelizzazione": null,
+      "wall_cumulato_ms": 1540.443124
+    },
+    {
+      "byte": {
+        "attraversati_dai_nodi": 8685216,
+        "input": 8685216
+      },
+      "campagne_tempo": 3,
+      "carico": "blocking_aggregate",
+      "contatori_saturati": false,
+      "determinismo": {
+        "byte_confrontati": 2248,
+        "byte_identici": true,
+        "esecuzioni": 6
+      },
+      "max_raggiunto": false,
+      "memoria": {
+        "a_caldo": {
+          "picco_governato": 8087740,
+          "rapporto": 1.049355196878238,
+          "rss_baseline": 21958656,
+          "rss_incremento": 8486912,
+          "rss_picco": 30445568
+        },
+        "a_freddo": {
+          "picco_governato": 8087740,
+          "rapporto": 1.4975595160081805,
+          "rss_baseline": 18239488,
+          "rss_incremento": 12111872,
+          "rss_picco": 30351360
+        },
+        "carico": "blocking_aggregate",
+        "disponibile": true,
+        "esecuzioni_misurate_per_regime": 1
+      },
+      "nodi": {
+        "a": {
+          "campioni": 80,
+          "max_ns": 11205341,
+          "mediana_ns": 8093194,
+          "min_ns": 5952092,
+          "operazione": "table.aggregate",
+          "righe_in": 196608,
+          "righe_out": 64
+        }
+      },
+      "parallelismo": {
+        "clk_tck": 100.0,
+        "cpu_ms": 2250.0,
+        "fattore": 1.4240748385783957,
+        "misurabile": true,
+        "risoluzione_tick_pct": 0.4444444444444444,
+        "tick_consumati": 225,
+        "wall_ms": 1579.973144
+      },
+      "parallelismo_fra_processi": {
+        "campagne": 3,
+        "campioni": 3,
+        "disponibile": true,
+        "max": 1.49958069267623,
+        "mediana": 1.43773270225421,
+        "min": 1.4240748385783957
+      },
+      "perche": "raggruppa e aggrega: materializzazione piu' hashing",
+      "picco_governato_mediano": 8087740,
+      "righe": {
+        "processate": 196608,
+        "uscita": 64
+      },
+      "ripetizioni": 80,
+      "soglia_raggiunta": true,
+      "sotto_pressione": {
+        "esito": "riuscito",
+        "picco_governato": 361884,
+        "spill_file": 64,
+        "spill_scritti": 8197120
+      },
+      "spill": {
+        "file": 0,
+        "scritti": 0
+      },
+      "tempo": {
+        "max_ns": 23368090,
+        "mediana_ns": 19904565,
+        "min_ns": 16506850
+      },
+      "tetto_parallelizzazione": null,
+      "wall_cumulato_ms": 1579.973144
+    },
+    {
+      "byte": {
+        "attraversati_dai_nodi": 25475712,
+        "input": 8685216
+      },
+      "campagne_tempo": 3,
+      "carico": "fan_out_tee",
+      "contatori_saturati": false,
+      "determinismo": {
+        "byte_confrontati": 8159944,
+        "byte_identici": true,
+        "esecuzioni": 6
+      },
+      "max_raggiunto": false,
+      "memoria": {
+        "a_caldo": {
+          "picco_governato": 16191608,
+          "rapporto": 1.092832781030766,
+          "rss_baseline": 20598784,
+          "rss_incremento": 17694720,
+          "rss_picco": 38293504
+        },
+        "a_freddo": {
+          "picco_governato": 16191608,
+          "rapporto": 1.140644215200862,
+          "rss_baseline": 17833984,
+          "rss_incremento": 18468864,
+          "rss_picco": 36302848
+        },
+        "carico": "fan_out_tee",
+        "disponibile": true,
+        "esecuzioni_misurate_per_regime": 1
+      },
+      "nodi": {
+        "ramo_a": {
+          "campioni": 112,
+          "max_ns": 6619723,
+          "mediana_ns": 4420901,
+          "min_ns": 3384559,
+          "operazione": "table.filter",
+          "righe_in": 196608,
+          "righe_out": 98304
+        },
+        "ramo_b": {
+          "campioni": 112,
+          "max_ns": 7466417,
+          "mediana_ns": 3711194,
+          "min_ns": 3236557,
+          "operazione": "table.filter",
+          "righe_in": 196608,
+          "righe_out": 98304
+        },
+        "unione": {
+          "campioni": 112,
+          "max_ns": 8841157,
+          "mediana_ns": 1551619,
+          "min_ns": 1213786,
+          "operazione": "table.concat",
+          "righe_in": 196608,
+          "righe_out": 196608
+        }
+      },
+      "parallelismo": {
+        "clk_tck": 100.0,
+        "cpu_ms": 1520.0,
+        "fattore": 0.9800810835265784,
+        "misurabile": true,
+        "risoluzione_tick_pct": 0.6578947368421052,
+        "tick_consumati": 152,
+        "wall_ms": 1550.89209
+      },
+      "parallelismo_fra_processi": {
+        "campagne": 3,
+        "campioni": 3,
+        "disponibile": true,
+        "max": 1.0059692530148792,
+        "mediana": 1.002378772946814,
+        "min": 0.9800810835265784
+      },
+      "perche": "un input, due consumatori: costo del tee (D9/V10)",
+      "picco_governato_mediano": 16191608,
+      "righe": {
+        "processate": 589824,
+        "uscita": 196608
+      },
+      "ripetizioni": 112,
+      "soglia_raggiunta": true,
+      "sotto_pressione": {
+        "dettaglio": "resource limit: max_memory_bytes superato: `main` richiede 361884 byte, 7961160 gia' riservati su un budget di 8095804",
+        "esito": "ResourceLimit"
+      },
+      "spill": {
+        "file": 0,
+        "scritti": 0
+      },
+      "tempo": {
+        "max_ns": 31591273,
+        "mediana_ns": 12766109,
+        "min_ns": 11257565
+      },
+      "tetto_parallelizzazione": {
+        "campioni": 112,
+        "guadagno_max_pct": 42.69,
+        "guadagno_mediano_pct": 38.57,
+        "guadagno_min_pct": 21.96
+      },
+      "wall_cumulato_ms": 1550.89209
+    },
+    {
+      "byte": {
+        "attraversati_dai_nodi": 39883256,
+        "input": 8685216
+      },
+      "campagne_tempo": 3,
+      "carico": "rami_indipendenti",
+      "contatori_saturati": false,
+      "determinismo": {
+        "byte_confrontati": 9757512,
+        "byte_identici": true,
+        "esecuzioni": 6
+      },
+      "max_raggiunto": false,
+      "memoria": {
+        "a_caldo": {
+          "picco_governato": 24857048,
+          "rapporto": 1.4195989805386384,
+          "rss_baseline": 43089920,
+          "rss_incremento": 35287040,
+          "rss_picco": 78376960
+        },
+        "a_freddo": {
+          "picco_governato": 24857048,
+          "rapporto": 1.9037291958401497,
+          "rss_baseline": 18231296,
+          "rss_incremento": 47321088,
+          "rss_picco": 65552384
+        },
+        "carico": "rami_indipendenti",
+        "disponibile": true,
+        "esecuzioni_misurate_per_regime": 1
+      },
+      "nodi": {
+        "a1": {
+          "campioni": 8,
+          "max_ns": 28970132,
+          "mediana_ns": 22668820,
+          "min_ns": 14857519,
+          "operazione": "table.sort",
+          "righe_in": 196608,
+          "righe_out": 196608
+        },
+        "a2": {
+          "campioni": 8,
+          "max_ns": 196764747,
+          "mediana_ns": 180277733,
+          "min_ns": 172899084,
+          "operazione": "table.distinct",
+          "righe_in": 196608,
+          "righe_out": 196608
+        },
+        "b1": {
+          "campioni": 8,
+          "max_ns": 77097802,
+          "mediana_ns": 71261729,
+          "min_ns": 59260874,
+          "operazione": "table.aggregate",
+          "righe_in": 196608,
+          "righe_out": 196608
+        },
+        "b2": {
+          "campioni": 8,
+          "max_ns": 4928284,
+          "mediana_ns": 3088996,
+          "min_ns": 2525327,
+          "operazione": "table.sort",
+          "righe_in": 196608,
+          "righe_out": 196608
+        },
+        "fine": {
+          "campioni": 8,
+          "max_ns": 105171609,
+          "mediana_ns": 82734419,
+          "min_ns": 72286676,
+          "operazione": "table.join",
+          "righe_in": 393216,
+          "righe_out": 196608
+        }
+      },
+      "parallelismo": {
+        "clk_tck": 100.0,
+        "cpu_ms": 5030.0,
+        "fattore": 1.7245012951731555,
+        "misurabile": true,
+        "risoluzione_tick_pct": 0.1988071570576541,
+        "tick_consumati": 503,
+        "wall_ms": 2916.785284
+      },
+      "parallelismo_fra_processi": {
+        "campagne": 3,
+        "campioni": 3,
+        "disponibile": true,
+        "max": 1.7530221270027295,
+        "mediana": 1.739648912003536,
+        "min": 1.7245012951731555
+      },
+      "perche": "due catene che non si toccano fino alla fine: il TETTO del guadagno che il parallelismo fra nodi potrebbe dare",
+      "picco_governato_mediano": 24857048,
+      "righe": {
+        "processate": 1179648,
+        "uscita": 196608
+      },
+      "ripetizioni": 8,
+      "soglia_raggiunta": true,
+      "sotto_pressione": {
+        "dettaglio": "resource limit: max_memory_bytes superato: `a1` richiede 8085916 byte, 8685216 gia' riservati su un budget di 12428524",
+        "esito": "ResourceLimit"
+      },
+      "spill": {
+        "file": 0,
+        "scritti": 0
+      },
+      "tempo": {
+        "max_ns": 385669492,
+        "mediana_ns": 376376168,
+        "min_ns": 334645705
+      },
+      "tetto_parallelizzazione": {
+        "campioni": 8,
+        "guadagno_max_pct": 21.84,
+        "guadagno_mediano_pct": 20.34,
+        "guadagno_min_pct": 17.69
+      },
+      "wall_cumulato_ms": 2916.785284
+    }
+  ],
+  "core_logici": 16,
+  "input": {
+    "batch": 24,
+    "righe_per_batch": 8192
+  },
+  "processi_tempo_per_carico": 3,
+  "soglia_cumulativa_ms": 1500,
+  "tabella_markdown": "| carico | tempo mediano | ripetizioni | soglia 1,5 s | parallelismo (mediana su 3 processi) | range |\n|---|---|---|---|---|---|\n| `streaming_lineare` | 28.77 ms | 56 | si | **0.99x** | 0.98–0.99 |\n| `blocking_sort` | 27.46 ms | 56 | si | **3.90x** | 3.85–3.96 |\n| `blocking_aggregate` | 19.90 ms | 80 | si | **1.44x** | 1.42–1.50 |\n| `fan_out_tee` | 12.77 ms | 112 | si | **1.00x** | 0.98–1.01 |\n| `rami_indipendenti` | 376.38 ms | 8 | si | **1.74x** | 1.72–1.75 |\n\n| carico | picco governato | RSS a freddo (max) | RSS a caldo (min) | rapporto a freddo |\n|---|---|---|---|---|\n| `streaming_lineare` | 10.24 MiB | 11.57 MiB | 2.12 MiB | 1.13x |\n| `blocking_sort` | 15.42 MiB | 18.98 MiB | 16.59 MiB | 1.23x |\n| `blocking_aggregate` | 7.71 MiB | 11.55 MiB | 8.09 MiB | 1.50x |\n| `fan_out_tee` | 15.44 MiB | 17.61 MiB | 16.88 MiB | 1.14x |\n| `rami_indipendenti` | 23.71 MiB | 45.13 MiB | 33.65 MiB | 1.90x |\n",
+  "warmup": 2
+}

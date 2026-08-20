@@ -2166,6 +2166,149 @@ fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
 enum StagingOutcome {
     Terminal(Option<PlenoraError>),
     Replay(StagedReplay),
+    /// Coda ordinata degli accepted trattenuti in memoria, con i lease
+    /// originali ancora vivi: consegnata direttamente, senza IPC ne' copie
+    /// (ADR-0002 M2d). Prodotta SOLO dai segmenti row-diagnostics; il gate
+    /// WKB dell'input resta su disco.
+    Memoria(std::collections::VecDeque<GovernedBatch>),
+}
+
+/// Staging degli accepted di un segmento row-diagnostics: **prima in
+/// memoria**, con passaggio definitivo su disco quando il budget non basta
+/// piu' (ADR-0002 M2d).
+///
+/// # Perche' esiste
+///
+/// La barriera R9.9 — nessun accepted pubblicato prima che la scansione sia
+/// completa — non richiede il disco: richiede solo che nulla esca prima della
+/// fine. Trattenere i batch gia' governati la soddisfa allo stesso modo, e
+/// risparmia per ogni riga una serializzazione IPC, una scrittura, una
+/// rilettura, una decodifica e una copia `take`.
+///
+/// # Perche' non puo' trasformare un input eseguibile in un `ResourceLimit`
+///
+/// Durante una passata della catena i lease vivi sono al piu' due: quello
+/// del batch d'ingresso e quello dell'uscita (`run_streaming_chain` acquisisce
+/// il secondo prima di rilasciare il primo). Quindi:
+///
+/// - **su disco** il picco della passata `k` e' `input_k + output_k`;
+/// - **in memoria** e' `trattenuti + input_k + output_k`.
+///
+/// Si entra nella passata `k` in modalita' memoria **solo se**
+/// `trattenuti + input_k + max_batch_bytes <= budget`, dove `input_k` e' la
+/// dimensione REALE del batch gia' prelevato e `max_batch_bytes` e' il tetto
+/// duro del piano (V7). Ogni batch di output attraversa il wrapper d'uscita,
+/// che applica lo stesso tetto: `output_k > max_batch_bytes` fa fallire il
+/// piano **in entrambe le modalita'**. Per un piano che prima riusciva vale
+/// quindi `output_k <= max_batch_bytes`, e il picco in memoria non supera il
+/// budget.
+///
+/// La soglia e' **derivata dai limiti del piano e dai lease effettivamente
+/// vivi**: nessuna percentuale scelta a mano, nessuna decisione temporale,
+/// nessuna dipendenza dall'ordine di arrivo.
+// La variante `Disco` porta writer e handle del file: piu' grande di una
+// `VecDeque`, ma esiste al massimo una volta per segmento e boxarla
+// aggiungerebbe un'indirezione sul percorso caldo dello staging.
+#[allow(clippy::large_enum_variant)]
+enum StagingAccepted {
+    /// Batch trattenuti in ordine, lease vivi, con il totale dei byte tenuto
+    /// aggiornato: ricalcolarlo a ogni batch sarebbe quadratico nel numero di
+    /// batch, e questa e' una funzione di ottimizzazione.
+    Memoria {
+        coda: std::collections::VecDeque<GovernedBatch>,
+        byte: u64,
+    },
+    /// Modalita' disco: definitiva, non si torna indietro.
+    Disco {
+        writer: Option<StreamWriter<CountingFile>>,
+        staging: Option<(tempfile::TempDir, std::path::PathBuf)>,
+        meta: std::collections::VecDeque<StagedBatchMeta>,
+    },
+}
+
+impl StagingAccepted {
+    const fn nuovo() -> Self {
+        Self::Memoria {
+            coda: std::collections::VecDeque::new(),
+            byte: 0,
+        }
+    }
+
+    /// Byte trattenuti in memoria (zero in modalita' disco).
+    const fn trattenuti(&self) -> u64 {
+        match self {
+            Self::Memoria { byte, .. } => *byte,
+            Self::Disco { .. } => 0,
+        }
+    }
+
+    /// Modalita' disco definitiva, partendo da una coda gia' trattenuta.
+    ///
+    /// I batch sono travasati **nell'ordine** in cui sono stati prodotti e i
+    /// lease rilasciati uno a uno: il picco durante il travaso non cresce
+    /// mai sopra quello gia' concesso.
+    fn passa_a_disco(&mut self, state: &Rc<ExecState>, edge: &str) -> Result<()> {
+        let Self::Memoria { coda, .. } = self else {
+            return Ok(());
+        };
+        let coda = std::mem::take(coda);
+        let mut writer = None;
+        let mut staging = None;
+        let mut meta = std::collections::VecDeque::new();
+        for governed in coda {
+            stage_one_batch(
+                &mut writer,
+                &mut staging,
+                state,
+                "output",
+                edge,
+                &governed.batch,
+            )?;
+            meta.push_back(StagedBatchMeta {
+                bytes: governed.accounted_bytes(),
+                sequence: governed.seq.clone(),
+            });
+            // Rilascio esplicito: il lease muore qui, non a fine ciclo.
+            drop(governed);
+        }
+        *self = Self::Disco {
+            writer,
+            staging,
+            meta,
+        };
+        Ok(())
+    }
+
+    /// Accoglie un accepted, gia' governato.
+    fn accogli(
+        &mut self,
+        state: &Rc<ExecState>,
+        edge: &str,
+        governed: GovernedBatch,
+    ) -> Result<()> {
+        match self {
+            Self::Memoria { coda, byte } => {
+                // Saturante: un totale che avvolge farebbe passare la soglia
+                // proprio quando non deve. Saturare la fa fallire, cioe'
+                // manda su disco: fail-closed.
+                *byte = byte.saturating_add(governed.accounted_bytes());
+                coda.push_back(governed);
+                Ok(())
+            }
+            Self::Disco {
+                writer,
+                staging,
+                meta,
+            } => {
+                stage_one_batch(writer, staging, state, "output", edge, &governed.batch)?;
+                meta.push_back(StagedBatchMeta {
+                    bytes: governed.accounted_bytes(),
+                    sequence: governed.seq.clone(),
+                });
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Scrive un batch nello staging IPC (inizializzando file e writer al primo
@@ -2348,6 +2491,17 @@ fn atomic_input_validation_stream(
                     );
                 }
                 StagingOutcome::Replay(staged) => replay = Some(staged),
+                // Il gate WKB dell'input resta su disco: `stage_input_batches`
+                // non produce mai la variante in memoria. Braccio
+                // fail-closed, non silenzioso.
+                StagingOutcome::Memoria(_) => {
+                    terminal = Some(
+                        vec![Err(PlenoraError::Internal(
+                            "staging input: modalita' memoria non prevista dal gate WKB".into(),
+                        ))]
+                        .into_iter(),
+                    );
+                }
             }
         }
         if let Some(active) = terminal.as_mut() {
@@ -2808,16 +2962,53 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
         .any(|kernel| kernel.emits_row_diagnostics)
 }
 
+/// Si puo' eseguire la prossima passata **trattenendo** cio' che c'e' gia'?
+///
+/// Condizione, tutta derivata dai limiti del piano e dai lease vivi:
+///
+/// ```text
+/// trattenuti + byte_input_gia_prelevato + max_batch_bytes <= max_memory_bytes
+/// ```
+///
+/// `max_batch_bytes` (V7) e' il tetto duro per batch che il wrapper d'uscita
+/// applica a OGNI batch di output: un output che lo supera fa fallire il piano
+/// in entrambe le modalita', quindi per un piano che riesce e' un maggiorante
+/// valido dell'uscita della passata. Non c'e' alcuna percentuale scelta a
+/// mano, e la condizione non dipende dal tempo ne' dall'ordine di arrivo.
+///
+/// In modalita' disco restituisce sempre `false` senza calcoli: il passaggio
+/// e' definitivo.
+fn accedibile_in_memoria(state: &ExecState, accepted: &StagingAccepted, byte_input: u64) -> bool {
+    if matches!(accepted, StagingAccepted::Disco { .. }) {
+        return false;
+    }
+    let budget = state.governor.budget_bytes();
+    let tetto_batch = state.plan.batch_target().max_batch_bytes as u64;
+    let Some(necessario) = accepted
+        .trattenuti()
+        .checked_add(byte_input)
+        .and_then(|somma| somma.checked_add(tetto_batch))
+    else {
+        // Somma non rappresentabile: fail-closed verso il disco, che e' la
+        // modalita' con il picco piu' basso.
+        return false;
+    };
+    necessario <= budget
+}
+
 /// Scansione completa di un segmento row-diagnostics (R9.9): esegue i
 /// kernel batch per batch, fa merge delle rejection row-scoped con offset
-/// assoluti e fa staging IPC bounded degli accepted su `max_temp_bytes`
-/// (lease rilasciato per batch — P1: nessun accumulo in RAM/lease per
-/// tutto l'input; uno stream valido oltre il budget cumulativo non viene
-/// piu' rifiutato). A scan completata: report completo (rejection anche
-/// tardiva -> zero accepted, lo staged e' scartato dal `Drop` del `TempDir`)
-/// oppure replay degli staged con ri-riserva per batch. Sequenza logica e
-/// ordine di pubblicazione invariati (ADR-0001).
-// Sequenza lineare di stati, lunga per costruzione.
+/// assoluti e trattiene gli accepted fino a fine scansione — **in memoria**
+/// finche' il budget lo consente, poi nello staging IPC bounded su
+/// `max_temp_bytes` (ADR-0002 M2d; [`accedibile_in_memoria`] per la soglia).
+/// A scan completata: report completo (rejection anche tardiva -> zero
+/// accepted; in memoria i lease muoiono con la coda, su disco lo staged e'
+/// scartato dal `Drop` del `TempDir`), consegna diretta della coda oppure
+/// replay degli staged con ri-riserva per batch. Sequenza logica e ordine di
+/// pubblicazione invariati (ADR-0001).
+// Macchina a stati lineare: scansione, decisione memoria/disco, diagnostica e
+// chiusura restano nello stesso scope per rendere evidente il cleanup
+// fail-closed.
 #[allow(clippy::too_many_lines)]
 fn scan_row_diagnostic_segment(
     input: &mut EdgeStream,
@@ -2830,10 +3021,7 @@ fn scan_row_diagnostic_segment(
     let mut input_rejected = false;
     let mut source_offset = 0_u64;
     let mut terminal_error = None;
-    let mut staged_meta: std::collections::VecDeque<StagedBatchMeta> =
-        std::collections::VecDeque::new();
-    let mut staging: Option<(tempfile::TempDir, std::path::PathBuf)> = None;
-    let mut writer: Option<StreamWriter<CountingFile>> = None;
+    let mut accepted = StagingAccepted::nuovo();
     let output_edge = &plan.segments()[segment_index].output_edge;
     for item in input {
         let governed = match item {
@@ -2909,26 +3097,34 @@ fn scan_row_diagnostic_segment(
         if diagnostics.is_some() && input_rejected {
             continue;
         }
+        // ADR-0002 M2d: la decisione memoria/disco si prende QUI, con il
+        // batch d'ingresso gia' prelevato e quindi di dimensione NOTA, e
+        // PRIMA di eseguire la catena su di esso. Cosi' la passata successiva
+        // non puo' superare il budget: se non ci sta, i trattenuti vanno su
+        // disco adesso, non dopo il fallimento.
+        if !accedibile_in_memoria(state, &accepted, governed.accounted_bytes()) {
+            if let Err(error) = accepted.passa_a_disco(state, output_edge) {
+                terminal_error = Some(attach_partial_row_diagnostics(
+                    error,
+                    &mut diagnostics,
+                    "data_tools.output_staging_failed",
+                ));
+                break;
+            }
+        }
         let diagnostic_node = diagnostic_context
             .as_ref()
             .map(|(node, _, _): &(String, String, String)| node.as_str());
         match run_streaming_chain(plan, segment_index, state, governed, diagnostic_node) {
             Ok(output) => {
                 if diagnostics.is_none() {
-                    // P1: staging IPC bounded dell'accepted — il lease e'
-                    // rilasciato qui (drop di `output` a fine iterazione) e
-                    // ri-riservato per batch solo al replay, a scan
-                    // completato. Se una rejection tardiva arriva dopo, lo
-                    // staged viene scartato senza pubblicare nulla.
-                    let staged = stage_one_batch(
-                        &mut writer,
-                        &mut staging,
-                        state,
-                        "output",
-                        output_edge,
-                        &output.batch,
-                    );
-                    if let Err(error) = staged {
+                    // La barriera R9.9 non richiede il disco: richiede che
+                    // nulla esca prima della fine della scansione. In
+                    // memoria il lease resta vivo e il batch e' consegnato
+                    // tale e quale; su disco il lease e' rilasciato qui e
+                    // ri-riservato al replay. Se una rejection tardiva
+                    // arriva dopo, in entrambi i casi non si pubblica nulla.
+                    if let Err(error) = accepted.accogli(state, output_edge, output) {
                         terminal_error = Some(attach_partial_row_diagnostics(
                             error,
                             &mut diagnostics,
@@ -2936,10 +3132,6 @@ fn scan_row_diagnostic_segment(
                         ));
                         break;
                     }
-                    staged_meta.push_back(StagedBatchMeta {
-                        bytes: output.accounted_bytes(),
-                        sequence: output.seq.clone(),
-                    });
                 }
             }
             Err(error) => {
@@ -2973,17 +3165,18 @@ fn scan_row_diagnostic_segment(
         }
     }
     if terminal_error.is_none() {
-        if let Some(active) = writer.as_mut() {
-            if let Err(error) = active.finish() {
-                terminal_error = Some(attach_partial_row_diagnostics(
-                    PlenoraError::Internal(format!("chiusura staging output: {error}")),
-                    &mut diagnostics,
-                    "data_tools.output_staging_failed",
-                ));
+        if let StagingAccepted::Disco { writer, .. } = &mut accepted {
+            if let Some(active) = writer.as_mut() {
+                if let Err(error) = active.finish() {
+                    terminal_error = Some(attach_partial_row_diagnostics(
+                        PlenoraError::Internal(format!("chiusura staging output: {error}")),
+                        &mut diagnostics,
+                        "data_tools.output_staging_failed",
+                    ));
+                }
             }
         }
     }
-    drop(writer);
     if terminal_error.is_none() {
         if let Err(error) = state.check_cancellation_point("output", "row_diagnostics") {
             terminal_error = Some(attach_partial_row_diagnostics(
@@ -2999,9 +3192,28 @@ fn scan_row_diagnostic_segment(
         }
     }
     if let Some(error) = terminal_error {
+        // Errore, rejection tardiva o cancellazione: `accepted` e' distrutto
+        // qui. In memoria i lease muoiono con la coda, su disco il `TempDir`
+        // cancella il file. In nessuno dei due casi esce un batch.
         return StagingOutcome::Terminal(Some(error));
     }
-    let Some((dir, path)) = staging.take() else {
+    let (writer, staging, staged_meta) = match accepted {
+        // Modalita' memoria: la coda si consegna com'e', in ordine, con i
+        // lease gia' vivi. Nessun IPC, nessuna decodifica, nessuna copia.
+        StagingAccepted::Memoria { coda, .. } => {
+            if coda.is_empty() {
+                return StagingOutcome::Terminal(None);
+            }
+            return StagingOutcome::Memoria(coda);
+        }
+        StagingAccepted::Disco {
+            writer,
+            staging,
+            meta,
+        } => (writer, staging, meta),
+    };
+    drop(writer);
+    let Some((dir, path)) = staging else {
         return StagingOutcome::Terminal(None);
     };
     match std::fs::File::open(&path)
@@ -3031,8 +3243,11 @@ fn row_diagnostic_stream(
 ) -> BatchStream {
     let mut terminal: Option<std::vec::IntoIter<Result<GovernedBatch>>> = None;
     let mut replay: Option<StagedReplay> = None;
+    let mut memoria: Option<std::collections::VecDeque<GovernedBatch>> = None;
+    let mut scansione_fatta = false;
     Box::new(std::iter::from_fn(move || {
-        if terminal.is_none() && replay.is_none() {
+        if !scansione_fatta {
+            scansione_fatta = true;
             match scan_row_diagnostic_segment(&mut input, &plan, &state, segment_index) {
                 StagingOutcome::Terminal(error) => {
                     terminal = Some(
@@ -3042,10 +3257,17 @@ fn row_diagnostic_stream(
                     );
                 }
                 StagingOutcome::Replay(staged) => replay = Some(staged),
+                StagingOutcome::Memoria(coda) => memoria = Some(coda),
             }
         }
         if let Some(active) = terminal.as_mut() {
             return active.next();
+        }
+        // Modalita' memoria: consegna in ordine di produzione, con il lease
+        // e la `BatchSequence` originali. Il batch e' lo stesso oggetto
+        // prodotto dalla catena — nessun round-trip IPC puo' alterarlo.
+        if let Some(coda) = memoria.as_mut() {
+            return coda.pop_front().map(Ok);
         }
         let active = replay.as_mut()?;
         let output_edge = &plan.segments()[segment_index].output_edge;
