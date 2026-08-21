@@ -279,6 +279,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Nessun bytecode Python tracciato. `docs/_build/__pycache__/
+      # md2pdf.cpython-312.pyc` era in Git dal commit iniziale, sopravvissuto
+      # sia al `.gitignore` (che non tocca cio' che e' gia' tracciato) sia
+      # alla rimozione del convertitore PDF: il sorgente era sparito e il suo
+      # bytecode no. Un artefatto compilato di uno strumento che non esiste
+      # piu' e' la forma piu' silenziosa di rimozione incompleta.
+      - name: Nessun bytecode Python tracciato
+        run: |
+          residuo="$(git ls-files '*.pyc' '*.pyo' '__pycache__/*')"
+          if [ -n "$residuo" ]; then
+            echo "bytecode Python tracciato da Git:"
+            echo "$residuo"
+            exit 1
+          fi
+
       # Il gate lavora su una COPIA e confronta li'. Un gate che rigenera il
       # file che sta verificando non verifica nulla: dichiara verde qualunque
       # cosa produca.
