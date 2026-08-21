@@ -174,6 +174,23 @@ def _valore_fra(testo, prefisso):
     return testo[len(atteso):-1].strip()
 
 
+def _crs(variante):
+    """Il requisito CRS in forma leggibile, o `None` se l'op non ne ha.
+
+    `CRS.get(...)` restituiva `None` anche per una variante che la tabella non
+    conosce: un requisito CRS nuovo sarebbe sparito dal documento, che avrebbe
+    continuato a sembrare completo. Una variante sconosciuta e' un errore.
+    """
+    if variante is None:
+        return None
+    if variante not in CRS:
+        raise ErroreCatalogo(
+            "variante CrsRequirement sconosciuta: %r. Aggiungerla a CRS in "
+            "questo file: omettendola, il documento tacerebbe su un requisito "
+            "che l'operazione ha davvero." % variante)
+    return CRS[variante]
+
+
 def _capability(testo):
     testo = testo.strip()
     if not testo.startswith("&[") or not testo.endswith("]"):
@@ -229,7 +246,7 @@ def parse_catalog(testo=None):
                 "arity": ARITY[posizionali["arity"]],
                 "exec": EXEC[posizionali["exec"]],
                 "shape": _valore_fra(posizionali["shape"], "ResultShape"),
-                "crs": CRS.get(_valore_fra(posizionali["crs"], "CrsRequirement") or ""),
+                "crs": _crs(_valore_fra(posizionali["crs"], "CrsRequirement")),
                 "caps": _capability(posizionali["caps"]),
                 "maturity": posizionali["maturity"],
                 "kver": opzionali.get("kernel_version"),
@@ -245,19 +262,44 @@ def parse_catalog(testo=None):
     return ops
 
 
-def parse_fragments():
+def parse_fragments(sorgenti=None):
+    """I blocchi `### <id>` dei frammenti.
+
+    `sorgenti` e' una sequenza `(nome, testo)`; se manca si leggono i file di
+    `FRAG_DIR`. Passarla serve alle regressioni: un parser di documentazione
+    va provato su input costruiti, non solo sul repository.
+
+    Un id ripetuto e' un ERRORE. Prima l'ultimo blocco sovrascriveva il
+    primo: due firme diverse per la stessa operazione, e nel documento ne
+    finiva una sola, senza che nulla dicesse quale fosse stata scartata.
+    """
+    if sorgenti is None:
+        sorgenti = [(path.name, path.read_text(encoding="utf-8"))
+                    for path in sorted(FRAG_DIR.glob("*.md"))]
     blocks = {}
-    for path in sorted(FRAG_DIR.glob("*.md")):
+    provenienza = {}
+
+    def deposita(nome, cur_id, cur_lines):
+        if cur_id in blocks:
+            raise ErroreCatalogo(
+                "frammento duplicato per `%s`: gia' definito in %s, di nuovo "
+                "in %s. Due firme per la stessa operazione: una delle due "
+                "sparirebbe in silenzio."
+                % (cur_id, provenienza[cur_id], nome))
+        blocks[cur_id] = "\n".join(cur_lines).strip()
+        provenienza[cur_id] = nome
+
+    for nome, testo in sorgenti:
         cur_id, cur_lines = None, []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in testo.splitlines():
             if line.startswith("### "):
                 if cur_id:
-                    blocks[cur_id] = "\n".join(cur_lines).strip()
+                    deposita(nome, cur_id, cur_lines)
                 cur_id, cur_lines = line[4:].strip(), []
             else:
                 cur_lines.append(line)
         if cur_id:
-            blocks[cur_id] = "\n".join(cur_lines).strip()
+            deposita(nome, cur_id, cur_lines)
     return blocks
 
 
@@ -509,12 +551,71 @@ def autotest():
         raise ErroreCatalogo(
             "autotest: una chiave opzionale sconosciuta e' passata inosservata.")
 
+    # Una variante CRS che la tabella non conosce spariva dal documento: il
+    # requisito c'era nel catalogo e la firma non lo diceva.
+    crs_ignoto = (
+        '    op!("geo.cinque", Geo, Extension, Unary, Streaming, Cooperative, '
+        'None, Some(CrsRequirement::VarianteNuova), &[], DefinedOrder, '
+        'PublicProtocol),\n'
+    )
+    try:
+        parse_catalog(_catalogo_finto(crs_ignoto))
+    except ErroreCatalogo as errore:
+        if "VarianteNuova" not in str(errore):
+            raise ErroreCatalogo(
+                "autotest: variante CRS sconosciuta rifiutata per la ragione "
+                "sbagliata: %s" % errore) from errore
+    else:
+        raise ErroreCatalogo(
+            "autotest: una variante CrsRequirement sconosciuta e' stata "
+            "omessa invece di fermare la generazione.")
+
+    # Due frammenti con lo stesso id: prima l'ultimo sovrascriveva il primo.
+    doppio = [
+        ("primo.md", "### table.uno\nfirma A\n"),
+        ("secondo.md", "### table.uno\nfirma B\n"),
+    ]
+    try:
+        parse_fragments(doppio)
+    except ErroreCatalogo as errore:
+        if "primo.md" not in str(errore) or "secondo.md" not in str(errore):
+            raise ErroreCatalogo(
+                "autotest: frammento duplicato rifiutato senza dire dove: %s"
+                % errore) from errore
+    else:
+        raise ErroreCatalogo(
+            "autotest: due frammenti con lo stesso id non hanno fatto fallire "
+            "la lettura: uno dei due sparirebbe in silenzio.")
+
+    # E un frammento per id resta il caso normale.
+    singoli = parse_fragments([("uno.md", "### table.uno\nfirma A\n"),
+                               ("due.md", "### table.due\nfirma B\n")])
+    if sorted(singoli) != ["table.due", "table.uno"]:
+        raise ErroreCatalogo("autotest: frammenti distinti letti male: %r"
+                             % sorted(singoli))
+
+    # Le sezioni non devono elencare due volte la stessa operazione.
+    ripetute = [oid for _, ops in TABLE_SECTIONS + GEO_SECTIONS for oid in ops]
+    if len(ripetute) != len(set(ripetute)):
+        raise ErroreCatalogo(
+            "autotest: le sezioni di questo file elencano gia' un'operazione "
+            "piu' di una volta: %r"
+            % sorted({o for o in ripetute if ripetute.count(o) > 1}))
+
 
 def genera():
     """Il testo completo di `kernel-signatures.md`, senza scriverlo."""
     catalog = parse_catalog()
     blocks = parse_fragments()
     documentate = [oid for _, ops in TABLE_SECTIONS + GEO_SECTIONS for oid in ops]
+    # Un'operazione elencata due volte comparirebbe due volte nel documento e
+    # gonfierebbe i conteggi dell'intestazione, che sono calcolati proprio da
+    # questa lista. `set()` altrove la assorbirebbe senza dire niente.
+    ripetute = sorted({oid for oid in documentate if documentate.count(oid) > 1})
+    if ripetute:
+        raise ErroreCatalogo(
+            "operazioni elencate piu' di una volta nelle sezioni: %r. "
+            "Comparirebbero due volte e falserebbero i conteggi." % ripetute)
     missing_cat = [oid for oid in documentate if oid not in catalog]
     missing_blk = [oid for oid in documentate if oid not in blocks]
     extra_blk = sorted(set(blocks) - set(documentate))
@@ -590,9 +691,12 @@ def main(argomenti):
         print("argomenti sconosciuti: %r (atteso: --verify)" % sconosciuti)
         return 2
 
-    autotest()
-
+    # Le regressioni e la generazione condividono il gestore: un autotest che
+    # fallisse con un traceback direbbe la stessa cosa in modo illeggibile, e
+    # nel log di CI un traceback si scambia per un guasto dello strumento
+    # invece che per il difetto che ha appena trovato.
     try:
+        autotest()
         testo = genera()
     except ErroreCatalogo as errore:
         print("ERRORE: %s" % errore)
