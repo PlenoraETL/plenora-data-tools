@@ -335,7 +335,7 @@ jobs:
   # Job PROPRIO, come i manifesti: un documento fuori data non deve nascondere
   # un test rosso, ne' viceversa.
   docs-riproducibili:
-    name: gate riproducibilita documentazione
+    name: gate documentazione
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -350,32 +350,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Nessun bytecode Python tracciato. `docs/_build/__pycache__/
-      # md2pdf.cpython-312.pyc` era in Git dal commit iniziale, sopravvissuto
-      # sia al `.gitignore` (che non tocca cio' che e' gia' tracciato) sia
-      # alla rimozione del convertitore PDF: il sorgente era sparito e il suo
-      # bytecode no. Un artefatto compilato di uno strumento che non esiste
-      # piu' e' la forma piu' silenziosa di rimozione incompleta.
-      - name: Nessun bytecode Python tracciato
-        run: |
-          residuo="$(git ls-files '*.pyc' '*.pyo' '__pycache__/*')"
-          if [ -n "$residuo" ]; then
-            echo "bytecode Python tracciato da Git:"
-            echo "$residuo"
-            exit 1
-          fi
-
       # Il gate lavora su una COPIA e confronta li'. Un gate che rigenera il
       # file che sta verificando non verifica nulla: dichiara verde qualunque
       # cosa produca.
       - name: Copia il repository fuori dal worktree
         run: cp -a "$GITHUB_WORKSPACE" "$RUNNER_TEMP/doc-check"
 
-      - name: Rigenera e confronta
+      # Il gate documentale copre superficie, collegamenti, riferimenti
+      # morti, allineamento catalogo/operazioni, divergenza del generato e
+      # artefatti tracciati. Gira sulla COPIA, come la rigenerazione.
+      - name: Superficie, collegamenti e documento generato
         working-directory: ${{ runner.temp }}/doc-check
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python docs/_build/assemble.py --verify
+        run: python scripts/verifica_documentazione.py
+
+      # I siti di allocazione e prenotazione descritti in
+      # docs/errori-e-limiti.md devono esistere ancora nella forma descritta.
+      # Un documento che descrive una garanzia marcisce in silenzio: basta
+      # spostare una reservation e il testo resta convincente e falso.
+      - name: Memoria governata coerente con la descrizione
+        working-directory: ${{ runner.temp }}/doc-check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_memoria_governata.py
 
       # Il controllo va fatto sulla COPIA, che e' l'unico albero che il gate
       # ha toccato: verificare il worktree originale non direbbe niente, ed e'

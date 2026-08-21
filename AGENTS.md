@@ -17,9 +17,10 @@ agente — segue queste regole. Non sono opzionali.
 3. **Ogni bug è una classe.** Trovato un bug, si cerca la stessa classe in
    tutto il codebase prima di dichiarare chiusa la fix (esempio: comparatore
    Int64 via f64 trovato in review 2026-07-27 — tre siti, una classe).
-4. **Deviazioni esplicite.** Ogni scostamento da ADR, contratti documentati
-   o invarianti va scritto nel codice E nell'ADR pertinente (`docs/adr/`),
-   con motivazione. Una garanzia indebolita va dichiarata come tale.
+4. **Deviazioni esplicite.** Ogni scostamento dai contratti documentati o
+   dagli invarianti va scritto nel codice **e** nel registro dei limiti
+   (`docs/errori-e-limiti.md`), con regola, ambito, hazard e condizione di
+   rientro. Una garanzia indebolita va dichiarata come tale.
 5. **Determinismo testato.** architettura.md#determinismo: stesso input → stesso output, sempre.
    Ordine logico (BatchSequence), mai temporale. Le ottimizzazioni si
    verificano con oracoli contro il percorso generico.
