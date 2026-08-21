@@ -7,7 +7,7 @@ Una pulizia del genere si disfa nel modo piu' banale — qualcuno aggiunge un
 `NOTE.md`, qualcun altro un `docs/vecchio/`, e in sei mesi ci sono due fonti
 di verita' che nessuno tiene allineate.
 
-Questo script lo impedisce. Verifica sei cose:
+Questo script lo impedisce. Verifica sette cose:
 
 1. **nessun Markdown pubblico fuori dalla allowlist**. L'elenco e' esatto, non
    un glob: aggiungere un documento e' una decisione, non un effetto
@@ -17,13 +17,19 @@ Questo script lo impedisce. Verifica sei cose:
    promette;
 3. **nessun riferimento a un documento eliminato**, in tutto il repository:
    ADR, deroghe, review, checkpoint, verbali e i loro nomi di file;
-4. **catalogo e `operazioni.md` allineati**: stesso numero di operazioni, e le
+4. **ogni riferimento `D*` ha una definizione corrente** nel registro delle
+   decisioni di `docs/architettura.md`, e ogni decisione definita e' citata
+   da qualche parte. Gli identificatori sono riferimenti stabili: un commento
+   che scrive `D16` deve poterlo risolvere, altrimenti e' un puntatore morto
+   come un link rotto — e un registro che nessuno cita torna a essere un
+   archivio;
+5. **catalogo e `operazioni.md` allineati**: stesso numero di operazioni, e le
    stesse. Non un conteggio, un confronto per nome;
-5. **il documento generato non diverge**, delegando ad `assemble.py --verify`;
-6. **nessun PDF, bytecode o artefatto di build tracciato**.
+6. **il documento generato non diverge**, delegando ad `assemble.py --verify`;
+7. **nessun PDF, bytecode o artefatto di build tracciato**.
 
-I manifesti di rilascio sotto `release/` sono **esclusi** dal punto 3: sono
-documenti immutabili, e il testo dell'epoca serve al gate di rilascio.
+I manifesti di rilascio sotto `release/` sono **esclusi** dai punti 3 e 4:
+sono documenti immutabili, e il testo dell'epoca serve al gate di rilascio.
 
     python scripts/verifica_documentazione.py
 
@@ -103,6 +109,13 @@ ARTEFATTI = [
     ('*.rlib', 'artefatto di build'),
     ('*.rmeta', 'artefatto di build'),
 ]
+
+ARCHITETTURA = 'docs/architettura.md'
+
+# `D16`, `D12.7`: identificatori di decisione. Il registro li definisce
+# come righe di tabella `| **D16** | ... |`.
+RIFERIMENTO_D = re.compile(r'(?<![A-Za-z0-9_])D([0-9]+)(\.[0-9]+)?(?![A-Za-z0-9_])')
+DEFINIZIONE_D = re.compile(r'^\|\s*\*\*(D[0-9]+(?:\.[0-9]+)?)\*\*\s*\|', re.M)
 
 CATALOGO = 'crates/plenora-core/src/catalog.rs'
 OPERAZIONI = 'docs/operazioni.md'
@@ -204,6 +217,65 @@ def controlla_riferimenti_morti(file_tracciati, problemi):
                     break
 
 
+def controlla_decisioni(file_tracciati, problemi):
+    """Ogni `D*` citato dev'essere definito, e ogni definizione dev'essere citata.
+
+    Gli identificatori di decisione sono un secondo sistema di riferimenti,
+    accanto ai collegamenti Markdown, e si rompe allo stesso modo: la
+    decisione sparisce e il commento che la cita resta, convincente e senza
+    referente. Il registro di `architettura.md` contiene solo le decisioni
+    ancora attive, quindi un `D*` citato e non definito e' una decisione
+    superata che qualcuno continua a invocare.
+    """
+    if not os.path.exists(ARCHITETTURA):
+        problemi.append("%s assente: non c\'e\' registro delle decisioni"
+                        % ARCHITETTURA)
+        return
+    definite = set(DEFINIZIONE_D.findall(testo(ARCHITETTURA)))
+    if not definite:
+        problemi.append(
+            "REGISTRO DELLE DECISIONI VUOTO in %s.\n"
+            "  Se le decisioni non hanno piu\' identificatori, vanno tolti "
+            "anche i riferimenti nel codice." % ARCHITETTURA)
+        return
+
+    citazioni = {}
+    for percorso in file_tracciati:
+        if ESENTI_DAI_MORTI.match(percorso):
+            continue
+        if not percorso.endswith(TESTUALI):
+            continue
+        if percorso in (ARCHITETTURA, 'scripts/verifica_documentazione.py'):
+            continue
+        if not os.path.exists(percorso):
+            continue
+        for numero, riga in enumerate(testo(percorso).split(chr(10)), 1):
+            for trovato in RIFERIMENTO_D.finditer(riga):
+                citazioni.setdefault(trovato.group(0), (percorso, numero))
+
+    def ordine(ident):
+        return [int(pezzo) for pezzo in ident[1:].split('.')]
+
+    orfani = sorted(set(citazioni) - definite, key=ordine)
+    if orfani:
+        righe = [('    %-8s %s:%d' % (i, citazioni[i][0], citazioni[i][1]))
+                 for i in orfani]
+        problemi.append(
+            "DECISIONI CITATE E NON DEFINITE (%d):\n%s\n"
+            "  Il registro di %s contiene solo le decisioni ancora attive.\n"
+            "  Una decisione superata non si archivia: si tolgono i suoi "
+            "riferimenti." % (len(orfani), chr(10).join(righe), ARCHITETTURA))
+
+    inutilizzate = sorted(definite - set(citazioni), key=ordine)
+    if inutilizzate:
+        problemi.append(
+            "DECISIONI DEFINITE E MAI CITATE: %r\n"
+            "  Un registro che cresce e non viene letto torna a essere un "
+            "archivio. Se la decisione vale ancora ma nessuno la cita, il "
+            "riferimento va messo dove la decisione e\' attuata; se non vale "
+            "piu\', va tolta." % inutilizzate)
+
+
 def controlla_catalogo(problemi):
     if not (os.path.exists(CATALOGO) and os.path.exists(OPERAZIONI)):
         problemi.append('catalogo o documento delle operazioni assenti')
@@ -259,6 +331,7 @@ def main():
     controlla_superficie(file_tracciati, problemi)
     controlla_collegamenti(problemi)
     controlla_riferimenti_morti(file_tracciati, problemi)
+    controlla_decisioni(file_tracciati, problemi)
     controlla_catalogo(problemi)
     controlla_generato(problemi)
     controlla_artefatti(problemi)
@@ -269,10 +342,11 @@ def main():
             sys.stderr.write('- %s\n' % problema)
         raise SystemExit(1)
 
+    definite = len(DEFINIZIONE_D.findall(testo(ARCHITETTURA)))
     print('documentazione coerente: %d documenti pubblici, %d eccezioni, '
-          'nessun riferimento morto, catalogo e operazioni allineati, '
-          'nessun artefatto tracciato'
-          % (len(PUBBLICI), len(ECCEZIONI)))
+          '%d decisioni definite e tutte citate, nessun riferimento morto, '
+          'catalogo e operazioni allineati, nessun artefatto tracciato'
+          % (len(PUBBLICI), len(ECCEZIONI), definite))
 
 
 main()

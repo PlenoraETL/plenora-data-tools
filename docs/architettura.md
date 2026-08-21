@@ -187,6 +187,58 @@ prima dell'esecuzione, non a metà.
 Sul percorso lineare le row diagnostics non esistono: quelle operazioni
 richiedono un piano DAG.
 
+## Decisioni
+
+Le decisioni ancora in vigore, con l'identificatore che il codice cita. Sono
+**riferimenti stabili**: un commento che scrive `D16` deve poterlo risolvere
+qui, e un gate lo verifica (`scripts/verifica_documentazione.py`). Le
+decisioni superate non compaiono: questo registro non è un archivio, contiene
+solo ciò che vale oggi.
+
+### Fondamenta
+
+| id | decisione |
+|---|---|
+| **D0** | Un solo punto di versione per le dipendenze: Arrow è pinnato a `=59.1.0` nel manifesto del workspace, e nessun crate lo ridichiara. |
+| **D6** | Il `DataContract` è l'unità di contratto fra i nodi: schema Arrow, geometrie, proprietà dichiarate. Ogni operazione lo inferisce **a secco** con `analyze_contract`, senza leggere dati. |
+| **D8** | Validazione statica e dinamica sono distinte. La fase 1 legge solo header e metadati e **non può** verificare il contenuto delle celle: limiti, struttura del grafo, config, schema e metadati geo sono statici; la validità strutturale del WKB per cella è dinamica, in lettura. |
+| **D9** | Materializzazione ai fan-out e fan-in: strategia conservativa della v1. Il fan-out resta una proprietà logica del DAG, e alternative fisiche — rilettura di sorgenti seekable, spill condiviso — restano possibili senza cambiare la semantica. |
+| **D16** | Al massimo **una** colonna geometrica attiva per input, e `FieldId` in un namespace globale del grafo: il planner rimappa gli id provvisori degli input, così due geometrie omonime di sorgenti diverse non si confondono. |
+| **D17** | Versioni **esplicite per componente** (`semantic_version`, `config_schema_version`, `contract_analysis_version`, `kernel_version`): ogni modifica incompatibile incrementa la versione pertinente, e il fingerprint del catalogo deriva da queste, mai da un hash del binario. |
+| **D19** | `Limits` in tre famiglie semanticamente distinte — righe, memoria e disco, piano — e i `PlanLimits` applicati **durante** il parsing, prima di qualunque allocazione guidata dal contenuto. |
+| **D20** | Alias legacy **versionati** e pipeline di migrazione **esplicita**: la risoluzione di un alias non dipende dai default correnti, e un piano storico arriva al canonico attraverso una conversione che dichiara che cosa sta traducendo. |
+| **D22** | Publish atomico definito da una **matrice di supporto** e da due profili distinti: rename atomico e durabilità non sono la stessa cosa e non vanno promessi insieme. |
+| **D25** | Il `DataContract` porta anche le proprietà dichiarate dell'insieme — ordinamento provato, conteggio righe, geometria attiva — con la loro confidenza, non solo lo schema. |
+
+### Fusione dei segmenti geo
+
+| id | decisione |
+|---|---|
+| **D12.1** | Forma decodificata **transiente**: gli archi restano `RecordBatch` con WKB canonico ISO XY, e nessun tipo nuovo compare sugli archi osservabili. Un decode e un encode per batch, non uno per operazione. |
+| **D12.2** | La fondibilità è una **capability di catalogo** (`geo_fusion`: `NotFusible`, `TransformInPlace`, `TerminalMeasure`), e resta **fuori dal fingerprint**: è una proprietà fisica, e includerla invaliderebbe piani semanticamente identici. |
+| **D12.3** | I limiti di cella sono **ri-applicati esatti**, con attribuzione al nodo: la dimensione del WKB XY di una geometria è funzione pura della struttura, quindi si calcola senza ri-serializzare. Nessuna deroga. |
+| **D12.4** | Validazione **inter-passo** con attribuzione per profilo: fra un passo e il successivo del gruppo fuso la geometria è rivalidata, così un errore resta attribuibile al nodo che lo produce. |
+| **D12.5** | La fusione è **solo fisica**: gli `analyze_*` girano in `validate` per ogni nodo, a secco, indipendentemente dalla fusione. Contratto, lineage e `FieldId` sono gli stessi con fusione accesa o spenta. |
+| **D12.6** | Errori e metriche **per nodo** preservati: il runner fuso è un'esecuzione alternativa del gruppo, non una rimozione dei nodi. Righe in e out per nodo restano esatte. |
+| **D12.7** | Memoria: **reservation esatta** dei byte decodificati prima del ciclo del gruppo, e fallback strumentato quando il budget non basta. È uno dei due punti in cui la prenotazione precede l'allocazione. |
+| **D12.8** | `max_batch_bytes` non è applicabile sugli archi interni fusi, dove il batch non è materializzato: la protezione è spostata sul governor, non rimossa. Vedi [`errori-e-limiti.md`](errori-e-limiti.md). |
+| **D12.9** | Kill switch `geo_fusion` (flag `--no-geo-fusion`), registrato nel piano: a `false` i gruppi non si formano e l'esecuzione è quella non fusa. Serve a isolare un sospetto senza ricompilare. |
+
+### Operazioni geo binarie nel piano
+
+| id | decisione |
+|---|---|
+| **D14.1** | Perimetro: `geo.sjoin`, `geo.nearest`, `geo.within`, `geo.count_points_in_polygons`. Criterio: **nessuna ri-encode**. |
+| **D14.2** | `PreparedConfig::GeoBinary` con i kernel riusati e la CLI invariata: il piano guadagna le binarie senza che il percorso di trasporto cambi. |
+| **D14.3** | Dimensione decodificata calcolata percorrendo la cella con la stessa camminata del decoder, senza materializzare. |
+| **D14.4** | Contabilità **preflight** dei due lati: le binarie possono superare il budget prima di produrre, quindi la stima precede l'allocazione. |
+| **D14.5** | Semantica degli errori: ogni errore è `Execution { node, operation, execution_id }`, e nessun messaggio di trasporto grezzo attraversa il confine. «Quale nodo ha rotto» resta rispondibile. |
+| **D14.6** | Limiti di espansione: vincolo relativo **più** un tetto assoluto, perché un vincolo solo relativo non limita un prodotto cartesiano. |
+| **D14.7** | **Ordine canonico** delle coppie (left-major, right-minor), fissato dal porting se il kernel non lo garantisce: senza, il risultato dipenderebbe dallo scheduling. |
+| **D14.8** | Lineage: passthrough del lato sinistro con le chiavi canoniche ereditate, colonne di indice e distanza derivate senza metadati ereditati per errore. |
+| **D14.9** | Oracolo esteso agli errori: doppia esecuzione, piano contro percorso di trasporto, con confronto byte per byte. |
+| **D14.10** | Benchmark A/B fra percorso standalone e piano, su fixture miste, con mediana di ripetizioni alternate. |
+
 ## Backend
 
 `geos-backend` e `proj-backend` sono **feature**. Senza di esse il
