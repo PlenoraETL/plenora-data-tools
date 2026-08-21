@@ -246,6 +246,81 @@ jobs:
           --fail-under-functions 85
           --fail-under-regions 89
 
+  # `docs/kernel-signatures.md` e' generato: il file committato deve coincidere
+  # BYTE PER BYTE con la rigenerazione.
+  #
+  # Fino al 2026-08-21 non esisteva questo gate, e il generatore era rotto da
+  # mesi senza che nulla lo dicesse: rustfmt aveva riformattato la macro `op!`
+  # del catalogo e la regex del parser aveva smesso di agganciarla, quindi lo
+  # script usciva con MISMATCH e non riscriveva niente. Un generatore che si
+  # ferma non rompe nulla di visibile — il documento resta com'era e sembra
+  # aggiornato. I verbali di review del 2026-08-18 lo registravano gia', e la
+  # CI restava verde lo stesso perche' nessuno rigenerava.
+  #
+  # Nessuna dipendenza: `assemble.py` usa la sola libreria standard. Niente
+  # pip, niente container, niente font — il PDF e' stato ritirato il
+  # 2026-08-21 (documentazione obsoleta, non una capacita' di data-tools).
+  #
+  # Job PROPRIO, come i manifesti: un documento fuori data non deve nascondere
+  # un test rosso, ne' viceversa.
+  docs-riproducibili:
+    name: gate riproducibilita documentazione
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Nessun bytecode Python tracciato. `docs/_build/__pycache__/
+      # md2pdf.cpython-312.pyc` era in Git dal commit iniziale, sopravvissuto
+      # sia al `.gitignore` (che non tocca cio' che e' gia' tracciato) sia
+      # alla rimozione del convertitore PDF: il sorgente era sparito e il suo
+      # bytecode no. Un artefatto compilato di uno strumento che non esiste
+      # piu' e' la forma piu' silenziosa di rimozione incompleta.
+      - name: Nessun bytecode Python tracciato
+        run: |
+          residuo="$(git ls-files '*.pyc' '*.pyo' '__pycache__/*')"
+          if [ -n "$residuo" ]; then
+            echo "bytecode Python tracciato da Git:"
+            echo "$residuo"
+            exit 1
+          fi
+
+      # Il gate lavora su una COPIA e confronta li'. Un gate che rigenera il
+      # file che sta verificando non verifica nulla: dichiara verde qualunque
+      # cosa produca.
+      - name: Copia il repository fuori dal worktree
+        run: cp -a "$GITHUB_WORKSPACE" "$RUNNER_TEMP/doc-check"
+
+      - name: Rigenera e confronta
+        working-directory: ${{ runner.temp }}/doc-check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python docs/_build/assemble.py --verify
+
+      # Il controllo va fatto sulla COPIA, che e' l'unico albero che il gate
+      # ha toccato: verificare il worktree originale non direbbe niente, ed e'
+      # proprio li' che una futura `--verify` che scrivesse resterebbe
+      # invisibile. `--untracked-files=all` perche' un file NUOVO e' una
+      # scrittura quanto un file modificato.
+      - name: La verifica non ha scritto nella copia
+        working-directory: ${{ runner.temp }}/doc-check
+        run: |
+          residuo="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$residuo" ]; then
+            echo "la verifica ha modificato la copia su cui lavorava:"
+            echo "$residuo"
+            exit 1
+          fi
+
   # Verifica dei manifesti di rilascio STORICI (rc-1.0.3), con il checker che
   # vive in QUESTO repository (`scripts/check_release_manifest.py`).
   #
