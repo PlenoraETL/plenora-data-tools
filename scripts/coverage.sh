@@ -12,6 +12,15 @@
 # cambiano qui vanno cambiate anche la', e viceversa. Perimetro: feature di
 # default — i backend nativi (geos static, proj bundled) non sono
 # strumentati, come in CI.
+#
+# I PROFILI GREZZI si puliscono PRIMA e DOPO, sempre, anche se la misura
+# fallisce (`trap`). I `.profraw` hanno nomi che contengono il pid, e il pid
+# il sistema lo ricicla: con i profili di esecuzioni precedenti ancora sul
+# disco, un processo nuovo trova il proprio nome occupato e LLVM scrive
+# l'errore su **stderr**, facendo fallire i test che pretendono stderr vuoto.
+# Il 2026-08-21, con 6 770 profili accumulati, due campagne consecutive sono
+# fallite per questo; dopo la pulizia, zero errori. La pulizia finale serve
+# anche a non lasciare residui alla cache della CI.
 set -euo pipefail
 
 IMAGE=rust:1.92
@@ -20,6 +29,27 @@ IMAGE=rust:1.92
 LLVM_COV_VERSION=0.8.7
 MSYS_NO_PATHCONV=1
 export MSYS_NO_PATHCONV
+
+RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Percorso RELATIVO dalla radice, e nessun argomento: su Git Bash per Windows
+# `$RADICE` e' un percorso MSYS (`/c/...`) che il `python.exe` nativo non sa
+# risolvere — lo interpreta come `C:\c\...` e non trova il file. Senza
+# argomenti lo script ricava la radice da `__file__`, in forma nativa.
+pulisci_profili() {
+  ( cd "$RADICE" && python scripts/pulisci_profili_coverage.py )
+}
+
+# Prima della misura: fatale se fallisce. Misurare sopra profili altrui e' il
+# difetto che questa pulizia esiste per evitare, e proseguire lo
+# riprodurrebbe.
+pulisci_profili
+
+# Dopo, sempre, anche su errore o interruzione: i profili non devono
+# sopravvivere alla campagna che li ha prodotti, ne' finire nella cache. Un
+# fallimento QUI non deve mascherare l'esito della misura, ma non va nemmeno
+# ingoiato in silenzio.
+trap 'esito=$?; pulisci_profili || echo "ATTENZIONE: pulizia finale dei profili fallita" >&2; exit $esito' EXIT
 
 docker run --rm \
   -v "$PWD:/work" \

@@ -216,13 +216,28 @@ jobs:
             target-cov
           # Chiave separata: gli artefatti strumentati non sono riusabili
           # dai job di test.
-          key: cargo-ci-cov-1.92.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-cov-1.92.0-
+          # v2 dal 2026-08-21: le cache di GitHub sono IMMUTABILI, e quelle
+          # esistenti contengono i `.profraw` accumulati dalle esecuzioni
+          # precedenti. Senza cambiare chiave, il job continuerebbe a
+          # ripristinare proprio i residui che questo cambiamento elimina.
+          key: cargo-ci-cov-v2-1.92.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-cov-v2-1.92.0-
 
       # Versione pinnata come ogni altra dipendenza (R13.2): un aggiornamento
       # del tool puo' spostare i conteggi e quindi il verdetto del gate.
       - name: Installa cargo-llvm-cov (pin 0.8.7)
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      # I `.profraw` hanno nomi che contengono il pid, e il pid il sistema lo
+      # ricicla: con i profili di una esecuzione precedente ancora sul disco —
+      # ed e' esattamente cio' che la cache ripristina — un processo nuovo
+      # trova il proprio nome occupato, LLVM scrive l'errore su STDERR, e i
+      # test che pretendono stderr vuoto falliscono per una ragione che non
+      # ha nulla a che vedere col codice. Il 2026-08-21 e' successo in locale
+      # con 6 770 profili accumulati: due campagne consecutive rosse, verdi
+      # subito dopo la pulizia.
+      - name: Rimuovi i profili delle esecuzioni precedenti
+        run: python scripts/pulisci_profili_coverage.py "$GITHUB_WORKSPACE/target-cov"
 
       - name: Misura coverage del workspace
         run: cargo llvm-cov --workspace --locked --no-report
@@ -245,6 +260,14 @@ jobs:
           --fail-under-lines 90
           --fail-under-functions 85
           --fail-under-regions 89
+
+      # `always()`: anche quando il gate sopra fallisce. I profili non devono
+      # finire nella cache, altrimenti il prossimo job riparte con il problema
+      # che questo ha appena risolto — e la cache, essendo immutabile, se lo
+      # porterebbe dietro fino al prossimo cambio di `Cargo.lock`.
+      - name: Rimuovi i profili prima della cache
+        if: always()
+        run: python scripts/pulisci_profili_coverage.py "$GITHUB_WORKSPACE/target-cov"
 
   # `docs/kernel-signatures.md` e' generato: il file committato deve coincidere
   # BYTE PER BYTE con la rigenerazione.
