@@ -1,0 +1,127 @@
+# Stato e roadmap
+
+Solo il **lavoro ancora aperto**. Quello che è fatto sta nel codice, nei test
+e negli altri documenti; qui c'è ciò che manca, in ordine.
+
+## Dove siamo
+
+Il core è una release candidate credibile: il piano v5 è il formato canonico,
+la CLI è l'eseguibile distribuito, le 146 operazioni del catalogo sono
+documentate, e la CI verifica Linux e Windows con tredici job.
+
+Non è ancora rilasciabile in produzione. Le ragioni sono qui sotto, in
+ordine di precedenza.
+
+---
+
+## 1. Reset documentale — **completato**
+
+La documentazione descrive ora soltanto ciò che il progetto è, i contratti
+validi, i limiti aperti e la strada verso la produzione. La storia resta in
+Git, non nel worktree: nessun archivio, nessun file conservato «per memoria».
+
+La superficie pubblica è chiusa da un gate che rifiuta ogni Markdown fuori
+dalla allowlist, i collegamenti rotti e i riferimenti a documenti eliminati.
+
+## 2. La memoria governata non è un tetto duro
+
+**È il limite più serio del progetto**, ed è la ragione per cui il core non è
+in produzione.
+
+Il budget governa la **ritenzione** del risultato, non la sua costruzione:
+dove il lease è preso dopo l'allocazione — quasi ovunque — un input che
+produce un output molto più grande del budget porta all'esaurimento della
+memoria **prima** che l'errore esista. Il fallimento è un OOM, non un errore
+diagnosticabile. Il quadro completo è in
+[`errori-e-limiti.md`](errori-e-limiti.md).
+
+Due strade, entrambe accettabili, nessuna parziale:
+
+1. un **preflight conservativo per ogni operazione**, sul modello di quello
+   già esistente per `cross_join`, `concat`, `concat_by_name` e `melt`, con un
+   modello per operazione e la copertura delle allocazioni temporanee che
+   ciascuna fa;
+2. un'**autorizzazione ad allocare** al posto del lease a posteriori:
+   reservation preventiva sufficientemente conservativa in entrambi gli
+   executor.
+
+I prerequisiti sono già in piedi: il governor ha un permesso atomico —
+verifica e prenotazione in una sola operazione — e la contabilità è
+linearizzabile. Ciò che manca è spostare le allocazioni, che è il lavoro vero.
+
+Il **profilo isolato** (esecuzione in un processo worker con un limite imposto
+dal sistema operativo) è la risposta al livello 2 del contratto, e non è
+ancora iniziato: nessun meccanismo è stato prototipato, e su macOS resterà non
+supportato finché un prototipo non dimostri copertura *e* attribuzione.
+
+## 3. Campagna fuzz finale
+
+Alla chiusura del punto 2, non prima: una campagna cambia significato se il
+codice sotto è ancora in movimento.
+
+Va inclusa la riattivazione di `arrow_transform`, oggi in quarantena per una
+ragione dichiarata — `libfuzzer` aborta prima dell'unwinding, quindi il target
+resterebbe rosso a barriera funzionante — che dipende da `apache/arrow-rs#10575`.
+
+## 4. Release
+
+Gate, piattaforme, packaging e procedura sono in [`release.md`](release.md).
+Il bump di versione è **maggiore**: la superficie pubblica è cambiata in modo
+incompatibile (rinomina del campo dei limiti, versione canonica del piano,
+tipi rinominati, `plan_hash` in un dominio nuovo).
+
+---
+
+## Dopo la release
+
+Non prima, e in quest'ordine.
+
+### M3 — scheduler parallelo
+
+Oggi l'esecuzione fra i nodi del DAG è **seriale**; il parallelismo esiste
+solo dentro i kernel. M3 introduce l'esecuzione concorrente dei rami
+indipendenti.
+
+I prerequisiti già fatti: permesso atomico del governor (senza il quale
+nascerebbe un TOCTOU), `BatchSequence` assegnata e propagata, contabilità
+linearizzabile. Quello che manca: lo scheduler, e il consumatore che riordina
+l'output dei rami paralleli secondo la sequenza logica — oggi assegnata e
+testata, ma non ancora usata per riordinare, perché in esecuzione seriale
+l'ordine logico coincide con quello di scansione.
+
+Un vincolo noto: `max_parallelism` dimensiona il pool globale del processo,
+non del piano. Un pool per esecuzione richiederebbe un executor con stato
+`Send`.
+
+### SDK Python
+
+**Non esiste.** Due vincoli sono già decisi per quando esisterà:
+
+- il percorso permissivo degli input non sarà esposto: solo il profilo
+  stretto, dove un input senza contratto è un errore e non una dimenticanza;
+- l'inizializzazione del modulo chiamerà `install(PanicPolicy::Sanitized)` —
+  installare un hook di panico è un atto esplicito dell'embedder, non un
+  effetto collaterale del caricamento di una libreria;
+- in-process non ci sarà un tetto duro sulla memoria; il profilo isolato sarà
+  disponibile ma rinuncia allo zero-copy e attraversa IPC.
+
+### Nuove trasformazioni
+
+Il catalogo cresce solo dopo che le garanzie di cui sopra sono chiuse.
+Aggiungere operazioni a un motore che può ancora andare in OOM senza
+diagnosticarlo sposta il problema, non lo risolve.
+
+---
+
+## Debito dichiarato, senza data
+
+Non blocca la release, ma è scritto perché non si perda.
+
+| voce | dove |
+|---|---|
+| hasher delle chiavi non keyed: costo peggiore quadratico entro il tetto di righe | [`errori-e-limiti.md`](errori-e-limiti.md) |
+| finestra TOCTOU fra pre-validazione del framing IPC e lettura | idem |
+| `max_parallelism` di processo, non di piano | idem |
+| `max_temp_bytes` per dominio: picco fino a ~3× | idem |
+| chiavi canoniche emesse prima della ratifica normativa | idem |
+| fuzzing su toolchain nightly | [`release.md`](release.md) |

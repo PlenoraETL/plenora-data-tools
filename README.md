@@ -1,31 +1,39 @@
 # plenora-data-tools
 
-Motore Rust Arrow-in/Arrow-out per pipeline dichiarative di trasformazione
-tabellare e geografica. Valida integralmente il piano e i contratti prima
+Motore Rust Arrow-in / Arrow-out per pipeline dichiarative di trasformazione
+tabellare e geografica. Valida integralmente il piano e i contratti **prima**
 dell'esecuzione, applica limiti di risorsa e pubblica gli output in modo
 atomico.
 
-> Versione workspace: `1.0.3`.
-> Versione, evidenze e stato di pubblicazione sono registrati nei manifesti
-> sotto `release/` e nelle release GitHub; questo README non sostituisce i gate.
+> Versione workspace: `1.0.3`. Il progetto **non è ancora rilasciabile in
+> produzione**: la ragione, e che cosa manca, sono in
+> [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md).
 
-## In tre comandi
+## Installazione
 
-Il giro completo su un input Arrow (`examples/e1-filtro-ordinamento`, che gira
-in CI a ogni build):
+Toolchain Rust **1.92.0**, pinnata da `rust-toolchain.toml`.
 
 ```sh
-# 1. Cosa contiene l'input: campi, tipi, colonna geometrica, CRS, fingerprint.
-plenora-data-tools describe --input citta.arrow
-
-# 2. Il piano si valida contro il contratto dell'input, senza leggere i dati.
-plenora-data-tools validate --plan piano.json --input citta=citta.arrow
-
-# 3. Esecuzione: output pubblicato atomicamente, metriche JSON su stdout.
-plenora-data-tools run --plan piano.json --input citta=citta.arrow --output output.arrow
+cargo build --release --locked
+# il binario è in target/release/plenora-data-tools
 ```
 
-Il piano e' un documento dichiarativo: dice **cosa** produrre, non come.
+Con i backend geografici nativi (GEOS statico, PROJ bundled; richiede `cmake`,
+`sqlite3`, `libsqlite3-dev`):
+
+```sh
+cargo build --release --locked --features full-backends
+```
+
+Senza quelle feature il comportamento è fail-closed e dichiarato: un piano che
+richiede la riproiezione fallisce in validazione invece di produrre un
+risultato approssimato. `plenora-data-tools capabilities` riporta che cosa la
+build offre davvero.
+
+## Il primo piano
+
+Un piano è un documento JSON dichiarativo: dice **che cosa** produrre, non
+come.
 
 ```json
 {
@@ -41,183 +49,73 @@ Il piano e' un documento dichiarativo: dice **cosa** produrre, non come.
 }
 ```
 
-`citta=` e' il nome dell'input **dichiarato dal piano**, non un'etichetta
-libera: lega quel percorso a quell'input, e un nome non dichiarato e' un
-errore. La forma `--inputs a.arrow b.arrow`, che accoppia per posizione, e'
-**rifiutata** quando il piano dichiara piu' di un input: due file scambiati con
-lo stesso schema darebbero un risultato sbagliato invece di un errore, e
-l'ordine non e' verificabile da nessuno. Resta accettata con un input solo,
-dove non c'e' niente da scambiare.
+`citta` è il nome dell'input **dichiarato dal piano**, non un'etichetta
+libera: lega un percorso a quell'input, e un nome non dichiarato è un errore.
 
-### Cosa succede se qualcosa non torna
+La versione canonica è la **5**. Un piano `schema_version: 4` continua a
+funzionare — viene migrato prima della validazione — e il formato lineare
+`schema_version <= 3` è invariato. Il dettaglio è in
+[`docs/piano-v5.md`](docs/piano-v5.md).
 
-Gli errori sono envelope JSON con quattro assi — categoria, fase, effetto
-remoto, disposizione di retry — emessi su **stdout**, con stderr lasciato
-vuoto e un exit code non zero. E' la convenzione di `plenora-database-tools`:
-chi orchestra i due componenti cerca gli errori in un posto solo.
+## Il giro completo
+
+```sh
+# 1. che cosa contiene l'input: campi, tipi, colonna geometrica, CRS, fingerprint.
+#    Legge il solo header Arrow, non i dati.
+plenora-data-tools describe --input citta.arrow
+
+# 2. il piano regge contro quel contratto?  Non esegue nulla.
+plenora-data-tools validate --plan piano.json --input citta=citta.arrow
+
+# 3. esecuzione: output pubblicato atomicamente, metriche JSON su stdout.
+plenora-data-tools run --plan piano.json --input citta=citta.arrow --output output.arrow
+```
+
+`validate` risponde **prima** di leggere i dati: struttura del piano,
+contratti degli input, CRS, capability della build, limiti effettivi. Un piano
+semanticamente valido ma fuori dal dispatch corrente fallisce qui, non a metà
+esecuzione.
+
+L'esempio completo ed eseguibile è in
+[`examples/e1-filtro-ordinamento/`](examples/e1-filtro-ordinamento/README.md),
+rieseguito dalla suite a ogni CI.
+
+## Errori
+
+Ogni errore esce come **envelope JSON su stdout**, una riga. **stderr resta
+vuoto**, anche sui percorsi d'errore: è una garanzia verificata da test, non
+una convenzione.
 
 ```json
 {"status":"error","protocol_version":1,
- "error":{"category":"schema","phase":"validate","remote_effect":"none",
-          "retry":{"kind":"never"},"message":"colonna `abitanti` assente"}}
+ "error":{"category":"invalid_plan","phase":"validate","remote_effect":"none",
+          "retry":{"kind":"never"},"message":"...",
+          "context":{"node":"grandi","operation":"table.filter","execution_id":"..."}}}
 ```
 
-Nessun output esistente viene sovrascritto, e nessun input viene corretto in
-silenzio: un valore che non e' rappresentabile e' un errore, non un
-arrotondamento.
+Quattro assi espliciti — categoria, fase, effetto remoto, disposizione di
+retry — mai dedotti dal testo del messaggio. L'exit code è la proiezione della
+categoria (`2` piano invalido, `3` schema o dati, `4` limite di risorsa, `5`
+I/O e affini, `6` esecuzione, `70` interno, `130` cancellato).
 
-## Esempi
+**Nessun dato nei messaggi d'errore**: mai valori di cella, mai payload. Un
+errore porta ciò che serve a diagnosticare, non ciò che serve a ricostruire i
+dati.
 
-| | |
+## Documentazione
+
+| documento | contenuto |
 |---|---|
-| [`examples/e1-filtro-ordinamento`](examples/e1-filtro-ordinamento) | il giro minimo: describe, validate, run |
+| [`docs/architettura.md`](docs/architettura.md) | crate, flusso planner/executor/kernel, determinismo, memoria, backend |
+| [`docs/piano-v5.md`](docs/piano-v5.md) | schema canonico, contratti, identità, migrazione dalla v4 |
+| [`docs/cli.md`](docs/cli.md) | comandi, binding degli input, formati, canali, exit code |
+| [`docs/operazioni.md`](docs/operazioni.md) | riferimento completo delle 146 operazioni, generato dal codice |
+| [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) | tassonomia, privacy, cancellazione, panic policy, **e i limiti non coperti** |
+| [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) | che cosa manca, in ordine |
+| [`docs/release.md`](docs/release.md) | gate, piattaforme, packaging, procedura |
+| [`AGENTS.md`](AGENTS.md) | regole di lavoro sul repository |
 
-Ogni esempio porta i propri dati e il proprio output atteso, ed e' rieseguito
-dalla suite: un esempio che non riproduce il proprio risultato rompe la build.
-
-## Ruolo nell'ecosistema Plenora
-
-```text
-plenora-IO-tools       file e formati  <-> Arrow
-plenora-data-tools     Arrow           <-> Arrow
-plenora-database-tools database        <-> Arrow
-```
-
-I tre componenti comunicano tramite schema Arrow e metadata canonici definiti
-da `plenora-contracts`. `plenora-data-tools` non legge direttamente CSV, XLSX,
-SHP, GeoPackage o database: riceve `RecordBatch`/Arrow IPC prodotti dai
-componenti di bordo, preserva il contratto e restituisce Arrow.
-
-## Requisiti
-
-- Rust `1.92` (fissato in `rust-toolchain.toml`);
-- dipendenze bloccate da `Cargo.lock`;
-- CMake, Clang e SQLite per il backend PROJ bundled;
-- toolchain native GEOS/PROJ solo quando richieste dalle relative feature.
-
-Il workspace usa Arrow `59.1.0` con pin esatti.
-
-## Build e test
-
-```sh
-cargo build --workspace --locked
-cargo test --workspace --no-fail-fast --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-```
-
-Esecuzione riproducibile in container:
-
-```sh
-docker run --rm -v "$PWD:/work" -w /work rust:1.92 \
-  cargo test --workspace --no-fail-fast --locked
-```
-
-Il gate safety-critical completo, inclusi i lint anti-panic sulle librerie, è
-documentato in [`AGENTS.md`](AGENTS.md).
-
-## Feature
-
-La CLI non abilita backend geografici per impostazione predefinita:
-
-- `geos-backend`: operazioni che richiedono GEOS;
-- `proj-backend`: risoluzione e riproiezione CRS tramite PROJ;
-- `full-backends`: abilita entrambi.
-
-Esempio:
-
-```sh
-cargo build -p plenora-cli --features full-backends --locked
-```
-
-## CLI — riferimento
-
-```sh
-plenora-data-tools --help
-plenora-data-tools catalog [--family table|geo]      # le operazioni disponibili
-plenora-data-tools capabilities                      # backend compilati
-plenora-data-tools describe --input INPUT.arrow      # contratto di un input
-plenora-data-tools validate --plan PLAN.json --input NOME=INPUT.arrow...
-plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow
-```
-
-`describe` ha l'alias `inspect-dataset`, il nome che lo stesso comando ha in
-`plenora-database-tools`.
-
-`validate` non esegue il piano. `run` accetta piani legacy fino alla versione 3
-(`--input PERCORSO`, senza nome) e piani DAG (`--input NOME=PERCORSO`). Per i
-piani DAG con piu' di un input la forma nominale e' l'unica ammessa.
-
-Il formato DAG corrente e' la **v5** (`"schema_version": 5`). Un piano
-`schema_version: 4` continua a funzionare: viene migrato al canonico prima
-della validazione, e i comandi riportano la versione sotto cui il piano viene
-davvero eseguito. La v4 e la v5 differiscono per un campo — il budget di
-memoria, che si chiama `max_governed_memory_bytes` — e non c'e' alias fra i
-due nomi (ADR 15).
-
-I comandi `transform`, `spatial-join`, `transform-arrow` e `pair-arrow` restano
-disponibili ma sono **deprecati**: la stessa cosa si esprime come piano e si
-esegue con `run`.
-
-### Convenzioni di output
-
-- **Errori**: envelope JSON su stdout (`{"status":"error","protocol_version":1,
-  "error":{…}}`), stderr vuoto, exit code non zero.
-- **Formato**: flag globale `--format json|markdown`, default `json`, valido
-  prima o dopo il sottocomando. `markdown` e' disponibile dove esiste una resa
-  leggibile (`describe`, `catalog`, `capabilities`); altrove il flag e'
-  **rifiutato**, non ignorato.
-- **Exit code**: convenzione **di questo componente**, non della famiglia —
-  `plenora-database-tools` usa `1` per qualunque errore. L'unica garanzia
-  condivisa e' «0 successo, non-zero errore»; codice portabile fra i due deve
-  leggere `error.category` dall'envelope, che resta la fonte di verita'.
-  Qui il codice ne e' una proiezione:
-
-  | codice | significato |
-  |---|---|
-  | 0 | successo |
-  | 2 | piano o configurazione invalidi |
-  | 3 | contratto, schema o capability incompatibili |
-  | 4 | limite di risorsa superato |
-  | 5 | I/O, pubblicazione, rete o autorizzazioni |
-  | 6 | fallimento di esecuzione di un nodo |
-  | 70 | difetto interno |
-  | 130 | cancellato (128 + SIGINT) |
-
-- **`--version`** e `capabilities` emettono JSON con versione del componente,
-  versione Arrow, backend compilati e numero di operazioni a catalogo.
-- **Argomenti**: ogni sottocomando accetta solo i flag che dichiara. Un flag
-  sconosciuto, o un flag a valore singolo ripetuto, e' un errore — non viene
-  ignorato. `--input` si ripete solo su `run` e `validate`, dove ogni
-  occorrenza e' un input nominato diverso.
-- Gli output esistenti non vengono sovrascritti silenziosamente.
-
-## Contratti e compatibilità
-
-- Nessun CRS predefinito e nessuna riproiezione implicita.
-- Le dichiarazioni CRS incompatibili non vengono conciliate silenziosamente.
-- Schema, metadata, nullability e dimensionalità fanno parte del contratto.
-- Arrow è parte della superficie pubblica Rust: un aggiornamento maggiore o
-  incompatibile è trattato come cambiamento potenzialmente breaking.
-- Le baseline normative e Git esatte appartengono ai documenti di release, non
-  a riferimenti mobili in questo file.
-
-Per il modello completo vedere:
-
-- [`Architetture.md`](Architetture.md);
-- [`Prestazioni.md`](Prestazioni.md);
-- [`docs/adr/`](docs/adr/);
-- [`docs/deroghe.md`](docs/deroghe.md).
-
-## Release
-
-Una release stabile richiede sulla stessa revisione immutabile:
-
-1. test default e all-features;
-2. Clippy, safety lint e build sulle piattaforme dichiarate;
-3. conformance e roundtrip con `plenora-IO-tools` e
-   `plenora-database-tools`;
-4. aggiornamento del manifesto `release/` e della baseline normativa;
-5. revisione indipendente prima del tag.
-
-Il bump di versione, il tag e la pubblicazione non sono impliciti nel semplice
-superamento della suite locale.
+Se legge un solo documento oltre a questo, legga
+[`docs/errori-e-limiti.md`](docs/errori-e-limiti.md): la seconda metà dice
+dove le garanzie si fermano, ed è l'informazione che serve prima di mettere il
+motore su dati che contano.
