@@ -236,7 +236,7 @@ impl PairArrowSchema {
     }
 }
 
-/// Vista pura dei parametri pair (ADR-0014 D14.2): i campi portano i nomi di
+/// Vista pura dei parametri pair (architettura.md#geometrie D14.2): i campi portano i nomi di
 /// parametro del protocollo v3. Alimentata dal trasporto
 /// ([`PairArrowSchema::validate_parameters`]) e dalla prepare del piano DAG
 /// (`GeoBinaryPlan`), che vi inietta i parametri tipizzati del nodo e i
@@ -255,7 +255,7 @@ pub struct PairParameterValues {
     pub tolerance: Option<f64>,
 }
 
-/// Tabella parametri-per-op in forma pura (ADR-0014 D14.2): parametri
+/// Tabella parametri-per-op in forma pura (architettura.md#geometrie D14.2): parametri
 /// ammessi, obbligatori e domini per operazione, senza IO ne' schema di
 /// trasporto. `max_output_rows` resta fuori: e' un limite del trasporto v3,
 /// non un parametro di operazione (nel piano DAG il ruolo e' dei limiti di
@@ -453,7 +453,7 @@ const fn validate_aligned_pair_rows(
 }
 
 /// Errore di decodifica di una colonna geometria con posizione strutturata
-/// (ADR-0014 D14.5).
+/// (architettura.md#geometrie D14.5).
 ///
 /// L'indice di riga nella sequenza decodificata e' un CAMPO — `None` per
 /// gli errori senza una riga (limite righe, colonna geometria assente o non
@@ -492,20 +492,20 @@ fn decode_geometry_side(
         });
     }
     let geometry_index = geometry_column_index(&schema, geometry_column)?;
-    // Trasporto v3 invariato (perimetro ADR-0014): la posizione strutturata
+    // Trasporto v3 invariato (perimetro architettura.md#geometrie): la posizione strutturata
     // della cella e' scartata qui, l'errore propaga nel testo storico.
     let geometries =
         decode_geometry_batches(&schema, &batches, geometry_index).map_err(|error| error.source)?;
     Ok((schema, batches, geometries))
 }
 
-/// Nucleo della decodifica validante fattorizzato (ADR-0014 D14.2).
+/// Nucleo della decodifica validante fattorizzato (architettura.md#geometrie D14.2).
 ///
 /// Schema e batch IPC → geometrie materializzate, con i gate `MAX_ROWS`
 /// (righe totali) e `MAX_CELL_BYTES` (per cella) in un'unica fonte di
 /// verita'. Usata da `pair_arrow` (trasporto v3, via
 /// [`decode_geometry_side`]) e dal ramo geo di `run_binary_blocking` (piano
-/// v4): una sola camminata validante (ADR-0011), totale e mai lazy (D14.3).
+/// v4): una sola camminata validante (architettura.md#geometrie), totale e mai lazy (D14.3).
 ///
 /// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
 /// per costruzione che autorizza le varianti `*_validated` dei kernel a
@@ -585,7 +585,7 @@ pub fn decode_geometry_batches(
     Ok(geometries)
 }
 
-/// Preflight della forma decodificata (ADR-0014 D14.4).
+/// Preflight della forma decodificata (architettura.md#geometrie D14.4).
 ///
 /// Dimensione in byte della colonna geometria decodificata — slot `Option`
 /// per riga (null inclusi) piu' l'heap di ogni cella via
@@ -1131,7 +1131,7 @@ pub fn pair_arrow_with_format(
                     "booleana pairwise senza kernel",
                 ))?;
             // righe indipendenti: parallelo con ordine deterministico.
-            // ADR-0001: primo errore in ordine di riga (collect
+            // architettura.md#determinismo: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato), mai la
             // selezione non deterministica di rayon.
             let results: Vec<Result<Option<Vec<u8>>, ArrowTransportError>> = left
@@ -1175,7 +1175,7 @@ pub fn pair_arrow_with_format(
                 .ok_or(ArrowTransportError::Internal(
                     "spatial_predicate validato assente",
                 ))?;
-            // ADR-0001: primo errore in ordine di riga (collect
+            // architettura.md#determinismo: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
             let results: Vec<Result<Option<bool>, ArrowTransportError>> =
                 left.par_iter()
@@ -1207,7 +1207,7 @@ pub fn pair_arrow_with_format(
                 .ok_or(ArrowTransportError::Internal(
                     "max_coordinate_pairs validato assente",
                 ))?;
-            // ADR-0001: primo errore in ordine di riga (collect
+            // architettura.md#determinismo: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
             let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
                 .par_iter()
@@ -1247,7 +1247,7 @@ pub fn pair_arrow_with_format(
         | PairOperation::GeodesicDistance
         | PairOperation::Bearing => {
             validate_aligned_pair_rows(left_rows, right_rows, limit)?;
-            // ADR-0001: primo errore in ordine di riga (collect
+            // architettura.md#determinismo: primo errore in ordine di riga (collect
             // sequenziale dopo quello parallelo indicizzato).
             let results: Vec<Result<Option<f64>, ArrowTransportError>> = left
                 .par_iter()
@@ -1404,7 +1404,7 @@ pub fn pair_arrow_with_format(
     };
 
     // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
-    // DER-002 estesa) — post-processo centrale prima della codifica IPC.
+    // errori-e-limiti.md#limiti-dichiarati estesa) — post-processo centrale prima della codifica IPC.
     let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
     let output_rows: u64 = output_batches
         .iter()

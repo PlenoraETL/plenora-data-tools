@@ -1,17 +1,17 @@
-//! Errori unificati (Architetture.md par. 3.1).
+//! Errori unificati (architettura.md).
 //!
 //! Regola: nessun dato sensibile negli errori — contesto (nodo, operazione,
-//! motivo), mai valori. La modalità diagnostica opt-in (ADR 3) è aggiunta
+//! motivo), mai valori. La modalità diagnostica opt-in (errori-e-limiti.md) è aggiunta
 //! dall'executor, non da queste varianti.
 //!
-//! Fase 2B M1d (ADR 3): ogni errore espone una [`ErrorCategory`] stabile
+//! Fase 2B M1d (errori-e-limiti.md): ogni errore espone una [`ErrorCategory`] stabile
 //! ([`PlenoraError::category`]); `Execution` e `Cancelled` portano
 //! l'`execution_id` dell'esecuzione che li ha prodotti (vuoto se costruiti
 //! fuori da un'esecuzione DAG, es. percorso legacy `table_engine` — il
 //! Display lo omette in quel caso).
 //!
 //! Milestone D (contratti trasversali v2.0-rc10 §9, proposta in attesa di
-//! ratifica — andra' in ADR-0009): l'errore porta i quattro assi
+//! ratifica — andra' in piano-v5.md#contratti-di-input): l'errore porta i quattro assi
 //! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste da
 //! M1d; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
 //! l'effetto remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]) e
@@ -23,7 +23,7 @@
 //! dopo l'invio di un commit non lo e' — con una disposizione calcolata
 //! da fase, effetto e idempotenza, mai dalla sola categoria.
 //!
-//! Tagging di fase ai confini (ADR-0009, BLOCK-03): la fase derivata per
+//! Tagging di fase ai confini (piano-v5.md#contratti-di-input, BLOCK-03): la fase derivata per
 //! variante e' raffinata nei punti in cui il confine conosce il momento
 //! esatto (lettura input, publish) dalla variante wrapper
 //! [`PlenoraError::Tagged`] — testo `Display` e altri assi invariati per
@@ -89,7 +89,7 @@ pub enum PlenoraError {
 
     /// Fallimento di un nodo durante l'esecuzione.
     ///
-    /// `execution_id` (ADR 3, M1d) identifica l'esecuzione DAG che ha
+    /// `execution_id` (errori-e-limiti.md, M1d) identifica l'esecuzione DAG che ha
     /// prodotto l'errore: e' riempito dall'executor al confine di
     /// dispatch/uscita; resta vuoto per errori costruiti fuori da
     /// un'esecuzione DAG (percorso legacy `table_engine`).
@@ -108,7 +108,7 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Esecuzione annullata dal chiamante (ADR 3, M1c): il token di
+    /// Esecuzione annullata dal chiamante (errori-e-limiti.md, M1c): il token di
     /// cancellazione e' stato osservato a un confine cooperativo
     /// dell'executor e nessun output e' stato pubblicato (invariante I8).
     /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
@@ -164,7 +164,7 @@ pub enum PlenoraError {
     },
 
     /// Errore con fase esplicita, assegnata al confine che lo ha prodotto
-    /// (tagging di fase ai confini, ADR-0009 — BLOCK-03): la variante non
+    /// (tagging di fase ai confini, piano-v5.md#contratti-di-input — BLOCK-03): la variante non
     /// distingue il momento (lo stesso `Io` nasce leggendo un input o
     /// scrivendo l'output), il confine si'. Wrapper trasparente: il
     /// `Display` e' DELEGATO alla sorgente (testo identico, nessun
@@ -326,7 +326,7 @@ categorie_errore! {
 /// progettuale in [`PlenoraError::phase`]. Mappatura sul ciclo di
 /// data-tools; per i bordi filesystem vale §9: `Connect` = acquisizione
 /// dell'handle/lease sulla risorsa, `Probe` = ispezione preliminare del
-/// formato, `Commit` = rename atomico di publish (ADR 7).
+/// formato, `Commit` = rename atomico di publish (errori-e-limiti.md#publish-e-cleanup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorPhase {
     /// Validazione: parse del piano (JSON), contratti, schema, CRS,
@@ -335,7 +335,7 @@ pub enum ErrorPhase {
     /// Acquisizione dell'handle/lease sulla risorsa (bordo filesystem, §9).
     Connect,
     /// Ispezione preliminare del formato o della risorsa di destinazione
-    /// (es. riconoscimento fail-closed del filesystem, ADR 7).
+    /// (es. riconoscimento fail-closed del filesystem, errori-e-limiti.md#publish-e-cleanup).
     Probe,
     /// Preparazione di kernel e risorse prima dell'esecuzione.
     Prepare,
@@ -346,7 +346,7 @@ pub enum ErrorPhase {
     Write,
     /// Finalizzazione dello stream di output (chiusura del writer).
     Finalize,
-    /// Commit dell'effetto: rename atomico di publish (ADR 7, §9).
+    /// Commit dell'effetto: rename atomico di publish (errori-e-limiti.md#publish-e-cleanup, §9).
     Commit,
     /// Annullamento dell'effetto, con conferma.
     Rollback,
@@ -388,7 +388,7 @@ impl fmt::Display for ErrorPhase {
 /// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
 /// effetto sempre [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]);
 /// il caso «publish riuscito, durabilita' non confermata» non e' un errore
-/// ma un esito tipizzato (`PublishOutcome`, ADR 7) che si mappa su questo
+/// ma un esito tipizzato (`PublishOutcome`, errori-e-limiti.md#publish-e-cleanup) che si mappa su questo
 /// asse senza duplicarlo in una variante d'errore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RemoteEffect {
@@ -484,7 +484,7 @@ impl fmt::Display for RetryDisposition {
 }
 
 impl PlenoraError {
-    /// Categoria dell'errore (ADR 3, M1d): mapping dichiarato per variante.
+    /// Categoria dell'errore (errori-e-limiti.md, M1d): mapping dichiarato per variante.
     /// Per [`PlenoraError::Tagged`] e' delegata alla sorgente: il tag
     /// raffina solo la fase.
     #[must_use]
@@ -515,10 +515,10 @@ impl PlenoraError {
     /// Calcolo per data-tools (la variante porta gia' fase ed effetto per
     /// mapping dichiarato; la tabella segue):
     ///
-    /// - L'effetto e' sempre [`RemoteEffect::None`] per costruzione (ADR 7:
+    /// - L'effetto e' sempre [`RemoteEffect::None`] per costruzione (errori-e-limiti.md#publish-e-cleanup:
     ///   publish atomico, nessun output parziale mai visibile; I8:
     ///   cancellazione senza output pubblicato) e la riesecuzione a parita'
-    ///   di input e' idempotente (ADR-0001: stesso input → stesso output;
+    ///   di input e' idempotente (architettura.md#determinismo: stesso input → stesso output;
     ///   il publish rifiuta una destinazione esistente, quindi un tentativo
     ///   fallito prima del rename non lascia nulla che ostacoli il
     ///   successivo). Nessun errore di data-tools richiede quindi
@@ -532,14 +532,14 @@ impl PlenoraError {
     ///   e operazione idempotente. Backoff e numero di tentativi restano
     ///   responsabilita' del chiamante.
     /// - [`RetryDisposition::Never`] per tutte le cause deterministiche
-    ///   (contratto, schema, mapping, esecuzione di un nodo: ADR-0001 — a
+    ///   (contratto, schema, mapping, esecuzione di un nodo: architettura.md#determinismo — a
     ///   parita' di input fallirebbero allo stesso modo), per la
     ///   cancellazione, che e' volontaria, e per le invarianti interne
     ///   violate (`Internal`), deterministiche per definizione.
     /// - [`RetryDisposition::After`] non e' mai prodotto: data-tools non ha
     ///   sorgenti di backoff tipizzate.
     ///
-    /// Il tagging di fase ai confini ([`PlenoraError::Tagged`], ADR-0009)
+    /// Il tagging di fase ai confini ([`PlenoraError::Tagged`], piano-v5.md#contratti-di-input)
     /// NON cambia la disposizione: e' delegata alla sorgente, perche'
     /// effetto `None` per costruzione e idempotenza della riesecuzione
     /// valgono a qualunque fase raffinata.
@@ -565,7 +565,7 @@ impl PlenoraError {
 
     /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1,
     /// milestone D): derivazione dichiarata per variante, RAFFINATA dal
-    /// tagging esplicito ai confini ([`PlenoraError::Tagged`], ADR-0009 —
+    /// tagging esplicito ai confini ([`PlenoraError::Tagged`], piano-v5.md#contratti-di-input —
     /// BLOCK-03). Un errore taggato riporta la fase dichiarata dal confine
     /// che lo ha prodotto; uno non taggato la fase derivata dalla variante.
     ///
@@ -576,7 +576,7 @@ impl PlenoraError {
     ///   (`Network::input_stream`) e sonde dell'header IPC nella CLI — gli
     ///   errori `Io`/`DataMapping`/`Schema` che nascono leggendo una
     ///   sorgente (prima emergevano come `Write`);
-    /// - publish (ADR 7, `geo_transport::publish`): riconoscimento della
+    /// - publish (errori-e-limiti.md#publish-e-cleanup, `geo_transport::publish`): riconoscimento della
     ///   destinazione (filesystem non supportato, directory inesistente) →
     ///   [`ErrorPhase::Probe`]; creazione del tempfile →
     ///   [`ErrorPhase::Write`]; flush e sync del writer →
@@ -648,7 +648,7 @@ impl PlenoraError {
         }
     }
 
-    /// Tag di fase al confine (ADR-0009, BLOCK-03): dichiara la fase esatta
+    /// Tag di fase al confine (piano-v5.md#contratti-di-input, BLOCK-03): dichiara la fase esatta
     /// in cui l'errore e' nato, avvolgendolo in [`PlenoraError::Tagged`].
     /// Testo `Display`, categoria, effetto e disposizione di retry sono
     /// invariati (delegati alla sorgente). Se l'errore e' GIA' taggato il
@@ -854,7 +854,7 @@ impl PlenoraError {
     /// variante.
     ///
     /// Sempre [`RemoteEffect::None`], PER COSTRUZIONE: il publish atomico
-    /// (ADR 7) scrive su tempfile nella stessa directory e pubblica solo a
+    /// (errori-e-limiti.md#publish-e-cleanup) scrive su tempfile nella stessa directory e pubblica solo a
     /// grafo completato con successo, eliminando il tempfile a qualunque
     /// fallimento — nessun output parziale e' mai visibile alla
     /// destinazione; la cancellazione rispetta l'invariante I8 (nessun
@@ -863,7 +863,7 @@ impl PlenoraError {
     /// chiamante come effetto dell'operazione. L'unico caso «effetto
     /// presente a fronte di una segnalazione» — publish riuscito con
     /// durabilita' non confermata — NON e' un errore (R9.3): e' tipizzato
-    /// come `PublishOutcome::PublishedButDurabilityUnconfirmed` (ADR 7) e
+    /// come `PublishOutcome::PublishedButDurabilityUnconfirmed` (errori-e-limiti.md#publish-e-cleanup) e
     /// mappato sull'asse effetto da quel tipo, non duplicato qui.
     #[must_use]
     pub const fn remote_effect(&self) -> RemoteEffect {
@@ -890,7 +890,7 @@ impl PlenoraError {
     }
 }
 
-/// Suffisso del Display con l'`execution_id` (ADR 3): omesso quando
+/// Suffisso del Display con l'`execution_id` (errori-e-limiti.md): omesso quando
 /// l'errore e' nato fuori da un'esecuzione DAG (id vuoto), cosi' i messaggi
 /// del percorso legacy restano invariati.
 fn execution_suffix(execution_id: &str) -> String {
@@ -1206,7 +1206,7 @@ mod tests {
     fn tagged_axes_are_delegated_to_the_source() {
         // Gli assi diversi dalla fase attraversano il wrapper invariati:
         // `Io` taggato resta categoria Io, effetto None, retry `Safe` —
-        // la disposizione NON cambia col raffinamento di fase (ADR-0009).
+        // la disposizione NON cambia col raffinamento di fase (piano-v5.md#contratti-di-input).
         let tagged = PlenoraError::Io(std::io::Error::other("io")).with_phase(ErrorPhase::Read);
         assert_eq!(tagged.category(), ErrorCategory::Io);
         assert_eq!(tagged.remote_effect(), RemoteEffect::None);
@@ -1245,7 +1245,7 @@ mod tests {
 
     #[test]
     fn remote_effect_is_none_for_every_variant_by_construction() {
-        // ADR 7 (publish atomico: nessun output parziale mai visibile) +
+        // errori-e-limiti.md#publish-e-cleanup (publish atomico: nessun output parziale mai visibile) +
         // invariante I8 (cancellazione senza output pubblicato): un
         // `PlenoraError` non accompagna mai un effetto osservabile. Il caso
         // «durabilita' non confermata» e' un `PublishOutcome`, non un

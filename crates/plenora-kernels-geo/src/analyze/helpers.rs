@@ -161,7 +161,7 @@ pub(in crate::analyze) fn single_geometry<'a>(
 }
 
 /// Identificazione della colonna geometria sul campo dello schema
-/// (ADR-0009, decisione 8).
+/// (piano-v5.md#contratti-di-input, decisione 8).
 ///
 /// Estensione `geoarrow.wkb` OPPURE sole chiavi canoniche
 /// (`plenora.geometry.*`), lo stesso criterio del trasporto
@@ -169,7 +169,7 @@ pub(in crate::analyze) fn single_geometry<'a>(
 /// QUI, in analisi del piano — il modello e' il rifiuto dimensionale B1.3 di
 /// [`require_xy_dimensions`]: una colonna che il trasporto non saprebbe
 /// identificare e' fermata a compile-plan, mai scoperta a meta' esecuzione
-/// (ADR-0008).
+/// (architettura.md#geometrie).
 pub(in crate::analyze) fn require_identifiable_geometry(
     op: &str,
     input: &DataContract,
@@ -192,7 +192,7 @@ pub(in crate::analyze) fn require_identifiable_geometry(
 }
 
 /// Contratto di output di un'operazione che RISCRIVE i tipi geometrici
-/// della colonna (ADR-0009, decisione 8).
+/// della colonna (piano-v5.md#contratti-di-input, decisione 8).
 ///
 /// La proprieta' `types` dichiara i tipi dell'OUTPUT e le chiavi canoniche
 /// `types`/`types_declaration` ereditate dal campo di input sono rimosse —
@@ -280,7 +280,7 @@ pub(in crate::analyze) fn rebuild(
 /// -> copiata; in entrambe con valori diversi -> errore esplicito che nomina
 /// la chiave (mai i valori: errori senza dati). Le chiavi di `right` sono
 /// esaminate in ordine lessicografico: l'eventuale errore e' deterministico
-/// (ADR-0001), mai dipendente dall'ordine di iterazione della mappa.
+/// (architettura.md#determinismo), mai dipendente dall'ordine di iterazione della mappa.
 pub(in crate::analyze) fn merge_schema_metadata(
     op: &str,
     left: &DataContract,

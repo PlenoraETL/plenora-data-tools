@@ -1310,7 +1310,7 @@ pub fn prepare_step(step: &Step) -> Result<PreparedStep> {
 ///
 /// `spill_dir` e' la directory di spill del chiamante (`None`: tempdir
 /// posseduta per operazione), `spill_metrics` accumula le metriche degli
-/// spill attivati nella catena (ADR-0002).
+/// spill attivati nella catena (architettura.md#memoria).
 #[allow(clippy::too_many_lines)] // Exhaustive contract dispatcher kept in one audited match.
 fn execute_step(
     batch: &RecordBatch,
@@ -1388,7 +1388,7 @@ fn execute_step(
 }
 
 // ---------------------------------------------------------------------------
-// Selezione dello spill unario (ADR-0002, Fase 2B M2c)
+// Selezione dello spill unario (architettura.md#memoria, Fase 2B M2c)
 // ---------------------------------------------------------------------------
 
 /// Il piano unario e' spill-capable: un solo passo `sort`/`distinct`/
@@ -1421,7 +1421,7 @@ fn spill_workspace(spill_dir: Option<&Path>, limits: &Limits) -> Result<spill::R
     )
 }
 
-/// `table.sort` con attivazione preventiva dello spill (ADR-0002): stessa
+/// `table.sort` con attivazione preventiva dello spill (architettura.md#memoria): stessa
 /// soglia deterministica del set-op spilled (byte stimati dell'input vs
 /// `max_governed_memory_bytes`); sopra soglia external merge sort su disco, sotto il
 /// percorso in memoria. Output identico nei due casi.
@@ -1500,7 +1500,7 @@ pub fn execute_complete_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Resul
 }
 
 /// Come [`execute_batch`], ma con la directory di spill decisa dal
-/// chiamante (ADR-0002, Fase 2B M2c).
+/// chiamante (architettura.md#memoria, Fase 2B M2c).
 ///
 /// `Some(dir)` instrada i file di spill di
 /// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione

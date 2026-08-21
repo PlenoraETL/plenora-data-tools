@@ -1,12 +1,12 @@
 //! Verifica prestazionale mirata dei percorsi toccati dai commit perf del
-//! 2026-07-28 (misura richiesta da Prestazioni.md §8): la full `geo_sweep`
+//! 2026-07-28 (misura richiesta da architettura.md): la full `geo_sweep`
 //! non e' eseguibile su questo host (stallo noto WSL2 `__vma_start_write`,
 //! vedi `benchmarks/sweep/geo_sweep.md`), quindi fixture COMPATTE a bassa
 //! pressione di allocazione, mediana di 5, stessa classe di carico:
 //!
 //! - `ref.decode_points`: ancora (percorso invariato per costruzione);
 //! - `op.centroid_polys`: per-cella con decode+op+encode via `map_nullable`
-//!   (misura il costo del Vec di determinismo ADR-0001);
+//!   (misura il costo del Vec di determinismo architettura.md#determinismo);
 //! - `op.snap_reference_2k`: R-tree del riferimento condiviso vs per-cella;
 //! - `op.voronoi_2k`: pre-filtro `bounding_rect`;
 //! - `op.from_wkt`: parsing senza uppercase integrale;
@@ -64,7 +64,7 @@ impl Rng {
 
     fn range(&mut self, min: f64, max: f64) -> f64 {
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (ADR-0001).
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo).
         #[allow(clippy::suboptimal_flops)]
         let value = min + (max - min) * self.unit();
         value
@@ -76,10 +76,10 @@ fn star_polygon(rng: &mut Rng, cx: f64, cy: f64, radius: f64, vertices: usize) -
     for index in 0..vertices {
         #[allow(clippy::cast_precision_loss)] // index < 2^53: esatto.
         let angle = index as f64 * 2.0 * std::f64::consts::PI / vertices as f64;
-        // Niente mul_add/FMA (ADR-0010): forma non fusa come il contratto.
+        // Niente mul_add/FMA (architettura.md#determinismo): forma non fusa come il contratto.
         #[allow(clippy::suboptimal_flops)]
         let jitter = 0.75 + 0.5 * rng.unit();
-        // Niente mul_add/FMA (ADR-0010): forma non fusa come il contratto.
+        // Niente mul_add/FMA (architettura.md#determinismo): forma non fusa come il contratto.
         #[allow(clippy::suboptimal_flops)]
         let point = (
             cx + radius * jitter * angle.cos(),
@@ -100,7 +100,7 @@ fn grid_geometries(shift: f64) -> Vec<Geometry<f64>> {
     for j in 0..50 {
         for i in 0..50 {
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (ADR-0001).
+            // violerebbe il determinismo bit-esatto (architettura.md#determinismo).
             #[allow(clippy::suboptimal_flops)]
             let x0 = f64::from(i) * 100.0 + shift;
             #[allow(clippy::suboptimal_flops)]

@@ -1031,7 +1031,7 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
     // `cross_join` (`preflight_output_bytes`), non piu' dal controllo di
     // ammissione a valle: il numero di righe dell'output e' esatto prima di
     // allocare. Per le operazioni senza preflight resta l'ammissione, ed e'
-    // una deroga dichiarata (DER-011) — non un tetto duro.
+    // una deroga dichiarata (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce) — non un tetto duro.
     //
     // Il caso e' costruito con un margine che l'aritmetica di Arrow non puo'
     // ribaltare: due input da 64 righe a una colonna (~mezzo KiB l'uno)

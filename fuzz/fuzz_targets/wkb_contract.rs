@@ -6,7 +6,7 @@ use libfuzzer_sys::fuzz_target;
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, validate_wkb_contract, Operation};
 
 fuzz_target!(|payload: &[u8]| {
-    // Oracolo differenziale ADR-0011: il decoder validante (via
+    // Oracolo differenziale architettura.md#geometrie: il decoder validante (via
     // `geometry_from_wkb`) e il percorso precedente (validatore strutturale
     // + geozero) devono accettare/rifiutare gli stessi payload e produrre
     // la stessa geometria, coordinata per coordinata.

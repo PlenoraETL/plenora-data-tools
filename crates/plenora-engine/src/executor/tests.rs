@@ -1,5 +1,5 @@
-//! Test dell'executor (Fase 2A-4, Architetture.md par. 6.3, ADR 5;
-//! Prestazioni.md V3/V4/V8/V9).
+//! Test dell'executor (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor;
+//! architettura.md V3/V4/V8/V9).
 
 use std::cell::Cell;
 use std::fs::File;
@@ -807,7 +807,7 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
         .iter()
         .map(|governed| governed.batch.num_rows())
         .sum();
-    // Ordine e BatchSequence logici invariati (ADR-0001).
+    // Ordine e BatchSequence logici invariati (architettura.md#determinismo).
     assert_eq!(sequences, vec![0, 1, 2, 3]);
     assert_eq!(rows, 4 * 512);
 }
@@ -901,7 +901,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         "schema_version": 5,
         "inputs": ["main"],
         // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
-        // batch (ADR-0002 M2d: si resta in memoria solo finche'
+        // batch (architettura.md#memoria M2d: si resta in memoria solo finche'
         // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
         // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
         // quota temporanea non verrebbe nemmeno interrogata. Il fatto che
@@ -1909,7 +1909,7 @@ fn edge_row_limit_accumulates_across_batches() {
 #[test]
 fn expansion_factor_triggers_on_join() {
     // 3 righe left x 2 righe right con la stessa chiave: 6 righe in uscita,
-    // base ADR 6 = left + right = 5 -> 6 > 5 x 1.0 scatta il limite.
+    // base errori-e-limiti.md = left + right = 5 -> 6 > 5 x 1.0 scatta il limite.
     let plan = json!({
         "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
@@ -1954,7 +1954,7 @@ fn expansion_factor_triggers_on_join() {
 fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
     // Stesso join del test precedente ma fattore 1.5: con la base left+right
     // (SumRelative, 6/5 = 1.2) NON scatterebbe; table.join dichiara
-    // MaxRelative (max(6/3, 6/2) = 3.0 > 1.5) -> scatta (ADR 6).
+    // MaxRelative (max(6/3, 6/2) = 3.0 > 1.5) -> scatta (errori-e-limiti.md).
     let plan = json!({
         "schema_version": 5,
         "limits": {"max_expansion_factor": 1.5},
@@ -1991,7 +1991,7 @@ fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
         .expect_err("MaxRelative oltre il fattore 1.5");
     let message = error.to_string();
     assert!(message.contains("max_expansion_factor"), "{message}");
-    // Il messaggio riporta vincolo e metriche (ADR 6).
+    // Il messaggio riporta vincolo e metriche (errori-e-limiti.md).
     assert!(message.contains("MaxRelative"), "{message}");
     assert!(message.contains("output/left"), "{message}");
     assert!(message.contains("output/right"), "{message}");
@@ -2048,7 +2048,7 @@ fn expansion_constraint_sum_relative_on_union_distinct() {
     // union_distinct dichiara SumRelative: output 3 righe su base left+right
     // = 4 -> metrica 0.75, sotto il fattore 1.0. Con LeftRelative (3/2 =
     // 1.5) scatterebbe: il vincolo dichiarato in catalogo e' quello
-    // applicato (ADR 6).
+    // applicato (errori-e-limiti.md).
     let plan = json!({
         "schema_version": 5,
         "limits": {"max_expansion_factor": 1.0},
@@ -2089,7 +2089,7 @@ fn expansion_constraint_sum_relative_on_union_distinct() {
 
 #[test]
 fn total_rows_processed_counts_rows_through_all_nodes() {
-    // Metrica obbligatoria ADR 6 (non limite v1): somma delle righe in
+    // Metrica obbligatoria errori-e-limiti.md (non limite v1): somma delle righe in
     // ingresso a ogni nodo. 3 righe attraversano filter e rename ->
     // 3 + 3 = 6.
     let plan = json!({
@@ -2276,7 +2276,7 @@ fn geo_contract_4326_realistic() -> DataContract {
 
 #[test]
 fn canonical_output_schema_normalizes_axis_order_and_deduces_srid() {
-    // ADR-0009, emendamento 2026-08-01: con un canonical realistico,
+    // piano-v5.md#contratti-di-input, emendamento 2026-08-01: con un canonical realistico,
     // `axis_order` descrive l'ordine fisico normalizzato mentre `srid` e'
     // dedotto dall'autorita' — completamento dell'assente su un campo SENZA
     // chiavi di lineage (EPSG:4326 -> lon_lat + 4326).
@@ -2359,7 +2359,7 @@ const MONTE_MARIO_WKT: &str = concat!(
 
 #[test]
 fn canonical_output_schema_passthrough_wkt_definition_is_idempotent() {
-    // ADR-0009, emendamento 2026-07-31 (classe B): contratto `Resolved` da
+    // piano-v5.md#contratti-di-input, emendamento 2026-07-31 (classe B): contratto `Resolved` da
     // definizione WKT + lineage `crs_definition = WKT`/`wkt` — la fusione
     // NON fallisce (R2.6): l'emissione WKT e' byte-identica alla lineage
     // (prima dell'emendamento il testo WKT sarebbe finito in `crs_id`,
@@ -2633,7 +2633,7 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
 
 #[test]
 fn canonical_output_schema_emits_rewritten_types_from_contract() {
-    // ADR-0009 decisione 8: il contratto di un type-changer (es. centroid)
+    // piano-v5.md#contratti-di-input decisione 8: il contratto di un type-changer (es. centroid)
     // dichiara i tipi dell'OUTPUT; la fusione li emette dal contratto.
     let mut contract = geo_contract();
     contract.geometries[0].types = ContractProperty::new(
@@ -2924,7 +2924,7 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
         Some("unknown")
     );
     // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non ha
-    // significato fuori dal processo, ADR-0009 decisione 3).
+    // significato fuori dal processo, piano-v5.md#contratti-di-input decisione 3).
     assert!(!metadata.contains_key(PLENORA_FIELD_ID_KEY));
     // Coesistenza R2.6: le chiavi GeoArrow legacy non sono rimosse.
     assert_eq!(
@@ -3919,7 +3919,7 @@ fn whole_to_many_ops_are_exempt_from_expansion_factor() {
 #[test]
 fn generate_grid_expansion_exempt_with_small_trigger() {
     // Trigger da 5 righe + griglia 100x100 celle (lato 1.0): 10_000 righe
-    // prodotte con fattore 1.0 — esente perche' WholeToMany (ADR 6).
+    // prodotte con fattore 1.0 — esente perche' WholeToMany (errori-e-limiti.md).
     let plan = json!({
         "schema_version": 5,
         "crs": "EPSG:32632",
@@ -4278,7 +4278,7 @@ fn binary_blocking_metrics_count_real_input_batches() {
 }
 
 // ---------------------------------------------------------------------------
-// Identita' ADR 4: l'executor rifiuta i grafi incompatibili
+// Identita' piano-v5.md#identita-e-fingerprint: l'executor rifiuta i grafi incompatibili
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -4295,7 +4295,7 @@ fn execute_rejects_a_graph_incompatible_with_the_environment() {
     let contracts = vec![("main".to_owned(), table_contract())];
     let mut graph = validate(&plan.to_string(), &contracts).expect("validate");
     // Grafo la cui identita' non combacia con l'ambiente corrente (es. riuso
-    // di un grafo validato da un'altra build): l'executor rifiuta (ADR 4).
+    // di un grafo validato da un'altra build): l'executor rifiuta (piano-v5.md#identita-e-fingerprint).
     graph.set_engine_version_for_test("0.0.0-altra");
     let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
     match execute(&graph, inputs, RuntimeContext::default()) {
@@ -4313,7 +4313,7 @@ fn execute_rejects_a_graph_incompatible_with_the_environment() {
 }
 
 // ---------------------------------------------------------------------------
-// Panic dei kernel al confine dell'executor (ADR 3)
+// Panic dei kernel al confine dell'executor (errori-e-limiti.md)
 // ---------------------------------------------------------------------------
 
 /// Guard che deregistra il proprio nodo dall'hook di iniezione panic anche
@@ -4509,12 +4509,12 @@ fn kernel_panic_publishes_nothing() {
     assert!(result.is_err());
     assert!(
         !destination.exists(),
-        "nessun publish dopo panic (ADR 3): il tempfile e' eliminato"
+        "nessun publish dopo panic (errori-e-limiti.md): il tempfile e' eliminato"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Cancellazione cooperativa (ADR 3, M1c), errori arricchiti (M1d), TempStore
+// Cancellazione cooperativa (errori-e-limiti.md, M1c), errori arricchiti (M1d), TempStore
 // ---------------------------------------------------------------------------
 
 /// Input lazy che cancella il token dopo `cancel_after` batch emessi: simula
@@ -4646,7 +4646,7 @@ fn cancel_between_batches_in_streaming_chain() {
         }
         other => panic!("atteso Cancelled: {other:?}"),
     }
-    // Metriche parziali osservabili al punto di cancel (ADR 3): solo il
+    // Metriche parziali osservabili al punto di cancel (errori-e-limiti.md): solo il
     // primo batch e' entrato nella catena.
     let metrics = output.metrics();
     assert_eq!(metrics.nodes["f"].batches_in, 1);
@@ -4780,7 +4780,7 @@ fn non_interruptible_op_is_never_interrupted() {
     output.next().expect("primo batch").expect("batch ok");
     // Il secondo batch attraversa comunque entrambi i kernel
     // (`NonInterruptible`: nessun check); il cancel e' osservato al confine
-    // di piano, prima della consegna (ADR 3: nessuna nuova attivita' dopo
+    // di piano, prima della consegna (errori-e-limiti.md: nessuna nuova attivita' dopo
     // la cancellazione).
     match output.next() {
         Some(Err(PlenoraError::Cancelled {
@@ -4792,7 +4792,7 @@ fn non_interruptible_op_is_never_interrupted() {
         other => panic!("atteso Cancelled al confine di piano: {other:?}"),
     }
     // L'op non e' stata interrotta: ha processato anche il batch successivo
-    // alla cancellazione (latenza osservabile nelle metriche, ADR 3).
+    // alla cancellazione (latenza osservabile nelle metriche, errori-e-limiti.md).
     assert_eq!(output.metrics().nodes["ni_f"].batches_in, 2);
 }
 
@@ -4882,7 +4882,7 @@ fn execute_creates_temp_store_and_cleans_it_up() {
                 })
         })
         .expect("store dell'esecuzione presente mentre l'Output e' vivo");
-    assert!(store_dir.join("lock.json").is_file(), "lock ADR 3 scritto");
+    assert!(store_dir.join("lock.json").is_file(), "lock errori-e-limiti.md scritto");
 
     let (batches, _) = output.collect_batches().expect("stream ok");
     assert_eq!(batches.len(), 1);
@@ -5044,13 +5044,13 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato (ADR-0002, Fase 2B M2c): attivazione preventiva al
+// Spill generalizzato (architettura.md#memoria, Fase 2B M2c): attivazione preventiva al
 // dispatch, TempStore condiviso, metriche e quota temp.
 // ---------------------------------------------------------------------------
 
 /// Piano con un `table.distinct` e limiti dati espliciti: con
 /// `max_governed_memory_bytes` sotto i byte stimati dell'input il dispatch attiva
-/// `distinct_spilled` (soglia deterministica ADR-0002).
+/// `distinct_spilled` (soglia deterministica architettura.md#memoria).
 fn distinct_plan(max_governed_memory_bytes: u64, max_temp_bytes: u64) -> serde_json::Value {
     json!({
         "schema_version": 5,
@@ -5136,7 +5136,7 @@ fn distinct_spills_end_to_end_into_shared_temp_store() {
     let (spilled, metrics) = output.collect_batches().expect("stream ok");
     let spilled_rows: usize = spilled.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(spilled_rows, 8, "8 chiavi distinte");
-    // Metriche di spill aggregate (ADR-0002): lo spill e' avvenuto.
+    // Metriche di spill aggregate (architettura.md#memoria): lo spill e' avvenuto.
     assert!(metrics.spill.bytes_written > 0, "{:?}", metrics.spill);
     assert!(metrics.spill.bytes_read > 0, "{:?}", metrics.spill);
     assert!(metrics.spill.files > 0, "{:?}", metrics.spill);
@@ -5201,7 +5201,7 @@ fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Fusione dei segmenti geo (ADR-0012)
+// Fusione dei segmenti geo (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi
@@ -5321,7 +5321,7 @@ fn circle_polygon_wkb(coords: usize) -> Vec<u8> {
 /// decodificati stimati (~64 KiB): il batch ricade sul percorso non fuso con
 /// metrica dedicata — mai silenzioso, mai un errore nuovo. E' anche la prova
 /// che il governor scatta davvero su un batch oltre soglia (condizione di
-/// entrata in vigore della deroga DER-003, D12.8).
+/// entrata in vigore della deroga errori-e-limiti.md#limiti-dichiarati, D12.8).
 #[test]
 fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
     let cells = || {
@@ -5357,7 +5357,7 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
 }
 
-/// Caso (g) dell'oracolo ADR-0012, nel crate perche' l'hook `PANIC_AT_NODES`
+/// Caso (g) dell'oracolo architettura.md#geometrie, nel crate perche' l'hook `PANIC_AT_NODES`
 /// e' privato: panic iniettato al nodo CENTRALE di un gruppo fuso di tre ->
 /// errore `Execution` attribuito a quel nodo, identico al percorso non fuso
 /// (`catch_unwind` sul gruppo con marker del kernel in corso, D12.6).
@@ -5410,7 +5410,7 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
 }
 
 // ---------------------------------------------------------------------------
-// Fusione dei segmenti geo: misura terminale in coda al gruppo (ADR-0012 M2)
+// Fusione dei segmenti geo: misura terminale in coda al gruppo (architettura.md#geometrie M2)
 // ---------------------------------------------------------------------------
 
 /// Catena translate -> simplify -> area: due transform + misura terminale in
@@ -5529,7 +5529,7 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
 }
 
 // --------------------------------------------------------------------------
-// Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
+// Tagging di fase al confine di lettura (BLOCK-03, piano-v5.md#contratti-di-input)
 // --------------------------------------------------------------------------
 
 #[test]
@@ -5634,7 +5634,7 @@ fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
     // LEGGENDO la sorgente, allo stesso confine dei tetti del trasporto — che
     // dichiarano `Read`. Due limiti sulla stessa lettura non possono
     // dichiarare fasi diverse: il tag esplicito vince sulla derivazione
-    // (ADR-0009, emendamento del 2026-08-17).
+    // (piano-v5.md#contratti-di-input, emendamento del 2026-08-17).
     let plan = json!({
         "schema_version": 5,
         "limits": {"max_input_rows": 1},
@@ -5656,7 +5656,7 @@ fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
 }
 
 // ---------------------------------------------------------------------------
-// Binari geo nel piano (ADR-0014 M1)
+// Binari geo nel piano (architettura.md#geometrie M1)
 // ---------------------------------------------------------------------------
 
 /// Poligono asse-allineato (fixture multi-tipo insieme a `point_wkb`).
@@ -5961,7 +5961,7 @@ fn geo_count_points_in_polygons_executes_with_count_column() {
 
 #[test]
 fn geo_binary_output_is_byte_identical_across_runs() {
-    // ADR-0001/R12: stesso input -> stesso output, byte per byte (ordine
+    // architettura.md#determinismo/R12: stesso input -> stesso output, byte per byte (ordine
     // logico delle coppie, mai temporale — i kernel raccolgono per indice).
     let cases: [(&str, serde_json::Value); 2] = [
         ("geo.sjoin", json!({"predicate": "intersects"})),
@@ -6004,9 +6004,9 @@ fn geo_binary_output_is_byte_identical_across_runs() {
     }
 }
 
-/// Caso (e) dell'oracolo ADR-0014 D14.9, nel crate perche' l'hook
+/// Caso (e) dell'oracolo architettura.md#geometrie D14.9, nel crate perche' l'hook
 /// `PANIC_AT_NODES` e' `#[cfg(test)]` e privato (stessa nota del caso (g)
-/// dell'oracolo ADR-0012): panic iniettato nel kernel `geo.sjoin` di un
+/// dell'oracolo architettura.md#geometrie): panic iniettato nel kernel `geo.sjoin` di un
 /// segmento `BinaryBlocking` geo -> errore `Execution` attribuito al nodo,
 /// fase `Write` derivata, nessun publish dopo panic (D14.5.6). Id di nodo
 /// dedicato: l'hook e' globale e i test girano in parallelo.
@@ -6203,7 +6203,7 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0002 M2d: staging memory-first degli accepted row-diagnostics
+// architettura.md#memoria M2d: staging memory-first degli accepted row-diagnostics
 //
 // La barriera R9.9 resta invariata: nessun accepted esce prima che la
 // scansione sia completa. Cambia solo DOVE i batch attendono. I test che
@@ -6315,7 +6315,7 @@ fn m2d_memoria_e_disco_producono_gli_stessi_byte() {
 #[test]
 fn m2d_ordine_e_sequenza_logica_preservati() {
     // La sequenza logica non e' esposta da `collect_batches`: si verifica
-    // l'ordine osservabile, che ne e' la proiezione (ADR-0001, propagazione
+    // l'ordine osservabile, che ne e' la proiezione (architettura.md#determinismo, propagazione
     // 1:1 batch per batch).
     for forza_disco in [false, true] {
         let (batches, _) = m2d_esegui(forza_disco).expect("esecuzione");
@@ -6643,7 +6643,7 @@ fn m2d_tre_famiglie_row_diagnostics() {
 fn m2d_batch_sequence_identica_fra_modalita() {
     // L'ordine osservabile e' la proiezione della sequenza logica; qui si
     // verifica la sequenza STESSA, che il replay IPC ricostruisce dai
-    // metadati e la modalita' memoria porta invariata (ADR-0001).
+    // metadati e la modalita' memoria porta invariata (architettura.md#determinismo).
     let sequenze = |forza_disco: bool| -> Vec<Option<BatchSequence>> {
         let graph =
             validate(&m2d_plan(forza_disco).to_string(), &m2d_contratti()).expect("piano valido");

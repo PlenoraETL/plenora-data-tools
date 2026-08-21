@@ -1,4 +1,4 @@
-//! plenora-data-tools CLI — Fase 1 "coesistenza" (Architetture.md par. 3.5).
+//! plenora-data-tools CLI — Fase 1 "coesistenza" (architettura.md).
 //!
 //! Fusione meccanica dei due binari di origine, senza modifiche di
 //! comportamento sui comandi legacy:
@@ -21,7 +21,7 @@
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili. Fase 2B M1c (ADR 3): `run` installa un handler
+//! senza dati sensibili. Fase 2B M1c (errori-e-limiti.md): `run` installa un handler
 //! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
@@ -100,7 +100,7 @@ fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
 
-/// Exit code dedicato alla cancellazione (ADR 3, M1c): 128 + SIGINT,
+/// Exit code dedicato alla cancellazione (errori-e-limiti.md, M1c): 128 + SIGINT,
 /// convenzione POSIX — distinto dagli altri codici di errore.
 const EXIT_CANCELLED: i32 = 130;
 
@@ -191,11 +191,11 @@ fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, PlenoraError> {
     Ok(rimanenti)
 }
 
-/// Handler Ctrl-C (ADR 3, M1c): il primo Ctrl-C cancella il token —
+/// Handler Ctrl-C (errori-e-limiti.md, M1c): il primo Ctrl-C cancella il token —
 /// l'executor si ferma al prossimo confine cooperativo con
 /// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
 /// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
-/// accettato e documentato in ADR 3: un kernel `NonInterruptible` in corso
+/// accettato e documentato in errori-e-limiti.md: un kernel `NonInterruptible` in corso
 /// non offre altri punti di interruzione).
 ///
 /// `ctrlc::set_handler` e' installabile una sola volta per processo: la CLI
@@ -209,7 +209,7 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
         // non e' un terminale c'e' un programma dall'altro lato, e per lui il
         // canale resta vuoto: l'esito della cancellazione arriva comunque
         // come envelope su stdout con categoria `cancelled` ed exit 130.
-        // La garanzia «stderr vuoto» di ADR-0003 vale quindi senza eccezioni
+        // La garanzia «stderr vuoto» di errori-e-limiti.md vale quindi senza eccezioni
         // per ogni consumatore non interattivo.
         let interattivo = std::io::IsTerminal::is_terminal(&std::io::stderr());
         if requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -228,11 +228,11 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
     .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
-/// Esito tipizzato del publish (ADR 7) in forma verificabile, **senza
+/// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup) in forma verificabile, **senza
 /// scrivere su stderr**.
 ///
 /// Era un avviso su stderr: invisibile a un consumatore automatico e insieme
-/// una crepa nel contratto «stderr vuoto» (ADR-0003). Ora il chiamante lo
+/// una crepa nel contratto «stderr vuoto» (errori-e-limiti.md). Ora il chiamante lo
 /// riporta nel proprio documento di uscita, dove chi legge le metriche lo
 /// trova senza intercettare un canale che per contratto non porta nulla.
 ///
@@ -366,7 +366,7 @@ fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, Plen
 /// esiste, vive nei kernel (`preflight_output_bytes`) ed e' applicato alle
 /// operazioni il cui numero di righe di output e' noto prima di allocare.
 /// Le altre restano coperte solo da qui: residuo dichiarato in
-/// `docs/deroghe.md`, DER-011.
+/// `docs/errori-e-limiti.md`, errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 fn ammissione_output(
     output: &RecordBatch,
     budget: usize,
@@ -501,7 +501,7 @@ fn run_pipeline(
         // budget residuo, e alcuni lo usano per rifiutare in anticipo
         // (`preflight_output_bytes`), ma gli altri costruiscono l'output e
         // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
-        // controllo di ammissione a valle, non un tetto duro: vedi DER-011.
+        // controllo di ammissione a valle, non un tetto duro: vedi errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
         // Non chiamarlo «budget globale» senza questa distinzione.
         let budget = plan.limits().max_governed_memory_bytes;
         let (left, usati) = load_complete_within(input_path, &plan, budget)?;
@@ -1175,7 +1175,7 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (fase 1, ADR 4/5) e poi `explain` con
+// - **validate**: `planner::validate` (fase 1, piano-v5.md#identita-e-fingerprint/5) e poi `explain` con
 //   il `RuntimeContext` di default per il riepilogo della strategia fisica —
 //   un piano valido semanticamente ma fuori dal dispatch v1 fallisce qui,
 //   non a meta' esecuzione. Il riepilogo JSON su stdout riporta: nodi, archi
@@ -1580,7 +1580,7 @@ fn contract_crs_from_keys(
 }
 
 /// Verifica di coerenza DECIDIBILE dopo la risoluzione, per un input
-/// `resolved` con doppia rappresentazione (ADR-0009, emendamento 2026-07-31
+/// `resolved` con doppia rappresentazione (piano-v5.md#contratti-di-input, emendamento 2026-07-31
 /// — classe A): risolve anche `crs_id` e confronta l'intera coppia
 /// autorita'+codice dedotta dai due canonical.
 ///
@@ -1630,7 +1630,7 @@ fn verify_declared_coherence(
 /// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`
 /// -> 4326); `None` per ogni altra forma — il confronto con `srid` non e'
 /// decidibile e l'identificatore resta intero alla risoluzione. Il parsing
-/// vive in `plenora-core` (unica fonte condivisa, ADR-0009 emendamento
+/// vive in `plenora-core` (unica fonte condivisa, piano-v5.md#contratti-di-input emendamento
 /// 2026-07-31: lo stesso helper alimenta la deduzione `srid` del percorso
 /// legacy in `arrow_adapter`).
 fn authority_code(crs_id: &str) -> Option<u32> {
@@ -1801,7 +1801,7 @@ fn discover_contracts(
 /// output). Lo schema del contratto di input NON e' toccato: il check
 /// fail-closed dell'executor confronta i campi del file con quelli del
 /// contratto validato (metadati inclusi). La decisione resta esplicita nel
-/// piano e coperta dal `plan_hash` (ADR 4); il fingerprint del contratto
+/// piano e coperta dal `plan_hash` (piano-v5.md#identita-e-fingerprint); il fingerprint del contratto
 /// di input cambia di conseguenza (un piano con decisione non accetta in
 /// riesecuzione l'input non deciso senza rivalidazione).
 ///
@@ -2016,7 +2016,7 @@ fn describe_markdown(documento: &serde_json::Value) -> String {
 }
 
 /// Riepilogo JSON di `validate` per un piano DAG: nodi, archi con contratti,
-/// segmenti con modo e strategia, capability e identita' ADR 4.
+/// segmenti con modo e strategia, capability e identita' piano-v5.md#identita-e-fingerprint.
 ///
 /// # Errors
 ///
@@ -2098,7 +2098,7 @@ fn graph_summary_json(
 /// batch e byte in/out, wall time in millisecondi), i totali di
 /// pubblicazione, il contatore dei fallback della fusione geo (D12.7: ogni
 /// fallback governor e' osservabile, mai silenzioso), l'osservabilita' dei
-/// lease di memoria e le metriche di spill aggregate (ADR-0002).
+/// lease di memoria e le metriche di spill aggregate (architettura.md#memoria).
 fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
@@ -2170,7 +2170,7 @@ fn has_flag(args: &[String], flag: &str) -> bool {
 }
 
 /// `validate` di un piano DAG: planner DAG + `explain` per la strategia, con
-/// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
+/// riepilogo JSON su stdout (architettura.md#planner-ed-executor: `prepare` e' interna all'engine).
 /// `geo_fusion` e' il kill switch D12.9 (flag `--no-geo-fusion`): a `false`
 /// i gruppi di fusione non si formano e `explain` mostra la strategia non
 /// fusa.
@@ -2922,7 +2922,7 @@ fn esegui_processo() -> i32 {
         }
     };
     if let Err(error) = run_with_args(&args) {
-        // Cancellazione cooperativa (ADR 3, M1c): exit code dedicato; il
+        // Cancellazione cooperativa (errori-e-limiti.md, M1c): exit code dedicato; il
         // publish atomico garantisce che nessun output parziale sia stato
         // pubblicato. Envelope §9 anche per la cancellazione (categoria
         // dedicata, fase/effetto/retry dagli assi).
@@ -2947,7 +2947,7 @@ fn esegui_processo() -> i32 {
 /// emette gli errori su stdout e lascia stderr vuoto: due componenti della
 /// stessa famiglia, orchestrati dallo stesso codice, non possono avere due
 /// convenzioni opposte su dove cercare un errore. La rottura per chi oggi
-/// parsa stderr e' registrata in `docs/api-breaking-2026-08-16.md`.
+/// parsa stderr e' registrata in `docs/release.md`.
 fn emit_error_envelope(
     mut stdout: impl Write,
     envelope: &serde_json::Value,
@@ -2967,7 +2967,7 @@ const EXIT_INTERNO: i32 = 70;
 /// default e' `70` e un test copre l'intero enum.
 ///
 /// **Non e' allineato a `plenora-database-tools`**, che restituisce `1` per
-/// qualunque errore: e' una divergenza dichiarata (emendamento a ADR-0003).
+/// qualunque errore: e' una divergenza dichiarata (emendamento a errori-e-limiti.md).
 /// L'unica garanzia condivisa dalla famiglia e' «0 successo, non-zero
 /// errore»; chi scrive codice portabile fra i due componenti legge
 /// `error.category`, non questo numero.
@@ -4411,7 +4411,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
+    // Tagging di fase al confine di lettura (BLOCK-03, piano-v5.md#contratti-di-input)
     // -------------------------------------------------------------------
 
     #[test]

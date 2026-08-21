@@ -101,11 +101,38 @@ python docs/_build/assemble.py            # rigenera
 python docs/_build/assemble.py --verify   # confronta, senza scrivere
 ```
 
-Nessuna dipendenza: solo la libreria standard. La generazione **fallisce** se
-il catalogo non è agganciato, se compare una chiave o una variante
-sconosciuta, se un frammento è duplicato, se un'operazione è ripetuta nelle
-sezioni o se un'operazione catalogata non ha firma. Il dettaglio è in
-`docs/_build/RIPRODUCIBILITA.md`.
+Nessuna dipendenza: solo la libreria standard. Nessun pacchetto da
+installare, nessun container, nessuno stato della macchina. Il confronto è in
+**byte** e non in testo di proposito: su Windows le funzioni di lettura e
+scrittura testuale traducono le fine riga in entrambi i versi, e un confronto
+testuale passerebbe su un file diverso da quello prodotto su Linux.
+
+La generazione **fallisce**, invece di produrre un documento incompleto che
+sembra completo, quando:
+
+| condizione | che cosa sarebbe sparito |
+|---|---|
+| **zero operazioni** lette dal catalogo | tutto: non è un catalogo vuoto, è il parser che non aggancia più |
+| chiave opzionale di `op!` **sconosciuta** | ciò che l'operazione dichiara e il documento non riporterebbe |
+| variante `CrsRequirement` **sconosciuta** | un requisito CRS reale, omesso dalla firma |
+| **frammento duplicato** (stesso id in due file) | una delle due firme, senza che si sappia quale |
+| **operazione ripetuta** nelle sezioni | niente, ma i conteggi dell'intestazione sarebbero falsi |
+| operazione documentata **assente dal catalogo**, o senza frammento | il documento parlerebbe di ciò che non esiste |
+| **operazione catalogata senza firma** | la copertura totale dichiarata nell'intestazione |
+
+Le regressioni girano a **ogni invocazione** dello script, non in una suite
+che qualcuno deve ricordarsi di lanciare: costano microsecondi, e il guasto
+che le ha motivate era del tipo che nessuno va a cercare. Coprono la macro su
+una riga e su più righe in forma `rustfmt`, l'annidamento, il catalogo vuoto,
+la chiave e la variante sconosciute, i frammenti duplicati e le sezioni
+ripetute. Sono **negative** dove conta: passano al controllo una struttura
+costruita apposta e pretendono il rifiuto.
+
+Perché tutto questo serviva: il generatore è rimasto **rotto per mesi in
+silenzio**. `rustfmt` aveva riformattato la macro `op!` del catalogo, la regex
+del parser aveva smesso di agganciarla, e lo script usciva senza riscrivere
+nulla. Un generatore che si ferma non rompe niente di visibile — il documento
+resta com'era e sembra aggiornato. Solo un confronto lo scopre.
 
 Non esiste un PDF: era documentazione obsoleta e non riproducibile, ed è stato
 ritirato. Un passo di CI verifica che non ricompaia, insieme a qualunque

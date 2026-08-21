@@ -1,4 +1,4 @@
-//! Catalogo unificato delle operazioni (Architetture.md par. 4.3, ADR 4).
+//! Catalogo unificato delle operazioni (architettura.md, piano-v5.md#identita-e-fingerprint).
 //!
 //! Ogni operazione dichiara il proprio contratto in modo machine-readable;
 //! il fingerprint del catalogo deriva dalle versioni esplicite per-componente,
@@ -41,7 +41,7 @@ pub enum ExecutionClass {
     BinaryBlocking,
 }
 
-/// Comportamento alla cancellazione (ADR 3).
+/// Comportamento alla cancellazione (errori-e-limiti.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CancellationBehavior {
     Cooperative,
@@ -49,13 +49,13 @@ pub enum CancellationBehavior {
     NonInterruptible,
 }
 
-/// Fondibilita' di un'operazione geo nella fusione dei segmenti (ADR-0012
+/// Fondibilita' di un'operazione geo nella fusione dei segmenti (architettura.md#geometrie
 /// D12.2).
 ///
 /// Capability dichiarativa FISICA, stesso principio di
 /// [`CancellationBehavior`]. Resta FUORI da `descriptor_canonical` e quindi
 /// dal `catalog_fingerprint` (decisione deliberata: il fingerprint guarda la
-/// compatibilita' semantica dei piani, la fondibilita' e' fisica — ADR 5).
+/// compatibilita' semantica dei piani, la fondibilita' e' fisica — architettura.md#planner-ed-executor).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeoFusion {
     /// Non fondibile: esecuzione nodo-per-nodo (default). Tutte le op
@@ -118,7 +118,7 @@ pub enum CrsRequirement {
     Reprojection,
 }
 
-/// Politica di determinismo per operazioni con ordine non definito (ADR 1).
+/// Politica di determinismo per operazioni con ordine non definito (architettura.md#determinismo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeterminismPolicy {
     /// L'output ha ordine definito dalla semantica dell'operazione.
@@ -131,7 +131,7 @@ pub enum DeterminismPolicy {
     CanonicalOrder,
 }
 
-/// Vincolo di espansione vincolante per un'operazione binaria (ADR 6).
+/// Vincolo di espansione vincolante per un'operazione binaria (errori-e-limiti.md).
 ///
 /// Per le operazioni binarie nessuna base singola e' adeguata: il runtime
 /// calcola tutte le metriche di [`JoinExpansion`] e il catalogo dichiara
@@ -141,7 +141,7 @@ pub enum DeterminismPolicy {
 ///
 /// `PartialEq`/`Eq`/`Hash` sono implementati a mano: il fattore di `Custom`
 /// e' confrontato e hashato per bit (`f64::to_bits`), mai per valore —
-/// nessuna ambiguita' su NaN/-0.0 nel fingerprint del catalogo (ADR 4).
+/// nessuna ambiguita' su NaN/-0.0 nel fingerprint del catalogo (piano-v5.md#identita-e-fingerprint).
 #[derive(Debug, Clone, Copy)]
 pub enum ExpansionConstraint {
     /// `output / (left + right)`: default, retrocompatibile con la base
@@ -153,7 +153,7 @@ pub enum ExpansionConstraint {
     RightRelative,
     /// `max(output / left, output / right)`: join molti-a-molti.
     MaxRelative,
-    /// Stima a priori da statistiche (ADR 6/ADR 5), per operazioni la cui
+    /// Stima a priori da statistiche (errori-e-limiti.md/architettura.md#planner-ed-executor), per operazioni la cui
     /// semantica di output non e' caratterizzabile con una base fissa.
     ///
     /// Semantica scelta: la **metrica** vincolante resta
@@ -198,7 +198,7 @@ impl std::hash::Hash for ExpansionConstraint {
 }
 
 impl ExpansionConstraint {
-    /// Soglia effettiva del fattore di espansione per questo vincolo (ADR 6):
+    /// Soglia effettiva del fattore di espansione per questo vincolo (errori-e-limiti.md):
     /// il fattore custom per [`ExpansionConstraint::Custom`] (override di
     /// `max_expansion_factor` per la singola operazione), altrimenti il
     /// `max_expansion_factor` dei limiti effettivi passato dal chiamante.
@@ -253,7 +253,7 @@ impl ExpansionConstraint {
     }
 }
 
-/// Metriche di espansione di un'operazione binaria (ADR 6).
+/// Metriche di espansione di un'operazione binaria (errori-e-limiti.md).
 ///
 /// Il runtime le calcola tutte e tre; il vincolo dichiarato in catalogo
 /// ([`ExpansionConstraint`]) seleziona quella vincolante.
@@ -278,7 +278,7 @@ impl JoinExpansion {
     /// Denominatore nullo: la metrica e' infinita se l'output e' non nullo
     /// (espansione da input vuoto), zero altrimenti.
     #[must_use]
-    #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto (ADR 6); sotto 2^53 righe il confronto e' esatto.
+    #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto (errori-e-limiti.md); sotto 2^53 righe il confronto e' esatto.
     pub fn compute(output_rows: u64, left_rows: u64, right_rows: u64) -> Self {
         fn ratio(numerator: u64, denominator: u64) -> f64 {
             if denominator == 0 {
@@ -335,7 +335,7 @@ pub enum Maturity {
     PublicProtocol,
 }
 
-/// Contratto machine-readable di un'operazione (ADR 4).
+/// Contratto machine-readable di un'operazione (piano-v5.md#identita-e-fingerprint).
 ///
 /// Le versioni per-componente alimentano il `catalog_fingerprint`:
 /// ogni modifica incompatibile incrementa la versione pertinente.
@@ -348,7 +348,7 @@ pub struct OperationDescriptor {
     pub arity: Arity,
     pub execution_class: ExecutionClass,
     pub cancellation_behavior: CancellationBehavior,
-    /// Fondibilita' nella fusione dei segmenti geo (ADR-0012 D12.2):
+    /// Fondibilita' nella fusione dei segmenti geo (architettura.md#geometrie D12.2):
     /// capability fisica, NON entra in `descriptor_canonical` ne' nel
     /// `catalog_fingerprint`. `NotFusible` per tutte le op tabellari.
     pub geo_fusion: GeoFusion,
@@ -357,18 +357,18 @@ pub struct OperationDescriptor {
     /// Backend/feature richiesti (es. `geos`, `proj`).
     pub required_capabilities: &'static [&'static str],
     pub determinism: DeterminismPolicy,
-    /// Vincolo di espansione vincolante per le operazioni binarie (ADR 6);
+    /// Vincolo di espansione vincolante per le operazioni binarie (errori-e-limiti.md);
     /// irrilevante per unarie/N-arie, che restano sulla base input
     /// (default `SumRelative`, retrocompatibile).
     pub expansion_constraint: ExpansionConstraint,
-    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6):
+    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md):
     /// le op che espandono per contratto ogni elemento di input in molti
     /// output (`WholeToMany`: generative/diagnostiche) non sono soggette al
     /// fattore; restano vincolate da `max_rows_per_edge` e dagli altri
     /// limiti di righe.
     pub expansion_factor_exempt: bool,
     pub maturity: Maturity,
-    // Versioni esplicite per-componente (ADR 4): disciplina di incremento in CI.
+    // Versioni esplicite per-componente (piano-v5.md#identita-e-fingerprint): disciplina di incremento in CI.
     pub semantic_version: u32,
     pub config_schema_version: u32,
     pub contract_analysis_version: u32,
@@ -564,7 +564,7 @@ impl OperationDescriptor {
 //   aggregazioni/tessellazioni -> Blocking, overlay/join -> BinaryBlocking);
 // - `cancellation_behavior`: Cooperative per kernel puri streaming,
 //   BoundaryOnly per blocking grandi, NonInterruptible per le op con
-//   capability esterna (`geos`/`proj`, chiamate monolitiche, ADR 3);
+//   capability esterna (`geos`/`proj`, chiamate monolitiche, errori-e-limiti.md);
 // - `result_shape`: `BinaryLineage` del sorgente geo non ha variante
 //   equivalente: mappato su `OneToMany` (un left puo' produrre piu' righe);
 // - `determinism`: `DefinedOrder` di default; `CanonicalOrder` per le set
@@ -573,8 +573,8 @@ impl OperationDescriptor {
 // ---------------------------------------------------------------------------
 
 macro_rules! op {
-    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (ADR 4),
-    // vincolo di espansione `SumRelative` e nessuna esenzione (ADR 6).
+    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (piano-v5.md#identita-e-fingerprint),
+    // vincolo di espansione `SumRelative` e nessuna esenzione (errori-e-limiti.md).
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident) => {
         op!($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat,
@@ -583,9 +583,9 @@ macro_rules! op {
     // Variante con chiavi opzionali: `semantic_version`,
     // `config_schema_version`, `contract_analysis_version`, `kernel_version`
     // (default 1), `expansion_constraint` (default `SumRelative`; accetta un
-    // ident di variante oppure `Custom(fattore)` con il fattore f64, ADR 6),
+    // ident di variante oppure `Custom(fattore)` con il fattore f64, errori-e-limiti.md),
     // `expansion_factor_exempt` (default `false`) e `geo_fusion` (default
-    // `NotFusible`, ADR-0012 D12.2) sono ammesse in qualsiasi combinazione e
+    // `NotFusible`, architettura.md#geometrie D12.2) sono ammesse in qualsiasi combinazione e
     // ordine; chiave duplicata o sconosciuta -> errore di compilazione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
@@ -631,7 +631,7 @@ macro_rules! op {
         op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e, $g) $($rest)+)
     };
     // `expansion_constraint`: variante senza payload (ident) oppure
-    // `Custom(fattore)` con fattore f64 esplicito (ADR 6).
+    // `Custom(fattore)` con fattore f64 esplicito (errori-e-limiti.md).
     (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = Custom($v:expr)) => {
         op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g))
@@ -656,7 +656,7 @@ macro_rules! op {
         expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v, $g) $($rest)+)
     };
-    // `geo_fusion`: variante di [`GeoFusion`] senza payload (ADR-0012 D12.2).
+    // `geo_fusion`: variante di [`GeoFusion`] senza payload (architettura.md#geometrie D12.2).
     (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         geo_fusion = $v:ident) => {
         op!(@build ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v))
@@ -902,7 +902,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2,
         kernel_version = 3
     ),
-    // join generico: molti-a-molti possibile -> MaxRelative (ADR 6).
+    // join generico: molti-a-molti possibile -> MaxRelative (errori-e-limiti.md).
     op!(
         "table.join",
         Table,
@@ -1093,7 +1093,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol
     ),
     // diff: l'output (added/removed/changed) e' proporzionale a entrambi gli
-    // input -> SumRelative (ADR 6).
+    // input -> SumRelative (errori-e-limiti.md).
     op!(
         "table.table_diff",
         Table,
@@ -1510,7 +1510,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // expression v2 (Fase estensione funzioni/temporali): nuove funzioni
     // (substring, regex_replace, between, in, greatest, least, floor, ceil,
     // power) e date_trunc con output Date32/TimestampMs nativi -> tutte e 4
-    // le versioni incrementate (ADR 4).
+    // le versioni incrementate (piano-v5.md#identita-e-fingerprint).
     op!(
         "table.expression",
         Table,
@@ -1634,7 +1634,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2
     ),
     // sjoin: una geometria left puo' intersecare molte right (molti-a-molti)
-    // -> MaxRelative (ADR 6).
+    // -> MaxRelative (errori-e-limiti.md).
     op!(
         "geo.sjoin",
         Geo,
@@ -2035,10 +2035,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         expansion_constraint = LeftRelative
     ),
-    // ADR-0012 M3: make_valid entra nel perimetro di fusione come
+    // architettura.md#geometrie M3: make_valid entra nel perimetro di fusione come
     // TransformInPlace; l'ammissione di input OGC-invalido (trappola 1) e'
     // una proprieta' del suo gate di decode, gestita dal runner fuso con
-    // l'eccezione documentata in ADR-0012 D12.4-M3 — non richiede una
+    // l'eccezione documentata in architettura.md#geometrie D12.4-M3 — non richiede una
     // variante di capability dedicata (la relazione di raggruppamento e'
     // identica: 1:1 in place sulla stessa colonna).
     op!(
@@ -2613,7 +2613,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
     // input (Blocking) e producono una riga per issue/tratto condiviso
     // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
-    // quindi SameProjected. Esenti da `max_expansion_factor` (ADR 6:
+    // quindi SameProjected. Esenti da `max_expansion_factor` (errori-e-limiti.md:
     // esenzione dichiarata in catalogo).
     op!(
         "geo.coverage_validate",
@@ -3066,7 +3066,7 @@ mod tests {
         assert_eq!(filter.kernel_version, 2);
         // Le 4 componenti di table.expression restano esplicite e indipendenti:
         // diagnostics row-scoped cambia semantica e kernel, non schema config
-        // né analisi del contratto (ADR-0004).
+        // né analisi del contratto (piano-v5.md#identita-e-fingerprint).
         let expression = find_operation("table.expression").expect("table.expression");
         assert_eq!(expression.semantic_version, 3);
         assert_eq!(expression.config_schema_version, 2);
@@ -3110,7 +3110,7 @@ mod tests {
 
     #[test]
     fn expansion_constraint_defaults_to_sum_relative() {
-        // Retrocompatibilita' comportamentale (ADR 6): le op senza
+        // Retrocompatibilita' comportamentale (errori-e-limiti.md): le op senza
         // dichiarazione esplicita restano sulla base left+right e non sono
         // esenti.
         let filter = find_operation("table.filter").expect("table.filter");
@@ -3224,7 +3224,7 @@ mod tests {
 
     #[test]
     fn whole_to_many_exemption_is_declared_in_catalog() {
-        // ADR 6: la classe di esenzione e' dichiarata in catalogo, non
+        // errori-e-limiti.md: la classe di esenzione e' dichiarata in catalogo, non
         // riconosciuta a posteriori — esattamente le op WholeToMany
         // generative/diagnostiche.
         let exempt: HashSet<_> = CATALOG
@@ -3338,10 +3338,10 @@ mod tests {
 
     #[test]
     // Come sopra: i confronti esatti sui fattori custom verificano
-    // l'uguaglianza per bit richiesta dal fingerprint (ADR 4/6).
+    // l'uguaglianza per bit richiesta dal fingerprint (piano-v5.md#identita-e-fingerprint/6).
     #[allow(clippy::float_cmp)]
     fn custom_constraint_overrides_the_threshold_not_the_metric() {
-        // ADR 6: `Custom(fattore)` e' la stima a priori per op la cui
+        // errori-e-limiti.md: `Custom(fattore)` e' la stima a priori per op la cui
         // semantica di output non ha una base fissa. La metrica vincolante
         // resta `output_over_sum_inputs`; il fattore sovrascrive
         // `max_expansion_factor` come soglia per la singola operazione.
@@ -3393,7 +3393,7 @@ mod tests {
 
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
-        // ADR-0012 D12.2 + perimetro M1+M3: esattamente le 16 trasformazioni
+        // architettura.md#geometrie D12.2 + perimetro M1+M3: esattamente le 16 trasformazioni
         // 1:1 revistate (14 di M1 + reproject/make_valid di M3) sono
         // TransformInPlace, le 5 misure terminali sono TerminalMeasure, TUTTO
         // il resto (tabellari incluse) e' NotFusible. Il campo e'
@@ -3471,7 +3471,7 @@ mod tests {
     #[test]
     fn geo_fusion_names_are_stable_snake_case() {
         // Nomi usati da capabilities JSON e snapshot di catalogo: stabili per
-        // contratto (ADR-0012 D12.2), mai derivati dal `Debug` Rust.
+        // contratto (architettura.md#geometrie D12.2), mai derivati dal `Debug` Rust.
         assert_eq!(GeoFusion::NotFusible.as_str(), "not_fusible");
         assert_eq!(GeoFusion::TransformInPlace.as_str(), "transform_in_place");
         assert_eq!(GeoFusion::TerminalMeasure.as_str(), "terminal_measure");
@@ -3599,7 +3599,7 @@ mod tests {
 
     #[test]
     fn row_diagnostics_changes_carry_the_declared_version_bumps() {
-        // ADR-0004: ogni op il cui comportamento osservabile, kernel o gate
+        // piano-v5.md#identita-e-fingerprint: ogni op il cui comportamento osservabile, kernel o gate
         // planner e' cambiato con la diagnostica row-scoped (delta 2026-08-03
         // su baseline af812aa) dichiara il bump nelle componenti di versione.
         // La tabella e' hard-coded dal delta e dalla baseline — nessun valore
@@ -3626,7 +3626,7 @@ mod tests {
             ("table.expression", 3, 2, 2, 4),
             // diag-wkt: raccolta nel kernel geo. La successiva dichiarazione
             // pubblica encoding/types del produttore cambia anche semantica e
-            // contract analysis (ADR-0004/ADR-0009).
+            // contract analysis (piano-v5.md#identita-e-fingerprint/piano-v5.md#contratti-di-input).
             ("geo.from_wkt", 3, 1, 2, 2),
             // diag-transport / diag-coords: il rifiuto row-scoped ora porta
             // il payload `plenora-row-diagnostics-v1` (comportamento
@@ -3669,7 +3669,7 @@ mod tests {
                     descriptor.kernel_version,
                 ),
                 (*semantic, *config_schema, *contract_analysis, *kernel),
-                "{id}: versioni non allineate al bump dichiarato (ADR-0004)"
+                "{id}: versioni non allineate al bump dichiarato (piano-v5.md#identita-e-fingerprint)"
             );
         }
     }

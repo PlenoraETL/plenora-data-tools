@@ -1,5 +1,5 @@
 //! Inferenza a secco dei `DataContract` per le 75 operazioni `geo.*`
-//! (Architetture.md par. 4.3 e 6.1, ADR 5 — Fase 2A-2b).
+//! (architettura.md e 6.1, architettura.md#planner-ed-executor — Fase 2A-2b).
 //!
 //! [`analyze_geo_contract`] e' l'`analyze_contract` del catalogo per la
 //! famiglia geo: dato l'id dell'operazione, i contratti di input, la config
@@ -27,7 +27,7 @@
 //!   geometria trasformata in place con lo stesso `FieldId`; le op che
 //!   CAMBIANO il tipo geometrico dichiarano i tipi dell'output nella
 //!   proprieta' `types` del contratto e sostituiscono le chiavi canoniche
-//!   `types`/`types_declaration` ereditate (ADR-0009, decisione 8);
+//!   `types`/`types_declaration` ereditate (piano-v5.md#contratti-di-input, decisione 8);
 //! - misure/predicati: la geometria resta e si **aggiunge** una colonna
 //!   (`Float64` aree/lunghezze/distanze, `Boolean` predicati, `UInt64`
 //!   `vertex_count`/`count`, `Utf8` `to_wkt`); nome da `output_column` o
@@ -53,7 +53,7 @@
 //! - `reproject`: schema invariato, `GeometryColumnContract.crs` e metadato
 //!   `geo.crs` aggiornati al target (unico step che modifica il CRS); le
 //!   chiavi canoniche CRS ereditate dalla sorgente sono sostituite
-//!   (ADR-0009, decisione 8);
+//!   (piano-v5.md#contratti-di-input, decisione 8);
 //! - `from_coords`: aggiunge la colonna geometria (nuovo `FieldId`,
 //!   `nullable=false` da specifica: coordinate null sono errore a runtime,
 //!   non geometria null);
@@ -116,7 +116,7 @@
 //! - ogni input ha esattamente una colonna geometria attiva (v1), salvo
 //!   `from_coords` che ne richiede zero;
 //! - la colonna geometria e' identificabile dal trasporto (estensione
-//!   `geoarrow.wkb` o sole chiavi canoniche — ADR-0009 decisione 8, mai un
+//!   `geoarrow.wkb` o sole chiavi canoniche — piano-v5.md#contratti-di-input decisione 8, mai un
 //!   rifiuto a meta' esecuzione);
 //! - `crs_requirement` del descriptor verificato con
 //!   [`plenora_core::crs::validate_requirement`] sui CRS dei contratti
@@ -259,7 +259,7 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 // ---------------------------------------------------------------------------
 
 /// `analyze_contract` del catalogo per le operazioni `geo.*`
-/// (Architetture.md par. 4.3): inferenza a secco del contratto di output.
+/// (architettura.md): inferenza a secco del contratto di output.
 ///
 /// `plan_crs` e' il CRS di piano gia' risolto dal planner (usato da
 /// `from_coords` e per il riuso in `reproject`); `fields` alloca i `FieldId`
@@ -271,7 +271,7 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 /// e' geo; l'arieta' non e' rispettata; un input non ha esattamente una
 /// colonna geometria attiva (v1); la colonna geometria non e' identificabile
 /// dal trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche,
-/// ADR-0009 decisione 8); la geometria di input non e' `Xy` per un kernel
+/// piano-v5.md#contratti-di-input decisione 8); la geometria di input non e' `Xy` per un kernel
 /// che la elabora (B1.3); il `crs_requirement` non e' soddisfatto;
 /// la config non supera deserializzazione stretta o domini dei parametri;
 /// una colonna prodotta collide con una esistente; il CRS di output non e'
@@ -476,7 +476,7 @@ mod tests {
     /// e' andata in panic — `analyze_geo_contract` -> `validate_wkb_hex` —
     /// per ogni operazione che accetta un WKB da configurazione, e serve
     /// dove la campagna vera non e' eseguibile (immagine nightly e
-    /// `cargo-fuzz` assenti: DER-001).
+    /// `cargo-fuzz` assenti: release.md#fuzzing).
     #[test]
     fn nessun_wkb_di_config_ostile_manda_in_panic_l_analisi() {
         let ostili = [
@@ -2626,7 +2626,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     /// Campo geometria con la sola estensione `geoarrow.wkb` (colonna
-    /// identificabile dal trasporto, ADR-0009 decisione 8) e nessun
+    /// identificabile dal trasporto, piano-v5.md#contratti-di-input decisione 8) e nessun
     /// metadato `geo`: la forma delle fixture senza CRS dichiarato.
     fn extension_only_geometry_field() -> Field {
         Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(HashMap::from([
@@ -2778,7 +2778,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // ADR-0009 decisione 8: le op che riscrivono un fatto canonico (tipo
+    // piano-v5.md#contratti-di-input decisione 8: le op che riscrivono un fatto canonico (tipo
     // geometrico, CRS) dichiarano il fatto dell'OUTPUT; le chiavi ereditate
     // sono sostituite. Identificabilita' della colonna a compile-plan.
     // -----------------------------------------------------------------------
@@ -3068,7 +3068,7 @@ mod tests {
 
     #[test]
     fn reproject_replaces_preexisting_canonical_crs_keys() {
-        // ADR-0009 decisione 8: la riproiezione cambia il FATTO (il CRS),
+        // piano-v5.md#contratti-di-input decisione 8: la riproiezione cambia il FATTO (il CRS),
         // quindi le chiavi canoniche della sorgente sono sostituite — rimosse
         // dal campo del contratto di output e ri-emesse a valle dal
         // contratto stesso. Il metadato legacy `geo.crs` e' quello del target.
@@ -3323,7 +3323,7 @@ mod tests {
 
     #[test]
     fn unidentifiable_geometry_column_is_rejected_in_analysis() {
-        // Minore 2 / ADR-0008: una colonna geometria che il trasporto non
+        // Minore 2 / architettura.md#geometrie: una colonna geometria che il trasporto non
         // saprebbe identificare (ne' estensione `geoarrow.wkb` ne' chiavi
         // canoniche) e' rifiutata QUI, in analisi del piano — mai scoperta
         // a meta' esecuzione.

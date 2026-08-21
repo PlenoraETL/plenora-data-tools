@@ -1,5 +1,5 @@
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
-//! Arrow per il canone GeoArrow-WKB (Architetture.md par. 3.3 e par. 2).
+//! Arrow per il canone GeoArrow-WKB (architettura.md e par. 2).
 //!
 //! Port Fase 1 ("coesistenza") da plenora-geo-tools-arrow: validatore WKB
 //! strutturale, kernel puri (`operations`, `analysis`, `topology`,
@@ -10,16 +10,16 @@
 //! `proj_backend`) e l'adapter Arrow di rappresentazione (`arrow_adapter`).
 //!
 //! L'adapter è progettato per ammettere la cache di decode per segmento
-//! (Prestazioni.md, vincoli V6/G1/G2) senza modifiche ai contratti.
+//! (architettura.md, vincoli V6/G1/G2) senza modifiche ai contratti.
 //!
 //! - [`arrow_adapter`](crate::arrow_adapter) per la rappresentazione
 //!   GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti
 //!   (`analyze_contract` del catalogo, Fase 2A-2b).
 //! - [`memory_estimate`](crate::memory_estimate) per la STIMA dichiarata
-//!   della memoria nativa delle geometrie decodificate (ADR-0002, Fase
+//!   della memoria nativa delle geometrie decodificate (architettura.md#memoria, Fase
 //!   2B-M2b): mai un conteggio preciso.
 //! - [`geometry_contract`](crate::geometry_contract) per il contratto sulle
-//!   geometrie decodificate (ADR-0012): dimensione esatta del WKB ISO XY e
+//!   geometrie decodificate (architettura.md#geometrie): dimensione esatta del WKB ISO XY e
 //!   validazione strutturale su `Geometry`.
 //!
 //! Errori: il sorgente usava `GeoEngineError`; qui le stesse condizioni sono
@@ -158,7 +158,7 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
 /// Decodifica una geometria dal canone GeoArrow-WKB.
 ///
-/// Una sola passata (ADR-0011): il decoder validante
+/// Una sola passata (architettura.md#geometrie): il decoder validante
 /// ([`wkb_decoder::decode_validated`]) esegue validazione strutturale e
 /// costruzione nella stessa camminata sui byte; poi la validazione OGC
 /// della geometria risultante.
@@ -240,7 +240,7 @@ impl<'a> WkbCursor<'a> {
 
     /// Legge una coordinata con lo `stride` dichiarato (byte per coordinata
     /// interleaved, vedi [`GeometryDimensions::coordinate_stride`]): X e Y
-    /// sono decodificate e validate (NaN/inf vietati, ADR-0001), le ordinate
+    /// sono decodificate e validate (NaN/inf vietati, architettura.md#determinismo), le ordinate
     /// extra (Z/M) sono saltate via stride e mai lette.
     fn read_coordinate(
         &mut self,
@@ -707,7 +707,7 @@ pub fn validate_wkb_transport_for_dimensions_with_depth(
 // float_cmp: i confronti esatti min/max individuano gli envelope degeneri
 // (larghezza o altezza nulle) per costruzione — min e max provengono dalle
 // stesse coordinate, quindi l'uguaglianza esatta e' il criterio voluto e un
-// margine epsilon cambierebbe la geometria prodotta (determinismo ADR-0001).
+// margine epsilon cambierebbe la geometria prodotta (determinismo architettura.md#determinismo).
 #[allow(clippy::float_cmp)]
 fn envelope(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
     let rect = geometry
@@ -803,7 +803,7 @@ pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, Pl
     Ok(output)
 }
 
-/// Validazione OGC di una geometria decodificata (ADR-0012 D12.4).
+/// Validazione OGC di una geometria decodificata (architettura.md#geometrie D12.4).
 ///
 /// La STESSA chiamata e lo STESSO messaggio del check in coda a
 /// [`geometry_from_wkb`]. Esposta per il runner fuso, che riproduce tra i
@@ -820,7 +820,7 @@ pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError
 }
 
 /// Pipeline di [`transform_wkb`] su una geometria gia' decodificata
-/// (ADR-0012 D12.4, profilo A).
+/// (architettura.md#geometrie D12.4, profilo A).
 ///
 /// Per `centroid`/`convex_hull`/`envelope`: stesso ordine e stessi messaggi
 /// — kernel con validazione OGC dell'output
@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn non_finite_xy_is_rejected_with_z_present_but_z_is_never_read() {
-        // NaN in X con Z presente: rifiutato (ADR-0001).
+        // NaN in X con Z presente: rifiutato (architettura.md#determinismo).
         let mut payload = Vec::new();
         push_header(&mut payload, 1001);
         push_coordinate(&mut payload, f64::NAN, 2.0, &[3.0]);

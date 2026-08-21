@@ -65,7 +65,7 @@ jobs:
           # monte: apache/arrow-rs#10575.
           # - arrow_transform
           # Rinominato da `plan_v4_parse` il 2026-08-20 con la v5
-          # (ADR 15): il target parsa il formato canonico, e un nome
+          # (errori-e-limiti.md#memoria-governata): il target parsa il formato canonico, e un nome
           # che cita la versione sbagliata manda a cercare nel posto
           # sbagliato. Il corpus non e' versionato (.gitignore) e
           # riparte da zero sotto il nome nuovo.
@@ -107,7 +107,7 @@ jobs:
         # RUSTUP_TOOLCHAIN vince su rust-toolchain.toml (stabile 1.92, R13):
         # senza questa variabile cargo-fuzz usa la toolchain pinnata di
         # progetto e `-Zsanitizer` fallisce ("only accepted on nightly").
-        # Deroga registrata: docs/deroghe.md DER-001 (ICD §16 R16.1).
+        # Deroga registrata: docs/errori-e-limiti.md release.md#fuzzing (ICD §16 R16.1).
         env:
           RUSTUP_TOOLCHAIN: nightly
         run: |

@@ -32,8 +32,8 @@
 //!   l'hook. Due componenti che passano DA QUI non possono sovrascriversi a
 //!   vicenda;
 //! - chi non chiama nulla resta con l'hook di `std`. E' un residuo
-//!   dichiarato, non un difetto nascosto: registrato come **DER-010** in
-//!   `docs/deroghe.md`, con regola derogata, hazard e condizione di rientro.
+//!   dichiarato, non un difetto nascosto: registrato come **errori-e-limiti.md#panic-policy** in
+//!   `docs/errori-e-limiti.md`, con regola derogata, hazard e condizione di rientro.
 //!
 //! ## Che cosa questo modulo NON garantisce
 //!

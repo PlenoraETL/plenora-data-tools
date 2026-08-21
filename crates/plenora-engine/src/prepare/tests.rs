@@ -1,4 +1,4 @@
-//! Test del preparer (Fase 2A-4, Architetture.md par. 6.3, ADR 5).
+//! Test del preparer (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor).
 
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ fn table_contract() -> DataContract {
 }
 
 /// Come in `planner::tests`: il marcatore `geoarrow.wkb` rende la colonna
-/// identificabile dal check di analyze (ADR-0009, decisione 8).
+/// identificabile dal check di analyze (piano-v5.md#contratti-di-input, decisione 8).
 fn wkb_geometry_field(name: &str) -> Field {
     Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
         plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
@@ -289,7 +289,7 @@ fn unknown_statistics_are_the_conservative_default() {
     );
 
     // Statistiche Known: registrate nel piano, nessuna scelta fisica v1
-    // dipende da esse (ADR 5).
+    // dipende da esse (architettura.md#planner-ed-executor).
     let mut runtime = RuntimeContext::default();
     runtime.statistics.insert(
         "main".to_owned(),
@@ -581,7 +581,7 @@ fn generative_geo_extensions_prepare_with_their_roles() {
 }
 
 // ---------------------------------------------------------------------------
-// Gruppi di fusione geo (ADR-0012)
+// Gruppi di fusione geo (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi.
@@ -1174,7 +1174,7 @@ fn measure_output_column_requires_exactly_one_added_column() {
 }
 
 // ---------------------------------------------------------------------------
-// Binari geo nel piano (ADR-0014 M1)
+// Binari geo nel piano (architettura.md#geometrie M1)
 // ---------------------------------------------------------------------------
 
 /// Piano a due input geo con un nodo binario come output del piano.

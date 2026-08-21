@@ -1,14 +1,14 @@
-//! plenora-core — fondamenta condivise del workspace (Architetture.md par. 3.1).
+//! plenora-core — fondamenta condivise del workspace (architettura.md).
 //!
 //! Ospita:
 //! - il re-export unico di Arrow (decisione D0: un solo punto di versione);
 //! - [`error`]: `PlenoraError`, fusione di `EngineError` e `GeoEngineError`;
-//! - [`limits`]: le tre famiglie di limiti (decisione D19, ADR 6);
+//! - [`limits`]: le tre famiglie di limiti (decisione D19, errori-e-limiti.md);
 //! - [`catalog`]: `OperationDescriptor` unificato con versioni per-componente
-//!   (decisione D17, ADR 4);
+//!   (decisione D17, piano-v5.md#identita-e-fingerprint);
 //! - [`contract`]: contratti dati del grafo (`DataContract`, `FieldId`,
 //!   provenienza/scope delle proprietà, `RuntimeStatistic`, `BatchSequence`) —
-//!   Fase 2A, decisioni D6/D16/D25, ADR 1 e ADR 5;
+//!   Fase 2A, decisioni D6/D16/D25, architettura.md#determinismo e architettura.md#planner-ed-executor;
 //! - [`panic_policy`]: politica di processo per i panici, valida anche per
 //!   chi ci usa come libreria;
 //! - [`crs`]: contratto CRS fail-closed (trasloco da `crs.rs` di
@@ -103,7 +103,7 @@ pub mod arrow {
     /// I crate Arrow non espongono la propria versione a runtime: la
     /// costante e' tenuta allineata al pin del workspace (`arrow-schema =
     /// "=…"` nel `Cargo.toml` di root) da un test dedicato. Entra
-    /// nell'identita' dei grafi validati (ADR 4).
+    /// nell'identita' dei grafi validati (piano-v5.md#identita-e-fingerprint).
     pub const VERSION: &str = "59.1.0";
 }
 
@@ -111,7 +111,7 @@ pub mod arrow {
 mod tests {
     /// `arrow::VERSION` deve restare allineata al pin del workspace: un bump
     /// di Arrow senza aggiornarla renderebbe silenziosamente falso il check
-    /// di versione nell'identita' dei grafi (ADR 4).
+    /// di versione nell'identita' dei grafi (piano-v5.md#identita-e-fingerprint).
     #[test]
     fn arrow_version_matches_the_workspace_pin() {
         let manifest =

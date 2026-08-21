@@ -96,7 +96,7 @@ pub(in crate::geo_transport) fn geometry_column_index(
             actual: field.data_type().to_string(),
         });
     }
-    // ADR-0009 decisione 8: estensione `geoarrow.wkb` OPPURE sole chiavi
+    // piano-v5.md#contratti-di-input decisione 8: estensione `geoarrow.wkb` OPPURE sole chiavi
     // canoniche — criterio condiviso con analyze (stessa funzione), cosi' il
     // rifiuto a compile-plan e l'accettazione a esecuzione non possono
     // divergere. Piani validati non arrivano mai qui con una colonna non
@@ -159,7 +159,7 @@ pub(in crate::geo_transport) fn geometry_output_field(
 }
 
 // ---------------------------------------------------------------------------
-// BLOCK-06 (decisione owner 2026-07-30 — parita' col percorso v4, DER-002
+// BLOCK-06 (decisione owner 2026-07-30 — parita' col percorso v4, errori-e-limiti.md#limiti-dichiarati
 // estesa): doppia emissione delle chiavi canoniche `plenora.geometry.*` e
 // `plenora.contract.version` anche sugli output del trasporto legacy.
 // ---------------------------------------------------------------------------
@@ -454,7 +454,7 @@ pub(in crate::geo_transport) fn encode_geometry(
     Ok(payload)
 }
 
-/// Parametri risolti di una trasformazione 1:1 fondibile (ADR-0012,
+/// Parametri risolti di una trasformazione 1:1 fondibile (architettura.md#geometrie,
 /// perimetro M1+M3): l'estrazione/validazione dei parametri avviene UNA
 /// volta per kernel ([`resolve_transform`]), prima di toccare le celle —
 /// stessa posizione e stessi errori del braccio corrispondente di
@@ -501,12 +501,12 @@ enum ResolvedTransform {
     SnapToGrid {
         grid_size: f64,
     },
-    /// `make_valid` (ADR-0012 M3): ammette input OGC-invalido — e' cio' che
+    /// `make_valid` (architettura.md#geometrie M3): ammette input OGC-invalido — e' cio' che
     /// ripara; la validazione che lo precede e' SOLO strutturale (trappola
     /// 1, vedi [`accepts_ogc_invalid_input`]).
     #[cfg(feature = "geos-backend")]
     MakeValid,
-    /// `reproject` (ADR-0012 M3): la coppia CRS e' risolta una volta per
+    /// `reproject` (architettura.md#geometrie M3): la coppia CRS e' risolta una volta per
     /// kernel, come l'estrazione in testa al braccio di `transform_cells`;
     /// la pipeline PROJ resta thread-local nel passo per-cella.
     #[cfg(feature = "proj-backend")]
@@ -517,7 +517,7 @@ enum ResolvedTransform {
 }
 
 /// L'operazione ammette input OGC-invalido in ingresso? Solo `make_valid`
-/// (ADR-0012 M3, trappola 1): nel percorso non fuso il suo "decode" e' il
+/// (architettura.md#geometrie M3, trappola 1): nel percorso non fuso il suo "decode" e' il
 /// SOLO gate strutturale di `make_valid_wkb` (`validate_wkb_contract`,
 /// nessun check OGC — l'input invalido e' esattamente cio' che l'operazione
 /// ripara). Il runner fuso riproduce la stessa semantica: decode iniziale
@@ -536,7 +536,7 @@ const fn accepts_ogc_invalid_input(params: &TransformArrowSchema) -> bool {
 /// Come il braccio corrispondente di `transform_cells` per la parte
 /// parametri; `ArrowTransportError::Internal` per operazioni fuori dal
 /// perimetro fondibile (mai raggiungibile: i gruppi sono annotati da
-/// `prepare` solo sulle op del perimetro ADR-0012 — difesa in profondita',
+/// `prepare` solo sulle op del perimetro architettura.md#geometrie — difesa in profondita',
 /// non un caso d'uso). A feature spenta `make_valid`/`reproject` danno
 /// `BackendUnavailable` esattamente come i bracci non fusi (M3).
 fn resolve_transform(
@@ -635,13 +635,13 @@ fn resolve_transform(
             feature: "proj-backend",
         }),
         _ => Err(ArrowTransportError::Internal(
-            "operazione fuori dal perimetro fondibile (ADR-0012)",
+            "operazione fuori dal perimetro fondibile (architettura.md#geometrie)",
         )),
     }
 }
 
 /// Applica una trasformazione fondibile a UNA geometria decodificata
-/// (ADR-0012): gli stessi kernel dei bracci di `transform_cells`, chiamati
+/// (architettura.md#geometrie): gli stessi kernel dei bracci di `transform_cells`, chiamati
 /// con gli stessi argomenti — usata sia dal percorso nodo-per-nodo sia dal
 /// runner fuso, perche' il dispatch per singolo kernel resti unico. `None`
 /// per gli output vuoti ammessi (`point_on_surface` di geometria vuota), che
@@ -762,7 +762,7 @@ fn map_nullable<T: Send>(
     f: impl Fn(&[u8]) -> Result<Option<T>, ArrowTransportError> + Sync,
 ) -> Result<Vec<Option<T>>, ArrowTransportError> {
     let cell_values: Vec<Option<&[u8]>> = cells.iter().collect();
-    // ADR-0001: come la primitiva omonima in arrow_adapter — i `Result`
+    // architettura.md#determinismo: come la primitiva omonima in arrow_adapter — i `Result`
     // per riga prima (ordine preservato dal collect indicizzato), poi la
     // selezione deterministica degli errori IN ORDINE DI RIGA; mai la
     // selezione non deterministica di rayon.
@@ -893,7 +893,7 @@ fn cell_diagnostics_report(rows: &std::collections::BTreeMap<u64, &'static str>)
 }
 
 /// Braccio condiviso delle trasformazioni 1:1 fondibili di profilo B
-/// (ADR-0012): i parametri sono risolti UNA volta ([`resolve_transform`],
+/// (architettura.md#geometrie): i parametri sono risolti UNA volta ([`resolve_transform`],
 /// stessi errori e stessa posizione dei bracci storici), poi per cella
 /// decode -> kernel ([`apply_transform_cell`]) -> encode, con il primo
 /// errore in ordine di riga (pattern di `map_nullable`). Comportamento
@@ -1339,11 +1339,11 @@ pub fn one_to_one_batch_prepared(
 }
 
 // ---------------------------------------------------------------------------
-// Runner fuso dei gruppi geo (ADR-0012)
+// Runner fuso dei gruppi geo (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Errore del runner fuso con l'attribuzione al kernel del gruppo
-/// (ADR-0012 D12.6): il runner e' un'esecuzione alternativa del gruppo, non
+/// (architettura.md#geometrie D12.6): il runner e' un'esecuzione alternativa del gruppo, non
 /// una rimozione dei nodi — ogni fallimento dice sempre QUALE nodo ha rotto.
 #[derive(Debug)]
 pub enum FusedStepError {
@@ -1355,7 +1355,7 @@ pub enum FusedStepError {
         /// L'errore vero e proprio.
         error: ArrowTransportError,
     },
-    /// Errore della misura terminale del gruppo (ADR-0012 M2): il percorso
+    /// Errore della misura terminale del gruppo (architettura.md#geometrie M2): il percorso
     /// non fuso delle misure (`geo_measure_batch` nell'executor) NON transita
     /// da `ArrowTransportError` — il decode e' `decode_geometry_cell` chiuso
     /// direttamente da `step_error` e il kernel e' chiuso in `InvalidPlan`
@@ -1369,12 +1369,12 @@ pub enum FusedStepError {
         error: PlenoraError,
     },
     /// Controllo dell'executor tra due kernel (cancellazione cooperativa,
-    /// ADR 3): gia' nella forma finale (`PlenoraError::Cancelled` con nodo,
+    /// errori-e-limiti.md): gia' nella forma finale (`PlenoraError::Cancelled` con nodo,
     /// operazione ed `execution_id`), propaga invariato.
     Control(PlenoraError),
 }
 
-/// Misura terminale di un gruppo fuso (ADR-0012 M2): il kernel scalare che
+/// Misura terminale di un gruppo fuso (architettura.md#geometrie M2): il kernel scalare che
 /// chiude il gruppo consumando la forma decodificata dell'ultimo passo,
 /// senza ri-decodificare il WKB di confine. Le 5 misure "add column" dei
 /// piani DAG (ramo `geo_measure_batch` dell'executor).
@@ -1392,7 +1392,7 @@ pub enum FusedTerminalMeasure {
     ToWkt,
 }
 
-/// Terminale misura di un gruppo fuso (ADR-0012 M2): il kernel scalare e lo
+/// Terminale misura di un gruppo fuso (architettura.md#geometrie M2): il kernel scalare e lo
 /// schema di output del nodo misura (contratto inferito in validazione —
 /// input + colonna misura appesa in coda, semantica v4 "add column").
 #[derive(Clone, Copy)]
@@ -1403,7 +1403,7 @@ pub struct FusedTerminal<'a> {
     pub output_schema: &'a SchemaRef,
 }
 
-/// Celle prodotte da un gruppo fuso (ADR-0012): la geometria ri-encodata UNA
+/// Celle prodotte da un gruppo fuso (architettura.md#geometrie): la geometria ri-encodata UNA
 /// volta (sempre — nel perimetro M2 la colonna geometria SOPRAVVIVE alla
 /// misura, semantica v4 "add column") e, se il gruppo chiude con una misura
 /// terminale, la colonna scalare calcolata sulla forma decodificata.
@@ -1415,7 +1415,7 @@ struct FusedCells {
 }
 
 /// Esegue un gruppo di trasformazioni 1:1 fondibili su una colonna WKB con
-/// UN decode e UN encode per batch (ADR-0012 D12.1): la forma decodificata
+/// UN decode e UN encode per batch (architettura.md#geometrie D12.1): la forma decodificata
 /// vive solo per la durata del gruppo sul singolo batch. Struttura
 /// kernel-esterno/celle-interno: attribuzione errori esatta per kernel,
 /// cancellazione per kernel (via `control`, stessa granularita' per batch
@@ -1561,7 +1561,7 @@ fn transform_cells_fused(
 }
 
 /// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
-/// indicizzato (ADR-0001), poi raccolta COMPLETA dei fallimenti per riga
+/// indicizzato (architettura.md#determinismo), poi raccolta COMPLETA dei fallimenti per riga
 /// (R9.9): gli errori del kernel sono attribuiti al kernel stesso, quelli
 /// della validazione inter-passo al kernel successivo — il kernel ha la
 /// precedenza (nel percorso non fuso il suo nodo fallirebbe prima, col suo
@@ -1660,7 +1660,7 @@ enum FusedCellFailure {
 }
 
 /// Misura terminale di un gruppo fuso sulle geometrie decodificate
-/// (ADR-0012 M2); `index` e' l'indice del nodo misura nel gruppo (numero di
+/// (architettura.md#geometrie M2); `index` e' l'indice del nodo misura nel gruppo (numero di
 /// trasformazioni). Per cella, nell'ordine del percorso non fuso
 /// (`geo_measure_batch`): validazione del "decode" (strutturale, poi OGC —
 /// l'ordine di `geometry_from_wkb`, profilo B di D12.4) poi kernel scalare;
@@ -1784,7 +1784,7 @@ fn collect_measure_failures(failures: Vec<(u64, &'static str, PlenoraError)>) ->
 }
 
 /// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
-/// kernel del gruppo (ADR-0012) per la validazione della colonna di input
+/// kernel del gruppo (architettura.md#geometrie) per la validazione della colonna di input
 /// (tipo Binary + metadati geoarrow, attribuita al primo nodo come nel
 /// percorso non fuso) e l'handle dell'ULTIMA trasformazione per lo schema
 /// di output: con `reproject` nel gruppo (M3) il CRS del campo geometria
@@ -2428,7 +2428,7 @@ fn diagnostics_batches(
             if payload.len() as u64 > MAX_CELL_BYTES {
                 return Err(ArrowTransportError::CellTooLarge(payload.len() as u64));
             }
-            // Decoder validante (ADR-0011): una passata, stesso contratto
+            // Decoder validante (architettura.md#geometrie): una passata, stesso contratto
             // strutturale di validate_wkb_contract + costruzione della
             // geometria. Niente `check_validation` OGC: la validita' e' il
             // dato che geometry_diagnostics stessa produce.
@@ -3010,7 +3010,7 @@ pub fn transform_arrow_with_format(
 
     let (output_schema, output_batches) = transform_batches(&input_schema, &batches, schema)?;
     // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
-    // DER-002 estesa) — post-processo centrale prima della codifica IPC.
+    // errori-e-limiti.md#limiti-dichiarati estesa) — post-processo centrale prima della codifica IPC.
     let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
     let output_rows: u64 = output_batches
         .iter()
@@ -3037,7 +3037,7 @@ pub fn transform_arrow_with_format(
 }
 
 // ---------------------------------------------------------------------------
-// Test del runner fuso (ADR-0012)
+// Test del runner fuso (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -3133,7 +3133,7 @@ mod tests {
             .collect::<BinaryArray>()
     }
 
-    /// Minore 1 (ADR-0009 decisione 8): la colonna si identifica anche con
+    /// Minore 1 (piano-v5.md#contratti-di-input decisione 8): la colonna si identifica anche con
     /// le sole chiavi canoniche — l'estensione `geoarrow.wkb` e' ammessa,
     /// non richiesta. Difesa in profondita': i piani validati non arrivano
     /// qui con colonne non identificabili (il rifiuto e' in analyze).
@@ -3392,7 +3392,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Misura terminale del gruppo fuso (ADR-0012 M2)
+    // Misura terminale del gruppo fuso (architettura.md#geometrie M2)
     // -----------------------------------------------------------------------
 
     /// Riferimento non fuso della misura: il braccio misura di

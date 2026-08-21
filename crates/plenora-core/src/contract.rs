@@ -1,5 +1,5 @@
-//! Contratti dati del grafo (Architetture.md par. 4.2/4.3, decisioni D6, D16,
-//! D25; ADR 1, ADR 5).
+//! Contratti dati del grafo (architettura.md/4.3, decisioni D6, D16,
+//! D25; architettura.md#determinismo, architettura.md#planner-ed-executor).
 //!
 //! Fondamenta della Fase 2A: tipi NUOVI (non trasloco) che descrivono ciò che
 //! scorre sugli archi del DAG (`DataContract`), l'identità logica stabile delle
@@ -13,7 +13,7 @@
 //! rifiuta contratti con più di una geometria (decisione D16).
 //!
 //! La type-safety avanzata sulle combinazioni confidence/scope prive di senso
-//! (es. `Proven` + scope `Schema` per proprietà dataset-wide, ADR 5) è
+//! (es. `Proven` + scope `Schema` per proprietà dataset-wide, architettura.md#planner-ed-executor) è
 //! deliberatamente rimandata: la rappresentazione v1 è la coppia semplice
 //! `ContractProperty<T> { confidence, scope }`.
 
@@ -978,7 +978,7 @@ impl ContractCrs {
     }
 }
 
-/// Contratto di una colonna geometrica (Architetture.md par. 4.3).
+/// Contratto di una colonna geometrica (architettura.md).
 #[derive(Clone, Debug)]
 pub struct GeometryColumnContract {
     /// Identità logica stabile nel grafo: le rinomine cambiano `name`,
@@ -1188,7 +1188,7 @@ pub enum PropertyScope {
     Dataset,
 }
 
-/// Una proprietà tipizzata con provenienza e scope (Architetture.md par. 4.3).
+/// Una proprietà tipizzata con provenienza e scope (architettura.md).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractProperty<T> {
     pub confidence: PropertyConfidence<T>,
@@ -1219,7 +1219,7 @@ pub struct ContractProperties {
     /// namespace globale del grafo.
     pub sorted_by: Option<ContractProperty<Vec<FieldId>>>,
     /// Cardinalità nota o stimata dell'arco (mai `Proven` in fase 1: non è
-    /// dimostrabile dagli header, Architetture.md par. 4.3).
+    /// dimostrabile dagli header, architettura.md).
     pub row_count: Option<ContractProperty<u64>>,
 }
 
@@ -1517,7 +1517,7 @@ fn validate_declared_types(
     Ok(())
 }
 
-/// Statistica di runtime (ADR 5).
+/// Statistica di runtime (architettura.md#planner-ed-executor).
 ///
 /// Regola: `prepare` produce sempre un piano valido anche con statistiche
 /// completamente assenti (`Unknown` → scelta conservativa); le statistiche
@@ -1557,7 +1557,7 @@ impl<T> RuntimeStatistic<T> {
     }
 }
 
-/// Sequenza logica di un batch (ADR 1).
+/// Sequenza logica di un batch (architettura.md#determinismo).
 ///
 /// Le operazioni parallele ricompongono l'output secondo l'ordine logico
 /// assegnato dal piano, mai secondo l'ordine temporale di completamento: la

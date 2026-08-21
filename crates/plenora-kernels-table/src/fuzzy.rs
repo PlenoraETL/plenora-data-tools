@@ -500,7 +500,7 @@ pub fn fuzzy_join(
     // dall'ordine di visita della `HashMap` — un dettaglio di implementazione
     // dell'hasher, non una proprieta' dell'input — e con piu' blocchi
     // sovradimensionati il conteggio nel messaggio poteva cambiare fra
-    // esecuzioni (ADR-0001: l'identita' dell'errore e' stabile).
+    // esecuzioni (architettura.md#determinismo: l'identita' dell'errore e' stabile).
     let worst = blocks
         .iter()
         .max_by(|(left_key, left_rows), (right_key, right_rows)| {

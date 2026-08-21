@@ -1,4 +1,4 @@
-//! Test del planner (fase 1 `validate`, Architetture.md par. 6.1, ADR 4/5).
+//! Test del planner (fase 1 `validate`, architettura.md, piano-v5.md#identita-e-fingerprint/5).
 
 use std::sync::Arc;
 
@@ -42,7 +42,7 @@ fn geographic_crs() -> ResolvedCrs {
 }
 
 /// Campo geometria WKB delle fixture: il marcatore di estensione
-/// `geoarrow.wkb` rende la colonna identificabile dal trasporto (ADR-0009,
+/// `geoarrow.wkb` rende la colonna identificabile dal trasporto (piano-v5.md#contratti-di-input,
 /// decisione 8 — il check vive in analyze, quindi anche le fixture dei
 /// contratti devono essere realistiche).
 fn wkb_geometry_field(name: &str) -> Field {
@@ -445,7 +445,7 @@ fn mixed_table_geo_pipeline_validates_end_to_end() {
         graph.used_operations(),
         &["geo.buffer", "table.aggregate", "table.filter"]
     );
-    // ADR 7: il profilo di publish di default (`AtomicPublish`) e' sempre
+    // errori-e-limiti.md#publish-e-cleanup: il profilo di publish di default (`AtomicPublish`) e' sempre
     // richiesto, finche' il formato piano non dichiara un profilo.
     assert_eq!(
         graph.required_capabilities().names().collect::<Vec<_>>(),
@@ -598,7 +598,7 @@ fn geo_contract_missing_crs(field_id: u32) -> DataContract {
 
 #[test]
 fn missing_crs_enters_the_contract_fingerprint() {
-    // ADR 4 + R4.6.3: un contratto con CRS risolto e uno con CRS mancante
+    // piano-v5.md#identita-e-fingerprint + R4.6.3: un contratto con CRS risolto e uno con CRS mancante
     // NON hanno lo stesso fingerprint — altrimenti un piano validato su
     // input risolto accetterebbe in riesecuzione un input senza CRS senza
     // rivalidazione, spostando il fallimento a runtime. La forma risolta
@@ -609,7 +609,7 @@ fn missing_crs_enters_the_contract_fingerprint() {
     assert_eq!(
         contract_fingerprint(&geo_contract_missing_crs(0)).expect("fingerprint missing"),
         missing,
-        "fingerprint deterministico (ADR-0001)"
+        "fingerprint deterministico (architettura.md#determinismo)"
     );
     // Forma canonica: lo stato entra col valore R2.2.
     let canonical = contract_canonical(&geo_contract_missing_crs(0));
@@ -646,7 +646,7 @@ fn geo_contract_declared_unresolved_crs(field_id: u32) -> DataContract {
 
 #[test]
 fn declared_unresolved_enters_the_contract_fingerprint_with_declarations() {
-    // ADR 4 + R4.1: i tre stati NON collassano — resolved, missing e
+    // piano-v5.md#identita-e-fingerprint + R4.1: i tre stati NON collassano — resolved, missing e
     // declared_unresolved producono tre fingerprint distinti, e due
     // incoerenze con dichiarazioni diverse non sono lo stesso contratto.
     let declared = contract_fingerprint(&geo_contract_declared_unresolved_crs(0))
@@ -663,7 +663,7 @@ fn declared_unresolved_enters_the_contract_fingerprint_with_declarations() {
         contract_fingerprint(&geo_contract_declared_unresolved_crs(0))
             .expect("fingerprint declared_unresolved"),
         declared,
-        "fingerprint deterministico (ADR-0001)"
+        "fingerprint deterministico (architettura.md#determinismo)"
     );
     // Forma canonica: lo stato entra con le dichiarazioni.
     let canonical = contract_canonical(&geo_contract_declared_unresolved_crs(0));
@@ -871,7 +871,7 @@ fn compiled_capability_validates_and_is_required_by_graph() {
         &local_capabilities(),
     )
     .expect("ambiente coerente");
-    // Un ambiente senza geos rifiuta il grafo (ADR 4).
+    // Un ambiente senza geos rifiuta il grafo (piano-v5.md#identita-e-fingerprint).
     let result = check_compatibility(
         &graph,
         CATALOG,
@@ -937,7 +937,7 @@ fn sorted_by_keys_on_input_are_rejected_fail_closed() {
 }
 
 // ---------------------------------------------------------------------------
-// Alias, migrazione, canonicalizzazione (ADR 4)
+// Alias, migrazione, canonicalizzazione (piano-v5.md#identita-e-fingerprint)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -978,7 +978,7 @@ fn legacy_aliases_in_v4_plan_validate_and_share_plan_hash() {
 #[test]
 fn equivalent_plans_share_plan_hash() {
     // Ordine dei nodi nel JSON e config omessa vs `{}` esplicita sono
-    // irrilevanti: il piano canonico e' lo stesso (ADR 4).
+    // irrilevanti: il piano canonico e' lo stesso (piano-v5.md#identita-e-fingerprint).
     let sparse = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1053,7 +1053,7 @@ fn legacy_plan_migrates_and_validates_end_to_end() {
 }
 
 // ---------------------------------------------------------------------------
-// Identita' e compatibilita' (ADR 4)
+// Identita' e compatibilita' (piano-v5.md#identita-e-fingerprint)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1076,7 +1076,7 @@ fn check_compatibility_accepts_the_current_environment() {
 
 #[test]
 fn publish_profile_is_required_and_checked() {
-    // ADR 7: il profilo di publish e' una capability del grafo.
+    // errori-e-limiti.md#publish-e-cleanup: il profilo di publish e' una capability del grafo.
     let graph = validate_mixed();
     // Default `AtomicPublish` finche' il formato piano non dichiara un profilo.
     assert!(graph
@@ -1097,7 +1097,7 @@ fn publish_profile_is_required_and_checked() {
         }
         other => panic!("atteso mismatch capability publish, ottenuto {other:?}"),
     }
-    // L'ambiente locale dichiara entrambi i profili implementati (ADR 7).
+    // L'ambiente locale dichiara entrambi i profili implementati (errori-e-limiti.md#publish-e-cleanup).
     assert!(local_capabilities().contains(PublishProfile::Atomic.capability_name()));
     assert!(local_capabilities().contains(PublishProfile::DurableAtomic.capability_name()));
 }
@@ -1145,7 +1145,7 @@ fn arrow_version_mismatch_is_rejected() {
 #[test]
 fn plan_hash_normalizes_integer_and_float_forms() {
     // `100` e `100.0` denotano lo stesso valore: la canonicalizzazione
-    // normalizza i numeri (ADR 4) e i due piani producono lo stesso hash.
+    // normalizza i numeri (piano-v5.md#identita-e-fingerprint) e i due piani producono lo stesso hash.
     let plan_with = |value: serde_json::Value| {
         json!({
             "schema_version": 5,
@@ -1198,7 +1198,7 @@ fn plan_hash_normalizes_integer_and_float_forms() {
 fn catalog_fingerprint_mismatch_is_rejected() {
     let graph = validate_mixed();
 
-    // Stessa op, semantica cambiata: fingerprint diverso (ADR 4).
+    // Stessa op, semantica cambiata: fingerprint diverso (piano-v5.md#identita-e-fingerprint).
     let bumped: Vec<OperationDescriptor> = CATALOG
         .iter()
         .map(|descriptor| {
@@ -1264,7 +1264,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
 
 #[test]
 fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
-    // ADR-0004 (delta row-diagnostics 2026-08-03): i bump di versione devono
+    // piano-v5.md#identita-e-fingerprint (delta row-diagnostics 2026-08-03): i bump di versione devono
     // invalidare i grafi validati contro la baseline af812aa. Per ogni op
     // rappresentativa: si valida un piano che la usa col catalogo corrente e
     // si verifica che un catalogo riportato ALLE VERSIONI DI BASELINE
@@ -1505,7 +1505,7 @@ fn input_geometry_names_are_not_bound_in_the_field_allocator() {
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot canonico del catalogo (disciplina ADR 4)
+// Snapshot canonico del catalogo (disciplina piano-v5.md#identita-e-fingerprint)
 // ---------------------------------------------------------------------------
 
 /// Percorso dello snapshot committato (`tests/catalog_snapshot.snap`).
@@ -1517,7 +1517,7 @@ const CATALOG_SNAPSHOT_PATH: &str =
 /// [`catalog_fingerprint`] richiede al chiamante), JSON pretty-printed
 /// a chiavi ordinate per un diff leggibile in review.
 ///
-/// La forma e' un SUPERINSIEME di [`descriptor_canonical`]: ADR-0012 D12.2
+/// La forma e' un SUPERINSIEME di [`descriptor_canonical`]: architettura.md#geometrie D12.2
 /// (decisione deliberata) tiene `geo_fusion` FUORI dal fingerprint
 /// (capability fisica, non semantica) ma DENTRO lo snapshot — ogni cambio di
 /// fondibilita' resta un diff esplicito in PR.
@@ -1543,7 +1543,7 @@ fn catalog_snapshot_content() -> String {
     content
 }
 
-/// Snapshot test del catalogo (ADR 4): il catalogo reale deve coincidere
+/// Snapshot test del catalogo (piano-v5.md#identita-e-fingerprint): il catalogo reale deve coincidere
 /// con lo snapshot committato `crates/plenora-engine/tests/catalog_snapshot.snap`.
 ///
 /// Qualunque PR che cambi un descrittore (campi, versioni per-componente,
@@ -1584,7 +1584,7 @@ fn catalog_matches_committed_snapshot() {
 }
 
 // ---------------------------------------------------------------------------
-// Contratto della memoria (ADR 15): migrazione, identita', invalidazione
+// Contratto della memoria (errori-e-limiti.md#memoria-governata): migrazione, identita', invalidazione
 // ---------------------------------------------------------------------------
 
 /// Lo stesso piano tabellare nelle due versioni, con lo stesso budget.

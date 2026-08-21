@@ -1,4 +1,4 @@
-//! Formato piano v5: DAG dichiarativo (Architetture.md par. 5, ADR 4, ADR 6).
+//! Formato piano v5: DAG dichiarativo (architettura.md, piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
 //!
 //! Fondamenta della Fase 2A — codice NUOVO, non trasloco:
 //!
@@ -6,15 +6,15 @@
 //!   configurazioni, nessuna annotazione di esecuzione), serde con
 //!   `deny_unknown_fields` a ogni livello;
 //! - [`PlanV5::parse`]: applicazione dei [`PlanLimits`] DURANTE il parsing
-//!   (ADR 6: il prima possibile, prima di allocazioni guidate dal contenuto),
+//!   (errori-e-limiti.md: il prima possibile, prima di allocazioni guidate dal contenuto),
 //!   poi validazione strutturale (id unici, riferimenti esistenti, aciclicità,
 //!   output raggiungibile, arietà da catalogo) e risoluzione alias verso gli
 //!   id canonici;
 //! - [`PlanV5::from_legacy`]: migrazione del piano lineare legacy
 //!   (`Plan{steps}`, `schema_version` <= 3) nel caso degenerato del DAG —
-//!   deterministica e idempotente (decisione D20, ADR 4);
+//!   deterministica e idempotente (decisione D20, piano-v5.md#identita-e-fingerprint);
 //! - [`canonical_json`]: serializzazione canonica ai fini del `plan_hash`
-//!   (ADR 4): chiavi ordinate, nodi in ordine topologico deterministico,
+//!   (piano-v5.md#identita-e-fingerprint): chiavi ordinate, nodi in ordine topologico deterministico,
 //!   alias sostituiti dagli id canonici, numeri della config normalizzati
 //!   (`100` ≡ `100.0`), default noti materializzati (limiti effettivi,
 //!   config omessa ≡ `{}`).
@@ -55,11 +55,11 @@ use crate::table_engine;
 
 pub mod migrazione_v4;
 
-/// Versione CANONICA del formato piano DAG (Architetture.md par. 5).
+/// Versione CANONICA del formato piano DAG (architettura.md).
 ///
 /// La v5 differisce dalla v4 per un solo campo, ma il campo cambia il
 /// contratto: il budget di memoria si chiama ora `max_governed_memory_bytes`
-/// (ADR 15). Il nome della v4 prometteva un tetto sull'intero processo che
+/// (errori-e-limiti.md#memoria-governata). Il nome della v4 prometteva un tetto sull'intero processo che
 /// in-process non e' realizzabile; il nuovo dice quello che il limite fa
 /// davvero, cioe' governare la memoria che la libreria controlla.
 ///
@@ -226,7 +226,7 @@ impl PlanLimitsOverride {
     }
 }
 
-/// Nodo del DAG: solo dipendenze e configurazione (Architetture.md par. 5).
+/// Nodo del DAG: solo dipendenze e configurazione (architettura.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeV5 {
@@ -245,7 +245,7 @@ pub struct NodeV5 {
     pub config: Value,
 }
 
-/// Piano v5: DAG dichiarativo (Architetture.md par. 5).
+/// Piano v5: DAG dichiarativo (architettura.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanV5 {
@@ -262,7 +262,7 @@ pub struct PlanV5 {
     /// definizione CRS che il centro DECIDE per quell'input, risolvendo
     /// un'incoerenza dichiarata (`declared_unresolved`). E' la sola forma
     /// con cui il centro puo' risolvere un'incoerenza: esplicita nel piano,
-    /// coperta dal `plan_hash` (ADR 4) e applicata al contratto di input
+    /// coperta dal `plan_hash` (piano-v5.md#identita-e-fingerprint) e applicata al contratto di input
     /// prima della validazione (CLI). Le chiavi devono essere input
     /// dichiarati; una decisione su uno stato diverso da
     /// `declared_unresolved` e' un errore (su `missing` sarebbe un CRS
@@ -312,7 +312,7 @@ impl ValidatedPlanV5 {
         self.plan.limits.effective()
     }
 
-    /// Serializzazione canonica ai fini del futuro `plan_hash` (ADR 4).
+    /// Serializzazione canonica ai fini del futuro `plan_hash` (piano-v5.md#identita-e-fingerprint).
     #[must_use]
     pub fn canonical_json(&self) -> Value {
         canonical_json(&self.plan)
@@ -324,7 +324,7 @@ const fn contract_error(message: String) -> PlenoraError {
 }
 
 impl PlanV5 {
-    /// Parse completo di un piano v5: limiti durante il parsing (ADR 6),
+    /// Parse completo di un piano v5: limiti durante il parsing (errori-e-limiti.md),
     /// validazione strutturale, risoluzione alias.
     ///
     /// # Errors
@@ -334,7 +334,7 @@ impl PlanV5 {
     /// `PlenoraError::Unsupported` per operazioni catalogate ma non
     /// disponibili (`Maturity::Planned`).
     pub fn parse(json_text: &str, plan_limits: &PlanLimits) -> Result<ValidatedPlanV5> {
-        // ADR 6: il limite sui byte del JSON si applica PRIMA del parse.
+        // errori-e-limiti.md: il limite sui byte del JSON si applica PRIMA del parse.
         if json_text.len() > plan_limits.max_plan_json_bytes {
             return Err(contract_error(format!(
                 "max_plan_json_bytes superato: {} byte > {}",
@@ -367,7 +367,7 @@ impl PlanV5 {
     /// `in = ["left", "right"]`.
     ///
     /// Deterministica (id `n0..nN`, input `main`/`left`/`right` fissi) e
-    /// idempotente (decisione D20, ADR 4): il risultato è già un piano v5
+    /// idempotente (decisione D20, piano-v5.md#identita-e-fingerprint): il risultato è già un piano v5
     /// validato con i limiti di default.
     ///
     /// # Errors
@@ -471,7 +471,7 @@ impl PlanV5 {
             )));
         }
 
-        // --- Conteggi e byte (ADR 6: prima delle validazioni guidate dal
+        // --- Conteggi e byte (errori-e-limiti.md: prima delle validazioni guidate dal
         // contenuto) ---
         if self.inputs.len() > plan_limits.max_inputs {
             return Err(contract_error(format!(
@@ -519,7 +519,7 @@ impl PlanV5 {
         for node in &mut self.nodes {
             check_identifier("id nodo", &node.id, plan_limits)?;
             check_identifier("operazione", &node.op, plan_limits)?;
-            // Config omessa (null) equivale a oggetto vuoto (ADR 4: config
+            // Config omessa (null) equivale a oggetto vuoto (piano-v5.md#identita-e-fingerprint: config
             // omessa ≡ config con default esplicito).
             if node.config.is_null() {
                 node.config = json!({});
@@ -589,7 +589,7 @@ impl PlanV5 {
                     node.inputs.len()
                 )));
             }
-            // Alias sostituito dall'id canonico (ADR 4).
+            // Alias sostituito dall'id canonico (piano-v5.md#identita-e-fingerprint).
             node.op = descriptor.id.to_owned();
         }
 
@@ -766,7 +766,7 @@ fn ancestors_of_output(plan: &PlanV5) -> HashSet<&str> {
     reachable
 }
 
-/// Serializzazione canonica del piano ai fini del `plan_hash` (ADR 4).
+/// Serializzazione canonica del piano ai fini del `plan_hash` (piano-v5.md#identita-e-fingerprint).
 ///
 /// Regole applicate: chiavi ordinate (garantito da `serde_json::Map`), nodi
 /// in ordine topologico deterministico (tie-break lessicografico), alias
@@ -821,7 +821,7 @@ pub fn canonical_json(plan: &PlanV5) -> Value {
         root.insert("crs".to_owned(), json!(crs));
     }
     root.insert("inputs".to_owned(), json!(plan.inputs));
-    // R4.6.3: le decisioni CRS fanno parte dell'identita' del piano (ADR 4)
+    // R4.6.3: le decisioni CRS fanno parte dell'identita' del piano (piano-v5.md#identita-e-fingerprint)
     // — una decisione diversa e' un piano diverso. Mappa ordinata per
     // costruzione (BTreeMap), assente quando vuota (piani esistenti
     // invariati).
@@ -833,7 +833,7 @@ pub fn canonical_json(plan: &PlanV5) -> Value {
     Value::Object(root)
 }
 
-/// Limiti effettivi completamente materializzati (ADR 4: default espliciti).
+/// Limiti effettivi completamente materializzati (piano-v5.md#identita-e-fingerprint: default espliciti).
 fn canonical_limits(limits: &Limits) -> Value {
     json!({
         "max_input_rows": limits.rows.max_input_rows,
@@ -868,7 +868,7 @@ fn canonical_limits(limits: &Limits) -> Value {
 /// in virgola mobile NON vanno unificate.
 const MAX_EXACT_F64_INT: u64 = 1 << 53;
 
-/// Normalizzazione ricorsiva dei numeri nella config (ADR 4): `100` e
+/// Normalizzazione ricorsiva dei numeri nella config (piano-v5.md#identita-e-fingerprint): `100` e
 /// `100.0` denotano lo stesso valore e devono produrre lo stesso piano
 /// canonico. Ogni float a valore intero entro 2^53 (rappresentazione esatta
 /// garantita) e' convertito all'intero corrispondente; i float con frazione
@@ -899,7 +899,7 @@ fn canonical_numbers(value: &Value) -> Value {
 /// stessa forma canonica. L'intero 9007199254740993 (2^53+1) diventava il
 /// double 9007199254740992.0, superava la guardia `|v| <= 2^53` e veniva
 /// canonicalizzato come 9007199254740992: due config semanticamente diverse
-/// con lo stesso `plan_hash` (violazione di ADR 1 / ADR 4, cache e riuso del
+/// con lo stesso `plan_hash` (violazione di architettura.md#determinismo / piano-v5.md#identita-e-fingerprint, cache e riuso del
 /// piano non piu' sicuri).
 #[allow(
     clippy::cast_possible_truncation,
@@ -909,7 +909,7 @@ fn canonical_numbers(value: &Value) -> Value {
 )]
 // I cast sono sicuri: guardati da `trunc` (valore intero) e da |v| <= 2^53.
 // Il confronto `float == float.trunc()` e' esatto volutamente: la
-// canonicalizzazione del plan_hash (ADR 4) richiede uguaglianza per bit.
+// canonicalizzazione del plan_hash (piano-v5.md#identita-e-fingerprint) richiede uguaglianza per bit.
 fn canonical_number(number: &Number) -> Value {
     if number.is_i64() || number.is_u64() {
         return Value::Number(number.clone());

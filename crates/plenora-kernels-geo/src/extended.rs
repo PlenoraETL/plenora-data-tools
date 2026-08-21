@@ -212,12 +212,12 @@ fn rotate_coefficients(
     let cosine = radians.cos();
     let sine = radians.sin();
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let x_offset = origin.x() - cosine * origin.x() + sine * origin.y();
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let y_offset = origin.y() - sine * origin.x() - cosine * origin.y();

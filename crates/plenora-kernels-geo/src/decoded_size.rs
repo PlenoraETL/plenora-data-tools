@@ -1,4 +1,4 @@
-//! Preflight della forma decodificata (ADR-0014 D14.4).
+//! Preflight della forma decodificata (architettura.md#geometrie D14.4).
 //!
 //! [`decoded_size_xy`] calcola la dimensione in byte della geometria
 //! `Geometry<f64>` che il decoder validante ([`crate::wkb_decoder`])
@@ -43,7 +43,7 @@
 //! byte dello slot), e la stima non sarebbe conservativa. Le costanti qui
 //! sono i `size_of` reali, verificate per costruzione dal test di
 //! conservativita' su corpus multi-tipo (stima ≥ memoria reale misurata —
-//! stesso ruolo del test DER-003). Lo slack di allocazione (`Vec` con
+//! stesso ruolo del test errori-e-limiti.md#limiti-dichiarati). Lo slack di allocazione (`Vec` con
 //! capacita' > lunghezza) e' fuori modello per costruzione: il decoder
 //! alloca ogni `Vec` con capacita' esatta (`with_capacity`), invariante
 //! verificata dal test.
@@ -73,7 +73,7 @@ pub const GEOMETRY_BYTES: u64 = size_of::<Geometry<f64>>() as u64;
 /// (`size_of`; contato per riga, null inclusi).
 pub const OPTION_SLOT_BYTES: u64 = size_of::<Option<Geometry<f64>>>() as u64;
 
-/// Dimensione in byte della forma decodificata di una cella WKB (ADR-0014
+/// Dimensione in byte della forma decodificata di una cella WKB (architettura.md#geometrie
 /// D14.4).
 ///
 /// Heap della `Geometry<f64>` che il decoder validante costruirebbe, SENZA
@@ -374,7 +374,7 @@ mod tests {
         ]
     }
 
-    /// Conservativita' (ADR-0014 D14.4, ruolo del test DER-003): su tutto il
+    /// Conservativita' (architettura.md#geometrie D14.4, ruolo del test errori-e-limiti.md#limiti-dichiarati): su tutto il
     /// corpus la stima del preflight e' >= la memoria reale misurata sulla
     /// geometria decodificata dal decoder validante — e qui esattamente
     /// uguale, perche' il decoder alloca ogni `Vec` con capacita' esatta

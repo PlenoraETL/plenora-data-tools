@@ -190,7 +190,7 @@ impl Parser<'_> {
     }
 }
 
-/// Valore intero come double, con arrotondamento DICHIARATO (DER-005):
+/// Valore intero come double, con arrotondamento DICHIARATO (errori-e-limiti.md#limiti-dichiarati):
 /// `formula` produce `Float64` per contratto e il tier generico applica la
 /// stessa conversione, cosi' i due percorsi non divergono.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi doc.
@@ -564,7 +564,7 @@ impl<'a> FastProgram<'a> {
                         // stack lo tiene lo zero. Non nullo: conversione
                         // esatta o errore, in parita' con `scalar_as_f64_rounded` del
                         // tier generico (che dal canto suo non arrotonda piu').
-                        // Arrotondamento dichiarato (DER-005): `formula`
+                        // Arrotondamento dichiarato (errori-e-limiti.md#limiti-dichiarati): `formula`
                         // produce `Float64` per contratto, come il tier
                         // generico (`scalar_as_f64_rounded`) — e i due
                         // percorsi devono dare la stessa risposta.
@@ -768,7 +768,7 @@ impl<'a> FastColumn<'a> {
     /// Valore della cella come slot del tier generale.
     ///
     /// Infallibile: `formula` produce `Float64` per contratto e le
-    /// conversioni sono arrotondate per dichiarazione (DER-005), come nel
+    /// conversioni sono arrotondate per dichiarazione (errori-e-limiti.md#limiti-dichiarati), come nel
     /// tier generico — non c'e' un caso di errore da propagare.
     fn slot(&self, row: usize) -> Slot<'a> {
         match self {

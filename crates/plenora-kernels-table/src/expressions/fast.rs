@@ -103,7 +103,7 @@ enum FastColumn<'a> {
     Other(&'a ArrayRef),
 }
 
-// Conversioni con arrotondamento DICHIARATO (DER-005).
+// Conversioni con arrotondamento DICHIARATO (errori-e-limiti.md#limiti-dichiarati).
 //
 // `table.expression` produce `Float64` per contratto: il double e' il tipo
 // del risultato, non un passaggio intermedio. Le stesse conversioni valgono
@@ -205,7 +205,7 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    // Arrotondamento dichiarato (DER-005): `expression`
+                    // Arrotondamento dichiarato (errori-e-limiti.md#limiti-dichiarati): `expression`
                     // produce `Float64` per contratto, e un decimal
                     // frazionario non ha un double esatto. Verificare il solo
                     // `unscaled` — come faceva la versione precedente —

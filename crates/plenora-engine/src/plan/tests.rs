@@ -516,7 +516,7 @@ fn canonical_json_materializes_limits_and_differs_on_real_differences() {
 #[test]
 fn crs_decisions_are_validated_and_enter_the_canonical_form() {
     // R4.6.3: la decisione del centro e' esplicita nel piano — fa parte
-    // dell'identita' ADR 4 (una decisione diversa e' un piano diverso) e
+    // dell'identita' piano-v5.md#identita-e-fingerprint (una decisione diversa e' un piano diverso) e
     // le chiavi devono essere input dichiarati, con definizione non vuota.
     let with_decision = json!({
         "schema_version": 5, "inputs": ["main"], "output": "a",
@@ -579,7 +579,7 @@ fn crs_decisions_are_validated_and_enter_the_canonical_form() {
 #[test]
 fn canonical_json_normalizes_numbers() {
     // `100` e `100.0` denotano lo stesso valore: stessa forma canonica
-    // (ADR 4), anche annidati in array e oggetti dentro la config.
+    // (piano-v5.md#identita-e-fingerprint), anche annidati in array e oggetti dentro la config.
     let plan_with = |value: serde_json::Value| {
         json!({
             "schema_version": 5, "inputs": ["main"], "output": "a",

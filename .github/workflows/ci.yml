@@ -4,7 +4,7 @@
 # (conteggio catalogo) e' sopravvissuto per giorni su main. Questo
 # workflow e' il minimo sindacale per impedirlo di nuovo.
 #
-# Matrice Linux/Windows: il publish atomico (ADR-0007) ha rami per
+# Matrice Linux/Windows: il publish atomico (errori-e-limiti.md#publish-e-cleanup) ha rami per
 # piattaforma (cfg) che un test solo-Linux non eserciterebbe.
 name: ci
 
@@ -93,21 +93,21 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
 
-      # ADR 15: il budget di memoria della libreria si chiama
+      # errori-e-limiti.md#memoria-governata: il budget di memoria della libreria si chiama
       # `max_governed_memory_bytes` e NON ha alias. Il nome della v4 vive
       # solo nel modulo di migrazione. Senza questo gate la decisione
       # sopravvive finche' qualcuno non riaggiunge il vecchio nome «per
       # compatibilita'»: e' esattamente il modo in cui una promessa
       # ritirata torna in circolazione.
-      - name: Gate nome del budget di memoria (ADR 15)
+      - name: Gate nome del budget di memoria (errori-e-limiti.md#memoria-governata)
         run: python scripts/verifica_nome_budget_memoria.py
 
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami erano verificati solo localmente — lint pedantic su pair.rs sono
-  # emersi mesi dopo perche' nessuna CI li compilava (M3, ADR-0012).
+  # emersi mesi dopo perche' nessuna CI li compilava (M3, architettura.md#geometrie).
   # Solo Linux: e' la piattaforma di riferimento dei backend; le dipendenze
-  # di build (cmake, sqlite3) sono quelle documentate in ADR-0012.
+  # di build (cmake, sqlite3) sono quelle documentate in architettura.md#geometrie.
   backends:
     name: test full-backends (linux)
     runs-on: ubuntu-latest
@@ -317,7 +317,7 @@ jobs:
         if: always() && steps.llvm-cov.conclusion == 'success'
         run: python scripts/pulisci_coverage.py
 
-  # `docs/kernel-signatures.md` e' generato: il file committato deve coincidere
+  # `docs/operazioni.md` e' generato: il file committato deve coincidere
   # BYTE PER BYTE con la rigenerazione.
   #
   # Fino al 2026-08-21 non esisteva questo gate, e il generatore era rotto da

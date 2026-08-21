@@ -20,14 +20,14 @@
 //!
 //! Milestone B (contratti trasversali v2.0-rc10 §2, proposta in attesa di
 //! ratifica; emissione con deroga registrata §15.4/DER-ICD-002 — vedi
-//! `docs/deroghe.md` DER-002): protocollo delle chiavi canoniche
+//! `docs/errori-e-limiti.md` errori-e-limiti.md#limiti-dichiarati): protocollo delle chiavi canoniche
 //! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
 //! dedicato, una chiave per nozione, MAI un blob unico). R4.6.3 (rc9/rc10):
 //! l'emissione porta anche gli stati `crs_resolution = missing` (nessuna
 //! chiave CRS, coerenza R2.2) e `declared_unresolved` (dichiarazioni
-//! originali ri-emesse invariate, R4.6.4) — ADR-0009 decisione 7. `plenora.field_id`
+//! originali ri-emesse invariate, R4.6.4) — piano-v5.md#contratti-di-input decisione 7. `plenora.field_id`
 //! e' solo letta (R2.2 opzionale; non si emette il `FieldId` di grafo, che
-//! non ha significato fuori dal processo — ADR-0009 decisione 3). Questo
+//! non ha significato fuori dal processo — piano-v5.md#contratti-di-input decisione 3). Questo
 //! modulo
 //! fornisce emissione da [`GeometryColumnContract`], lettura fail-closed per
 //! chiave (R5.1: valore non canonico → errore esplicito, mai ignorato o
@@ -175,7 +175,7 @@ fn cell_too_large(bytes: u64) -> PlenoraError {
 
 /// Il campo si dichiara colonna geometria WKB?
 ///
-/// Identificazione ammessa (ADR-0009, decisione 8): l'estensione
+/// Identificazione ammessa (piano-v5.md#contratti-di-input, decisione 8): l'estensione
 /// `GeoArrow` `ARROW:extension:name = geoarrow.wkb` OPPURE la forma a sole
 /// chiavi canoniche — almeno una chiave `plenora.geometry.*`, autosufficiente
 /// come in discovery (`plenora.geometry.encoding` +
@@ -437,7 +437,7 @@ pub fn geometry_encoding_from_metadata_strict(
 ///
 /// `Ok(None)` = chiave ASSENTE. JSON malformato = `Err`.
 ///
-/// La distinzione e' il punto: ADR-0009 (R5.1) impone che «illeggibile» non
+/// La distinzione e' il punto: piano-v5.md#contratti-di-input (R5.1) impone che «illeggibile» non
 /// equivalga ad «assente». Con il `.ok()` che questa funzione usava prima, un
 /// metadato `geo` malformato diventava indistinguibile da uno mancante, e la
 /// risoluzione del contratto proseguiva completando le nozioni dalle sole
@@ -499,7 +499,7 @@ fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
 pub struct GeometryMetadataDetails {
     /// Ordine degli assi del CRS; la chiave e' obbligatoria quando un CRS
     /// e' presente e l'emissione e' per completamento DELL'ASSENTE (R2.7,
-    /// ADR-0009 emendamento 2026-07-31): questo dettaglio esplicito vince,
+    /// piano-v5.md#contratti-di-input emendamento 2026-07-31): questo dettaglio esplicito vince,
     /// poi l'ordine GIS normalizzato quando la definizione canonica permette
     /// di stabilire gli assi. La chiave descrive l'ordine fisico x/y dei
     /// byte, non l'ordine nativo dell'autorita'.
@@ -542,7 +542,7 @@ pub struct GeometryMetadataDetails {
 ///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
 ///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
 /// - la forma della definizione CRS decide la chiave
-///   ([`definition_form`], ADR-0009 emendamento 2026-07-31): un oggetto
+///   ([`definition_form`], piano-v5.md#contratti-di-input emendamento 2026-07-31): un oggetto
 ///   JSON (PROJJSON) e' emesso come `crs_definition` + `projjson`, un testo
 ///   WKT1/WKT2 come `crs_definition` + `wkt`/`wkt2`, un identificatore di
 ///   autorita' (es. `EPSG:4326`) come `crs_id`. E' la stessa distinzione che
@@ -556,7 +556,7 @@ pub struct GeometryMetadataDetails {
 /// - con un CRS risolto `axis_order` e' sempre emesso, e con `declared_unresolved`
 ///   e' emesso quando `crs_id` o `crs_definition` e' presente (obbligatorio
 ///   in quei casi) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
-///   ADR-0009, emendamento 2026-07-31): vince il dettaglio esplicito, poi
+///   piano-v5.md#contratti-di-input, emendamento 2026-07-31): vince il dettaglio esplicito, poi
 ///   l'ordine GIS normalizzato quando la definizione canonica permette di
 ///   stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai
 ///   kernel; `unknown` resta il fallback quando gli assi non sono deducibili (la
@@ -675,7 +675,7 @@ pub fn canonical_geometry_metadata(
     }
     // `plenora.field_id` NON e' emesso: la tabella R2.2 lo dichiara
     // opzionale e il `FieldId` del contratto appartiene al namespace del
-    // grafo che lo ha assegnato (ADR-0009, decisione 3) — non ha
+    // grafo che lo ha assegnato (piano-v5.md#contratti-di-input, decisione 3) — non ha
     // significato fuori dal processo. Una chiave `plenora.field_id`
     // RICEVUTA resta propagata invariata dalla lineage (R2.4), mai
     // sovrascritta dal valore di grafo.
@@ -691,7 +691,7 @@ pub fn canonical_geometry_metadata(
 /// e dettagli.
 ///
 /// La FORMA della definizione decide la chiave ([`definition_form`],
-/// ADR-0009 emendamento 2026-07-31 — classe B): oggetto JSON (PROJJSON) →
+/// piano-v5.md#contratti-di-input emendamento 2026-07-31 — classe B): oggetto JSON (PROJJSON) →
 /// `crs_definition` + `crs_definition_format = projjson`; testo WKT1/WKT2
 /// → `crs_definition` (byte originali) + `wkt`/`wkt2` (etichetta derivata
 /// dalla stringa stessa: passthrough idempotente contro la lineage, nessuno
@@ -706,7 +706,7 @@ pub fn canonical_geometry_metadata(
 /// e resta in `crs_id` ([`DefinitionForm::Other`]).
 ///
 /// `axis_order` e' sempre emesso (obbligatorio quando un CRS e' presente)
-/// con completamento DELL'ASSENTE, mai arbitrato (R2.7 — ADR-0009,
+/// con completamento DELL'ASSENTE, mai arbitrato (R2.7 — piano-v5.md#contratti-di-input,
 /// emendamento 2026-07-31): vince il dettaglio esplicito di `details`, poi
 /// l'ordine GIS normalizzato quando la definizione canonica permette di
 /// stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai kernel;
@@ -770,7 +770,7 @@ fn insert_resolved_crs_keys(
 /// produttore, senza un [`ResolvedCrs`].
 ///
 /// BLOCK-06 (decisione owner 2026-07-30 — parita' del percorso legacy col
-/// v4, DER-002 estesa): il trasporto legacy `geo_transport` valida il CRS
+/// v4, errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
 /// al livello comandi (risoluzione PROJ obbligatoria in `publish.rs`) e
 /// trasporta la sola definizione; un `ResolvedCrs` richiederebbe una
 /// risoluzione che il trasporto non esegue.
@@ -784,7 +784,7 @@ fn insert_resolved_crs_keys(
 /// trasporto legacy non dichiara i tipi e inventarli e' vietato (R3.4.1);
 /// `encoding` e' emessa solo se il chiamante la dichiara (R5.2).
 ///
-/// Deduzione d'autorita' (ADR-0009, emendamento 2026-07-31): senza un
+/// Deduzione d'autorita' (piano-v5.md#contratti-di-input, emendamento 2026-07-31): senza un
 /// `ResolvedCrs` la definizione canonica non e' disponibile, quindi lo
 /// `srid` e' dedotto dalla forma `authority:code` della definizione quando
 /// numerica ([`authority_code_srid`] — `EPSG:4326` → 4326), mentre
@@ -865,7 +865,7 @@ pub const CRS_KEYS_REPLACED_BY_DECISION: [&str; 6] = [
 ];
 
 /// Chiavi canoniche dei tipi geometrici riscritte dalle trasformazioni che
-/// CAMBIANO il tipo della colonna (ADR-0009, decisione 8).
+/// CAMBIANO il tipo della colonna (piano-v5.md#contratti-di-input, decisione 8).
 ///
 /// Il contratto di output prodotto dall'analisi dichiara i tipi
 /// dell'output; le chiavi ereditate dal campo di input descriverebbero il
@@ -878,7 +878,7 @@ pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
 /// Rimuove le chiavi canoniche dei tipi dai metadati di un campo geometria.
 ///
 /// Usata dall'analisi delle trasformazioni che cambiano il tipo geometrico
-/// (ADR-0009, decisione 8): il contratto dichiara i tipi dell'output e il
+/// (piano-v5.md#contratti-di-input, decisione 8): il contratto dichiara i tipi dell'output e il
 /// blocco canonico li ri-emette da li' — la dichiarazione ereditata non
 /// deve sopravvivere accanto (un consumatore a valle leggerebbe il tipo di
 /// prima della trasformazione) ne' provocare un conflitto R2.6.
@@ -894,7 +894,7 @@ pub fn strip_rewritten_types_declarations<S: std::hash::BuildHasher>(
 /// SENZA toccare il metadato legacy `geo` (gia' riscritto dall'operazione
 /// col CRS di output).
 ///
-/// Usata dall'analisi di `geo.reproject` (ADR-0009, decisione 8): la
+/// Usata dall'analisi di `geo.reproject` (piano-v5.md#contratti-di-input, decisione 8): la
 /// riproiezione CAMBIA il fatto (il CRS della colonna), non ne descrive uno
 /// diverso — le chiavi della sorgente sono sostituite e il blocco canonico
 /// ri-emette il target dal contratto, senza conflitto R2.6 con la lineage.
@@ -1615,12 +1615,12 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 ///
 /// `PlenoraError::ResourceLimit` se una cella non-null supera [`MAX_CELL_BYTES`];
 /// in piu' l'errore restituito da `f` sulla prima cella IN ORDINE DI RIGA
-/// che fallisce (deterministico, ADR-0001).
+/// che fallisce (deterministico, architettura.md#determinismo).
 pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
-    // ADR-0001: il collect parallelo di `Result` sceglie l'errore in modo
+    // architettura.md#determinismo: il collect parallelo di `Result` sceglie l'errore in modo
     // NON deterministico (il primo che acquisisce il mutex interno di
     // rayon). Qui i `Result` sono raccolti per riga (l'ordine del collect
     // parallelo indicizzato e' preservato) e il primo errore IN ORDINE DI
@@ -1648,7 +1648,7 @@ pub fn map_nullable<T: Send>(
 }
 
 /// STIMA dei byte nativi delle geometrie decodificate di una colonna
-/// geometria (ADR-0002, Fase 2B-M2b).
+/// geometria (architettura.md#memoria, Fase 2B-M2b).
 ///
 /// Decodifica ogni cella non-null e somma le stime per cella. Il valore e'
 /// una STIMA dichiarata (formula in [`crate::memory_estimate`]), da riportare
@@ -2005,7 +2005,7 @@ mod tests {
 
     #[test]
     fn geometry_column_index_accepts_the_canonical_only_form() {
-        // ADR-0009 decisione 8 (minore 1): la forma a sole chiavi canoniche
+        // piano-v5.md#contratti-di-input decisione 8 (minore 1): la forma a sole chiavi canoniche
         // (`plenora.geometry.encoding` + `plenora.geometry.dimensions`
         // bastano) identifica la colonna — l'estensione `geoarrow.wkb` e'
         // ammessa, non richiesta.
@@ -2076,7 +2076,7 @@ mod tests {
 
     #[test]
     fn map_nullable_reports_the_first_failing_row_deterministically() {
-        // ADR-0001: con piu' celle fallite, l'errore riportato DEVE essere
+        // architettura.md#determinismo: con piu' celle fallite, l'errore riportato DEVE essere
         // quello della prima riga in ordine, a qualunque scheduling rayon
         // (il collect parallelo diretto sceglierebbe il primo errore che
         // acquisisce il mutex interno: non deterministico).
@@ -2108,7 +2108,7 @@ mod tests {
         ));
     }
 
-    /// STIMA per colonna geometria (ADR-0002): somma delle stime delle celle
+    /// STIMA per colonna geometria (architettura.md#memoria): somma delle stime delle celle
     /// non-null; i null contribuiscono zero; l'accumulatore riporta lo
     /// stesso totale come metrica "stimata".
     #[test]
@@ -2223,7 +2223,7 @@ mod tests {
         );
         assert_eq!(get(PLENORA_GEOMETRY_PRECISION_KEY), Some("float64"));
         // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
-        // ha significato fuori dal processo, ADR-0009 decisione 3).
+        // ha significato fuori dal processo, piano-v5.md#contratti-di-input decisione 3).
         assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
     }
 
@@ -2243,7 +2243,7 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
         assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
         // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
-        // ha significato fuori dal processo, ADR-0009 decisione 3).
+        // ha significato fuori dal processo, piano-v5.md#contratti-di-input decisione 3).
         assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
         // R5.2 + R3.4.1: le opzionali e le non dichiarate restano assenti.
         for key in [
@@ -2260,7 +2260,7 @@ mod tests {
         }
     }
 
-    // --- Ordine fisico normalizzato + SRID d'autorita' (ADR-0009,
+    // --- Ordine fisico normalizzato + SRID d'autorita' (piano-v5.md#contratti-di-input,
     // emendamento 2026-08-01) ----------------------------------------------
 
     /// Contratto `Resolved` con PROJJSON realistico di EPSG:4326 (assi e
@@ -2366,7 +2366,7 @@ mod tests {
         );
     }
 
-    // --- Emissione da definizione WKT (ADR-0009, emendamento 2026-07-31 —
+    // --- Emissione da definizione WKT (piano-v5.md#contratti-di-input, emendamento 2026-07-31 —
     // classe B) ----------------------------------------------------------
 
     /// WKT1 realistico di Monte Mario / Italy zone 1 con `AUTHORITY` e
@@ -3030,7 +3030,7 @@ mod tests {
         );
 
         // Metadato legacy ILLEGGIBILE: errore, non rango legacy assente
-        // (R5.1/ADR-0009). Prima il JSON malformato era indistinguibile
+        // (R5.1/piano-v5.md#contratti-di-input). Prima il JSON malformato era indistinguibile
         // dall'assenza, e la risoluzione completava per precedenza dalle sole
         // chiavi canoniche scavalcando in silenzio un legacy che non era
         // riuscita a leggere.

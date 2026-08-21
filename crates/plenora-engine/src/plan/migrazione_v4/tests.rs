@@ -1,4 +1,4 @@
-//! Unit test della migrazione v4 -> v5 (ADR 15).
+//! Unit test della migrazione v4 -> v5 (errori-e-limiti.md#memoria-governata).
 //!
 //! Le prove sono organizzate per promessa, non per funzione: il contratto che
 //! il blocco introduce e' «nessun alias, migrazione esplicita, canonico

@@ -1,4 +1,4 @@
-//! Misura A/B dei binari geo (ADR-0014 M3, D14.10 — chiusura del cantiere):
+//! Misura A/B dei binari geo (architettura.md#geometrie M3, D14.10 — chiusura del cantiere):
 //! CLI standalone (trasporto v3 `pair_arrow`, la stessa camminata del
 //! comando `pair-arrow` senza processo) contro piano v4 (`geo.sjoin`,
 //! `geo.within`), piu' il controllo di non regressione dei `table.*` binari
@@ -22,7 +22,7 @@
 //!   framing dei batch e preflight D14.4. `validate` e la costruzione
 //!   delle fixture sono fuori timing.
 //!
-//! Fixture geo (deterministica, niente RNG — ADR-0001): 100 000 righe per
+//! Fixture geo (deterministica, niente RNG — architettura.md#determinismo): 100 000 righe per
 //! lato, batch da 10 000, griglia di 500 colonne a passo 100 (come
 //! `bench_geo_fusion`): left alterna quadrati 20x20 all'origine della cella
 //! e punti al centro, con l'1 per mille di null; right e' quadrati sulla
@@ -57,7 +57,7 @@
 //!
 //! Oracolo (bloccante, exit != 0 al fallimento):
 //!
-//! - cross-run (ADR-0001): serializzazione IPC (`FileWriter`) dell'output
+//! - cross-run (architettura.md#determinismo): serializzazione IPC (`FileWriter`) dell'output
 //!   di OGNI run di una modalita' -> byte-identici tra run;
 //! - cross-path (semantico, MAI byte — gli schemi v3/v4 differiscono per
 //!   contratto D14.8): sjoin confronta le coppie (left, right) in ordine
@@ -262,7 +262,7 @@ fn table_schema() -> SchemaRef {
 
 /// 1M righe (id = 0..N, chiavi identiche nei due lati -> join inner 1:1 da
 /// 1M righe di output); payload deterministico con sale diverso per lato
-/// (niente RNG, ADR-0001).
+/// (niente RNG, architettura.md#determinismo).
 fn table_batches(salt: i64) -> Vec<RecordBatch> {
     let mut batches = Vec::with_capacity(TABLE_ROWS.div_ceil(TABLE_BATCH_ROWS));
     for first in (0..TABLE_ROWS).step_by(TABLE_BATCH_ROWS) {
@@ -550,7 +550,7 @@ struct AlternatedRuns {
 
 /// Le RUNS run per modalita' alternate A,B,A,B... con oracolo cross-run
 /// (serializzazione IPC byte-per-byte tra run della stessa modalita',
-/// ADR-0001). La mediana di 5 per modalita' non dipende dall'ordine e un
+/// architettura.md#determinismo). La mediana di 5 per modalita' non dipende dall'ordine e un
 /// eventuale drift termico/di cache pesa su entrambe le modalita'.
 fn run_geo_alternated(
     scenario: &GeoScenario,
@@ -577,7 +577,7 @@ fn run_geo_alternated(
             if let Some(reference) = &reference_v4 {
                 assert_eq!(
                     *reference, serialized,
-                    "{}: output v4 diverso tra run (ADR-0001)",
+                    "{}: output v4 diverso tra run (architettura.md#determinismo)",
                     scenario.name
                 );
             } else {
@@ -594,7 +594,7 @@ fn run_geo_alternated(
             if let Some(reference) = &reference_v3 {
                 assert_eq!(
                     *reference, serialized,
-                    "{}: output v3 diverso tra run (ADR-0001)",
+                    "{}: output v3 diverso tra run (architettura.md#determinismo)",
                     scenario.name
                 );
             } else {
@@ -759,7 +759,7 @@ fn run_table_join_control() {
         if let Some(reference) = &reference {
             assert_eq!(
                 *reference, serialized,
-                "table_join_control: output diverso tra run (ADR-0001)"
+                "table_join_control: output diverso tra run (architettura.md#determinismo)"
             );
         } else {
             reference = Some(serialized);

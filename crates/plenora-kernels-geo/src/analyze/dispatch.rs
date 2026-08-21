@@ -197,7 +197,7 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 }
 
 /// Tipi geometrici dell'output delle trasformazioni 1:1 in place (mappa
-/// per-op, ADR-0009 decisione 8).
+/// per-op, piano-v5.md#contratti-di-input decisione 8).
 ///
 /// Un op che cambia il tipo dichiara i tipi dell'OUTPUT, mai quelli
 /// dell'input: `Some` per le op che cambiano il tipo, `None` per quelle a
@@ -279,9 +279,9 @@ pub(in crate::analyze) fn analyze_unary(
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let geometry = single_geometry(op, input)?;
-    // ADR-0009 decisione 8: la colonna deve essere identificabile dal
+    // piano-v5.md#contratti-di-input decisione 8: la colonna deve essere identificabile dal
     // trasporto (estensione `geoarrow.wkb` o sole chiavi canoniche) —
-    // rifiuto a compile-plan, mai a meta' esecuzione (ADR-0008).
+    // rifiuto a compile-plan, mai a meta' esecuzione (architettura.md#geometrie).
     require_identifiable_geometry(op, input, geometry)?;
     // B1.3: ogni op unaria che consuma una geometria la decodifica in XY —
     // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
@@ -292,7 +292,7 @@ pub(in crate::analyze) fn analyze_unary(
     match op {
         // Trasformazioni 1:1 in place: schema e FieldId invariati; le op
         // che CAMBIANO il tipo geometrico dichiarano i tipi dell'output
-        // (ADR-0009 decisione 8, `transform_output_types`).
+        // (piano-v5.md#contratti-di-input decisione 8, `transform_output_types`).
         "geo.centroid"
         | "geo.convex_hull"
         | "geo.envelope"
@@ -370,7 +370,7 @@ pub(in crate::analyze) fn analyze_unary(
                 }
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // ADR-0009 decisione 8: le celle di Voronoi sono sempre poligoni
+            // piano-v5.md#contratti-di-input decisione 8: le celle di Voronoi sono sempre poligoni
             // (l'input puntuale non e' il tipo dell'output).
             with_geometry_types(input, geometry, exact_types(vec![GeometryType::Polygon])?)
         }
@@ -379,7 +379,7 @@ pub(in crate::analyze) fn analyze_unary(
             ensure_non_negative(op, "snap_tolerance", parsed.snap_tolerance)?;
             let _ = (&parsed.remove_overlaps, &parsed.fill_gaps);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // ADR-0009 decisione 8: input poligonale, output poligonale — ma
+            // piano-v5.md#contratti-di-input decisione 8: input poligonale, output poligonale — ma
             // la rimozione degli overlap (differenza) puo' spezzare un
             // `Polygon` in `MultiPolygon`: insieme noto, dichiarazione exact.
             with_geometry_types(
@@ -469,7 +469,7 @@ pub(in crate::analyze) fn analyze_binary(
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
-    // ADR-0009 decisione 8 (come per le unarie): identificabilita' della
+    // piano-v5.md#contratti-di-input decisione 8 (come per le unarie): identificabilita' della
     // colonna verificata a compile-plan su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;
     require_identifiable_geometry(op, right, right_geometry)?;
@@ -489,7 +489,7 @@ pub(in crate::analyze) fn analyze_binary(
     let output = match op {
         // Schema left invariato, geometria sostituita in place; righe
         // allineate a left nel protocollo legacy: proprieta' preservate.
-        // ADR-0009 decisione 8: le booleane poligonali producono sempre
+        // piano-v5.md#contratti-di-input decisione 8: le booleane poligonali producono sempre
         // `MultiPolygon` (forma unica del kernel), non il tipo di left.
         "geo.clip"
         | "geo.intersection"

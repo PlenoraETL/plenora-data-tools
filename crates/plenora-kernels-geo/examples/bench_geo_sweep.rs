@@ -121,7 +121,7 @@ impl Rng {
 
     /// Uniforme in [min, max).
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn range(&mut self, min: f64, max: f64) -> f64 {
@@ -267,7 +267,7 @@ fn polys_complex_wkb() -> &'static WkbCells {
 
 /// `MultiPoligoni`: 4 componenti da ~100 vertici.
 // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-// violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+// violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
 // fusa e' il contratto numerico.
 #[allow(clippy::suboptimal_flops)]
 fn multipolys_wkb() -> &'static WkbCells {
@@ -417,7 +417,7 @@ fn pairs_wkb() -> (&'static WkbCells, &'static WkbCells) {
 /// Rettangolo di griglia [i*100, (i+1)*100) x [j*100, (j+1)*100).
 fn grid_rect(i: usize, j: usize, grow: f64, shift: f64) -> Geometry<f64> {
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let x0 = i as f64 * 100.0 - grow + shift;
@@ -513,7 +513,7 @@ fn collect_polys_wkb() -> &'static WkbCells {
             let i = index % 317;
             let j = index / 317;
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+            // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
             // fusa e' il contratto numerico.
             #[allow(clippy::suboptimal_flops)]
             let cx = 50.0 + i as f64 * 100.0;

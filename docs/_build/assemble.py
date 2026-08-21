@@ -669,7 +669,7 @@ def autotest():
 
 
 def genera():
-    """Il testo completo di `kernel-signatures.md`, senza scriverlo."""
+    """Il testo completo di `operazioni.md`, senza scriverlo."""
     catalog = parse_catalog()
     blocks = parse_fragments()
     documentate = _elenco_documentato(TABLE_SECTIONS + GEO_SECTIONS)

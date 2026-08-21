@@ -1,6 +1,6 @@
 [package]
 name = "plenora-kernels-table"
-description = "Kernel tabellari puri su RecordBatch (da plenora-nogeo-tools, Architetture.md par. 3.2)"
+description = "Kernel tabellari puri su RecordBatch (da plenora-nogeo-tools, architettura.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

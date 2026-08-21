@@ -1,6 +1,6 @@
 [package]
 name = "plenora-cli"
-description = "CLI di plenora-data-tools: validate, run, catalog + comandi legacy geo (Architetture.md par. 3.5)"
+description = "CLI di plenora-data-tools: validate, run, catalog + comandi legacy geo (architettura.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,7 +29,7 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-# Handler Ctrl-C per la cancellazione cooperativa (ADR 3, M1c).
+# Handler Ctrl-C per la cancellazione cooperativa (errori-e-limiti.md, M1c).
 ctrlc.workspace = true
 
 [dev-dependencies]

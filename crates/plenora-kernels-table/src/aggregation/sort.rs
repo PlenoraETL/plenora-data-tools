@@ -119,7 +119,7 @@ fn compare_nullable<A: Array>(
 /// `par_sort_by` quale confronto fallisse per primo dipende da come Rayon
 /// spezza il lavoro fra i thread: con piu' celle non valide, identita' e
 /// messaggio dell'errore cambiavano fra esecuzioni sullo stesso input —
-/// violazione di ADR-0001, che impone errori deterministici.
+/// violazione di architettura.md#determinismo, che impone errori deterministici.
 fn prevalidate_sort_columns(batch: &RecordBatch, indices: &[usize]) -> Result<()> {
     for index in indices {
         validate_sortable(batch.column(*index), batch.num_rows())?;

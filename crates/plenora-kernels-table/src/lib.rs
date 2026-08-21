@@ -1,5 +1,5 @@
 //! plenora-kernels-table — kernel tabellari puri `&RecordBatch -> Result<RecordBatch>`
-//! (Architetture.md par. 3.2).
+//! (architettura.md).
 //!
 //! Fase 1 "coesistenza": trasloco meccanico dei 17 moduli kernel da
 //! `plenora-nogeo-tools/src/kernels/` (`columns`, `strings`, `cleansing`,
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// comportamento).
 ///
 /// NOTA (punto aperto per la fase engine): il `Limits` unificato di
-/// `plenora_core::limits` (decisione D19, ADR 6) non copre `max_columns` e
+/// `plenora_core::limits` (decisione D19, errori-e-limiti.md) non copre `max_columns` e
 /// `max_split_columns`, e sostituisce il singolo `max_rows` con la famiglia
 /// semantica `RowLimits` (`max_input_rows` / `max_output_rows` /
 /// `max_rows_per_edge`). La mappatura di questa struct su
@@ -458,7 +458,7 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 /// di indici, tabelle hash, copie temporanee — a meno che il chiamante non lo
 /// includa esplicitamente in `bytes_per_row`. Serve a impedire le esplosioni
 /// di ordini di grandezza; NON rende `max_governed_memory_bytes` un tetto duro sulla
-/// memoria del processo. Vedi `docs/deroghe.md`, DER-011.
+/// memoria del processo. Vedi `docs/errori-e-limiti.md`, errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 ///
 /// # Errors
 ///
@@ -997,7 +997,7 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
 /// invece [`scalar_as_f64`], esatto o errore, o meglio ancora
 /// [`scalar_compare`], che non converte affatto.
 ///
-/// La deroga e' registrata in `docs/deroghe.md` (DER-005).
+/// La deroga e' registrata in `docs/errori-e-limiti.md` (errori-e-limiti.md#limiti-dichiarati).
 ///
 /// # Errors
 ///

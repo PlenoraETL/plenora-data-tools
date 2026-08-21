@@ -215,7 +215,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 .ok_or_else(|| PlenoraError::InvalidPlan("indice quantile non valido".into()))?;
             let weight = position - position.floor();
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+            // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
             // fusa e' il contratto numerico. Produzione e oracolo usano la
             // STESSA forma: l'equivalenza bit-a-bit resta per costruzione.
             #[allow(clippy::suboptimal_flops)]

@@ -1,7 +1,7 @@
 //! Test end-to-end della CLI sul DAG: `validate` e `run` di piani
 //! `schema_version: 5` attraverso planner/executor di `plenora-engine`, con
 //! il piano legacy che continua a funzionare invariato e i piani v4 che
-//! entrano dalla migrazione (ADR 15).
+//! entrano dalla migrazione (errori-e-limiti.md#memoria-governata).
 //!
 //! Le fixture Arrow sono generate nei test (stesso stile di
 //! `roundtrip_smoke.rs`). Il test con geometria richiede la risoluzione CRS
@@ -137,7 +137,7 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
     assert_eq!(
         summary["required_capabilities"],
         json!(["atomic_publish"]),
-        "piano solo tabellare: solo il profilo di publish di default (ADR 7)"
+        "piano solo tabellare: solo il profilo di publish di default (errori-e-limiti.md#publish-e-cleanup)"
     );
     assert_eq!(
         summary["input_contract_fingerprints"]
@@ -620,7 +620,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
         .output()
         .expect("run");
 
-    // WKB invalido: categoria `data_mapping` -> exit 3 (ADR-0003 §em.).
+    // WKB invalido: categoria `data_mapping` -> exit 3 (errori-e-limiti.md §em.).
     assert_eq!(result.status.code(), Some(3));
     assert!(
         result.stderr.is_empty(),
@@ -1475,7 +1475,7 @@ fn dag_v4_misto_geo_end_to_end() {
 
 /// Kill switch D12.9 via CLI: `--no-geo-fusion` e' accettato, il run
 /// riesce e l'output e' identico al percorso fuso (la fusione non cambia
-/// mai i byte, ADR-0012); il contatore dei fallback e' esposto nel JSON.
+/// mai i byte, architettura.md#geometrie); il contatore dei fallback e' esposto nel JSON.
 #[cfg(feature = "proj-backend")]
 #[test]
 fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
@@ -1742,7 +1742,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     );
     // axis_order: la lineage (R2.4) preserva il valore dichiarato in
     // ingresso — `unknown` dell'emissione non e' una dichiarazione ma
-    // l'assenza di una (il DataContract non lo modella, ADR-0009) e non
+    // l'assenza di una (il DataContract non lo modella, piano-v5.md#contratti-di-input) e non
     // puo' sovrascrivere una chiave presente (R2.7). lat_lon attraversa
     // il centro.
     assert_eq!(
@@ -1766,7 +1766,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0009 decisione 8: op che riscrivono fatti canonici (CRS di `reproject`,
+// piano-v5.md#contratti-di-input decisione 8: op che riscrivono fatti canonici (CRS di `reproject`,
 // tipi geometrici dei type-changer) — sostituzione, mai conflitto R2.6.
 // Minore 1/2: colonna geometria identificata dalle sole chiavi canoniche.
 // ---------------------------------------------------------------------------
@@ -2332,7 +2332,7 @@ fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
 }
 
 // ---------------------------------------------------------------------------
-// Migrazione v4 -> v5 attraverso la CLI (ADR 15)
+// Migrazione v4 -> v5 attraverso la CLI (errori-e-limiti.md#memoria-governata)
 // ---------------------------------------------------------------------------
 
 /// Lo stesso piano tabellare nella forma v4, col nome che la v4 dava al
@@ -2475,7 +2475,7 @@ fn un_piano_v4_esegue_e_produce_lo_stesso_output_del_v5() {
 #[test]
 fn un_piano_legacy_conserva_il_nome_del_proprio_formato() {
     // Il formato lineare v1 e' un formato PUBBLICATO, distinguibile dagli
-    // altri proprio da `schema_version: 1`. ADR 15 ha rinominato il campo
+    // altri proprio da `schema_version: 1`. errori-e-limiti.md#memoria-governata ha rinominato il campo
     // della libreria, non quel formato: un piano gia' scritto non cambia
     // perche' noi abbiamo cambiato idea sul nome. La traduzione avviene
     // dentro, in `table_engine::contract::limiti_v1`.

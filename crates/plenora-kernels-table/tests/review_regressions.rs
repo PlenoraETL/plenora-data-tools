@@ -944,7 +944,7 @@ fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
     // diversi.
     //
     // Il test attraversa un kernel per famiglia; la ricerca per classe e'
-    // documentata in docs/review-5-fix-2026-08-17.md.
+    // documentata in docs/errori-e-limiti.md.
     use plenora_core::ErrorCategory;
 
     let stretti = Limits {

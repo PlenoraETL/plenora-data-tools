@@ -1,5 +1,5 @@
 //! Uguaglianza geometrica con tolleranza dichiarata e normalizzazione
-//! topologica opzionale (ADR-0001, paragrafo "Uguaglianza geometrica").
+//! topologica opzionale (architettura.md#determinismo, paragrafo "Uguaglianza geometrica").
 //!
 //! Il confronto e' geometrico, non byte-per-byte sul WKB: si lavora su
 //! `geo::Geometry<f64>` gia' decodificate (il decode WKB resta a carico di
@@ -16,7 +16,7 @@
 //! possono canonizzare il punto iniziale degli anelli in modo diverso; in
 //! quel caso il confronto resta conservativo (puo' dare `false`).
 //!
-//! Semantica scalare (ADR-0001): `-0.0` e `+0.0` sono uguali, `NaN` e'
+//! Semantica scalare (architettura.md#determinismo): `-0.0` e `+0.0` sono uguali, `NaN` e'
 //! uguale a `NaN` ai soli fini del confronto (la validazione dinamica
 //! continua a rifiutare coordinate non finite in ingresso).
 
@@ -60,7 +60,7 @@ impl Default for GeometryComparison {
     }
 }
 
-/// Confronto scalale secondo ADR-0001: `-0.0 == +0.0` (coperto da `==`),
+/// Confronto scalale secondo architettura.md#determinismo: `-0.0 == +0.0` (coperto da `==`),
 /// `NaN == NaN`, altrimenti scarto assoluto entro la tolleranza.
 fn scalar_eq(left: f64, right: f64, tolerance: f64) -> bool {
     if left == right {
@@ -262,7 +262,7 @@ fn normalize_polygon(polygon: &Polygon<f64>) -> Polygon<f64> {
     Polygon::new(exterior, interiors)
 }
 
-/// Normalizzazione topologica opzionale (ADR-0001): rende il confronto
+/// Normalizzazione topologica opzionale (architettura.md#determinismo): rende il confronto
 /// insensibile a rappresentazioni equivalenti della stessa geometria.
 ///
 /// Cosa canonizza:
@@ -311,7 +311,7 @@ pub fn normalize_geometry(geometry: &Geometry<f64>) -> Geometry<f64> {
     }
 }
 
-/// Uguaglianza geometrica con tolleranza dichiarata (ADR-0001, livello 1):
+/// Uguaglianza geometrica con tolleranza dichiarata (architettura.md#determinismo, livello 1):
 /// confronto per-coordinate sulla struttura, con normalizzazione topologica
 /// opzionale quando `comparison.normalize` e' `true`.
 #[must_use]

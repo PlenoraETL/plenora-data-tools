@@ -1,16 +1,16 @@
-//! Planner del DAG v5 — fase 1 `validate` (Architetture.md par. 6.1/6.2,
-//! ADR 4, ADR 5) — Fase 2A-3.
+//! Planner del DAG v5 — fase 1 `validate` (architettura.md/6.2,
+//! piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor) — Fase 2A-3.
 //!
 //! [`validate`] e' una funzione pura e a secco: legge il piano JSON e i
 //! contratti di input (schemi Arrow dagli header IPC, nessuna riga di dati) e
 //! produce un [`ValidatedGraph`] immutabile contenente **solo decisioni
 //! semantiche stabili** — struttura, tipi, CRS, ordini dichiarati, identita'
-//! (ADR 4). Nessuna decisione fisica: `prepare`/`ExecutionPlan` sono Fase 2A-4
-//! (ADR 5) e NON sono implementati qui.
+//! (piano-v5.md#identita-e-fingerprint). Nessuna decisione fisica: `prepare`/`ExecutionPlan` sono Fase 2A-4
+//! (architettura.md#planner-ed-executor) e NON sono implementati qui.
 //!
-//! Passi (Architetture.md par. 6.1):
+//! Passi (architettura.md):
 //!
-//! 1. `PlanLimits` di default durante il parsing (ADR 6), poi validazione
+//! 1. `PlanLimits` di default durante il parsing (errori-e-limiti.md), poi validazione
 //!    strutturale e risoluzione alias — in [`PlanV5::parse`];
 //! 2. risoluzione del CRS di piano (campo `crs`): feature-dispatch come
 //!    `geo_transport` — con `proj-backend` la risoluzione PROJ reale, senza
@@ -23,7 +23,7 @@
 //!    unico [`FieldAllocator`] per grafo: i `FieldId` delle geometrie di input
 //!    sono **rimappati all'ingresso** nel namespace globale del grafo
 //!    (decisione D16: due input non possono collidere);
-//! 5. costruzione dell'identita' (ADR 4): `plan_hash` (SHA-256 del piano
+//! 5. costruzione dell'identita' (piano-v5.md#identita-e-fingerprint): `plan_hash` (SHA-256 del piano
 //!    canonico serializzato stabile), `catalog_fingerprint` (hash dei
 //!    descrittori delle op usate, in ordine stabile, con le quattro versioni
 //!    per-componente), `engine_version`, `arrow_version`,
@@ -48,13 +48,13 @@
 //!   (R4.6.3) entra come valore canonico: un contratto senza CRS non ha lo
 //!   stesso fingerprint di uno con CRS risolto;
 //! - **profilo di publish**: il formato piano non dichiara ancora un
-//!   profilo (`AtomicPublish`/`DurableAtomicPublish`, ADR 7); finche' non lo
+//!   profilo (`AtomicPublish`/`DurableAtomicPublish`, errori-e-limiti.md#publish-e-cleanup); finche' non lo
 //!   fara', il default `AtomicPublish` entra nelle `required_capabilities`
 //!   qui raccolte ed e' verificato da [`check_compatibility`] contro le
 //!   capability dell'ambiente, come i backend — senza cambi di API;
 //! - fingerprint e hash usano serializzazioni JSON stabili (chiavi ordinate);
 //!   i tipi Arrow entrano con la loro forma `Debug`: i fingerprint vivono solo
-//!   in memoria nella v1 (ADR 4, serializzazione persistente rimandata), la
+//!   in memoria nella v1 (piano-v5.md#identita-e-fingerprint, serializzazione persistente rimandata), la
 //!   stabilita' cross-build non e' richiesta.
 //!
 //! # Type-state
@@ -62,7 +62,7 @@
 //! [`ValidatedGraph`] non ha costruttori pubblici: si ottiene solo da
 //! [`validate`]. La futura `execute` (Fase 2A-4) accettera' esclusivamente
 //! `&ValidatedGraph` — nessun percorso non validato puo' raggiungere
-//! l'esecuzione (ADR 5).
+//! l'esecuzione (architettura.md#planner-ed-executor).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -97,10 +97,10 @@ use crate::plan::{migrazione_v4, PlanV5, ValidatedPlanV5, PLAN_SCHEMA_VERSION_V5
 #[cfg(test)]
 mod tests;
 
-/// Versione dell'engine che ha prodotto il grafo validato (ADR 4).
+/// Versione dell'engine che ha prodotto il grafo validato (piano-v5.md#identita-e-fingerprint).
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Separatore di dominio del `plan_hash` (ADR 4, esteso da ADR 15).
+/// Separatore di dominio del `plan_hash` (piano-v5.md#identita-e-fingerprint, esteso da errori-e-limiti.md#memoria-governata).
 ///
 /// Il `plan_hash` non e' piu' `SHA256(canonical_json)` ma
 /// `SHA256(dominio || canonical_json)`. Il dominio nomina la versione del
@@ -126,13 +126,13 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `plan_format_version` in [`check_compatibility`].
 const PLAN_HASH_DOMAIN: &[u8] = b"plenora/plan_hash/v5\0";
 
-/// Versione dei crate Arrow in questa build (ADR 4: entra nell'identita' del
+/// Versione dei crate Arrow in questa build (piano-v5.md#identita-e-fingerprint: entra nell'identita' del
 /// grafo — un grafo validato con una versione Arrow diversa non e' riusabile).
 pub const ARROW_VERSION: &str = plenora_core::arrow::VERSION;
 
 /// Capability disponibili in questa build (backend compilati).
 ///
-/// I profili di publish non dipendono dalle feature di compilazione (ADR 7):
+/// I profili di publish non dipendono dalle feature di compilazione (errori-e-limiti.md#publish-e-cleanup):
 /// NON sono inclusi qui — per l'ambiente locale completo (backend + profili
 /// di publish implementati dall'engine) si usi [`local_capabilities`]; un
 /// ambiente diverso dichiara le proprie capability al chiamante di
@@ -150,7 +150,7 @@ pub fn compiled_capabilities() -> CapabilitySet {
 }
 
 /// Capability dell'ambiente locale: backend compilati piu' i profili di
-/// publish implementati dall'engine (ADR 7).
+/// publish implementati dall'engine (errori-e-limiti.md#publish-e-cleanup).
 ///
 /// Entrambi i profili sono inclusi; il riconoscimento fail-closed del
 /// filesystem di destinazione resta al momento del publish, non e' una
@@ -167,7 +167,7 @@ pub fn local_capabilities() -> CapabilitySet {
 
 /// Insieme ordinato di capability (`geos`, `proj`, profili di publish).
 ///
-/// L'ordine lessicografico rende stabili serializzazione e confronti (ADR 4).
+/// L'ordine lessicografico rende stabili serializzazione e confronti (piano-v5.md#identita-e-fingerprint).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CapabilitySet(BTreeSet<String>);
 
@@ -210,18 +210,18 @@ impl From<BTreeSet<String>> for CapabilitySet {
     }
 }
 
-/// Hash SHA-256 del piano canonico migrato (ADR 4).
+/// Hash SHA-256 del piano canonico migrato (piano-v5.md#identita-e-fingerprint).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlanHash([u8; 32]);
 
-/// Fingerprint del catalogo ristretto alle op usate dal piano (ADR 4).
+/// Fingerprint del catalogo ristretto alle op usate dal piano (piano-v5.md#identita-e-fingerprint).
 ///
 /// Deriva dai descrittori serializzati in ordine stabile con le loro
 /// versioni esplicite — mai da hash del binario.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CatalogFingerprint([u8; 32]);
 
-/// Fingerprint di un `DataContract` di input: schema + geometria (ADR 4).
+/// Fingerprint di un `DataContract` di input: schema + geometria (piano-v5.md#identita-e-fingerprint).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContractFingerprint([u8; 32]);
 
@@ -259,7 +259,7 @@ impl_hash_newtype!(PlanHash);
 impl_hash_newtype!(CatalogFingerprint);
 impl_hash_newtype!(ContractFingerprint);
 
-/// Versione dell'engine che ha validato il grafo (ADR 4).
+/// Versione dell'engine che ha validato il grafo (piano-v5.md#identita-e-fingerprint).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineVersion(pub String);
 
@@ -269,7 +269,7 @@ impl fmt::Display for EngineVersion {
     }
 }
 
-/// Versione dei crate Arrow della build che ha validato il grafo (ADR 4).
+/// Versione dei crate Arrow della build che ha validato il grafo (piano-v5.md#identita-e-fingerprint).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArrowVersion(pub String);
 
@@ -279,15 +279,15 @@ impl fmt::Display for ArrowVersion {
     }
 }
 
-/// Grafo validato: il solo ingresso ammesso alla futura `execute` (ADR 5).
+/// Grafo validato: il solo ingresso ammesso alla futura `execute` (architettura.md#planner-ed-executor).
 ///
 /// Contiene esclusivamente decisioni semantiche stabili (struttura, tipi,
-/// CRS, ordini dichiarati) e l'identita' ADR 4. Nessun costruttore pubblico:
+/// CRS, ordini dichiarati) e l'identita' piano-v5.md#identita-e-fingerprint. Nessun costruttore pubblico:
 /// si costruisce solo tramite [`validate`]. Immutabile per convenzione di
 /// API: tutti gli accessor restituiscono riferimenti condivisi.
 #[derive(Debug)]
 pub struct ValidatedGraph {
-    // --- Identita' (ADR 4) ---
+    // --- Identita' (piano-v5.md#identita-e-fingerprint) ---
     plan_hash: PlanHash,
     catalog_fingerprint: CatalogFingerprint,
     engine_version: EngineVersion,
@@ -309,13 +309,13 @@ pub struct ValidatedGraph {
 }
 
 impl ValidatedGraph {
-    /// Hash canonico del piano migrato (ADR 4).
+    /// Hash canonico del piano migrato (piano-v5.md#identita-e-fingerprint).
     #[must_use]
     pub const fn plan_hash(&self) -> PlanHash {
         self.plan_hash
     }
 
-    /// Fingerprint del catalogo ristretto alle op usate (ADR 4).
+    /// Fingerprint del catalogo ristretto alle op usate (piano-v5.md#identita-e-fingerprint).
     #[must_use]
     pub const fn catalog_fingerprint(&self) -> CatalogFingerprint {
         self.catalog_fingerprint
@@ -334,7 +334,7 @@ impl ValidatedGraph {
     }
 
     /// Capability richieste dal grafo: backend delle op usate e profilo di
-    /// publish (ADR 7 — default `AtomicPublish` finche' il formato piano non
+    /// publish (errori-e-limiti.md#publish-e-cleanup — default `AtomicPublish` finche' il formato piano non
     /// dichiara un profilo).
     #[must_use]
     pub const fn required_capabilities(&self) -> &CapabilitySet {
@@ -405,17 +405,17 @@ impl ValidatedGraph {
 
     /// Solo test: sovrascrive la versione engine registrata nell'identita',
     /// per verificare che l'executor rifiuti un grafo la cui identita' non
-    /// combacia con l'ambiente corrente (ADR 4: mai procedere alla cieca).
+    /// combacia con l'ambiente corrente (piano-v5.md#identita-e-fingerprint: mai procedere alla cieca).
     #[cfg(test)]
     pub fn set_engine_version_for_test(&mut self, version: &str) {
         self.engine_version = EngineVersion(version.to_owned());
     }
 }
 
-/// Fase 1 `validate` del DAG v5 (Architetture.md par. 6.1, ADR 4, ADR 5).
+/// Fase 1 `validate` del DAG v5 (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
 /// Un piano `schema_version: 4` entra da qui attraverso la migrazione
-/// esplicita (ADR 15): il resto della fase 1 conosce una sola forma.
+/// esplicita (errori-e-limiti.md#memoria-governata): il resto della fase 1 conosce una sola forma.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
 /// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
@@ -443,12 +443,12 @@ pub fn validate(
     input_contracts: &[(String, DataContract)],
 ) -> Result<ValidatedGraph> {
     // Passo 0: versione. Un piano v4 viene migrato al canonico v5 qui, in
-    // un punto solo (ADR 15): il resto della fase 1 conosce una sola forma.
+    // un punto solo (errori-e-limiti.md#memoria-governata): il resto della fase 1 conosce una sola forma.
     // Un piano v5 attraversa senza copia.
     let plan_limits = PlanLimits::default();
     let plan_json = migrazione_v4::testo_canonico_v5(plan_json, &plan_limits)?;
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
-    // risoluzione alias (PlanV5::parse, ADR 6).
+    // risoluzione alias (PlanV5::parse, errori-e-limiti.md).
     let plan = PlanV5::parse(plan_json.as_ref(), &plan_limits)?;
     // Validazione dei limiti effettivi in un punto solo, prima di qualunque
     // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
@@ -509,7 +509,7 @@ pub fn validate(
         .transpose()?;
 
     // Passo 4: required_capabilities di ogni op contro i backend compilati.
-    // Piu' il profilo di publish (ADR 7): il formato piano non dichiara
+    // Piu' il profilo di publish (errori-e-limiti.md#publish-e-cleanup): il formato piano non dichiara
     // ancora un profilo, quindi si registra il default `AtomicPublish`;
     // quando il piano lo dichiarera' entrera' qui il profilo scelto, senza
     // cambi di API (la verifica resta in `check_compatibility`).
@@ -614,7 +614,7 @@ pub fn validate(
         );
     }
 
-    // Passo 6: identita' ADR 4.
+    // Passo 6: identita' piano-v5.md#identita-e-fingerprint.
     let canonical = plan.canonical_json();
     let canonical_bytes = serde_json::to_vec(&canonical)?;
     let mut hasher = Sha256::new();
@@ -648,18 +648,18 @@ pub fn validate(
 }
 
 /// Verifica di compatibilita' di un grafo validato con l'ambiente corrente
-/// (ADR 4): qualunque mismatch rifiuta il grafo, mai procedere alla cieca.
+/// (piano-v5.md#identita-e-fingerprint): qualunque mismatch rifiuta il grafo, mai procedere alla cieca.
 ///
 /// I mismatch rilevati: **versione del formato piano diversa**, catalogo
 /// cambiato (o op usata rimossa), versione engine diversa, versione Arrow
 /// diversa, capability non piu' disponibili (backend o profilo di publish,
-/// ADR 7).
+/// errori-e-limiti.md#publish-e-cleanup).
 ///
 /// `current_catalog` e' il catalogo contro cui riverificare (in produzione
 /// `plenora_core::catalog::CATALOG`); `engine_version` e `arrow_version`
 /// sono quelli dell'ambiente corrente (in produzione [`ENGINE_VERSION`] e
 /// [`ARROW_VERSION`]); `capabilities` sono quelle offerte dall'ambiente
-/// corrente (backend compilati + profili di publish supportati, ADR 7).
+/// corrente (backend compilati + profili di publish supportati, errori-e-limiti.md#publish-e-cleanup).
 ///
 /// # Errors
 ///
@@ -769,7 +769,7 @@ pub fn check_declared_input_contracts(
 }
 
 /// Riverifica i contratti di input contro i fingerprint registrati nel grafo
-/// (ADR 4): un input con contratto diverso non riusa il grafo.
+/// (piano-v5.md#identita-e-fingerprint): un input con contratto diverso non riusa il grafo.
 ///
 /// # Errors
 ///
@@ -844,7 +844,7 @@ fn at_node(node_id: &str, error: PlenoraError) -> PlenoraError {
     }
 }
 
-/// Fingerprint del catalogo ristretto alle op date (ADR 4): descrittori
+/// Fingerprint del catalogo ristretto alle op date (piano-v5.md#identita-e-fingerprint): descrittori
 /// serializzati in ordine stabile (il chiamante li passa ordinati per id) con
 /// le quattro versioni per-componente, capability, classe di esecuzione e
 /// determinismo.
@@ -868,10 +868,10 @@ fn catalog_fingerprint(descriptors: &[&OperationDescriptor]) -> Result<CatalogFi
 /// Serializzazione stabile di un descrittore (nomi enum espliciti, non
 /// `Debug`: il fingerprint non deve dipendere dai nomi Rust).
 ///
-/// ADR-0012 D12.2 (decisione deliberata): `geo_fusion` resta FUORI da
+/// architettura.md#geometrie D12.2 (decisione deliberata): `geo_fusion` resta FUORI da
 /// questa forma canonica e quindi dal `catalog_fingerprint` — il fingerprint
 /// guarda la compatibilita' semantica dei piani, la fondibilita' e' una
-/// capability FISICA (ADR 5): aggiungerla invaliderebbe piani semanticamente
+/// capability FISICA (architettura.md#planner-ed-executor): aggiungerla invaliderebbe piani semanticamente
 /// identici. Il campo resta osservabile nello snapshot di catalogo
 /// (`planner/tests.rs`) e nelle capability JSON (`capabilities.rs`).
 fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
@@ -929,7 +929,7 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
             ExpansionConstraint::RightRelative => json!("right_relative"),
             ExpansionConstraint::MaxRelative => json!("max_relative"),
             // Fattore in forma stabile per bit (mai `Debug` di float): due
-            // build concordano sul fingerprint a parita' di costante (ADR 4).
+            // build concordano sul fingerprint a parita' di costante (piano-v5.md#identita-e-fingerprint).
             ExpansionConstraint::Custom(factor) => json!({ "custom": factor.to_bits() }),
         },
         "expansion_factor_exempt": descriptor.expansion_factor_exempt,
@@ -946,7 +946,7 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
     })
 }
 
-/// Fingerprint di un contratto di input: schema + geometria (ADR 4).
+/// Fingerprint di un contratto di input: schema + geometria (piano-v5.md#identita-e-fingerprint).
 ///
 /// I `FieldId` sono esclusi: identita' interna del grafo (rimappata
 /// all'ingresso, D16), non dell'input. `active_geometry` e le proprieta' di
@@ -970,7 +970,7 @@ pub fn contract_fingerprint(contract: &DataContract) -> Result<ContractFingerpri
 
 /// Serializzazione stabile di schema + geometrie (chiavi ordinate da
 /// `serde_json::Map`; i tipi Arrow in forma `Debug` — fingerprint solo in
-/// memoria nella v1, ADR 4).
+/// memoria nella v1, piano-v5.md#identita-e-fingerprint).
 fn contract_canonical(contract: &DataContract) -> Value {
     let fields: Vec<Value> = contract
         .schema
@@ -989,7 +989,7 @@ fn contract_canonical(contract: &DataContract) -> Value {
         .geometries
         .iter()
         .map(|geometry| {
-            // R4.6.3/ADR 4: lo stato del CRS ENTRA nel fingerprint — un
+            // R4.6.3/piano-v5.md#identita-e-fingerprint: lo stato del CRS ENTRA nel fingerprint — un
             // contratto con CRS risolto e uno con CRS mancante non sono lo
             // stesso contratto (altrimenti un piano validato su input
             // risolto accetterebbe in riesecuzione un input senza CRS senza

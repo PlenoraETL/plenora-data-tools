@@ -1,5 +1,5 @@
 //! Oracolo differenziale della fusione dei segmenti geo, esteso agli errori
-//! (ADR-0012, gate di M1): stesso input -> stesso output byte-per-byte O
+//! (architettura.md#geometrie, gate di M1): stesso input -> stesso output byte-per-byte O
 //! stesso errore (variante, nodo, operazione, categoria, fase, effetto remoto,
 //! retry e motivo — con `diagnostics` attivo, quindi con il contesto
 //! strutturale `batch_seq` nel motivo).
@@ -14,7 +14,7 @@
 //! Caso (g) (panic iniettato) NON coperto qui: l'hook `PANIC_AT_NODES` di
 //! `executor.rs` e' `#[cfg(test)]` e privato del crate, irraggiungibile da un
 //! test di integrazione senza modificare il codice di produzione (fuori
-//! perimetro — vedi report). Il test governor-oltre-soglia (DER-003, D12.8)
+//! perimetro — vedi report). Il test governor-oltre-soglia (errori-e-limiti.md#limiti-dichiarati, D12.8)
 //! esiste gia' in `executor/tests.rs`
 //! (`geo_fusion_falls_back_when_the_governor_rejects_the_reservation`) e non
 //! e' duplicato.
@@ -181,7 +181,7 @@ fn assert_group_formation(plan: &Value, nodes: &[&str]) {
     }
 }
 
-/// Forma dell'errore confrontata dall'oracolo (ADR-0012): variante, nodo,
+/// Forma dell'errore confrontata dall'oracolo (architettura.md#geometrie): variante, nodo,
 /// operazione, motivo (con il suffisso `batch_seq` della diagnostica),
 /// categoria, fase, effetto remoto e retry. `execution_id` e' escluso PER
 /// COSTRUZIONE: e' un UUID nuovo a ogni esecuzione, non un osservabile
@@ -456,7 +456,7 @@ fn multi_type_batches() -> Vec<RecordBatch> {
     ]
 }
 
-/// (a) ADR-0012: catena di sei op fondibili su fixture multi-tipo — output
+/// (a) architettura.md#geometrie: catena di sei op fondibili su fixture multi-tipo — output
 /// byte-per-byte identico (confronto diretto dei `RecordBatch`, schema e
 /// dati) e metriche per nodo preservate (D12.6).
 #[test]
@@ -560,7 +560,7 @@ fn oversized_cell_batches() -> Vec<RecordBatch> {
     )]
 }
 
-/// (b) ADR-0012: la prima op produce una cella oltre 64 MiB -> `CellTooLarge`
+/// (b) architettura.md#geometrie: la prima op produce una cella oltre 64 MiB -> `CellTooLarge`
 /// al PRIMO nodo in entrambi i percorsi (stessa variante, categoria e motivo
 /// con la stessa misura esatta in byte).
 #[test]
@@ -627,7 +627,7 @@ fn unclosed_ring_wkb() -> Vec<u8> {
 /// WKB di poligono a farfalla (anello auto-intersecante): strutturalmente
 /// ben formato (anello chiuso, coordinate finite) ma OGC-invalido — supera la
 /// validazione strutturale dell'arco di input e fallisce al check OGC del
-/// decode del primo nodo (`geometry_from_wkb`, ADR 11).
+/// decode del primo nodo (`geometry_from_wkb`, architettura.md#geometrie).
 fn bowtie_wkb() -> Vec<u8> {
     to_wkb(&Geometry::Polygon(polygon![
         (x: 0.0, y: 0.0),
@@ -638,7 +638,7 @@ fn bowtie_wkb() -> Vec<u8> {
     ]))
 }
 
-/// (c) ADR-0012: WKB malformato in input -> stesso errore nei due percorsi.
+/// (c) architettura.md#geometrie: WKB malformato in input -> stesso errore nei due percorsi.
 ///
 /// Il pre-gate dell'arco e' eseguito nel contesto del primo consumer `t`, che
 /// e' quindi il nodo autorevole anche per WKB strutturalmente invalido (byte
@@ -893,7 +893,7 @@ fn cancellation_batches() -> Vec<RecordBatch> {
         .collect()
 }
 
-/// (f) ADR-0012: token attivato mentre lo stream scorre (dal secondo batch in
+/// (f) architettura.md#geometrie: token attivato mentre lo stream scorre (dal secondo batch in
 /// poi) -> `Cancelled` con la stessa attribuzione nei due percorsi. Il check
 /// cooperativo osserva il token al confine del primo kernel del gruppo sul
 /// batch in corso: il nodo e' `t` in entrambi i percorsi. La cancellazione
@@ -1182,7 +1182,7 @@ fn invalid_then_valid_batches() -> Vec<RecordBatch> {
     ]
 }
 
-/// (m3-a) ADR-0012 M3, trappola 1 — il caso centrale: input OGC-INVALIDO ->
+/// (m3-a) architettura.md#geometrie M3, trappola 1 — il caso centrale: input OGC-INVALIDO ->
 /// `make_valid` in testa al gruppo. Nel percorso non fuso il nodo legge col
 /// SOLO gate strutturale di `make_valid_wkb` e ripara; il percorso fuso NON
 /// deve rifiutare l'intermedio/ingresso OGC-invalido (decode iniziale solo
@@ -1273,7 +1273,7 @@ fn m3a2_make_valid_then_measure_boundary_bytes_match() {
     );
 }
 
-/// (m3-b) ADR-0012 M3: catena con `reproject` — EPSG:32632 -> EPSG:3857 ->
+/// (m3-b) architettura.md#geometrie M3: catena con `reproject` — EPSG:32632 -> EPSG:3857 ->
 /// translate. Output byte-per-byte identico nei due percorsi e schema di
 /// confine col CRS TARGET (il runner fuso costruisce il batch sullo schema
 /// dell'ultima trasformazione: il cambio di CRS a meta' gruppo e' fisico,
@@ -1310,7 +1310,7 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
     );
 }
 
-/// (m3-b2) ADR-0012 M3+M2: `reproject` verso un CRS GEOGRAFICO con misura
+/// (m3-b2) architettura.md#geometrie M3+M2: `reproject` verso un CRS GEOGRAFICO con misura
 /// terminale in coda al gruppo — la colonna geometria sopravvive col CRS
 /// target e la misura e' byte-per-byte identica.
 #[cfg(feature = "proj-backend")]
@@ -1336,7 +1336,7 @@ fn m3b2_reproject_to_geographic_with_terminal_measure() {
     );
 }
 
-/// (m3-c) ADR-0012 M3: `make_valid` a meta' catena seguito da altro op —
+/// (m3-c) architettura.md#geometrie M3: `make_valid` a meta' catena seguito da altro op —
 /// su input valido e' un passthrough byte-identico e la validazione
 /// inter-passo standard (strutturale + OGC) resta in vigore davanti al
 /// successore (l'output riparato e' valido per contratto del kernel).
@@ -1367,7 +1367,7 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
     }
 }
 
-/// (m3-d) ADR-0012 M3: con input geometrico la validazione WKB atomica drena
+/// (m3-d) architettura.md#geometrie M3: con input geometrico la validazione WKB atomica drena
 /// i batch prima del gruppo. La cancellazione iniettata dal reader e'
 /// quindi osservata deterministicamente a `main`, prima che `make_valid`
 /// `NonInterruptible` inizi; i percorsi fuso e non fuso devono produrre la

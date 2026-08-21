@@ -87,7 +87,7 @@ impl ResolvedCrs {
     }
 
     /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
-    /// (ADR-0009, emendamento 2026-07-31).
+    /// (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
     ///
     /// Legge le direzioni dei primi due assi di `coordinate_system` nel
     /// PROJJSON — lo stesso oggetto con cui il kernel opera — e le combina
@@ -136,7 +136,7 @@ impl ResolvedCrs {
         }
     }
 
-    /// SRID dedotto dalla definizione canonica d'autorita' (ADR-0009,
+    /// SRID dedotto dalla definizione canonica d'autorita' (piano-v5.md#contratti-di-input,
     /// emendamento 2026-07-31).
     ///
     /// `id.code` numerico (in PROJJSON il codice puo' essere numero o
@@ -170,7 +170,7 @@ impl ResolvedCrs {
 /// 4326).
 ///
 /// La forma usata dal trasporto legacy, che trasporta la sola definizione
-/// senza un [`ResolvedCrs`] (ADR-0009, emendamento 2026-07-31). `None` per
+/// senza un [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31). `None` per
 /// ogni altra forma (autorita' o codice vuoti, codice non numerico, oltre
 /// `u32`) — mai indovinare: lo `srid` non e' decidibile e l'identificatore
 /// resta intero alla risoluzione. Unica fonte di parsing condivisa (era
@@ -201,7 +201,7 @@ pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
     Some((authority, code.parse().ok()?))
 }
 
-/// Forma testuale di una definizione CRS (ADR-0009, emendamento 2026-07-31
+/// Forma testuale di una definizione CRS (piano-v5.md#contratti-di-input, emendamento 2026-07-31
 /// — classe B, emissione).
 ///
 /// Classifica la SOLA stringa, senza backend e senza indovinare: serve
@@ -621,7 +621,7 @@ mod tests {
         assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
     }
 
-    // --- Deduzione axis_order/srid dalla definizione canonica (ADR-0009,
+    // --- Deduzione axis_order/srid dalla definizione canonica (piano-v5.md#contratti-di-input,
     // emendamento 2026-07-31) ---------------------------------------------
 
     #[test]

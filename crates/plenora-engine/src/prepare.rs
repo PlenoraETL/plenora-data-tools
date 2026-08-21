@@ -1,5 +1,5 @@
 //! Preparer del DAG — `prepare(&ValidatedGraph, &RuntimeContext) ->
-//! ExecutionPlan` (Architetture.md par. 6.3, ADR 5; Prestazioni.md V2, E1-E3)
+//! ExecutionPlan` (architettura.md, architettura.md#planner-ed-executor; architettura.md V2, E1-E3)
 //! — Fase 2A-4.
 //!
 //! Il [`ValidatedGraph`] contiene solo decisioni semantiche stabili; qui si
@@ -19,7 +19,7 @@
 //! - configurazione delle metriche (E3: per nodo logico anche dentro ai
 //!   segmenti fusi, e per segmento).
 //!
-//! Statistiche di runtime (ADR 5): [`RuntimeStatistic::Unknown`] e' il
+//! Statistiche di runtime (architettura.md#planner-ed-executor): [`RuntimeStatistic::Unknown`] e' il
 //! default e impone scelte conservative. Nella v1 seriale le statistiche
 //! `Known`/`Estimated` non cambiano ancora nessuna decisione fisica (il
 //! parallelismo adattivo e' Fase 2B): sono validate, propagate nel piano per
@@ -30,7 +30,7 @@
 //! column", le estensioni geo v1.1-v1.3 (`from_wkt`,
 //! `geometry_accessors`, `collect`, `line_locate_point`, `generate_grid`,
 //! `subdivide`, `snap`, `coverage_validate`, `shared_paths`,
-//! `cluster_dbscan`) e i quattro binari geo del perimetro ADR-0014 M1
+//! `cluster_dbscan`) e i quattro binari geo del perimetro architettura.md#geometrie M1
 //! (`geo.sjoin`, `geo.nearest`, `geo.within`,
 //! `geo.count_points_in_polygons`); le altre op geo — es. `geo.dissolve`,
 //! `geo.explode`, predicati, distanze, i binari geo con ri-encode (clip,
@@ -60,7 +60,7 @@ use crate::plan::NodeV5;
 use crate::planner::ValidatedGraph;
 use crate::table_engine;
 
-/// Dimensione di batch obiettivo e tetto duro (Prestazioni.md V7).
+/// Dimensione di batch obiettivo e tetto duro (architettura.md V7).
 ///
 /// La v1 non ri-pacchettizza i batch in lettura (conservativo): il target
 /// e' consultivo per le scelte fisiche future, `max_batch_bytes` e' un
@@ -82,7 +82,7 @@ impl Default for BatchTarget {
     }
 }
 
-/// Statistiche di runtime di un input (ADR 5).
+/// Statistiche di runtime di un input (architettura.md#planner-ed-executor).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputStatistics {
     /// Righe totali dell'input (es. da header Arrow IPC file format).
@@ -91,12 +91,12 @@ pub struct InputStatistics {
     pub batches: RuntimeStatistic<u64>,
 }
 
-/// Contesto runtime di una singola esecuzione (Architetture.md par. 6.3).
+/// Contesto runtime di una singola esecuzione (architettura.md).
 ///
 /// Non contiene nulla di semantico: uno stesso `ValidatedGraph` con due
 /// `RuntimeContext` diversi produce due `ExecutionPlan` diversi, ed e' il
-/// comportamento voluto (ADR 5). Fanno eccezione `cancellation`,
-/// `diagnostics` e `temp_root` (ADR 3, M1c/M1d): non sono decisioni fisiche
+/// comportamento voluto (architettura.md#planner-ed-executor). Fanno eccezione `cancellation`,
+/// `diagnostics` e `temp_root` (errori-e-limiti.md, M1c/M1d): non sono decisioni fisiche
 /// e NON entrano nell'`ExecutionPlan` — li consuma direttamente `execute`.
 #[derive(Clone, Debug)]
 pub struct RuntimeContext {
@@ -111,21 +111,21 @@ pub struct RuntimeContext {
     pub batch_target: BatchTarget,
     /// Metriche da raccogliere (E3).
     pub metrics: MetricsConfig,
-    /// Token di cancellazione cooperativa (ADR 3, M1c): il default non e'
+    /// Token di cancellazione cooperativa (errori-e-limiti.md, M1c): il default non e'
     /// mai cancellato. Il chiamante (es. l'handler Ctrl-C della CLI) trattiene
     /// un clone del token e lo cancella dall'esterno; l'executor lo osserva
     /// ai confini cooperativi onorando il `CancellationBehavior` di catalogo.
     pub cancellation: CancellationToken,
-    /// Modalita' diagnostica opt-in (ADR 3, M1d), solo per input fidati:
+    /// Modalita' diagnostica opt-in (errori-e-limiti.md, M1d), solo per input fidati:
     /// gli errori includono contesto strutturale aggiuntivo (indice di
     /// batch, riga, colonna dove disponibile) — MAI valori. Default `false`:
     /// messaggi invariati (retrocompatibile).
     pub diagnostics: bool,
     /// Radice del `TempStore` dell'esecuzione e dello scavenging all'avvio
-    /// (ADR 3): `None` = temp di sistema. Configurabile per i test e per
+    /// (errori-e-limiti.md): `None` = temp di sistema. Configurabile per i test e per
     /// ambienti con una temp dedicata.
     pub temp_root: Option<PathBuf>,
-    /// Kill switch della fusione dei segmenti geo (ADR-0012 D12.9): con
+    /// Kill switch della fusione dei segmenti geo (architettura.md#geometrie D12.9): con
     /// `true` (default) `prepare` annota i gruppi di nodi geo 1:1 fondibili
     /// e l'executor li esegue con il runner fuso (un decode/encode per
     /// gruppo); con `false` i gruppi non si formano e l'esecuzione e' quella
@@ -177,14 +177,14 @@ impl Default for MetricsConfig {
     }
 }
 
-/// Modalita' fisica di un segmento (Prestazioni.md E2).
+/// Modalita' fisica di un segmento (architettura.md E2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegmentMode {
     /// Catena di kernel streaming (almeno uno tabellare): batch-per-batch,
     /// senza materializzazione intermedia (V3/V4).
     LinearStreaming,
     /// Catena di sole op geo 1:1. I run di nodi fondibili annotati da
-    /// `prepare` (campo `fusion_group`, ADR-0012) sono eseguiti col runner
+    /// `prepare` (campo `fusion_group`, architettura.md#geometrie) sono eseguiti col runner
     /// fuso — un decode/encode per gruppo su ogni batch; il resto e'
     /// eseguito come `LinearStreaming`.
     GeoFused,
@@ -195,7 +195,7 @@ pub enum SegmentMode {
     BinaryBlocking,
 }
 
-/// Strategia di parallelismo scelta dal piano (Prestazioni.md V8).
+/// Strategia di parallelismo scelta dal piano (architettura.md V8).
 ///
 /// La v1 sceglie sempre `SerialFused` per i segmenti streaming e
 /// `BlockingSingleTask` per quelli blocking: il parallelismo si attiva solo
@@ -238,7 +238,7 @@ pub enum GeoRole {
     /// `collect`, `generate_grid`, `coverage_validate`, `shared_paths`.
     WholeTable,
     /// Op binaria geo che consuma i due input materializzati (segmento
-    /// `BinaryBlocking`, ADR-0014 M1): `sjoin`, `nearest`, `within`,
+    /// `BinaryBlocking`, architettura.md#geometrie M1): `sjoin`, `nearest`, `within`,
     /// `count_points_in_polygons`. Mai in un gruppo di fusione.
     BinaryBlocking,
 }
@@ -309,7 +309,7 @@ impl AccessorKind {
     }
 }
 
-/// Piano fisico di un binario geo del perimetro ADR-0014 M1 (D14.1/D14.2).
+/// Piano fisico di un binario geo del perimetro architettura.md#geometrie M1 (D14.1/D14.2).
 ///
 /// Perimetro: `geo.sjoin`, `geo.nearest`, `geo.within`,
 /// `geo.count_points_in_polygons` — nessuna ri-encode, output via `take`
@@ -363,7 +363,7 @@ pub enum PreparedConfig {
     /// un solo step binario, eseguito una sola volta da
     /// `table_engine::execute_binary` su input materializzati.
     TableBinary(Box<table_engine::ValidatedPlan>),
-    /// Op geo binaria del perimetro ADR-0014 M1 (senza ri-encode, D14.1):
+    /// Op geo binaria del perimetro architettura.md#geometrie M1 (senza ri-encode, D14.1):
     /// piano fisico [`GeoBinaryPlan`] con parametri tipizzati rivalidati e
     /// tetti assoluti D14.6 risolti. Eseguita una sola volta dal ramo geo
     /// di `run_binary_blocking` sui due input materializzati.
@@ -493,13 +493,13 @@ pub struct PreparedKernel {
     pub input_contracts: Vec<DataContract>,
     /// Contratto dell'arco di output del nodo.
     pub output_contract: DataContract,
-    /// Comportamento alla cancellazione dichiarato in catalogo (ADR 3),
+    /// Comportamento alla cancellazione dichiarato in catalogo (errori-e-limiti.md),
     /// risolto in `prepare` (V2: nessuno scan del catalogo a runtime).
     pub cancellation_behavior: plenora_core::catalog::CancellationBehavior,
-    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6),
+    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md),
     /// risolta in `prepare` (V2: nessuno scan del catalogo a runtime).
     pub expansion_factor_exempt: bool,
-    /// Fondibilita' dichiarata in catalogo (ADR-0012 D12.2), risolta in
+    /// Fondibilita' dichiarata in catalogo (architettura.md#geometrie D12.2), risolta in
     /// `prepare` come `cancellation_behavior`.
     pub geo_fusion: plenora_core::catalog::GeoFusion,
     /// Emissione di diagnostica row-scoped dichiarata dall'autorita' di
@@ -508,7 +508,7 @@ pub struct PreparedKernel {
     /// planner e del gate legacy CLI), risolta in `prepare` — nessuno scan
     /// del catalogo ne' lista duplicata a runtime.
     pub emits_row_diagnostics: bool,
-    /// Gruppo di fusione geo del kernel (ADR-0012): `Some(id)` per i membri
+    /// Gruppo di fusione geo del kernel (architettura.md#geometrie): `Some(id)` per i membri
     /// di un run massimale (>= 2) di kernel `GeoTransform` consecutivi
     /// fondibili (capability `TransformInPlace` di entrambi i nodi adiacenti,
     /// stessa colonna geometria, stesso ruolo), piu' UNA misura terminale
@@ -554,7 +554,7 @@ pub enum LastConsumer {
     Output,
 }
 
-/// Decisioni fisiche per una singola esecuzione (ADR 5).
+/// Decisioni fisiche per una singola esecuzione (architettura.md#planner-ed-executor).
 ///
 /// Prodotto da [`prepare`], consumato dall'executor. Uno stesso
 /// `ValidatedGraph` puo' produrre piani diversi su contesti runtime diversi.
@@ -568,7 +568,7 @@ pub struct ExecutionPlan {
     metrics_config: MetricsConfig,
     batch_target: BatchTarget,
     limits: Limits,
-    /// Kill switch della fusione geo registrato nel piano (ADR-0012 D12.9):
+    /// Kill switch della fusione geo registrato nel piano (architettura.md#geometrie D12.9):
     /// copia di `RuntimeContext::geo_fusion` per questa esecuzione.
     geo_fusion: bool,
     /// Statistiche per input come dichiarate nel `RuntimeContext`
@@ -619,20 +619,20 @@ impl ExecutionPlan {
         &self.limits
     }
 
-    /// Statistiche di input registrate nel piano (ADR 5).
+    /// Statistiche di input registrate nel piano (architettura.md#planner-ed-executor).
     #[must_use]
     pub const fn input_statistics(&self) -> &BTreeMap<String, InputStatistics> {
         &self.input_statistics
     }
 
-    /// Kill switch della fusione geo registrato nel piano (ADR-0012 D12.9).
+    /// Kill switch della fusione geo registrato nel piano (architettura.md#geometrie D12.9).
     #[must_use]
     pub const fn geo_fusion(&self) -> bool {
         self.geo_fusion
     }
 }
 
-/// Vista pubblica di sola lettura sulla strategia fisica (dry-run, ADR 5):
+/// Vista pubblica di sola lettura sulla strategia fisica (dry-run, architettura.md#planner-ed-executor):
 /// restituisce l'[`ExecutionPlan`] che `execute` produrrebbe per questo
 /// grafo e contesto, **senza eseguire nulla**.
 ///
@@ -649,16 +649,16 @@ pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<Execu
     prepare(graph, runtime)
 }
 
-/// `prepare` (Architetture.md par. 6.3, ADR 5): decisioni fisiche per questa
+/// `prepare` (architettura.md, architettura.md#planner-ed-executor): decisioni fisiche per questa
 /// esecuzione a partire dal grafo validato e dal contesto runtime.
 ///
-/// **Interna al crate** (ADR 5): l'API pubblica del motore e' a due passi
+/// **Interna al crate** (architettura.md#planner-ed-executor): l'API pubblica del motore e' a due passi
 /// (`validate` -> `execute`); la strategia fisica e' un dettaglio di
 /// implementazione di `execute`. L'unica vista pubblica e' [`explain`],
 /// per l'ispezione a secco (dry-run della CLI).
 ///
 /// Funzione pura e a secco: nessuna lettura di dati. Produce sempre un piano
-/// valido con statistiche assenti (`Unknown` → conservativo, ADR 5).
+/// valido con statistiche assenti (`Unknown` → conservativo, architettura.md#planner-ed-executor).
 ///
 /// # Errors
 ///
@@ -867,7 +867,7 @@ fn build_segments<'a>(
                 })
             })
             .collect::<Result<_>>()?;
-        // Gruppi di fusione geo (ADR-0012 D12.2): solo a kill switch attivo
+        // Gruppi di fusione geo (architettura.md#geometrie D12.2): solo a kill switch attivo
         // (D12.9); i segmenti blocking hanno un solo kernel, quindi il
         // run massimale e' sempre < 2 e l'annotazione resta vuota.
         if geo_fusion_enabled {
@@ -892,7 +892,7 @@ fn build_segments<'a>(
     Ok((segments, node_segment))
 }
 
-/// Annota i gruppi di fusione geo dentro a un segmento (ADR-0012 D12.2):
+/// Annota i gruppi di fusione geo dentro a un segmento (architettura.md#geometrie D12.2):
 /// run massimali di almeno due kernel consecutivi fondibili — capability
 /// `GeoFusion::TransformInPlace` di ENTRAMBI i nodi adiacenti, ruolo
 /// [`GeoRole::TransformInPlace`], config `GeoTransform` e stessa colonna
@@ -1069,7 +1069,7 @@ fn prepare_kernel(
 /// Limiti del motore tabellare legacy derivati dai limiti effettivi del
 /// piano (i campi senza corrispettivo restano ai default legacy).
 ///
-/// Mapping documentato (semantica ADR 6): il `max_rows` legacy e' un limite
+/// Mapping documentato (semantica errori-e-limiti.md): il `max_rows` legacy e' un limite
 /// **per batch/tabella** del motore a tabella intera; qui lo si ancora a
 /// `max_input_rows` (tetto conservativo sulla tabella materializzata dai
 /// nodi blocking). I limiti per arco (`max_rows_per_edge`) e di espansione
@@ -1279,7 +1279,7 @@ struct GeoBinaryOutputColumnConfig {
     output_column: Option<String>,
 }
 
-/// Binari geo del perimetro ADR-0014 M1 (D14.1: nessuna ri-encode).
+/// Binari geo del perimetro architettura.md#geometrie M1 (D14.1: nessuna ri-encode).
 /// `None` se l'op non e' nel perimetro (clip, overlay, booleane pairwise:
 /// secondo cantiere — restano `Unsupported`).
 ///
@@ -1289,7 +1289,7 @@ struct GeoBinaryOutputColumnConfig {
 /// l'output del piano, `max_rows_per_edge` altrimenti), passato al kernel
 /// come `max_pairs`/`max_results` (rifiuto durante il calcolo, prima della
 /// materializzazione completa delle coppie) e riverificato post-hoc dai
-/// check esistenti (`check_join_expansion` ADR 6 + conteggi per arco/output).
+/// check esistenti (`check_join_expansion` errori-e-limiti.md + conteggi per arco/output).
 /// Una sola fonte: i limiti effettivi del piano. Per i confronti n×m di
 /// `nearest` (lavoro, non espansione) il tetto e' il quadrato del massimo
 /// tra `max_input_rows` e `max_rows_per_edge`: ogni lato e' coperto da uno
@@ -1385,7 +1385,7 @@ fn prepare_geo_binary(
     })?;
     // Indici delle colonne geometria sui due contratti (V2): risolti qui,
     // mai per nome a runtime. L'identificabilita' e' garantita da analyze
-    // (ADR-0009 decisione 8, entrambi gli operandi).
+    // (piano-v5.md#contratti-di-input decisione 8, entrambi gli operandi).
     let geometry_index = |contract: &DataContract, side: &'static str| -> Result<usize> {
         let geometry = contract.active_geometry_column().ok_or_else(|| {
             PlenoraError::Internal(format!(
@@ -1462,7 +1462,7 @@ fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
 }
 
 /// Kernel geo: trasformazioni 1:1 in place via `transform_batches`, misure
-/// "add column" via dispatch dedicato, binari del perimetro ADR-0014 M1 via
+/// "add column" via dispatch dedicato, binari del perimetro architettura.md#geometrie M1 via
 /// [`prepare_geo_binary`]; il resto e' fuori dal dispatch v1.
 ///
 /// `input_contracts` sono i contratti degli archi di input del nodo (1 per
@@ -1591,7 +1591,7 @@ fn prepare_geo(
          perimeter/vertex_count/to_wkt, le estensioni v1.1-v1.3 (from_wkt, \
          geometry_accessors, collect, line_locate_point, generate_grid, \
          subdivide, snap, coverage_validate, shared_paths, cluster_dbscan) e \
-         i binari del perimetro ADR-0014 M1 (sjoin, nearest, within, \
+         i binari del perimetro architettura.md#geometrie M1 (sjoin, nearest, within, \
          count_points_in_polygons); il resto e' Fase 2B/2C (clip, overlay e \
          booleane pairwise al secondo cantiere D14.1)",
         node.id, descriptor.id

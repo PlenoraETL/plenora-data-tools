@@ -1,4 +1,4 @@
-//! Misura A/B engine-level della fusione dei segmenti geo (ADR-0012 M1+M2,
+//! Misura A/B engine-level della fusione dei segmenti geo (architettura.md#geometrie M1+M2,
 //! kill switch D12.9): due scenari, ciascuno eseguito con
 //! `RuntimeContext.geo_fusion` true/false, N run alternate per modalita'.
 //! Scenario `chain_transforms`: `geo.buffer -> geo.simplify -> geo.centroid`
@@ -15,7 +15,7 @@
 //! Uso: `bench_geo_fusion` — una riga JSON per scenario+modalita' su stdout,
 //! piu' una riga di sintesi con il delta percentuale. Fallisce (exit != 0)
 //! se il percorso fuso registra fallback governor o se gli output delle due
-//! modalita' non sono identici (stesso oracolo dei test di ADR-0012).
+//! modalita' non sono identici (stesso oracolo dei test di architettura.md#geometrie).
 
 // Benchmark: usano il percorso permissivo di `Inputs`, deprecato ma
 // ancora supportato. Non e' codice di produzione.
@@ -156,7 +156,7 @@ fn point_wkb(x: f64, y: f64) -> Vec<u8> {
 /// Fixture: quadrati 20x20 su griglia da 500 colonne (passo 100) alternati
 /// a punti al centro della cella, con l'1 per mille di celle null per
 /// coprire il percorso nullable. Coordinate intere piccole: esatte in f64
-/// per costruzione, nessun RNG (determinismo ADR-0001).
+/// per costruzione, nessun RNG (determinismo architettura.md#determinismo).
 fn fixture_batches() -> Vec<RecordBatch> {
     let mut batches = Vec::with_capacity(ROWS.div_ceil(BATCH_ROWS));
     for first in (0..ROWS).step_by(BATCH_ROWS) {
@@ -283,7 +283,7 @@ fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool)
     }
 
     // Oracolo A/B (D12.9): output identico tra le due modalita', come nei
-    // test di ADR-0012 (confronto per valore dei RecordBatch di una run).
+    // test di architettura.md#geometrie (confronto per valore dei RecordBatch di una run).
     let outputs_identical =
         fused_reference.expect("run fusa") == plain_reference.expect("run non fusa");
     assert!(

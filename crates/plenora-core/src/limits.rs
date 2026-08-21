@@ -1,4 +1,4 @@
-//! Le tre famiglie di limiti (decisione D19, ADR 6).
+//! Le tre famiglie di limiti (decisione D19, errori-e-limiti.md).
 //!
 //! - [`RowLimits`]: espansioni logiche dei dati;
 //! - [`PlanLimits`]: complessità del piano, applicati durante il parsing;
@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::error::{PlenoraError, Result};
 
-/// Limiti di righe, semanticamente distinti (ADR 6).
+/// Limiti di righe, semanticamente distinti (errori-e-limiti.md).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowLimits {
@@ -33,7 +33,7 @@ impl Default for RowLimits {
     }
 }
 
-/// Limiti alla complessità del piano, applicati durante il parsing (ADR 6).
+/// Limiti alla complessità del piano, applicati durante il parsing (errori-e-limiti.md).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanLimits {
@@ -62,7 +62,7 @@ impl Default for PlanLimits {
     }
 }
 
-/// Contenitore unico dei limiti (Architetture.md par. 3.1).
+/// Contenitore unico dei limiti (architettura.md).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
@@ -70,7 +70,7 @@ pub struct Limits {
     pub rows: RowLimits,
     #[serde(default)]
     pub plan: PlanLimits,
-    /// Budget memoria globale del piano (perimetro: ADR 2).
+    /// Budget memoria globale del piano (perimetro: architettura.md#memoria).
     pub max_governed_memory_bytes: u64,
     /// Quota spill su disco.
     pub max_temp_bytes: u64,
@@ -210,7 +210,7 @@ impl Default for Limits {
 /// `true` se `output_rows` supera `base_rows * factor`.
 ///
 /// NESSUN conteggio passa per `f64`. Il fattore e' un double per contratto
-/// (ADR 6), quindi lo si decompone in `mantissa * 2^esponente` e il confronto
+/// (errori-e-limiti.md), quindi lo si decompone in `mantissa * 2^esponente` e il confronto
 /// resta fra interi:
 ///
 /// ```text

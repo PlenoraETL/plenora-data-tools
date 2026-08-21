@@ -464,7 +464,7 @@ mod tests {
         // costruirebbe per questa colonna (CRS risolto, dimensions xy,
         // encoding non dichiarato, tipi non dichiarati). Il canonical porta
         // l'`id` d'autorita' (forma della risoluzione PROJ): la deduzione
-        // `srid` (ADR-0009, emendamento 2026-07-31) produce 3857 su
+        // `srid` (piano-v5.md#contratti-di-input, emendamento 2026-07-31) produce 3857 su
         // ENTRAMBI i percorsi — legacy dalla forma `authority:code` della
         // definizione, v4 dall'`id` del canonical — e l'identita' regge.
         // Senza `coordinate_system` anche `axis_order` coincide (`unknown`):

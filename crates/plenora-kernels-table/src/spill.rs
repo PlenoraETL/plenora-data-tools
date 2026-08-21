@@ -318,7 +318,7 @@ pub fn should_spill(left: &RecordBatch, right: &RecordBatch, limits: &Limits) ->
 }
 
 /// Variante unaria di `should_spill` per gli operatori a un input (sort,
-/// distinct, hash aggregation; ADR-0002): si spilla quando il solo input
+/// distinct, hash aggregation; architettura.md#memoria): si spilla quando il solo input
 /// supera il budget `max_governed_memory_bytes`.
 #[must_use]
 pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
@@ -405,7 +405,7 @@ pub fn execute_set_operation(
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato a righe complete (M2a Fase 2B, ADR-0002 "Spill
+// Spill generalizzato a righe complete (M2a Fase 2B, architettura.md#memoria "Spill
 // selettivo"): sort, distinct e hash aggregation.
 //
 // Formato su disco: Arrow IPC *stream* per partizione/run. Scelta rispetto a
@@ -421,7 +421,7 @@ pub fn execute_set_operation(
 // stessa partizione, quindi gruppi e duplicati non attraversano mai le
 // partizioni e l'aggregazione/distinct per partizione e' esatta.
 //
-// Integrazione con il governor (ADR-0002): la directory temporanea puo'
+// Integrazione con il governor (architettura.md#memoria): la directory temporanea puo'
 // venire dal chiamante (`RowSpillWorkspace::with_directory`), pensata per il
 // `TempStore` condiviso per execution_id di plenora-engine: kernels-table
 // resta senza dipendenze da engine e riceve solo path + quota. Con directory
@@ -438,7 +438,7 @@ const SPILL_ORDINAL_COLUMN: &str = "__plenora_spill_ordinal";
 /// volta per file aperto (run del merge sort, partizioni).
 const SPILL_CHUNK_ROWS: usize = 8_192;
 
-/// Metriche di spill richieste da ADR-0002: byte scritti e letti sui file
+/// Metriche di spill richieste da architettura.md#memoria: byte scritti e letti sui file
 /// temporanei e numero di file (partizioni/run) materializzati.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -604,7 +604,7 @@ impl RowSpillWorkspace {
         Ok(())
     }
 
-    /// Metriche accumulate (ADR-0002): `files` conta i file materializzati,
+    /// Metriche accumulate (architettura.md#memoria): `files` conta i file materializzati,
     /// anche se gia' ripuliti.
     #[must_use]
     pub fn metrics(&self) -> SpillMetrics {
@@ -677,7 +677,7 @@ impl Write for CountingWriter {
 }
 
 /// Reader conteggiato: alimenta la metrica `bytes_read` (nessuna quota in
-/// lettura, solo osservabilita' ADR-0002).
+/// lettura, solo osservabilita' architettura.md#memoria).
 struct CountingReader {
     inner: BufReader<File>,
     counter: Rc<Cell<u64>>,
@@ -809,7 +809,7 @@ fn read_partition(
     Ok(concat_batches(&schema, &batches)?)
 }
 
-/// `table.distinct` con spill (ADR-0002).
+/// `table.distinct` con spill (architettura.md#memoria).
 ///
 /// Righe complete partizionate su disco per hash della chiave, poi una
 /// passata in streaming che accumula le statistiche per chiave
@@ -981,7 +981,7 @@ pub fn distinct_spilled_in(
     Ok((output, workspace.metrics()))
 }
 
-/// `table.aggregate` con spill (ADR-0002).
+/// `table.aggregate` con spill (architettura.md#memoria).
 ///
 /// Righe complete partizionate per hash della chiave di gruppo (ogni gruppo
 /// vive interamente in una partizione), aggregazione in memoria di una
@@ -1184,7 +1184,7 @@ fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) ->
     )
 }
 
-/// `table.sort` con spill (ADR-0002): external merge sort.
+/// `table.sort` con spill (architettura.md#memoria): external merge sort.
 ///
 /// L'input e' affettato in run dimensionate su `max_governed_memory_bytes`, ogni run
 /// e' ordinata in memoria con `sort` e spillata su IPC; il merge k-way in

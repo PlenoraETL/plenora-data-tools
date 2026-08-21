@@ -1,12 +1,12 @@
 //! Migrazione esplicita dei piani `schema_version: 4` al canonico v5
-//! (ADR 15).
+//! (errori-e-limiti.md#memoria-governata).
 //!
 //! # Perche' un parser separato e non un alias
 //!
 //! `serde(alias)` avrebbe fatto accettare `max_memory_bytes` **anche** ai
 //! piani v5, e un nome che continua a funzionare e' un nome che continua a
 //! promettere: chi lo scrive crede ancora in un tetto sull'intero processo
-//! che in-process non esiste (ADR 15 §3). Qui la v4 ha una struttura
+//! che in-process non esiste (errori-e-limiti.md#memoria-governata §3). Qui la v4 ha una struttura
 //! **propria**, che conosce solo il nome vecchio, ed e' usata **solo** da
 //! questa migrazione.
 //!
@@ -42,7 +42,7 @@
 //! **semantica** dei valori non toccati e l'equivalenza **canonica** del
 //! risultato: un piano v4 e il v5 equivalente producono lo stesso piano
 //! canonico e lo stesso `plan_hash`. Che e' poi la sola equivalenza che
-//! conti, perche' e' quella su cui poggiano cache e riproducibilita' (ADR 4).
+//! conti, perche' e' quella su cui poggiano cache e riproducibilita' (piano-v5.md#identita-e-fingerprint).
 //!
 //! # Idempotenza
 //!
@@ -64,7 +64,7 @@
 //! Pubblico e' solo [`testo_canonico_v5`], che riceve i [`PlanLimits`] e li
 //! applica. Le funzioni interne costruiscono un `serde_json::Value` dal
 //! testo, cioe' allocano guidate dal contenuto: esporle avrebbe offerto un
-//! ingresso che aggira il tetto di ADR 6, ed e' esattamente il genere di
+//! ingresso che aggira il tetto di errori-e-limiti.md, ed e' esattamente il genere di
 //! porta di servizio che un tetto applicato «il prima possibile» esiste per
 //! non avere.
 
@@ -157,7 +157,7 @@ impl LimitsOverrideV4 {
             max_expansion_factor,
             plan,
             // L'unico campo che cambia nome. Il valore non si tocca: era
-            // gia' un budget di ammissione, solo chiamato male (ADR 15).
+            // gia' un budget di ammissione, solo chiamato male (errori-e-limiti.md#memoria-governata).
             max_governed_memory_bytes: max_memory_bytes,
             max_temp_bytes,
             spill_partitions,
@@ -211,7 +211,7 @@ fn versione_dichiarata(json_text: &str) -> Result<u16> {
 /// 5 e il blocco `limits` viene ricostruito da `LimitsOverrideV4` tramite
 /// `LimitsOverrideV4::in_v5`, dove `max_memory_bytes` diventa
 /// `max_governed_memory_bytes`. Il valore non cambia — cambia il nome,
-/// perche' e' il nome a essere stato sbagliato (ADR 15).
+/// perche' e' il nome a essere stato sbagliato (errori-e-limiti.md#memoria-governata).
 ///
 /// Il passaggio dalla struttura v4 non e' un dettaglio di comodo: rifiuta
 /// fail-closed un v4 con chiavi sconosciute o col nome nuovo, che una
@@ -292,9 +292,9 @@ fn migra_v4_a_v5(json_text: &str) -> Result<String> {
 /// migrazione non deve costare a chi non la usa.
 ///
 /// Il tetto `max_plan_json_bytes` si applica **due volte**: al testo fornito,
-/// prima di costruire qualunque albero JSON (ADR 6: migrare significa
+/// prima di costruire qualunque albero JSON (errori-e-limiti.md: migrare significa
 /// allocare, e allocare guidati dal contenuto prima di averlo limitato e'
-/// cio' che ADR 6 vieta), e al testo **migrato**, prima di restituirlo.
+/// cio' che errori-e-limiti.md vieta), e al testo **migrato**, prima di restituirlo.
 ///
 /// Il secondo controllo non e' ridondante: il nome della v5 e' piu' lungo di
 /// nove byte, quindi un v4 lungo esattamente quanto il tetto migra in un

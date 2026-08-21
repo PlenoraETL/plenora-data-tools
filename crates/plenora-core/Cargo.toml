@@ -1,6 +1,6 @@
 [package]
 name = "plenora-core"
-description = "Fondamenta condivise di plenora-data-tools: re-export Arrow, errori, limiti, catalogo, CRS (Architetture.md par. 3.1)"
+description = "Fondamenta condivise di plenora-data-tools: re-export Arrow, errori, limiti, catalogo, CRS (architettura.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -71,7 +71,7 @@ pub struct Plan {
 
 /// Il blocco `limits` del formato lineare **v1**, sul filo.
 ///
-/// ADR 15 ha rinominato il budget di memoria della libreria, e il tipo Rust
+/// errori-e-limiti.md#memoria-governata ha rinominato il budget di memoria della libreria, e il tipo Rust
 /// [`Limits`] porta il nome nuovo. Il formato v1 **no**: e' un formato
 /// pubblicato, distinguibile dagli altri proprio da `schema_version: 1`, e un
 /// piano gia' scritto non cambia perche' noi abbiamo cambiato idea sul nome.
@@ -472,7 +472,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_limiti_v1 {
-    //! Il formato v1 sul filo (ADR 15 §7): conserva il proprio nome, e non
+    //! Il formato v1 sul filo (errori-e-limiti.md#memoria-governata §7): conserva il proprio nome, e non
     //! accetta quello della v5.
 
     use serde_json::json;
