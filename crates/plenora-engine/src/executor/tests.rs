@@ -4882,7 +4882,10 @@ fn execute_creates_temp_store_and_cleans_it_up() {
                 })
         })
         .expect("store dell'esecuzione presente mentre l'Output e' vivo");
-    assert!(store_dir.join("lock.json").is_file(), "lock errori-e-limiti.md scritto");
+    assert!(
+        store_dir.join("lock.json").is_file(),
+        "lock errori-e-limiti.md scritto"
+    );
 
     let (batches, _) = output.collect_batches().expect("stream ok");
     assert_eq!(batches.len(), 1);

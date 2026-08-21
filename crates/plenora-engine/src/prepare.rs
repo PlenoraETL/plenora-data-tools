@@ -632,9 +632,11 @@ impl ExecutionPlan {
     }
 }
 
-/// Vista pubblica di sola lettura sulla strategia fisica (dry-run, architettura.md#planner-ed-executor):
-/// restituisce l'[`ExecutionPlan`] che `execute` produrrebbe per questo
-/// grafo e contesto, **senza eseguire nulla**.
+/// Vista pubblica di sola lettura sulla strategia fisica (dry-run).
+///
+/// Restituisce l'[`ExecutionPlan`] che `execute` produrrebbe per questo
+/// grafo e contesto, **senza eseguire nulla**
+/// (architettura.md#planner-ed-executor).
 ///
 /// L'API operativa resta a due passi (`validate` -> `execute`); `explain`
 /// esiste per l'ispezione (es. `validate` della CLI, che mostra segmenti e

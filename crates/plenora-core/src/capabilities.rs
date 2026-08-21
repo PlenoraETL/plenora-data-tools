@@ -225,7 +225,10 @@ mod tests {
     fn il_documento_e_deterministico_e_serializzabile() {
         let first = serde_json::to_string(&component_capabilities()).expect("serialize");
         let second = serde_json::to_string(&component_capabilities()).expect("serialize");
-        assert_eq!(first, second, "stesso documento, stessi byte (architettura.md#determinismo)");
+        assert_eq!(
+            first, second,
+            "stesso documento, stessi byte (architettura.md#determinismo)"
+        );
         assert!(first.contains("\"protocol_version\":1"));
         assert!(first.contains("\"geo.reproject\""));
         assert!(first.contains("\"proj\""));

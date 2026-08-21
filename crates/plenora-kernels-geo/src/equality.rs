@@ -311,9 +311,11 @@ pub fn normalize_geometry(geometry: &Geometry<f64>) -> Geometry<f64> {
     }
 }
 
-/// Uguaglianza geometrica con tolleranza dichiarata (architettura.md#determinismo, livello 1):
-/// confronto per-coordinate sulla struttura, con normalizzazione topologica
-/// opzionale quando `comparison.normalize` e' `true`.
+/// Uguaglianza geometrica con tolleranza dichiarata.
+///
+/// Confronto per-coordinate sulla struttura, con normalizzazione topologica
+/// opzionale quando `comparison.normalize` e' `true`. E' il livello 1 del
+/// determinismo (architettura.md#determinismo).
 #[must_use]
 pub fn geo_equals_with_tolerance(
     left: &Geometry<f64>,
