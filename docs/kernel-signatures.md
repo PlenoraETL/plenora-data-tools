@@ -1,9 +1,13 @@
 # plenora-data-tools — Firme dei kernel (v1)
 
 Documento generato dal codice sorgente del workspace (`crates/plenora-core`,
-`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre le **127
-operazioni** del catalogo unificato: 62 tabellari (`table.*`) e 65 geografiche
-(`geo.*`).
+`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre **127
+delle 146 operazioni** del catalogo unificato: 62 tabellari (`table.*`) e
+65 geografiche (`geo.*`).
+
+Le 19 operazioni catalogate e **non ancora documentate** sono elencate in
+fondo. Il conteggio qui sopra e l'elenco sono generati dal catalogo: non
+possono divergere da esso senza che la generazione fallisca.
 
 ## Come si legge una firma
 
@@ -130,7 +134,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.distinct
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `Distinct` (`aggregation.rs:222`)
 
@@ -144,7 +148,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.dedup_advanced
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `DedupAdvanced` (`aggregation.rs:266`)
 
@@ -182,7 +186,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.rolling_window
 
-*estensione · arietà: unaria · execution class: blocking*
+*estensione · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `RollingWindow` (`aggregation.rs:1106`) con enum `RollingKind` (`aggregation.rs:1092`)
 
@@ -202,7 +206,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.window_function
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `WindowFunction` (`aggregation.rs:1231`) con enum `WindowKind` (`aggregation.rs:1209`)
 
@@ -224,7 +228,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.join
 
-*manipola-compat · arietà: binaria (left, right) · execution class: binary-blocking*
+*manipola-compat · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `Join` (`joins.rs:269`)
 
@@ -239,7 +243,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.semi_join
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `MembershipJoin` (`joins.rs:681`)
 
@@ -253,7 +257,7 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 
 ### table.anti_join
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `MembershipJoin` (`joins.rs:681`)
 
@@ -344,7 +348,7 @@ Config vuota (`{}`).
 
 ### table.type_cast
 
-*manipola-compat · arietà: unaria · execution class: streaming · kernel v2*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `TypeCast` (`cleansing.rs:82`)
 
@@ -397,7 +401,7 @@ Config vuota (`{}`).
 
 ### table.string_extract
 
-*manipola-compat · arietà: unaria · execution class: streaming*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `StringExtract` (`strings.rs:138`)
 
@@ -431,7 +435,7 @@ Config vuota (`{}`).
 
 ### table.date_format
 
-*estensione · arietà: unaria · execution class: streaming · kernel v2*
+*estensione · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `DateFormat` (`dates.rs:90`)
 
@@ -448,7 +452,7 @@ Config vuota (`{}`).
 
 ### table.date_add
 
-*estensione · arietà: unaria · execution class: streaming · kernel v2*
+*estensione · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `DateAdd` (`dates.rs:159`)
 
@@ -467,7 +471,7 @@ Config vuota (`{}`).
 
 ### table.date_diff
 
-*estensione · arietà: unaria · execution class: streaming · kernel v2*
+*estensione · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `DateDiff` (`dates.rs:268`)
 
@@ -485,7 +489,7 @@ Config vuota (`{}`).
 
 ### table.timezone_convert
 
-*estensione · arietà: unaria · execution class: streaming · kernel v2*
+*estensione · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `TimezoneConvert` (`dates.rs:370`)
 
@@ -617,7 +621,7 @@ Config vuota (`{}`).
 
 ### table.flatten_json
 
-*manipola-compat · arietà: unaria · execution class: streaming*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `FlattenJson` (`analysis.rs:207`)
 
@@ -633,7 +637,7 @@ Config vuota (`{}`).
 
 ### table.statistics
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `Statistics` (`analysis.rs:335`), enum `Stat` (`analysis.rs:309`, snake_case)
 
@@ -668,7 +672,7 @@ Config vuota (`{}`).
 
 ### table.melt
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `Melt` (`reshape.rs:22`), enum `HeterogeneousTypePolicy` (`reshape.rs:36`, snake_case)
 
@@ -685,7 +689,7 @@ Config vuota (`{}`).
 
 ### table.pivot
 
-*manipola-compat · arietà: unaria · execution class: blocking*
+*manipola-compat · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `Pivot` (`reshape.rs:346`), enum `PivotAgg` (`reshape.rs:330`, snake_case)
 
@@ -717,7 +721,7 @@ Config vuota (`{}`).
 
 ### table.explode
 
-*estensione · arietà: unaria · execution class: blocking*
+*estensione · arietà: unaria · execution class: blocking · kernel v2*
 
 **Config** — `Explode` (`reshape.rs:645`), enum `EmptyListPolicy` (`reshape.rs:634`, snake_case)
 
@@ -747,7 +751,7 @@ Config vuota (`{}`).
 
 ### table.table_diff
 
-*manipola-compat · arietà: binaria (left, right) · execution class: binary-blocking*
+*manipola-compat · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `TableDiff` (`reshape.rs:770`)
 
@@ -767,7 +771,7 @@ Config vuota (`{}`).
 
 ### table.except
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `SetOperation` (`setops.rs:18`)
 
@@ -778,7 +782,7 @@ Config vuota (`{}`).
 
 ### table.intersect
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `SetOperation` (`setops.rs:18`)
 
@@ -789,7 +793,7 @@ Config vuota (`{}`).
 
 ### table.union_distinct
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `SetOperation` (`setops.rs:18`)
 
@@ -803,7 +807,7 @@ Config vuota (`{}`).
 
 ### table.md5_hash
 
-*manipola-compat · arietà: unaria · execution class: streaming*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `Md5Hash` (`security.rs:14`)
 
@@ -820,7 +824,7 @@ Config vuota (`{}`).
 
 ### table.sha256_hash
 
-*estensione · arietà: unaria · execution class: streaming*
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `Sha256Hash` (`security.rs:100`)
 
@@ -837,7 +841,7 @@ Config vuota (`{}`).
 
 ### table.mask_data
 
-*manipola-compat · arietà: unaria · execution class: streaming*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `MaskData` (`security.rs:221`), con sotto-config `Masking` (`security.rs:207`)
 
@@ -887,7 +891,7 @@ Campi di `SchemaExpectation`:
 
 ### table.assert_not_null
 
-*estensione · arietà: unaria · execution class: streaming*
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `AssertNotNull` (`quality.rs:132`)
 
@@ -900,7 +904,7 @@ Campi di `SchemaExpectation`:
 
 ### table.assert_unique
 
-*estensione · arietà: unaria · execution class: blocking*
+*estensione · arietà: unaria · execution class: blocking · kernel v3*
 
 **Config** — `AssertUnique` (`quality.rs:171`)
 
@@ -914,7 +918,7 @@ Campi di `SchemaExpectation`:
 
 ### table.assert_range
 
-*estensione · arietà: unaria · execution class: streaming*
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `AssertRange` (`quality.rs:203`)
 
@@ -932,7 +936,7 @@ Campi di `SchemaExpectation`:
 
 ### table.assert_regex
 
-*estensione · arietà: unaria · execution class: streaming*
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
 
 **Config** — `AssertRegex` (`quality.rs:252`)
 
@@ -993,7 +997,7 @@ Campi di `SchemaExpectation`:
 
 ### table.assert_foreign_key
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v3*
 
 **Config** — `ForeignKey` (`governance.rs:74`)
 
@@ -1008,7 +1012,7 @@ Campi di `SchemaExpectation`:
 
 ### table.reconcile
 
-*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking · kernel v2*
 
 **Config** — `Reconcile` (`governance.rs:158`)
 
@@ -1043,7 +1047,7 @@ Campi di `SchemaExpectation`:
 
 ### table.date_extract
 
-*manipola-compat · arietà: unaria · execution class: streaming · kernel v2*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `DateExtract` (`utility.rs:95`), con `DatePart` (`utility.rs:81`) e `InvalidDatePolicy` (`utility.rs:110`)
 
@@ -1076,7 +1080,7 @@ Campi di `SchemaExpectation`:
 
 ### table.formula
 
-*manipola-compat · arietà: unaria · execution class: streaming*
+*manipola-compat · arietà: unaria · execution class: streaming · kernel v3*
 
 **Config** — `Formula` (`formula.rs:16`)
 
@@ -1093,7 +1097,7 @@ Campi di `SchemaExpectation`:
 
 ### table.expression
 
-*estensione · arietà: unaria · execution class: streaming*
+*estensione · arietà: unaria · execution class: streaming · kernel v4*
 
 **Config** — `ExpressionTransform` (`expressions.rs:28`)
 
@@ -1303,7 +1307,7 @@ Config vuota (`{}`).
 | `geometry_column` | string | `null` (default `"geometry"`) | non vuota; non deve collidere con colonne esistenti |
 | `crs` | string | `null` | se assente serve il CRS di piano; la definizione deve essere risolvibile |
 
-**Input:** nessuna colonna geometria (input non geografico); due colonne numeriche (`Float64`/`Int64`) per x e y. Su colonne `Int64` i valori oltre ±2⁵³ sono **rifiutati** (`IntegerCoordinateTooLarge`): la conversione a `f64` oltre quel limite sposterebbe la coordinata in silenzio (cast audit 2026-07-27, ICD R5.4).
+**Input:** nessuna colonna geometria (input non geografico); due colonne numeriche (`Float64`/`Int64`) per x e y.
 **Output:** schema invariato + nuova colonna geometria (WKB, `nullable=false`, CRS da config o di piano, dimensioni XY); l'output diventa geografico; righe invariate.
 
 ### geo.intersection
@@ -1949,3 +1953,27 @@ Config vuota (`{}`).
 
 **Input:** esattamente una colonna geometria (WKB).
 **Output:** la colonna geometria è **sostituita** (nella stessa posizione) dalle 10 colonne diagnostiche, tutte nullable: `geometry_type` (Utf8), `coordinate_count` (UInt64), `is_empty` (Boolean), `is_finite` (Boolean), `is_valid` (Boolean), `validity_reason` (Utf8), `bounds_minx` (Float64), `bounds_miny` (Float64), `bounds_maxx` (Float64), `bounds_maxy` (Float64); il contratto diventa non-geografico; righe 1:1.
+
+## Operazioni catalogate non ancora documentate
+
+Queste 19 operazioni esistono nel catalogo e **non hanno ancora una firma in questo documento**. Sono elencate perche' un documento che tace su cio' che non copre sembra completo:
+
+- `geo.cluster_dbscan`
+- `geo.collect`
+- `geo.coverage_validate`
+- `geo.from_wkt`
+- `geo.generate_grid`
+- `geo.geometry_accessors`
+- `geo.line_locate_point`
+- `geo.shared_paths`
+- `geo.snap`
+- `geo.subdivide`
+- `table.align_schema`
+- `table.concat_by_name`
+- `table.fuzzy_join`
+- `table.hmac_sha256`
+- `table.limit`
+- `table.select_columns`
+- `table.stable_fingerprint`
+- `table.top_n`
+- `table.validate_rules`
