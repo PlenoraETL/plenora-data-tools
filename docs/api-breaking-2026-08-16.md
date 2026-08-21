@@ -570,9 +570,13 @@ gli exit code di una pipeline che accetta entrambe le versioni deve saperlo.
 plan_hash = SHA256("plenora/plan_hash/v5\0" || canonical_json)
 ```
 
-Ogni `plan_hash` calcolato prima di questo cambiamento è **diverso**. Chi lo
-conserva (cache, log di riproducibilità, confronti fra esecuzioni) deve
-considerare invalidati i valori precedenti.
+Ogni `plan_hash` calcolato prima di questo cambiamento appartiene a un
+**dominio precedente** ed è da considerarsi **invalidato**. Chi lo conserva
+(cache, log di riproducibilità, confronti fra esecuzioni) non deve più
+confrontarlo con quelli prodotti da qui in avanti — e non perché
+l'uguaglianza sia impossibile: resta teoricamente possibile per collisione
+SHA-256, come si legge qui sotto. È invalidato perché non descrive più lo
+stesso contratto, non perché il numero non possa ripetersi.
 
 Con precisione: il dominio rende **disgiunti** gli insiemi di **input** della
 funzione di hash. Da input disgiunti non segue che gli output lo siano: un

@@ -45,8 +45,9 @@ vecchia, o lasciare la versione a 1 o 4 scrivendo la chiave nuova. Il rifiuto
 
 ## Che cosa NON è cambiato nelle misure
 
-I `plan_hash` **cambiano tutti** (ADR 4, emendamento 2026-08-20), ma nessun
-verbale ne registra uno: i verbali misurano tempi, byte e conteggi. Chi
+I `plan_hash` appartengono ora a un **dominio diverso** e sono da considerarsi
+invalidati (ADR 4, emendamento 2026-08-20), ma nessun verbale ne registra uno:
+i verbali misurano tempi, byte e conteggi. Chi
 riesegue `misura_orchestrazione` oggi ottiene gli stessi ordini di grandezza
 sugli stessi piani — i piani nel sorgente dell'harness sono stati portati alla
 v5 — e non c'è ragione di aspettarsi uno spostamento, perché la
