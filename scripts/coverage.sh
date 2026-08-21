@@ -46,10 +46,26 @@ pulisci_profili() {
 pulisci_profili
 
 # Dopo, sempre, anche su errore o interruzione: i profili non devono
-# sopravvivere alla campagna che li ha prodotti, ne' finire nella cache. Un
-# fallimento QUI non deve mascherare l'esito della misura, ma non va nemmeno
-# ingoiato in silenzio.
-trap 'esito=$?; pulisci_profili || echo "ATTENZIONE: pulizia finale dei profili fallita" >&2; exit $esito' EXIT
+# sopravvivere alla campagna che li ha prodotti, ne' finire nella cache.
+#
+# Se la pulizia finale fallisce e la misura era andata bene, la campagna
+# FALLISCE: dichiarare successo lasciando i residui significa consegnare alla
+# prossima campagna — o alla cache della CI — esattamente il difetto che
+# questa pulizia esiste per evitare. Se la misura era gia' fallita, l'esito
+# originale si conserva: e' quello che chi legge deve diagnosticare.
+pulizia_finale() {
+  esito=$?
+  if ! pulisci_profili; then
+    echo "ERRORE: pulizia finale dei profili fallita; i residui verrebbero" >&2
+    echo "        riusati dalla prossima campagna." >&2
+    if [ "$esito" -eq 0 ]; then
+      esito=1
+    fi
+  fi
+  exit "$esito"
+}
+
+trap pulizia_finale EXIT
 
 docker run --rm \
   -v "$PWD:/work" \

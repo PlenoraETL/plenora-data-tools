@@ -55,6 +55,17 @@ class PercorsoNonAmmesso(Exception):
     """Il percorso indicato non e' una directory di coverage di questo repo."""
 
 
+class ScansioneFallita(Exception):
+    """Una parte della directory non e' stata leggibile.
+
+    `os.walk` senza `onerror` **ignora** gli errori: una sottodirectory che
+    non si riesce ad aprire viene semplicemente saltata, e la funzione
+    restituisce come se avesse visto tutto. Qui significherebbe dichiarare
+    puliti dei profili che sono ancora sul disco, e il primo a scoprirlo
+    sarebbe un test rosso in una campagna successiva.
+    """
+
+
 def _valida(percorso, radice):
     """Il percorso assoluto della directory, o un'eccezione.
 
@@ -90,8 +101,13 @@ def pulisci(percorso, radice=RADICE):
     assoluto = _valida(percorso, radice)
     if not os.path.isdir(assoluto):
         return 0
+
+    def propaga(errore):
+        raise ScansioneFallita(
+            'directory non leggibile durante la scansione: %s' % errore)
+
     rimossi = 0
-    for cartella, _, nomi in os.walk(assoluto):
+    for cartella, _, nomi in os.walk(assoluto, onerror=propaga):
         for nome in nomi:
             if nome.endswith(ESTENSIONE):
                 os.remove(os.path.join(cartella, nome))
@@ -181,8 +197,61 @@ def autotest():
             pass
         else:
             raise SystemExit('autotest: accettata la radice del repository')
+
+        _autotest_scansione(coverage, radice)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+def _autotest_scansione(coverage, radice):
+    """Un errore di scansione deve fermare la pulizia, non essere saltato.
+
+    Due prove. La prima e' portabile: si sostituisce `os.walk` con uno stub
+    che invoca `onerror`, e si pretende che l'eccezione arrivi fino al
+    chiamante — verifica che il callback sia passato e che propaghi davvero.
+    La seconda e' reale ma solo su POSIX: una sottodirectory senza permesso
+    di lettura. Su Windows i permessi non si tolgono al proprietario in modo
+    affidabile, e da root il permesso non si applica: li' si salta, ed e'
+    detto qui invece di essere taciuto.
+    """
+    def walk_che_fallisce(top, onerror=None, **_ignorati):
+        if onerror is not None:
+            onerror(OSError(13, 'permesso negato', top))
+        return iter(())
+
+    originale = os.walk
+    os.walk = walk_che_fallisce
+    try:
+        pulisci(coverage, radice)
+    except ScansioneFallita:
+        pass
+    except Exception as errore:  # noqa: BLE001 - l'autotest deve dire quale
+        raise SystemExit('autotest: errore di scansione riportato come %r'
+                         % errore)
+    else:
+        raise SystemExit(
+            'autotest: un errore di scansione e\' stato ignorato. `os.walk` '
+            'senza `onerror` salta le directory illeggibili e dichiara '
+            'successo: i profili resterebbero sul disco.')
+    finally:
+        os.walk = originale
+
+    if os.name == 'posix' and hasattr(os, 'geteuid') and os.geteuid() != 0:
+        chiusa = os.path.join(coverage, 'chiusa')
+        os.makedirs(chiusa, exist_ok=True)
+        io.open(os.path.join(chiusa, 'work-9-zzz' + ESTENSIONE),
+                'w', encoding='utf-8').write('x')
+        os.chmod(chiusa, 0o000)
+        try:
+            pulisci(coverage, radice)
+        except ScansioneFallita:
+            pass
+        else:
+            raise SystemExit(
+                'autotest: una sottodirectory illeggibile non ha fermato la '
+                'pulizia')
+        finally:
+            os.chmod(chiusa, 0o700)
 
 
 def main(argomenti):
@@ -193,7 +262,7 @@ def main(argomenti):
     percorso = argomenti[0] if argomenti else os.path.join(RADICE, NOME_ATTESO)
     try:
         rimossi = pulisci(percorso)
-    except PercorsoNonAmmesso as errore:
+    except (PercorsoNonAmmesso, ScansioneFallita) as errore:
         print('ERRORE: %s' % errore)
         return 1
     print('profili di coverage rimossi: %d (%s)' % (rimossi, percorso))
