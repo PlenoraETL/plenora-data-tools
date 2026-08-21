@@ -1,5 +1,5 @@
 //! Oracolo esteso agli errori dei binari geo nel piano v4 contro il
-//! trasporto CLI `pair-arrow` v3 (architettura.md#geometrie D14.9, gate di M2): per i quattro
+//! trasporto CLI `pair-arrow` v3 (architettura.md#geometrie D14.9): per i quattro
 //! op del perimetro (`geo.sjoin`, `geo.nearest`, `geo.within`,
 //! `geo.count_points_in_polygons`) lo stesso input produce sui due percorsi
 //! lo stesso risultato — confronto SEMANTICO contro attesi codificati nel
@@ -30,11 +30,11 @@
 //! - (g) governor che rifiuta la reservation decodificata (condizione di
 //!   attivazione del perimetro, ruolo errori-e-limiti.md#limiti-dichiarati): questo file (`g_*`);
 //! - (h) conservativita' di `decoded_size_xy` su corpus: test di modulo in
-//!   `crates/plenora-kernels-geo/src/decoded_size.rs` (M2), non duplicato.
+//!   `crates/plenora-kernels-geo/src/decoded_size.rs`, non duplicato.
 //!
-//! Divergenze osservate rispetto alla lettera dell'ADR (regola 4 del
+//! Divergenze osservate rispetto alla specifica di partenza (regola 4 del
 //! progetto: asserito il comportamento REALE, motivazione nel commento del
-//! test; segnalate nel report di M2):
+//! test):
 //!
 //! 1. (f)/(g) gli errori di `check_join_expansion` (errori-e-limiti.md) e del governor
 //!    (`reserve`, architettura.md#memoria) arrivano al chiamante come `InvalidPlan` GREZZO
@@ -300,7 +300,7 @@ fn two_geo_inputs(left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> Inputs {
         .expect("input right")
 }
 
-/// Diagnostica attiva (errori-e-limiti.md M1d): il dettaglio strutturato `side=… row=…`
+/// Diagnostica attiva (errori-e-limiti.md, errori arricchiti): il dettaglio strutturato `side=… row=…`
 /// di D14.5.2 esiste solo in questo canale (mai nel testo base, regola 8).
 fn runtime() -> RuntimeContext {
     RuntimeContext {
@@ -838,7 +838,8 @@ fn a_nearest_happy_path() {
 /// punto (37,37) nel buco NON rende il poligono bucato within nulla. Gli
 /// schemi v3/v4 differiscono solo per contratto (D14.8): la colonna flag e'
 /// `WITHIN_COLUMN` nel v3, il nome dal contratto di output nel v4 (letto dal
-/// grafo, fonte unica di verita' E1) — il confronto e' sui valori.
+/// grafo, fonte unica di verita', con le configurazioni preparate) — il
+/// confronto e' sui valori.
 #[test]
 fn a_within_happy_path() {
     let case = "a-within";

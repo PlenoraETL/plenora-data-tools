@@ -3161,7 +3161,7 @@ mod tests {
 
     #[test]
     fn reproject_identity_never_relabels_untouched_coordinates() {
-        // P1 (review indipendente): con source == target il backend PROJ non
+        // Con source == target il backend PROJ non
         // costruisce alcuna pipeline e restituisce la geometria di input byte
         // per byte (`proj_backend::Reprojector::new` /
         // `identical_crs_is_an_exact_noop`). Una colonna che DICHIARA
@@ -3191,7 +3191,7 @@ mod tests {
 
     #[test]
     fn reproject_rejects_declared_non_normalized_axis_order_on_every_path() {
-        // Stessa classe sul percorso NON identity (il gemello del P1): la
+        // Stessa classe sul percorso NON identity (il gemello del caso sopra): la
         // pipeline PROJ e' normalizzata per la visualizzazione GIS e legge
         // x=longitudine/easting — coordinate dichiarate `lat_lon` (o
         // `northing_easting`, o `other`) sarebbero lette al contrario e il

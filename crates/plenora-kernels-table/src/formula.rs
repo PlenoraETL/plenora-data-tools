@@ -209,7 +209,7 @@ fn is_literal_zero(expr: &Expr) -> bool {
     }
 }
 
-/// P2 review 2026-08-03: divisione con divisore LETTERALE zero -> errore di
+/// Divisione con divisore LETTERALE zero -> errore di
 /// configurazione (`InvalidPlan`), mai un rifiuto row-scoped attribuito a
 /// tutte le righe. Un divisore dipendente dalla riga (es. `i * 0`) resta
 /// row-scoped.
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn errore_non_classificabile_propaga_senza_diagnostica_inventata() {
-        // P2 review 2026-08-03 (gap documentato): la classificazione delle
+        // Gap documentato: la classificazione delle
         // cause row-scoped e' per messaggio (costanti condivise). Un errore
         // di valutazione NON classificabile (qui sottrazione fra testi)
         // propaga fail-closed cosi' com'e': mai una causa inventata, mai un
@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn divisione_per_zero_letterale_e_errore_di_configurazione() {
-        // P2 review 2026-08-03: un divisore LETTERALE zero (anche -0) e' una
+        // Un divisore LETTERALE zero (anche -0) e' una
         // proprieta' del piano, non delle righe: errore di configurazione
         // senza diagnostica row-scoped (mai un rifiuto attribuito a TUTTE
         // le righe). Il divisore calcolato (es. i * 0) resta row-scoped.
@@ -1358,7 +1358,7 @@ mod tests {
         let batch = fixture();
         // Divisione per zero (anche -0.0), a riga 0 e a riga successiva.
         // I divisori LETTERALI zero ("f / 0" e simili) sono errori di
-        // configurazione dal 2026-08-03 (P2 review): coperti dal test
+        // configurazione: coperti dal test
         // dedicato, non da questo oracolo di errori di dominio per riga.
         for text in [
             "f / (f - f)",

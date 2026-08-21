@@ -10,7 +10,8 @@
 //! `proj_backend`) e l'adapter Arrow di rappresentazione (`arrow_adapter`).
 //!
 //! L'adapter è progettato per ammettere la cache di decode per segmento
-//! (architettura.md, vincoli V6/G1/G2) senza modifiche ai contratti.
+//! (architettura.md: decode/encode geo minimizzato, WKB come confine)
+//! senza modifiche ai contratti.
 //!
 //! - [`arrow_adapter`](crate::arrow_adapter) per la rappresentazione
 //!   GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti

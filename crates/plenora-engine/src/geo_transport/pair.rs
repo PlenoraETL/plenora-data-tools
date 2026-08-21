@@ -512,7 +512,7 @@ fn decode_geometry_side(
 /// valle (R0.1): il gate dei kernel non si ripete perche' e' gia' stato
 /// eseguito qui, geometria per geometria.
 ///
-/// L'indice della colonna geometria e' risolto dal chiamante (V2); il nome
+/// L'indice della colonna geometria e' risolto dal chiamante (hot path minimale); il nome
 /// e' recuperato dallo schema solo per il contesto d'errore.
 ///
 /// L'errore porta l'indice di riga della cella come campo strutturato

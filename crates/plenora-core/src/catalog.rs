@@ -59,15 +59,15 @@ pub enum CancellationBehavior {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeoFusion {
     /// Non fondibile: esecuzione nodo-per-nodo (default). Tutte le op
-    /// tabellari e le geo non revistate per il perimetro (M1+M3).
+    /// tabellari e le geo fuori dal perimetro fondibile.
     NotFusible,
     /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
-    /// consecutivi a parita' di colonna geometria e ruolo (le 14 op di M1
-    /// piu' `reproject`/`make_valid` di M3).
+    /// consecutivi a parita' di colonna geometria e ruolo (le quattordici
+    ///   trasformazioni in place, piu' `reproject` e `make_valid`).
     TransformInPlace,
     /// Misura terminale: consuma la geometria producendo un valore non
     /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
-    /// — perimetro M2); chiude un eventuale gruppo fuso a monte.
+    /// — misure terminali); chiude un eventuale gruppo fuso a monte.
     TerminalMeasure,
 }
 
@@ -449,9 +449,9 @@ impl OperationDescriptor {
     ///   `date32`, `timestamp_millis`, `decimal128`) e solo con `errors`
     ///   assente/`coerce`/`raise`; gli altri target (es. `str`) sono totali;
     /// - `table.md5_hash`/`table.sha256_hash`: solo con `null_policy=error`
-    ///   (P1-3: `empty`/`literal` hanno semantica storica dichiarata, nessun
+    ///   (`empty`/`literal` hanno semantica storica dichiarata, nessun
     ///   rifiuto);
-    /// - `table.hmac_sha256`: MAI (P2) — le `null_policy` legacy producono
+    /// - `table.hmac_sha256`: MAI — le `null_policy` legacy producono
     ///   output dichiarato, nessun rifiuto row-scoped possibile.
     ///
     /// Le op geo elencate sono quelle dispatchate nel DAG con raccolta
@@ -2035,10 +2035,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         expansion_constraint = LeftRelative
     ),
-    // architettura.md#geometrie M3: make_valid entra nel perimetro di fusione come
+    // architettura.md#geometrie: `make_valid` entra nel perimetro di fusione come
     // TransformInPlace; l'ammissione di input OGC-invalido (trappola 1) e'
     // una proprieta' del suo gate di decode, gestita dal runner fuso con
-    // l'eccezione documentata in architettura.md#geometrie D12.4-M3 — non richiede una
+    // l'eccezione documentata in architettura.md#geometrie D12.4 — non richiede una
     // variante di capability dedicata (la relazione di raggruppamento e'
     // identica: 1:1 in place sulla stessa colonna).
     op!(
@@ -3290,7 +3290,7 @@ mod tests {
 
     #[test]
     fn la_decisione_binaria_e_esatta_anche_dove_le_metriche_arrotondano() {
-        // Quarto giro della review. `left = right = 2^53`, `output = 2^53+1`,
+        // `left = right = 2^53`, `output = 2^53+1`,
         // fattore 1: il rapporto reale e' > 1, ma `output as f64` arrotonda a
         // 2^53 e la metrica diventa esattamente 1.0 — il limite NON scattava.
         const DUE_53: u64 = 1 << 53;
@@ -3393,12 +3393,12 @@ mod tests {
 
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
-        // architettura.md#geometrie D12.2 + perimetro M1+M3: esattamente le 16 trasformazioni
-        // 1:1 revistate (14 di M1 + reproject/make_valid di M3) sono
+        // architettura.md#geometrie D12.2, perimetro fondibile: le 16 trasformazioni
+        // 1:1 revistate (quattordici in place, piu' `reproject` e `make_valid`) sono
         // TransformInPlace, le 5 misure terminali sono TerminalMeasure, TUTTO
         // il resto (tabellari incluse) e' NotFusible. Il campo e'
         // dichiarativo: la lista chiusa qui sotto e' il contratto; aggiungere
-        // un op fondibile richiede l'oracolo differenziale (gate di M1).
+        // un op fondibile richiede l'oracolo differenziale.
         let transforms: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.geo_fusion == GeoFusion::TransformInPlace)
@@ -3456,7 +3456,7 @@ mod tests {
                     op.id
                 );
             }
-            // Invariante M1: solo op unarie streaming possono fondersi.
+            // Invariante della fusione: solo op unarie streaming possono fondersi.
             if op.geo_fusion != GeoFusion::NotFusible {
                 assert_eq!(op.family, Family::Geo, "{}", op.id);
                 assert_eq!(op.arity, Arity::Unary, "{}", op.id);
@@ -3533,7 +3533,7 @@ mod tests {
         assert!(!type_cast.emits_row_diagnostics(&serde_json::json!({"target_type": "str"})));
         assert!(!type_cast.emits_row_diagnostics(&serde_json::json!({})));
 
-        // P1-3: md5/sha256 rifiutano row-scoped solo con null_policy=error;
+        // md5/sha256 rifiutano row-scoped solo con null_policy=error;
         // le altre policy hanno semantica storica dichiarata.
         for id in ["table.md5_hash", "table.sha256_hash"] {
             let hash = find_operation(id).expect(id);
@@ -3543,7 +3543,7 @@ mod tests {
             assert!(!hash.emits_row_diagnostics(&serde_json::json!({"null_policy": "literal"})));
         }
 
-        // P2: hmac_sha256 non emette MAI (le null_policy legacy producono
+        // hmac_sha256 non emette MAI (le null_policy legacy producono
         // output dichiarato, nessun rifiuto row-scoped).
         let hmac = find_operation("table.hmac_sha256").expect("hmac");
         for config in [
@@ -3559,7 +3559,7 @@ mod tests {
             );
         }
 
-        // P0 (drift lock): formula ed expression emettono con qualunque
+        // Drift lock: formula ed expression emettono con qualunque
         // configurazione; se il catalogo smettesse di classificarle il gate
         // legacy tornerebbe bypassabile via sort -> formula/expression.
         assert!(find_operation("table.formula")

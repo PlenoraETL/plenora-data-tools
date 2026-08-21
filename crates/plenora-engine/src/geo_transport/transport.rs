@@ -2038,7 +2038,7 @@ mod tests {
 
     #[test]
     fn one_to_one_reports_absolute_indices_and_complete_scan_across_batches() {
-        // P0-2: due batch, WKB malformato in ENTRAMBI. Il trasporto deve
+        // Due batch, WKB malformato in ENTRAMBI. Il trasporto deve
         // scansionare tutti i batch, aggregare con offset assoluti checked
         // e chiudere fail-closed senza pubblicare output. Copre il choke
         // point comune delle op 1:1: transform (Centroid), misura (Area),
@@ -2081,7 +2081,7 @@ mod tests {
 
     #[test]
     fn one_to_one_invalid_only_in_later_batch_reports_absolute_index() {
-        // P0-2 (controllo): primo batch pulito, WKB malformato solo nel
+        // Controllo: primo batch pulito, WKB malformato solo nel
         // secondo -> l'indice pubblicato e' assoluto (offset del primo
         // batch applicato), nessun indice batch-locale spacciato.
         let malformed: &[u8] = &[0x01, 0x09, 0x00];
@@ -2101,7 +2101,7 @@ mod tests {
 
     #[test]
     fn one_to_one_late_non_row_scoped_error_preserves_partial_diagnostics() {
-        // P2: il primo batch produce un rifiuto row-scoped (diagnostica gia'
+        // Il primo batch produce un rifiuto row-scoped (diagnostica gia'
         // osservata); il secondo un errore NON row-scoped (colonna geometria
         // non Binary — schema drift tra batch dello stesso stream). L'errore
         // reale deve propagare CON il report accumulato declassato a Partial
@@ -2172,7 +2172,7 @@ mod tests {
 
     #[test]
     fn from_coords_late_non_row_scoped_error_preserves_partial_diagnostics() {
-        // P2 (stessa classe di one_to_one): il primo batch produce una
+        // Stessa classe di one_to_one: il primo batch produce una
         // rejection row-scoped (coordinata NaN); il secondo un errore NON
         // row-scoped (colonna x non numerica — schema drift). L'errore reale
         // propaga con il report delle rejection osservate declassato a

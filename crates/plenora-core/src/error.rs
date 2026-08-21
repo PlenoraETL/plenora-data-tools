@@ -4,7 +4,7 @@
 //! motivo), mai valori. La modalità diagnostica opt-in (errori-e-limiti.md) è aggiunta
 //! dall'executor, non da queste varianti.
 //!
-//! Fase 2B M1d (errori-e-limiti.md): ogni errore espone una [`ErrorCategory`] stabile
+//! Fase 2B, errori arricchiti (errori-e-limiti.md): ogni errore espone una [`ErrorCategory`] stabile
 //! ([`PlenoraError::category`]); `Execution` e `Cancelled` portano
 //! l'`execution_id` dell'esecuzione che li ha prodotti (vuoto se costruiti
 //! fuori da un'esecuzione DAG, es. percorso legacy `table_engine` — il
@@ -12,13 +12,13 @@
 //!
 //! Milestone D (contratti trasversali v2.0-rc10 §9, proposta in attesa di
 //! ratifica — andra' in piano-v5.md#contratti-di-input): l'errore porta i quattro assi
-//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste da
-//! M1d; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
+//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste
+//! dalla prima tassonomia; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
 //! l'effetto remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]) e
 //! la disposizione di retry ([`PlenoraError::retry_disposition`],
 //! [`RetryDisposition`]), tutti da enumerazioni canoniche condivise
 //! (R9.5/R9.6: sottoinsieme ammesso, valori propri vietati). R9.7
-//! sostituisce il booleano `retryable()` di M1d — insufficiente e
+//! sostituisce il booleano `retryable()` della prima tassonomia — insufficiente e
 //! pericoloso: un timeout in lettura e' ritentabile, lo stesso timeout
 //! dopo l'invio di un commit non lo e' — con una disposizione calcolata
 //! da fase, effetto e idempotenza, mai dalla sola categoria.
@@ -89,7 +89,7 @@ pub enum PlenoraError {
 
     /// Fallimento di un nodo durante l'esecuzione.
     ///
-    /// `execution_id` (errori-e-limiti.md, M1d) identifica l'esecuzione DAG che ha
+    /// `execution_id` (errori-e-limiti.md, errori arricchiti) identifica l'esecuzione DAG che ha
     /// prodotto l'errore: e' riempito dall'executor al confine di
     /// dispatch/uscita; resta vuoto per errori costruiti fuori da
     /// un'esecuzione DAG (percorso legacy `table_engine`).
@@ -108,9 +108,9 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Esecuzione annullata dal chiamante (errori-e-limiti.md, M1c): il token di
+    /// Esecuzione annullata dal chiamante (errori-e-limiti.md, cancellazione cooperativa): il token di
     /// cancellazione e' stato osservato a un confine cooperativo
-    /// dell'executor e nessun output e' stato pubblicato (invariante I8).
+    /// dell'executor e nessun output e' stato pubblicato (invariante publish atomico).
     /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
     #[error(
         "cancelled at node `{node}` (operation `{operation}`{}): {reason}",
@@ -484,7 +484,7 @@ impl fmt::Display for RetryDisposition {
 }
 
 impl PlenoraError {
-    /// Categoria dell'errore (errori-e-limiti.md, M1d): mapping dichiarato per variante.
+    /// Categoria dell'errore (errori-e-limiti.md, errori arricchiti): mapping dichiarato per variante.
     /// Per [`PlenoraError::Tagged`] e' delegata alla sorgente: il tag
     /// raffina solo la fase.
     #[must_use]
@@ -509,14 +509,14 @@ impl PlenoraError {
     /// enumerazione canonica R9.7): calcolata da fase
     /// ([`PlenoraError::phase`]), effetto ([`PlenoraError::remote_effect`])
     /// e idempotenza dell'operazione — MAI dalla sola categoria.
-    /// Sostituisce il booleano `retryable()` di M1d, rimosso perche'
+    /// Sostituisce il booleano `retryable()` della prima tassonomia, rimosso perche'
     /// insufficiente e pericoloso (R9.7).
     ///
     /// Calcolo per data-tools (la variante porta gia' fase ed effetto per
     /// mapping dichiarato; la tabella segue):
     ///
     /// - L'effetto e' sempre [`RemoteEffect::None`] per costruzione (errori-e-limiti.md#publish-e-cleanup:
-    ///   publish atomico, nessun output parziale mai visibile; I8:
+    ///   publish atomico, nessun output parziale mai visibile:
     ///   cancellazione senza output pubblicato) e la riesecuzione a parita'
     ///   di input e' idempotente (architettura.md#determinismo: stesso input → stesso output;
     ///   il publish rifiuta una destinazione esistente, quindi un tentativo
@@ -605,7 +605,7 @@ impl PlenoraError {
     ///   `Input` PRIMA dell'esecuzione del DAG e i suoi errori emergono
     ///   come `Io`/`DataMapping`/`Schema` — ora taggati `Read` — mai come
     ///   `Execution`; un `Execution` nasce solo mentre un nodo produce il
-    ///   proprio stream di output, e la cancellazione (invariante I8:
+    ///   proprio stream di output, e la cancellazione (invariante publish atomico:
     ///   nessun output pubblicato) e' osservata agli stessi confini
     ///   cooperativi. La produzione dell'output e' la fase `Write` del
     ///   ciclo canonico.
@@ -857,7 +857,7 @@ impl PlenoraError {
     /// (errori-e-limiti.md#publish-e-cleanup) scrive su tempfile nella stessa directory e pubblica solo a
     /// grafo completato con successo, eliminando il tempfile a qualunque
     /// fallimento — nessun output parziale e' mai visibile alla
-    /// destinazione; la cancellazione rispetta l'invariante I8 (nessun
+    /// destinazione; la cancellazione rispetta l'invariante publish atomico (nessun
     /// output pubblicato). Anche gli eventuali residui temp dopo un crash
     /// restano `None`: non sono alla destinazione, non sono osservabili dal
     /// chiamante come effetto dell'operazione. L'unico caso «effetto
@@ -1246,7 +1246,7 @@ mod tests {
     #[test]
     fn remote_effect_is_none_for_every_variant_by_construction() {
         // errori-e-limiti.md#publish-e-cleanup (publish atomico: nessun output parziale mai visibile) +
-        // invariante I8 (cancellazione senza output pubblicato): un
+        // invariante publish atomico (cancellazione senza output pubblicato): un
         // `PlenoraError` non accompagna mai un effetto osservabile. Il caso
         // «durabilita' non confermata» e' un `PublishOutcome`, non un
         // errore (R9.3).

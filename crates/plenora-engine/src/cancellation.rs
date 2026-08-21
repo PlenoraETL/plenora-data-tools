@@ -1,7 +1,7 @@
-//! Token di cancellazione cooperativa (errori-e-limiti.md, Fase 2B M1c).
+//! Token di cancellazione cooperativa (errori-e-limiti.md, Fase 2B).
 //!
 //! Decisione di dipendenza: valutata la crate `cancellation-token`
-//! (piccola, senza `unsafe`), ma in M1 il token e' un semplice flag
+//! (piccola, senza `unsafe`), ma oggi il token e' un semplice flag
 //! condiviso — nessuna attesa/notifica, nessuna gerarchia di token: il
 //! runtime v1 e' seriale e il check e' un `load` atomico ai confini
 //! dell'executor. La politica del workspace (punto unico di versione con
@@ -11,7 +11,7 @@
 //! tipo libero di crescere (attesa, gerarchie) senza cambiare la
 //! superficie pubblica.
 //!
-//! Perimetro M1: i kernel NON vedono il token — i check sono solo ai
+//! Oggi i kernel NON vedono il token — i check sono solo ai
 //! confini dell'executor (tra batch nelle catene streaming, tra kernel,
 //! durante il drenaggio dei segmenti blocking, sull'output del piano) e
 //! onorano il `CancellationBehavior` dichiarato in catalogo. Il passaggio

@@ -455,7 +455,7 @@ pub(in crate::geo_transport) fn encode_geometry(
 }
 
 /// Parametri risolti di una trasformazione 1:1 fondibile (architettura.md#geometrie,
-/// perimetro M1+M3): l'estrazione/validazione dei parametri avviene UNA
+/// perimetro fondibile): l'estrazione/validazione dei parametri avviene UNA
 /// volta per kernel ([`resolve_transform`]), prima di toccare le celle —
 /// stessa posizione e stessi errori del braccio corrispondente di
 /// `transform_cells`, anche a batch vuoto.
@@ -1199,7 +1199,7 @@ pub fn transform_batches(
     }
 }
 
-/// Handle prepared delle operazioni 1:1 (V2).
+/// Handle prepared delle operazioni 1:1 (hot path minimale).
 ///
 /// Indice di colonna e schema di output sono risolti UNA volta per kernel,
 /// non per batch — il lavoro che `one_to_one_batches` rifaceva a ogni
@@ -1210,7 +1210,7 @@ pub struct OneToOnePrepared {
     output_schema: SchemaRef,
 }
 
-/// Risolve l'handle prepared di un'operazione 1:1 (V2).
+/// Risolve l'handle prepared di un'operazione 1:1 (hot path minimale).
 ///
 /// # Errors
 ///
@@ -1355,7 +1355,7 @@ pub enum FusedStepError {
         /// L'errore vero e proprio.
         error: ArrowTransportError,
     },
-    /// Errore della misura terminale del gruppo (architettura.md#geometrie M2): il percorso
+    /// Errore della misura terminale del gruppo (architettura.md#geometrie): il percorso
     /// non fuso delle misure (`geo_measure_batch` nell'executor) NON transita
     /// da `ArrowTransportError` — il decode e' `decode_geometry_cell` chiuso
     /// direttamente da `step_error` e il kernel e' chiuso in `InvalidPlan`
@@ -1374,7 +1374,7 @@ pub enum FusedStepError {
     Control(PlenoraError),
 }
 
-/// Misura terminale di un gruppo fuso (architettura.md#geometrie M2): il kernel scalare che
+/// Misura terminale di un gruppo fuso (architettura.md#geometrie): il kernel scalare che
 /// chiude il gruppo consumando la forma decodificata dell'ultimo passo,
 /// senza ri-decodificare il WKB di confine. Le 5 misure "add column" dei
 /// piani DAG (ramo `geo_measure_batch` dell'executor).
@@ -1392,7 +1392,7 @@ pub enum FusedTerminalMeasure {
     ToWkt,
 }
 
-/// Terminale misura di un gruppo fuso (architettura.md#geometrie M2): il kernel scalare e lo
+/// Terminale misura di un gruppo fuso (architettura.md#geometrie): il kernel scalare e lo
 /// schema di output del nodo misura (contratto inferito in validazione —
 /// input + colonna misura appesa in coda, semantica v4 "add column").
 #[derive(Clone, Copy)]
@@ -1404,13 +1404,14 @@ pub struct FusedTerminal<'a> {
 }
 
 /// Celle prodotte da un gruppo fuso (architettura.md#geometrie): la geometria ri-encodata UNA
-/// volta (sempre — nel perimetro M2 la colonna geometria SOPRAVVIVE alla
+/// volta (sempre — con una misura terminale la colonna geometria
+/// SOPRAVVIVE alla
 /// misura, semantica v4 "add column") e, se il gruppo chiude con una misura
 /// terminale, la colonna scalare calcolata sulla forma decodificata.
 struct FusedCells {
     /// Geometrie al confine del gruppo, WKB canonico XY.
     geometry: Vec<Option<Vec<u8>>>,
-    /// Colonna della misura terminale, se il gruppo ne ha una (M2).
+    /// Colonna della misura terminale, se il gruppo ne ha una.
     measure: Option<TransformedColumn>,
 }
 
@@ -1442,7 +1443,7 @@ struct FusedCells {
 /// - profilo B sull'ULTIMO kernel SENZA misura terminale: NESSUNA
 ///   validazione extra — nel percorso non fuso l'output esce dopo
 ///   `encode_geometry` senza altra validazione e decodera' chi consuma;
-/// - con misura terminale (M2): la validazione del "decode" prima della
+/// - con misura terminale: la validazione del "decode" prima della
 ///   misura (strutturale, poi OGC) e' nel passo della misura -> nodo misura
 ///   (variante [`FusedStepError::Measure`], mai `ArrowTransportError`: il
 ///   ramo non fuso delle misure non la attraversa).
@@ -1517,7 +1518,7 @@ fn transform_cells_fused(
             successor_repairs,
         )?;
     }
-    // Misura terminale (M2): passo dedicato DOPO il loop dei kernel. Nel
+    // Misura terminale: passo dedicato DOPO il loop dei kernel. Nel
     // percorso non fuso il nodo trasformazione completa TUTTE le righe
     // (kernel + encode) prima che il nodo misura decodifichi la prima cella;
     // il passo separato riproduce esattamente questa precedenza, con lo
@@ -1660,7 +1661,7 @@ enum FusedCellFailure {
 }
 
 /// Misura terminale di un gruppo fuso sulle geometrie decodificate
-/// (architettura.md#geometrie M2); `index` e' l'indice del nodo misura nel gruppo (numero di
+/// (architettura.md#geometrie); `index` e' l'indice del nodo misura nel gruppo (numero di
 /// trasformazioni). Per cella, nell'ordine del percorso non fuso
 /// (`geo_measure_batch`): validazione del "decode" (strutturale, poi OGC —
 /// l'ordine di `geometry_from_wkb`, profilo B di D12.4) poi kernel scalare;
@@ -1701,7 +1702,7 @@ fn apply_fused_measure(
     }
 }
 
-/// Una misura scalare su tutte le celle decodificate del gruppo (M2): per
+/// Una misura scalare su tutte le celle decodificate del gruppo: per
 /// cella validazione pre-misura poi kernel, con raccolta COMPLETA dei
 /// fallimenti per riga (R9.9 — il ramo non fuso raccoglie gli stessi
 /// fallimenti in `map_nullable`/`geo_measure_batch`); l'errore primario e'
@@ -1789,12 +1790,13 @@ fn collect_measure_failures(failures: Vec<(u64, &'static str, PlenoraError)>) ->
 /// percorso non fuso) e l'handle dell'ULTIMA trasformazione per lo schema
 /// di output: con `reproject` nel gruppo (M3) il CRS del campo geometria
 /// cambia a meta' catena e lo schema di confine e' quello dell'ultimo nodo
-/// — per le op M1/M2 (CRS invariato lungo il gruppo) coincide con quello
+/// — per trasformazioni e misure (CRS invariato lungo il gruppo) coincide
+///   con quello
 /// del primo kernel, perche' la ricostruzione canonica del campo dipende
 /// solo da (nome colonna, CRS di output) e gli altri campi passano
 /// invariati.
 ///
-/// Misura terminale (M2): con `terminal` il runner applica il kernel scalare
+/// Misura terminale: con `terminal` il runner applica il kernel scalare
 /// sulla forma decodificata dell'ultimo passo e appende la colonna misura in
 /// coda — la STESSA sequenza del percorso non fuso (`one_to_one_batch_prepared`
 /// dell'ultima trasformazione, poi `append_output_column` del nodo misura):
@@ -3392,7 +3394,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Misura terminale del gruppo fuso (architettura.md#geometrie M2)
+    // Misura terminale del gruppo fuso (architettura.md#geometrie)
     // -----------------------------------------------------------------------
 
     /// Riferimento non fuso della misura: il braccio misura di
@@ -3416,7 +3418,7 @@ mod tests {
         transform_cells_fused(group, Some(terminal), cells, &mut |_| Ok(()))
     }
 
-    /// Gruppo [translate, simplify] + misura terminale `area` (M2): la
+    /// Gruppo [translate, simplify] + misura terminale `area`: la
     /// geometria ri-encodata e la colonna misura sono identiche byte-per-byte
     /// al riferimento nodo-per-nodo, su fixture multi-tipo con null
     /// (null-in -> null-out sulla misura).
@@ -3450,7 +3452,7 @@ mod tests {
         assert!(fused_area[4].is_none(), "null-in -> null-out sulla misura");
     }
 
-    /// Gruppo [translate, simplify] + misura terminale `to_wkt` (M2): parita'
+    /// Gruppo [translate, simplify] + misura terminale `to_wkt`: parita'
     /// byte-per-byte della colonna Utf8 e della geometria di confine.
     #[test]
     fn fused_terminal_to_wkt_matches_sequential() {
@@ -3487,7 +3489,7 @@ mod tests {
     /// fuso — il runner fuso lo rifiuta con la STESSA variante e lo STESSO
     /// messaggio di `check_geometry_valid` (nessun transito da
     /// `ArrowTransportError`, come `decode_geometry_cell` +
-    /// `step_error`). Difesa in profondita': gli op di M1 non producono
+    /// `step_error`). Difesa in profondita': le op fondibili non producono
     /// intermedi invalidi, quindi il trigger e' diretto su
     /// `apply_fused_measure` (stesso stato dei casi (d2)/(e) dell'oracolo).
     #[test]

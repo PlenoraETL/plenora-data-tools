@@ -24,7 +24,7 @@ thiserror.workspace = true
 rayon.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
-# execution_id delle esecuzioni (errori-e-limiti.md, M1d): UUID v4 — versione gia'
+# execution_id delle esecuzioni (errori-e-limiti.md, errori arricchiti): UUID v4 — versione gia'
 # pinnata nel workspace (usata da plenora-kernels-table), nessuna dep nuova.
 uuid.workspace = true
 # Usati dalla validazione delle config portata da nogeo (regex, timezone).

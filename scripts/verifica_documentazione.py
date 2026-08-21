@@ -17,12 +17,14 @@ Questo script lo impedisce. Verifica sette cose:
    promette;
 3. **nessun riferimento a un documento eliminato**, in tutto il repository:
    ADR, deroghe, review, checkpoint, verbali e i loro nomi di file;
-4. **ogni riferimento `D*` ha una definizione corrente** nel registro delle
-   decisioni di `docs/architettura.md`, e ogni decisione definita e' citata
-   da qualche parte. Gli identificatori sono riferimenti stabili: un commento
-   che scrive `D16` deve poterlo risolvere, altrimenti e' un puntatore morto
-   come un link rotto — e un registro che nessuno cita torna a essere un
-   archivio;
+4. **ogni puntatore interno ha una definizione corrente**, e ogni
+   definizione e' citata. Vale per tutte le famiglie — `D`, `M`, `V`, `E`,
+   `I`, `P`, `G` — con l'identificatore intero, anche multilivello. Un
+   commento che scrive `D14.5.6` o `M3` deve poterlo risolvere, altrimenti
+   e' un puntatore morto come un link rotto; e una definizione che nessuno
+   cita torna a essere un archivio. Sono cercati **solo nei commenti**: `const
+   M1: usize` e `I64(&Int64Array)` hanno la forma di un puntatore e sono
+   codice;
 5. **catalogo e `operazioni.md` allineati**: stesso numero di operazioni, e le
    stesse. Non un conteggio, un confronto per nome;
 6. **il documento generato non diverge**, delegando ad `assemble.py --verify`;
@@ -71,7 +73,11 @@ SORGENTI_GENERATE = re.compile(r'^docs/_fragments/[0-9]+\.md$')
 # ---------------------------------------------------------------------------
 
 MORTI = [
-    (r'\bADR[-\s]0*\d{1,2}\b', 'riferimento a una ADR eliminata'),
+    # Anche il richiamo nudo: «l'ADR dichiarava» manda a cercare un file
+    # che non c'e' piu', esattamente come un link rotto.
+    (r'\bADR\b', 'riferimento a una ADR eliminata'),
+    (r'\bverbal[ei]\b', 'i verbali di review sono stati eliminati'),
+    (r'\breview del \d{4}-\d{2}-\d{2}', 'riferimento a un verbale di review'),
     (r'\bDER-\d{3}\b', 'riferimento a una deroga eliminata'),
     (r'\bdocs/adr/', 'la directory delle ADR non esiste piu\''),
     (r'\bdocs/misure/', 'i grezzi di misura non esistono piu\''),
@@ -114,12 +120,38 @@ ARCHITETTURA = 'docs/architettura.md'
 
 # `D16`, `D12.7`: identificatori di decisione. Il registro li definisce
 # come righe di tabella `| **D16** | ... |`.
-# La sequenza puntata e' di profondita' ARBITRARIA: esistono `D14.5.6`
-# come esistono `D14.5` e `D16`. Fermarsi a un livello tronca
-# l'identificatore e ne inventa uno che nessuno ha definito — il
-# gate direbbe «tutto risolto» confrontando la cosa sbagliata.
-RIFERIMENTO_D = re.compile(r'(?<![A-Za-z0-9_])D([0-9]+(?:\.[0-9]+)*)(?![A-Za-z0-9_])')
-DEFINIZIONE_D = re.compile(r'^\|\s*\*\*(D[0-9]+(?:\.[0-9]+)*)\*\*\s*\|', re.M)
+# I puntatori interni: `D16`, `D14.5.6`, `M3`, `E1`. Sette famiglie, un
+# solo sistema di regole.
+#
+# La sequenza puntata e' di profondita' ARBITRARIA: esistono `D14.5.6` come
+# esistono `D14.5` e `D16`. Fermarsi a un livello tronca l'identificatore e ne
+# inventa uno che nessuno ha definito — il gate direbbe «tutto risolto»
+# confrontando la cosa sbagliata.
+#
+# Al massimo DUE cifre per livello, e **solo nei commenti**. Le due regole
+# insieme tengono fuori cio' che non e' un puntatore: `const M1: usize`,
+# `I64(&Int64Array)` e `soundex("Pfister") == "P236"` sono codice, non prosa;
+# `# noqa: E402` e' un codice di flake8, e ha tre cifre. Un gate che li
+# segnalasse verrebbe disattivato entro una settimana.
+FAMIGLIE = 'DMVEIPG'
+PUNTATORE = re.compile(
+    r'(?<![A-Za-z0-9_])([%s][0-9]{1,2}(?:\.[0-9]{1,2})*)(?![A-Za-z0-9_])'
+    % FAMIGLIE)
+# Una definizione e' una riga di tabella `| **D16** | ... |` oppure un
+# titolo `### M3 — ...`: le due forme che i documenti attuali usano.
+DEFINIZIONE = re.compile(
+    r'^(?:\|\s*\*\*([%s][0-9.]+)\*\*\s*\||#{1,4}\s+([%s][0-9.]+)\s+[—-])'
+    % (FAMIGLIE, FAMIGLIE), re.M)
+
+# Dove ogni famiglia si definisce. Un puntatore vive dove la cosa che
+# nomina e' descritta, non in un registro unico: `M3` e' una milestone
+# della roadmap. L'esempio eseguibile non ha piu' un
+# identificatore: nessuno lo citava come `E1`, e un puntatore che
+# nessuno usa e' un archivio di una voce sola.
+DOVE_SI_DEFINISCE = [
+    'docs/architettura.md',
+    'docs/stato-e-roadmap.md',
+]
 
 CATALOGO = 'crates/plenora-core/src/catalog.rs'
 OPERAZIONI = 'docs/operazioni.md'
@@ -229,34 +261,80 @@ def controlla_riferimenti_morti(file_tracciati, problemi):
                     break
 
 
-def controlla_decisioni(file_tracciati, problemi):
-    """Ogni `D*` citato dev'essere definito, e ogni definizione dev'essere citata.
-
-    Gli identificatori di decisione sono un secondo sistema di riferimenti,
-    accanto ai collegamenti Markdown, e si rompe allo stesso modo: la
-    decisione sparisce e il commento che la cita resta, convincente e senza
-    referente. Il registro di `architettura.md` contiene solo le decisioni
-    ancora attive, quindi un `D*` citato e non definito e' una decisione
-    superata che qualcuno continua a invocare.
-    """
-    if not os.path.exists(ARCHITETTURA):
-        problemi.append("%s assente: non c\'e\' registro delle decisioni"
-                        % ARCHITETTURA)
-        return
-    trovate = DEFINIZIONE_D.findall(testo(ARCHITETTURA))
-    definite = set(trovate)
-    doppie = sorted({i for i in trovate if trovate.count(i) > 1},
-                    key=lambda i: [int(p) for p in i[1:].split('.')])
+def _definizioni(problemi):
+    """Gli identificatori definiti, e quelli definiti piu' di una volta."""
+    trovate = []
+    for percorso in DOVE_SI_DEFINISCE:
+        if not os.path.exists(percorso):
+            problemi.append('SORGENTE DI DEFINIZIONI ASSENTE: %s' % percorso)
+            continue
+        for coppia in DEFINIZIONE.findall(testo(percorso)):
+            trovate.append(coppia[0] or coppia[1])
+    doppie = sorted({i for i in trovate if trovate.count(i) > 1}, key=ordine)
     if doppie:
         problemi.append(
-            "DECISIONI DEFINITE PIU' DI UNA VOLTA: %r\n"
-            "  Due righe per lo stesso identificatore sono due contratti per "
-            "la stessa decisione, e chi legge non sa quale valga." % doppie)
-    if not definite:
+            "PUNTATORI DEFINITI PIU\' DI UNA VOLTA: %r\n"
+            "  Due definizioni dello stesso identificatore sono due contratti "
+            "per la stessa cosa, e chi legge non sa quale valga." % doppie)
+    return set(trovate)
+
+
+def ordine(ident):
+    return (ident[0], [int(pezzo) for pezzo in ident[1:].split('.')])
+
+
+CODE_SPAN = re.compile(r'`[^`]*`')
+
+
+def _senza_code_span(riga):
+    """La riga senza cio' che sta fra backtick.
+
+    Un backtick dice «questo e' codice»: `I64` in un commento nomina un tipo
+    Rust, non un puntatore interno. Contarlo produrrebbe un falso positivo
+    ogni volta che un commento cita una variante di enum, ed e' cosi' che un
+    gate smette di essere letto.
+    """
+    return CODE_SPAN.sub(' ', riga)
+
+
+def _commenti(percorso, contenuto):
+    """Le sole righe di PROSA: commenti nei sorgenti, tutto nei documenti.
+
+    Un puntatore vive in un commento. `const M1: usize = 1_000_000` e
+    `I64(&Int64Array)` sono codice: hanno la forma di un identificatore e non
+    lo sono, e un gate che non sa distinguerli produce falsi positivi finche'
+    qualcuno non lo spegne.
+    """
+    if not percorso.endswith('.rs'):
+        return contenuto.split(chr(10))
+    righe = []
+    for riga in contenuto.split(chr(10)):
+        nuda = riga.lstrip()
+        if nuda.startswith('//'):
+            righe.append(riga)
+        elif '//' in riga:
+            righe.append(riga[riga.index('//'):])
+        else:
+            righe.append('')
+    return righe
+
+
+def controlla_decisioni(file_tracciati, problemi):
+    """Ogni puntatore citato dev\'essere definito, e ogni definizione citata.
+
+    Gli identificatori interni sono un secondo sistema di riferimenti, accanto
+    ai collegamenti Markdown, e si rompe allo stesso modo: la cosa nominata
+    sparisce e il commento che la cita resta, convincente e senza referente.
+    I documenti attuali definiscono solo cio\' che vale adesso, quindi un
+    puntatore citato e non definito e\' una cosa superata che qualcuno
+    continua a invocare.
+    """
+    definiti = _definizioni(problemi)
+    if not definiti:
         problemi.append(
-            "REGISTRO DELLE DECISIONI VUOTO in %s.\n"
-            "  Se le decisioni non hanno piu\' identificatori, vanno tolti "
-            "anche i riferimenti nel codice." % ARCHITETTURA)
+            "NESSUN PUNTATORE DEFINITO.\n"
+            "  Se non ne esistono piu\', vanno tolti anche i riferimenti "
+            "nel codice.")
         return
 
     citazioni = {}
@@ -265,35 +343,35 @@ def controlla_decisioni(file_tracciati, problemi):
             continue
         if not percorso.endswith(TESTUALI):
             continue
-        if percorso in (ARCHITETTURA, 'scripts/verifica_documentazione.py'):
+        if percorso in DOVE_SI_DEFINISCE:
+            continue
+        if percorso == 'scripts/verifica_documentazione.py':
             continue
         if not os.path.exists(percorso):
             continue
-        for numero, riga in enumerate(testo(percorso).split(chr(10)), 1):
-            for trovato in RIFERIMENTO_D.finditer(riga):
-                citazioni.setdefault(trovato.group(0), (percorso, numero))
+        for numero, riga in enumerate(_commenti(percorso, testo(percorso)), 1):
+            for trovato in PUNTATORE.finditer(_senza_code_span(riga)):
+                citazioni.setdefault(trovato.group(1), (percorso, numero))
 
-    def ordine(ident):
-        return [int(pezzo) for pezzo in ident[1:].split('.')]
-
-    orfani = sorted(set(citazioni) - definite, key=ordine)
+    orfani = sorted(set(citazioni) - definiti, key=ordine)
     if orfani:
-        righe = [('    %-8s %s:%d' % (i, citazioni[i][0], citazioni[i][1]))
+        righe = [('    %-9s %s:%d' % (i, citazioni[i][0], citazioni[i][1]))
                  for i in orfani]
         problemi.append(
-            "DECISIONI CITATE E NON DEFINITE (%d):\n%s\n"
-            "  Il registro di %s contiene solo le decisioni ancora attive.\n"
-            "  Una decisione superata non si archivia: si tolgono i suoi "
-            "riferimenti." % (len(orfani), chr(10).join(righe), ARCHITETTURA))
+            "PUNTATORI CITATI E NON DEFINITI (%d):\n%s\n"
+            "  I documenti attuali definiscono solo cio\' che vale adesso.\n"
+            "  Un puntatore superato non si archivia: si sostituisce con la "
+            "descrizione o con la sezione corrente."
+            % (len(orfani), chr(10).join(righe)))
 
-    inutilizzate = sorted(definite - set(citazioni), key=ordine)
-    if inutilizzate:
+    inutilizzati = sorted(definiti - set(citazioni), key=ordine)
+    if inutilizzati:
         problemi.append(
-            "DECISIONI DEFINITE E MAI CITATE: %r\n"
+            "PUNTATORI DEFINITI E MAI CITATI: %r\n"
             "  Un registro che cresce e non viene letto torna a essere un "
-            "archivio. Se la decisione vale ancora ma nessuno la cita, il "
-            "riferimento va messo dove la decisione e\' attuata; se non vale "
-            "piu\', va tolta." % inutilizzate)
+            "archivio. Se la cosa vale ancora ma nessuno la cita, il "
+            "riferimento va messo dove e\' attuata; se non vale piu\', va "
+            "tolta." % inutilizzati)
 
 
 def controlla_catalogo(problemi):
@@ -362,11 +440,11 @@ def main():
             sys.stderr.write('- %s\n' % problema)
         raise SystemExit(1)
 
-    definite = len(set(DEFINIZIONE_D.findall(testo(ARCHITETTURA))))
+    definiti = len(_definizioni([]))
     print('documentazione coerente: %d documenti pubblici, %d eccezioni, '
-          '%d decisioni definite e tutte citate, nessun riferimento morto, '
+          '%d puntatori definiti e tutti citati, nessun riferimento morto, '
           'catalogo e operazioni allineati, nessun artefatto tracciato'
-          % (len(PUBBLICI), len(ECCEZIONI), definite))
+          % (len(PUBBLICI), len(ECCEZIONI), definiti))
 
 
 main()

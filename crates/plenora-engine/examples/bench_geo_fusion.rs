@@ -1,9 +1,10 @@
-//! Misura A/B engine-level della fusione dei segmenti geo (architettura.md#geometrie M1+M2,
+//! Misura A/B engine-level della fusione dei segmenti geo (architettura.md#geometrie,
 //! kill switch D12.9): due scenari, ciascuno eseguito con
 //! `RuntimeContext.geo_fusion` true/false, N run alternate per modalita'.
 //! Scenario `chain_transforms`: `geo.buffer -> geo.simplify -> geo.centroid`
-//! (M1). Scenario `chain_terminal_measure`: la stessa catena + `geo.area` in
-//! coda (M2 — la catena completa del baseline kernel-level, `chain_wkb` vs
+//! (tre trasformazioni in place). Scenario `chain_terminal_measure`: la stessa
+//! catena, con `geo.area` come misura terminale in
+//! coda (la catena completa del baseline kernel-level, `chain_wkb` vs
 //! `chain_fused` in `benchmarks/baseline/baseline.json`). A livello engine il
 //! percorso include il framing dei `RecordBatch` tra un nodo e l'altro,
 //! quindi il delta atteso e' minore del kernel-level ma deve restare
@@ -54,7 +55,7 @@ const RUNS: usize = 5;
 
 /// Piano v4: la catena del baseline kernel-level (buffer distanza 5.0,
 /// simplify tolleranza 0.01, centroid) — tre kernel fondibili consecutivi
-/// (perimetro M1, capability `TransformInPlace`).
+/// (capability `TransformInPlace`).
 fn chain_plan() -> serde_json::Value {
     json!({
         "schema_version": 5,
@@ -69,7 +70,7 @@ fn chain_plan() -> serde_json::Value {
 }
 
 /// Piano v4: la catena completa del baseline (buffer -> simplify -> centroid
-/// -> area): tre `TransformInPlace` + la misura terminale (M2).
+/// -> area): tre `TransformInPlace` piu' una misura terminale.
 fn chain_plan_with_area() -> serde_json::Value {
     json!({
         "schema_version": 5,

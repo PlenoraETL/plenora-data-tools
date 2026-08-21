@@ -1522,7 +1522,7 @@ fn asof_on_value(array: &dyn Array, row: usize) -> Result<Option<f64>> {
 
 /// Righe destre del fast path di `asof_join`: build con chiavi native
 /// (`FastKeys`, nessuna stringa per riga) e probe con buffer riusato.
-#[allow(clippy::too_many_arguments)] // Parametri gia' risolti dal chiamante (V2): nessun ricalcolo.
+#[allow(clippy::too_many_arguments)] // Parametri gia' risolti dal chiamante (hot path minimale): nessun ricalcolo.
 fn asof_right_rows_fast(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1740,7 +1740,7 @@ pub fn asof_join(
             ));
         }
     }
-    // Fast path tipizzato (V2): chiavi `by` native (uguaglianza identica
+    // Fast path tipizzato (hot path minimale): chiavi `by` native (uguaglianza identica
     // alla chiave stringa — invariante documentata di `KeyVal`) e `on` da
     // array tipizzati; se un tipo `by` non e' coperto, il percorso
     // generico per chiave testuale (stesso risultato, per costruzione).

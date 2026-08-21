@@ -1,4 +1,4 @@
-# E1 — Filtro e ordinamento
+# Esempio: filtro e ordinamento
 
 Il giro minimo: guardare un input, validare un piano contro di esso, eseguirlo.
 Nessun backend geografico richiesto.

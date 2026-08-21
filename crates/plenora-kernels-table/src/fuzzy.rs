@@ -216,7 +216,7 @@ fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
 }
 
 /// Jaro con flag di match forniti dal chiamante (riuso buffer nel probe di
-/// `fuzzy_join`, V2): stessa sequenza di confronti, risultato bit-identico.
+/// `fuzzy_join`, hot path minimale): stessa sequenza di confronti, risultato bit-identico.
 fn jaro_similarity_scratch(
     left: &[char],
     right: &[char],
@@ -296,7 +296,7 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
 }
 
 /// DP di Levenshtein con righe fornite dal chiamante (riuso buffer nel
-/// probe di `fuzzy_join`, V2): stesso ordine di calcolo, risultato identico.
+/// probe di `fuzzy_join`, hot path minimale): stesso ordine di calcolo, risultato identico.
 fn levenshtein_distance_scratch(
     left: &[char],
     right: &[char],
@@ -357,7 +357,7 @@ pub(crate) fn jaccard_tokens(left: &str, right: &str) -> f64 {
 }
 
 /// Buffer riusati per le metriche di coppia nel probe di `fuzzy_join`
-/// (V2: nessuna allocazione per coppia candidata). I risultati sono
+/// (hot path minimale: nessuna allocazione per coppia candidata). I risultati sono
 /// bit-identici alle versioni allocanti: stesse operazioni f64 nello
 /// stesso ordine.
 #[derive(Default)]
@@ -423,7 +423,7 @@ fn jaccard_sets(
 }
 
 /// Forma decodificata del lato destro, costruita una tantum per la metrica
-/// scelta (V2): nessuna decodifica per coppia candidata nel probe.
+/// scelta (hot path minimale): nessuna decodifica per coppia candidata nel probe.
 enum FuzzyForm<'a> {
     Chars(Vec<Option<Vec<char>>>),
     Tokens(Vec<Option<std::collections::HashSet<&'a str>>>),
@@ -521,7 +521,7 @@ pub fn fuzzy_join(
     // indice (i `Vec` dei blocchi preservano l'ordine di inserzione). Le
     // forme decodificate per la metrica sono costruite una tantum (lato
     // destro) e una per riga (lato sinistro): nessuna allocazione per
-    // coppia candidata (V2).
+    // coppia candidata (hot path minimale).
     let right_decoded = match config.metric {
         FuzzyMetric::JaroWinkler | FuzzyMetric::Levenshtein => FuzzyForm::Chars(
             right_norm

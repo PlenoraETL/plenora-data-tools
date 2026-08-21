@@ -756,7 +756,7 @@ pub fn snap_column(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     ensure_valid(reference).map_err(|error| snap_error(&error))?;
     check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
-    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (V2: il
+    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (hot path minimale: il
     // riferimento non cambia mai tra le righe), non per cella — il costo
     // O(V log V) e' condiviso da tutte le query delle N righe.
     let reference_vertices: Vec<[f64; 2]> = reference

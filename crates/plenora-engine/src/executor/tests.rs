@@ -1,5 +1,6 @@
 //! Test dell'executor (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor;
-//! architettura.md V3/V4/V8/V9).
+//! architettura.md: streaming reale, segmenti lineari senza code,
+//! parallelismo solo dove conviene, materializzazione minima).
 
 use std::cell::Cell;
 use std::fs::File;
@@ -733,7 +734,7 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
 
 #[test]
 fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
-    // P1 (review 2026-08-03): 4 batch validi, ciascuno sotto il budget di
+    // 4 batch validi, ciascuno sotto il budget di
     // memoria, ma con output cumulativi SOPRA budget. Prima del fix gli
     // accepted restavano in RAM con lease trattenuti fino a fine scan e lo
     // stream valido veniva rifiutato ("budget esaurito"): ora gli accepted
@@ -879,7 +880,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
 
 #[test]
 fn accepted_output_staging_beyond_temp_quota_fails_closed() {
-    // P1 fail-closed: stream VALIDO la cui staging IPC supera la quota
+    // Fail-closed: stream VALIDO la cui staging IPC supera la quota
     // `max_temp_bytes` -> errore esplicito, zero accepted pubblicati,
     // nessun artefatto scrivibile via write_ipc_file.
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -901,7 +902,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         "schema_version": 5,
         "inputs": ["main"],
         // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
-        // batch (architettura.md#memoria M2d: si resta in memoria solo finche'
+        // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
         // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
         // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
         // quota temporanea non verrebbe nemmeno interrogata. Il fatto che
@@ -975,7 +976,7 @@ fn linear_table_chain_executes_with_coherent_per_node_metrics() {
     assert!(batches[0].schema().field_with_name("key").is_ok());
     assert!(batches[0].schema().field_with_name("count").is_ok());
 
-    // Metriche per nodo logico (E3), anche dentro al segmento fuso.
+    // Metriche per nodo logico (osservabilita' per nodo), anche dentro al segmento fuso.
     assert_eq!(metrics.nodes.len(), 3);
     let filter = &metrics.nodes["f"];
     assert_eq!(filter.operation, "table.filter");
@@ -1092,7 +1093,7 @@ fn fan_out_fan_in_join_executes() {
 }
 
 // ---------------------------------------------------------------------------
-// Streaming reale (V3): lazy, batch per batch
+// Streaming reale: lazy, batch per batch
 // ---------------------------------------------------------------------------
 
 /// Input lazy che conta i batch consumati.
@@ -3167,7 +3168,7 @@ fn geo_snap_subdivide_chain_expands_rows() {
     };
     assert_eq!((line.0[1].x, line.0[1].y), (4.0, 0.0), "vertice snappato");
 
-    // Metriche per nodo (E3): espansione 2 -> 3 righe su subdivide.
+    // Metriche per nodo (osservabilita' per nodo): espansione 2 -> 3 righe su subdivide.
     assert_eq!(metrics.nodes["s"].rows_out, 2);
     assert_eq!(metrics.nodes["d"].rows_in, 2);
     assert_eq!(metrics.nodes["d"].rows_out, 3);
@@ -4514,7 +4515,7 @@ fn kernel_panic_publishes_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// Cancellazione cooperativa (errori-e-limiti.md, M1c), errori arricchiti (M1d), TempStore
+// Cancellazione cooperativa, errori arricchiti (errori-e-limiti.md), TempStore
 // ---------------------------------------------------------------------------
 
 /// Input lazy che cancella il token dopo `cancel_after` batch emessi: simula
@@ -4957,7 +4958,7 @@ fn diagnostics_off_leaves_step_error_unchanged() {
         "diagnostics spento: motivo invariato salvo la categoria"
     );
     // `execution_id` resta assegnato anche fuori dall'involucro `Execution`:
-    // e' il `Replayed` a portarlo (M1d).
+    // e' il `Replayed` a portarlo (errori arricchiti).
     let PlenoraError::Replayed(inner) = &error else {
         panic!("atteso Replayed con attribuzione: {error:?}");
     };
@@ -5047,7 +5048,7 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato (architettura.md#memoria, Fase 2B M2c): attivazione preventiva al
+// Spill generalizzato (architettura.md#memoria, Fase 2B): attivazione preventiva al
 // dispatch, TempStore condiviso, metriche e quota temp.
 // ---------------------------------------------------------------------------
 
@@ -5208,7 +5209,7 @@ fn spill_temp_quota_exceeded_fails_with_dedicated_error() {
 // ---------------------------------------------------------------------------
 
 /// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi
-/// (perimetro M1, capability `TransformInPlace`).
+/// (capability `TransformInPlace`).
 fn geo_fusion_chain_plan() -> serde_json::Value {
     json!({
         "schema_version": 5,
@@ -5413,11 +5414,11 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
 }
 
 // ---------------------------------------------------------------------------
-// Fusione dei segmenti geo: misura terminale in coda al gruppo (architettura.md#geometrie M2)
+// Fusione dei segmenti geo: misura terminale in coda al gruppo (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Catena translate -> simplify -> area: due transform + misura terminale in
-/// un unico gruppo (M2). A/B via kill switch (D12.9): output byte-per-byte
+/// un unico gruppo. A/B via kill switch (D12.9): output byte-per-byte
 /// identico al percorso non fuso su fixture multi-tipo con null, metriche
 /// per nodo preservate (D12.6), nessun fallback (D12.7). La colonna
 /// geometria SOPRAVVIVE alla misura (semantica v4 "add column"): ri-encodata
@@ -5480,7 +5481,7 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
 }
 
 /// Catena translate -> `to_wkt`: UN transform + misura terminale basta a
-/// formare il gruppo (M2). Parita' byte-per-byte della colonna Utf8 e della
+/// formare il gruppo. Parita' byte-per-byte della colonna Utf8 e della
 /// geometria di confine, null-in -> null-out.
 #[test]
 fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
@@ -5659,7 +5660,7 @@ fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
 }
 
 // ---------------------------------------------------------------------------
-// Binari geo nel piano (architettura.md#geometrie M1)
+// Binari geo nel piano (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Poligono asse-allineato (fixture multi-tipo insieme a `point_wkb`).
@@ -5763,7 +5764,7 @@ fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
 
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
-    // Identita' contratto/schema vs analyze (E1): lo schema del batch e'
+    // Identita' contratto/schema vs analyze (configurazioni preparate): lo schema del batch e'
     // quello del contratto inferito dal planner.
     assert_eq!(batch.schema(), output_contract.schema);
     // Righe = coppie: il punto (1,1) interseca entrambi i poligoni, il
@@ -6061,7 +6062,7 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
 
 #[test]
 fn atomic_input_gate_streams_valid_input_over_cumulative_memory_budget() {
-    // P1-4: input geometrico VALIDO piu' grande del budget memoria cumulativo
+    // Input geometrico VALIDO piu' grande del budget memoria cumulativo
     // ma entro il budget per batch: il gate atomico non puo' trattenere i
     // lease di tutti i batch — staging bounded e replay, nessun accepted
     // pubblicato prima della validazione completa.
@@ -6098,7 +6099,7 @@ fn atomic_input_gate_streams_valid_input_over_cumulative_memory_budget() {
 
 #[test]
 fn atomic_input_gate_rejects_late_invalid_with_zero_accepted_over_budget() {
-    // P1-4 (controllo fail-closed): stesso scenario sopra budget cumulativo,
+    // Controllo fail-closed: stesso scenario sopra budget cumulativo,
     // WKB malformato nell'ULTIMO batch — zero accepted, diagnostica completa
     // con indice assoluto, nessun batch pubblicato a valle.
     let plan = json!({
@@ -6206,7 +6207,7 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
 }
 
 // ---------------------------------------------------------------------------
-// architettura.md#memoria M2d: staging memory-first degli accepted row-diagnostics
+// architettura.md#memoria: staging memory-first degli accepted row-diagnostics
 //
 // La barriera R9.9 resta invariata: nessun accepted esce prima che la
 // scansione sia completa. Cambia solo DOVE i batch attendono. I test che
@@ -6214,7 +6215,7 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
 // risultato, e che il passaggio al disco sia deterministico e completo.
 // ---------------------------------------------------------------------------
 
-/// Schema e batch delle prove M2d: quattro batch da tre righe.
+/// Schema e batch delle prove dello staging memory-first: quattro batch da tre righe.
 fn m2d_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -6776,12 +6777,12 @@ fn m2d_dictionary_e_nested() {
 
 #[test]
 fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
-    // Il rischio dichiarato di M2d: trattenere i lease potrebbe trasformare
+    // Il rischio dichiarato dello staging memory-first: trattenere i lease potrebbe trasformare
     // un input prima eseguibile in un falso `ResourceLimit`. La soglia lo
     // impedisce facendo scattare il disco PRIMA della passata che non
     // starebbe nel budget. Qui il budget e' molto piu' stretto del tetto per
     // batch (64 MiB), quindi la modalita' disco parte dal primo batch e il
-    // comportamento e' identico a quello precedente a M2d: il piano riesce.
+    // comportamento e' identico a quello precedente allo staging memory-first: il piano riesce.
     for budget in [64_u64 * 1024, 256 * 1024, 1024 * 1024] {
         let piano = json!({
             "schema_version": 5,
@@ -6848,7 +6849,7 @@ fn m2d_fanout_batch(indice: usize) -> RecordBatch {
 /// Mentre il primo ramo viene drenato, `EdgeShared` conserva i batch gia'
 /// prelevati per il secondo e ne **trattiene i lease** (buffer del tee,
 /// `executor.rs`). Quelle prenotazioni sono vive nel governor ma invisibili a
-/// qualunque contatore locale del ramo: e' la classe che la prima soglia M2d
+/// qualunque contatore locale del ramo: e' la classe che la prima soglia dello staging memory-first
 /// non copriva.
 ///
 /// I rami usano `table.type_cast` da testo a intero — operazione

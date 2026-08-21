@@ -1,21 +1,25 @@
-//! Executor del DAG — fase 2 `execute` (architettura.md, architettura.md#planner-ed-executor;
-//! architettura.md V2-V4, V7-V10, E3) — Fase 2A-4.
+//! Executor del DAG — fase 2 `execute`.
+//!
+//! Vincoli che governano questo modulo: streaming reale, hot path minimale,
+//! materializzazione minima, e osservabilita' per nodo anche dentro ai
+//! segmenti fusi (architettura.md#planner-ed-executor).
 //!
 //! [`execute`] accetta solo un [`ValidatedGraph`] (type-state: nessun
 //! percorso non validato raggiunge l'esecuzione), svolge internamente
 //! `prepare` + `execute_physical` (architettura.md#planner-ed-executor) e restituisce un [`Output`] a
 //! **pull**: i batch finali sono uno stream lazy, l'input e' consumato
-//! batch-per-batch man mano che il chiamante tira l'output (V3: una
+//! batch-per-batch man mano che il chiamante tira l'output (streaming reale: una
 //! pipeline streaming non materializza l'intera tabella).
 //!
-//! Esecuzione v1: **seriale** ovunque (`SerialFused`, V8 — parallelismo e
-//! spill restano Fase 2B: M2/M3; il governor della memoria e' entrato con
-//! M1a/M1b, la cancellazione cooperativa e gli errori arricchiti con
-//! M1c/M1d, vedi sotto). Per questo lo stream usa `Rc`/`RefCell` e
+//! Esecuzione v1: **seriale** ovunque (`SerialFused`); il parallelismo
+//! resta da fare (M3), lo spill c'e' solo per i kernel che lo prevedono.
+//! Il governor della memoria, la cancellazione cooperativa e gli errori
+//! arricchiti sono invece attivi (vedi sotto). Per questo lo stream usa
+//! `Rc`/`RefCell` e
 //! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
 //! nascosto.
 //!
-//! Fase 2B M1c — cancellazione cooperativa (errori-e-limiti.md): il chiamante passa un
+//! Fase 2B, cancellazione cooperativa (errori-e-limiti.md): il chiamante passa un
 //! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
 //! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
 //! ai confini dell'executor — tra batch nelle catene streaming, tra kernel,
@@ -24,7 +28,7 @@
 //! (check a ogni batch), `BoundaryOnly` (check tra kernel/a fine kernel e
 //! durante il drenaggio), `NonInterruptible` (mai: l'op completa; i confini
 //! di piano a valle restano attivi — nessuna nuova attivita' dopo la
-//! cancellazione, publish compreso). I kernel NON vedono il token in M1 (il
+//! cancellazione, publish compreso). I kernel NON vedono il token (il
 //! passaggio e' M3). Al cancel l'errore e' `PlenoraError::Cancelled` con
 //! `node`/`operation`/`execution_id`; nessun output e' pubblicato (publish
 //! atomico) e le metriche parziali restano osservabili iterando [`Output`]
@@ -32,12 +36,12 @@
 //! comodo `collect_batches`/`write_ipc_file*` consumano l'`Output`: con
 //! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
 //!
-//! Fase 2B M1d — errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
+//! Fase 2B, errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
 //! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
 //! nessuna versione nuova) riportato negli errori `Execution`/`Cancelled` e nel
 //! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
 //! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
-//! gli assi §9; R9.7 ha sostituito il `retryable()` di M1d). La modalita'
+//! gli assi §9; R9.7 ha sostituito il `retryable()` della prima tassonomia). La modalita'
 //! diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
 //! motivazione contesto strutturale — indice di batch, riga, colonna dove
@@ -47,13 +51,13 @@
 //! best-effort delle directory orfane all'avvio (sulla radice configurata,
 //! default temp di sistema) e crea lo store dell'esecuzione **fail-closed**
 //! (decisione documentata: niente degrado a tempdir semplice — lo store e'
-//! la difesa strutturale contro i crash non intercettabili e lo spill di M2
+//! la difesa strutturale contro i crash non intercettabili e lo spill
 //! ci scrivera'; se non e' creabile l'esecuzione fallisce prima di toccare
 //! i dati). L'heartbeat e' scritto al punto centrale (ogni batch processato
 //! passa dal conteggio metriche) con throttle di
 //! [`HEARTBEAT_MIN_INTERVAL`]; il cleanup e' RAII al `Drop` dello stato.
 //!
-//! Fase 2B M1a/M1b — resource accounting (architettura.md#memoria) e sequenza logica
+//! Fase 2B, governor della memoria — resource accounting (architettura.md#memoria) e sequenza logica
 //! (architettura.md#determinismo): i batch attraversano gli archi come [`GovernedBatch`]
 //! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_governed_memory_bytes`
 //! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
@@ -68,23 +72,23 @@
 //! Struttura fisica:
 //!
 //! - ogni arco del DAG e' un canale condiviso ([`EdgeShared`]): un solo
-//!   consumatore = pass-through puro; piu' consumatori (fan-out, D9/V9) =
+//!   consumatore = pass-through puro; piu' consumatori (fan-out, D9) =
 //!   tee che condivide i `RecordBatch` immutabili senza copie di buffer e
 //!   rilascia ciascun batch quando tutti i consumatori lo hanno letto
-//!   (V10). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
+//!   (rilascio al last consumer). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
 //!   `Arc`) tra i consumatori, la quota resta contata una sola volta e torna
 //!   al governor con `release_consumed` + `Drop` dell'ultimo riferimento.
 //!   In esecuzione seriale i consumatori drenano in sequenza, quindi
 //!   il tee coincide con la materializzazione conservativa di D9;
 //! - `LinearStreaming`/`GeoFused`: il batch attraversa la catena di kernel
-//!   senza code ne' materializzazioni (V4). Nei segmenti `GeoFused` i run di
+//!   senza code ne' materializzazioni (segmenti lineari senza code). Nei segmenti `GeoFused` i run di
 //!   kernel fondibili annotati da `prepare` (campo `fusion_group`) sono
 //!   eseguiti col runner fuso di architettura.md#geometrie — un decode/encode per gruppo su
 //!   ogni batch, con errori/metriche/cancellazione per nodo preservati e
 //!   fallback strumentato al percorso nodo-per-nodo a reservation governor
 //!   fallita (D12.6/D12.7);
 //! - `Blocking`/`BinaryBlocking`: alla prima pull drenano gli input del
-//!   segmento (materializzazione prevista dal piano, V9), concatenano ed
+//!   segmento (materializzazione prevista dal piano, materializzazione minima), concatenano ed
 //!   eseguono il kernel una sola volta;
 //! - dispatch nodi: `table.*` via [`crate::table_engine`] (`execute_batch`
 //!   per gli unari, `execute_binary` per i binari, con la config gia'
@@ -113,12 +117,12 @@
 //!   catalogo, la base input e' un trigger, insensata come denominatore),
 //!   `max_batches` per arco, `max_wkb_cell_bytes` per cella,
 //!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
-//!   annidamento WKB, `max_batch_bytes` per batch (V7, tetto duro, applicato
+//!   annidamento WKB, `max_batch_bytes` per batch (tetto in byte per batch, tetto duro, applicato
 //!   anche al batch concatenato dei segmenti blocking);
 //! - nessun output parziale: [`Output::write_ipc_file`] scrive via
 //!   [`crate::geo_transport::publish::publish_atomic`] (tempfile + persist
 //!   no-clobber solo a stream completato con successo);
-//! - metriche per nodo logico e per segmento (E3), prefilled per tutti i
+//! - metriche per nodo logico e per segmento (osservabilita' per nodo), prefilled per tutti i
 //!   nodi del piano e aggiornate batch per batch.
 //!
 //! Errore a meta' stream: il batch in errore propaga `Err` nello stream di
@@ -270,7 +274,7 @@ impl Input {
     ///
     /// I batch entrano nel perimetro nudi (API pubblica su `RecordBatch`) e
     /// sono avvolti in [`GovernedBatch`] senza lease: quota e sequenza sono
-    /// assegnate all'ingresso dell'arco di input (architettura.md#memoria/architettura.md#determinismo).
+    /// assegnate all'ingresso dell'arco di input (architettura.md#memoria e #determinismo).
     #[must_use]
     pub fn from_iter<I>(schema: SchemaRef, iter: I) -> Self
     where
@@ -545,10 +549,10 @@ impl Inputs {
 }
 
 // ---------------------------------------------------------------------------
-// Metriche (E3)
+// Metriche (osservabilita' per nodo)
 // ---------------------------------------------------------------------------
 
-/// Metriche di un nodo logico (presenti anche dentro ai segmenti fusi, E3).
+/// Metriche di un nodo logico (presenti anche dentro ai segmenti fusi, osservabilita' per nodo).
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct NodeMetrics {
@@ -562,9 +566,9 @@ pub struct NodeMetrics {
     pub batches_in: u64,
     /// Batch prodotti dal nodo.
     pub batches_out: u64,
-    /// Byte Arrow in ingresso al nodo (metadati dei buffer, E3/architettura.md#memoria).
+    /// Byte Arrow in ingresso al nodo (metadati dei buffer, osservabilita' per nodo; architettura.md#memoria).
     pub bytes_in: u64,
-    /// Byte Arrow prodotti dal nodo (metadati dei buffer, E3/architettura.md#memoria).
+    /// Byte Arrow prodotti dal nodo (metadati dei buffer, osservabilita' per nodo; architettura.md#memoria).
     pub bytes_out: u64,
     /// Wall time cumulato del kernel.
     pub wall_time: Duration,
@@ -613,7 +617,7 @@ pub struct ExecutionMetrics {
     /// della lettura delle metriche — lease vivi, byte trattenuti attuali e
     /// di picco, eta' del lease piu' vecchio.
     pub memory: MemoryMetrics,
-    /// Metriche di spill aggregate sull'esecuzione (architettura.md#memoria, Fase 2B M2c):
+    /// Metriche di spill aggregate sull'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
     /// byte scritti/letti sui file temporanei e numero di file
     /// materializzati dai percorsi `*_spilled` di sort/distinct/aggregate.
     /// Tutte zero se nessun nodo ha spillato.
@@ -671,29 +675,29 @@ const fn sum_rows(left: u64, right: u64, saturated: &mut bool) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Stato mutabile condiviso tra le chiusure dello stream (contatori per i
-/// limiti effettivi e metriche). `Rc`/`RefCell`: esecuzione seriale v1 (V8).
+/// limiti effettivi e metriche). `Rc`/`RefCell`: esecuzione seriale v1 (parallelismo solo dove conviene).
 struct ExecState {
     plan: Rc<ExecutionPlan>,
     metrics: RefCell<ExecutionMetrics>,
-    /// Governor del budget memoria globale di piano (architettura.md#memoria, M1a).
+    /// Governor del budget memoria globale di piano (architettura.md#memoria).
     governor: MemoryGovernor,
-    /// Identita' dell'esecuzione (errori-e-limiti.md, M1d): riportata negli errori
+    /// Identita' dell'esecuzione (errori-e-limiti.md, errori arricchiti): riportata negli errori
     /// `Execution`/`Cancelled` e nel lock del `TempStore`.
     execution_id: String,
-    /// Token di cancellazione cooperativa (errori-e-limiti.md, M1c): osservato solo ai
+    /// Token di cancellazione cooperativa (errori-e-limiti.md): osservato solo ai
     /// confini dell'executor, mai dentro ai kernel (M3).
     cancellation: CancellationToken,
-    /// Diagnostica opt-in (errori-e-limiti.md, M1d): arricchisce le motivazioni degli
+    /// Diagnostica opt-in (errori-e-limiti.md, errori arricchiti): arricchisce le motivazioni degli
     /// errori con contesto strutturale, mai valori.
     diagnostics: bool,
     /// Store temporaneo dell'esecuzione (errori-e-limiti.md): heartbeat al punto
     /// centrale, cleanup RAII al `Drop`.
     temp_store: RefCell<TempStore>,
-    /// Directory di spill condivisa (architettura.md#memoria, Fase 2B M2c): `spill/`
-    /// sotto il `TempStore`, risolta UNA volta alla costruzione (V2) —
+    /// Directory di spill condivisa (architettura.md#memoria, Fase 2B, spill generalizzato): `spill/`
+    /// sotto il `TempStore`, risolta UNA volta alla costruzione (hot path minimale) —
     /// il path e' fisso per tutta l'esecuzione.
     spill_directory: PathBuf,
-    /// Metriche di spill aggregate (architettura.md#memoria, Fase 2B M2c): alimentate dai
+    /// Metriche di spill aggregate (architettura.md#memoria, Fase 2B, spill generalizzato): alimentate dai
     /// percorsi `*_spilled` attivati nei nodi tabellari.
     spill_metrics: RefCell<SpillMetrics>,
     /// Istante dell'ultimo heartbeat scritto (throttle).
@@ -706,7 +710,7 @@ struct ExecState {
     /// Righe in/out cumulate per nodo (`max_expansion_factor`).
     node_rows: RefCell<HashMap<String, (u64, u64)>>,
     /// Handle prepared delle operazioni geo 1:1, costruito una volta per
-    /// nodo (V2): indice di colonna e schema di output non sono piu'
+    /// nodo (hot path minimale): indice di colonna e schema di output non sono piu'
     /// risolti a ogni batch.
     prepared_one_to_one: RefCell<HashMap<String, Rc<OneToOnePrepared>>>,
 }
@@ -827,7 +831,7 @@ impl ExecState {
     }
 
     /// Handle prepared dell'operazione geo 1:1 del nodo, costruito alla
-    /// prima occorrenza (V2): indice di colonna e schema di output sono
+    /// prima occorrenza (hot path minimale): indice di colonna e schema di output sono
     /// risolti UNA volta per kernel, non per batch. La chiave e' l'id del
     /// nodo: lo schema di input di un arco e' fisso per contratto.
     fn one_to_one_prepared(
@@ -859,10 +863,10 @@ impl ExecState {
         metrics
     }
 
-    /// Directory di spill condivisa dell'esecuzione (architettura.md#memoria, Fase 2B M2c):
+    /// Directory di spill condivisa dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
     /// sotto-directory `spill/` del `TempStore` — creata dal workspace di
     /// spill al primo uso, ripulita dei file a fine operazione e rimossa
-    /// interamente dal `Drop` RAII dello store. Risolta in `new` (V2).
+    /// interamente dal `Drop` RAII dello store. Risolta in `new` (hot path minimale).
     fn spill_directory(&self) -> &Path {
         &self.spill_directory
     }
@@ -932,7 +936,7 @@ impl ExecState {
         }
     }
 
-    /// Check di cancellazione al confine di un kernel (errori-e-limiti.md, M1c): onora il
+    /// Check di cancellazione al confine di un kernel (errori-e-limiti.md, cancellazione cooperativa): onora il
     /// `CancellationBehavior` dichiarato in catalogo — `NonInterruptible`
     /// non offre punti di interruzione (mai check).
     fn check_cancellation(&self, kernel: &PreparedKernel) -> Result<()> {
@@ -953,14 +957,14 @@ impl ExecState {
         Ok(())
     }
 
-    /// Tag M1d al confine di uscita: ogni errore `Execution` che lascia il DAG
+    /// Tag di categoria al confine di uscita: ogni errore `Execution` che lascia il DAG
     /// porta l'`execution_id` (riempito qui se il punto di origine, in
     /// profondita' nel dispatch, non lo aveva a disposizione).
     fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
         error.with_execution_id(&self.execution_id)
     }
 
-    /// Arricchimento diagnostico opt-in (errori-e-limiti.md, M1d): con `diagnostics`
+    /// Arricchimento diagnostico opt-in (errori-e-limiti.md, errori arricchiti): con `diagnostics`
     /// attivo aggiunge alla motivazione contesto strutturale — indice di
     /// batch, riga, colonna dove disponibile, MAI valori. A flag spento (o
     /// dettaglio assente) l'errore passa invariato: messaggi retrocompatibili.
@@ -976,7 +980,8 @@ impl ExecState {
 }
 
 // ---------------------------------------------------------------------------
-// Canale d'arco condiviso (fan-out tee, D9/V9/V10)
+// Canale d'arco condiviso (fan-out tee, D9: materializzazione minima,
+// rilascio al last consumer)
 // ---------------------------------------------------------------------------
 
 /// Errore di un arco conservato in forma scomposta per la riproduzione ai
@@ -1088,7 +1093,7 @@ struct EdgeStream {
 }
 
 impl EdgeStream {
-    /// Rilascia i batch letti da tutti i consumatori (V10).
+    /// Rilascia i batch letti da tutti i consumatori (rilascio al last consumer).
     ///
     /// Nel caso a consumatore singolo i batch non sono bufferizzati affatto:
     /// il cursore e' clam-pato alla lunghezza del buffer condiviso.
@@ -1331,7 +1336,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
 /// Output di un'esecuzione: stream lazy dei batch finali + metriche.
 ///
 /// Iterare l'`Output` guida l'esecuzione: l'input e' consumato
-/// batch-per-batch (V3). Non e' `Send` nella v1 seriale (V8).
+/// batch-per-batch (streaming reale). Non e' `Send` nella v1 seriale (parallelismo solo dove conviene).
 pub struct Output {
     contract: DataContract,
     /// Schema IPC emesso: quello del contratto piu' il blocco canonico
@@ -1368,7 +1373,7 @@ impl Output {
         &self.contract
     }
 
-    /// Identita' dell'esecuzione (errori-e-limiti.md, M1d): la stessa riportata negli
+    /// Identita' dell'esecuzione (errori-e-limiti.md, errori arricchiti): la stessa riportata negli
     /// errori `Execution`/`Cancelled` e nel lock del `TempStore`.
     #[must_use]
     pub fn execution_id(&self) -> &str {
@@ -1406,7 +1411,7 @@ impl Output {
 
     /// Drena lo stream conservando i wrapper governati (lease + sequenza).
     ///
-    /// Seam interno per i test M1a/M1b (architettura.md#determinismo/architettura.md#memoria): in questa
+    /// Seam interno per i test del governor (architettura.md#determinismo e #memoria): in questa
     /// milestone nessun consumatore pubblico riordina per `BatchSequence`.
     #[cfg(test)]
     pub(crate) fn collect_governed(self) -> Result<(Vec<GovernedBatch>, ExecutionMetrics)> {
@@ -1460,7 +1465,7 @@ impl Output {
             // batch di uno stream condividono lo stesso Arc (lo schema del
             // contratto del kernel), quindi il confronto profondo di
             // `Schema` (campi + mappe metadata) si esegue solo al primo
-            // batch di ogni schema distinto (V2: lavoro hoistable fuori
+            // batch di ogni schema distinto (hot path minimale: lavoro hoistable fuori
             // dal loop). Il rivestimento resta fail-closed: `try_new`
             // rivalida ogni batch rivestito.
             let mut schema_decision: Option<(SchemaRef, bool)> = None;
@@ -1644,7 +1649,7 @@ fn execute_physical(
         }
     }
 
-    // errori-e-limiti.md, M1d: identita' dell'esecuzione — UUID v4 (dipendenza `uuid`
+    // errori-e-limiti.md, errori arricchiti: identita' dell'esecuzione — UUID v4 (dipendenza `uuid`
     // gia' pinnata nel workspace, nessuna versione nuova) con prefisso
     // leggibile; il charset rispetta la validazione restrittiva del
     // `TempStore` ([A-Za-z0-9._-]).
@@ -1658,7 +1663,7 @@ fn execute_physical(
     let _ = scavenge_stale_temp_dirs(&temp_root, DEFAULT_SCAVENGE_TTL);
     // Fail-closed, decisione documentata: niente degrado a tempdir semplice.
     // Il `TempStore` e' la difesa strutturale errori-e-limiti.md contro i crash non
-    // intercettabili (lo spill di M2 ci scrivera'): eseguire senza
+    // intercettabili (lo spill ci scrivera'): eseguire senza
     // nasconderebbe la perdita di protezione. Se non e' creabile,
     // l'esecuzione fallisce qui, prima di toccare i dati.
     let temp_store = TempStore::with_root(&execution_id, &temp_root)?;
@@ -1701,9 +1706,9 @@ fn execute_physical(
     let output_edge = plan.output_edge().to_owned();
     let mut output_counts = (0_u64, 0_u64);
     let stream = Box::new(stream.map(move |item| {
-        // Tag M1d: ogni errore `Execution` che esce dal DAG porta l'execution_id.
+        // Tag di categoria: ogni errore `Execution` che esce dal DAG porta l'execution_id.
         let governed = item.map_err(|error| output_state.tag_execution(error))?;
-        // errori-e-limiti.md, M1c: confine di piano — sempre attivo, anche a valle di op
+        // errori-e-limiti.md, cancellazione cooperativa: confine di piano — sempre attivo, anche a valle di op
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
@@ -1761,7 +1766,7 @@ struct Network {
 
 impl Network {
     /// Stream di lettura di un arco (nome di input o id nodo). Archi con
-    /// piu' consumatori (fan-out) sono condivisi via tee (D9/V9).
+    /// piu' consumatori (fan-out) sono condivisi via tee (D9).
     fn edge_stream(&mut self, edge: &str) -> Result<EdgeStream> {
         if let Some(shared) = self.edges.get(edge) {
             return Ok(shared.register_reader());
@@ -1862,7 +1867,7 @@ impl Network {
             }
             {
                 let mut counts = state.input_counts.borrow_mut();
-                // Chiave clonata solo al primo batch dell'input (V2): i
+                // Chiave clonata solo al primo batch dell'input (hot path minimale): i
                 // batch successivi entrano dal `get_mut` sul nome esistente.
                 if let Some(entry) = counts.get_mut(&edge_name) {
                     entry.0 = entry
@@ -1947,7 +1952,7 @@ impl Network {
         }
     }
 
-    /// Stream prodotto da un segmento, secondo la sua modalita' (E2).
+    /// Stream prodotto da un segmento, secondo la sua modalita' (modalita' fisiche esplicite).
     fn segment_stream(&mut self, index: usize) -> Result<BatchStream> {
         let (mode, input_edges) = {
             let segment = &self.plan.segments()[index];
@@ -1981,7 +1986,7 @@ impl Network {
                             "segmento blocking senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // architettura.md#memoria (Fase 2B M2c): verso un kernel spill-capable
+                    // architettura.md#memoria (Fase 2B, spill generalizzato): verso un kernel spill-capable
                     // la quota governor dei batch drenati e' rilasciata
                     // subito. La soglia di attivazione dello spill ha la
                     // stessa grandezza del budget (byte stimati dell'input vs
@@ -1992,7 +1997,7 @@ impl Network {
                     // la materializzazione dell'input resta in RAM (lo spill
                     // in streaming durante il drenaggio e' M3).
                     let spill_capable = spill_capable_unary(kernel);
-                    // errori-e-limiti.md, M1c: drenaggio dell'input — check a ogni
+                    // errori-e-limiti.md, cancellazione cooperativa: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che
                     // ricevera' i dati (`NonInterruptible`: mai).
                     let mut batches = Vec::new();
@@ -2021,7 +2026,7 @@ impl Network {
                             "segmento binario senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // errori-e-limiti.md, M1c: come per il blocking unario — check a ogni
+                    // errori-e-limiti.md, cancellazione cooperativa: come per il blocking unario — check a ogni
                     // confine di batch durante il drenaggio dei due rami.
                     let mut left_batches = Vec::new();
                     for item in &mut left {
@@ -2047,8 +2052,8 @@ impl Network {
 // Limiti e validazione dinamica
 // ---------------------------------------------------------------------------
 
-/// Tetto duro sui byte di un batch (V7: `max_batch_bytes`). Restituisce i
-/// byte del batch (V2: un solo conteggio, riusato da lease e contatori).
+/// Tetto duro sui byte di un batch (tetto in byte per batch: `max_batch_bytes`). Restituisce i
+/// byte del batch (hot path minimale: un solo conteggio, riusato da lease e contatori).
 fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Result<u64> {
     let bytes = batch.get_array_memory_size();
     let max = state.plan.batch_target().max_batch_bytes;
@@ -2130,7 +2135,7 @@ struct StagedReplay {
 /// Replay di UN batch dallo staging IPC: compattazione right-sized, lease
 /// ri-riservato per batch (memoria bounded) e sequenza logica ripubblicata
 /// invariata. Condiviso dal gate input WKB e dallo staging degli output
-/// accettati dei segmenti row-diagnostics (P1): nessuna logica duplicata.
+/// accettati dei segmenti row-diagnostics: nessuna logica duplicata.
 fn replay_staged_batch(
     state: &ExecState,
     replay: &mut StagedReplay,
@@ -2207,14 +2212,14 @@ enum StagingOutcome {
     Replay(StagedReplay),
     /// Coda ordinata degli accepted trattenuti in memoria, con i lease
     /// originali ancora vivi: consegnata direttamente, senza IPC ne' copie
-    /// (architettura.md#memoria M2d). Prodotta SOLO dai segmenti row-diagnostics; il gate
+    /// (architettura.md#memoria, staging memory-first). Prodotta SOLO dai segmenti row-diagnostics; il gate
     /// WKB dell'input resta su disco.
     Memoria(std::collections::VecDeque<GovernedBatch>),
 }
 
 /// Staging degli accepted di un segmento row-diagnostics: **prima in
 /// memoria**, con passaggio definitivo su disco quando il budget non basta
-/// piu' (architettura.md#memoria M2d).
+/// piu' (architettura.md#memoria, staging memory-first).
 ///
 /// # Perche' esiste
 ///
@@ -2236,7 +2241,7 @@ enum StagingOutcome {
 /// Si entra nella passata `k` in modalita' memoria **solo se**
 /// `trattenuti + input_k + max_batch_bytes <= budget`, dove `input_k` e' la
 /// dimensione REALE del batch gia' prelevato e `max_batch_bytes` e' il tetto
-/// duro del piano (V7). Ogni batch di output attraversa il wrapper d'uscita,
+/// duro del piano (tetto in byte per batch). Ogni batch di output attraversa il wrapper d'uscita,
 /// che applica lo stesso tetto: `output_k > max_batch_bytes` fa fallire il
 /// piano **in entrambe le modalita'**. Per un piano che prima riusciva vale
 /// quindi `output_k <= max_batch_bytes`, e il picco in memoria non supera il
@@ -2555,8 +2560,8 @@ fn validate_wkb_cells(
     let limits = state.plan.limits();
     let max_cell = limits.max_wkb_cell_bytes;
     let max_depth = limits.max_geometry_depth as usize;
-    // Diagnostica opt-in (M1d): il nome della colonna e' contesto
-    // strutturale, non un valore — risolto solo nel ramo d'errore (V2),
+    // Diagnostica opt-in (errori arricchiti): il nome della colonna e' contesto
+    // strutturale, non un valore — risolto solo nel ramo d'errore (hot path minimale),
     // mai allocato sul percorso felice.
     let column = batch.schema().field(geometry_index).name().clone();
     let mut rejected = Vec::new();
@@ -2717,7 +2722,7 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
 /// governor, reservation D12.7). Righe e batch restano esatti (1:1).
 fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     let mut counts = state.edge_counts.borrow_mut();
-    // Chiave clonata solo al primo batch dell'arco (V2): i batch successivi
+    // Chiave clonata solo al primo batch dell'arco (hot path minimale): i batch successivi
     // entrano dal `get_mut` sul nome esistente.
     if let Some(entry) = counts.get_mut(edge) {
         entry.0 = entry
@@ -2752,14 +2757,14 @@ fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
 /// le op `WholeToMany` (`geo.generate_grid`, `geo.coverage_validate`,
 /// `geo.shared_paths`) sono generative/diagnostiche — l'input funge da
 /// trigger o da insieme da analizzare, non da base proporzionale
-/// dell'output. Risolta in `prepare` (V2: nessuno scan del catalogo nel
+/// dell'output. Risolta in `prepare` (hot path minimale: nessuno scan del catalogo nel
 /// loop per batch).
 const fn expansion_exempt(kernel: &PreparedKernel) -> bool {
     kernel.expansion_factor_exempt
 }
 
-/// Comportamento alla cancellazione del kernel (errori-e-limiti.md, M1c): dichiarato in
-/// catalogo dal descriptor dell'operazione e risolto in `prepare` (V2:
+/// Comportamento alla cancellazione del kernel (errori-e-limiti.md, cancellazione cooperativa): dichiarato in
+/// catalogo dal descriptor dell'operazione e risolto in `prepare` (hot path minimale:
 /// nessuno scan del catalogo nel loop per batch).
 // Non const fn: sotto cfg(test) chiama l'hook `test_behavior_override`
 // (non const) — nel build normale il corpo e' la sola lettura di campo.
@@ -2804,7 +2809,7 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
         return Ok(());
     }
     let mut rows = state.node_rows.borrow_mut();
-    // Chiave clonata solo al primo batch del nodo (V2): i batch successivi
+    // Chiave clonata solo al primo batch del nodo (hot path minimale): i batch successivi
     // entrano dal `get_mut` sull'id esistente.
     if let Some(entry) = rows.get_mut(&kernel.node_id) {
         entry.0 = entry.0.saturating_add(base_rows);
@@ -2864,9 +2869,9 @@ fn check_join_expansion(
     )))
 }
 
-/// Errore di un kernel attribuito al nodo logico (E3), preservando la
+/// Errore di un kernel attribuito al nodo logico (osservabilita' per nodo), preservando la
 /// diagnosi senza dati sensibili. L'`execution_id` e' vuoto qui (il dispatch
-/// in profondita' non lo ha a disposizione): lo riempie il tag M1d al
+/// in profondita' non lo ha a disposizione): lo riempie il tag di categoria al
 /// confine di uscita (`ExecState::tag_execution`).
 fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     if let Some(diagnostics) = error.row_diagnostics().cloned() {
@@ -2990,7 +2995,7 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
 ///
 /// Non e' una verifica seguita da una prenotazione: e' **una sola
 /// operazione**. Si chiede al governor un permesso per `max_batch_bytes` —
-/// il tetto duro per batch (V7), che il wrapper d'uscita applica a ogni
+/// il tetto duro per batch (tetto in byte per batch), che il wrapper d'uscita applica a ogni
 /// batch di output ed e' quindi un maggiorante valido dell'unica prenotazione
 /// che la passata aggiunge. Se il permesso e' concesso, quella quota e'
 /// **gia' nostra**: la passata puo' ritagliarne l'output senza che nessun
@@ -3127,7 +3132,7 @@ fn scan_row_diagnostic_segment(
         if diagnostics.is_some() && input_rejected {
             continue;
         }
-        // architettura.md#memoria M2d: la decisione memoria/disco si prende QUI, con il
+        // architettura.md#memoria, staging memory-first: la decisione memoria/disco si prende QUI, con il
         // batch d'ingresso gia' prelevato e quindi di dimensione NOTA, e
         // PRIMA di eseguire la catena su di esso. Cosi' la passata successiva
         // non puo' superare il budget: se non ci sta, i trattenuti vanno su
@@ -3369,7 +3374,7 @@ impl GeoBinarySide {
 /// nodo (architettura.md#geometrie D14.5.2): sorgente grezza + fase + side + indice di riga
 /// come campi strutturati. La posizione NON entra MAI nel testo base del
 /// messaggio (regola 8): e' pubblicata solo nel dettaglio diagnostico
-/// opt-in (`side=… row=…`, stesso canale di `batch_seq`, errori-e-limiti.md M1d).
+/// opt-in (`side=… row=…`, stesso canale di `batch_seq`, errori-e-limiti.md, errori arricchiti).
 struct GeoBinaryStepError {
     /// Fase del ciclo (D14.5.4): `Read` per drenaggio/decode, `Write` per
     /// kernel e costruzione dell'output.
@@ -3408,11 +3413,11 @@ fn geo_binary_step_error(
     }
 }
 
-/// Metriche di un'esecuzione di kernel (per nodo e per segmento, E3).
+/// Metriche di un'esecuzione di kernel (per nodo e per segmento, osservabilita' per nodo).
 /// `first`/`last` indicano la posizione del kernel nel segmento (righe e
 /// batch di ingresso contati solo sul primo, di uscita solo sull'ultimo).
 /// I byte sono i metadati dei buffer Arrow ai confini del kernel
-/// (E3/architettura.md#memoria: il governor non riconta — questi conteggi sono metriche,
+/// (osservabilita' per nodo; architettura.md#memoria: il governor non riconta — questi conteggi sono metriche,
 /// non reservation).
 #[allow(clippy::too_many_arguments)]
 fn record_kernel_metrics(
@@ -3475,7 +3480,7 @@ fn record_kernel_metrics(
 /// blocking emette UN batch per esecuzione (per i binari il contenuto
 /// dipende dalla scansione left-then-right, anch'essa seriale), quindi la
 /// sequenza e' sempre `source_node` = nodo del kernel, `input_partition` =
-/// 0, `sequence_number` = 0. In M1 nessun consumatore riordina: la sequenza
+/// 0, `sequence_number` = 0. Oggi nessun consumatore riordina: la sequenza
 /// e' osservabilita' e predisposizione per il collect indicizzato di M3.
 fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
     BatchSequence {
@@ -3485,10 +3490,10 @@ fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
     }
 }
 
-/// Catena streaming (V4): il batch attraversa i kernel in sequenza senza
+/// Catena streaming (segmenti lineari senza code): il batch attraversa i kernel in sequenza senza
 /// materializzazione; limiti per arco ed espansione dopo ogni kernel.
 ///
-/// Confine architettura.md#memoria/architettura.md#determinismo: il wrapper si spacca in ingresso (i kernel
+/// Confine architettura.md#memoria e #determinismo: il wrapper si spacca in ingresso (i kernel
 /// restano su `RecordBatch` puro) e si ricompone in uscita — lease NUOVO
 /// sui byte dell'output, acquisito PRIMA di rilasciare quello di input (mai
 /// sotto-conteggio al confine: il picco reale del kernel e' input+output),
@@ -3523,8 +3528,8 @@ fn run_streaming_chain(
         MemoryLease::bytes,
     );
     let kernels = &segment.kernels;
-    // Diagnostica opt-in (M1d): la sequenza logica e' contesto strutturale
-    // (indice di batch), mai un valore. Formattata solo a flag attivo (V2):
+    // Diagnostica opt-in (errori arricchiti): la sequenza logica e' contesto strutturale
+    // (indice di batch), mai un valore. Formattata solo a flag attivo (hot path minimale):
     // `with_diagnostics` la ignorerebbe comunque a diagnostica spenta.
     let batch_detail = if state.diagnostics {
         seq.as_ref()
@@ -3558,7 +3563,7 @@ fn run_streaming_chain(
             continue;
         }
         let kernel = &kernels[position];
-        // errori-e-limiti.md, M1c: check cooperativo al confine di kernel — per il primo
+        // errori-e-limiti.md, cancellazione cooperativa: check cooperativo al confine di kernel — per il primo
         // kernel della catena e' anche il check "tra batch"; onora il
         // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
         state.check_cancellation(kernel)?;
@@ -3685,7 +3690,7 @@ impl FusedAttempt<'_> {
     /// righe/batch esatti (1:1), niente tetto byte (D12.8, deroga errori-e-limiti.md#limiti-dichiarati);
     /// il batch materiale esiste solo a gruppo completato (ultimo kernel).
     /// I byte ai confini interni fusi sono zero: i buffer Arrow intermedi
-    /// non esistono (metriche E3, non reservation).
+    /// non esistono (metriche per nodo, non reservation).
     ///
     /// # Errors
     ///
@@ -3756,7 +3761,7 @@ impl FusedAttempt<'_> {
 /// nuovo, il loop standard produce l'esito identico.
 ///
 /// Un gruppo e' un run di trasformazioni `TransformInPlace` (>= 1) piu' UNA
-/// misura terminale opzionale in coda (M2, capability `TerminalMeasure`):
+/// misura terminale opzionale in coda (capability `TerminalMeasure`):
 /// la misura consuma la forma decodificata dell'ultimo passo e appende la
 /// colonna scalare (semantica v4 "add column" — la colonna geometria
 /// sopravvive e viene ri-encodata una sola volta al confine). La reservation
@@ -3808,7 +3813,7 @@ fn try_run_fused_group(
             return Ok(false);
         }
     };
-    // Misura terminale (architettura.md#geometrie M2): se l'ultimo membro del gruppo e' una
+    // Misura terminale (architettura.md#geometrie): se l'ultimo membro del gruppo e' una
     // misura "add column" (`GeoMeasure`), il gruppo eseguito dal runner fuso
     // e' il run di trasformazioni che la precede + la misura in coda, che
     // consuma la forma decodificata dell'ultimo passo e appende la colonna
@@ -3841,7 +3846,8 @@ fn try_run_fused_group(
     // solo da (nome, CRS di output) e gli altri campi passano invariati,
     // quindi l'handle risolto sullo schema del batch e' IDENTICO a quello
     // che il percorso non fuso risolverebbe sullo schema intermedio; per le
-    // op M1/M2 (CRS invariato) coincide con l'handle del primo kernel.
+    // op di trasformazione o di misura (CRS invariato) coincide con
+    // l'handle del primo kernel.
     let last_transform = transforms.len() - 1;
     let output_prepared = state
         .one_to_one_prepared(
@@ -3921,7 +3927,7 @@ fn try_run_fused_group(
             Err(state.with_diagnostics(error, batch_detail))
         }
         Err(FusedStepError::Measure { index, error }) => {
-            // Misura terminale (M2): l'errore e' gia' nella forma del
+            // Misura terminale: l'errore e' gia' nella forma del
             // percorso non fuso (`geo_measure_batch` chiude il `PlenoraError`
             // grezzo con `step_error`, senza wrap in `InvalidPlan`).
             attempt.account(index, None, finished)?;
@@ -3931,7 +3937,7 @@ fn try_run_fused_group(
     }
 }
 
-/// Scomposizione di un gruppo fuso (architettura.md#geometrie M2): il run di trasformazioni
+/// Scomposizione di un gruppo fuso (architettura.md#geometrie): il run di trasformazioni
 /// e la misura terminale opzionale in coda (presente se l'ultimo membro e'
 /// un `GeoMeasure` — invariante di `prepare`: la misura puo' solo chiudere
 /// un gruppo, mai aprirlo o proseguirlo).
@@ -4008,7 +4014,7 @@ fn run_kernel(
 /// Dispatch per famiglia di un kernel su un batch.
 ///
 /// I kernel tabellari unari ricevono la directory di spill condivisa
-/// dell'esecuzione (architettura.md#memoria, Fase 2B M2c): `sort`/`distinct`/`aggregate`
+/// dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato): `sort`/`distinct`/`aggregate`
 /// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
 /// accumulate in [`ExecState`].
 fn dispatch_kernel(
@@ -4078,9 +4084,9 @@ fn dispatch_kernel(
 }
 
 /// Trasformazione geo 1:1 in place via `geo_transport` (per batch, senza
-/// envelope): i parametri sono tipizzati e risolti da `prepare` (E1);
+/// envelope): i parametri sono tipizzati e risolti da `prepare` (configurazioni preparate);
 /// indice di colonna e schema di output arrivano dall'handle prepared del
-/// nodo, costruito una volta per esecuzione (V2).
+/// nodo, costruito una volta per esecuzione (hot path minimale).
 fn geo_transform_batch(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
@@ -4211,7 +4217,7 @@ fn geo_measure_batch(
         ));
     }
     // Lo schema di output e' quello del contratto (input + colonna misura),
-    // un clone di Arc condiviso: nessuna ricostruzione per batch (V1),
+    // un clone di Arc condiviso: nessuna ricostruzione per batch (Arrow come rappresentazione unica),
     // stesso percorso degli altri kernel add-column.
     append_output_column(kernel, batch, column)
 }
@@ -4293,7 +4299,7 @@ fn measure_row_diagnostics(rows: &[(u64, &'static str)]) -> RowDiagnostics {
 // ---------------------------------------------------------------------------
 
 /// Celle WKB della colonna geometria attiva del batch (indice risolto in
-/// `prepare`, V2), con errore attribuito al nodo logico.
+/// `prepare`, hot path minimale), con errore attribuito al nodo logico.
 fn kernel_geometry_cells<'a>(
     kernel: &PreparedKernel,
     batch: &'a RecordBatch,
@@ -4311,7 +4317,7 @@ fn kernel_geometry_cells<'a>(
         .map_err(|error| step_error(kernel, error))
 }
 
-/// Indice risolto della colonna geometria attiva (V2), con errore di nodo.
+/// Indice risolto della colonna geometria attiva (hot path minimale), con errore di nodo.
 fn kernel_geometry_index(kernel: &PreparedKernel) -> Result<usize> {
     kernel.geometry_column_index.ok_or_else(|| {
         step_error(
@@ -4322,7 +4328,7 @@ fn kernel_geometry_index(kernel: &PreparedKernel) -> Result<usize> {
 }
 
 /// Batch con una colonna aggiunta in coda: lo schema e' quello del contratto
-/// di output inferito dal planner (fonte unica di verita', E1).
+/// di output inferito dal planner (fonte unica di verita', configurazioni preparate).
 fn append_output_column(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
@@ -4746,7 +4752,7 @@ fn geo_cluster_dbscan_batch(
 }
 
 /// Il kernel di un segmento blocking unario e' spill-capable (architettura.md#memoria,
-/// Fase 2B M2c): `table.sort`/`distinct`/`aggregate` hanno la variante
+/// Fase 2B, spill generalizzato): `table.sort`/`distinct`/`aggregate` hanno la variante
 /// `*_spilled` in kernels-table (cfr. `table_engine::unary_spill_capable`).
 fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     matches!(
@@ -4755,7 +4761,7 @@ fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     )
 }
 
-/// Segmento blocking unario: input materializzato (previsto dal piano, V9),
+/// Segmento blocking unario: input materializzato (previsto dal piano, materializzazione minima),
 /// concatenato ed eseguito una sola volta.
 ///
 /// Confine architettura.md#memoria: i lease degli input sono trattenuti durante la
@@ -4791,10 +4797,10 @@ fn run_blocking(
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     // Il batch concatenato non ha un produttore a monte che ne abbia
-    // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
-    // I byte restituiti alimentano la reservation (V2: un solo conteggio).
+    // verificato i byte: il tetto duro in byte per batch si applica anche qui (fail-closed).
+    // I byte restituiti alimentano la reservation (hot path minimale: un solo conteggio).
     let full_bytes = check_batch_bytes(state, &full, &kernel.node_id)?;
-    // architettura.md#memoria (Fase 2B M2c): se il kernel spillera' — stessa soglia
+    // architettura.md#memoria (Fase 2B, spill generalizzato): se il kernel spillera' — stessa soglia
     // deterministica valutata al dispatch tabellare (`should_spill_unary`
     // sui byte stimati dell'input), stessi limiti — l'intermedio
     // concatenato NON consuma quota governor: la memoria di lavoro
@@ -4815,7 +4821,7 @@ fn run_blocking(
         Some(state.governor.reserve(full_bytes, &kernel.node_id)?)
     };
     drop(batches);
-    // errori-e-limiti.md, M1c: a fine drenaggio, prima del kernel monolitico
+    // errori-e-limiti.md, cancellazione cooperativa: a fine drenaggio, prima del kernel monolitico
     // (`BoundaryOnly`: check tra kernel/a fine kernel; `NonInterruptible`:
     // mai).
     state.check_cancellation(kernel)?;
@@ -4920,8 +4926,8 @@ fn run_binary_blocking(
         concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
-    // Come per il blocking unario: tetto duro V7 sui batch concatenati; i
-    // byte restituiti alimentano le reservation (V2: un solo conteggio).
+    // Come per il blocking unario: tetto duro in byte per batch sui batch concatenati; i
+    // byte restituiti alimentano le reservation (hot path minimale: un solo conteggio).
     let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
     let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
     // Reservation complete degli intermedi in ordine globale fisso (left,
@@ -4930,7 +4936,7 @@ fn run_binary_blocking(
     let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
     drop(left_batches);
     drop(right_batches);
-    // errori-e-limiti.md, M1c: a fine drenaggio, prima del kernel binario monolitico
+    // errori-e-limiti.md, cancellazione cooperativa: a fine drenaggio, prima del kernel binario monolitico
     // (come `run_blocking`).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
@@ -4999,9 +5005,9 @@ fn run_binary_blocking(
     ))
 }
 
-/// Ramo geo di [`run_binary_blocking`] (architettura.md#geometrie M1/M2, D14.2): stesso
+/// Ramo geo di [`run_binary_blocking`] (architettura.md#geometrie, D14.2): stesso
 /// guscio del ramo tabellare — drenaggio dei due rami a monte,
-/// `concat_batches`, tetti V7, reservation in ordine globale fisso
+/// `concat_batches`, tetti in byte per batch, reservation in ordine globale fisso
 /// left→right, cancellazione post-drenaggio, `catch_unwind`,
 /// `check_join_expansion`, `blocking_output_sequence`, metriche — con il
 /// cuore sostituito da decode totale D14.3 → kernel `*_validated` → output
@@ -5011,7 +5017,7 @@ fn run_binary_blocking(
 /// esistenti (batch in drenaggio + post-drenaggio pre-kernel), nessun check
 /// dentro il kernel — comportamento voluto, non lacuna.
 ///
-/// Contabilita' D14.4 (M2): per ciascun lato, nell'ordine globale fisso
+/// Contabilita' D14.4: per ciascun lato, nell'ordine globale fisso
 /// left→right — reservation dei byte Arrow, preflight della forma
 /// decodificata ([`preflight_decoded_bytes`]), reservation della forma
 /// decodificata, decode. Rifiuto fail-closed PRIMA dell'allocazione: una
@@ -5020,7 +5026,7 @@ fn run_binary_blocking(
 /// resta per take/passthrough); i lease decodificati dopo il lease
 /// dell'output.
 ///
-/// Errori D14.5 (M2): decode → fase `Read` con side/riga strutturati,
+/// Errori D14.5: decode → fase `Read` con side/riga strutturati,
 /// kernel e costruzione output → fase `Write` (carrier
 /// [`GeoBinaryStepError`], conversione [`geo_binary_step_error`]); il primo
 /// errore e' in ordine (side, riga) per costruzione della sequenza.
@@ -5072,8 +5078,8 @@ fn run_geo_binary_blocking(
         concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
-    // Come nel ramo tabellare: tetto duro V7 sui batch concatenati; i byte
-    // restituiti alimentano le reservation (V2: un solo conteggio).
+    // Come nel ramo tabellare: tetto duro in byte per batch sui batch concatenati; i byte
+    // restituiti alimentano le reservation (hot path minimale: un solo conteggio).
     let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
     let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
     // I batch d'ingresso non servono piu' (il concat possiede i nuovi
@@ -5240,13 +5246,14 @@ fn run_geo_binary_blocking(
 ///   e' null).
 ///
 /// Lo schema di output e' quello del contratto inferito dal planner
-/// (fonte unica di verita', E1) — identico per costruzione allo schema del
+/// (fonte unica di verita', configurazioni preparate) — identico per costruzione allo schema del
 /// contratto analyze v4, verificato dai test di identita'.
 ///
 /// Gli errori propagano come sorgente grezza: fase (`Write`), side e riga
 /// sono aggiunti dal chiamante nel carrier [`GeoBinaryStepError`] (D14.5.2).
 // La lunghezza e' data dalla sequenza lineare dei quattro casi del
-// perimetro M1 (kernel + costruzione output per op), non da complessita'
+// perimetro della fusione (kernel e costruzione output per op), non da
+// complessita'
 // logica (stesso criterio di `pair_arrow`).
 #[allow(clippy::too_many_lines)]
 fn execute_geo_binary(

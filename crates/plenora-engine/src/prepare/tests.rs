@@ -166,7 +166,7 @@ fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
         }
         other => panic!("config inattesa: {other:?}"),
     }
-    // Indice della colonna geometria risolto in prepare (E1/V2).
+    // Indice della colonna geometria risolto in prepare (configurazioni preparate, hot path minimale).
     assert_eq!(measure.geometry_column_index, Some(1));
 }
 
@@ -368,7 +368,7 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
             Some(GeoRole::MeasureAddColumn),
         ]
     );
-    // Config tipizzate risolte in prepare (E1): riferimento decodificato,
+    // Config tipizzate risolte in prepare (configurazioni preparate): riferimento decodificato,
     // soglia e colonne accessorie gia' pronte per il loop per batch.
     match &segment.kernels[0].config {
         PreparedConfig::GeoSnap { tolerance, .. } => {
@@ -668,7 +668,7 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
     );
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
-    // M2: la misura terminale (`geo.area`, capability TerminalMeasure)
+    // La misura terminale (`geo.area`, capability TerminalMeasure)
     // chiude il run di transform ed entra nel gruppo come ultimo membro.
     let kernels = &plan.segments()[0].kernels;
     assert_eq!(
@@ -699,7 +699,7 @@ fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
     );
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
-    // M2: con la misura in coda basta UN transform (gruppo di due nodi).
+    // Con la misura in coda basta UN transform (gruppo di due nodi).
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
 }
 
@@ -831,7 +831,7 @@ fn reproject_joins_fusion_groups() {
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch fail-closed e rivalidazione fisica delle estensioni geo (E1)
+// Dispatch fail-closed e rivalidazione fisica delle estensioni geo (configurazioni preparate)
 // ---------------------------------------------------------------------------
 //
 // La fase 1 (`planner::validate` via `analyze`) pre-valida le config; le
@@ -1015,7 +1015,7 @@ fn generate_grid_extension_revalidates_extent_and_cell_size() {
 
 #[test]
 fn wkb_hex_operands_are_decoded_once_and_fail_closed() {
-    // Decodifica una tantum in `prepare` (E1): hex valido -> geometria.
+    // Decodifica una tantum in `prepare` (configurazioni preparate): hex valido -> geometria.
     let point = decode_wkb_hex("n", "point_wkb", POINT_HEX).expect("point valido");
     match point {
         Geometry::Point(point) => {
@@ -1174,7 +1174,7 @@ fn measure_output_column_requires_exactly_one_added_column() {
 }
 
 // ---------------------------------------------------------------------------
-// Binari geo nel piano (architettura.md#geometrie M1)
+// Binari geo nel piano (architettura.md#geometrie)
 // ---------------------------------------------------------------------------
 
 /// Piano a due input geo con un nodo binario come output del piano.
@@ -1266,7 +1266,7 @@ fn geo_binary_m1_ops_prepare_as_geo_binary_with_resolved_plan() {
         assert_eq!(geo_plan.max_comparisons, ceiling * ceiling, "{op}");
     }
     // Parametri tipizzati rivalidati: predicato del sjoin e max_distance del
-    // nearest arrivano al piano come valori tipizzati (E1, niente JSON a runtime).
+    // nearest arrivano al piano come valori tipizzati (configurazioni preparate, niente JSON a runtime).
     let graph = geo_binary_graph("geo.sjoin", &json!({"predicate": "within"}));
     let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
     assert_eq!(

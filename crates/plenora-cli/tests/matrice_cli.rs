@@ -791,7 +791,7 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
     // dentro un ramo governato da `is_terminal`.
     //
     // Il controllo esiste perche' la modifica precedente era stata scritta
-    // ma non salvata: l'ADR dichiarava la garanzia e il codice non la
+    // ma non salvata: il documento dichiarava la garanzia e il codice non la
     // implementava.
     let sorgente =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
@@ -816,7 +816,7 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
     }
     assert!(
         sorgente.contains("IsTerminal::is_terminal(&std::io::stderr())"),
-        "il controllo dichiarato nell'ADR dev'essere nel codice, non solo nel documento"
+        "il controllo dichiarato nel documento dev'essere anche nel codice"
     );
 }
 

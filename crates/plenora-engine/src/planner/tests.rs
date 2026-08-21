@@ -234,7 +234,7 @@ fn row_diagnostics_reject_unobservable_provenance_after_filter() {
 
 #[test]
 fn row_diagnostics_hash_gate_follows_null_policy() {
-    // P1-3/P2: md5/sha256 rifiutano row-scoped SOLO con null_policy=error —
+    // md5/sha256 rifiutano row-scoped SOLO con null_policy=error —
     // il gate provenance segue la stessa autorita' config-sensitive del
     // catalogo, non una lista statica.
     let plan_with = |operation: &str, config: serde_json::Value| {
@@ -278,7 +278,7 @@ fn row_diagnostics_hash_gate_follows_null_policy() {
 
 #[test]
 fn row_diagnostics_gate_ignores_hmac_sha256() {
-    // P2: hmac_sha256 non emette MAI diagnostica row-scoped (le null_policy
+    // hmac_sha256 non emette MAI diagnostica row-scoped (le null_policy
     // legacy producono output dichiarato): nessun gate provenance.
     let plan = json!({
         "schema_version": 5,

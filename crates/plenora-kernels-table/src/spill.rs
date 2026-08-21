@@ -202,7 +202,7 @@ fn read_record(
             "record spill oltre il limite di sicurezza".into(),
         ));
     }
-    // Buffer del chiamante riusato fra i record (V2): cresce solo se il
+    // Buffer del chiamante riusato fra i record (hot path minimale): cresce solo se il
     // record corrente supera la capacita' gia' allocata.
     key.clear();
     key.resize(length, 0);
@@ -221,7 +221,7 @@ fn read_record(
 }
 
 /// Insieme di chiavi lette da spill con l'hash dedicato `KeyHasher`
-/// (FxHash+splitmix64, deterministico) al posto di `SipHash` (V2): stesso
+/// (FxHash+splitmix64, deterministico) al posto di `SipHash` (hot path minimale): stesso
 /// hasher di `partition` e delle mappe di aggregazione spilled.
 type SpillKeySet = HashSet<Box<[u8]>, BuildHasherDefault<KeyHasher>>;
 
@@ -231,7 +231,7 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut estimated = 0_usize;
     let mut key = Vec::new();
     while read_record(&mut reader, max_record_bytes(limits), &mut key)?.is_some() {
-        // Una sola hash per chiave (V2): accounting e inserimento nel ramo
+        // Una sola hash per chiave (hot path minimale): accounting e inserimento nel ramo
         // "chiave nuova", stessa semantica del contains + insert originale.
         if keys.insert(key.as_slice().into()) {
             estimated = estimated

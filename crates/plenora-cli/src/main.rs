@@ -13,15 +13,15 @@
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
 //!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
 //! - Fase 2A: collegamento al DAG. Se il piano dichiara `schema_version: 5`
-//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (ADR
-//!   15) — `validate` e `run` usano il planner/executor del DAG
+//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (piano-v5.md,
+//!   migrazione) — `validate` e `run` usano il planner/executor del DAG
 //!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani
 //!   legacy (`schema_version` <= 3) restano sul `table_engine`, comportamento
 //!   invariato. Dettagli nella sezione "DAG (Fase 2A)" piu' sotto.
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili. Fase 2B M1c (errori-e-limiti.md): `run` installa un handler
+//! senza dati sensibili. Fase 2B, cancellazione cooperativa (errori-e-limiti.md): `run` installa un handler
 //! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
@@ -100,7 +100,7 @@ fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
 
-/// Exit code dedicato alla cancellazione (errori-e-limiti.md, M1c): 128 + SIGINT,
+/// Exit code dedicato alla cancellazione (errori-e-limiti.md, cancellazione cooperativa): 128 + SIGINT,
 /// convenzione POSIX — distinto dagli altri codici di errore.
 const EXIT_CANCELLED: i32 = 130;
 
@@ -191,7 +191,7 @@ fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, PlenoraError> {
     Ok(rimanenti)
 }
 
-/// Handler Ctrl-C (errori-e-limiti.md, M1c): il primo Ctrl-C cancella il token —
+/// Handler Ctrl-C (errori-e-limiti.md, cancellazione cooperativa): il primo Ctrl-C cancella il token —
 /// l'executor si ferma al prossimo confine cooperativo con
 /// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
 /// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
@@ -2373,7 +2373,7 @@ fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraErro
     // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
     // (catalogo plenora-core), la stessa del gate provenance del planner e
     // del machinery di segmento dell'executor — nessuna lista locale
-    // duplicata (P0: formula/expression erano omesse qui; P2: hmac_sha256
+    // duplicata (formula/expression erano omesse qui; hmac_sha256
     // non emette, md5/sha256 solo con null_policy=error). La scansione
     // precede la validazione legacy: un'op diagnostica richiede DAG
     // anche se il resto del piano sarebbe invalido — mai eseguire per poi
@@ -2922,7 +2922,7 @@ fn esegui_processo() -> i32 {
         }
     };
     if let Err(error) = run_with_args(&args) {
-        // Cancellazione cooperativa (errori-e-limiti.md, M1c): exit code dedicato; il
+        // Cancellazione cooperativa (errori-e-limiti.md): exit code dedicato; il
         // publish atomico garantisce che nessun output parziale sia stato
         // pubblicato. Envelope §9 anche per la cancellazione (categoria
         // dedicata, fase/effetto/retry dagli assi).
@@ -2941,8 +2941,8 @@ fn esegui_processo() -> i32 {
 
 /// Envelope di errore §9 su **stdout**, con `stderr` lasciato vuoto.
 ///
-/// **Inversione dichiarata rispetto alla review P1-5 del 2026-08-03**, che
-/// aveva riportato l'envelope su stderr come «contratto pubblico storico».
+/// **Inversione dichiarata rispetto alla scelta precedente**, che teneva
+/// l'envelope su stderr come «contratto pubblico storico».
 /// Quella decisione precede l'esistenza di `plenora-database-tools`, che
 /// emette gli errori su stdout e lascia stderr vuoto: due componenti della
 /// stessa famiglia, orchestrati dallo stesso codice, non possono avere due
@@ -3281,7 +3281,7 @@ mod tests {
 
     #[test]
     fn every_catalog_row_diagnostic_operation_requires_dag_v4_in_legacy_plans() {
-        // Catalog-driven (anti-drift, P0/P2): l'universo delle op arriva dal
+        // Catalog-driven (anti-drift): l'universo delle op arriva dal
         // catalogo, NON da una lista duplicata nel test. Per ogni
         // (descrittore, config) che l'autorita' dichiara diagnostica, ogni
         // nome risolvibile (id canonico + alias legacy) in un piano
@@ -3340,8 +3340,8 @@ mod tests {
                 }
             }
         }
-        // Lock espliciti del perimetro (P0: formula/expression erano il
-        // bypass; P2: md5/sha256 con null_policy=error; type_cast fallibile).
+        // Lock espliciti del perimetro (formula ed expression erano il bypass;
+        // md5/sha256 con null_policy=error; type_cast fallibile).
         for expected in [
             "table.formula",
             "table.expression",
@@ -3362,7 +3362,7 @@ mod tests {
 
     #[test]
     fn legacy_gate_passes_operations_that_do_not_emit_row_diagnostics() {
-        // P1-3/P2: md5/sha256 senza null_policy=error, type_cast verso `str`
+        // md5/sha256 senza null_policy=error, type_cast verso `str`
         // e hmac_sha256 non emettono diagnostica row-scoped: il gate li
         // lascia passare (resta la validazione legacy, qui con config
         // valide). Lock anti-regressione sull'autorita' config-sensitive.

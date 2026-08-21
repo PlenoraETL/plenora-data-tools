@@ -23,7 +23,8 @@ use super::Limits;
 
 #[cfg(test)]
 thread_local! {
-    /// Contatore delle deserializzazioni di config (test E1/V2): thread-local
+    /// Contatore delle deserializzazioni di config (i test su configurazioni
+    /// preparate e hot path minimale): thread-local
     /// per non interferire con i test paralleli; il percorso per batch non
     /// deve mai incrementarlo.
     static DECODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -892,7 +893,7 @@ pub fn validate_step_contract(step: &Step, limits: &Limits) -> Result<()> {
 /// I nomi duplicati sono proprieta' dello SCHEMA, non del batch: il
 /// chiamante passa una cache (`names_validated`) con l'`Arc` dell'ultimo
 /// schema verificato — uno stesso puntatore di schema non e' riesaminato
-/// (V2: niente `HashSet` ricostruito a ogni batch sullo stesso schema).
+/// (hot path minimale: niente `HashSet` ricostruito a ogni batch sullo stesso schema).
 fn validate_batch(
     batch: &RecordBatch,
     limits: &Limits,
@@ -937,7 +938,7 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
         .fields()
         .iter()
         .any(|field| field.data_type() == &DataType::LargeUtf8);
-    // Test prima del clone della mappa (V2): la copia dei metadata serve
+    // Test prima del clone della mappa (hot path minimale): la copia dei metadata serve
     // solo se c'e' davvero una voce da rimuovere.
     let has_pandas_metadata = batch.schema().metadata().contains_key("pandas");
     if !has_large_utf8 && !has_pandas_metadata {
@@ -984,7 +985,7 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
     )
 }
 
-/// Config tipizzata di un passo tabellare (E1/V2): deserializzata UNA VOLTA
+/// Config tipizzata di un passo tabellare (configurazioni preparate, hot path minimale): deserializzata UNA VOLTA
 /// in `Plan::validate` e riusata da ogni batch — niente JSON nel percorso
 /// caldo. Ogni variante e' `Box`ata: le config hanno dimensioni molto
 /// eterogenee e l'allocazione avviene una sola volta a monte dello stream.
@@ -1218,7 +1219,7 @@ impl PreparedStep {
     }
 }
 
-/// Deserializza la config di un passo nella sua forma tipizzata (E1/V2).
+/// Deserializza la config di un passo nella sua forma tipizzata (configurazioni preparate, hot path minimale).
 /// Chiamata una sola volta per passo da `Plan::validate`, mai per batch;
 /// il dispatch per nome e' lo stesso di `validate_step_contract`.
 ///
@@ -1306,7 +1307,7 @@ pub fn prepare_step(step: &Step) -> Result<PreparedStep> {
 }
 
 /// Esegue un passo unario sulla batch usando la config gia' tipizzata
-/// (E1/V2: nessuna deserializzazione nel percorso caldo).
+/// (configurazioni preparate, hot path minimale: nessuna deserializzazione nel percorso caldo).
 ///
 /// `spill_dir` e' la directory di spill del chiamante (`None`: tempdir
 /// posseduta per operazione), `spill_metrics` accumula le metriche degli
@@ -1388,7 +1389,7 @@ fn execute_step(
 }
 
 // ---------------------------------------------------------------------------
-// Selezione dello spill unario (architettura.md#memoria, Fase 2B M2c)
+// Selezione dello spill unario (architettura.md#memoria, Fase 2B)
 // ---------------------------------------------------------------------------
 
 /// Il piano unario e' spill-capable: un solo passo `sort`/`distinct`/
@@ -1500,7 +1501,7 @@ pub fn execute_complete_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Resul
 }
 
 /// Come [`execute_batch`], ma con la directory di spill decisa dal
-/// chiamante (architettura.md#memoria, Fase 2B M2c).
+/// chiamante (architettura.md#memoria, Fase 2B, spill generalizzato).
 ///
 /// `Some(dir)` instrada i file di spill di
 /// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione
@@ -1589,7 +1590,7 @@ fn execute_batch_with_spill_impl(
         ));
     }
     batch = normalize_large_utf8(&batch)?;
-    // Cache dello schema gia' validato (V2): i passi che conservano lo
+    // Cache dello schema gia' validato (hot path minimale): i passi che conservano lo
     // schema (stesso `Arc`) non riesaminano i nomi duplicati.
     let mut names_validated: Option<SchemaRef> = None;
     validate_batch(&batch, plan.limits(), &mut names_validated)?;
@@ -1636,7 +1637,7 @@ pub fn execute_binary(
     }
     let left = normalize_large_utf8(left)?;
     let right = normalize_large_utf8(right)?;
-    // Cache dello schema gia' validato (V2), come `execute_batch_with_spill`.
+    // Cache dello schema gia' validato (hot path minimale), come `execute_batch_with_spill`.
     let mut names_validated: Option<SchemaRef> = None;
     validate_batch(&left, plan.limits(), &mut names_validated)?;
     validate_batch(&right, plan.limits(), &mut names_validated)?;
@@ -1646,7 +1647,7 @@ pub fn execute_binary(
         PreparedStep::UnionDistinct(_) | PreparedStep::Intersect(_) | PreparedStep::Except(_)
     ) && spill::should_spill(&left, &right, plan.limits())
     {
-        // NOTA (Fase 2B M2c): il set-op spilled usa ancora una tempdir
+        // NOTA (Fase 2B, spill generalizzato): il set-op spilled usa ancora una tempdir
         // posseduta interna a `execute_set_operation` — kernels-table non
         // espone una variante `*_in` con workspace del chiamante per i
         // set-op, quindi questo percorso NON transita dalla directory
@@ -1709,7 +1710,7 @@ mod tests {
         DECODE_CALLS.with(std::cell::Cell::get)
     }
 
-    /// E1/V2: la config di un passo e' deserializzata una sola volta in
+    /// configurazioni preparate, hot path minimale: la config di un passo e' deserializzata una sola volta in
     /// `Plan::validate`; l'esecuzione di N batch non deve mai ri-parsare.
     #[test]
     fn config_deserialized_once_at_validation_never_per_batch() {

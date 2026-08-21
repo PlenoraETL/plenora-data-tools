@@ -250,7 +250,7 @@ fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     let ids = (0..rows)
         .map(|row| Some(2 * i64::try_from(row).unwrap_or(0) + offset))
         .collect::<Vec<_>>();
-    // Bound evidente: row < rows e rows <= M10 = 10^7 (scale del bench,
+    // Bound evidente: row < rows e rows <= `M10` = 10^7 (scale del bench,
     // costanti in testa al file) << 2^53: cast esatto in f64.
     #[allow(clippy::cast_precision_loss)]
     let vals = (0..rows).map(|row| Some(row as f64)).collect::<Vec<_>>();
@@ -273,7 +273,7 @@ fn list_fixture(rows: usize) -> RecordBatch {
     let ids = (0..rows)
         .map(|row| i64::try_from(row).ok())
         .collect::<Vec<_>>();
-    // Bound evidente: row < rows <= M10 = 10^7 (scale del bench) e
+    // Bound evidente: row < rows <= `M10` = 10^7 (scale del bench) e
     // value < length <= 4 (length = rng.next() % 5): entrambi i cast
     // entrano in i64 senza wrap.
     #[allow(clippy::cast_possible_wrap)]

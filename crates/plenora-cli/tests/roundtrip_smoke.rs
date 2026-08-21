@@ -374,7 +374,7 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
     );
 }
 
-/// P2: un rifiuto row-scoped di `transform-arrow` e' un difetto del DATO
+/// Un rifiuto row-scoped di `transform-arrow` e' un difetto del DATO
 /// letto, non del piano: l'envelope porta gli assi `data_mapping`/`read`,
 /// `remote_effect` none, retry never (mai riclassificato `invalid_plan`) e la
 /// diagnostica, con zero output pubblicato. Un errore NON row-scoped

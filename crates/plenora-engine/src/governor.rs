@@ -1,5 +1,7 @@
-//! Governor della memoria del piano e batch governati (architettura.md#memoria, Fase 2B —
-//! milestone M1a/M1b; architettura.md, architettura.md).
+//! Governor della memoria del piano e batch governati.
+//!
+//! Il budget, che cosa comprende e dove la garanzia si ferma sono in
+//! architettura.md#memoria e in errori-e-limiti.md#memoria-governata.
 //!
 //! Perimetro di `max_governed_memory_bytes`: la memoria Arrow governata dall'engine —
 //! i batch che attraversano gli archi del DAG e le materializzazioni
@@ -19,7 +21,7 @@
 //! `Granted` — vedi [`MemoryGovernor::try_reserve`] per la regola v1 e il
 //! perche' gli altri due esiti non sono attuabili in seriale.
 //!
-//! Spill (Fase 2B M2c): `sort`/`distinct`/`aggregate` hanno una variante
+//! Spill (Fase 2B): `sort`/`distinct`/`aggregate` hanno una variante
 //! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
 //! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", architettura.md#memoria
 //! "attivazione prima dell'esaurimento"), NON guidata da una reservation
@@ -51,7 +53,7 @@ pub enum ReservationResult {
     RetryAfterProgress,
     /// Il richiedente ha una strategia di spill e deve attivarla (preferita
     /// a nuova quota, architettura.md#memoria). Resta MAI emesso in v1: lo spill selettivo
-    /// esiste (Fase 2B M2c: sort/distinct/aggregate spilled) ma la sua
+    /// esiste (Fase 2B: sort/distinct/aggregate spilled) ma la sua
     /// attivazione e' PREVENTIVA ai punti di dispatch, su soglia stimata —
     /// non su reservation fallita. Emetterlo richiede il planner che
     /// riprova il nodo con una strategia diversa (re-scheduling, M3).
@@ -299,13 +301,13 @@ impl MemoryGovernor {
 
     /// Reservation a tre vie (architettura.md#memoria).
     ///
-    /// Regola v1 (seriale, M1a): l'acquisizione e' **immediata** —
+    /// Regola v1 (seriale): l'acquisizione e' **immediata** —
     /// `Granted` se il budget residuo copre `bytes`. Se la quota manca,
     /// l'architettura.md#memoria prescriverebbe `RetryAfterProgress` (sospensione del ramo
     /// e retry dopo un progresso globale) o `MustSpill` (strategia di spill
     /// preferita): in seriale NESSUNO dei due esiti e' attuabile — non
     /// esiste uno scheduler che sospenda i rami (M3) ne' un planner che
-    /// riprovi il nodo con lo spill (M3; lo spill M2c e' attivato
+    /// riprovi il nodo con lo spill (M3; lo spill e' attivato
     /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
     /// resta l'unico esito residuo dell'architettura.md#memoria, il fail-fast "nessuna
     /// strategia sicura disponibile".

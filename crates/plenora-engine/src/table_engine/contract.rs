@@ -192,7 +192,7 @@ mod limiti_v1 {
 pub struct ValidatedPlan {
     limits: Limits,
     steps: Vec<Step>,
-    /// Config tipizzate dei passi, allineate per indice a `steps` (E1/V2):
+    /// Config tipizzate dei passi, allineate per indice a `steps` (configurazioni preparate, hot path minimale):
     /// deserializzate una volta in `Plan::validate`, mai nel percorso per
     /// batch. `Arc` per clonare il piano senza ri-allocare le config.
     prepared: std::sync::Arc<[super::executor::PreparedStep]>,
@@ -271,7 +271,7 @@ impl Plan {
             })?;
         }
 
-        // E1/V2: la config di ogni passo e' deserializzata nella sua forma
+        // configurazioni preparate, hot path minimale: la config di ogni passo e' deserializzata nella sua forma
         // tipizzata UNA VOLTA qui; l'esecuzione per batch usa solo queste
         // (irraggiungibile un fallimento: stessa validazione di cui sopra).
         let prepared = self
@@ -330,7 +330,7 @@ impl ValidatedPlan {
     }
 
     /// Config tipizzate dei passi, allineate per indice a [`Self::steps`]
-    /// (E1/V2: percorso per batch senza parsing JSON).
+    /// (configurazioni preparate, hot path minimale: percorso per batch senza parsing JSON).
     #[must_use]
     pub(crate) fn prepared_steps(&self) -> &[super::executor::PreparedStep] {
         &self.prepared

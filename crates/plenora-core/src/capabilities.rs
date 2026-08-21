@@ -253,7 +253,8 @@ mod tests {
                 descriptor.id
             );
         }
-        // Spot-check delle tre classi sul perimetro (M1+M3 incluso).
+        // Spot-check delle tre classi sul perimetro fondibile,
+        // `reproject` e `make_valid` inclusi.
         let by_id = |id: &str| {
             capabilities
                 .operations

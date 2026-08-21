@@ -1,5 +1,5 @@
 //! Test del resource accounting (architettura.md#memoria) e della sequenza logica
-//! (architettura.md#determinismo) nell'executor — Fase 2B, milestone M1a/M1b.
+//! (architettura.md#determinismo) nell'executor — Fase 2B, milestone del governor.
 
 use std::sync::Arc;
 

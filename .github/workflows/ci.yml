@@ -325,8 +325,7 @@ jobs:
   # del catalogo e la regex del parser aveva smesso di agganciarla, quindi lo
   # script usciva con MISMATCH e non riscriveva niente. Un generatore che si
   # ferma non rompe nulla di visibile — il documento resta com'era e sembra
-  # aggiornato. I verbali di review del 2026-08-18 lo registravano gia', e la
-  # CI restava verde lo stesso perche' nessuno rigenerava.
+  # aggiornato: la CI restava verde perche' nessuno rigenerava.
   #
   # Nessuna dipendenza: `assemble.py` usa la sola libreria standard. Niente
   # pip, niente container, niente font — il PDF e' stato ritirato il

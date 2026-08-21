@@ -509,7 +509,7 @@ fn capabilities_emette_il_documento_dichiarativo_icd10() {
     assert_eq!(reproject["cancellation_behavior"], "non_interruptible");
 }
 
-// P0-1: un piano legacy con nodo blocking prima di un'op row-diagnostics
+// Un piano legacy con nodo blocking prima di un'op row-diagnostics
 // pubblicherebbe indici post-sort dichiarati `source_row_zero_based`.
 // Fail-closed: la CLI rifiuta e richiede un piano DAG, nessun output pubblicato.
 #[test]
@@ -584,7 +584,7 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     );
 }
 
-// P0 (review 2026-08-03): formula ed expression erano omesse dal gate
+// formula ed expression erano omesse dal gate
 // legacy pur essendo row-diagnostics per planner/executor: un piano
 // sort -> formula/expression bypassava il gate e `execute_complete_batch`
 // pubblicava indici post-sort come `source_row_zero_based` Complete.
@@ -672,7 +672,7 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
     }
 }
 
-// Anti-drift (P0/P2): il gate legacy deve coprire TUTTE le op che
+// Anti-drift: il gate legacy deve coprire TUTTE le op che
 // l'autorita' di catalogo dichiara row-diagnostics ed esprimibili in un
 // piano legacy (alias storico). L'universo delle op arriva dal catalogo,
 // non da una lista duplicata nel test: un'op diagnostica nuova o
@@ -779,7 +779,7 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
             gated.insert(descriptor.id);
         }
     }
-    // Lock espliciti del perimetro atteso (P0: formula/expression; P2:
+    // Lock espliciti del perimetro atteso (formula ed expression;
     // md5/sha256 con null_policy=error; type_cast fallibile).
     for expected in [
         "table.formula",

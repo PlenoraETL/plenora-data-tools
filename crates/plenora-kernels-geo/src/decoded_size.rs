@@ -36,7 +36,7 @@
 //!   figlio di `MultiPolygon`, [`GEOMETRY_BYTES`] per figlio di collection
 //!   (piu' la ricorsione sul figlio).
 //!
-//! Deviazione dichiarata rispetto allo schizzo dell'ADR (`16·n_coord` +
+//! Deviazione dichiarata rispetto allo schizzo iniziale (`16·n_coord` +
 //! `24·n_vec` + `8·n_enum` + 24 per slot): quelle costanti NON coprono il layout
 //! fisico — un valore `Geometry<f64>` costa `size_of::<Geometry<f64>>()`
 //! qualunque sia la variante (8 di enum + 16 di coordinata non pagano i 56

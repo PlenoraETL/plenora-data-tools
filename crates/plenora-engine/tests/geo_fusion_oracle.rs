@@ -1,5 +1,5 @@
 //! Oracolo differenziale della fusione dei segmenti geo, esteso agli errori
-//! (architettura.md#geometrie, gate di M1): stesso input -> stesso output byte-per-byte O
+//! (architettura.md#geometrie): stesso input -> stesso output byte-per-byte O
 //! stesso errore (variante, nodo, operazione, categoria, fase, effetto remoto,
 //! retry e motivo — con `diagnostics` attivo, quindi con il contesto
 //! strutturale `batch_seq` nel motivo).
@@ -353,7 +353,7 @@ fn run_ok(
 // (a) Percorso felice multi-tipo
 // ---------------------------------------------------------------------------
 
-/// Sei op fondibili (`TransformInPlace`, perimetro M1): translate -> densify
+/// Sei op fondibili (`TransformInPlace`): translate -> densify
 /// -> rotate -> simplify -> scale -> envelope, un solo gruppo.
 fn happy_path_plan() -> Value {
     json!({
@@ -758,14 +758,14 @@ fn scale_inf_plan() -> Value {
     })
 }
 
-/// (d2) scale x1e308 a meta' catena: 1e30 * 1e308 = `inf`. L'ADR cita questo
-/// scenario come profilo B (errore al nodo k+1), ma con gli op di M1 NON e'
+/// (d2) scale x1e308 a meta' catena: 1e30 * 1e308 = `inf`. La specifica di partenza citava questo
+/// scenario come profilo B (errore al nodo k+1), ma con le op fondibili NON e'
 /// realizzabile: `scale` (`affine_transform` -> `validate_output`) valida il
 /// proprio output e rifiuta i non-finiti al produttore, in entrambi i
 /// percorsi — l'errore e' quindi attribuito al nodo `k` (stesso kernel,
 /// stessa chiamata, stessa variante). Parita' confermata nella sola forma
 /// raggiungibile; il braccio k+1 del runner fuso per i non-finiti resta
-/// difesa in profondita' senza trigger dagli op M1 (vedi report).
+/// difesa in profondita' che gli op fondibili non riescono a innescare.
 #[test]
 fn d2_scale_to_infinite_attributed_to_producer() {
     let plan = scale_inf_plan();
@@ -799,14 +799,14 @@ fn ogc_invalid_plan() -> Value {
 
 /// (e) scale con fattore X nullo collasserebbe l'anello su un segmento
 /// verticale (punti ripetuti, OGC-invalido). Come per (d2), lo scenario
-/// «errore al nodo successivo» dell'ADR non e' realizzabile con gli op di
-/// M1: OGNI kernel fondibile valida il proprio output (affine/snap/densify/
+/// «errore al nodo successivo» della specifica di partenza non e' realizzabile con gli op di
+/// OGNI kernel fondibile valida il proprio output (affine/snap/densify/
 /// buffer/simplify -> `validate_output` con `check_validation` OGC) e
 /// rifiuta l'OGC-invalido al produttore — qui `scale` fallisce al nodo `k`
 /// con `InvalidOutput` in entrambi i percorsi, stessa variante e motivo.
 /// Il check OGC inter-passo del runner fuso (D12.4 profilo B, attribuzione
 /// k+1) resta difesa in profondita' non raggiungibile via output dei kernel
-/// M1; la divergenza di precedenza al validatore (caso -0.0/NaN di D12.4)
+/// la divergenza di precedenza al validatore (caso -0.0/NaN di D12.4)
 /// NON si manifesta perche' nessun intermedio invalido arriva mai al
 /// round-trip WKB (vedi report).
 #[test]
@@ -926,11 +926,11 @@ fn f_cancellation_mid_group_same_node() {
 }
 
 // ---------------------------------------------------------------------------
-// M2 — misura terminale in coda al gruppo fuso
+// Misura terminale in coda al gruppo fuso
 // ---------------------------------------------------------------------------
 //
 // Nota sul caso errore «misura su geometria invalida prodotta a meta'
-// catena»: NON realizzabile con gli op del perimetro M1+M2, per la stessa
+// catena»: NON realizzabile con gli op del perimetro attuale, per la stessa
 // ragione dei casi (d2)/(e) — OGNI kernel fondibile valida il proprio
 // output (validate_output / pipeline canonica di profilo A), quindi nessun
 // intermedio OGC-invalido raggiunge mai il decode del nodo misura. La
@@ -942,7 +942,7 @@ fn f_cancellation_mid_group_same_node() {
 // limiti di cella e input invalido, che devono mantenere l'attribuzione ai
 // nodi trasformazione (la misura non li sposta).
 
-/// Piano M2: due transform fondibili + misura terminale `geo.area`.
+/// Piano: due transform fondibili + misura terminale `geo.area`.
 fn terminal_area_plan() -> Value {
     json!({
         "schema_version": 5,
@@ -957,7 +957,7 @@ fn terminal_area_plan() -> Value {
     })
 }
 
-/// Piano M2: UN transform + misura terminale `geo.to_wkt` (gruppo di due).
+/// Piano: UN transform + misura terminale `geo.to_wkt` (gruppo di due).
 fn terminal_to_wkt_plan() -> Value {
     json!({
         "schema_version": 5,
@@ -971,7 +971,7 @@ fn terminal_to_wkt_plan() -> Value {
     })
 }
 
-/// (M2) Percorso felice con misura terminale: il gruppo include il nodo
+/// Percorso felice con misura terminale: il gruppo include il nodo
 /// misura (prova di formazione, D12.2), l'output e' byte-per-byte identico
 /// al percorso non fuso su fixture multi-tipo con null, le metriche per nodo
 /// sono preservate (D12.6) e la colonna geometria SOPRAVVIVE (semantica v4
@@ -1034,7 +1034,7 @@ fn m2_happy_path_terminal_measure_byte_per_byte() {
     }
 }
 
-/// (M2) Cella oltre `MAX_CELL_BYTES` al primo transform con misura in coda:
+/// Cella oltre `MAX_CELL_BYTES` al primo transform con misura in coda:
 /// la misura NON sposta l'attribuzione — `CellTooLarge` scatta al nodo che
 /// ha prodotto la cella (D12.3) in entrambi i percorsi, prima che il nodo
 /// misura sia eseguito (nel non fuso il nodo misura parte solo dopo che il
@@ -1064,7 +1064,7 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
     assert_eq!(report.examples[0].source_index, 0);
 }
 
-/// (M2) Input OGC-invalido (bowtie, strutturalmente valido: supera l'arco di
+/// Input OGC-invalido (bowtie, strutturalmente valido: supera l'arco di
 /// input) con misura in coda: fallisce al decode del PRIMO nodo in entrambi
 /// i percorsi — la misura in coda non cambia l'attribuzione degli errori di
 /// input.
@@ -1310,7 +1310,7 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
     );
 }
 
-/// (m3-b2) architettura.md#geometrie M3+M2: `reproject` verso un CRS GEOGRAFICO con misura
+/// (m3-b2) architettura.md#geometrie: `reproject` verso un CRS GEOGRAFICO con misura
 /// terminale in coda al gruppo — la colonna geometria sopravvive col CRS
 /// target e la misura e' byte-per-byte identica.
 #[cfg(feature = "proj-backend")]

@@ -43,7 +43,7 @@ md-5 = "=0.10.6"
 sha2 = "=0.10.9"
 uuid = { version = "=1.18.1", features = ["v4"] }
 tempfile = "=3.27.0"
-# Handler Ctrl-C della CLI (errori-e-limiti.md, M1c): setta il token di cancellazione
+# Handler Ctrl-C della CLI (errori-e-limiti.md, cancellazione cooperativa): setta il token di cancellazione
 # cooperativa. Piccola, mantenuta, nessun unsafe nel perimetro del workspace
 # (unsafe_code e' proibito solo nei crate del workspace).
 ctrlc = "=3.5.2"

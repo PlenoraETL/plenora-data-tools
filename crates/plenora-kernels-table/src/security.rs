@@ -103,7 +103,7 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    // P1-3: il pre-rifiuto row-scoped vale solo per null_policy=error;
+    // Il pre-rifiuto row-scoped vale solo per null_policy=error;
     // empty (default) e literal hanno semantica storica dichiarata.
     if matches!(config.null_policy, HashNullPolicy::Error) {
         reject_null_hash_rows(batch, &columns, &indices)?;
@@ -654,7 +654,7 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let key = load_hmac_key(&config.key_env)?;
-    // P1-3: hmac non ha null_policy=error; Empty (default), Null e Skip
+    // hmac non ha null_policy=error; Empty (default), Null e Skip
     // mantengono l'output storico dichiarato, nessun pre-rifiuto.
     let (inner_base, outer_base) = hmac_sha256_states(&key);
     // Framing costante per colonna e accesso tipizzato ai valori,
@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn hash_null_policy_empty_and_literal_preserve_historic_output() {
-        // P1-3: il rifiuto row-scoped e' solo per null_policy=error; empty
+        // Il rifiuto row-scoped e' solo per null_policy=error; empty
         // (default) e literal mantengono l'output storico (sostituzione
         // dichiarata nel contratto dell'op, mai remediation silenziosa).
         let batch = RecordBatch::try_new(
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn hmac_sha256_null_policies() {
-        // P1-3: hmac non ha null_policy=error — Empty (default), Null e Skip
+        // hmac non ha null_policy=error — Empty (default), Null e Skip
         // mantengono l'output storico dichiarato; nessun rifiuto aggiunto.
         std::env::set_var("PLENORA_HMAC_NULL_KEY", "plenora-hmac-test-key");
         let batch = hmac_fixture();
@@ -2062,7 +2062,7 @@ mod tests {
                     output_column: "hmac".into(),
                     null_policy,
                 };
-                // P1-3: politiche null storiche — nessun rifiuto; il percorso
+                // Politiche null storiche — nessun rifiuto; il percorso
                 // veloce deve coincidere con la copia verbatim pre-ottimizzazione.
                 let fast = output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
                 let reference = output_strings(
