@@ -68,9 +68,15 @@ Due livelli, dichiarati e testati separatamente.
 **Livello 1 — semantico, sempre garantito.** A parità di piano validato e
 input, qualunque schedule produce le stesse righe, gli stessi valori, gli
 stessi null, lo stesso ordine dichiarato dove l'operazione ne definisce uno, e
-le stesse geometrie. È verificato da un property test obbligatorio: stesso
-piano, schedule forzato seriale contro parallelo, risultato semanticamente
-identico.
+le stesse geometrie.
+
+Il confronto **seriale contro parallelo** che dimostrerebbe questa garanzia
+nel caso interessante **non è eseguito**, e non può esserlo: lo scheduler
+parallelo non esiste ancora. Oggi il livello 1 è verificato su esecuzione
+seriale — determinismo fra esecuzioni ripetute, e il property test sui kernel
+che al loro interno usano Rayon. Il property test «stesso piano, schedule
+forzato seriale contro parallelo» è un **criterio di accettazione di M3**, non
+una garanzia già dimostrata: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 **Livello 2 — IPC canonico, opzionale.** In aggiunta: stessi confini di batch,
 stesso ordine dei metadati, stesso dictionary layout, stesso formato binario.
@@ -187,6 +193,37 @@ prima dell'esecuzione, non a metà.
 Sul percorso lineare le row diagnostics non esistono: quelle operazioni
 richiedono un piano DAG.
 
+## Riferimenti normativi esterni
+
+Il codice cita due sistemi di identificatori che **non sono definiti in questo
+repository**, e la distinzione conta perché si assomigliano.
+
+### `R…` — requisiti dell'ICD
+
+Circa **730 citazioni** della forma `R2.4`, `R4.6.3`, `R6`, `R9.1`, `R13.2`.
+Sono requisiti dell'**Interface Control Document** della famiglia Plenora, la
+cui fonte normativa è il repository `plenora-contracts` al tag **`v2.0-rc10`**,
+revisione **`3598259`**.
+
+Quella fonte è **congelata**: il repository è stato sostituito il 2026-08-18 e
+il suo contenuto attuale è una linea normativa **nuova**, che non descrive i
+requisiti citati qui. Non va clonato, e non va usato per reinterpretarli.
+
+Le citazioni restano quindi **riferimenti storici a una fonte esterna
+congelata**: dicono a quale requisito, in quale revisione, una scelta risponde.
+Non sono puntatori a un documento di questo repository, e non vanno né
+tradotti né cancellati meccanicamente — cancellarli perderebbe l'unica traccia
+del perché una regola ha la forma che ha.
+
+Quando la nuova linea normativa sarà ratificata servirà una traduzione
+esplicita, requisito per requisito, con la sua tabella di corrispondenza. È
+lavoro dichiarato, non ancora fatto.
+
+### `D…` — decisioni di questo repository
+
+Sono invece **interne**, e definite qui sotto. Un `D…` citato dal codice deve
+essere risolvibile nel registro, e un gate lo verifica.
+
 ## Decisioni
 
 Le decisioni ancora in vigore, con l'identificatore che il codice cita. Sono
@@ -232,7 +269,13 @@ solo ciò che vale oggi.
 | **D14.2** | `PreparedConfig::GeoBinary` con i kernel riusati e la CLI invariata: il piano guadagna le binarie senza che il percorso di trasporto cambi. |
 | **D14.3** | Dimensione decodificata calcolata percorrendo la cella con la stessa camminata del decoder, senza materializzare. |
 | **D14.4** | Contabilità **preflight** dei due lati: le binarie possono superare il budget prima di produrre, quindi la stima precede l'allocazione. |
-| **D14.5** | Semantica degli errori: ogni errore è `Execution { node, operation, execution_id }`, e nessun messaggio di trasporto grezzo attraversa il confine. «Quale nodo ha rotto» resta rispondibile. |
+| **D14.5** | Semantica degli errori: nessun messaggio di trasporto grezzo attraversa il confine, e «quale nodo ha rotto» resta rispondibile. La forma è cambiata rispetto alla decisione originale: l'errore **non** diventa `Execution`, perché così la categoria spariva — un `resource_limit` usciva come `execution`, exit 6 invece di 4. Oggi ogni categoria tranne `Execution` è **preservata** e il contesto del nodo si aggiunge con `Replayed`, che porta categoria e attribuzione insieme. |
+| **D14.5.1** | Il contesto del nodo si aggiunge senza perdere la categoria: `step_error` produce `Replayed`, che porta categoria e attribuzione insieme. Solo `Execution` viene sostituita, perché è già la categoria generica. |
+| **D14.5.2** | Nessun transito dell'errore di trasporto grezzo nel messaggio: un carrier dedicato porta sorgente, fase, lato e indice di riga in campi **strutturati**, non dentro una stringa da parsare. |
+| **D14.5.3** | **Primo errore in ordine** `(lato, riga)`: il lato sinistro è decodificato interamente prima del destro, così l'errore riportato non dipende dallo scheduling. |
+| **D14.5.4** | Fasi dichiarate: drenaggio e decode degli input sono `Read`, kernel e costruzione dell'output sono `Write`. La fase è dedotta dal punto del ciclo, non dal tipo di errore. |
+| **D14.5.5** | Cancellazione `BoundaryOnly`: i confini sono i batch in ingresso e la fine del drenaggio, prima del kernel binario. Un kernel binario avviato non si interrompe a metà. |
+| **D14.5.6** | `catch_unwind` sul kernel: un panic diventa errore di nodo sanitizzato, e **non si pubblica mai** dopo un panic. |
 | **D14.6** | Limiti di espansione: vincolo relativo **più** un tetto assoluto, perché un vincolo solo relativo non limita un prodotto cartesiano. |
 | **D14.7** | **Ordine canonico** delle coppie (left-major, right-minor), fissato dal porting se il kernel non lo garantisce: senza, il risultato dipenderebbe dallo scheduling. |
 | **D14.8** | Lineage: passthrough del lato sinistro con le chiavi canoniche ereditate, colonne di indice e distanza derivate senza metadati ereditati per errore. |

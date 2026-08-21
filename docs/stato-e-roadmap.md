@@ -59,9 +59,12 @@ supportato finché un prototipo non dimostri copertura *e* attribuzione.
 Alla chiusura del punto 2, non prima: una campagna cambia significato se il
 codice sotto è ancora in movimento.
 
-Va inclusa la riattivazione di `arrow_transform`, oggi in quarantena per una
-ragione dichiarata — `libfuzzer` aborta prima dell'unwinding, quindi il target
-resterebbe rosso a barriera funzionante — che dipende da `apache/arrow-rs#10575`.
+Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
+ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target
+resterebbe rosso a barriera funzionante. Due esiti ammessi, e nessuno dei due
+è il silenzio: **riattivarlo**, se `apache/arrow-rs#10575` avrà reso fallibile
+la conversione dello schema, oppure **riconfermare la quarantena per
+iscritto**, con la ragione aggiornata alla data del rilascio.
 
 ## 4. Release
 
@@ -88,6 +91,16 @@ linearizzabile. Quello che manca: lo scheduler, e il consumatore che riordina
 l'output dei rami paralleli secondo la sequenza logica — oggi assegnata e
 testata, ma non ancora usata per riordinare, perché in esecuzione seriale
 l'ordine logico coincide con quello di scansione.
+
+**Criteri di accettazione**, oltre allo scheduler stesso:
+
+- il property test «stesso piano, schedule forzato **seriale contro
+  parallelo**, risultato semanticamente identico». È il test che dimostrerebbe
+  il determinismo di livello 1 nel caso che conta, e oggi non è eseguibile
+  perché manca il secondo termine del confronto;
+- la `BatchSequence` **usata** per riordinare, non solo assegnata;
+- nessuna regressione sul picco di memoria governata con rami concorrenti: il
+  permesso è atomico, ma la contesa non è ancora stata misurata.
 
 Un vincolo noto: `max_parallelism` dimensiona il pool globale del processo,
 non del piano. Un pool per esecuzione richiederebbe un executor con stato

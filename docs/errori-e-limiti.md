@@ -123,17 +123,33 @@ che non sia successo nulla.
 libreria contabilizza. Non è RSS, non è la memoria del processo, e la
 differenza con `top` non è un difetto: è la parte non governata.
 
-**Nel perimetro**: buffer Arrow, capacità allocata, batch in coda, dictionary
-condivisi, geometrie decodificate, hash table, indici spaziali, cache di
-segmento, memoria temporanea dei kernel, writer IPC.
+Il perimetro è più stretto di quanto il nome suggerisca, e vale la pena dirlo
+per esteso: **è contabilizzato ciò per cui esiste una prenotazione esplicita**,
+non «la memoria che la libreria usa».
 
-**Fuori**: strutture fisse di planner ed executor, memoria nativa di GEOS e
-PROJ — stimata, mai presentata come conteggio preciso.
+**Nel perimetro**, sito per sito:
 
-Le allocazioni **condivise** (slice, dictionary) sono contate una sola volta:
-al fan-out il lease è condiviso, non duplicato, e il batch resta contabilizzato
-una volta fino al rilascio dell'ultimo riferimento. Il reference counting è
-per batch e per buffer, **mai per riga**.
+| che cosa | dove |
+|---|---|
+| i **batch sugli archi** del grafo, attribuiti all'arco | ingresso di ogni segmento |
+| l'**output materializzato** dei nodi blocking, unari e binari | dopo la costruzione del batch |
+| l'**output del segmento** al confine, ritagliato dal permesso quando esiste | uscita del segmento |
+| la **geometria decodificata** dei gruppi geo fusi e delle operazioni geo binarie | prima della decodifica |
+| i **batch riletti** dallo staging su disco | replay |
+
+**Fuori dal perimetro**, e sono le voci che contano quando la macchina va in
+affanno: tabelle hash di join e aggregazioni, indici spaziali, copie
+intermedie e buffer di crescita dei kernel, il writer IPC, le strutture fisse
+di planner ed executor, e la memoria nativa di GEOS e PROJ. Un kernel che
+costruisce una tabella hash grande quanto l'input la costruisce **senza
+chiedere permesso a nessuno**.
+
+Sulla **condivisione** la garanzia è una sola, e più stretta di «una volta per
+buffer»: al fan-out lo stesso `GovernedBatch` porta un lease **condiviso**,
+quindi quel batch è contabilizzato una volta sola finché l'ultimo riferimento
+non lo rilascia. Non c'è invece alcuna deduplicazione **globale** dei buffer
+Arrow: due batch distinti che affettano lo stesso buffer sottostante pagano
+due volte. Il conteggio è per batch, **mai per riga**.
 
 La quota si prende con un **permesso atomico**: `permesso(bytes, owner)`
 verifica e prenota in una sola operazione. `ritaglia` riduce un permesso alla
@@ -154,12 +170,16 @@ input che produce un output molto più grande del budget porta all'esaurimento
 della memoria del processo **prima** che l'errore `resource_limit` esista. Il
 fallimento è un OOM, non un errore diagnosticabile.
 
-Il rifiuto **preventivo**, prima di allocare, esiste solo per:
+Il rifiuto **preventivo**, prima di allocare, esiste solo in tre punti:
 
 - `table.cross_join`, `table.concat`, `table.concat_by_name`, `table.melt`,
   tramite `preflight_output_bytes`;
-- il gruppo geo fuso, dove la reservation dei byte decodificati precede la
-  decodifica.
+- il **gruppo geo fuso**, dove la reservation dei byte decodificati — calcolati
+  esatti percorrendo la cella, senza materializzare — precede la decodifica;
+- i **segmenti row-diagnostics**, dove il permesso per l'output è chiesto
+  **prima** della passata e ritagliato dopo, alla dimensione reale. Se il
+  budget non basta il segmento passa allo staging su disco invece di
+  proseguire e scoprirlo dopo.
 
 E anche lì la stima **non è una misura**: copre i buffer del risultato secondo
 il modello dichiarato dal kernel, non le allocazioni temporanee che

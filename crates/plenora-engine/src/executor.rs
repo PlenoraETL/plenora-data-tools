@@ -3382,8 +3382,8 @@ struct GeoBinaryStepError {
     source: PlenoraError,
 }
 
-/// Conversione del carrier D14.5 in errore di nodo: `Execution { node,
-/// operation, execution_id }` via `step_error` (D14.5.1); la fase `Read`
+/// Conversione del carrier D14.5 in errore di nodo: `step_error` aggiunge il
+/// contesto **preservando la categoria** (D14.5.1); la fase `Read`
 /// del decode e' taggata al confine (`Write` e' gia' la fase derivata di
 /// `Execution`, D14.5.4); side/riga solo come dettaglio diagnostico opt-in.
 fn geo_binary_step_error(

@@ -114,8 +114,12 @@ ARCHITETTURA = 'docs/architettura.md'
 
 # `D16`, `D12.7`: identificatori di decisione. Il registro li definisce
 # come righe di tabella `| **D16** | ... |`.
-RIFERIMENTO_D = re.compile(r'(?<![A-Za-z0-9_])D([0-9]+)(\.[0-9]+)?(?![A-Za-z0-9_])')
-DEFINIZIONE_D = re.compile(r'^\|\s*\*\*(D[0-9]+(?:\.[0-9]+)?)\*\*\s*\|', re.M)
+# La sequenza puntata e' di profondita' ARBITRARIA: esistono `D14.5.6`
+# come esistono `D14.5` e `D16`. Fermarsi a un livello tronca
+# l'identificatore e ne inventa uno che nessuno ha definito — il
+# gate direbbe «tutto risolto» confrontando la cosa sbagliata.
+RIFERIMENTO_D = re.compile(r'(?<![A-Za-z0-9_])D([0-9]+(?:\.[0-9]+)*)(?![A-Za-z0-9_])')
+DEFINIZIONE_D = re.compile(r'^\|\s*\*\*(D[0-9]+(?:\.[0-9]+)*)\*\*\s*\|', re.M)
 
 CATALOGO = 'crates/plenora-core/src/catalog.rs'
 OPERAZIONI = 'docs/operazioni.md'
@@ -160,9 +164,17 @@ def controlla_superficie(file_tracciati, problemi):
             '  Aggiungere un documento e\' una decisione: va messo in '
             'PUBBLICI qui dentro, con la ragione.'
             % (percorso, ', '.join(PUBBLICI)))
+    tracciati_set = set(file_tracciati)
     for percorso in PUBBLICI + ECCEZIONI:
         if not os.path.exists(percorso):
             problemi.append('DOCUMENTO ATTESO ASSENTE: %s' % percorso)
+        elif percorso not in tracciati_set:
+            # Esistere sul disco non basta: un documento non tracciato non
+            # arriva a chi clona il repository, e il gate direbbe di si'
+            # guardando una copia locale che nessun altro ha.
+            problemi.append(
+                "DOCUMENTO NON TRACCIATO: %s esiste ma non e' in Git."
+                % percorso)
 
 
 def controlla_collegamenti(problemi):
@@ -231,7 +243,15 @@ def controlla_decisioni(file_tracciati, problemi):
         problemi.append("%s assente: non c\'e\' registro delle decisioni"
                         % ARCHITETTURA)
         return
-    definite = set(DEFINIZIONE_D.findall(testo(ARCHITETTURA)))
+    trovate = DEFINIZIONE_D.findall(testo(ARCHITETTURA))
+    definite = set(trovate)
+    doppie = sorted({i for i in trovate if trovate.count(i) > 1},
+                    key=lambda i: [int(p) for p in i[1:].split('.')])
+    if doppie:
+        problemi.append(
+            "DECISIONI DEFINITE PIU' DI UNA VOLTA: %r\n"
+            "  Due righe per lo stesso identificatore sono due contratti per "
+            "la stessa decisione, e chi legge non sa quale valga." % doppie)
     if not definite:
         problemi.append(
             "REGISTRO DELLE DECISIONI VUOTO in %s.\n"
@@ -342,7 +362,7 @@ def main():
             sys.stderr.write('- %s\n' % problema)
         raise SystemExit(1)
 
-    definite = len(DEFINIZIONE_D.findall(testo(ARCHITETTURA)))
+    definite = len(set(DEFINIZIONE_D.findall(testo(ARCHITETTURA))))
     print('documentazione coerente: %d documenti pubblici, %d eccezioni, '
           '%d decisioni definite e tutte citate, nessun riferimento morto, '
           'catalogo e operazioni allineati, nessun artefatto tracciato'

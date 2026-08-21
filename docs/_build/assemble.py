@@ -30,39 +30,6 @@ CHIAVI_OPZIONALI = {"semantic_version", "config_schema_version",
 
 ANCORA_CATALOGO = "pub static CATALOG: &[OperationDescriptor] = &["
 
-ANCORA_CATALOGO = "pub static CATALOG: &[OperationDescriptor] = &["
-
-# Operazioni presenti nel catalogo e NON ancora documentate: nessuna sezione,
-# nessun frammento. Sono elencate qui, e nel documento generato, invece di
-# sparire in un conteggio: il generatore controllava che ogni op documentata
-# esistesse nel catalogo, mai il verso opposto, e diciannove operazioni sono
-# rimaste fuori senza che nulla lo dicesse.
-#
-# L'elenco e' un'ASSERZIONE, non una configurazione: se il divario cambia — in
-# meglio o in peggio — la generazione fallisce e va aggiornato a mano. Chiuderlo
-# significa scrivere diciannove firme, ed e' un lavoro suo, non di questo blocco.
-NON_DOCUMENTATE = (
-    "geo.cluster_dbscan",
-    "geo.collect",
-    "geo.coverage_validate",
-    "geo.from_wkt",
-    "geo.generate_grid",
-    "geo.geometry_accessors",
-    "geo.line_locate_point",
-    "geo.shared_paths",
-    "geo.snap",
-    "geo.subdivide",
-    "table.align_schema",
-    "table.concat_by_name",
-    "table.fuzzy_join",
-    "table.hmac_sha256",
-    "table.limit",
-    "table.select_columns",
-    "table.stable_fingerprint",
-    "table.top_n",
-    "table.validate_rules",
-)
-
 
 class ErroreCatalogo(Exception):
     """Il catalogo non e' nella forma che questo generatore sa leggere."""
