@@ -29,7 +29,7 @@ Il piano e' un documento dichiarativo: dice **cosa** produrre, non come.
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "inputs": ["citta"],
   "nodes": [
     {"id": "grandi",   "op": "table.filter", "in": ["citta"],

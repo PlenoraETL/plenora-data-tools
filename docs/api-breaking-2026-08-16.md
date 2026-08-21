@@ -574,11 +574,11 @@ Ogni `plan_hash` calcolato prima di questo cambiamento è **diverso**. Chi lo
 conserva (cache, log di riproducibilità, confronti fra esecuzioni) deve
 considerare invalidati i valori precedenti.
 
-Con precisione: il dominio rende **disgiunti** gli insiemi di input della
-funzione di hash, quindi nessun testo canonico può produrre oggi l'hash che un
-testo canonico produceva ieri. Non è una garanzia matematica di assenza di
-collisioni — vale la resistenza di SHA-256, che era già l'assunzione di prima.
-Vedi ADR 4, emendamento 2026-08-20.
+Con precisione: il dominio rende **disgiunti** gli insiemi di **input** della
+funzione di hash. Da input disgiunti non segue che gli output lo siano: un
+digest uguale fra i due domini richiederebbe una **collisione SHA-256**, che è
+la stessa assunzione su cui il `plan_hash` poggiava già prima. Vedi ADR 4,
+emendamento 2026-08-20.
 
 `catalog_fingerprint` e `ContractFingerprint` **non** cambiano.
 

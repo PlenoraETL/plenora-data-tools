@@ -7,7 +7,7 @@ ADR 15 ha deciso che il limite della libreria si chiama
 funzionare continua a promettere un tetto sull'intero processo che in-process
 non esiste.
 
-«Nessun alias» non significa pero' «un solo nome ovunque». Ci sono due formati
+«Nessun alias» non significa pero' «un solo nome ovunque». Ci sono tre formati
 sul filo, e ciascuno conserva il proprio:
 
 - il piano canonico **v5** e l'API Rust usano `max_governed_memory_bytes`;
@@ -24,7 +24,7 @@ Una decisione del genere marcisce nel modo piu' banale: qualcuno riaggiunge il
 vecchio nome «per compatibilita'» in un terzo posto, e nessuno se ne accorge
 finche' un utente non ci costruisce sopra.
 
-Verifica cinque cose:
+Verifica sei cose:
 
 1. il nome della v4 NON compare nel codice di produzione, fuori dai due
    moduli autorizzati;
@@ -33,13 +33,20 @@ Verifica cinque cose:
 3. nei test compare solo nei file che esercitano deliberatamente il rifiuto,
    la migrazione e il formato v1. Un file di test nuovo che lo nomina va
    guardato, non ignorato;
-4. `serde(alias` non compare nelle strutture che dichiarano i limiti: e' il
-   modo tecnico in cui l'alias rientrerebbe senza che il nome ricompaia in
-   chiaro. Il controllo e' mirato a quei file e non al workspace: altrove
-   `alias` e' una scelta legittima gia' presa (per esempio
-   `sort_alphabetical` in `columns.rs`), e un gate che vieta tutto viene
-   disattivato al primo falso positivo;
-5. i due moduli autorizzati esistono ancora dove dichiarato.
+4. nessun attributo `#[serde(...)]` delle strutture che dichiarano i limiti
+   contiene `alias`: e' il modo tecnico in cui l'alias rientrerebbe senza che
+   il nome ricompaia in chiaro. L'attributo e' analizzato **per intero**,
+   anche quando e' spezzato su piu' righe, perche' un controllo riga per riga
+   lascerebbe passare la forma indentata — che e' proprio quella che rustfmt
+   produce quando l'attributo cresce. Il controllo e' mirato a quei file e non
+   al workspace: altrove `alias` e' una scelta legittima gia' presa (per
+   esempio `sort_alphabetical` in `columns.rs`), e un gate che vieta tutto
+   viene disattivato al primo falso positivo;
+5. i due moduli autorizzati esistono ancora dove dichiarato;
+6. **il gate vede davvero l'alias**: su ciascun modulo autorizzato viene
+   iniettato in memoria un alias multilinea sul campo della v4, e il
+   rilevatore deve accorgersene. Un gate che non e' mai stato visto fallire
+   non e' un gate, e' una riga di log.
 
     python scripts/verifica_nome_budget_memoria.py
 
@@ -90,10 +97,7 @@ TEST_AMMESSI = {
 # (quello contiene `governed_memory_bytes`), quindi basta cercarlo cosi'
 # com'e'. La lookbehind protegge comunque da un futuro `foo_max_memory_bytes`.
 OCCORRENZA = re.compile(r'(?<![A-Za-z0-9_])' + VECCHIO + r'(?![A-Za-z0-9_])')
-# Solo l'ATTRIBUTO, non la parola: il modulo di migrazione spiega a voce alta
-# perche' `serde(alias)` non e' stato usato, e un gate che non sa distinguere
-# una spiegazione da un'attuazione vieta di spiegarsi.
-ALIAS = re.compile(r'#\s*\[\s*serde\s*\([^)]*\balias\b')
+PAROLA_ALIAS = re.compile(r'\balias\b')
 
 
 def normalizza(percorso):
@@ -129,6 +133,93 @@ def righe_con(contenuto, pattern):
             if pattern.search(riga)]
 
 
+def attributi(contenuto):
+    """Ogni attributo esterno `#[...]` come `(riga, testo completo)`.
+
+    Consuma fino alla parentesi quadra che chiude, contando le parentesi
+    annidate e saltando il contenuto delle stringhe: un attributo puo'
+    occupare piu' righe, e leggerlo riga per riga significa non leggerlo.
+    """
+    trovati = []
+    posizione = 0
+    lunghezza = len(contenuto)
+    while True:
+        inizio = contenuto.find('#[', posizione)
+        if inizio < 0:
+            return trovati
+        profondita = 0
+        in_stringa = False
+        fuga = False
+        indice = inizio + 1
+        while indice < lunghezza:
+            carattere = contenuto[indice]
+            if in_stringa:
+                if fuga:
+                    fuga = False
+                elif carattere == '\\':
+                    fuga = True
+                elif carattere == '"':
+                    in_stringa = False
+            elif carattere == '"':
+                in_stringa = True
+            elif carattere in '[(':
+                profondita += 1
+            elif carattere in '])':
+                profondita -= 1
+                if profondita == 0:
+                    break
+            indice += 1
+        if indice >= lunghezza:
+            # Attributo non chiuso: il file non compilerebbe, ma il gate non
+            # deve andare in loop ne' tacere.
+            trovati.append((contenuto.count('\n', 0, inizio) + 1,
+                            contenuto[inizio:]))
+            return trovati
+        trovati.append((contenuto.count('\n', 0, inizio) + 1,
+                        contenuto[inizio:indice + 1]))
+        posizione = indice + 1
+
+
+def alias_negli_attributi(contenuto):
+    """Attributi `serde` che contengono `alias`, riga e forma compattata.
+
+    Solo l'ATTRIBUTO, non la parola: il modulo di migrazione spiega a voce
+    alta perche' `serde(alias)` non e' stato usato, e un gate che non sa
+    distinguere una spiegazione da un'attuazione vieta di spiegarsi.
+    """
+    return [(riga, ' '.join(attributo.split()))
+            for riga, attributo in attributi(contenuto)
+            if 'serde' in attributo and PAROLA_ALIAS.search(attributo)]
+
+
+# L'alias che il gate deve vedere: spezzato su piu' righe, cioe' nella forma
+# in cui rustfmt lo scriverebbe se qualcuno lo aggiungesse davvero.
+MUTAZIONE = ('#[serde(\n'
+             '    alias = "%s"\n'
+             ')]\n' % NUOVO)
+
+
+def prova_di_mutazione():
+    """Inietta l'alias in ciascun modulo autorizzato e pretende il rifiuto."""
+    problemi = []
+    for percorso in sorted(PRODUZIONE_AMMESSA):
+        if not os.path.exists(percorso):
+            continue
+        originale = testo(percorso)
+        if alias_negli_attributi(originale):
+            continue  # gia' segnalato dal controllo normale
+        ancora = OCCORRENZA.search(originale)
+        if ancora is None:
+            continue  # gia' segnalato come permesso stantio
+        mutato = originale[:ancora.start()] + MUTAZIONE + originale[ancora.start():]
+        if not alias_negli_attributi(mutato):
+            problemi.append(
+                'IL GATE E\' CIECO: un alias multilinea iniettato in %s non '
+                'viene visto.\n  Il rilevatore va corretto: senza, il divieto '
+                'di alias e\' una riga di log.' % percorso)
+    return problemi
+
+
 def main():
     problemi = []
     visti = set()
@@ -160,12 +251,12 @@ def main():
                                  in sorted(PRODUZIONE_AMMESSA.items()))))
 
         if percorso in PORTATORI_DI_LIMITI:
-            for numero, riga in righe_con(contenuto, ALIAS):
+            for numero, attributo in alias_negli_attributi(contenuto):
                 problemi.append(
                     'ALIAS %s:%d: %s\n'
                     '  ADR 15: nessun alias sui limiti. Una traduzione fra '
                     'formati e\' un\'altra cosa, e rifiuta il nome dell\'altro '
-                    'formato in modo simmetrico.' % (percorso, numero, riga))
+                    'formato in modo simmetrico.' % (percorso, numero, attributo))
 
     for percorso, motivo in sorted(PRODUZIONE_AMMESSA.items()):
         if not os.path.exists(percorso):
@@ -196,6 +287,8 @@ def main():
                 'dovrebbe dimostrare che %s.'
                 % (percorso, VECCHIO, TEST_AMMESSI[percorso]))
 
+    problemi.extend(prova_di_mutazione())
+
     if problemi:
         sys.stderr.write(
             'i nomi del budget di memoria non sono quelli decisi da ADR 15:\n\n')
@@ -204,7 +297,8 @@ def main():
         raise SystemExit(1)
 
     print('nomi del budget di memoria coerenti con ADR 15: `%s` in produzione, '
-          '`%s` in %d moduli autorizzati e in %d file di test dichiarati'
+          '`%s` in %d moduli autorizzati e in %d file di test dichiarati; '
+          'alias multilinea iniettato e rifiutato in entrambi i moduli'
           % (NUOVO, VECCHIO, len(PRODUZIONE_AMMESSA), len(TEST_AMMESSI)))
 
 

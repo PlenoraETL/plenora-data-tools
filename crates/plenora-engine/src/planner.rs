@@ -114,13 +114,12 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// garanzia della funzione. Un grafo riusato per sbaglio con un hash di prima
 /// e' un piano eseguito sotto un contratto di memoria che non e' piu' il suo.
 ///
-/// Che cosa il dominio garantisce, con precisione: che **nessun testo
-/// canonico** possa produrre, sotto la regola nuova, l'hash che un testo
-/// canonico produceva sotto quella vecchia — i due insiemi di input della
-/// funzione di hash sono disgiunti, perche' uno ha il prefisso e l'altro no.
-/// Resta la resistenza alle collisioni di SHA-256, che e' l'assunzione su cui
-/// il `plan_hash` poggiava gia' prima: il dominio **separa** gli spazi, non
-/// abolisce la crittografia.
+/// Che cosa il dominio garantisce, con precisione: che gli **input** della
+/// funzione di hash siano disgiunti fra le due regole — uno ha il prefisso,
+/// l'altro no. Da input disgiunti non segue che gli output lo siano: un
+/// digest uguale fra i due domini **richiederebbe una collisione SHA-256**.
+/// E' la stessa assunzione su cui il `plan_hash` poggiava gia' prima; il
+/// dominio la riusa, non la rafforza, e non abolisce la crittografia.
 ///
 /// La difesa vera contro il riuso di un grafo validato sotto un'altra
 /// versione del formato non e' l'hash ma il confronto esplicito di

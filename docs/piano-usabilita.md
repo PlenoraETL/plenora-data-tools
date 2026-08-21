@@ -200,7 +200,7 @@ silenzio, metriche stampate su stdout a fine `run`.
   quei tre comandi. *(chiude L4)*
 
 - **1.3.4 `plan-schema`** *(chiude L3)* — emette lo JSON Schema del piano,
-  **generato** dalle stesse strutture che `PlanV4::parse` valida: uno schema
+  **generato** dalle stesse strutture che `PlanV5::parse` valida: uno schema
   scritto a mano che diverge dal parser e' peggio di nessuno schema.
 
 - **1.3.5 Exit code stabili** — **FATTO** (2026-08-16), come convenzione **di

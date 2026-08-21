@@ -188,7 +188,7 @@ Riferimento normativo citato nelle CIA: `plenora-contracts`, tag `v2.0-rc10`
   chiama `max_governed_memory_bytes` (ADR 15) — resta un contatore di cio' che
   e' gia' stato allocato.
 
-  **Percorso DAG v4.** Stesso ordine, in tre punti verificati:
+  **Percorso DAG (v5 canonica).** Stesso ordine, in tre punti verificati:
   `concat_batches` costruisce il batch completo e solo dopo arrivano
   `check_batch_bytes` e la reservation (`executor.rs`, intorno a 4423); il
   kernel produce l'output e il governor lo riserva subito **dopo**

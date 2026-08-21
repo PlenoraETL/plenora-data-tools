@@ -251,15 +251,17 @@ piano eseguito sotto un contratto di memoria che non è più il suo.
 
 ### Che cosa il dominio garantisce, con precisione
 
-Che i due insiemi di input della funzione di hash siano **disgiunti**: ogni
-input della regola nuova comincia col prefisso, nessun input della regola
-vecchia ce l'aveva. Nessun testo canonico può quindi produrre oggi l'hash che
-un testo canonico produceva ieri.
+Che i due insiemi di **input** della funzione di hash siano **disgiunti**:
+ogni input della regola nuova comincia col prefisso, nessun input della regola
+vecchia ce l'aveva.
 
-Non di più. Resta in piedi l'assunzione di sempre — la resistenza alle
-collisioni di SHA-256 — e il dominio non la rafforza: **separa** gli spazi,
-non abolisce la crittografia. Chiamarlo «impossibile» sarebbe promettere una
-proprietà matematica al posto di una proprietà di costruzione.
+Non di più, e la distinzione conta: da input disgiunti **non segue** che gli
+output lo siano. Un `plan_hash` calcolato oggi che coincida con uno calcolato
+ieri richiederebbe una **collisione SHA-256** — la stessa assunzione su cui il
+`plan_hash` poggiava già prima che il dominio esistesse. Il dominio la riusa,
+non la rafforza, e non abolisce la crittografia. Chiamarlo «impossibile»
+sarebbe promettere una proprietà matematica al posto di un'assunzione
+crittografica.
 
 La difesa vera contro il riuso di un grafo validato sotto un'altra versione
 del formato è un confronto esplicito, non un hash: `check_compatibility`

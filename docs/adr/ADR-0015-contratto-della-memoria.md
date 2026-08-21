@@ -519,11 +519,12 @@ migrato finisce per girare sotto limiti che non ha chiesto.
 ### Invalidazione esplicita delle identità
 
 Il digest è calcolato su `"plenora/plan_hash/v5\0" || canonical_json` (ADR 4,
-emendamento 2026-08-20). Il dominio **separa gli spazi di input**: nessun testo
-canonico può produrre, sotto la regola nuova, l'hash che un testo canonico
-produceva sotto quella vecchia. Non è una garanzia matematica di assenza di
-collisioni — resta la resistenza di SHA-256, che era già l'assunzione di
-prima — ma toglie di mezzo l'unica collisione *strutturale* possibile.
+emendamento 2026-08-20). Il dominio **separa gli spazi di input**: nessun
+testo canonico prodotto sotto la regola nuova coincide con uno prodotto sotto
+quella vecchia. Da input disgiunti non segue però che i digest lo siano — un
+`plan_hash` uguale fra i due domini richiederebbe una **collisione SHA-256**,
+che era già l'assunzione di prima. Il dominio toglie di mezzo la sola
+coincidenza *strutturale* possibile, non la crittografia.
 
 La difesa contro il riuso di un grafo validato sotto un'altra versione del
 formato non è però l'hash: è il confronto esplicito di `plan_format_version`
