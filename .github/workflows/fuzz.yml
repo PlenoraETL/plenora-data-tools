@@ -64,7 +64,12 @@ jobs:
           # schema, cioe' quando la barriera non servira' piu'. Segnalato a
           # monte: apache/arrow-rs#10575.
           # - arrow_transform
-          - plan_v4_parse
+          # Rinominato da `plan_v4_parse` il 2026-08-20 con la v5
+          # (ADR 15): il target parsa il formato canonico, e un nome
+          # che cita la versione sbagliata manda a cercare nel posto
+          # sbagliato. Il corpus non e' versionato (.gitignore) e
+          # riparte da zero sotto il nome nuovo.
+          - plan_v5_parse
           - analyze_table
           - analyze_geo
           - diff_kernels

@@ -1,7 +1,7 @@
 //! Governor della memoria del piano e batch governati (ADR-0002, Fase 2B —
 //! milestone M1a/M1b; Architetture.md par. 6.4, Prestazioni.md par. 3).
 //!
-//! Perimetro di `max_memory_bytes`: la memoria Arrow governata dall'engine —
+//! Perimetro di `max_governed_memory_bytes`: la memoria Arrow governata dall'engine —
 //! i batch che attraversano gli archi del DAG e le materializzazioni
 //! intermedie dei segmenti blocking. Il conteggio avviene **ai confini di
 //! batch**, mai per riga, e il governor non percorre mai ricorsivamente i
@@ -21,7 +21,7 @@
 //!
 //! Spill (Fase 2B M2c): `sort`/`distinct`/`aggregate` hanno una variante
 //! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
-//! di dispatch (soglia stimata "byte input > `max_memory_bytes`", ADR-0002
+//! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", ADR-0002
 //! "attivazione prima dell'esaurimento"), NON guidata da una reservation
 //! fallita: `MustSpill` resta non emesso in v1 — il re-scheduling su
 //! reservation fallita richiede il planner che riprova (M3).
@@ -188,7 +188,7 @@ impl GovernorShared {
 }
 
 /// Governor della memoria del piano (ADR-0002): unico budget globale
-/// (`max_memory_bytes` dei limiti effettivi).
+/// (`max_governed_memory_bytes` dei limiti effettivi).
 ///
 /// Il budget e' condiviso da tutti gli archi e i segmenti — in prospettiva
 /// M3 anche dai rami paralleli, che per invariante condivideranno la stessa
@@ -199,12 +199,12 @@ pub struct MemoryGovernor {
 }
 
 impl MemoryGovernor {
-    /// Governor con budget `max_memory_bytes`.
+    /// Governor con budget `max_governed_memory_bytes`.
     #[must_use]
-    pub fn new(max_memory_bytes: u64) -> Self {
+    pub fn new(max_governed_memory_bytes: u64) -> Self {
         Self {
             shared: Arc::new(GovernorShared {
-                budget: max_memory_bytes,
+                budget: max_governed_memory_bytes,
                 stato: Mutex::new(Contabilita {
                     reserved: 0,
                     peak: 0,
@@ -329,7 +329,7 @@ impl MemoryGovernor {
             Err(riservati) => {
                 let budget = self.shared.budget;
                 Err(PlenoraError::ResourceLimit(format!(
-                    "max_memory_bytes superato: `{owner}` richiede {bytes} byte, \
+                    "max_governed_memory_bytes superato: `{owner}` richiede {bytes} byte, \
                      {riservati} gia' riservati su un budget di {budget}"
                 )))
             }
@@ -484,7 +484,7 @@ impl MemoryGovernor {
             // un errore nel proprio piano.
             ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => {
                 Err(PlenoraError::Internal(format!(
-                    "max_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
+                    "max_governed_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
                 )))
             }
         }
@@ -660,7 +660,7 @@ impl MemoryPermit {
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct MemoryMetrics {
-    /// Budget globale del piano (`max_memory_bytes`).
+    /// Budget globale del piano (`max_governed_memory_bytes`).
     pub budget_bytes: u64,
     /// Byte attualmente trattenuti dai lease vivi.
     pub reserved_bytes: u64,
@@ -799,8 +799,8 @@ mod tests {
         // decisione del chiamante e' «rilancia con piu' budget», che e'
         // esattamente cio' che `resource_limit` significa.
         assert!(
-            matches!(error, PlenoraError::ResourceLimit(ref reason) if reason.contains("max_memory_bytes")),
-            "errore ResourceLimit max_memory_bytes: {error}"
+            matches!(error, PlenoraError::ResourceLimit(ref reason) if reason.contains("max_governed_memory_bytes")),
+            "errore ResourceLimit max_governed_memory_bytes: {error}"
         );
         // Il tentativo fallito non trattiene quota (rollback immediato).
         assert_eq!(governor.reserved_bytes(), 60);

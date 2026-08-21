@@ -140,7 +140,7 @@ plenora-data-tools/
     `max_expansion_factor`; `max_total_rows_processed` resta una **metrica o
     limite avanzato**, perché il suo conteggio dipende dal piano fisico (due
     `ExecutionPlan` semanticamente equivalenti potrebbero conteggiarlo in modo
-    diverso — semantica in ADR 6) — più `max_memory_bytes`, `max_temp_bytes`,
+    diverso — semantica in ADR 6) — più `max_governed_memory_bytes`, `max_temp_bytes`,
     `spill_partitions`, `max_wkb_cell_bytes`, `max_payload_bytes`,
     `max_batches`, profondità geometrica, `max_parallelism`.
   - **Piano** (`PlanLimits`, §5): complessità del grafo e delle config.
@@ -313,8 +313,8 @@ enum PropertyScope { Schema, Batch, Stream, Dataset }
 
 ```json
 {
-  "schema_version": 4,
-  "limits": { "max_rows_per_edge": 10000000, "max_memory_bytes": 536870912, "max_parallelism": 8 },
+  "schema_version": 5,
+  "limits": { "max_rows_per_edge": 10000000, "max_governed_memory_bytes": 536870912, "max_parallelism": 8 },
   "crs": "EPSG:32632",
   "inputs":  ["main", "fiumi"],
   "nodes": [
@@ -334,7 +334,17 @@ Regole:
   input esistente.
 - Il piano **lineare** (`Plan{steps}` di nogeo, schema_version ≤ 3) è il caso
   degenerato: ogni nodo ha un solo `in`, il precedente. Conversione tramite la
-  pipeline di migrazione esplicita (§7), non dipendente dai default correnti.
+  pipeline di migrazione esplicita (§7), non dipendente dai default correnti,
+  e con destinazione il canonico **v5**: non esiste una forma intermedia da
+  cui ripartire.
+- La `schema_version` canonica è **5** (ADR 15). Un piano `schema_version: 4`
+  è accettato solo attraverso la migrazione esplicita, che ne traduce il nome
+  del budget di memoria. **Non c'è alias**, e il rifiuto è simmetrico: un
+  piano v5 che usa il nome della v4 è rifiutato, un piano v4 (o lineare v1)
+  che usa il nome della v5 pure. Ogni formato conserva il proprio nome —
+  `max_memory_bytes` nella v1 e nella v4, `max_governed_memory_bytes` nel
+  canonico — e la traduzione avviene all'ingresso, mai lasciando che un nome
+  funzioni in due formati.
 - Nessuna annotazione di esecuzione nei nodi: il piano dichiara solo
   dipendenze e configurazioni.
 - `max_parallelism` sta in `limits` (risorsa), non nei nodi.
@@ -684,7 +694,7 @@ effect apparterranno a un futuro modello transazionale separato.
   nuova operazione potenzialmente in conflitto.
 - **Pipeline di migrazione esplicita** (decisione D20): piano legacy → parse
   nella versione originaria → migrazione canonica del piano → migrazione
-  versionata delle config → piano v4 canonico → validazione. Mai dipendere
+  versionata delle config → piano v5 canonico → validazione. Mai dipendere
   implicitamente dai default correnti delle configurazioni. La migrazione è
   **deterministica e idempotente**, coperta da **golden test per ogni versione
   supportata**: piano legacy → migrazione → serializzazione canonica →
@@ -761,7 +771,7 @@ più delicati (scrittura prevista in Fase 0, completata):
   dei componenti, `NaN`/`-0.0`, confronto geometrico ≠ confronto WKB);
   garanzie tra versioni e backend.
 - **ADR 2 — Resource accounting e reservation protocol**: perimetro di
-  `max_memory_bytes`; memoria precisa/stimata; ownership contabile di buffer,
+  `max_governed_memory_bytes`; memoria precisa/stimata; ownership contabile di buffer,
   slice e dictionary; regola anti-deadlock; **reservation adattive** per
   operatori con crescita imprevedibile (join, explode); **`MemoryLease` e
   fan-out** (condivisione reference-counted, regole di attribuzione);

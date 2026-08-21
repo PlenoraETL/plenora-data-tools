@@ -235,7 +235,7 @@ fn carichi() -> Vec<Carico> {
             nome: "streaming_lineare",
             perche: "catena di kernel streaming: nessuna materializzazione",
             piano: json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 // `formula` PRIMA di `filter`: dopo un nodo che cambia
                 // cardinalita' l'arco non porta provenance row-level e il
@@ -256,7 +256,7 @@ fn carichi() -> Vec<Carico> {
             nome: "blocking_sort",
             perche: "materializza l'intero input e ordina",
             piano: json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": [
                     {"id": "o", "op": "table.sort", "in": ["main"],
@@ -270,7 +270,7 @@ fn carichi() -> Vec<Carico> {
             nome: "blocking_aggregate",
             perche: "raggruppa e aggrega: materializzazione piu' hashing",
             piano: json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": [
                     {"id": "a", "op": "table.aggregate", "in": ["main"],
@@ -286,7 +286,7 @@ fn carichi() -> Vec<Carico> {
             nome: "fan_out_tee",
             perche: "un input, due consumatori: costo del tee (D9/V10)",
             piano: json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": [
                     {"id": "ramo_a", "op": "table.filter", "in": ["main"],
@@ -305,7 +305,7 @@ fn carichi() -> Vec<Carico> {
             perche: "due catene che non si toccano fino alla fine: il TETTO del \
                      guadagno che il parallelismo fra nodi potrebbe dare",
             piano: json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": [
                     {"id": "a1", "op": "table.sort", "in": ["main"],
@@ -618,7 +618,7 @@ fn fase_tempo(carico: &Carico) -> Value {
     // Sotto pressione: budget pari alla meta' del picco governato mediano.
     let budget = (statistica(&picchi).0 / 2).max(1_048_576);
     let mut stretto = carico.piano.clone();
-    stretto["limits"] = json!({"max_memory_bytes": budget});
+    stretto["limits"] = json!({"max_governed_memory_bytes": budget});
     let contratti = [("main".to_owned(), banco.contratto.clone())];
     let pressione = match validate(&stretto.to_string(), &contratti) {
         Err(errore) => {
@@ -1014,11 +1014,11 @@ fn carico_catena(k: usize) -> Carico {
         nome: "catena",
         perche: "catena di nodi identici: isola il costo di attraversamento",
         piano: json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": nodi,
             "output": format!("n{}", k - 1),
-            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+            "limits": {"max_governed_memory_bytes": 512 * 1024 * 1024},
         }),
         rami: None,
     }
@@ -1049,11 +1049,11 @@ fn carico_catena_formula(k: usize) -> Carico {
         nome: "catena_formula",
         perche: "catena di nodi formula: il residuo scala col numero di nodi?",
         piano: json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": nodi,
             "output": format!("n{}", k - 1),
-            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+            "limits": {"max_governed_memory_bytes": 512 * 1024 * 1024},
         }),
         rami: None,
     }
@@ -1065,11 +1065,11 @@ fn carico_singolo(nome: &'static str, nodo: &Value) -> Carico {
         nome,
         perche: "nodo singolo: attribuisce il residuo all'operazione",
         piano: json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [nodo],
             "output": "n0",
-            "limits": {"max_memory_bytes": 512 * 1024 * 1024},
+            "limits": {"max_governed_memory_bytes": 512 * 1024 * 1024},
         }),
         rami: None,
     }

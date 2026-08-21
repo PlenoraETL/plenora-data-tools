@@ -36,7 +36,7 @@
 //!
 //! Fase 2B M2c (ADR-0002): selezione preventiva dello spill per
 //! `sort`/`distinct`/`aggregate` — sopra la soglia deterministica "byte
-//! stimati dell'input > `max_memory_bytes`" (la stessa del set-op spilled) il
+//! stimati dell'input > `max_governed_memory_bytes`" (la stessa del set-op spilled) il
 //! passo usa la variante `*_spilled` di `plenora_kernels_table::spill`.
 //! [`execute_batch_with_spill`] permette al chiamante (l'executor del DAG) di
 //! instradare i file di spill nella directory condivisa del `TempStore`

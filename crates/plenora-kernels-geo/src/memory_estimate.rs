@@ -47,7 +47,7 @@
 //! dei `Vec`, le indirezioni di un eventuale backend GEOS ne' le strutture
 //! ausiliarie (indici spaziali, envelope precalcolati). Va quindi riportata
 //! nelle metriche come "memoria nativa stimata", mai come conteggio preciso
-//! (ADR-0002, paragrafo "Perimetro di `max_memory_bytes`").
+//! (ADR-0002, paragrafo "Perimetro di `max_governed_memory_bytes`").
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

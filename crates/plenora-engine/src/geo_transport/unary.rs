@@ -1377,7 +1377,7 @@ pub enum FusedStepError {
 /// Misura terminale di un gruppo fuso (ADR-0012 M2): il kernel scalare che
 /// chiude il gruppo consumando la forma decodificata dell'ultimo passo,
 /// senza ri-decodificare il WKB di confine. Le 5 misure "add column" dei
-/// piani v4 (ramo `geo_measure_batch` dell'executor).
+/// piani DAG (ramo `geo_measure_batch` dell'executor).
 #[derive(Clone, Copy, Debug)]
 pub enum FusedTerminalMeasure {
     /// `geo.area` -> colonna `Float64`.

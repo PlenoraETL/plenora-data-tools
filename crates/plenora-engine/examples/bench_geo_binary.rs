@@ -497,7 +497,7 @@ fn boolean_flags(batches: &[RecordBatch], index: usize, case: &str) -> Vec<Optio
 
 fn binary_plan(op: &str, config: &Value) -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "j", "op": op, "in": ["left_in", "right_in"], "config": config},
@@ -732,7 +732,7 @@ fn run_table_join_control() {
     let left = table_batches(7);
     let right = table_batches(13);
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "j", "op": "table.join", "in": ["left_in", "right_in"],

@@ -1019,7 +1019,7 @@ fn governance_checks_cardinality_metadata_foreign_keys_and_reconciliation() {
         "assert_foreign_key",
         json!({"left_keys":["id"],"right_keys":["id"],"allow_null":true}),
         Limits {
-            max_memory_bytes: 1,
+            max_governed_memory_bytes: 1,
             ..Limits::default()
         },
     );
@@ -1059,7 +1059,7 @@ fn governance_checks_cardinality_metadata_foreign_keys_and_reconciliation() {
         "reconcile",
         json!({"left_keys":["id"],"right_keys":["id"],"nulls_equal":true}),
         Limits {
-            max_memory_bytes: 1,
+            max_governed_memory_bytes: 1,
             ..Limits::default()
         },
     );
@@ -1112,7 +1112,7 @@ fn disk_spill_is_semantically_identical_ordered_and_quota_bounded() {
         )
         .expect("in memory");
         let spill_limits = Limits {
-            max_memory_bytes: 2_048,
+            max_governed_memory_bytes: 2_048,
             spill_partitions: 64,
             ..Limits::default()
         };
@@ -1122,7 +1122,7 @@ fn disk_spill_is_semantically_identical_ordered_and_quota_bounded() {
     }
 
     let quota = Limits {
-        max_memory_bytes: 2_048,
+        max_governed_memory_bytes: 2_048,
         max_temp_bytes: 32,
         spill_partitions: 8,
         ..Limits::default()

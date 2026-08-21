@@ -38,7 +38,7 @@ fn validate_limits(limits: &Limits) -> Result<()> {
         || limits.max_string_bytes == 0
         || limits.max_regex_bytes == 0
         || limits.max_split_columns == 0
-        || limits.max_memory_bytes == 0
+        || limits.max_governed_memory_bytes == 0
         || limits.max_temp_bytes == 0
         || limits.spill_partitions < 2
         || limits.spill_partitions > 4_096
@@ -62,9 +62,130 @@ pub struct Step {
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub schema_version: u16,
-    #[serde(default)]
+    /// I limiti **come li scrive il formato v1**, tradotti sul tipo Rust
+    /// corrente da [`limiti_v1`]. Vedi il modulo per il perche'.
+    #[serde(default, with = "limiti_v1")]
     pub limits: Limits,
     pub steps: Vec<Step>,
+}
+
+/// Il blocco `limits` del formato lineare **v1**, sul filo.
+///
+/// ADR 15 ha rinominato il budget di memoria della libreria, e il tipo Rust
+/// [`Limits`] porta il nome nuovo. Il formato v1 **no**: e' un formato
+/// pubblicato, distinguibile dagli altri proprio da `schema_version: 1`, e un
+/// piano gia' scritto non cambia perche' noi abbiamo cambiato idea sul nome.
+/// Riscriverlo retroattivamente sarebbe stato peggio di un alias: un alias
+/// almeno non rompe nulla.
+///
+/// Questa struttura e' **privata** e serve solo alla (de)serializzazione di
+/// [`Plan`]. Non e' un alias, ed e' una cosa diversa in due modi che contano:
+///
+/// - vale **solo** dentro `schema_version: 1`, non nel formato canonico;
+/// - `deny_unknown_fields` fa si' che il nome della v5 **non** sia accettato
+///   qui. Un piano v1 che scrive `max_governed_memory_bytes` e' rifiutato,
+///   esattamente come un piano v5 che scrive il nome della v1. Nessuno dei
+///   due nomi funziona in entrambi i posti: e' questo che distingue una
+///   traduzione da un alias.
+///
+/// La conversione e' per campi, non per chiavi: se qualcuno aggiunge un
+/// limite a [`Limits`], questi letterali smettono di compilare. Un campo
+/// nuovo dimenticato qui sparirebbe in silenzio dal formato v1.
+mod limiti_v1 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::Limits;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct LimitsV1 {
+        max_rows: usize,
+        max_columns: usize,
+        max_string_bytes: usize,
+        max_regex_bytes: usize,
+        max_split_columns: usize,
+        /// Il nome della v1. E' l'unica differenza rispetto al tipo Rust.
+        max_memory_bytes: usize,
+        max_temp_bytes: u64,
+        spill_partitions: usize,
+    }
+
+    impl Default for LimitsV1 {
+        fn default() -> Self {
+            // Un solo posto in cui vivono i default, e non e' questo.
+            Self::from(Limits::default())
+        }
+    }
+
+    impl From<Limits> for LimitsV1 {
+        fn from(limits: Limits) -> Self {
+            let Limits {
+                max_rows,
+                max_columns,
+                max_string_bytes,
+                max_regex_bytes,
+                max_split_columns,
+                max_governed_memory_bytes,
+                max_temp_bytes,
+                spill_partitions,
+            } = limits;
+            Self {
+                max_rows,
+                max_columns,
+                max_string_bytes,
+                max_regex_bytes,
+                max_split_columns,
+                max_memory_bytes: max_governed_memory_bytes,
+                max_temp_bytes,
+                spill_partitions,
+            }
+        }
+    }
+
+    impl From<LimitsV1> for Limits {
+        fn from(wire: LimitsV1) -> Self {
+            let LimitsV1 {
+                max_rows,
+                max_columns,
+                max_string_bytes,
+                max_regex_bytes,
+                max_split_columns,
+                max_memory_bytes,
+                max_temp_bytes,
+                spill_partitions,
+            } = wire;
+            Self {
+                max_rows,
+                max_columns,
+                max_string_bytes,
+                max_regex_bytes,
+                max_split_columns,
+                max_governed_memory_bytes: max_memory_bytes,
+                max_temp_bytes,
+                spill_partitions,
+            }
+        }
+    }
+
+    /// Un piano v1 riserializzato torna a nominare i limiti come la v1: chi
+    /// legge e riscrive un piano non deve ritrovarselo cambiato di formato.
+    pub fn serialize<S>(limits: &Limits, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        LimitsV1::from(limits.clone()).serialize(serializer)
+    }
+
+    /// # Errors
+    ///
+    /// L'errore del deserializzatore: chiave sconosciuta (compreso il nome
+    /// della v5), tipo sbagliato, JSON malformato.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Limits, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        LimitsV1::deserialize(deserializer).map(Limits::from)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -173,13 +294,13 @@ impl ValidatedPlan {
         &self.limits
     }
 
-    /// Copia del piano con `max_memory_bytes` **ridotto** al valore indicato.
+    /// Copia del piano con `max_governed_memory_bytes` **ridotto** al valore indicato.
     ///
-    /// Serve al percorso legacy della CLI, dove `max_memory_bytes` deve
+    /// Serve al percorso legacy della CLI, dove `max_governed_memory_bytes` deve
     /// essere un tetto GLOBALE del piano e non il tetto di ogni singola
     /// fase: caricato un input, la memoria che quell'input trattiene non e'
     /// piu' disponibile per l'esecuzione, e i kernel — che consultano
-    /// `limits.max_memory_bytes` per le proprie tabelle di lavoro — devono
+    /// `limits.max_governed_memory_bytes` per le proprie tabelle di lavoro — devono
     /// vedere cio' che RESTA, non il budget iniziale.
     ///
     /// Il budget puo' solo scendere: passare un valore maggiore di quello
@@ -189,7 +310,7 @@ impl ValidatedPlan {
     /// # Errors
     ///
     /// [`PlenoraError::ResourceLimit`] se il budget residuo e' zero: un piano
-    /// con `max_memory_bytes = 0` non e' valido (`validate_limits`), e la
+    /// con `max_governed_memory_bytes = 0` non e' valido (`validate_limits`), e la
     /// condizione «non resta memoria» e' un limite di risorsa, non un piano
     /// sbagliato.
     pub fn with_memory_budget(&self, bytes: usize) -> Result<Self> {
@@ -199,7 +320,7 @@ impl ValidatedPlan {
             ));
         }
         let mut ridotto = self.clone();
-        ridotto.limits.max_memory_bytes = bytes.min(self.limits.max_memory_bytes);
+        ridotto.limits.max_governed_memory_bytes = bytes.min(self.limits.max_governed_memory_bytes);
         Ok(ridotto)
     }
 
@@ -346,5 +467,119 @@ mod tests {
             .validate()
             .expect("valid canonical binary plan");
         assert!(binary.requires_secondary());
+    }
+}
+
+#[cfg(test)]
+mod tests_limiti_v1 {
+    //! Il formato v1 sul filo (ADR 15 §7): conserva il proprio nome, e non
+    //! accetta quello della v5.
+
+    use serde_json::json;
+
+    use super::{Limits, Plan, SCHEMA_VERSION};
+
+    fn testo(limiti: &serde_json::Value) -> String {
+        json!({
+            "schema_version": SCHEMA_VERSION,
+            "limits": limiti,
+            "steps": [{"operation": "drop_columns", "config": {"columns": []}}]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn il_nome_della_v1_viene_tradotto_sul_campo_corrente() {
+        let plan: Plan = serde_json::from_str(&testo(&json!({"max_memory_bytes": 4096})))
+            .expect("un piano v1 scrive il nome della v1");
+        assert_eq!(plan.limits.max_governed_memory_bytes, 4096);
+    }
+
+    #[test]
+    fn il_nome_della_v5_non_e_accettato_nella_v1() {
+        // Se passasse, avremmo scritto un alias e chiamato traduzione.
+        let errore = serde_json::from_str::<Plan>(&testo(&json!({
+            "max_governed_memory_bytes": 4096
+        })))
+        .expect_err("il nome della v5 non appartiene alla v1")
+        .to_string();
+        assert!(errore.contains("max_governed_memory_bytes"), "{errore}");
+    }
+
+    #[test]
+    fn le_due_chiavi_insieme_sono_rifiutate() {
+        let errore = serde_json::from_str::<Plan>(&testo(&json!({
+            "max_memory_bytes": 4096,
+            "max_governed_memory_bytes": 4096
+        })))
+        .expect_err("una delle due e' sempre sconosciuta")
+        .to_string();
+        assert!(errore.contains("max_governed_memory_bytes"), "{errore}");
+    }
+
+    #[test]
+    fn gli_altri_limiti_v1_attraversano_intatti() {
+        let plan: Plan = serde_json::from_str(&testo(&json!({
+            "max_rows": 7,
+            "max_columns": 8,
+            "max_string_bytes": 9,
+            "max_regex_bytes": 10,
+            "max_split_columns": 11,
+            "max_memory_bytes": 12,
+            "max_temp_bytes": 13,
+            "spill_partitions": 14
+        })))
+        .expect("piano v1");
+        let Limits {
+            max_rows,
+            max_columns,
+            max_string_bytes,
+            max_regex_bytes,
+            max_split_columns,
+            max_governed_memory_bytes,
+            max_temp_bytes,
+            spill_partitions,
+        } = plan.limits;
+        assert_eq!(
+            (
+                max_rows,
+                max_columns,
+                max_string_bytes,
+                max_regex_bytes,
+                max_split_columns,
+                max_governed_memory_bytes,
+                max_temp_bytes,
+                spill_partitions
+            ),
+            (7, 8, 9, 10, 11, 12, 13, 14)
+        );
+    }
+
+    #[test]
+    fn i_limiti_omessi_restano_quelli_di_default() {
+        let plan: Plan =
+            serde_json::from_str(&testo(&json!({"max_memory_bytes": 4096}))).expect("piano v1");
+        assert_eq!(plan.limits.max_rows, Limits::default().max_rows);
+        assert_eq!(
+            plan.limits.spill_partitions,
+            Limits::default().spill_partitions
+        );
+    }
+
+    #[test]
+    fn riserializzare_un_piano_v1_riscrive_il_nome_della_v1() {
+        // Chi legge un piano e lo riscrive non deve ritrovarselo cambiato di
+        // formato: sarebbe una migrazione silenziosa verso un formato che il
+        // documento non dichiara.
+        let plan: Plan =
+            serde_json::from_str(&testo(&json!({"max_memory_bytes": 4096}))).expect("piano v1");
+        let riscritto = serde_json::to_value(&plan).expect("serializzazione");
+        assert_eq!(riscritto["limits"]["max_memory_bytes"], json!(4096));
+        assert!(riscritto["limits"]
+            .get("max_governed_memory_bytes")
+            .is_none());
+
+        let ririletto: Plan = serde_json::from_value(riscritto).expect("round-trip");
+        assert_eq!(ririletto.limits.max_governed_memory_bytes, 4096);
     }
 }

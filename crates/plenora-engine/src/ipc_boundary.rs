@@ -289,7 +289,7 @@ pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
 ///
 /// Il tetto sul body e' il PIU' STRETTO fra i limiti che il batch dovra'
 /// rispettare comunque: `max_batch_bytes` (con cui l'executor misura il batch
-/// risultante), `max_memory_bytes` (il budget del governor) e
+/// risultante), `max_governed_memory_bytes` (il budget del governor) e
 /// `max_payload_bytes`. Derivarlo dal solo `max_batch_bytes` lasciava arrow
 /// allocare fino al tetto di default del body (64 MiB) anche con un budget di
 /// memoria di 1 MiB, e il
@@ -307,7 +307,7 @@ pub fn limits_from_plan(
     let default = IpcLimits::default();
     let tetto = u64::try_from(max_batch_bytes)
         .unwrap_or(u64::MAX)
-        .min(limits.max_memory_bytes)
+        .min(limits.max_governed_memory_bytes)
         .min(limits.max_payload_bytes);
     IpcLimits {
         // Anche i METADATI sono un'allocazione, e arrow li alloca prima di
@@ -328,16 +328,16 @@ pub fn limits_from_plan(
 }
 
 /// Limiti del confine per i percorsi che hanno un solo budget di memoria e
-/// nessun piano v4 alle spalle (piani legacy, `schema_version <= 3`).
+/// nessun piano DAG alle spalle (piani legacy, `schema_version <= 3`).
 ///
 /// Il percorso legacy usava `IpcLimits::default()`: 64 MiB di body e 16 MiB di
-/// metadati indipendentemente da `max_memory_bytes`, cioe' un confine che non
+/// metadati indipendentemente da `max_governed_memory_bytes`, cioe' un confine che non
 /// vincolava il budget dichiarato dal piano. Qui il budget e' l'unico dato
 /// disponibile e diventa il tetto di entrambe le allocazioni.
 #[must_use]
-pub fn limits_from_memory_budget(max_memory_bytes: usize) -> IpcLimits {
+pub fn limits_from_memory_budget(max_governed_memory_bytes: usize) -> IpcLimits {
     let default = IpcLimits::default();
-    let tetto = u64::try_from(max_memory_bytes).unwrap_or(u64::MAX);
+    let tetto = u64::try_from(max_governed_memory_bytes).unwrap_or(u64::MAX);
     IpcLimits {
         max_metadata_bytes: usize::try_from(
             u64::try_from(default.max_metadata_bytes)

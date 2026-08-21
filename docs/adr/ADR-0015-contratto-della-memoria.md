@@ -427,3 +427,160 @@ dettaglio implementativo, e chi sceglie il tetto duro lo sceglie sapendolo.
   presa (§0); l'attuazione — rinominazione, migrazione di versione dei piani
   storici, profilo isolato — è un blocco separato, e questo ADR non ne stima
   il costo né ne fissa l'ordine.
+
+
+---
+
+## 7. Attuazione del livello 1 (2026-08-20)
+
+Il livello 1 è attuato. Il livello 2 **no**: `hard_process_memory_bytes` non
+esiste ancora nel codice, di proposito — introdurre il nome prima del profilo
+isolato che lo realizza ripeterebbe l'errore che questa ADR corregge.
+
+Il titolo di questo documento cita ancora il nome della v4 perché è il nome
+con cui il problema è stato posto. Non è un nome ancora in uso.
+
+### Che cosa è cambiato
+
+| | |
+|---|---|
+| campo Rust | `Limits::max_governed_memory_bytes` (`plenora-core`) e `plenora_kernels_table::Limits::max_governed_memory_bytes` |
+| chiave del piano canonico | `limits.max_governed_memory_bytes` |
+| versione canonica del piano | **5** |
+| piano v4 | accettato **solo** attraverso `plan::migrazione_v4`, che lo porta al canonico |
+| piano lineare v1 | **invariato**: continua a scrivere il nome della v1, tradotto all'ingresso |
+| `plan_hash` | separatore di dominio, ADR 4 emendata |
+| alias | **nessuno** in nessuno dei formati, e un gate lo verifica a ogni CI |
+
+### Tre formati, tre nomi, nessun alias
+
+«Nessun alias» non vuol dire «un solo nome ovunque». Vuol dire che **nessun
+nome funziona in due formati**:
+
+| formato | come si riconosce | come chiama il budget |
+|---|---|---|
+| piano lineare v1 | `schema_version: 1` | `max_memory_bytes` |
+| piano DAG v4 | `schema_version: 4` | `max_memory_bytes` |
+| piano DAG v5 (canonico) | `schema_version: 5` | `max_governed_memory_bytes` |
+
+Un piano v1 o v4 che scrive il nome della v5 è rifiutato; un piano v5 che
+scrive il nome vecchio è rifiutato. È questa **simmetria** a distinguere una
+traduzione da un alias: un alias fa funzionare il nome vecchio ovunque, una
+traduzione lo fa funzionare in un formato solo — il suo — e lo converte
+all'ingresso.
+
+Il formato v1 non è stato toccato di proposito. È un formato **pubblicato**,
+distinguibile dagli altri proprio dalla sua `schema_version`, e un piano già
+scritto non cambia perché noi abbiamo cambiato idea sul nome. Riscriverlo
+retroattivamente sarebbe stato peggio di un alias: un alias almeno non rompe
+nulla. La traduzione vive in una struttura wire privata
+(`table_engine::contract::limiti_v1`), che il tipo Rust non conosce.
+
+I piani `schema_version <= 3` che passano al DAG lo fanno via
+`PlanV5::from_legacy`, cioè da una struttura **già deserializzata**: arrivano
+al canonico v5 senza forma intermedia. La traduzione del nome è avvenuta
+prima, all'ingresso del formato v1.
+
+### Come è resa vera l'assenza di alias
+
+Non con un controllo aggiuntivo, che si può dimenticare, ma con **due
+strutture separate**:
+
+- `LimitsOverride` (v5) conosce solo `max_governed_memory_bytes`;
+- `LimitsOverrideV4`, privata del modulo di migrazione, conosce solo il nome
+  della v4.
+
+Entrambe hanno `deny_unknown_fields`. Ne segue, per costruzione: un piano v5
+col nome della v4 è rifiutato, un v4 col nome nuovo è rifiutato, e un piano
+che dichiara entrambe le chiavi è rifiutato in ogni versione — qualunque
+versione dichiari, una delle due chiavi è sconosciuta a chi la deserializza.
+
+La traduzione fra le due non è una riscrittura di chiavi ma una costruzione
+**per campi**: se un limite nuovo viene aggiunto a `LimitsOverride`, il
+letterale della migrazione smette di compilare. Una migrazione che dimentica
+un campo nuovo lo lascerebbe cadere in silenzio, ed è così che un piano
+migrato finisce per girare sotto limiti che non ha chiesto.
+
+### Determinismo, idempotenza, ordine
+
+- un piano v4 e il v5 equivalente producono lo **stesso** piano canonico e lo
+  **stesso** `plan_hash`;
+- la migrazione non riordina né normalizza il resto del piano: normalizzare è
+  compito della canonicalizzazione, e farlo in due posti significa poterlo
+  fare in due modi;
+- l'ingresso di versione è idempotente (applicato al proprio risultato non
+  cambia nulla); la sola funzione di migrazione, invece, **rifiuta** un piano
+  già migrato, perché chiamarla due volte è un errore di chi chiama;
+- l'ordine è fail-closed: tetto sui byte → chiavi duplicate → lettura della
+  `schema_version` → migrazione → parse. Le chiavi duplicate sono rifiutate
+  prima di leggere la versione: risolverle con «vince l'ultima» farebbe
+  dipendere la scelta del percorso da quale duplicato ha vinto.
+
+### Invalidazione esplicita delle identità
+
+Il digest è calcolato su `"plenora/plan_hash/v5\0" || canonical_json` (ADR 4,
+emendamento 2026-08-20). Il dominio **separa gli spazi di input**: nessun
+testo canonico prodotto sotto la regola nuova coincide con uno prodotto sotto
+quella vecchia. Da input disgiunti non segue però che i digest lo siano — un
+`plan_hash` uguale fra i due domini richiederebbe una **collisione SHA-256**,
+che era già l'assunzione di prima. Il dominio toglie di mezzo la sola
+coincidenza *strutturale* possibile, non la crittografia.
+
+La difesa contro il riuso di un grafo validato sotto un'altra versione del
+formato non è però l'hash: è il confronto esplicito di `plan_format_version`
+in `planner::check_compatibility`, aggiunto qui perché il campo era registrato
+e non veniva letto da nessuno.
+
+Il `catalog_fingerprint` e i `ContractFingerprint` degli input **non**
+cambiano: non descrivono il formato del piano, e invalidarli sarebbe rumore.
+
+### Il gate
+
+`scripts/verifica_nome_budget_memoria.py` (in CI) fallisce se il nome della v4
+ricompare nel codice di produzione fuori dal modulo di migrazione, se compare
+in un file di test non dichiarato, se il modulo di migrazione smette di
+nominarlo (allowlist stantia), o se un `serde(alias` compare nelle strutture
+che dichiarano i limiti.
+
+### Il campo Rust è rinominato anche dove il formato non cambia
+
+Il campo esiste in **due** strutture: quella di `plenora-core`, che è il
+contratto del piano DAG, e quella di `plenora-kernels-table`, che è il tipo
+in-memory dei limiti del percorso lineare. Entrambe portano ora il nome
+corretto: sono API Rust, e un'API Rust che promette male promette male in
+qualunque percorso la si usi.
+
+Il **formato v1 sul filo**, invece, non cambia — vedi sopra. La distanza fra
+le due cose è colmata da `table_engine::contract::limiti_v1`, che è privata,
+vale solo dentro `schema_version: 1`, e rifiuta il nome della v5 con la stessa
+severità con cui il canonico rifiuta quello della v1.
+
+Chi costruisce `plenora_kernels_table::Limits` da Rust deve aggiornare il nome
+del campo: è una rottura di compilazione, dichiarata in
+`docs/api-breaking-2026-08-16.md`. Chi scrive piani v1 in JSON non deve fare
+nulla.
+
+### Il limite di parsing e l'idempotenza
+
+Il nome della v5 è più lungo di nove byte: un piano v4 grande esattamente
+quanto `max_plan_json_bytes` migra in un testo che lo supera. Se il tetto si
+applicasse solo al testo fornito, l'ingresso di versione risponderebbe `Ok`
+alla prima chiamata e `Err` alla seconda **sullo stesso input**. Il tetto si
+applica quindi due volte, al testo fornito e al migrato, e un piano v4 viene
+accettato o rifiutato **insieme** al v5 equivalente, che ha la stessa
+dimensione del migrato.
+
+### La categoria d'errore è congelata
+
+Un blocco `limits` malformato dà la **stessa categoria** — e quindi lo stesso
+exit code — sia scritto in v4 sia scritto in v5. Una migrazione che traduce un
+nome non deve cambiare anche il contratto d'errore.
+
+### Che cosa la migrazione promette
+
+Equivalenza **canonica**, non testuale. Il piano passa da un
+`serde_json::Value`: ordine delle chiavi, spaziatura e forma dei letterali
+numerici possono cambiare. Ciò che è garantito — e verificato — è che i valori
+non toccati siano gli stessi e che il piano canonico e il `plan_hash` di un v4
+coincidano con quelli del v5 equivalente. È la sola equivalenza su cui
+poggiano cache e riproducibilità (ADR 4).

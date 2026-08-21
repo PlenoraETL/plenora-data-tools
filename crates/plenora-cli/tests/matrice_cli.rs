@@ -141,7 +141,7 @@ fn scrivi_input_batch(path: &Path, batch: usize, righe_per_batch: i64) {
 
 fn scrivi_piano(path: &Path) {
     let piano = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [{"id": "f", "op": "table.filter", "in": ["main"],
                    "config": {"column": "id", "operator": ">", "value": 0}}],
@@ -1023,7 +1023,7 @@ fn il_percorso_legacy_non_declassa_un_limite_di_risorsa_a_esecuzione() {
 #[test]
 fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
     // Il caricamento era limitato, l'esecuzione no: gli input restavano vivi
-    // e il kernel riceveva `max_memory_bytes` INTERO, e l'output non veniva
+    // e il kernel riceveva `max_governed_memory_bytes` INTERO, e l'output non veniva
     // addebitato a nessuno. Un piano dichiarato a N byte poteva quindi
     // arrivare molto oltre N.
     //

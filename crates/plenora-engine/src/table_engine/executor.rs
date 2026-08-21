@@ -1423,7 +1423,7 @@ fn spill_workspace(spill_dir: Option<&Path>, limits: &Limits) -> Result<spill::R
 
 /// `table.sort` con attivazione preventiva dello spill (ADR-0002): stessa
 /// soglia deterministica del set-op spilled (byte stimati dell'input vs
-/// `max_memory_bytes`); sopra soglia external merge sort su disco, sotto il
+/// `max_governed_memory_bytes`); sopra soglia external merge sort su disco, sotto il
 /// percorso in memoria. Output identico nei due casi.
 fn sort_dispatch(
     batch: &RecordBatch,
@@ -1608,7 +1608,7 @@ fn execute_batch_with_spill_impl(
                     error
                 } else {
                     PlenoraError::Unsupported(
-                        "row diagnostics batch-local non pubblicabili: usare l'executor DAG v4"
+                        "row diagnostics batch-local non pubblicabili: usare l'executor DAG"
                             .to_owned(),
                     )
                 }

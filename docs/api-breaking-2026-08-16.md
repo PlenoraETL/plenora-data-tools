@@ -485,3 +485,134 @@ l'analizzatore del contratto.
   evidenza, come i precedenti;
 - riportare `since = "<versione>"` negli attributi `#[deprecated]`, che oggi
   ne sono privi proprio perche' il numero non era deciso.
+
+
+---
+
+# Aggiunta 2026-08-20 — contratto della memoria (ADR 15, livello 1)
+
+Rotture **ulteriori** rispetto all'inventario del 2026-08-16, dallo stesso
+bump maggiore. Le sezioni sopra restano com'erano scritte: descrivono lo stato
+dell'API a quella data, quando il campo aveva ancora il nome della v4, e
+riscriverle renderebbe l'inventario una cronaca inaffidabile.
+
+## Il campo Rust
+
+`max_memory_bytes` si chiama ora **`max_governed_memory_bytes`**. Il nome
+precedente prometteva un tetto sull'intero processo che in-process non è
+realizzabile (ADR 15 §3); il nuovo dice che cosa il limite fa davvero.
+
+| dove | prima | dopo |
+|---|---|---|
+| `plenora_core::limits::Limits` | `max_memory_bytes: u64` | `max_governed_memory_bytes: u64` |
+| `plenora_kernels_table::Limits` | `max_memory_bytes: usize` | `max_governed_memory_bytes: usize` |
+| `ValidatedPlan::with_memory_budget` | riduce `max_memory_bytes` | riduce `max_governed_memory_bytes` |
+
+Chi costruisce una di quelle `Limits` con struct literal, o chi legge il
+campo, non compila più. È l'unica rottura che colpisce chi usa la libreria da
+Rust, ed è segnalata dal compilatore.
+
+## I formati sul filo: chi cambia e chi no
+
+**Non c'è alias, in nessuna forma**: né `serde(alias)`, né un campo deprecato,
+né una chiave accettata «solo per compatibilità». Ma «nessun alias» non
+significa «un solo nome ovunque»: significa che **nessun nome funziona in due
+formati**.
+
+| formato | come si riconosce | chiave del budget | cambia? |
+|---|---|---|---|
+| piano lineare v1 | `schema_version: 1` | `max_memory_bytes` | **no** |
+| piano DAG v4 | `schema_version: 4` | `max_memory_bytes` | no, ma è migrato |
+| piano DAG v5 (canonico) | `schema_version: 5` | `max_governed_memory_bytes` | è il nuovo |
+
+- **chi scrive piani lineari `schema_version: 1` non deve fare nulla.** Il
+  formato è pubblicato e resta quello che era; la traduzione verso il campo
+  Rust avviene all'ingresso, in una struttura wire privata;
+- **chi scrive piani v4 non deve fare nulla**: la migrazione li porta al
+  canonico. Conviene comunque passare alla v5, che è la forma in cui i piani
+  vanno scritti da qui in avanti;
+- **chi scrive piani v5 usa il nome nuovo**, e solo quello.
+
+Il rifiuto è **simmetrico**, ed è ciò che distingue una traduzione da un
+alias: un piano v1 o v4 che scrive `max_governed_memory_bytes` è rifiutato,
+esattamente come un piano v5 che scrive `max_memory_bytes`. Un piano che
+dichiara entrambe le chiavi è rifiutato in ogni formato. La diagnosi è a
+runtime ed è un **errore**, non un default silenzioso: tutte le strutture
+hanno `deny_unknown_fields`.
+
+## Formato del piano: la canonica è la v5
+
+- la `schema_version` canonica passa da **4 a 5**;
+- un piano `schema_version: 4` è accettato **solo** attraverso la migrazione
+  esplicita, che traduce il nome del budget;
+- i piani `schema_version <= 3` che entrano nel DAG arrivano **direttamente al
+  canonico v5** (`PlanV5::from_legacy`, da una struttura già deserializzata):
+  non esiste una forma intermedia da cui ripartire;
+- `validate` e `run` della CLI riportano `"schema_version": 5` anche per un
+  piano v4 in ingresso: è la versione sotto cui il piano viene effettivamente
+  eseguito;
+- un piano v4 grande **esattamente** quanto `max_plan_json_bytes` è ora
+  rifiutato: il nome della v5 è più lungo di nove byte, e il tetto si applica
+  anche al testo migrato. È la stessa risposta che riceve il v5 equivalente,
+  che ha la stessa dimensione.
+
+## Categoria d'errore, e quindi exit code
+
+Un blocco `limits` malformato — valore del tipo sbagliato, chiave sconosciuta,
+nome dell'altro formato — dà `data_mapping` sia in v4 sia in v5. Prima della
+correzione il percorso v4 dava `invalid_plan` e quello v5 `data_mapping`, con
+exit code diversi per lo stesso difetto scritto in due versioni. Chi confronta
+gli exit code di una pipeline che accetta entrambe le versioni deve saperlo.
+
+## `plan_hash`: dominio separato
+
+```
+plan_hash = SHA256("plenora/plan_hash/v5\0" || canonical_json)
+```
+
+Ogni `plan_hash` calcolato prima di questo cambiamento appartiene a un
+**dominio precedente** ed è da considerarsi **invalidato**. Chi lo conserva
+(cache, log di riproducibilità, confronti fra esecuzioni) non deve più
+confrontarlo con quelli prodotti da qui in avanti — e non perché
+l'uguaglianza sia impossibile: resta teoricamente possibile per collisione
+SHA-256, come si legge qui sotto. È invalidato perché non descrive più lo
+stesso contratto, non perché il numero non possa ripetersi.
+
+Con precisione: il dominio rende **disgiunti** gli insiemi di **input** della
+funzione di hash. Da input disgiunti non segue che gli output lo siano: un
+digest uguale fra i due domini richiederebbe una **collisione SHA-256**, che è
+la stessa assunzione su cui il `plan_hash` poggiava già prima. Vedi ADR 4,
+emendamento 2026-08-20.
+
+`catalog_fingerprint` e `ContractFingerprint` **non** cambiano.
+
+## `check_compatibility` confronta anche la versione del formato
+
+`planner::check_compatibility` rifiuta ora con `GRAPH_MISMATCH` un
+`ValidatedGraph` il cui `plan_format_version` non è quello canonico corrente.
+Il campo era registrato e non veniva letto da nessuno: un grafo validato sotto
+un altro formato sarebbe stato dichiarato compatibile. Un chiamante che
+riusava grafi serializzati da versioni precedenti vedrà ora un rifiuto
+esplicito dove prima passava.
+
+## Superficie nuova
+
+- `plenora_engine::plan::migrazione_v4::testo_canonico_v5` — l'ingresso di
+  versione, e **l'unica** funzione pubblica del modulo. Riceve i `PlanLimits`
+  e li applica; restituisce un `Cow`, quindi un piano già v5 attraversa senza
+  copia. La migrazione vera e la lettura della `schema_version` sono interne
+  di proposito: costruiscono un `serde_json::Value` dal testo, cioè allocano
+  guidate dal contenuto, e come funzioni pubbliche senza limite sarebbero
+  state un ingresso che aggira il tetto di ADR 6;
+- `plenora_engine::plan::PLAN_SCHEMA_VERSION_V5` (= 5) e
+  `PLAN_SCHEMA_VERSION_V4` (= 4, accettata solo dalla migrazione). La
+  costante `PLAN_SCHEMA_VERSION_V4` di prima **valeva 4 ed era la canonica**:
+  chi la usava per scrivere piani deve passare a `PLAN_SCHEMA_VERSION_V5`;
+- i tipi `PlanV4`, `NodeV4`, `ValidatedPlanV4` sono rinominati in `PlanV5`,
+  `NodeV5`, `ValidatedPlanV5`.
+
+## Non introdotto
+
+`hard_process_memory_bytes` (livello 2 di ADR 15) **non esiste**: arriverà col
+profilo isolato che lo realizza. Introdurre il nome prima del meccanismo
+ripeterebbe l'errore che ADR 15 corregge.

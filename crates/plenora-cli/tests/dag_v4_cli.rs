@@ -1,6 +1,7 @@
-//! Test end-to-end della CLI sul DAG v4 (Fase 2A): `validate` e `run` di
-//! piani `schema_version: 4` attraverso planner/executor di `plenora-engine`,
-//! con il piano legacy che continua a funzionare invariato.
+//! Test end-to-end della CLI sul DAG: `validate` e `run` di piani
+//! `schema_version: 5` attraverso planner/executor di `plenora-engine`, con
+//! il piano legacy che continua a funzionare invariato e i piani v4 che
+//! entrano dalla migrazione (ADR 15).
 //!
 //! Le fixture Arrow sono generate nei test (stesso stile di
 //! `roundtrip_smoke.rs`). Il test con geometria richiede la risoluzione CRS
@@ -55,7 +56,7 @@ fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
 /// Piano v4 tabellare: filter `id > 0` poi rename `name` -> `label`.
 fn table_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -99,7 +100,7 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
     );
     let summary: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
     assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["schema_version"], 4);
+    assert_eq!(summary["schema_version"], 5);
     let plan_hash = summary["plan_hash"].as_str().expect("plan_hash");
     assert_eq!(plan_hash.len(), 64, "plan_hash SHA-256 esadecimale");
     assert_eq!(summary["inputs"], json!(["main"]));
@@ -261,7 +262,7 @@ fn run_v4_schema_mismatch_fallisce_in_validazione() {
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -427,7 +428,7 @@ fn geometry_without_crs_batch(
 /// Piano v4: solo `table.filter` su `id` (colonna non geometrica).
 fn filter_only_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "f", "op": "table.filter", "in": ["main"],
@@ -581,7 +582,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
     let directory = tempfile::tempdir().expect("tempdir");
     let output = directory.path().join("output.arrow");
     let plan_json = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "centroid-node", "op": "geo.centroid", "in": ["main"], "config": {}}
@@ -672,7 +673,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     // lettura fallito), categoria d'errore CRS.
     let plan = directory.path().join("plan.json");
     let buffer_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
@@ -1206,7 +1207,7 @@ fn dag_v4_geo_op_on_declared_unresolved_fails_with_distinct_cause() {
     // dichiara un'incoerenza, non un'assenza.
     let directory = tempfile::tempdir().expect("tempdir");
     let buffer_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 1.0}},
@@ -1237,7 +1238,7 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
     // esplicito, mai ignorata in silenzio.
     let directory = tempfile::tempdir().expect("tempdir");
     let decision_plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "crs_decisions": {"main": "EPSG:32632"},
         "nodes": [
@@ -1273,7 +1274,7 @@ fn dag_v4_crs_decision_resolves_declared_unresolved() {
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "crs_decisions": {"main": "EPSG:32632"},
         "nodes": [
@@ -1367,7 +1368,7 @@ fn mixed_plan() -> serde_json::Value {
     // cardinality-changing: il gate provenance rifiuterebbe l'ordine
     // inverso; le asserzioni sulle righe filtrate sono invariate.
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -1645,7 +1646,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -1914,7 +1915,7 @@ fn dag_v4_reproject_replaces_canonical_crs_keys() {
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "p", "op": "geo.reproject", "in": ["main"],
@@ -1966,7 +1967,7 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "c", "op": "geo.centroid", "in": ["main"], "config": {}},
@@ -2012,7 +2013,7 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
 /// forma posizionale non poteva intercettare.
 fn plan_due_input() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["sinistra", "destra"],
         "nodes": [
             {"id": "j", "op": "table.join", "in": ["sinistra", "destra"],
@@ -2213,7 +2214,7 @@ fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["sinistra", "destra"],
             // Quattro righe per lato entrano (max_input_rows = 8), ma la
             // chiave e' la stessa per tutte: il join produce 16 righe e il
@@ -2288,7 +2289,7 @@ fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "limits": {"max_payload_bytes": 512},
             "nodes": [{"id": "f", "op": "table.filter", "in": ["main"],
@@ -2328,4 +2329,216 @@ fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
         "la fase e' quella in cui il tetto scatta: {envelope}"
     );
     assert!(!uscita.exists(), "nessun output da un tetto superato");
+}
+
+// ---------------------------------------------------------------------------
+// Migrazione v4 -> v5 attraverso la CLI (ADR 15)
+// ---------------------------------------------------------------------------
+
+/// Lo stesso piano tabellare nella forma v4, col nome che la v4 dava al
+/// budget di memoria.
+fn table_plan_v4() -> serde_json::Value {
+    let mut piano = table_plan();
+    piano["schema_version"] = json!(4);
+    piano["limits"] = json!({"max_memory_bytes": 4_194_304});
+    piano
+}
+
+fn riepilogo_validate(plan: &std::path::Path, input: &std::path::Path) -> serde_json::Value {
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(plan)
+        .arg("--inputs")
+        .arg(input)
+        .output()
+        .expect("validate");
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    serde_json::from_slice(&result.stdout).expect("JSON")
+}
+
+#[test]
+fn un_piano_v4_entra_dalla_migrazione_e_riporta_la_versione_canonica() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_, input) = write_table_fixture(directory.path());
+
+    let piano_v4 = directory.path().join("plan_v4.json");
+    std::fs::write(
+        &piano_v4,
+        serde_json::to_vec(&table_plan_v4()).expect("json"),
+    )
+    .expect("plan");
+    let piano_v5 = directory.path().join("plan_v5.json");
+    let mut equivalente = table_plan();
+    equivalente["limits"] = json!({"max_governed_memory_bytes": 4_194_304});
+    std::fs::write(&piano_v5, serde_json::to_vec(&equivalente).expect("json")).expect("plan");
+
+    let da_v4 = riepilogo_validate(&piano_v4, &input);
+    let da_v5 = riepilogo_validate(&piano_v5, &input);
+
+    // La CLI riporta la versione CANONICA, non quella scritta nel file: e'
+    // la versione sotto cui il piano viene effettivamente eseguito.
+    assert_eq!(da_v4["schema_version"], 5);
+    assert_eq!(da_v4["plan_hash"], da_v5["plan_hash"]);
+    assert_eq!(da_v4["topological_order"], da_v5["topological_order"]);
+}
+
+#[test]
+fn un_piano_v4_col_nome_della_v5_e_rifiutato_dalla_cli() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_, input) = write_table_fixture(directory.path());
+
+    let mut piano = table_plan_v4();
+    piano["limits"] = json!({"max_governed_memory_bytes": 4_194_304});
+    let percorso = directory.path().join("plan_misto.json");
+    std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
+
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(&percorso)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(!result.status.success());
+    // Canale congelato: l'envelope diagnostico vive su stdout, stderr resta
+    // vuoto (par. 9).
+    assert!(result.stderr.is_empty());
+    let envelope = String::from_utf8_lossy(&result.stdout);
+    assert!(envelope.contains("non ha alias"), "{envelope}");
+}
+
+#[test]
+fn un_piano_v5_col_nome_della_v4_e_rifiutato_dalla_cli() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_, input) = write_table_fixture(directory.path());
+
+    let mut piano = table_plan();
+    piano["limits"] = json!({"max_memory_bytes": 4_194_304});
+    let percorso = directory.path().join("plan_vecchio.json");
+    std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
+
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(&percorso)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(!result.status.success());
+    assert!(result.stderr.is_empty());
+    let envelope = String::from_utf8_lossy(&result.stdout);
+    assert!(envelope.contains("max_memory_bytes"), "{envelope}");
+}
+
+#[test]
+fn un_piano_v4_esegue_e_produce_lo_stesso_output_del_v5() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (piano_v5, input) = write_table_fixture(directory.path());
+    let piano_v4 = directory.path().join("plan_v4.json");
+    let mut v4 = table_plan();
+    v4["schema_version"] = json!(4);
+    std::fs::write(&piano_v4, serde_json::to_vec(&v4).expect("json")).expect("plan");
+
+    let esegui = |plan: &std::path::Path, output: &std::path::Path| {
+        let result = cli()
+            .args(["run", "--plan"])
+            .arg(plan)
+            .arg("--inputs")
+            .arg(&input)
+            .arg("--output")
+            .arg(output)
+            .output()
+            .expect("run");
+        assert!(
+            result.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+
+    let uscita_v4 = directory.path().join("out_v4.arrow");
+    let uscita_v5 = directory.path().join("out_v5.arrow");
+    esegui(&piano_v4, &uscita_v4);
+    esegui(&piano_v5, &uscita_v5);
+
+    assert_eq!(
+        std::fs::read(&uscita_v4).expect("out v4"),
+        std::fs::read(&uscita_v5).expect("out v5"),
+        "la migrazione non deve cambiare i byte prodotti"
+    );
+}
+
+#[test]
+fn un_piano_legacy_conserva_il_nome_del_proprio_formato() {
+    // Il formato lineare v1 e' un formato PUBBLICATO, distinguibile dagli
+    // altri proprio da `schema_version: 1`. ADR 15 ha rinominato il campo
+    // della libreria, non quel formato: un piano gia' scritto non cambia
+    // perche' noi abbiamo cambiato idea sul nome. La traduzione avviene
+    // dentro, in `table_engine::contract::limiti_v1`.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan_legacy.json");
+    let input = directory.path().join("input.arrow");
+    std::fs::write(
+        &plan,
+        br#"{"schema_version":1,"limits":{"max_memory_bytes":4194304},
+            "steps":[{"operation":"rename","config":{"renames":[
+            {"old_name":"name","new_name":"label"}]}}]}"#,
+    )
+    .expect("plan");
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[1, 2], &["a", "b"])],
+    );
+
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate legacy");
+    assert!(
+        result.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+}
+
+#[test]
+fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
+    // Il rovescio, ed e' cio' che distingue una traduzione da un alias:
+    // nessuno dei due nomi funziona in entrambi i formati. Se il nome nuovo
+    // passasse anche qui, avremmo scritto un alias e chiamato traduzione.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan_legacy.json");
+    let input = directory.path().join("input.arrow");
+    std::fs::write(
+        &plan,
+        br#"{"schema_version":1,"limits":{"max_governed_memory_bytes":4194304},
+            "steps":[{"operation":"rename","config":{"renames":[
+            {"old_name":"name","new_name":"label"}]}}]}"#,
+    )
+    .expect("plan");
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[1, 2], &["a", "b"])],
+    );
+
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate legacy");
+    assert!(!result.status.success());
+    assert!(result.stderr.is_empty());
+    let envelope = String::from_utf8_lossy(&result.stdout);
+    assert!(envelope.contains("max_governed_memory_bytes"), "{envelope}");
 }

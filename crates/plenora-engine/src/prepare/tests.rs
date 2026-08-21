@@ -77,7 +77,7 @@ fn validate_plan(plan: &serde_json::Value, contract: DataContract) -> ValidatedG
 fn linear_table_chain_fuses_into_one_streaming_segment() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -119,7 +119,7 @@ fn linear_table_chain_fuses_into_one_streaming_segment() {
 fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
     let geo_graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -139,7 +139,7 @@ fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
 
     let mixed_graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "r", "op": "table.rename", "in": ["main"],
@@ -174,7 +174,7 @@ fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
 fn fan_out_breaks_fusion_and_marks_materialization() {
     let graph = validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["left_in", "right_in"],
             "nodes": [
                 {"id": "l", "op": "table.filter", "in": ["left_in"],
@@ -213,7 +213,7 @@ fn fan_out_breaks_fusion_and_marks_materialization() {
     // Fan-out: lo stesso arco alimenta due nodi -> materializzazione prevista.
     let fanout_graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "a", "op": "table.filter", "in": ["main"],
@@ -244,7 +244,7 @@ fn fan_out_breaks_fusion_and_marks_materialization() {
 fn pass_through_plan_prepares_without_segments() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [],
             "output": "main",
@@ -264,7 +264,7 @@ fn pass_through_plan_prepares_without_segments() {
 fn unknown_statistics_are_the_conservative_default() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -313,7 +313,7 @@ fn unknown_statistics_are_the_conservative_default() {
 fn unsupported_geo_op_fails_at_prepare_not_mid_stream() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "d", "op": "geo.dissolve", "in": ["main"], "config": {}},
@@ -337,7 +337,7 @@ const POINT_WKB_HEX: &str = "010100000000000000000000000000000000000000";
 fn streaming_geo_extensions_fuse_with_their_roles() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "s", "op": "geo.snap", "in": ["main"],
@@ -390,7 +390,7 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
 fn line_locate_point_prepares_typed_point_and_output_column() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "p", "op": "geo.line_locate_point", "in": ["main"],
@@ -435,7 +435,7 @@ fn blocking_geo_extensions_are_single_blocking_segments() {
     for (op, config, role) in cases {
         let graph = validate_plan(
             &json!({
-                "schema_version": 4,
+                "schema_version": 5,
                 "inputs": ["main"],
                 "nodes": [
                     {"id": "n", "op": op, "in": ["main"], "config": config},
@@ -462,7 +462,7 @@ fn blocking_geo_extensions_are_single_blocking_segments() {
 fn fuzzy_join_prepares_as_binary_blocking() {
     let graph = validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["left_in", "right_in"],
             "nodes": [
                 {"id": "j", "op": "table.fuzzy_join", "in": ["left_in", "right_in"],
@@ -500,7 +500,7 @@ fn fuzzy_join_prepares_as_binary_blocking() {
 fn top_n_prepares_as_blocking_table_unary() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "t", "op": "table.top_n", "in": ["main"],
@@ -526,7 +526,7 @@ fn top_n_prepares_as_blocking_table_unary() {
 fn generative_geo_extensions_prepare_with_their_roles() {
     let from_wkt = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "crs": "EPSG:32632",
             "inputs": ["main"],
             "nodes": [
@@ -553,7 +553,7 @@ fn generative_geo_extensions_prepare_with_their_roles() {
 
     let grid = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "crs": "EPSG:32632",
             "inputs": ["main"],
             "nodes": [
@@ -587,7 +587,7 @@ fn generative_geo_extensions_prepare_with_their_roles() {
 /// Catena buffer -> simplify -> centroid: tre kernel fondibili consecutivi.
 fn fusible_chain_plan() -> serde_json::Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["main"],
         "nodes": [
             {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -629,7 +629,7 @@ fn fusible_geo_runs_form_one_fusion_group() {
 fn non_fusible_kernel_breaks_the_fusion_run() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -655,7 +655,7 @@ fn non_fusible_kernel_breaks_the_fusion_run() {
 fn transforms_and_terminal_measure_form_one_fusion_group() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "b", "op": "geo.buffer", "in": ["main"], "config": {"distance": 10.0}},
@@ -686,7 +686,7 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
 fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -707,7 +707,7 @@ fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
 fn lone_terminal_measure_forms_no_group() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "a", "op": "geo.area", "in": ["main"], "config": {}},
@@ -727,7 +727,7 @@ fn lone_terminal_measure_forms_no_group() {
 fn terminal_measure_closes_but_does_not_extend_the_run() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -777,7 +777,7 @@ fn geo_fusion_kill_switch_disables_groups() {
 fn make_valid_joins_fusion_groups() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "t", "op": "geo.translate", "in": ["main"],
@@ -808,7 +808,7 @@ fn make_valid_joins_fusion_groups() {
 fn reproject_joins_fusion_groups() {
     let graph = validate_plan(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "p", "op": "geo.reproject", "in": ["main"],
@@ -848,8 +848,8 @@ const POINT_HEX: &str = "010100000000000000000000400000000000000840";
 const LINESTRING_HEX: &str =
     "01020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f";
 
-fn geo_node(op: &str, config: serde_json::Value) -> NodeV4 {
-    NodeV4 {
+fn geo_node(op: &str, config: serde_json::Value) -> NodeV5 {
+    NodeV5 {
         id: "n".to_owned(),
         op: op.to_owned(),
         inputs: vec!["main".to_owned()],
@@ -868,7 +868,7 @@ fn nary_concat_over_two_inputs_is_rejected_fail_closed() {
     // (fail-closed a secco), mai a meta' esecuzione.
     let graph = validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["a", "b", "c"],
             "nodes": [
                 {"id": "cat", "op": "table.concat", "in": ["a", "b", "c"], "config": {}}
@@ -1190,7 +1190,7 @@ fn geo_binary_graph_with_limits(
 ) -> ValidatedGraph {
     validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "limits": limits,
             "inputs": ["left_in", "right_in"],
             "nodes": [
@@ -1295,7 +1295,7 @@ fn geo_binary_caps_follow_edge_position_and_plan_limits() {
     // Nodo intermedio (a valle un filter): tetto = max_rows_per_edge.
     let graph = validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "limits": {"max_rows_per_edge": 77},
             "inputs": ["left_in", "right_in"],
             "nodes": [
@@ -1338,7 +1338,7 @@ fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
     // raggiungibile da un piano, ed e' il verso giusto.
     let error = validate(
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "limits": {"max_output_rows": 0},
             "inputs": ["left_in", "right_in"],
             "nodes": [

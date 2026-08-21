@@ -1173,7 +1173,7 @@ fn cross_join_rifiuta_prima_di_allocare_l_output() {
     // controllo sulle righe non scatta e si arriva all'allocazione.
     let limiti = Limits {
         max_rows: 10_000_000,
-        max_memory_bytes: 64 * 1024,
+        max_governed_memory_bytes: 64 * 1024,
         ..Limits::default()
     };
 
@@ -1195,7 +1195,9 @@ fn cross_join_rifiuta_prima_di_allocare_l_output() {
         "il rifiuto dev'essere quello PREVENTIVO, non un conteggio a valle: {errore}"
     );
     assert!(
-        errore.to_string().contains("supera max_memory_bytes"),
+        errore
+            .to_string()
+            .contains("supera max_governed_memory_bytes"),
         "e deve dire quale tetto: {errore}"
     );
 }
@@ -1295,7 +1297,7 @@ fn budget_fra(stima_vecchia: usize, stima_nuova: usize) -> Limits {
         max_columns: 4_096,
         // A meta' strada: sopra cio' che la vecchia formula stimava, sotto
         // cio' che l'operazione richiede davvero.
-        max_memory_bytes: stima_vecchia + (stima_nuova - stima_vecchia) / 2,
+        max_governed_memory_bytes: stima_vecchia + (stima_nuova - stima_vecchia) / 2,
         ..Limits::default()
     }
 }
@@ -1677,7 +1679,7 @@ fn una_stima_che_perde_il_conto_non_autorizza_l_allocazione() {
     );
     let limiti = Limits {
         max_rows: usize::MAX,
-        max_memory_bytes: usize::MAX,
+        max_governed_memory_bytes: usize::MAX,
         ..Limits::default()
     };
     // `usize::MAX` righe non sono costruibili; il traboccamento della stima
@@ -2139,7 +2141,7 @@ fn un_piano_invalido_resta_invalido_qualunque_sia_il_budget() {
         Limits::default(),
         Limits {
             max_rows: 1,
-            max_memory_bytes: 1,
+            max_governed_memory_bytes: 1,
             ..Limits::default()
         },
     ] {

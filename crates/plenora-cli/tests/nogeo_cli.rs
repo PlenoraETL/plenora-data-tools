@@ -511,7 +511,7 @@ fn capabilities_emette_il_documento_dichiarativo_icd10() {
 
 // P0-1: un piano legacy con nodo blocking prima di un'op row-diagnostics
 // pubblicherebbe indici post-sort dichiarati `source_row_zero_based`.
-// Fail-closed: la CLI rifiuta e richiede DAG v4, nessun output pubblicato.
+// Fail-closed: la CLI rifiuta e richiede un piano DAG, nessun output pubblicato.
 #[test]
 fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     let directory = tempfile::tempdir().expect("tempdir");
@@ -575,8 +575,8 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     );
     let envelope_text = String::from_utf8_lossy(&result.stdout).into_owned();
     assert!(
-        envelope_text.contains("DAG v4"),
-        "atteso rifiuto fail-closed verso DAG v4, trovato: {envelope_text}"
+        envelope_text.contains("piano DAG"),
+        "atteso rifiuto fail-closed verso il DAG, trovato: {envelope_text}"
     );
     assert!(
         !envelope_text.contains("row_diagnostics"),
@@ -662,8 +662,8 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(
-            stderr.contains("DAG v4"),
-            "{operation}: atteso rifiuto fail-closed verso DAG v4: {stderr}"
+            stderr.contains("piano DAG"),
+            "{operation}: atteso rifiuto fail-closed verso il DAG: {stderr}"
         );
         assert!(
             !stderr.contains("row_diagnostics"),
@@ -762,8 +762,8 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
                 descriptor.id
             );
             assert!(
-                stderr.contains("DAG v4"),
-                "{} (alias `{alias}`): atteso rifiuto dal gate verso DAG v4: {stderr}",
+                stderr.contains("piano DAG"),
+                "{} (alias `{alias}`): atteso rifiuto dal gate verso il DAG: {stderr}",
                 descriptor.id
             );
             assert!(

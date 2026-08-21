@@ -292,7 +292,7 @@ impl<'a> RowKeyEncoder<'a> {
 ///   delle chiavi non identici fra i due lati;
 /// - `DataMapping`: chiave null in `left` con `allow_null = false` o chiave
 ///   sinistra non presente in `right`, con row diagnostics;
-/// - `ResourceLimit`: memoria oltre `limits.max_memory_bytes`;
+/// - `ResourceLimit`: memoria oltre `limits.max_governed_memory_bytes`;
 /// - `Internal`: overflow dei contatori.
 pub fn assert_foreign_key(
     left: &RecordBatch,
@@ -318,9 +318,9 @@ pub fn assert_foreign_key(
                     .ok_or_else(|| {
                         PlenoraError::ResourceLimit("overflow memoria foreign key".into())
                     })?;
-                if memory_used > limits.max_memory_bytes {
+                if memory_used > limits.max_governed_memory_bytes {
                     return Err(PlenoraError::ResourceLimit(
-                        "assert_foreign_key oltre max_memory_bytes".into(),
+                        "assert_foreign_key oltre max_governed_memory_bytes".into(),
                     ));
                 }
             }
@@ -394,9 +394,9 @@ fn frequencies(
                 .ok_or_else(|| {
                     PlenoraError::ResourceLimit("overflow memoria reconciliation".into())
                 })?;
-            if *memory_used > limits.max_memory_bytes {
+            if *memory_used > limits.max_governed_memory_bytes {
                 return Err(PlenoraError::ResourceLimit(
-                    "reconcile oltre max_memory_bytes".into(),
+                    "reconcile oltre max_governed_memory_bytes".into(),
                 ));
             }
             output.insert(std::mem::take(&mut key), 1);
@@ -422,7 +422,7 @@ fn as_u64(value: usize) -> Result<u64> {
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
 ///   delle chiavi non identici fra i due lati; errore Arrow nella
 ///   costruzione del batch di output;
-/// - `ResourceLimit`: memoria oltre `limits.max_memory_bytes`; chiavi distinte
+/// - `ResourceLimit`: memoria oltre `limits.max_governed_memory_bytes`; chiavi distinte
 ///   oltre `limits.max_rows`; conteggio oltre `u64`/overflow dei contatori
 ///   (errore Internal).
 pub fn reconcile(
@@ -1089,9 +1089,9 @@ mod tests {
                     .ok_or_else(|| {
                         PlenoraError::ResourceLimit("overflow memoria reconciliation".into())
                     })?;
-                if *memory_used > limits.max_memory_bytes {
+                if *memory_used > limits.max_governed_memory_bytes {
                     return Err(PlenoraError::ResourceLimit(
-                        "reconcile oltre max_memory_bytes".into(),
+                        "reconcile oltre max_governed_memory_bytes".into(),
                     ));
                 }
                 output.insert(key, 1);
@@ -1203,9 +1203,9 @@ mod tests {
                         .ok_or_else(|| {
                             PlenoraError::ResourceLimit("overflow memoria foreign key".into())
                         })?;
-                    if memory_used > limits.max_memory_bytes {
+                    if memory_used > limits.max_governed_memory_bytes {
                         return Err(PlenoraError::ResourceLimit(
-                            "assert_foreign_key oltre max_memory_bytes".into(),
+                            "assert_foreign_key oltre max_governed_memory_bytes".into(),
                         ));
                     }
                 }
@@ -1416,9 +1416,9 @@ mod tests {
             right_keys: vec!["id".into()],
             nulls_equal: true,
         };
-        // max_memory_bytes esaurito: stesso errore nelle due versioni.
+        // max_governed_memory_bytes esaurito: stesso errore nelle due versioni.
         let tight_memory = Limits {
-            max_memory_bytes: 4,
+            max_governed_memory_bytes: 4,
             ..Limits::default()
         };
         let fast = reconcile(&left, &right, &config, &tight_memory).expect_err("fast err");
@@ -1507,9 +1507,9 @@ mod tests {
             &Limits::default()
         )
         .is_ok());
-        // max_memory_bytes: stesso errore (contabilita' basata sui byte chiave).
+        // max_governed_memory_bytes: stesso errore (contabilita' basata sui byte chiave).
         let tight = Limits {
-            max_memory_bytes: 4,
+            max_governed_memory_bytes: 4,
             ..Limits::default()
         };
         let fast = assert_foreign_key(&left, &right, &config, &tight).expect_err("fast err");

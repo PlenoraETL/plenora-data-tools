@@ -452,7 +452,7 @@ fn i_tetti_del_piano_limitano_anche_i_metadati() {
     // batch: un tetto che non li copre non e' un tetto.
     let stretti = limits_from_plan(
         &plenora_core::limits::Limits {
-            max_memory_bytes: 1_024,
+            max_governed_memory_bytes: 1_024,
             ..plenora_core::limits::Limits::default()
         },
         64 * 1024 * 1024,
@@ -467,7 +467,7 @@ fn i_tetti_del_piano_limitano_anche_i_metadati() {
     // due, non il budget in assoluto.
     let larghi = limits_from_plan(
         &plenora_core::limits::Limits {
-            max_memory_bytes: u64::MAX,
+            max_governed_memory_bytes: u64::MAX,
             max_payload_bytes: u64::MAX,
             ..plenora_core::limits::Limits::default()
         },
@@ -486,7 +486,7 @@ fn i_tetti_del_piano_limitano_anche_i_metadati() {
     write_file_format(&path);
     let minuscoli = limits_from_plan(
         &plenora_core::limits::Limits {
-            max_memory_bytes: 64,
+            max_governed_memory_bytes: 64,
             ..plenora_core::limits::Limits::default()
         },
         64 * 1024 * 1024,
@@ -504,7 +504,7 @@ fn i_tetti_del_piano_limitano_anche_i_metadati() {
 fn il_budget_di_memoria_limita_il_confine_anche_senza_piano_v4() {
     // Sesto giro, finding 5: il percorso legacy costruiva `IpcLimits::default()`
     // e quindi ammetteva 64 MiB per messaggio qualunque fosse
-    // `max_memory_bytes` del piano.
+    // `max_governed_memory_bytes` del piano.
     let stretti = limits_from_memory_budget(2_048);
     assert_eq!(stretti.max_body_bytes, 2_048);
     assert_eq!(stretti.max_metadata_bytes, 2_048);

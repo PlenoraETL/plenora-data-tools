@@ -17,7 +17,13 @@ capacità allocata diversa dalla lunghezza, memoria nativa GEOS.
 
 ## Decisione
 
-### Perimetro di `max_memory_bytes`
+### Perimetro di `max_governed_memory_bytes`
+
+> Rinominato da `max_memory_bytes` il 2026-08-20 (ADR 15). Il nome precedente prometteva un
+> tetto sull'intero processo che in-process non è realizzabile; il perimetro
+> descritto qui sotto è sempre stato quello del nome nuovo. I documenti
+> storici e le misure conservano il nome dell'epoca e non vanno riscritti.
+
 
 Comprende: buffer Arrow, capacità allocata, batch in coda, dictionary
 condivisi, geometrie decodificate, hash table, indici spaziali, cache di
@@ -118,7 +124,7 @@ benchmark dedicati (invariante P10 di `Prestazioni.md`).
 
 Implementato in `plenora-engine/src/governor.rs` e nell'executor:
 
-- `MemoryGovernor` con budget globale di piano (`max_memory_bytes`),
+- `MemoryGovernor` con budget globale di piano (`max_governed_memory_bytes`),
   `MemoryLease` RAII reference-counted (quota restituita al Drop dell'ultimo
   clone), `GovernedBatch` che trasporta batch+lease+`BatchSequence` nello
   stream; i kernel restano su `RecordBatch` puro, il wrapper si spacca e si
@@ -147,7 +153,7 @@ lease vivo, e si passa al disco solo quando il budget non basta più.
 prelevato, quindi di dimensione nota — si resta in memoria se e solo se:
 
 ```text
-governor.reserved_bytes() + max_batch_bytes <= max_memory_bytes
+governor.reserved_bytes() + max_batch_bytes <= max_governed_memory_bytes
 ```
 
 Nessuna percentuale scelta a mano, nessuna decisione temporale, nessuna
@@ -256,7 +262,7 @@ permesso, che con l'atomicità non è più solo verificato ma davvero preso. La
 misura complessiva è quella riportata sopra — `streaming_lineare` da 0,76 a
 73,83 MiB su un budget di 512 MiB — e non va sommata a nessun'altra: è il
 picco finale, non un incremento intermedio. È un aumento reale del picco, non
-un aumento del tetto: il permesso lo tiene sotto `max_memory_bytes` per
+un aumento del tetto: il permesso lo tiene sotto `max_governed_memory_bytes` per
 costruzione, perché è il permesso stesso a non essere concesso quando non ci
 starebbe.
 
@@ -279,7 +285,7 @@ starebbe.
 - **Limite noto della v1 (dichiarato)**: per i kernel spill-capable l'input
   del segmento blocking è materializzato in RAM **senza contabilità governor**
   (lease rilasciati al drenaggio, reservation dell'intermedio saltata quando
-  `should_spill_unary` scatta): in quel transitorio `max_memory_bytes` non è
+  `should_spill_unary` scatta): in quel transitorio `max_governed_memory_bytes` non è
   un tetto duro. Il tetto resta pienamente garantito per i kernel non
   spill-capable e dal `check_batch_bytes` sull'intermedio. La soluzione
   strutturale (spill in streaming durante il drenaggio, senza

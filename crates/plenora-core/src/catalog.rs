@@ -454,7 +454,7 @@ impl OperationDescriptor {
     /// - `table.hmac_sha256`: MAI (P2) — le `null_policy` legacy producono
     ///   output dichiarato, nessun rifiuto row-scoped possibile.
     ///
-    /// Le op geo elencate sono quelle dispatchate nel DAG v4 con raccolta
+    /// Le op geo elencate sono quelle dispatchate nel DAG con raccolta
     /// row-scoped (ledger `diag-transport`/`diag-wkt`): le op solo-trasporto
     /// (es. `geo.geodesic_*`) non attraversano nessuno dei tre gate e restano
     /// coperte dal contratto del trasporto.

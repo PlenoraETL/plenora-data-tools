@@ -63,22 +63,39 @@ struct JoinExpansion {
 
 ### Limiti di memoria
 
-`max_memory_bytes` e `max_temp_bytes` operano su byte reali (perimetro e
+`max_governed_memory_bytes` e `max_temp_bytes` operano su byte reali (perimetro e
 protocollo in ADR 2). I limiti di righe proteggono dalle espansioni logiche,
 non sostituiscono il budget in byte.
+
+> **Rinominato il 2026-08-20 (ADR 15).** Il campo si chiamava
+> `max_memory_bytes`. Non c'è alias: i piani che usano il nome precedente
+> passano dalla migrazione di versione. Il nome vecchio prometteva un tetto
+> sull'intero processo; ciò che il limite governa è la memoria che la
+> libreria contabilizza, ed è quello che il nome dice ora.
 
 **Perimetro di `max_temp_bytes` (chiarimento 2026-08-03, DER-004)**: la
 quota e' applicata **per dominio di scrittura**, non come tetto globale su
 disco — staging input del gate WKB, staging degli output accettati dei
 segmenti row-diagnostics e spill degli operatori misurano ciascuno la
 propria scrittura; il picco su disco puo' arrivare alla somma dei domini
-concorrenti. `max_memory_bytes` resta invece budget globale di piano
+concorrenti. `max_governed_memory_bytes` resta invece budget globale di piano
 (governor, ADR 2).
 
 ### Limiti del piano (`PlanLimits`)
 
 Applicati **durante il parsing**, prima di qualunque allocazione guidata dal
 contenuto:
+
+**Ordine rispetto alla migrazione di versione (2026-08-20, ADR 15).** Un
+piano `schema_version: 4` viene riscritto nel canonico v5 prima del parse.
+La riscrittura costruisce un albero JSON, quindi è a tutti gli effetti
+un'allocazione guidata dal contenuto: `max_plan_json_bytes` si applica al
+testo **fornito**, prima di migrarlo, e il testo migrato lo riattraversa nel
+parse. Non c'è divergenza fra un piano v4 e il v5 equivalente, perché il v5
+equivalente scrive la stessa chiave e ha quindi la stessa dimensione. Le
+chiavi duplicate sono rifiutate prima ancora di **leggere** la
+`schema_version`: risolverle con «vince l'ultima» farebbe dipendere la scelta
+del percorso da quale duplicato ha vinto.
 
 ```rust
 struct PlanLimits {

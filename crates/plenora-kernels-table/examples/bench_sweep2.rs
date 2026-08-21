@@ -77,7 +77,7 @@ const HMAC_KEY_ENV: &str = "PLENORA_BENCH_HMAC_KEY";
 fn bench_limits() -> Limits {
     Limits {
         max_rows: 40_000_000,
-        max_memory_bytes: 6 * 1024 * 1024 * 1024,
+        max_governed_memory_bytes: 6 * 1024 * 1024 * 1024,
         ..Limits::default()
     }
 }

@@ -12,20 +12,22 @@
 //!   (envelope v3 `PLNGEO3`), `pair-arrow` (v3), `self-test --output`;
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
 //!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
-//! - Fase 2A: collegamento al DAG v4. Se il piano dichiara `schema_version: 4`,
-//!   `validate` e `run` usano il planner/executor del DAG
+//! - Fase 2A: collegamento al DAG. Se il piano dichiara `schema_version: 5`
+//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (ADR
+//!   15) — `validate` e `run` usano il planner/executor del DAG
 //!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani
 //!   legacy (`schema_version` <= 3) restano sul `table_engine`, comportamento
-//!   invariato. Dettagli nella sezione "DAG v4 (Fase 2A)" piu' sotto.
+//!   invariato. Dettagli nella sezione "DAG (Fase 2A)" piu' sotto.
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
 //! senza dati sensibili. Fase 2B M1c (ADR 3): `run` installa un handler
-//! Ctrl-C che cancella cooperativamente l'esecuzione DAG v4 tramite
+//! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
 //! l'uscita immediata.
 
+use std::borrow::Cow;
 use std::env;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
@@ -43,6 +45,7 @@ use plenora_core::contract::{
     GeometryTypesProperty, PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{required_definition, validate_requirement, ResolvedCrs};
+use plenora_core::limits::PlanLimits;
 use plenora_core::{ErrorPhase, PlenoraError, RetryDisposition};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
@@ -54,7 +57,7 @@ use plenora_engine::geo_transport::transport::{
     pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, ArrowTransportError,
     PairArrowSchema, PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
 };
-use plenora_engine::plan::PLAN_SCHEMA_VERSION_V4;
+use plenora_engine::plan::{migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5};
 use plenora_engine::planner::{self, ValidatedGraph};
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
 use plenora_engine::{
@@ -317,7 +320,7 @@ fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraErro
 ///
 /// Il budget dev'essere globale, non per input: con la contabilita' per
 /// singolo input i due lati di un piano binario potevano occupare ciascuno
-/// l'intero `max_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
+/// l'intero `max_governed_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
 /// scala il residuo e passa quello.
 ///
 /// La CONCATENAZIONE finale duplica temporaneamente i dati — i batch di
@@ -489,7 +492,7 @@ fn run_pipeline(
     if plan.requires_secondary() || plan.requires_blocking() {
         // Contabilita' GLOBALE del budget, non per input: il secondo lato
         // riceve cio' che resta dopo il primo. Chiamando due volte
-        // `load_complete` ciascun lato riceveva l'intero `max_memory_bytes`,
+        // `load_complete` ciascun lato riceveva l'intero `max_governed_memory_bytes`,
         // cioe' il doppio del dichiarato.
         //
         // ATTENZIONE a cosa questo garantisce. Il CARICAMENTO e' limitato
@@ -500,7 +503,7 @@ fn run_pipeline(
         // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
         // controllo di ammissione a valle, non un tetto duro: vedi DER-011.
         // Non chiamarlo «budget globale» senza questa distinzione.
-        let budget = plan.limits().max_memory_bytes;
+        let budget = plan.limits().max_governed_memory_bytes;
         let (left, usati) = load_complete_within(input_path, &plan, budget)?;
         let output = if plan.requires_secondary() {
             let right_path = right_path.ok_or_else(|| contract("il piano richiede --right"))?;
@@ -510,7 +513,7 @@ fn run_pipeline(
             // prestati al kernel, non consumati. Il budget dell'esecuzione e'
             // quindi cio' che resta dopo averli trattenuti tutti e due, e i
             // kernel devono vedere quel numero — non il budget iniziale —
-            // perche' e' con `limits.max_memory_bytes` che dimensionano le
+            // perche' e' con `limits.max_governed_memory_bytes` che dimensionano le
             // proprie tabelle di lavoro.
             let trattenuti = usati.checked_add(usati_destra).ok_or_else(|| {
                 PlenoraError::ResourceLimit(
@@ -539,7 +542,7 @@ fn run_pipeline(
     let (input_schema, reader) = ipc_boundary::open_with_format(
         input_path,
         IpcFormat::File,
-        &ipc_boundary::limits_from_memory_budget(plan.limits().max_memory_bytes),
+        &ipc_boundary::limits_from_memory_budget(plan.limits().max_governed_memory_bytes),
     )?;
 
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
@@ -1090,8 +1093,12 @@ fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     // comandi, altrimenti si valida un accoppiamento e se ne esegue un altro.
     let inputs = v4_inputs(args)?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
-        return validate_dag_v4(&plan_text, &inputs, !has_flag(args, "--no-geo-fusion"));
+    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
+        return validate_dag_v4(
+            plan_text.as_ref(),
+            &inputs,
+            !has_flag(args, "--no-geo-fusion"),
+        );
     }
     let inputs: Vec<PathBuf> = match inputs {
         V4Inputs::Positional(paths) => paths,
@@ -1099,7 +1106,8 @@ fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
         // percorsi, e accettare una forma che non sanno usare confonderebbe.
         V4Inputs::Named(_) => {
             return Err(contract(
-                "`--input nome=percorso` richiede un piano DAG v4; per i piani legacy                  usare `--input PERCORSO`",
+                "`--input nome=percorso` richiede un piano DAG; \
+                 per i piani legacy usare `--input PERCORSO`",
             )
             .into());
         }
@@ -1143,7 +1151,7 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 // ---------------------------------------------------------------------------
-// DAG v4 (Fase 2A): scoperta dei contratti, validate e run
+// DAG (Fase 2A): scoperta dei contratti, validate e run
 // ---------------------------------------------------------------------------
 //
 // Un piano con `schema_version: 4` segue il percorso del DAG:
@@ -1180,13 +1188,13 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 //   segmento (righe in/out, batch, wall time in ms) sono stampate in JSON su
 //   **stdout**, come gli altri riepiloghi della CLI.
 
-/// Sonda del solo `schema_version`: decide il percorso (DAG v4 vs legacy).
+/// Sonda del solo `schema_version`: decide il percorso (DAG vs legacy).
 #[derive(Debug, Deserialize)]
 struct PlanVersionProbe {
     schema_version: u32,
 }
 
-/// Sonda dei nomi di input dichiarati dal piano v4 (accoppiamento posizionale
+/// Sonda dei nomi di input dichiarati dal piano DAG (accoppiamento posizionale
 /// con i percorsi CLI; la validazione vera resta al planner) e delle
 /// decisioni CRS esplicite (R4.6.3, applicate da [`apply_crs_decisions`]).
 #[derive(Debug, Deserialize)]
@@ -1202,6 +1210,21 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
     Ok(serde_json::from_str::<PlanVersionProbe>(plan_text)?.schema_version)
 }
 
+/// Porta il testo del piano al canonico v5 se il piano dichiara un formato
+/// DAG; `None` se dichiara la forma lineare legacy (`schema_version <= 3`),
+/// che prosegue sul percorso invariato.
+///
+/// La CLI sonda il piano piu' volte (input dichiarati, decisioni CRS) prima
+/// di chiamare il planner: se la migrazione avvenisse solo dentro il planner,
+/// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui
+/// esiste **un** testo, deciso una volta, e da li' in poi e' v5.
+fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
+    if plan_schema_version(plan_text)? < u32::from(PLAN_SCHEMA_VERSION_V4) {
+        return Ok(None);
+    }
+    migrazione_v4::testo_canonico_v5(plan_text, &PlanLimits::default()).map(Some)
+}
+
 /// Tetto sui byte di un documento JSON di controllo letto da file.
 ///
 /// Coincide con `PlanLimits::max_plan_json_bytes` di default: i piani legacy
@@ -1215,7 +1238,7 @@ const MAX_CONTROL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 /// E' l'unico lettore dei documenti di controllo della CLI. Prima ogni sito
 /// chiamava `serde_json::from_reader` per conto proprio: nessun tetto sui
 /// byte, e chiavi duplicate risolte con «vince l'ultima» — la stessa
-/// ambiguita' che il piano v4 rifiuta, lasciata aperta sui piani legacy,
+/// ambiguita' che il piano DAG rifiuta, lasciata aperta sui piani legacy,
 /// sugli schemi di comando e sulle sonde di instradamento.
 ///
 /// Confine di lettura (BLOCK-03): gli errori nascono leggendo la sorgente.
@@ -1265,7 +1288,7 @@ fn contract_error_missing(name: &str) -> PlenoraError {
 /// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
 /// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
 /// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
-/// sonda lo legge per prima. Per i piani v4 `PlanV4::parse` ripete la
+/// sonda lo legge per prima. Per i piani DAG `PlanV5::parse` ripete la
 /// verifica: e' idempotente e copre anche chi non passa dalla CLI.
 fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
@@ -1662,7 +1685,7 @@ fn geometry_contract_from_field(
     }
 }
 
-/// Accoppia gli input della riga di comando a quelli dichiarati dal piano v4.
+/// Accoppia gli input della riga di comando a quelli dichiarati dal piano DAG.
 ///
 /// Nella forma NOMINALE l'accoppiamento e' quello scritto: ogni nome dev'essere
 /// dichiarato dal piano e ogni input dichiarato dev'essere fornito, una volta
@@ -1752,7 +1775,7 @@ fn pair_v4_inputs(
         .collect())
 }
 
-/// Contratti degli input di un piano v4, scoperti dagli header IPC.
+/// Contratti degli input di un piano DAG, scoperti dagli header IPC.
 fn discover_contracts(
     pairs: &[(String, PathBuf)],
 ) -> Result<Vec<(String, DataContract)>, PlenoraError> {
@@ -1766,7 +1789,7 @@ fn discover_contracts(
         .collect()
 }
 
-/// Applica le decisioni CRS esplicite del piano v4 (`crs_decisions`,
+/// Applica le decisioni CRS esplicite del piano DAG (`crs_decisions`,
 /// R4.6.3) ai contratti scoperti: per ogni input nominato, la definizione
 /// decisa e' risolta contro il backend (senza `proj-backend`:
 /// `BackendUnavailable`, come il CRS di piano) e sostituisce lo stato
@@ -1992,7 +2015,7 @@ fn describe_markdown(documento: &serde_json::Value) -> String {
     testo
 }
 
-/// Riepilogo JSON di `validate` per un piano v4: nodi, archi con contratti,
+/// Riepilogo JSON di `validate` per un piano DAG: nodi, archi con contratti,
 /// segmenti con modo e strategia, capability e identita' ADR 4.
 ///
 /// # Errors
@@ -2054,7 +2077,7 @@ fn graph_summary_json(
         .collect();
     Ok(serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V4,
+        "schema_version": PLAN_SCHEMA_VERSION_V5,
         "plan_hash": graph.plan_hash().to_hex(),
         "engine_version": graph.engine_version().to_string(),
         "inputs": plan.inputs,
@@ -2115,7 +2138,7 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
         .collect();
     serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V4,
+        "schema_version": PLAN_SCHEMA_VERSION_V5,
         "plan_hash": graph.plan_hash().to_hex(),
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,
@@ -2146,7 +2169,7 @@ fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|argument| argument == flag)
 }
 
-/// `validate` di un piano v4: planner DAG + `explain` per la strategia, con
+/// `validate` di un piano DAG: planner DAG + `explain` per la strategia, con
 /// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
 /// `geo_fusion` e' il kill switch D12.9 (flag `--no-geo-fusion`): a `false`
 /// i gruppi di fusione non si formano e `explain` mostra la strategia non
@@ -2175,7 +2198,7 @@ fn validate_dag_v4(
     Ok(())
 }
 
-/// `run` di un piano v4: esecuzione DAG e pubblicazione atomica dell'output,
+/// `run` di un piano DAG: esecuzione DAG e pubblicazione atomica dell'output,
 /// con metriche JSON su stdout. Installa l'handler Ctrl-C: al cancel
 /// l'executor propaga `PlenoraError::Cancelled`, il publish atomico non e'
 /// mai raggiunto e `main` esce con [`EXIT_CANCELLED`]. `geo_fusion` e' il
@@ -2249,9 +2272,9 @@ fn run_dag_v4(
     Ok(())
 }
 
-/// Percorsi di input per un piano v4: `--input` singolo e/o `--inputs`
+/// Percorsi di input per un piano DAG: `--input` singolo e/o `--inputs`
 /// multiplo (valori fino al prossimo flag).
-/// Sorgenti degli input di un piano v4, come dichiarate sulla riga di
+/// Sorgenti degli input di un piano DAG, come dichiarate sulla riga di
 /// comando.
 ///
 /// Le due forme non si mescolano: o l'accoppiamento e' esplicito, o e'
@@ -2280,7 +2303,7 @@ fn is_named_input(value: &str) -> bool {
     })
 }
 
-/// Raccoglie gli input di un piano v4 dalla riga di comando.
+/// Raccoglie gli input di un piano DAG dalla riga di comando.
 ///
 /// # Errors
 ///
@@ -2343,16 +2366,16 @@ fn v4_inputs(args: &[String]) -> Result<V4Inputs, PlenoraError> {
 fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraError> {
     // Fail-closed su TUTTI i piani legacy che contengono op row-diagnostics,
     // anche blocking/secondary: nel percorso legacy non esiste gate
-    // provenance (quello e' solo DAG v4) e un nodo blocking (es. sort)
+    // provenance (quello e' solo DAG) e un nodo blocking (es. sort)
     // renderebbe gli indici pubblicati posizioni post-riordino, non
-    // `source_row_zero_based`. Nessun indice inventato: si richiede DAG v4.
+    // `source_row_zero_based`. Nessun indice inventato: si richiede DAG.
     //
     // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
     // (catalogo plenora-core), la stessa del gate provenance del planner e
     // del machinery di segmento dell'executor — nessuna lista locale
     // duplicata (P0: formula/expression erano omesse qui; P2: hmac_sha256
     // non emette, md5/sha256 solo con null_policy=error). La scansione
-    // precede la validazione legacy: un'op diagnostica richiede DAG v4
+    // precede la validazione legacy: un'op diagnostica richiede DAG
     // anche se il resto del piano sarebbe invalido — mai eseguire per poi
     // scoprire indici inventati.
     let document: serde_json::Value = serde_json::from_str(plan_text)?;
@@ -2377,7 +2400,7 @@ fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraErro
         });
     if requires_v4 {
         return Err(PlenoraError::Unsupported(
-            "operazione con diagnostics row-scoped richiede piano DAG v4".to_owned(),
+            "operazione con diagnostics row-scoped richiede un piano DAG".to_owned(),
         ));
     }
     let validated: Plan = serde_json::from_str(plan_text)?;
@@ -2385,23 +2408,23 @@ fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraErro
     Ok(())
 }
 
-/// Dispatch di `run`: DAG v4 se il piano dichiara `schema_version: 4`,
+/// Dispatch di `run`: DAG se il piano dichiara `schema_version` >= 4,
 /// pipeline tabellare legacy altrimenti (comportamento invariato).
 fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     OutputFormat::require_json("run")?;
     let plan_path = value_after(args, "--plan")?;
     let output_path = value_after(args, "--output")?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if plan_schema_version(&plan_text)? == u32::from(PLAN_SCHEMA_VERSION_V4) {
+    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
         if args.iter().any(|argument| argument == "--right") {
             return Err(contract(
-                "--right non e' ammesso per i piani v4: usare --inputs con i percorsi \
+                "--right non e' ammesso per i piani DAG: usare --inputs con i percorsi \
                  nell'ordine di dichiarazione degli input del piano",
             )
             .into());
         }
         return run_dag_v4(
-            &plan_text,
+            plan_text.as_ref(),
             &v4_inputs(args)?,
             &output_path,
             !has_flag(args, "--no-geo-fusion"),
@@ -2427,7 +2450,7 @@ fn help_text() -> String {
   plenora-data-tools catalog [--family table|geo]
   plenora-data-tools describe --input INPUT.arrow                          (alias: inspect-dataset)
   plenora-data-tools validate --plan PLAN.json --input NOME=INPUT.arrow...
-  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v4)
+  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v5)
   plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow       (piani legacy, schema_version <= 3)
   plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow --output OUTPUT.arrow                            (posizionale: solo piani a UN input)
   plenora-data-tools capabilities
@@ -3373,9 +3396,9 @@ mod tests {
 
     #[test]
     fn legacy_diagnostic_plans_are_rejected_even_when_blocking() {
-        // Nel percorso legacy non esiste gate provenance (solo DAG v4):
+        // Nel percorso legacy non esiste gate provenance (solo DAG):
         // qualsiasi op row-diagnostics, anche come primo step o dopo op
-        // blocking row-preserving, richiede DAG v4 — la materializzazione
+        // blocking row-preserving, richiede DAG — la materializzazione
         // completa non attesta la provenance `source_row_zero_based`.
         for plan in [
             serde_json::json!({

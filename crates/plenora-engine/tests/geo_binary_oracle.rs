@@ -263,7 +263,7 @@ fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
 
 fn binary_plan(op: &str, config: &Value) -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "inputs": ["left_in", "right_in"],
         "nodes": [
             {"id": "j", "op": op, "in": ["left_in", "right_in"], "config": config},
@@ -1577,7 +1577,7 @@ fn f_expansion_beyond_constraint() {
 /// decodificata e' attiva e correttamente ordinata.
 ///
 /// Divergenza di attribuzione (punto 1 dell'header): l'errore arriva come
-/// `InvalidPlan` grezzo del governor (`max_memory_bytes superato: `j`
+/// `InvalidPlan` grezzo del governor (`max_governed_memory_bytes superato: `j`
 /// richiede …`), fase `Validate` derivata — non `Execution` della lettera
 /// di D14.5.1 (stessa forma del test DER-003 di ADR-0012).
 #[test]
@@ -1610,7 +1610,7 @@ fn g_governor_rejects_decoded_reservation() {
     let ok_budget = 2 * left_arrow + left_decoded + right_arrow + right_decoded + 1024;
 
     let mut plan = binary_plan("geo.within", &json!({}));
-    plan["limits"] = json!({"max_memory_bytes": failing_budget});
+    plan["limits"] = json!({"max_governed_memory_bytes": failing_budget});
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
     assert_eq!(
@@ -1636,13 +1636,13 @@ fn g_governor_rejects_decoded_reservation() {
     );
     assert!(
         signature.reason.contains(&format!(
-            "max_memory_bytes superato: `j` richiede {left_decoded} byte"
+            "max_governed_memory_bytes superato: `j` richiede {left_decoded} byte"
         )),
         "{case}: la reservation DECODIFICATA left e' quella rifiutata (owner `j`): {}",
         signature.reason
     );
 
-    plan["limits"] = json!({"max_memory_bytes": ok_budget});
+    plan["limits"] = json!({"max_governed_memory_bytes": ok_budget});
     let (batches, metrics) = run_ok_v4(&plan, left, right);
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(

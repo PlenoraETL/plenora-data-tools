@@ -29,7 +29,7 @@ pub struct Limits {
     pub max_string_bytes: usize,
     pub max_regex_bytes: usize,
     pub max_split_columns: usize,
-    pub max_memory_bytes: usize,
+    pub max_governed_memory_bytes: usize,
     pub max_temp_bytes: u64,
     pub spill_partitions: usize,
 }
@@ -42,7 +42,7 @@ impl Default for Limits {
             max_string_bytes: 16 * 1024 * 1024,
             max_regex_bytes: 4_096,
             max_split_columns: 256,
-            max_memory_bytes: 512 * 1024 * 1024,
+            max_governed_memory_bytes: 512 * 1024 * 1024,
             max_temp_bytes: 8 * 1024 * 1024 * 1024,
             spill_partitions: 64,
         }
@@ -416,7 +416,7 @@ pub fn text_convertible(data_type: &DataType) -> bool {
 /// [`PlenoraError::ResourceLimit`] se la somma delle larghezze non e'
 /// rappresentabile. Aritmetica CONTROLLATA, non saturante: una stima che ha
 /// perso il conto non puo' autorizzare un'allocazione, e con
-/// `max_memory_bytes` a fondo scala una somma saturata passerebbe il
+/// `max_governed_memory_bytes` a fondo scala una somma saturata passerebbe il
 /// confronto. E' la stessa regola del picco di memoria della CLI e dei
 /// contatori dello spill.
 pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
@@ -436,7 +436,7 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 /// I tetti dei kernel erano tutti *post*: si costruiva l'output e poi lo si
 /// confrontava con `max_rows`. Per le righe va bene — il conteggio si sa
 /// prima — ma per i BYTE no: un `cross_join` che rispetta `max_rows` puo'
-/// comunque allocare molto oltre `max_memory_bytes`, e l'unico esito
+/// comunque allocare molto oltre `max_governed_memory_bytes`, e l'unico esito
 /// possibile diventa l'esaurimento della memoria, non un errore. Un tetto che
 /// si puo' verificare solo dopo aver superato il tetto non e' un tetto.
 ///
@@ -457,12 +457,12 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 /// cio' che l'implementazione alloca oltre i buffer del risultato — vettori
 /// di indici, tabelle hash, copie temporanee — a meno che il chiamante non lo
 /// includa esplicitamente in `bytes_per_row`. Serve a impedire le esplosioni
-/// di ordini di grandezza; NON rende `max_memory_bytes` un tetto duro sulla
+/// di ordini di grandezza; NON rende `max_governed_memory_bytes` un tetto duro sulla
 /// memoria del processo. Vedi `docs/deroghe.md`, DER-011.
 ///
 /// # Errors
 ///
-/// [`PlenoraError::ResourceLimit`] se la stima supera `max_memory_bytes`, o
+/// [`PlenoraError::ResourceLimit`] se la stima supera `max_governed_memory_bytes`, o
 /// se il prodotto non e' rappresentabile — un numero che ha perso il conto
 /// non puo' autorizzare un'allocazione.
 pub fn preflight_output_bytes(
@@ -480,11 +480,11 @@ pub fn preflight_output_bytes(
              ({output_rows} righe x {bytes_per_row} byte)"
         ))
     })?;
-    if stima > limits.max_memory_bytes {
+    if stima > limits.max_governed_memory_bytes {
         return Err(PlenoraError::ResourceLimit(format!(
             "{operation}: l'output stimato ({stima} byte: {output_rows} righe x \
-             {bytes_per_row} byte) supera max_memory_bytes ({})",
-            limits.max_memory_bytes
+             {bytes_per_row} byte) supera max_governed_memory_bytes ({})",
+            limits.max_governed_memory_bytes
         )));
     }
     Ok(())

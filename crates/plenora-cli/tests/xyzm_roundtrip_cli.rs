@@ -131,7 +131,7 @@ fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
     let plan = write_plan(
         directory.path(),
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],
@@ -187,7 +187,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
     let plan = write_plan(
         directory.path(),
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "b", "op": "geo.buffer", "in": ["main"],
@@ -228,7 +228,7 @@ fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
     let plan = write_plan(
         directory.path(),
         &json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": ["main"],
             "nodes": [
                 {"id": "f", "op": "table.filter", "in": ["main"],

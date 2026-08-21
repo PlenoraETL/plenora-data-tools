@@ -93,6 +93,15 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
 
+      # ADR 15: il budget di memoria della libreria si chiama
+      # `max_governed_memory_bytes` e NON ha alias. Il nome della v4 vive
+      # solo nel modulo di migrazione. Senza questo gate la decisione
+      # sopravvive finche' qualcuno non riaggiunge il vecchio nome «per
+      # compatibilita'»: e' esattamente il modo in cui una promessa
+      # ritirata torna in circolazione.
+      - name: Gate nome del budget di memoria (ADR 15)
+        run: python scripts/verifica_nome_budget_memoria.py
+
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami erano verificati solo localmente — lint pedantic su pair.rs sono
