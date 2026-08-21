@@ -3,7 +3,7 @@
 `docs/kernel-signatures.md` è **generato** da `docs/_build/assemble.py` a
 partire dal catalogo (`crates/plenora-core/src/catalog.rs`) e dai frammenti
 (`docs/_fragments/*.md`). Deve coincidere byte per byte con la rigenerazione,
-e la CI lo verifica a ogni push.
+e la CI lo verifica a ogni PR e a ogni push su `main`.
 
 ```bash
 python docs/_build/assemble.py            # rigenera
@@ -65,7 +65,14 @@ Copre: invocazione su una riga, invocazione multilinea in forma `rustfmt`,
 invocazione annidata con `Some(...)`, `&[...]` e più chiavi opzionali,
 catalogo senza operazioni, chiave opzionale sconosciuta, variante CRS
 sconosciuta, frammenti duplicati (e frammenti distinti, che devono passare),
-sezioni senza ripetizioni.
+operazione ripetuta fra due sezioni, operazione ripetuta dentro la stessa
+sezione, e sezioni senza ripetizioni che devono passare conservando l'ordine.
+
+Le regressioni sono **negative** dove conta: passano al controllo una
+struttura costruita apposta e pretendono il rifiuto. Verificare le sezioni
+reali dimostrerebbe soltanto che oggi sono a posto, non che il controllo
+funzioni — ed è per questo che il controllo vive in un helper
+(`_elenco_documentato`) invece che in linea dentro `genera()`.
 
 ## La prova che il gate non è vacuo
 
@@ -78,6 +85,8 @@ repository, ciascuna rifiutata con la propria diagnosi:
 | macro `op!` rinominata nel catalogo | rifiutata: «zero operazioni lette… è il parser a non agganciarlo più» |
 | variante `CrsRequirement` inventata | rifiutata, con il nome della variante |
 | stesso id in due frammenti | rifiutata, con i due file che se lo contendono |
+| stessa operazione in due sezioni | rifiutata, con l'id ripetuto |
+| il controllo sulle sezioni reso inerte | l'autotest fallisce: la regressione non è vacua |
 
 La copia intatta passa, e il worktree originale resta invariato.
 
@@ -100,5 +109,11 @@ consecutive sulla stessa macchina davano già file diversi — e renderlo tale
 avrebbe richiesto di vendorizzare font, licenze e un lock del grafo Python.
 
 Decisione del maintainer: il PDF è **documentazione obsoleta, non una capacità
-di data-tools**. Pipeline rimossa. Il Markdown è l'unica documentazione
-generata, e non ha dipendenze.
+di data-tools**. Pipeline rimossa. Con essa il suo bytecode
+(`__pycache__/md2pdf.cpython-312.pyc`), che era tracciato da Git dal commit
+iniziale e sarebbe sopravvissuto al sorgente: un artefatto compilato di uno
+strumento che non esiste più è la forma più silenziosa di rimozione
+incompleta. Un passo di CI verifica che nessun bytecode Python sia
+tracciato.
+
+Il Markdown è l'unica documentazione generata, e non ha dipendenze.

@@ -174,6 +174,27 @@ def _valore_fra(testo, prefisso):
     return testo[len(atteso):-1].strip()
 
 
+def _elenco_documentato(sezioni):
+    """Gli id delle sezioni, in ordine, rifiutando le ripetizioni.
+
+    Un'operazione elencata due volte comparirebbe due volte nel documento e
+    gonfierebbe i conteggi dell'intestazione, che sono calcolati proprio da
+    questa lista. `set()` altrove la assorbirebbe senza dire niente.
+
+    Sta in un helper, e non in linea dentro `genera()`, perche' una
+    regressione ha bisogno di poter passare una struttura COSTRUITA: provare
+    il controllo sulle sezioni reali dimostra solo che oggi sono a posto, non
+    che il controllo funzioni.
+    """
+    elenco = [oid for _, ops in sezioni for oid in ops]
+    ripetute = sorted({oid for oid in elenco if elenco.count(oid) > 1})
+    if ripetute:
+        raise ErroreCatalogo(
+            "operazioni elencate piu' di una volta nelle sezioni: %r. "
+            "Comparirebbero due volte e falserebbero i conteggi." % ripetute)
+    return elenco
+
+
 def _crs(variante):
     """Il requisito CRS in forma leggibile, o `None` se l'op non ne ha.
 
@@ -594,28 +615,53 @@ def autotest():
         raise ErroreCatalogo("autotest: frammenti distinti letti male: %r"
                              % sorted(singoli))
 
-    # Le sezioni non devono elencare due volte la stessa operazione.
-    ripetute = [oid for _, ops in TABLE_SECTIONS + GEO_SECTIONS for oid in ops]
-    if len(ripetute) != len(set(ripetute)):
+    # Un'operazione elencata in due sezioni diverse: prima passava, compariva
+    # due volte nel documento e gonfiava i conteggi dell'intestazione.
+    sezioni_doppie = [
+        ("filtering", ["table.filter", "table.sort"]),
+        ("aggregation", ["table.sort", "table.distinct"]),
+    ]
+    try:
+        _elenco_documentato(sezioni_doppie)
+    except ErroreCatalogo as errore:
+        if "table.sort" not in str(errore):
+            raise ErroreCatalogo(
+                "autotest: sezione duplicata rifiutata senza dire quale: %s"
+                % errore) from errore
+    else:
         raise ErroreCatalogo(
-            "autotest: le sezioni di questo file elencano gia' un'operazione "
-            "piu' di una volta: %r"
-            % sorted({o for o in ripetute if ripetute.count(o) > 1}))
+            "autotest: un'operazione elencata in due sezioni non ha fatto "
+            "fallire il controllo: comparirebbe due volte e falserebbe i "
+            "conteggi.")
+
+    # Una ripetizione dentro la STESSA sezione conta quanto una fra due.
+    try:
+        _elenco_documentato([("filtering", ["table.filter", "table.filter"])])
+    except ErroreCatalogo as errore:
+        if "table.filter" not in str(errore):
+            raise ErroreCatalogo(
+                "autotest: ripetizione interna rifiutata senza dire quale: %s"
+                % errore) from errore
+    else:
+        raise ErroreCatalogo(
+            "autotest: un'operazione ripetuta dentro la stessa sezione e' "
+            "passata inosservata.")
+
+    # E sezioni senza ripetizioni restano il caso normale, in ordine.
+    ordinate = _elenco_documentato([
+        ("filtering", ["table.filter"]),
+        ("aggregation", ["table.sort", "table.distinct"]),
+    ])
+    if ordinate != ["table.filter", "table.sort", "table.distinct"]:
+        raise ErroreCatalogo(
+            "autotest: l'elenco documentato ha perso l'ordine: %r" % ordinate)
 
 
 def genera():
     """Il testo completo di `kernel-signatures.md`, senza scriverlo."""
     catalog = parse_catalog()
     blocks = parse_fragments()
-    documentate = [oid for _, ops in TABLE_SECTIONS + GEO_SECTIONS for oid in ops]
-    # Un'operazione elencata due volte comparirebbe due volte nel documento e
-    # gonfierebbe i conteggi dell'intestazione, che sono calcolati proprio da
-    # questa lista. `set()` altrove la assorbirebbe senza dire niente.
-    ripetute = sorted({oid for oid in documentate if documentate.count(oid) > 1})
-    if ripetute:
-        raise ErroreCatalogo(
-            "operazioni elencate piu' di una volta nelle sezioni: %r. "
-            "Comparirebbero due volte e falserebbero i conteggi." % ripetute)
+    documentate = _elenco_documentato(TABLE_SECTIONS + GEO_SECTIONS)
     missing_cat = [oid for oid in documentate if oid not in catalog]
     missing_blk = [oid for oid in documentate if oid not in blocks]
     extra_blk = sorted(set(blocks) - set(documentate))
