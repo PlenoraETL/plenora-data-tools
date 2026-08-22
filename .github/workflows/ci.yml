@@ -288,19 +288,19 @@ jobs:
       # che questo ha appena risolto — e la cache, essendo immutabile, se lo
       # porterebbe dietro fino al prossimo cambio di `Cargo.lock`.
       #
-      # Pulizia COMPLETA, non solo i profili, per tre ragioni misurate il
-      # 2026-08-22 su una campagna intera:
+      # Pulizia COMPLETA, non solo i profili, per tre ragioni:
       #
-      #   - peso. A fine campagna `target-cov` sono 5 748 file / 7,49 GiB di
-      #     spazio occupato; di questi, 4 481 file e 6,78 GiB (il 90% dei
-      #     byte) sono artefatti del workspace che la pulizia a inizio job
-      #     cancella comunque. Salvarli
-      #     significa spendere upload, download e quota per roba che verra'
-      #     buttata prima di essere usata;
+      #   - peso. Misurato in LOCALE il 2026-08-22 a fine campagna:
+      #     `target-cov` sono 5 748 file / 7,49 GiB di spazio occupato, di cui
+      #     4 481 file e 6,78 GiB — il 90% dei byte — artefatti del workspace
+      #     che la pulizia a inizio job cancella comunque. Qui la cifra e'
+      #     piu' bassa, perche' `CARGO_INCREMENTAL: 0` toglie di mezzo
+      #     `debug/incremental/`, che in locale e' la fetta grossa; la classe
+      #     pero' e' la stessa, e salvarla significa spendere upload, download
+      #     e quota per roba buttata prima di essere usata;
       #   - quota. Il limite di GitHub e' 10 GB per repository, condivisi con
-      #     le cache dei job `test` e `backends`: una cache di coverage da 7,5
-      #     GiB sfratta per anzianita' proprio le dipendenze che la rendono
-      #     utile;
+      #     le cache dei job `test` e `backends`: una cache di coverage gonfia
+      #     sfratta per anzianita' proprio le dipendenze che la rendono utile;
       #   - difesa in profondita'. Se un domani la pulizia a inizio job venisse
       #     indebolita, una cache senza binari strumentati non avrebbe nulla da
       #     restituire: il difetto resterebbe senza combustibile.

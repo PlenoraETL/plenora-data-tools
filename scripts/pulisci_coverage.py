@@ -44,9 +44,11 @@ Nessun fingerprint `plenora-*` e' sopravvissuto e nessun artefatto di terze
 parti e' stato toccato: il perimetro e' esattamente il workspace, e la cache
 delle dipendenze continua a pagare.
 
-Il peso, misurato a valle di una singola campagna: `target-cov` passa da
-5 748 file / 7,49 GiB a 1 267 file / 0,71 GiB, cioe' 4 481 file e 6,78 GiB —
-il 90% dei byte — che erano artefatti del workspace.
+Il peso, misurato in locale a valle di una singola campagna: `target-cov`
+passa da 5 748 file / 7,49 GiB a 1 267 file / 0,71 GiB, cioe' 4 481 file e
+6,78 GiB — il 90% dei byte — che erano artefatti del workspace. In CI la
+fetta e' piu' piccola, perche' `CARGO_INCREMENTAL: 0` toglie di mezzo
+`debug/incremental/`; la classe e' la stessa.
 
 Le due cifre di dimensione che si incontrano qui NON sono lo stesso numero, e
 la differenza non e' un errore di nessuno dei due: `cargo` somma le dimensioni
