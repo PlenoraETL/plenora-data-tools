@@ -1,4 +1,4 @@
-//! Contratti dati del grafo (architettura.md/4.3, decisioni D6, D16,
+//! Contratti dati del grafo (architettura.md, decisioni D6, D16,
 //! D25; architettura.md#determinismo, architettura.md#planner-ed-executor).
 //!
 //! Fondamenta della Fase 2A: tipi NUOVI (non trasloco) che descrivono ciò che

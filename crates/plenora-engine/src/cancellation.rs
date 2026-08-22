@@ -1,4 +1,4 @@
-//! Token di cancellazione cooperativa (errori-e-limiti.md, Fase 2B).
+//! Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione, Fase 2B).
 //!
 //! Decisione di dipendenza: valutata la crate `cancellation-token`
 //! (piccola, senza `unsafe`), ma oggi il token e' un semplice flag
@@ -42,9 +42,10 @@ impl CancellationToken {
     }
 
     /// Richiede la cancellazione: idempotente e visibile subito a tutti i
-    /// cloni. L'executor la osserva al prossimo confine cooperativo (errori-e-limiti.md:
-    /// nessuna promessa di cancellazione immediata — un kernel
-    /// `NonInterruptible` in corso completa prima dello stop).
+    /// cloni. L'executor la osserva al prossimo confine cooperativo
+    /// (errori-e-limiti.md#cancellazione: nessuna promessa di cancellazione
+    /// immediata — un kernel `NonInterruptible` in corso completa prima
+    /// dello stop).
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::Release);
     }

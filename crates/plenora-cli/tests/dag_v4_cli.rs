@@ -620,7 +620,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
         .output()
         .expect("run");
 
-    // WKB invalido: categoria `data_mapping` -> exit 3 (errori-e-limiti.md §em.).
+    // WKB invalido: categoria `data_mapping` -> exit 3 (cli.md#exit-code).
     assert_eq!(result.status.code(), Some(3));
     assert!(
         result.stderr.is_empty(),

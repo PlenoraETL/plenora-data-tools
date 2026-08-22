@@ -1,5 +1,5 @@
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
-//! Arrow per il canone GeoArrow-WKB (architettura.md e par. 2).
+//! Arrow per il canone GeoArrow-WKB (architettura.md#geometrie).
 //!
 //! Port Fase 1 ("coesistenza") da plenora-geo-tools-arrow: validatore WKB
 //! strutturale, kernel puri (`operations`, `analysis`, `topology`,

@@ -1,7 +1,7 @@
 //! Verifica prestazionale mirata dei percorsi toccati dai commit perf del
 //! 2026-07-28 (misura richiesta da architettura.md): la full `geo_sweep`
-//! non e' eseguibile su questo host (stallo noto WSL2 `__vma_start_write`,
-//! vedi `benchmarks/sweep/geo_sweep.md`), quindi fixture COMPATTE a bassa
+//! non e' eseguibile su questo host (stallo noto WSL2 `__vma_start_write`
+//! sotto carico di allocazioni intensive), quindi fixture COMPATTE a bassa
 //! pressione di allocazione, mediana di 5, stessa classe di carico:
 //!
 //! - `ref.decode_points`: ancora (percorso invariato per costruzione);

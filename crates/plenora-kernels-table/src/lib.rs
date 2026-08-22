@@ -458,7 +458,8 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 /// di indici, tabelle hash, copie temporanee — a meno che il chiamante non lo
 /// includa esplicitamente in `bytes_per_row`. Serve a impedire le esplosioni
 /// di ordini di grandezza; NON rende `max_governed_memory_bytes` un tetto duro sulla
-/// memoria del processo. Vedi `docs/errori-e-limiti.md`, errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
+/// memoria del processo. Vedi
+/// errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 ///
 /// # Errors
 ///

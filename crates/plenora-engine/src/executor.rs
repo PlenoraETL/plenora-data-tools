@@ -19,7 +19,8 @@
 //! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
 //! nascosto.
 //!
-//! Fase 2B, cancellazione cooperativa (errori-e-limiti.md): il chiamante passa un
+//! Fase 2B, cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+//! il chiamante passa un
 //! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
 //! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
 //! ai confini dell'executor — tra batch nelle catene streaming, tra kernel,
@@ -130,7 +131,7 @@
 //! `publish_atomic`) e le metriche restano consultabili fino al punto di
 //! fallimento.
 //!
-//! Panic dei kernel (errori-e-limiti.md): intercettati con `catch_unwind` al punto di
+//! Panic dei kernel (errori-e-limiti.md#panic-policy): intercettati con `catch_unwind` al punto di
 //! dispatch — [`run_kernel`] per i kernel unari (streaming e blocking) e la
 //! chiamata `execute_binary` per i segmenti binari, il livello piu' interno
 //! che conserva l'attribuzione di nodo — e convertiti in
@@ -684,7 +685,8 @@ struct ExecState {
     /// Identita' dell'esecuzione (errori-e-limiti.md, errori arricchiti): riportata negli errori
     /// `Execution`/`Cancelled` e nel lock del `TempStore`.
     execution_id: String,
-    /// Token di cancellazione cooperativa (errori-e-limiti.md): osservato solo ai
+    /// Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+    /// osservato solo ai
     /// confini dell'executor, mai dentro ai kernel (M3).
     cancellation: CancellationToken,
     /// Diagnostica opt-in (errori-e-limiti.md, errori arricchiti): arricchisce le motivazioni degli
@@ -925,7 +927,8 @@ impl ExecState {
         let _ = self.temp_store.borrow_mut().heartbeat();
     }
 
-    /// Errore di cancellazione attribuito a un punto del DAG (errori-e-limiti.md):
+    /// Errore di cancellazione attribuito a un punto del DAG
+    /// (errori-e-limiti.md#cancellazione):
     /// contesto (nodo, operazione, `execution_id`), mai dati.
     fn cancelled(&self, node: &str, operation: &str) -> PlenoraError {
         PlenoraError::Cancelled {
@@ -936,7 +939,7 @@ impl ExecState {
         }
     }
 
-    /// Check di cancellazione al confine di un kernel (errori-e-limiti.md, cancellazione cooperativa): onora il
+    /// Check di cancellazione al confine di un kernel (errori-e-limiti.md#cancellazione): onora il
     /// `CancellationBehavior` dichiarato in catalogo — `NonInterruptible`
     /// non offre punti di interruzione (mai check).
     fn check_cancellation(&self, kernel: &PreparedKernel) -> Result<()> {
@@ -1708,7 +1711,7 @@ fn execute_physical(
     let stream = Box::new(stream.map(move |item| {
         // Tag di categoria: ogni errore `Execution` che esce dal DAG porta l'execution_id.
         let governed = item.map_err(|error| output_state.tag_execution(error))?;
-        // errori-e-limiti.md, cancellazione cooperativa: confine di piano — sempre attivo, anche a valle di op
+        // errori-e-limiti.md#cancellazione: confine di piano — sempre attivo, anche a valle di op
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
@@ -1997,7 +2000,7 @@ impl Network {
                     // la materializzazione dell'input resta in RAM (lo spill
                     // in streaming durante il drenaggio e' M3).
                     let spill_capable = spill_capable_unary(kernel);
-                    // errori-e-limiti.md, cancellazione cooperativa: drenaggio dell'input — check a ogni
+                    // errori-e-limiti.md#cancellazione: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che
                     // ricevera' i dati (`NonInterruptible`: mai).
                     let mut batches = Vec::new();
@@ -2026,7 +2029,7 @@ impl Network {
                             "segmento binario senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // errori-e-limiti.md, cancellazione cooperativa: come per il blocking unario — check a ogni
+                    // errori-e-limiti.md#cancellazione: come per il blocking unario — check a ogni
                     // confine di batch durante il drenaggio dei due rami.
                     let mut left_batches = Vec::new();
                     for item in &mut left {
@@ -2763,7 +2766,7 @@ const fn expansion_exempt(kernel: &PreparedKernel) -> bool {
     kernel.expansion_factor_exempt
 }
 
-/// Comportamento alla cancellazione del kernel (errori-e-limiti.md, cancellazione cooperativa): dichiarato in
+/// Comportamento alla cancellazione del kernel (errori-e-limiti.md#cancellazione): dichiarato in
 /// catalogo dal descriptor dell'operazione e risolto in `prepare` (hot path minimale:
 /// nessuno scan del catalogo nel loop per batch).
 // Non const fn: sotto cfg(test) chiama l'hook `test_behavior_override`
@@ -2777,7 +2780,8 @@ fn cancellation_behavior(kernel: &PreparedKernel) -> CancellationBehavior {
     kernel.cancellation_behavior
 }
 
-/// Hook di test (errori-e-limiti.md): override del `CancellationBehavior` di catalogo
+/// Hook di test (errori-e-limiti.md#cancellazione): override del
+/// `CancellationBehavior` di catalogo
 /// per id nodo. Serve a verificare il rispetto dei behavior senza i backend
 /// opzionali: le sole op `NonInterruptible` del catalogo v1
 /// (`geo.make_valid`, `geo.reproject`, `geo.polygonize`, `geo.split`)
@@ -2834,7 +2838,8 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
 /// catalogo — non dovrebbe accadere: il piano e' validato sul catalogo).
 /// La soglia e' `max_expansion_factor` dei limiti effettivi, tranne per il
 /// vincolo `Custom(fattore)`: il fattore dichiarato in catalogo la
-/// sovrascrive per la singola operazione (stima a priori, architettura.md#planner-ed-executor/6).
+/// sovrascrive per la singola operazione (stima a priori,
+/// architettura.md#planner-ed-executor, errori-e-limiti.md).
 fn check_join_expansion(
     state: &ExecState,
     kernel: &PreparedKernel,
@@ -3331,7 +3336,8 @@ fn row_diagnostic_stream(
     }))
 }
 
-/// Conversione di un panic di kernel in errore di nodo (errori-e-limiti.md): il payload
+/// Conversione di un panic di kernel in errore di nodo
+/// (errori-e-limiti.md#panic-policy): il payload
 /// testuale (`&str`/`String`) diventa il motivo, mai dati dei batch (regola
 /// di error.rs: contesto, non valori). Payload non testuale: motivo generico.
 fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send)) -> PlenoraError {
@@ -3563,7 +3569,7 @@ fn run_streaming_chain(
             continue;
         }
         let kernel = &kernels[position];
-        // errori-e-limiti.md, cancellazione cooperativa: check cooperativo al confine di kernel — per il primo
+        // errori-e-limiti.md#cancellazione: check cooperativo al confine di kernel — per il primo
         // kernel della catena e' anche il check "tra batch"; onora il
         // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
         state.check_cancellation(kernel)?;
@@ -3963,7 +3969,8 @@ fn fused_group_terminal(
     )
 }
 
-/// Hook di test (errori-e-limiti.md): id dei nodi in cui iniettare un panic, per
+/// Hook di test (errori-e-limiti.md#panic-policy): id dei nodi in cui
+/// iniettare un panic, per
 /// verificare la conversione panic → errore `Execution` al confine dell'executor.
 /// Solo `cfg(test)`: i kernel non usano panic per errori attesi. Insieme
 /// (non singolo id): i test girano in parallelo nello stesso processo e
@@ -3984,7 +3991,8 @@ fn inject_test_panic(node_id: &str) {
     }
 }
 
-/// Un kernel su un batch: confine errori-e-limiti.md dell'executor. Un panic del kernel
+/// Un kernel su un batch: confine di panic policy dell'executor
+/// (errori-e-limiti.md#panic-policy). Un panic del kernel
 /// e' intercettato qui — il livello piu' interno che conserva l'attribuzione
 /// di nodo — e convertito in errore `Execution` con il solo messaggio del panic
 /// ([`panic_step_error`]); l'errore propaga nello stream, quindi il publish
@@ -4821,7 +4829,7 @@ fn run_blocking(
         Some(state.governor.reserve(full_bytes, &kernel.node_id)?)
     };
     drop(batches);
-    // errori-e-limiti.md, cancellazione cooperativa: a fine drenaggio, prima del kernel monolitico
+    // errori-e-limiti.md#cancellazione: a fine drenaggio, prima del kernel monolitico
     // (`BoundaryOnly`: check tra kernel/a fine kernel; `NonInterruptible`:
     // mai).
     state.check_cancellation(kernel)?;
@@ -4936,11 +4944,12 @@ fn run_binary_blocking(
     let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
     drop(left_batches);
     drop(right_batches);
-    // errori-e-limiti.md, cancellazione cooperativa: a fine drenaggio, prima del kernel binario monolitico
+    // errori-e-limiti.md#cancellazione: a fine drenaggio, prima del kernel binario monolitico
     // (come `run_blocking`).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
-    // Confine errori-e-limiti.md come `run_kernel`: panic del kernel binario convertito
+    // Confine di panic policy (errori-e-limiti.md#panic-policy) come
+    // `run_kernel`: panic del kernel binario convertito
     // in errore `Execution` attribuito al nodo, mai publish dopo panic.
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]
@@ -5151,7 +5160,8 @@ fn run_geo_binary_blocking(
     // monolitico (come `run_blocking` e il ramo tabellare).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
-    // Confine errori-e-limiti.md / D14.5.6 come il ramo tabellare: panic del kernel
+    // Confine di panic policy (errori-e-limiti.md#panic-policy, D14.5.6)
+    // come il ramo tabellare: panic del kernel
     // convertito in errore `Execution` attribuito al nodo, mai publish
     // dopo panic; hook `PANIC_AT_NODES` esteso al ramo.
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -66,7 +66,31 @@ resterebbe rosso a barriera funzionante. Due esiti ammessi, e nessuno dei due
 la conversione dello schema, oppure **riconfermare la quarantena per
 iscritto**, con la ragione aggiornata alla data del rilascio.
 
-## 4. Release
+## 4. Qualifica prestazionale
+
+Oggi le prestazioni non sono qualificate: esistono una baseline di
+riferimento, gli harness e gli esempi `bench_*`, ma **nessun gate le
+consuma** e nessuna soglia è applicata da qualcosa (vedi
+[`release.md`](release.md)). Finché è così, «è abbastanza veloce» è
+un'opinione, non un esito.
+
+Serve, prima della produzione:
+
+- una **matrice fissata**: quali scenari, quali scale, quali feature — decisa
+  una volta e non a ogni misura, altrimenti due campagne non si confrontano;
+- un **ambiente controllato** su cui misurare, dichiarato insieme ai numeri:
+  le esecuzioni note vengono da container su host di sviluppo, e la
+  variabilità dell'host oggi è dentro il dato;
+- **soglie esplicite**, con la regressione che le fa fallire: una soglia che
+  nessuno applica è una nota, non un limite;
+- il **confronto con la baseline e con la release precedente**, perché il
+  numero che conta non è il valore assoluto ma la differenza.
+
+Il lavoro non è in questo ramo e non lo anticipa: qui c'è la dichiarazione di
+che cosa manca, così che nessuno legga i numeri sparsi nel codice come se
+fossero un verdetto.
+
+## 5. Release
 
 Gate, piattaforme, packaging e procedura sono in [`release.md`](release.md).
 Il bump di versione è **maggiore**: la superficie pubblica è cambiata in modo

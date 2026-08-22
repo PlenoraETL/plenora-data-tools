@@ -6,9 +6,10 @@
 //! `serde(alias)` avrebbe fatto accettare `max_memory_bytes` **anche** ai
 //! piani v5, e un nome che continua a funzionare e' un nome che continua a
 //! promettere: chi lo scrive crede ancora in un tetto sull'intero processo
-//! che in-process non esiste (errori-e-limiti.md#memoria-governata §3). Qui la v4 ha una struttura
-//! **propria**, che conosce solo il nome vecchio, ed e' usata **solo** da
-//! questa migrazione.
+//! che in-process non esiste
+//! (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce). Qui la
+//! v4 ha una struttura **propria**, che conosce solo il nome vecchio, ed e'
+//! usata **solo** da questa migrazione.
 //!
 //! Ne segue, per costruzione e non per controllo aggiuntivo:
 //!

@@ -15,8 +15,9 @@
 //! L'unificazione in un DAG unico e' in corso: Fase 2A introduce
 //! [`plan`] — il formato piano v5 (DAG dichiarativo, `PlanLimits` in parsing,
 //! migrazione dal piano lineare legacy, canonicalizzazione per il futuro
-//! `plan_hash`) — e [`planner`] — la fase 1 `validate` (architettura.md
-//! par. 6.1, piano-v5.md#identita-e-fingerprint/5): inferenza dei contratti arco per arco, identita' del
+//! `plan_hash`) — e [`planner`] — la fase 1 `validate`
+//! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint):
+//! inferenza dei contratti arco per arco, identita' del
 //! `ValidatedGraph` e verifica di compatibilita'. Fase 2A-4 aggiunge
 //! [`prepare`] — la fase 2 `prepare` (architettura.md, architettura.md#planner-ed-executor):
 //! `RuntimeContext`/`RuntimeStatistic`, `PreparedKernel` (configurazioni preparate), segmenti
@@ -42,7 +43,7 @@
 //! `RecordBatch` puro.
 //!
 //! Fase 2B aggiunge [`cancellation`] e gli errori arricchiti
-//! (errori-e-limiti.md): [`CancellationToken`] cooperativo osservato ai confini
+//! (errori-e-limiti.md#cancellazione): [`CancellationToken`] cooperativo osservato ai confini
 //! dell'executor (mai dentro ai kernel — il passaggio e' M3) con
 //! errore dedicato `PlenoraError::Cancelled`; `execution_id` per esecuzione
 //! negli errori `Execution`/`Cancelled` e nel lock del `TempStore`;

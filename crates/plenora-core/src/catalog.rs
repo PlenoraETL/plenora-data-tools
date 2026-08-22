@@ -41,7 +41,7 @@ pub enum ExecutionClass {
     BinaryBlocking,
 }
 
-/// Comportamento alla cancellazione (errori-e-limiti.md).
+/// Comportamento alla cancellazione (errori-e-limiti.md#cancellazione).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CancellationBehavior {
     Cooperative,
@@ -153,7 +153,8 @@ pub enum ExpansionConstraint {
     RightRelative,
     /// `max(output / left, output / right)`: join molti-a-molti.
     MaxRelative,
-    /// Stima a priori da statistiche (errori-e-limiti.md/architettura.md#planner-ed-executor), per operazioni la cui
+    /// Stima a priori da statistiche (errori-e-limiti.md,
+    /// architettura.md#planner-ed-executor), per operazioni la cui
     /// semantica di output non e' caratterizzabile con una base fissa.
     ///
     /// Semantica scelta: la **metrica** vincolante resta
@@ -548,7 +549,7 @@ impl OperationDescriptor {
 // - `plenora-nogeo-tools/src/catalog.rs`  (62 op tabellari -> `table.*`);
 // - `plenora-geo-tools-arrow/src/catalog.rs` (65 op geografiche -> `geo.*`).
 //
-// Mapping documentato in `docs/catalog-diff.md`:
+// Mapping documentato in piano-v5.md#alias-legacy:
 // - tabellari: id storico invariato sotto il namespace `table.`;
 // - geografiche `geo_*`: il prefisso storico diventa il namespace
 //   (`geo_buffer` -> `geo.buffer`);
@@ -2792,7 +2793,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
     ),
 ];
 
-/// Tabella alias versionata (decisione D20, `docs/catalog-diff.md`).
+/// Tabella alias versionata (piano-v5.md#alias-legacy).
 ///
 /// Forma: `(schema_version, legacy_alias, canonical_id)`. Immutabile per le
 /// versioni pubblicate: un alias introdotto non puo' mai essere riassegnato.
@@ -3338,7 +3339,8 @@ mod tests {
 
     #[test]
     // Come sopra: i confronti esatti sui fattori custom verificano
-    // l'uguaglianza per bit richiesta dal fingerprint (piano-v5.md#identita-e-fingerprint/6).
+    // l'uguaglianza per bit richiesta dal fingerprint
+    // (piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
     #[allow(clippy::float_cmp)]
     fn custom_constraint_overrides_the_threshold_not_the_metric() {
         // errori-e-limiti.md: `Custom(fattore)` e' la stima a priori per op la cui
@@ -3626,7 +3628,8 @@ mod tests {
             ("table.expression", 3, 2, 2, 4),
             // diag-wkt: raccolta nel kernel geo. La successiva dichiarazione
             // pubblica encoding/types del produttore cambia anche semantica e
-            // contract analysis (piano-v5.md#identita-e-fingerprint/piano-v5.md#contratti-di-input).
+            // contract analysis (piano-v5.md#identita-e-fingerprint,
+            // piano-v5.md#contratti-di-input).
             ("geo.from_wkt", 3, 1, 2, 2),
             // diag-transport / diag-coords: il rifiuto row-scoped ora porta
             // il payload `plenora-row-diagnostics-v1` (comportamento

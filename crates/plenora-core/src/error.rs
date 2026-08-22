@@ -108,7 +108,7 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Esecuzione annullata dal chiamante (errori-e-limiti.md, cancellazione cooperativa): il token di
+    /// Esecuzione annullata dal chiamante (errori-e-limiti.md#cancellazione): il token di
     /// cancellazione e' stato osservato a un confine cooperativo
     /// dell'executor e nessun output e' stato pubblicato (invariante publish atomico).
     /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
@@ -346,7 +346,8 @@ pub enum ErrorPhase {
     Write,
     /// Finalizzazione dello stream di output (chiusura del writer).
     Finalize,
-    /// Commit dell'effetto: rename atomico di publish (errori-e-limiti.md#publish-e-cleanup, §9).
+    /// Commit dell'effetto: rename atomico di publish
+    /// (errori-e-limiti.md#publish-e-cleanup, ICD §9).
     Commit,
     /// Annullamento dell'effetto, con conferma.
     Rollback,

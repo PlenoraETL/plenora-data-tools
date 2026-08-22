@@ -21,7 +21,8 @@
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili. Fase 2B, cancellazione cooperativa (errori-e-limiti.md): `run` installa un handler
+//! senza dati sensibili. Fase 2B, cancellazione cooperativa
+//! (errori-e-limiti.md#cancellazione): `run` installa un handler
 //! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
@@ -100,7 +101,7 @@ fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
 
-/// Exit code dedicato alla cancellazione (errori-e-limiti.md, cancellazione cooperativa): 128 + SIGINT,
+/// Exit code dedicato alla cancellazione (errori-e-limiti.md#cancellazione): 128 + SIGINT,
 /// convenzione POSIX — distinto dagli altri codici di errore.
 const EXIT_CANCELLED: i32 = 130;
 
@@ -191,7 +192,7 @@ fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, PlenoraError> {
     Ok(rimanenti)
 }
 
-/// Handler Ctrl-C (errori-e-limiti.md, cancellazione cooperativa): il primo Ctrl-C cancella il token —
+/// Handler Ctrl-C (errori-e-limiti.md#cancellazione): il primo Ctrl-C cancella il token —
 /// l'executor si ferma al prossimo confine cooperativo con
 /// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
 /// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
@@ -209,7 +210,8 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
         // non e' un terminale c'e' un programma dall'altro lato, e per lui il
         // canale resta vuoto: l'esito della cancellazione arriva comunque
         // come envelope su stdout con categoria `cancelled` ed exit 130.
-        // La garanzia «stderr vuoto» di errori-e-limiti.md vale quindi senza eccezioni
+        // La garanzia «stderr vuoto» (errori-e-limiti.md#envelope-e-canali)
+        // vale quindi senza eccezioni
         // per ogni consumatore non interattivo.
         let interattivo = std::io::IsTerminal::is_terminal(&std::io::stderr());
         if requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -232,7 +234,8 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
 /// scrivere su stderr**.
 ///
 /// Era un avviso su stderr: invisibile a un consumatore automatico e insieme
-/// una crepa nel contratto «stderr vuoto» (errori-e-limiti.md). Ora il chiamante lo
+/// una crepa nel contratto «stderr vuoto»
+/// (errori-e-limiti.md#envelope-e-canali). Ora il chiamante lo
 /// riporta nel proprio documento di uscita, dove chi legge le metriche lo
 /// trova senza intercettare un canale che per contratto non porta nulla.
 ///
@@ -366,7 +369,7 @@ fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, Plen
 /// esiste, vive nei kernel (`preflight_output_bytes`) ed e' applicato alle
 /// operazioni il cui numero di righe di output e' noto prima di allocare.
 /// Le altre restano coperte solo da qui: residuo dichiarato in
-/// `docs/errori-e-limiti.md`, errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
+/// errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 fn ammissione_output(
     output: &RecordBatch,
     budget: usize,
@@ -1175,7 +1178,9 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (fase 1, piano-v5.md#identita-e-fingerprint/5) e poi `explain` con
+// - **validate**: `planner::validate` (fase 1,
+//   piano-v5.md#identita-e-fingerprint,
+//   architettura.md#planner-ed-executor) e poi `explain` con
 //   il `RuntimeContext` di default per il riepilogo della strategia fisica —
 //   un piano valido semanticamente ma fuori dal dispatch v1 fallisce qui,
 //   non a meta' esecuzione. Il riepilogo JSON su stdout riporta: nodi, archi
@@ -2922,7 +2927,8 @@ fn esegui_processo() -> i32 {
         }
     };
     if let Err(error) = run_with_args(&args) {
-        // Cancellazione cooperativa (errori-e-limiti.md): exit code dedicato; il
+        // Cancellazione cooperativa (errori-e-limiti.md#cancellazione): exit
+        // code dedicato; il
         // publish atomico garantisce che nessun output parziale sia stato
         // pubblicato. Envelope §9 anche per la cancellazione (categoria
         // dedicata, fase/effetto/retry dagli assi).
@@ -2967,7 +2973,7 @@ const EXIT_INTERNO: i32 = 70;
 /// default e' `70` e un test copre l'intero enum.
 ///
 /// **Non e' allineato a `plenora-database-tools`**, che restituisce `1` per
-/// qualunque errore: e' una divergenza dichiarata (emendamento a errori-e-limiti.md).
+/// qualunque errore: e' una divergenza dichiarata (cli.md#exit-code).
 /// L'unica garanzia condivisa dalla famiglia e' «0 successo, non-zero
 /// errore»; chi scrive codice portabile fra i due componenti legge
 /// `error.category`, non questo numero.

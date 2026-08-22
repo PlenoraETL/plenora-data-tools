@@ -89,6 +89,28 @@ schema (`apache/arrow-rs#10575`).
 La campagna fuzz completa è prevista alla chiusura del lavoro sulla memoria
 governata: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
+## Prestazioni
+
+**Che cosa esiste.** Una baseline di riferimento in
+`benchmarks/baseline/baseline.json`, con le misure grezze in
+`benchmarks/baseline/raw/` e gli harness che le producono in
+`benchmarks/baseline/harness/`; gli sweep per famiglia di kernel in
+`benchmarks/sweep/*.json`; e gli esempi `bench_*` dei crate, che si eseguono a
+mano e stampano una riga JSON per scenario.
+
+**Che cosa non esiste.** Non c'è un gate prestazionale: nessun job di CI e
+nessun checker di rilascio legge quei file, e nessuna soglia è applicata da
+qualcosa. Non ci sono soglie definitive — i numeri in giro per il codice sono
+citati come riferimento, mai come limite — né un runner controllato su cui
+misurare: le esecuzioni note vengono da container su host di sviluppo, con la
+variabilità che ne consegue.
+
+Di conseguenza un numero, da solo, **non è un verdetto**: dipende dall'host,
+dal kernel e dal carico. Serve a confrontare due esecuzioni fatte nello stesso
+posto, non a decidere se una versione è abbastanza veloce. La qualifica
+prestazionale — matrice, ambiente e soglie — è lavoro dichiarato aperto in
+[`stato-e-roadmap.md`](stato-e-roadmap.md).
+
 ## Documentazione generata
 
 `docs/operazioni.md` è generato dal catalogo e dai frammenti. Il file

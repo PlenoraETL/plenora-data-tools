@@ -51,9 +51,9 @@
 //!
 //! Controllo `table_join_control` (solo v4): join inner 1:1 su `id` di due
 //! tabelle da 1M righe (id Int64 + payload Int64), stessa forma del
-//! riferimento storico `benchmarks/baseline/baseline.md` par. 1 («join
-//! inner su id | 1M | 0,6361s», stesso container rust:1.92 ma sensibile
-//! all'host — citato come riferimento, NON come soglia).
+//! riferimento storico «join inner su id | 1M | 0,6361s»
+//! (`benchmarks/baseline/raw/nogeo_join_1M.json`, stesso container rust:1.92
+//! ma sensibile all'host — citato come riferimento, NON come soglia).
 //!
 //! Oracolo (bloccante, exit != 0 al fallimento):
 //!
@@ -65,9 +65,8 @@
 //!   della fixture + `__right_index`); within confronta il vettore di flag
 //!   allineato alle righe left.
 //!
-//! Mitigazione allocatore (documentata in `benchmarks/sweep/geo_sweep.md`:
-//! stallo `brk`/`__vma_start_write` su WSL2 sotto carico di allocazioni
-//! intensive): eseguire con `MALLOC_ARENA_MAX=4
+//! Mitigazione allocatore (stallo `brk`/`__vma_start_write` su WSL2 sotto
+//! carico di allocazioni intensive): eseguire con `MALLOC_ARENA_MAX=4
 //! MALLOC_MMAP_THRESHOLD_=32768` nel container rust:1.92.
 //!
 //! Uso: `cargo run -p plenora-engine --release --locked --example
@@ -726,8 +725,8 @@ fn unreachable_op(op: &str) -> ! {
 /// `table_join_control`: join inner 1:1 su `id` di due tabelle da 1M righe
 /// sul guscio binario condiviso (dopo lo smistamento D14.2 sul
 /// `PreparedConfig`, il ramo tabellare non deve regredire). Riferimento
-/// storico citato, non soglia: `benchmarks/baseline/baseline.md` par. 1
-/// (0,6361s nello stesso container).
+/// storico citato, non soglia: 0,6361s nello stesso container
+/// (`benchmarks/baseline/raw/nogeo_join_1M.json`).
 fn run_table_join_control() {
     let left = table_batches(7);
     let right = table_batches(13);
@@ -787,7 +786,7 @@ fn run_table_join_control() {
             "output_rows": output_rows,
             "oracle_cross_run": true,
             "baseline_reference_seconds": 0.6361,
-            "baseline_note": "riferimento storico benchmarks/baseline/baseline.md par. 1 (stesso container rust:1.92, sensibile all'host — non una soglia)",
+            "baseline_note": "riferimento storico 0,6361s da benchmarks/baseline/raw/nogeo_join_1M.json (stesso container rust:1.92, sensibile all'host — non una soglia)",
         })
     );
 }

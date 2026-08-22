@@ -118,6 +118,37 @@ canonico v5**: non esiste una forma intermedia da cui ripartire.
 Sul percorso lineare non esistono le row diagnostics: un'operazione che le
 emette richiede un piano DAG e viene rifiutata prima dell'esecuzione.
 
+## Alias legacy
+
+Gli id storici dei due progetti di origine restano accettati come **alias**
+degli id canonici del catalogo unificato. La tabella vive in
+`plenora-core/src/catalog.rs` (`ALIASES`) e ha forma `(schema_version, alias,
+id canonico)`: 127 voci, tutte con `schema_version` 3, che copre sia i piani
+lineari nogeo sia gli id storici del protocollo geo (v2/v3,
+`TransformArrowSchema`).
+
+Le regole di mapping sono quattro:
+
+| origine | regola | esempio |
+|---|---|---|
+| tabellari | id storico invariato sotto il namespace `table.` | `filter` → `table.filter` |
+| geografiche `geo_*` | il prefisso storico diventa il namespace | `geo_buffer` → `geo.buffer` |
+| predicati DE-9IM | `predicate_*` sotto `geo.` | `predicate_contains` → `geo.predicate_contains` |
+| estensioni geo senza prefisso | `<id>` sotto `geo.` | `geodesic_area` → `geo.geodesic_area` |
+
+La risoluzione è **esatta e versionata**: `resolve_alias` cerca la coppia
+(`schema_version`, alias), non il solo nome, così un piano non cambia
+significato perché è cambiata la versione di default. `find_operation`
+accetta id canonici e alias; quando la versione non è nota al chiamante usa
+la prima voce corrispondente.
+
+**Un alias pubblicato non si riassegna.** La tabella è immutabile per le
+versioni già rilasciate: aggiungere una voce è consentito, cambiare la
+destinazione di una voce esistente no — sarebbe lo stesso piano, con lo
+stesso testo, che ieri faceva una cosa e oggi ne fa un'altra. Due test
+bloccanti tengono la tabella onesta: ogni alias risolve a un id esistente del
+catalogo, e nessun alias collide con l'id canonico di un'altra famiglia.
+
 ## Contratti di input
 
 Ogni input porta un **contratto**: schema Arrow, proprietà dichiarate e, se
@@ -146,6 +177,8 @@ capability e limiti, e restituisce il riepilogo con nodi, archi, ordine
 topologico, segmenti, capability richieste, fingerprint degli input e
 `plan_hash`. Un piano semanticamente valido ma fuori dal dispatch corrente
 fallisce **qui**, non a metà esecuzione.
+
+<a id="identita-e-fingerprint"></a>
 
 ## Identità e fingerprint
 

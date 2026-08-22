@@ -352,7 +352,8 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
         .output()
         .expect("transform-arrow");
     assert!(!result.status.success(), "coordinata NaN accettata");
-    // L'envelope vive su stdout e stderr resta vuoto (errori-e-limiti.md §em.).
+    // L'envelope vive su stdout e stderr resta vuoto
+    // (errori-e-limiti.md#envelope-e-canali).
     assert!(
         result.stderr.is_empty(),
         "stderr: {}",

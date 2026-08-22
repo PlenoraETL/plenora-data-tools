@@ -114,7 +114,8 @@ pub struct RuntimeContext {
     pub batch_target: BatchTarget,
     /// Metriche da raccogliere (osservabilita' per nodo).
     pub metrics: MetricsConfig,
-    /// Token di cancellazione cooperativa (errori-e-limiti.md): il default non e'
+    /// Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+    /// il default non e'
     /// mai cancellato. Il chiamante (es. l'handler Ctrl-C della CLI) trattiene
     /// un clone del token e lo cancella dall'esterno; l'executor lo osserva
     /// ai confini cooperativi onorando il `CancellationBehavior` di catalogo.
@@ -497,7 +498,7 @@ pub struct PreparedKernel {
     pub input_contracts: Vec<DataContract>,
     /// Contratto dell'arco di output del nodo.
     pub output_contract: DataContract,
-    /// Comportamento alla cancellazione dichiarato in catalogo (errori-e-limiti.md),
+    /// Comportamento alla cancellazione dichiarato in catalogo (errori-e-limiti.md#cancellazione),
     /// risolto in `prepare` (hot path minimale: nessuno scan del catalogo a runtime).
     pub cancellation_behavior: plenora_core::catalog::CancellationBehavior,
     /// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md),

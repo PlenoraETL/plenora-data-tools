@@ -1,5 +1,6 @@
-//! Planner del DAG v5 — fase 1 `validate` (architettura.md/6.2,
-//! piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor) — Fase 2A-3.
+//! Planner del DAG v5 — fase 1 `validate`
+//! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint)
+//! — Fase 2A-3.
 //!
 //! [`validate`] e' una funzione pura e a secco: legge il piano JSON e i
 //! contratti di input (schemi Arrow dagli header IPC, nessuna riga di dati) e

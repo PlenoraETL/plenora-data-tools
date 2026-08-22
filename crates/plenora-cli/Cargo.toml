@@ -29,7 +29,7 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-# Handler Ctrl-C per la cancellazione cooperativa (errori-e-limiti.md).
+# Handler Ctrl-C per la cancellazione cooperativa (errori-e-limiti.md#cancellazione).
 ctrlc.workspace = true
 
 [dev-dependencies]

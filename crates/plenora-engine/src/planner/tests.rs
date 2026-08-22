@@ -1,4 +1,5 @@
-//! Test del planner (fase 1 `validate`, architettura.md, piano-v5.md#identita-e-fingerprint/5).
+//! Test del planner (fase 1 `validate`,
+//! architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint).
 
 use std::sync::Arc;
 

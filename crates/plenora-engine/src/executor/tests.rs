@@ -4314,7 +4314,8 @@ fn execute_rejects_a_graph_incompatible_with_the_environment() {
 }
 
 // ---------------------------------------------------------------------------
-// Panic dei kernel al confine dell'executor (errori-e-limiti.md)
+// Panic dei kernel al confine dell'executor
+// (errori-e-limiti.md#panic-policy)
 // ---------------------------------------------------------------------------
 
 /// Guard che deregistra il proprio nodo dall'hook di iniezione panic anche
@@ -4510,7 +4511,7 @@ fn kernel_panic_publishes_nothing() {
     assert!(result.is_err());
     assert!(
         !destination.exists(),
-        "nessun publish dopo panic (errori-e-limiti.md): il tempfile e' eliminato"
+        "nessun publish dopo panic (errori-e-limiti.md#panic-policy): il tempfile e' eliminato"
     );
 }
 
@@ -4793,7 +4794,7 @@ fn non_interruptible_op_is_never_interrupted() {
         other => panic!("atteso Cancelled al confine di piano: {other:?}"),
     }
     // L'op non e' stata interrotta: ha processato anche il batch successivo
-    // alla cancellazione (latenza osservabile nelle metriche, errori-e-limiti.md).
+    // alla cancellazione (latenza osservabile nelle metriche, errori-e-limiti.md#cancellazione).
     assert_eq!(output.metrics().nodes["ni_f"].batches_in, 2);
 }
 
@@ -5965,7 +5966,8 @@ fn geo_count_points_in_polygons_executes_with_count_column() {
 
 #[test]
 fn geo_binary_output_is_byte_identical_across_runs() {
-    // architettura.md#determinismo/R12: stesso input -> stesso output, byte per byte (ordine
+    // architettura.md#determinismo, R12: stesso input -> stesso output, byte
+    // per byte (ordine
     // logico delle coppie, mai temporale — i kernel raccolgono per indice).
     let cases: [(&str, serde_json::Value); 2] = [
         ("geo.sjoin", json!({"predicate": "intersects"})),

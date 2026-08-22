@@ -2,7 +2,7 @@
 
 Legge i file raw/*.json (output degli harness Rust e degli esempi dei progetti
 di origine) e raw/*.time (output di /usr/bin/time -v) e produce il documento
-di baseline usato dal benchmark gate (architettura.md par. 9).
+di baseline di riferimento per confronti manuali.
 """
 
 from __future__ import annotations

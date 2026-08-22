@@ -472,8 +472,8 @@ mod tests {
 
 #[cfg(test)]
 mod tests_limiti_v1 {
-    //! Il formato v1 sul filo (errori-e-limiti.md#memoria-governata §7): conserva il proprio nome, e non
-    //! accetta quello della v5.
+    //! Il formato v1 sul filo (errori-e-limiti.md#memoria-governata):
+    //! conserva il proprio nome, e non accetta quello della v5.
 
     use serde_json::json;
 

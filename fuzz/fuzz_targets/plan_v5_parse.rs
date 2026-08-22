@@ -1,7 +1,7 @@
 #![no_main]
 
 //! Parser del piano v5 e migrazione di versione contro JSON ostili
-//! (Fase 2A, errori-e-limiti.md; errori-e-limiti.md#memoria-governata): byte arbitrari, JSON malformati, strutture
+//! (Fase 2A, errori-e-limiti.md#memoria-governata): byte arbitrari, JSON malformati, strutture
 //! enormi o profondamente annidate, identificatori lunghi. Invarianti: mai
 //! panic, mai hang; ogni input produce `Ok` o un errore tipizzato; i
 //! `PlanLimits` (default o ristretti dal payload) sono applicati durante il

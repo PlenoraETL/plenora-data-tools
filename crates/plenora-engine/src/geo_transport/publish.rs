@@ -117,9 +117,11 @@ pub enum PublishProfile {
 
 impl PublishProfile {
     /// Nome della capability corrispondente al profilo nelle
-    /// `required_capabilities` del `ValidatedGraph` (errori-e-limiti.md#publish-e-cleanup/piano-v5.md#identita-e-fingerprint): un grafo
-    /// validato con un profilo e' riusabile solo in un ambiente che dichiara
-    /// la capability omonima (`check_compatibility` del planner).
+    /// `required_capabilities` del `ValidatedGraph`
+    /// (errori-e-limiti.md#publish-e-cleanup,
+    /// piano-v5.md#identita-e-fingerprint): un grafo validato con un profilo
+    /// e' riusabile solo in un ambiente che dichiara la capability omonima
+    /// (`check_compatibility` del planner).
     #[must_use]
     pub const fn capability_name(self) -> &'static str {
         match self {
@@ -391,8 +393,9 @@ pub fn publish_with_profile<T>(
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, PublishOutcome), PlenoraError> {
     if output_path.exists() {
-        // Check no-clobber al confine di commit (errori-e-limiti.md#publish-e-cleanup/§9): e' la
-        // precondizione del rename atomico, non validazione del piano.
+        // Check no-clobber al confine di commit
+        // (errori-e-limiti.md#publish-e-cleanup, ICD §9): e' la precondizione
+        // del rename atomico, non validazione del piano.
         return Err(PlenoraError::InvalidPlan(format!(
             "output gia' esistente: {}",
             output_path.display()
@@ -730,7 +733,8 @@ mod tests {
     #[test]
     fn existing_output_is_a_commit_phase_error_with_unchanged_text() {
         // Check no-clobber: precondizione del rename atomico — scatta al
-        // confine di commit (errori-e-limiti.md#publish-e-cleanup/§9), non in validazione del piano.
+        // confine di commit (errori-e-limiti.md#publish-e-cleanup, ICD §9),
+        // non in validazione del piano.
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("output.bin");
         std::fs::write(&destination, b"vecchio").expect("fixture");
