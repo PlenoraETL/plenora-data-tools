@@ -13,14 +13,32 @@
 # default — i backend nativi (geos static, proj bundled) non sono
 # strumentati, come in CI.
 #
-# I PROFILI GREZZI si puliscono PRIMA e DOPO, sempre, anche se la misura
-# fallisce (`trap`). I `.profraw` hanno nomi che contengono il pid, e il pid
-# il sistema lo ricicla: con i profili di esecuzioni precedenti ancora sul
-# disco, un processo nuovo trova il proprio nome occupato e LLVM scrive
-# l'errore su **stderr**, facendo fallire i test che pretendono stderr vuoto.
-# Il 2026-08-21, con 6 770 profili accumulati, due campagne consecutive sono
-# fallite per questo; dopo la pulizia, zero errori. La pulizia finale serve
-# anche a non lasciare residui alla cache della CI.
+# GLI ARTEFATTI DELLA CAMPAGNA PRECEDENTE si puliscono PRIMA della misura, e
+# i profili anche DOPO, sempre, pure se la misura fallisce (`trap`). Le
+# classi di residuo sono due e i sintomi opposti:
+#
+#   - i `.profraw` hanno nomi che contengono il pid, e il pid il sistema lo
+#     ricicla: con i profili di esecuzioni precedenti ancora sul disco un
+#     processo nuovo trova il proprio nome occupato, LLVM scrive l'errore su
+#     **stderr** e i test che pretendono stderr vuoto falliscono. Il
+#     2026-08-21, con 6 770 profili accumulati, due campagne consecutive sono
+#     fallite per questo;
+#   - i **binari strumentati** di una build precedente portano con se' la
+#     mappa di copertura del codice di allora: le loro righe entrano nel
+#     denominatore senza che nessun test le esegua, e il gate diventa non
+#     ermetico — percentuali piu' basse del vero, cioe' rossi falsi.
+#
+# Le rimuove entrambe `scripts/pulisci_coverage.py`, unica sorgente della
+# logica di pulizia insieme al job `coverage` della CI. Gira DENTRO il
+# container perche' la seconda classe la rimuove `cargo llvm-cov clean
+# --workspace`, e cargo-llvm-cov qui vive solo li'.
+#
+# La pulizia finale, qui in locale, tocca i soli profili: gli artefatti
+# strumentati restano, perche' dopo una campagna rossa servono a rieseguire
+# `cargo llvm-cov report --html` e vedere DOVE e' scesa la coverage. In CI
+# quel bisogno lo copre l'artifact LCOV, e li' la pulizia finale e' completa
+# per non spendere la quota di cache in artefatti che il job successivo
+# cancella comunque.
 set -euo pipefail
 
 IMAGE=rust:1.92
@@ -37,13 +55,15 @@ RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # risolvere — lo interpreta come `C:\c\...` e non trova il file. Senza
 # argomenti lo script ricava la radice da `__file__`, in forma nativa.
 pulisci_profili() {
-  ( cd "$RADICE" && python scripts/pulisci_profili_coverage.py )
+  ( cd "$RADICE" && python scripts/pulisci_coverage.py --solo-profili )
 }
 
-# Prima della misura: fatale se fallisce. Misurare sopra profili altrui e' il
-# difetto che questa pulizia esiste per evitare, e proseguire lo
+# La pulizia PRIMA della misura non e' qui: gira dentro il container, subito
+# prima di `cargo llvm-cov --workspace`, perche' rimuove anche gli artefatti
+# strumentati e per farlo le serve cargo-llvm-cov. E' fatale come questa
+# (`set -e` nel container): misurare sopra i residui di un'altra campagna e'
+# il difetto che quella pulizia esiste per evitare, e proseguire lo
 # riprodurrebbe.
-pulisci_profili
 
 # Dopo, sempre, anche su errore o interruzione: i profili non devono
 # sopravvivere alla campagna che li ha prodotti, ne' finire nella cache.
@@ -80,6 +100,10 @@ if ! command -v cargo-llvm-cov >/dev/null; then
   CARGO_INSTALL_ROOT=/opt/cargo-bin cargo install cargo-llvm-cov --version $LLVM_COV_VERSION --locked --quiet
 fi
 mkdir -p target/tmp
+# Unica sorgente della pulizia, identica a quella del job \`coverage\` in CI:
+# artefatti strumentati stantii (cargo llvm-cov clean --workspace) e profili
+# grezzi rimasti ovunque sotto target-cov. Fatale per \`set -e\`.
+python3 scripts/pulisci_coverage.py
 cargo llvm-cov --workspace --locked --no-report
 if [ \"${1:-}\" = '--html' ]; then
   cargo llvm-cov report --html --output-dir target/tmp/coverage
