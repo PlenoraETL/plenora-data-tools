@@ -791,7 +791,7 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
     // dentro un ramo governato da `is_terminal`.
     //
     // Il controllo esiste perche' la modifica precedente era stata scritta
-    // ma non salvata: l'ADR dichiarava la garanzia e il codice non la
+    // ma non salvata: il documento dichiarava la garanzia e il codice non la
     // implementava.
     let sorgente =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
@@ -816,7 +816,7 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
     }
     assert!(
         sorgente.contains("IsTerminal::is_terminal(&std::io::stderr())"),
-        "il controllo dichiarato nell'ADR dev'essere nel codice, non solo nel documento"
+        "il controllo dichiarato nel documento dev'essere anche nel codice"
     );
 }
 
@@ -1031,7 +1031,7 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
     // `cross_join` (`preflight_output_bytes`), non piu' dal controllo di
     // ammissione a valle: il numero di righe dell'output e' esatto prima di
     // allocare. Per le operazioni senza preflight resta l'ammissione, ed e'
-    // una deroga dichiarata (DER-011) — non un tetto duro.
+    // una deroga dichiarata (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce) — non un tetto duro.
     //
     // Il caso e' costruito con un margine che l'aritmetica di Arrow non puo'
     // ribaltare: due input da 64 righe a una colonna (~mezzo KiB l'uno)

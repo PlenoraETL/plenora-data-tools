@@ -842,7 +842,7 @@ fn point_ratio_on_segment(
     let dx = segment.line.end.x - segment.line.start.x;
     let dy = segment.line.end.y - segment.line.start.y;
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let length_squared = dx * dx + dy * dy;
@@ -850,7 +850,7 @@ fn point_ratio_on_segment(
         return None;
     }
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let parameter = (((point.x() - segment.line.start.x) * dx
@@ -1009,7 +1009,7 @@ pub fn split_line(
             scale.max(coordinate.x.abs()).max(coordinate.y.abs())
         });
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let query_tolerance = (tolerance + coordinate_scale * f64::EPSILON * 16.0).min(f64::MAX);

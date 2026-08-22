@@ -352,7 +352,8 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
         .output()
         .expect("transform-arrow");
     assert!(!result.status.success(), "coordinata NaN accettata");
-    // L'envelope vive su stdout e stderr resta vuoto (ADR-0003 §em.).
+    // L'envelope vive su stdout e stderr resta vuoto
+    // (errori-e-limiti.md#envelope-e-canali).
     assert!(
         result.stderr.is_empty(),
         "stderr: {}",
@@ -374,7 +375,7 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
     );
 }
 
-/// P2: un rifiuto row-scoped di `transform-arrow` e' un difetto del DATO
+/// Un rifiuto row-scoped di `transform-arrow` e' un difetto del DATO
 /// letto, non del piano: l'envelope porta gli assi `data_mapping`/`read`,
 /// `remote_effect` none, retry never (mai riclassificato `invalid_plan`) e la
 /// diagnostica, con zero output pubblicato. Un errore NON row-scoped
@@ -467,7 +468,7 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
 }
 
 /// BLOCK-06: l'output di `transform-arrow` porta le chiavi canoniche §2 in
-/// doppia emissione con quelle `GeoArrow` (parita' col percorso v4, DER-002
+/// doppia emissione con quelle `GeoArrow` (parita' col percorso v4, errori-e-limiti.md#limiti-dichiarati
 /// estesa), con `plenora.contract.version` nei metadati dello schema (R2.5).
 #[cfg(feature = "proj-backend")]
 #[test]

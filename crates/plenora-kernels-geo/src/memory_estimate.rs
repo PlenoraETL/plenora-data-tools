@@ -1,7 +1,7 @@
-//! Stima della memoria nativa delle geometrie decodificate (ADR-0002, Fase
+//! Stima della memoria nativa delle geometrie decodificate (architettura.md#memoria, Fase
 //! 2B-M2b).
 //!
-//! ADR-0002 ("Resource accounting e reservation protocol") prescrive che la
+//! architettura.md#memoria ("Resource accounting e reservation protocol") prescrive che la
 //! memoria nativa delle geometrie decodificate (oggi `geo::Geometry<f64>`,
 //! in futuro strutture GEOS nel backend feature-gated) sia **stimata e
 //! dichiarata come stima**, mai presentata come conteggio preciso. Questo
@@ -13,7 +13,7 @@
 //!   geometrie (es. colonna decodificata di un batch);
 //! - [`DecodedNativeBytesEstimate`]: accumulatore thread-safe per i punti di
 //!   decode (adapter Arrow), pensato per essere letto dal governor come
-//!   metrica "stimata" (separata da riservato/osservato, ADR-0002).
+//!   metrica "stimata" (separata da riservato/osservato, architettura.md#memoria).
 //!
 //! # Formula di stima (dichiarata)
 //!
@@ -47,7 +47,7 @@
 //! dei `Vec`, le indirezioni di un eventuale backend GEOS ne' le strutture
 //! ausiliarie (indici spaziali, envelope precalcolati). Va quindi riportata
 //! nelle metriche come "memoria nativa stimata", mai come conteggio preciso
-//! (ADR-0002, paragrafo "Perimetro di `max_governed_memory_bytes`").
+//! (architettura.md#memoria, paragrafo "Perimetro di `max_governed_memory_bytes`").
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -89,7 +89,7 @@ fn polygon_body_bytes(polygon: &geo::Polygon<f64>) -> u64 {
 
 /// STIMA euristica dei byte nativi di una geometria decodificata.
 ///
-/// **Non e' un conteggio preciso**: e' l'euristica dichiarata da ADR-0002
+/// **Non e' un conteggio preciso**: e' l'euristica dichiarata da architettura.md#memoria
 /// per la memoria nativa delle geometrie (formula nel doc-comment di
 /// modulo). Va esposta nelle metriche come "stimata", separata da memoria
 /// riservata e osservata.
@@ -134,7 +134,7 @@ pub fn estimate_geometry_native_bytes(geometry: &Geometry<f64>) -> u64 {
 ///
 /// Stessa natura dichiarata di [`estimate_geometry_native_bytes`]: somma
 /// saturante delle stime per cella, da riportare come "memoria nativa
-/// stimata" (ADR-0002).
+/// stimata" (architettura.md#memoria).
 pub fn estimate_geometries_native_bytes<'a>(
     geometries: impl IntoIterator<Item = &'a Geometry<f64>>,
 ) -> u64 {
@@ -144,7 +144,7 @@ pub fn estimate_geometries_native_bytes<'a>(
 }
 
 /// Accumulatore thread-safe della STIMA dei byte nativi decodificati
-/// (ADR-0002: metrica "stimata", separata da riservato/osservato).
+/// (architettura.md#memoria: metrica "stimata", separata da riservato/osservato).
 ///
 /// Punto di accumulo naturale per gli adapter che decodificano celle WKB in
 /// parallelo (rayon): ogni cella decodificata contribuisce la propria stima

@@ -1,8 +1,8 @@
-//! Contratto di geometria su forme decodificate (ADR-0012, D12.3/D12.4).
+//! Contratto di geometria su forme decodificate (architettura.md#geometrie, D12.3/D12.4).
 //!
 //! Due helper che riproducono SU `Geometry<f64>` cio' che il percorso non
 //! fuso ottiene con il round-trip WKB (encode canonico `to_wkb` +
-//! validazione del decoder ADR-0011):
+//! validazione del decoder architettura.md#geometrie):
 //!
 //! - [`wkb_size_xy`]: dimensione ESATTA del WKB ISO XY prodotto da
 //!   `geozero::ToWkb::to_wkb(CoordDimensions::xy())` — camminata
@@ -39,7 +39,7 @@ const COUNT_BYTES: u64 = 4;
 /// Byte di una coordinata XY: due `f64`.
 const COORD_BYTES: u64 = 16;
 
-/// Dimensione esatta in byte del WKB ISO XY di `geometry` (ADR-0012 D12.3).
+/// Dimensione esatta in byte del WKB ISO XY di `geometry` (architettura.md#geometrie D12.3).
 ///
 /// Camminata strutturale speculare all'encoder canonico
 /// (`geozero::ToWkb::to_wkb(CoordDimensions::xy())`): un header per ogni
@@ -89,10 +89,10 @@ fn polygon_size_xy(polygon: &Polygon<f64>) -> u64 {
             .sum::<u64>()
 }
 
-/// Validazione strutturale di una geometria decodificata (ADR-0012 D12.4).
+/// Validazione strutturale di una geometria decodificata (architettura.md#geometrie D12.4).
 ///
 /// L'equivalente su `Geometry<f64>` delle regole del decoder validante
-/// ([`crate::wkb_decoder`], ADR-0011), nello stesso ordine di valutazione
+/// ([`crate::wkb_decoder`], architettura.md#geometrie), nello stesso ordine di valutazione
 /// e con gli stessi messaggi d'errore: profondita' di annidamento,
 /// conteggio dei componenti (una unita' per geometria, figli inclusi),
 /// cardinalita' delle `LineString`, coordinate finite (NaN e infiniti
@@ -100,7 +100,7 @@ fn polygon_size_xy(polygon: &Polygon<f64>) -> u64 {
 /// (first == last, confronto su X/Y).
 ///
 /// La validazione OGC NON e' compresa: resta responsabilita' del
-/// chiamante (topologica, non strutturale — come in ADR-0011).
+/// chiamante (topologica, non strutturale — come in architettura.md#geometrie).
 ///
 /// # Errors
 ///
@@ -186,7 +186,7 @@ fn validate_node(
     }
 }
 
-/// X/Y finite (NaN e infiniti rifiutati, ADR-0001), stesso errore del
+/// X/Y finite (NaN e infiniti rifiutati, architettura.md#determinismo), stesso errore del
 /// decoder.
 fn check_finite(coord: &Coord<f64>) -> Result<(), PlenoraError> {
     if coord.x.is_finite() && coord.y.is_finite() {
@@ -216,7 +216,7 @@ fn check_polygon(polygon: &Polygon<f64>) -> Result<(), PlenoraError> {
 
 /// Anello: almeno quattro coordinate, tutte finite, chiusura esatta
 /// (first == last su X/Y — i NaN sono gia' esclusi dalla finitezza,
-/// nessun margine epsilon: determinismo ADR-0001).
+/// nessun margine epsilon: determinismo architettura.md#determinismo).
 fn check_ring(ring: &LineString<f64>) -> Result<(), PlenoraError> {
     if ring.0.len() < 4 {
         return Err(invalid_wkb_structure(

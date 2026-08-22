@@ -125,7 +125,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         let adjustment = if min == 0.0 { 0.001 } else { min.abs() * 0.001 };
         let lower = min - adjustment;
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
         // fusa e' il contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         let width = (adjustment * 2.0 + 0.0) / count_f64;
@@ -828,7 +828,7 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
         sorted[low]
     } else {
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
         // fusa e' il contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         let interpolated = (sorted[high] - sorted[low]) * (position - low.to_f64()?) + sorted[low];

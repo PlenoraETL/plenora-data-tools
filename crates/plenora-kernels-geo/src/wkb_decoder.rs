@@ -1,4 +1,4 @@
-//! Decoder WKB validante (ADR-0011).
+//! Decoder WKB validante (architettura.md#geometrie).
 //!
 //! UNA passata sui byte che esegue la validazione strutturale del contratto
 //! e costruisce la geometria nella stessa camminata — le due scansioni del
@@ -27,13 +27,13 @@ use crate::{
     MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,
 };
 
-/// Decodifica e valida un payload WKB in una sola passata (ADR-0011).
+/// Decodifica e valida un payload WKB in una sola passata (architettura.md#geometrie).
 ///
 /// Copre la classe di input del protocollo 2D (come
 /// [`crate::geometry_from_wkb`]): serie Z/M e SRID rifiutate come
 /// [`crate::Unsupported`]. La validazione OGC della geometria risultante
 /// NON e' compresa: resta responsabilita' del chiamante (topologica, non
-/// strutturale — vedi ADR-0011).
+/// strutturale — vedi architettura.md#geometrie).
 ///
 /// # Errors
 ///
@@ -75,7 +75,7 @@ pub fn decode_validated_with_depth(
 /// stesse coordinate consumate.
 // Dispatcher esaustivo per tipo geometrico WKB: un solo corpo tiene le
 // regole di validazione e costruzione allineate alla speculare del
-// validatore strutturale (ADR-0011); spezzarlo peggiorerebbe il confronto
+// validatore strutturale (architettura.md#geometrie); spezzarlo peggiorerebbe il confronto
 // riga-per-riga con `validate_wkb_geometry_with_dimensions`.
 #[allow(clippy::too_many_lines)]
 fn decode_geometry(
@@ -248,7 +248,7 @@ mod tests {
     use super::*;
     use crate::validate_wkb_contract;
 
-    /// Oracolo differenziale (ADR-0011): per ogni payload, il percorso
+    /// Oracolo differenziale (architettura.md#geometrie): per ogni payload, il percorso
     /// precedente (`validate_wkb_contract` + `Wkb::to_geo`) e il decoder
     /// validante devono produrre lo stesso esito e, in caso di successo,
     /// la stessa geometria coordinata per coordinata.

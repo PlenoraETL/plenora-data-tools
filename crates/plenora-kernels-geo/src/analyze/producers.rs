@@ -100,7 +100,7 @@ pub(in crate::analyze) fn analyze_geometry_only(
 /// aggiornati al target risolto. La sorgente DEVE avere un CRS risolto
 /// (R4.6.3: il requisito e' dell'operazione, gate in analyze).
 ///
-/// ADR-0009 decisione 8: la riproiezione CAMBIA il fatto (il CRS della
+/// piano-v5.md#contratti-di-input decisione 8: la riproiezione CAMBIA il fatto (il CRS della
 /// colonna), non ne descrive uno diverso — le chiavi canoniche CRS ereditate
 /// dal campo di input (`crs_id`, `crs_definition`+formato, `srid`,
 /// `axis_order`, `crs_resolution`) sono SOSTITUITE, non fuse: rimosse qui e

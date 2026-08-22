@@ -17,10 +17,11 @@ agente — segue queste regole. Non sono opzionali.
 3. **Ogni bug è una classe.** Trovato un bug, si cerca la stessa classe in
    tutto il codebase prima di dichiarare chiusa la fix (esempio: comparatore
    Int64 via f64 trovato in review 2026-07-27 — tre siti, una classe).
-4. **Deviazioni esplicite.** Ogni scostamento da ADR, contratti documentati
-   o invarianti va scritto nel codice E nell'ADR pertinente (`docs/adr/`),
-   con motivazione. Una garanzia indebolita va dichiarata come tale.
-5. **Determinismo testato.** ADR-0001: stesso input → stesso output, sempre.
+4. **Deviazioni esplicite.** Ogni scostamento dai contratti documentati o
+   dagli invarianti va scritto nel codice **e** nel registro dei limiti
+   (`docs/errori-e-limiti.md`), con regola, ambito, hazard e condizione di
+   rientro. Una garanzia indebolita va dichiarata come tale.
+5. **Determinismo testato.** architettura.md#determinismo: stesso input → stesso output, sempre.
    Ordine logico (BatchSequence), mai temporale. Le ottimizzazioni si
    verificano con oracoli contro il percorso generico.
 6. **Nessun `unsafe`** nel workspace (lint attivo). Nessuna dipendenza nuova
@@ -33,13 +34,23 @@ agente — segue queste regole. Non sono opzionali.
 
 ## Riferimenti
 
-- ADR in `docs/adr/` — contratto architetturale; lo stato di attuazione è
-  riportato in coda a ciascuno.
-- Registro delle deroghe: `docs/deroghe.md` (ICD §16 R16.2) — unico punto
-  di raccolta; ogni deroga dichiara regola, motivo, hazard, owner e
-  condizione di rientro (R16.1). Fonte normativa citata nelle CIA:
-  `plenora-contracts`, tag `v2.0-rc10` (revisione `3598259`).
-- `Architetture.md`, `Prestazioni.md` — decisioni (D*) e invarianti (I*, P*).
+La superficie documentale è **chiusa**: `README.md`, `AGENTS.md` e i sette
+documenti sotto `docs/`. Non se ne aggiungono altri senza aggiornare
+l'allowlist di `scripts/verifica_documentazione.py`, che li presidia insieme
+ai collegamenti interni.
+
+- [`docs/architettura.md`](docs/architettura.md) — crate, flusso, determinismo,
+  memoria, backend.
+- [`docs/piano-v5.md`](docs/piano-v5.md) — formato del piano, contratti,
+  identità, migrazione.
+- [`docs/cli.md`](docs/cli.md) — comandi, canali, exit code.
+- [`docs/operazioni.md`](docs/operazioni.md) — **generato**: non si modifica a
+  mano, si rigenera con `python docs/_build/assemble.py`.
+- [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) — tassonomia, privacy,
+  e il **registro dei limiti dichiarati**: ogni limite con regola, ambito,
+  hazard e condizione di rientro. È l'unico punto di raccolta.
+- [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — solo il lavoro aperto.
+- [`docs/release.md`](docs/release.md) — gate, piattaforme, procedura.
 - Catalogo operazioni: snapshot test
   (`crates/plenora-engine/tests/catalog_snapshot.snap`) — ogni cambio di
   catalogo è esplicito in PR.
@@ -59,7 +70,7 @@ cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 # stesso gate sul perimetro feature-gated (rami geos/proj, non compilati
-# dal comando sopra): richiede cmake + sqlite3, vedi ADR-0012.
+# dal comando sopra): richiede cmake + sqlite3, vedi architettura.md#geometrie.
 cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
   --lib --bins --locked --features full-backends -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \

@@ -1,4 +1,4 @@
-//! Regressioni della review statica 2026-08-16 su engine e core.
+//! Regressioni su engine e core.
 //!
 //! Ogni test qui sotto fallisce sul codice precedente alla correzione.
 

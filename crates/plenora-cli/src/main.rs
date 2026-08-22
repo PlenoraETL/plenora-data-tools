@@ -1,4 +1,4 @@
-//! plenora-data-tools CLI — Fase 1 "coesistenza" (Architetture.md par. 3.5).
+//! plenora-data-tools CLI — Fase 1 "coesistenza" (architettura.md).
 //!
 //! Fusione meccanica dei due binari di origine, senza modifiche di
 //! comportamento sui comandi legacy:
@@ -13,15 +13,16 @@
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
 //!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
 //! - Fase 2A: collegamento al DAG. Se il piano dichiara `schema_version: 5`
-//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (ADR
-//!   15) — `validate` e `run` usano il planner/executor del DAG
+//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (piano-v5.md,
+//!   migrazione) — `validate` e `run` usano il planner/executor del DAG
 //!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani
 //!   legacy (`schema_version` <= 3) restano sul `table_engine`, comportamento
 //!   invariato. Dettagli nella sezione "DAG (Fase 2A)" piu' sotto.
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
 //! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili. Fase 2B M1c (ADR 3): `run` installa un handler
+//! senza dati sensibili. Fase 2B, cancellazione cooperativa
+//! (errori-e-limiti.md#cancellazione): `run` installa un handler
 //! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
@@ -100,7 +101,7 @@ fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
 
-/// Exit code dedicato alla cancellazione (ADR 3, M1c): 128 + SIGINT,
+/// Exit code dedicato alla cancellazione (errori-e-limiti.md#cancellazione): 128 + SIGINT,
 /// convenzione POSIX — distinto dagli altri codici di errore.
 const EXIT_CANCELLED: i32 = 130;
 
@@ -191,11 +192,11 @@ fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, PlenoraError> {
     Ok(rimanenti)
 }
 
-/// Handler Ctrl-C (ADR 3, M1c): il primo Ctrl-C cancella il token —
+/// Handler Ctrl-C (errori-e-limiti.md#cancellazione): il primo Ctrl-C cancella il token —
 /// l'executor si ferma al prossimo confine cooperativo con
 /// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
 /// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
-/// accettato e documentato in ADR 3: un kernel `NonInterruptible` in corso
+/// accettato e documentato in errori-e-limiti.md: un kernel `NonInterruptible` in corso
 /// non offre altri punti di interruzione).
 ///
 /// `ctrlc::set_handler` e' installabile una sola volta per processo: la CLI
@@ -209,7 +210,8 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
         // non e' un terminale c'e' un programma dall'altro lato, e per lui il
         // canale resta vuoto: l'esito della cancellazione arriva comunque
         // come envelope su stdout con categoria `cancelled` ed exit 130.
-        // La garanzia «stderr vuoto» di ADR-0003 vale quindi senza eccezioni
+        // La garanzia «stderr vuoto» (errori-e-limiti.md#envelope-e-canali)
+        // vale quindi senza eccezioni
         // per ogni consumatore non interattivo.
         let interattivo = std::io::IsTerminal::is_terminal(&std::io::stderr());
         if requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -228,11 +230,12 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
     .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
-/// Esito tipizzato del publish (ADR 7) in forma verificabile, **senza
+/// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup) in forma verificabile, **senza
 /// scrivere su stderr**.
 ///
 /// Era un avviso su stderr: invisibile a un consumatore automatico e insieme
-/// una crepa nel contratto «stderr vuoto» (ADR-0003). Ora il chiamante lo
+/// una crepa nel contratto «stderr vuoto»
+/// (errori-e-limiti.md#envelope-e-canali). Ora il chiamante lo
 /// riporta nel proprio documento di uscita, dove chi legge le metriche lo
 /// trova senza intercettare un canale che per contratto non porta nulla.
 ///
@@ -366,7 +369,7 @@ fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, Plen
 /// esiste, vive nei kernel (`preflight_output_bytes`) ed e' applicato alle
 /// operazioni il cui numero di righe di output e' noto prima di allocare.
 /// Le altre restano coperte solo da qui: residuo dichiarato in
-/// `docs/deroghe.md`, DER-011.
+/// errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 fn ammissione_output(
     output: &RecordBatch,
     budget: usize,
@@ -501,7 +504,7 @@ fn run_pipeline(
         // budget residuo, e alcuni lo usano per rifiutare in anticipo
         // (`preflight_output_bytes`), ma gli altri costruiscono l'output e
         // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
-        // controllo di ammissione a valle, non un tetto duro: vedi DER-011.
+        // controllo di ammissione a valle, non un tetto duro: vedi errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
         // Non chiamarlo «budget globale» senza questa distinzione.
         let budget = plan.limits().max_governed_memory_bytes;
         let (left, usati) = load_complete_within(input_path, &plan, budget)?;
@@ -1175,7 +1178,9 @@ fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (fase 1, ADR 4/5) e poi `explain` con
+// - **validate**: `planner::validate` (fase 1,
+//   piano-v5.md#identita-e-fingerprint,
+//   architettura.md#planner-ed-executor) e poi `explain` con
 //   il `RuntimeContext` di default per il riepilogo della strategia fisica —
 //   un piano valido semanticamente ma fuori dal dispatch v1 fallisce qui,
 //   non a meta' esecuzione. Il riepilogo JSON su stdout riporta: nodi, archi
@@ -1580,7 +1585,7 @@ fn contract_crs_from_keys(
 }
 
 /// Verifica di coerenza DECIDIBILE dopo la risoluzione, per un input
-/// `resolved` con doppia rappresentazione (ADR-0009, emendamento 2026-07-31
+/// `resolved` con doppia rappresentazione (piano-v5.md#contratti-di-input, emendamento 2026-07-31
 /// — classe A): risolve anche `crs_id` e confronta l'intera coppia
 /// autorita'+codice dedotta dai due canonical.
 ///
@@ -1630,7 +1635,7 @@ fn verify_declared_coherence(
 /// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`
 /// -> 4326); `None` per ogni altra forma — il confronto con `srid` non e'
 /// decidibile e l'identificatore resta intero alla risoluzione. Il parsing
-/// vive in `plenora-core` (unica fonte condivisa, ADR-0009 emendamento
+/// vive in `plenora-core` (unica fonte condivisa, piano-v5.md#contratti-di-input emendamento
 /// 2026-07-31: lo stesso helper alimenta la deduzione `srid` del percorso
 /// legacy in `arrow_adapter`).
 fn authority_code(crs_id: &str) -> Option<u32> {
@@ -1801,7 +1806,7 @@ fn discover_contracts(
 /// output). Lo schema del contratto di input NON e' toccato: il check
 /// fail-closed dell'executor confronta i campi del file con quelli del
 /// contratto validato (metadati inclusi). La decisione resta esplicita nel
-/// piano e coperta dal `plan_hash` (ADR 4); il fingerprint del contratto
+/// piano e coperta dal `plan_hash` (piano-v5.md#identita-e-fingerprint); il fingerprint del contratto
 /// di input cambia di conseguenza (un piano con decisione non accetta in
 /// riesecuzione l'input non deciso senza rivalidazione).
 ///
@@ -2016,7 +2021,7 @@ fn describe_markdown(documento: &serde_json::Value) -> String {
 }
 
 /// Riepilogo JSON di `validate` per un piano DAG: nodi, archi con contratti,
-/// segmenti con modo e strategia, capability e identita' ADR 4.
+/// segmenti con modo e strategia, capability e identita' piano-v5.md#identita-e-fingerprint.
 ///
 /// # Errors
 ///
@@ -2098,7 +2103,7 @@ fn graph_summary_json(
 /// batch e byte in/out, wall time in millisecondi), i totali di
 /// pubblicazione, il contatore dei fallback della fusione geo (D12.7: ogni
 /// fallback governor e' osservabile, mai silenzioso), l'osservabilita' dei
-/// lease di memoria e le metriche di spill aggregate (ADR-0002).
+/// lease di memoria e le metriche di spill aggregate (architettura.md#memoria).
 fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
@@ -2170,7 +2175,7 @@ fn has_flag(args: &[String], flag: &str) -> bool {
 }
 
 /// `validate` di un piano DAG: planner DAG + `explain` per la strategia, con
-/// riepilogo JSON su stdout (ADR 5: `prepare` e' interna all'engine).
+/// riepilogo JSON su stdout (architettura.md#planner-ed-executor: `prepare` e' interna all'engine).
 /// `geo_fusion` e' il kill switch D12.9 (flag `--no-geo-fusion`): a `false`
 /// i gruppi di fusione non si formano e `explain` mostra la strategia non
 /// fusa.
@@ -2373,7 +2378,7 @@ fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraErro
     // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
     // (catalogo plenora-core), la stessa del gate provenance del planner e
     // del machinery di segmento dell'executor — nessuna lista locale
-    // duplicata (P0: formula/expression erano omesse qui; P2: hmac_sha256
+    // duplicata (formula/expression erano omesse qui; hmac_sha256
     // non emette, md5/sha256 solo con null_policy=error). La scansione
     // precede la validazione legacy: un'op diagnostica richiede DAG
     // anche se il resto del piano sarebbe invalido — mai eseguire per poi
@@ -2922,7 +2927,8 @@ fn esegui_processo() -> i32 {
         }
     };
     if let Err(error) = run_with_args(&args) {
-        // Cancellazione cooperativa (ADR 3, M1c): exit code dedicato; il
+        // Cancellazione cooperativa (errori-e-limiti.md#cancellazione): exit
+        // code dedicato; il
         // publish atomico garantisce che nessun output parziale sia stato
         // pubblicato. Envelope §9 anche per la cancellazione (categoria
         // dedicata, fase/effetto/retry dagli assi).
@@ -2941,13 +2947,13 @@ fn esegui_processo() -> i32 {
 
 /// Envelope di errore §9 su **stdout**, con `stderr` lasciato vuoto.
 ///
-/// **Inversione dichiarata rispetto alla review P1-5 del 2026-08-03**, che
-/// aveva riportato l'envelope su stderr come «contratto pubblico storico».
+/// **Inversione dichiarata rispetto alla scelta precedente**, che teneva
+/// l'envelope su stderr come «contratto pubblico storico».
 /// Quella decisione precede l'esistenza di `plenora-database-tools`, che
 /// emette gli errori su stdout e lascia stderr vuoto: due componenti della
 /// stessa famiglia, orchestrati dallo stesso codice, non possono avere due
 /// convenzioni opposte su dove cercare un errore. La rottura per chi oggi
-/// parsa stderr e' registrata in `docs/api-breaking-2026-08-16.md`.
+/// parsa stderr e' registrata in `docs/release.md`.
 fn emit_error_envelope(
     mut stdout: impl Write,
     envelope: &serde_json::Value,
@@ -2967,7 +2973,7 @@ const EXIT_INTERNO: i32 = 70;
 /// default e' `70` e un test copre l'intero enum.
 ///
 /// **Non e' allineato a `plenora-database-tools`**, che restituisce `1` per
-/// qualunque errore: e' una divergenza dichiarata (emendamento a ADR-0003).
+/// qualunque errore: e' una divergenza dichiarata (cli.md#exit-code).
 /// L'unica garanzia condivisa dalla famiglia e' «0 successo, non-zero
 /// errore»; chi scrive codice portabile fra i due componenti legge
 /// `error.category`, non questo numero.
@@ -3281,7 +3287,7 @@ mod tests {
 
     #[test]
     fn every_catalog_row_diagnostic_operation_requires_dag_v4_in_legacy_plans() {
-        // Catalog-driven (anti-drift, P0/P2): l'universo delle op arriva dal
+        // Catalog-driven (anti-drift): l'universo delle op arriva dal
         // catalogo, NON da una lista duplicata nel test. Per ogni
         // (descrittore, config) che l'autorita' dichiara diagnostica, ogni
         // nome risolvibile (id canonico + alias legacy) in un piano
@@ -3340,8 +3346,8 @@ mod tests {
                 }
             }
         }
-        // Lock espliciti del perimetro (P0: formula/expression erano il
-        // bypass; P2: md5/sha256 con null_policy=error; type_cast fallibile).
+        // Lock espliciti del perimetro (formula ed expression erano il bypass;
+        // md5/sha256 con null_policy=error; type_cast fallibile).
         for expected in [
             "table.formula",
             "table.expression",
@@ -3362,7 +3368,7 @@ mod tests {
 
     #[test]
     fn legacy_gate_passes_operations_that_do_not_emit_row_diagnostics() {
-        // P1-3/P2: md5/sha256 senza null_policy=error, type_cast verso `str`
+        // md5/sha256 senza null_policy=error, type_cast verso `str`
         // e hmac_sha256 non emettono diagnostica row-scoped: il gate li
         // lascia passare (resta la validazione legacy, qui con config
         // valide). Lock anti-regressione sull'autorita' config-sensitive.
@@ -4411,7 +4417,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Tagging di fase al confine di lettura (BLOCK-03, ADR-0009)
+    // Tagging di fase al confine di lettura (BLOCK-03, piano-v5.md#contratti-di-input)
     // -------------------------------------------------------------------
 
     #[test]

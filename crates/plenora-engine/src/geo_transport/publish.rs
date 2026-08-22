@@ -11,7 +11,7 @@
 //! `validate_transform_arrow_crs`/`validate_pair_arrow_crs` → esecuzione
 //! (`transform_arrow`/`pair_arrow`) → `publish_atomic`.
 //!
-//! Profili di publish (ADR 7): [`PublishProfile::Atomic`] e' il comportamento
+//! Profili di publish (errori-e-limiti.md#publish-e-cleanup): [`PublishProfile::Atomic`] e' il comportamento
 //! storico; [`PublishProfile::DurableAtomic`] aggiunge il `fsync` della
 //! directory dopo il persist. L'esito e' tipizzato ([`PublishOutcome`]) e la
 //! destinazione passa un riconoscimento fail-closed del filesystem
@@ -95,7 +95,7 @@ pub fn validate_pair_arrow_crs(schema: &PairArrowSchema) -> Result<(), PlenoraEr
     Ok(())
 }
 
-/// Profilo di pubblicazione (ADR 7): la garanzia e' precisa, non
+/// Profilo di pubblicazione (errori-e-limiti.md#publish-e-cleanup): la garanzia e' precisa, non
 /// un'assunzione. Il profilo fa parte delle capability del piano: la scelta
 /// e' esplicita, mai silenziosa.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -117,9 +117,11 @@ pub enum PublishProfile {
 
 impl PublishProfile {
     /// Nome della capability corrispondente al profilo nelle
-    /// `required_capabilities` del `ValidatedGraph` (ADR 7/ADR 4): un grafo
-    /// validato con un profilo e' riusabile solo in un ambiente che dichiara
-    /// la capability omonima (`check_compatibility` del planner).
+    /// `required_capabilities` del `ValidatedGraph`
+    /// (errori-e-limiti.md#publish-e-cleanup,
+    /// piano-v5.md#identita-e-fingerprint): un grafo validato con un profilo
+    /// e' riusabile solo in un ambiente che dichiara la capability omonima
+    /// (`check_compatibility` del planner).
     #[must_use]
     pub const fn capability_name(self) -> &'static str {
         match self {
@@ -129,7 +131,7 @@ impl PublishProfile {
     }
 }
 
-/// Esito tipizzato del publish (ADR 7).
+/// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup).
 ///
 /// Il fallimento del `fsync` di directory dopo il rename non e' un errore
 /// generico — l'output e' completo e gia' visibile, ma la durabilita' non e'
@@ -146,7 +148,7 @@ pub enum PublishOutcome {
 impl PublishOutcome {
     /// Effetto dell'esito sull'asse canonico «effetto remoto» (R9.6,
     /// contratti trasversali v2.0-rc10 §9, milestone D): collegamento
-    /// esplicito tra ADR 7 e il modello a quattro assi (R9.1), SENZA
+    /// esplicito tra errori-e-limiti.md#publish-e-cleanup e il modello a quattro assi (R9.1), SENZA
     /// duplicare l'esito in una variante d'errore — l'esito ignoto non e'
     /// una categoria d'errore (R9.3).
     ///
@@ -155,7 +157,7 @@ impl PublishOutcome {
     /// l'effetto e' determinato e definitivo dal punto di vista del
     /// chiamante. In [`PublishOutcome::PublishedButDurabilityUnconfirmed`]
     /// cio' che non e' confermato e' la DURABILITA' (sopravvivenza a un
-    /// crash della macchina, ADR 7), non l'esistenza dell'effetto:
+    /// crash della macchina, errori-e-limiti.md#publish-e-cleanup), non l'esistenza dell'effetto:
     /// [`RemoteEffect::Unknown`] («effetto non determinabile con i mezzi
     /// disponibili», R9.6) sarebbe scorretto — l'output e' osservabile.
     #[must_use]
@@ -167,7 +169,7 @@ impl PublishOutcome {
 }
 
 /// Tentativi totali di persist (1 iniziale + retry sui soli errori
-/// transitori; ADR 7: share lock e antivirus su Windows).
+/// transitori; errori-e-limiti.md#publish-e-cleanup: share lock e antivirus su Windows).
 const MAX_PERSIST_ATTEMPTS: u32 = 4;
 
 /// Backoff iniziale tra un tentativo di persist e il successivo; raddoppia a
@@ -213,7 +215,7 @@ fn persist_with_retry(mut persist: impl FnMut() -> Result<(), io::Error>) -> Res
 }
 
 /// Magic `f_type` (vedi `statfs(2)`) dei filesystem locali supportati
-/// (ADR 7). Riconoscimento fail-closed: qualunque magic fuori da questa
+/// (errori-e-limiti.md#publish-e-cleanup). Riconoscimento fail-closed: qualunque magic fuori da questa
 /// whitelist e' rifiutato come `UnsupportedPublishTarget` — in dubbio,
 /// rifiutare.
 #[cfg(any(target_os = "linux", test))]
@@ -226,7 +228,7 @@ const LOCAL_FS_MAGICS: &[u64] = &[
 ];
 
 /// Magic `f_type` dei filesystem di rete noti: rifiutati con messaggio
-/// dedicato (filesystem di rete fuori scope v1, ADR 7).
+/// dedicato (filesystem di rete fuori scope v1, errori-e-limiti.md#publish-e-cleanup).
 #[cfg(any(target_os = "linux", test))]
 const NETWORK_FS_MAGICS: &[(u64, &str)] = &[
     (0x6969, "NFS"),
@@ -235,7 +237,7 @@ const NETWORK_FS_MAGICS: &[(u64, &str)] = &[
     (0xFE53_4D42, "SMB2"),
 ];
 
-/// Classe del filesystem di destinazione (ADR 7, fail-closed).
+/// Classe del filesystem di destinazione (errori-e-limiti.md#publish-e-cleanup, fail-closed).
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilesystemClass {
@@ -262,7 +264,7 @@ fn classify_filesystem(magic: u64) -> FilesystemClass {
     FilesystemClass::Unknown
 }
 
-/// Riconoscimento fail-closed del filesystem (ADR 7) su Linux: `statfs`
+/// Riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup) su Linux: `statfs`
 /// della directory di destinazione e whitelist dei magic locali. Fase
 /// [`ErrorPhase::Probe`] (BLOCK-03): ispezione preliminare della
 /// destinazione — la fase che la variante dedicata aveva prima della
@@ -320,7 +322,7 @@ fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
 }
 
 /// `fsync` della directory dopo il persist (profilo
-/// [`PublishProfile::DurableAtomic`], ADR 7). Su Unix apre la directory e la
+/// [`PublishProfile::DurableAtomic`], errori-e-limiti.md#publish-e-cleanup). Su Unix apre la directory e la
 /// sincronizza; il fallimento non e' un errore — il file e' gia' pubblicato —
 /// ma declassa l'esito a [`PublishOutcome::PublishedButDurabilityUnconfirmed`].
 #[cfg(unix)]
@@ -332,14 +334,14 @@ fn sync_directory_outcome(parent: &Path) -> PublishOutcome {
 }
 
 /// Windows non espone il `fsync` di directory: la durabilita' richiesta dal
-/// profilo [`PublishProfile::DurableAtomic`] non e' confermabile (ADR 7) e
+/// profilo [`PublishProfile::DurableAtomic`] non e' confermabile (errori-e-limiti.md#publish-e-cleanup) e
 /// l'esito e' sempre [`PublishOutcome::PublishedButDurabilityUnconfirmed`].
 #[cfg(not(unix))]
 const fn sync_directory_outcome(_parent: &Path) -> PublishOutcome {
     PublishOutcome::PublishedButDurabilityUnconfirmed
 }
 
-// Hook di iniezione dei fallimenti (solo test, ADR 7): simula un crash
+// Hook di iniezione dei fallimenti (solo test, errori-e-limiti.md#publish-e-cleanup): simula un crash
 // dopo scrittura + sync del tempfile e prima del persist. Thread-local per
 // non interferire con i test paralleli.
 #[cfg(test)]
@@ -354,7 +356,7 @@ fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
     PlenoraError::Io(error).with_phase(phase)
 }
 
-/// Pubblicazione atomica dell'output con profilo selezionabile (ADR 7).
+/// Pubblicazione atomica dell'output con profilo selezionabile (errori-e-limiti.md#publish-e-cleanup).
 ///
 /// Rifiuta un output esistente, verifica il filesystem di destinazione
 /// (fail-closed), scrive su un tempfile `.plenora-geo-*.partial` nella
@@ -363,7 +365,7 @@ fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
 /// [`PublishProfile::DurableAtomic`] sincronizza anche la directory dopo il
 /// persist e l'esito riflette la conferma della durabilita'.
 ///
-/// Tagging di fase (BLOCK-03, ADR-0009): ogni punto del confine dichiara il
+/// Tagging di fase (BLOCK-03, piano-v5.md#contratti-di-input): ogni punto del confine dichiara il
 /// momento esatto — riconoscimento della destinazione [`ErrorPhase::Probe`],
 /// creazione del tempfile [`ErrorPhase::Write`], flush/sync del writer
 /// [`ErrorPhase::Finalize`], check no-clobber e rename atomico
@@ -391,8 +393,9 @@ pub fn publish_with_profile<T>(
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, PublishOutcome), PlenoraError> {
     if output_path.exists() {
-        // Check no-clobber al confine di commit (ADR 7/§9): e' la
-        // precondizione del rename atomico, non validazione del piano.
+        // Check no-clobber al confine di commit
+        // (errori-e-limiti.md#publish-e-cleanup, ICD §9): e' la precondizione
+        // del rename atomico, non validazione del piano.
         return Err(PlenoraError::InvalidPlan(format!(
             "output gia' esistente: {}",
             output_path.display()
@@ -431,7 +434,7 @@ pub fn publish_with_profile<T>(
         .as_file()
         .sync_all()
         .map_err(|error| io_at(ErrorPhase::Finalize, error))?;
-    // Hook di iniezione (solo test, ADR 7): fallimento tra scrittura e
+    // Hook di iniezione (solo test, errori-e-limiti.md#publish-e-cleanup): fallimento tra scrittura e
     // persist — il tempfile deve essere ripulito dal Drop, nessun output
     // parziale visibile.
     #[cfg(test)]
@@ -495,7 +498,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    // -- Riconoscimento fail-closed del filesystem (ADR 7) ------------------
+    // -- Riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup) ------------------
 
     #[test]
     fn classify_local_magics_as_supported() {
@@ -614,7 +617,7 @@ mod tests {
 
     #[test]
     fn publish_outcome_maps_on_the_remote_effect_axis() {
-        // R9.1/R9.6 (milestone D): l'esito tipizzato di ADR 7 vive
+        // R9.1/R9.6 (milestone D): l'esito tipizzato di errori-e-limiti.md#publish-e-cleanup vive
         // sull'asse effetto, non in una variante d'errore (R9.3). Committed
         // in entrambi i casi: l'output e' completo e visibile; in
         // `PublishedButDurabilityUnconfirmed` e' la durabilita' a non
@@ -653,7 +656,7 @@ mod tests {
             })
             .expect("publish durevole");
         assert_eq!(value, 42);
-        // Su Unix il fsync di directory e' supportato; su Windows no (ADR 7).
+        // Su Unix il fsync di directory e' supportato; su Windows no (errori-e-limiti.md#publish-e-cleanup).
         #[cfg(unix)]
         assert_eq!(outcome, PublishOutcome::Published);
         #[cfg(not(unix))]
@@ -685,7 +688,7 @@ mod tests {
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
     }
 
-    // -- Crash simulato tra scrittura e persist (ADR 7) ----------------------
+    // -- Crash simulato tra scrittura e persist (errori-e-limiti.md#publish-e-cleanup) ----------------------
 
     #[test]
     fn crash_between_write_and_persist_leaves_nothing_visible() {
@@ -708,7 +711,7 @@ mod tests {
         assert_eq!(leftovers, 0, "il tempfile e' ripulito");
     }
 
-    // -- Tagging di fase al confine di publish (BLOCK-03, ADR-0009) --------
+    // -- Tagging di fase al confine di publish (BLOCK-03, piano-v5.md#contratti-di-input) --------
 
     #[test]
     fn io_at_tags_each_publish_phase_without_changing_text_or_axes() {
@@ -730,7 +733,8 @@ mod tests {
     #[test]
     fn existing_output_is_a_commit_phase_error_with_unchanged_text() {
         // Check no-clobber: precondizione del rename atomico — scatta al
-        // confine di commit (ADR 7/§9), non in validazione del piano.
+        // confine di commit (errori-e-limiti.md#publish-e-cleanup, ICD §9),
+        // non in validazione del piano.
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("output.bin");
         std::fs::write(&destination, b"vecchio").expect("fixture");
@@ -868,7 +872,7 @@ mod tests {
         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
     }
 
-    // -- Filesystem di destinazione non identificabile (ADR 7) -------------
+    // -- Filesystem di destinazione non identificabile (errori-e-limiti.md#publish-e-cleanup) -------------
 
     #[cfg(target_os = "linux")]
     #[test]

@@ -1189,7 +1189,7 @@ pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), Arrow
     // `plenora_core::panic_policy`: la CLI installa `Silent`, un embedder —
     // il binding PyO3 compreso — deve installare `Sanitized`. Chi non
     // installa nulla resta con l'hook di `std`: residuo dichiarato in
-    // docs/deroghe.md.
+    // docs/errori-e-limiti.md.
     //
     // ATTENZIONE per chi legge in futuro: il fuzz target `arrow_transform` e'
     // in quarantena e resta rosso anche con questa barriera attiva. Non e' un

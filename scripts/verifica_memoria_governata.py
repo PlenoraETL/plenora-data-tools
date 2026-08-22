@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Verifica che il censimento DER-011 corrisponda ancora al codice.
+"""Verifica che la memoria governata sia ancora quella descritta.
 
-Il censimento (`docs/der011-censimento-2026-08-21.md`) elenca, punto per
-punto, dove la memoria viene allocata PRIMA di essere prenotata. Un elenco
-del genere marcisce in silenzio: basta che qualcuno sposti una reservation e
-il documento resta convincente e falso.
+`docs/errori-e-limiti.md` dichiara che cosa il budget governato garantisce e
+dove la garanzia si ferma: quali siti prenotano PRIMA di allocare, quali
+prenotano dopo, e quale primitivo esiste per prendere la quota. Un documento
+del genere marcisce in silenzio — basta che qualcuno sposti una reservation e
+il testo resta convincente e falso.
 
-Questo script non conta le righe — cambierebbero al primo refactor — ma
-verifica che ogni sito citato esista ancora **nella forma che il censimento
-descrive**, e che i due punti preventivi non ne abbiano perso la
-caratteristica. Esce 1 al primo scostamento.
+Questo script non conta le righe, che cambiano al primo refactor: verifica che
+ogni sito descritto esista ancora **nella forma in cui e' descritto**, e che i
+pattern che sono stati eliminati non riappaiano. Esce 1 al primo scostamento.
 
-    python scripts/verifica_censimento_der011.py
+    python scripts/verifica_memoria_governata.py
 """
 import io
 import sys
@@ -91,7 +91,7 @@ ANCORE = [
 ]
 
 # Frammenti che NON devono ricomparire: sono i pattern che questo blocco ha
-# eliminato. Se tornano, il censimento e la deroga vanno riletti.
+# eliminato. Se tornano, docs/errori-e-limiti.md va riletto.
 VIETATI = [
     (ESECUTORE,
      'fn accedibile_in_memoria(',
@@ -128,7 +128,7 @@ def main():
             cache[percorso] = testo(percorso)
         if frammento not in cache[percorso]:
             problemi.append(
-                'ANCORA PERSA in %s: %r\n  il censimento afferma: %s'
+                'ANCORA PERSA in %s: %r\n  il documento afferma: %s'
                 % (percorso, frammento, motivo))
     for percorso, frammento, motivo in VIETATI:
         if percorso not in cache:
@@ -138,15 +138,17 @@ def main():
                 'PATTERN RIAPPARSO in %s: %r\n  %s'
                 % (percorso, frammento, motivo))
     if problemi:
-        sys.stderr.write('il censimento DER-011 non corrisponde al codice:\n\n')
+        sys.stderr.write("la memoria governata non e' quella descritta in "
+                         'docs/errori-e-limiti.md:\n\n')
         for problema in problemi:
             sys.stderr.write('- %s\n' % problema)
         sys.stderr.write(
-            '\nRileggere docs/der011-censimento-2026-08-21.md prima di '
+            '\nRileggere docs/errori-e-limiti.md prima di '
             'aggiornarlo: un elenco sbagliato e\' peggio di nessun elenco.\n')
         raise SystemExit(1)
-    print('censimento DER-011 coerente con il codice: %d ancore, %d pattern '
-          'eliminati e non riapparsi' % (len(ANCORE), len(VIETATI)))
+    print('memoria governata coerente con docs/errori-e-limiti.md: '
+          '%d ancore, %d pattern eliminati e non riapparsi'
+          % (len(ANCORE), len(VIETATI)))
 
 
 main()

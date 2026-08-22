@@ -1,4 +1,4 @@
-//! Test del livello 2 di determinismo (ADR-0001, "Determinismo IPC
+//! Test del livello 2 di determinismo (architettura.md#determinismo, "Determinismo IPC
 //! canonico"): stesso piano validato, stesso input, stessa configurazione
 //! del writer → i due output IPC devono essere binariamente identici.
 //!

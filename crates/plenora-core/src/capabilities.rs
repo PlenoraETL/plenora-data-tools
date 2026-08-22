@@ -66,7 +66,7 @@ pub struct OperationCapability {
     /// Politica di determinismo (`defined_order` | `input_order` |
     /// `stable_key_order` | `canonical_order`).
     pub determinism: &'static str,
-    /// Fondibilita' nella fusione dei segmenti geo (ADR-0012 D12.2:
+    /// Fondibilita' nella fusione dei segmenti geo (architettura.md#geometrie D12.2:
     /// `not_fusible` | `transform_in_place` | `terminal_measure`).
     /// Capability fisica: esposta qui ma FUORI dal `catalog_fingerprint`.
     pub geo_fusion: &'static str,
@@ -88,7 +88,7 @@ pub struct ComponentCapabilities {
     /// Modello geometrico dichiarato.
     pub geometry: GeometryCapabilities,
     /// Una capability per ogni operazione del catalogo, in ordine di
-    /// catalogo (deterministico, ADR-0001).
+    /// catalogo (deterministico, architettura.md#determinismo).
     pub operations: Vec<OperationCapability>,
 }
 
@@ -225,7 +225,10 @@ mod tests {
     fn il_documento_e_deterministico_e_serializzabile() {
         let first = serde_json::to_string(&component_capabilities()).expect("serialize");
         let second = serde_json::to_string(&component_capabilities()).expect("serialize");
-        assert_eq!(first, second, "stesso documento, stessi byte (ADR-0001)");
+        assert_eq!(
+            first, second,
+            "stesso documento, stessi byte (architettura.md#determinismo)"
+        );
         assert!(first.contains("\"protocol_version\":1"));
         assert!(first.contains("\"geo.reproject\""));
         assert!(first.contains("\"proj\""));
@@ -234,7 +237,7 @@ mod tests {
 
     #[test]
     fn geo_fusion_esposta_dalla_stessa_fonte_del_catalogo() {
-        // ADR-0012 D12.2: la capability non puo' divergere dal descriptor —
+        // architettura.md#geometrie D12.2: la capability non puo' divergere dal descriptor —
         // il valore serializzato e' il nome stabile del campo di catalogo.
         let capabilities = component_capabilities();
         for descriptor in CATALOG {
@@ -250,7 +253,8 @@ mod tests {
                 descriptor.id
             );
         }
-        // Spot-check delle tre classi sul perimetro (M1+M3 incluso).
+        // Spot-check delle tre classi sul perimetro fondibile,
+        // `reproject` e `make_valid` inclusi.
         let by_id = |id: &str| {
             capabilities
                 .operations

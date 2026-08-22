@@ -1,5 +1,5 @@
 //! Inferenza a secco del `DataContract` di output per le 71 operazioni
-//! `table.*` del catalogo (Fase 2A-2, Architetture.md par. 4.3 e 6.1, ADR 5).
+//! `table.*` del catalogo (Fase 2A-2, architettura.md e 6.1, architettura.md#planner-ed-executor).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
 //! (fail-closed: config non valida -> errore `InvalidPlan` puntuale), replica le
@@ -103,7 +103,7 @@ use self::strings::{
 };
 
 /// Inferisce il `DataContract` di output di un'operazione `table.*` a secco
-/// (Fase 1 `validate`, Architetture.md par. 6.1 passo 6).
+/// (Fase 1 `validate`, architettura.md passo 6).
 ///
 /// `op` accetta id canonici e alias legacy (risolti via catalogo);
 /// `inputs` deve rispettare l'arieta' dichiarata dal catalogo (unaria,

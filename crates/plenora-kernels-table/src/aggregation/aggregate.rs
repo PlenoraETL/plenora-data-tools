@@ -79,7 +79,7 @@ pub struct Aggregate {
 /// originale (stesso ordine di somma, `total_cmp` per distinct/quantile,
 /// null esclusi o gruppo nullo secondo `skip_null`).
 /// Riduzione Sum/Avg/Min/Max/Variance/Stddev senza materializzare il
-/// gruppo (V2): stesse operazioni f64 nello stesso ordine del percorso
+/// gruppo (hot path minimale): stesse operazioni f64 nello stesso ordine del percorso
 /// materializzato (`values.iter().sum()`, due passate per la varianza) —
 /// risultato bit-identico, nessuna seconda allocazione per gruppo.
 fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> Result<Option<f64>> {
@@ -151,7 +151,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     }
     // Solo `distinct` e `quantile` hanno bisogno del gruppo materializzato
     // (ordinamento); per le altre funzioni il secondo `Vec` e' lavoro
-    // evitabile (V2): si riduce sull'iteratore flatten, stesse operazioni
+    // evitabile (hot path minimale): si riduce sull'iteratore flatten, stesse operazioni
     // f64 nello stesso ordine — parita' bit-a-bit per costruzione.
     if !aggregation.distinct && !matches!(aggregation.function, AggFunction::Quantile) {
         return reduce_numeric_streaming(&raw, aggregation);
@@ -215,7 +215,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 .ok_or_else(|| PlenoraError::InvalidPlan("indice quantile non valido".into()))?;
             let weight = position - position.floor();
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+            // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
             // fusa e' il contratto numerico. Produzione e oracolo usano la
             // STESSA forma: l'equivalenza bit-a-bit resta per costruzione.
             #[allow(clippy::suboptimal_flops)]

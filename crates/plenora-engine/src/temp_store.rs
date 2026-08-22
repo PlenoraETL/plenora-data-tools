@@ -1,5 +1,5 @@
 //! Store temporaneo condiviso per esecuzione e scavenging all'avvio
-//! (ADR 3, "Crash non intercettabili").
+//! (errori-e-limiti.md, "Crash non intercettabili").
 //!
 //! `catch_unwind` non copre `panic = "abort"`, crash nei backend nativi,
 //! OOM killer e kill esterni: la difesa strutturale e' una directory
@@ -45,7 +45,7 @@ const DIR_PREFIX: &str = "plenora-";
 const LOCK_FILE_NAME: &str = "lock.json";
 
 /// TTL di default dello scavenging (24 ore): volutamente conservativo
-/// (ADR 3 — una macchina sospesa/ibernata puo' congelare l'heartbeat di
+/// (errori-e-limiti.md — una macchina sospesa/ibernata puo' congelare l'heartbeat di
 /// un'esecuzione ancora valida).
 pub const DEFAULT_SCAVENGE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -53,7 +53,7 @@ pub const DEFAULT_SCAVENGE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// directory, quindi e' validato in modo restrittivo).
 const MAX_EXECUTION_ID_LEN: usize = 128;
 
-/// Contenuto del lock file `lock.json` (ADR 3): il lock file stesso e' la
+/// Contenuto del lock file `lock.json` (errori-e-limiti.md): il lock file stesso e' la
 /// prova principale (la directory esiste solo mentre l'esecuzione e' viva,
 /// salvo crash); PID, hostname e timestamp sono segnali diagnostici.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ struct LockFile {
     heartbeat_unix_secs: u64,
 }
 
-/// Esito dello scavenging all'avvio (ADR 3): telemetria per il chiamante,
+/// Esito dello scavenging all'avvio (errori-e-limiti.md): telemetria per il chiamante,
 /// nessun valore o payload sensibile.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ScavengeReport {
@@ -78,7 +78,7 @@ pub struct ScavengeReport {
     pub kept_conservative: usize,
 }
 
-/// Store temporaneo condiviso per una singola esecuzione (ADR 3).
+/// Store temporaneo condiviso per una singola esecuzione (errori-e-limiti.md).
 ///
 /// Creato all'avvio dell'esecuzione, ospita tutti i file temporanei (spill
 /// e simili) sotto `plenora-<execution_id>-<random>/`. Il `Drop` rimuove
@@ -137,7 +137,7 @@ impl TempStore {
         &self.lock.execution_id
     }
 
-    /// Aggiorna il timestamp di heartbeat nel lock file (ADR 3).
+    /// Aggiorna il timestamp di heartbeat nel lock file (errori-e-limiti.md).
     ///
     /// Nella v1 seriale la periodicita' e' decisa dal chiamante: invocarla a
     /// intervalli ben piu' brevi del TTL di scavenging (es. a ogni batch) —
@@ -153,7 +153,7 @@ impl TempStore {
     }
 }
 
-/// Scavenging all'avvio delle directory temporanee orfane (ADR 3).
+/// Scavenging all'avvio delle directory temporanee orfane (errori-e-limiti.md).
 ///
 /// Elenca le voci `plenora-*` in `root` (SOLO directory, SOLO con quel
 /// prefisso: qualunque altra voce e' ignorata e mai toccata) e per ognuna
@@ -221,7 +221,7 @@ enum ScavengeAction {
     KeepConservative,
 }
 
-/// Classificazione pura di una directory `plenora-*` (ADR 3): la prova
+/// Classificazione pura di una directory `plenora-*` (errori-e-limiti.md): la prova
 /// principale e' il lock file; PID e heartbeat sono segnali diagnostici.
 fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
     let lock_path = path.join(LOCK_FILE_NAME);
@@ -264,7 +264,7 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
 /// Verifica `kill(pid, 0)` (solo Linux, via rustix — dipendenza gia'
 /// presente per `statfs`): `ESRCH` = processo inesistente; `EPERM` = esiste
 /// ma non e' nostro, quindi vivo. Il PID resta un segnale diagnostico
-/// (riutilizzabile), mai una prova sufficiente (ADR 3).
+/// (riutilizzabile), mai una prova sufficiente (errori-e-limiti.md).
 #[cfg(target_os = "linux")]
 fn process_alive(pid: u32) -> bool {
     let Some(pid) = i32::try_from(pid)
@@ -281,7 +281,7 @@ fn process_alive(pid: u32) -> bool {
 
 /// Windows e altri Unix: nessuna verifica PID portabile senza nuove
 /// dipendenze. Fallback conservativo: il processo e' considerato vivo e
-/// decide solo il TTL dell'heartbeat (ADR 3).
+/// decide solo il TTL dell'heartbeat (errori-e-limiti.md).
 #[cfg(not(target_os = "linux"))]
 const fn process_alive(_pid: u32) -> bool {
     true
@@ -325,7 +325,7 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
-/// Hostname diagnostico (ADR 3: segnale, mai prova). Solo variabili
+/// Hostname diagnostico (errori-e-limiti.md: segnale, mai prova). Solo variabili
 /// d'ambiente (`HOSTNAME` su Unix, `COMPUTERNAME` su Windows): nessuna
 /// nuova dipendenza; se assenti, `unknown`.
 fn hostname() -> String {
@@ -470,7 +470,7 @@ mod tests {
     fn stale_heartbeat_is_scavenged() {
         let root = tempfile::tempdir().expect("root");
         let store = TempStore::with_root("exec-stale", root.path()).expect("store");
-        // PID vivo (noi stessi) ma heartbeat antico: il TTL decide (ADR 3).
+        // PID vivo (noi stessi) ma heartbeat antico: il TTL decide (errori-e-limiti.md).
         let lock = sample_lock(std::process::id(), 1_000_000);
         plant_lock(store.path(), &lock);
         let report =

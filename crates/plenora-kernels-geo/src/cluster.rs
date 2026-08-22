@@ -113,7 +113,7 @@ impl RTreeObject for IndexedPoint {
 
 impl PointDistance for IndexedPoint {
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn distance_2(&self, point: &[f64; 2]) -> f64 {
@@ -499,7 +499,7 @@ mod tests {
     }
 
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn cloud(center: (f64, f64), count: usize) -> Vec<(f64, f64)> {
@@ -677,7 +677,7 @@ mod tests {
         let mut coords = cloud((0.0, 0.0), 40);
         coords.extend(cloud((50.0, 50.0), 40));
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
         // fusa e' il contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));

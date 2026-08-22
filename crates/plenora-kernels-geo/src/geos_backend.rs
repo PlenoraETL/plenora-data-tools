@@ -99,7 +99,7 @@ pub fn make_valid_wkb(
     }
     let output = repaired.to_wkb().map_err(geos_error)?;
     // Rivalidazione dell'output (R0.1: nessuna fiducia nel produttore):
-    // il decoder validante (ADR-0011) applica lo stesso contratto
+    // il decoder validante (architettura.md#geometrie) applica lo stesso contratto
     // strutturale DURANTE la costruzione — una passata, garanzia identica.
     geometry_from_wkb(&output)?;
     Ok(output)
@@ -107,7 +107,7 @@ pub fn make_valid_wkb(
 
 /// Variante di [`make_valid_wkb`] su geometria gia' decodificata.
 ///
-/// Fusione dei segmenti geo (ADR-0012 M3): l'input resta ammesso OGC-invalido
+/// Fusione dei segmenti geo (architettura.md#geometrie M3): l'input resta ammesso OGC-invalido
 /// — e' esattamente cio' che l'operazione ripara. Il WKB intermedio e' la
 /// stessa forma canonica XY che il percorso non fuso consegnerebbe al nodo,
 /// quindi gate strutturale, riparazione GEOS e rivalidazione dell'output
@@ -246,7 +246,7 @@ fn checked_noding_work(
 fn geos_to_geo(geometry: &GeosGeometry) -> Result<Geometry<f64>, GeosBackendError> {
     let payload = geometry.to_wkb().map_err(geos_error)?;
     // Come in make_valid_wkb: geometry_from_wkb include il contratto
-    // strutturale (decoder validante, ADR-0011) — nessuna scansione
+    // strutturale (decoder validante, architettura.md#geometrie) — nessuna scansione
     // separata, la garanzia fail-closed e' identica.
     geometry_from_wkb(&payload).map_err(GeosBackendError::from)
 }
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn make_valid_geometry_matches_the_wkb_path() {
-        // ADR-0012 M3: la variante su forma decodificata deve produrre la
+        // architettura.md#geometrie M3: la variante su forma decodificata deve produrre la
         // STESSA geometria del percorso WKB (che la fusione sostituisce),
         // sull'input OGC-invalido che l'operazione esiste per riparare.
         let input = bow_tie_wkb();

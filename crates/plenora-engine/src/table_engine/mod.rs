@@ -34,7 +34,7 @@
 //!
 //! L'unificazione con il trasporto geo in un DAG unico e' Fase 2.
 //!
-//! Fase 2B M2c (ADR-0002): selezione preventiva dello spill per
+//! Fase 2B, spill generalizzato (architettura.md#memoria): selezione preventiva dello spill per
 //! `sort`/`distinct`/`aggregate` — sopra la soglia deterministica "byte
 //! stimati dell'input > `max_governed_memory_bytes`" (la stessa del set-op spilled) il
 //! passo usa la variante `*_spilled` di `plenora_kernels_table::spill`.

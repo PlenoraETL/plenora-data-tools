@@ -1,13 +1,13 @@
-# plenora-data-tools — Firme dei kernel (v1)
+# Operazioni
 
 Documento generato dal codice sorgente del workspace (`crates/plenora-core`,
-`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre **127
-delle 146 operazioni** del catalogo unificato: 62 tabellari (`table.*`) e
-65 geografiche (`geo.*`).
+`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre **tutte e
+146 le operazioni** del catalogo unificato: 71 tabellari
+(`table.*`) e 75 geografiche (`geo.*`).
 
-Le 19 operazioni catalogate e **non ancora documentate** sono elencate in
-fondo. Il conteggio qui sopra e l'elenco sono generati dal catalogo: non
-possono divergere da esso senza che la generazione fallisca.
+I conteggi sono calcolati dal catalogo, non ricordati a mano, e la copertura è
+un'asserzione: un'operazione catalogata senza firma fa **fallire la
+generazione**.
 
 ## Come si legge una firma
 
@@ -53,30 +53,30 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 ## Indice
 
 
-### Operazioni tabellari (62)
+### Operazioni tabellari (71)
 
 - **filtering** (2): `table.filter`, `table.conditional`
-- **aggregation** (6): `table.sort`, `table.distinct`, `table.dedup_advanced`, `table.aggregate`, `table.rolling_window`, `table.window_function`
-- **joins** (6): `table.join`, `table.semi_join`, `table.anti_join`, `table.asof_join`, `table.cross_join`, `table.concat`
+- **aggregation** (7): `table.sort`, `table.distinct`, `table.dedup_advanced`, `table.aggregate`, `table.rolling_window`, `table.window_function`, `table.top_n`
+- **joins** (8): `table.join`, `table.semi_join`, `table.anti_join`, `table.asof_join`, `table.cross_join`, `table.concat`, `table.concat_by_name`, `table.fuzzy_join`
 - **cleansing** (3): `table.fill_na`, `table.replace`, `table.type_cast`
 - **strings** (4): `table.string_pad`, `table.string_length`, `table.string_extract`, `table.text_normalize`
 - **dates** (4): `table.date_format`, `table.date_add`, `table.date_diff`, `table.timezone_convert`
-- **columns** (5): `table.drop_columns`, `table.rename`, `table.reorder_columns`, `table.concat_columns`, `table.split_column`
+- **columns** (7): `table.drop_columns`, `table.rename`, `table.reorder_columns`, `table.concat_columns`, `table.split_column`, `table.select_columns`, `table.align_schema`
 - **analysis** (5): `table.lookup`, `table.bin`, `table.flatten_json`, `table.statistics`, `table.sample`
 - **reshape** (6): `table.melt`, `table.pivot`, `table.transpose`, `table.explode`, `table.unnest`, `table.table_diff`
 - **setops** (3): `table.except`, `table.intersect`, `table.union_distinct`
-- **security** (3): `table.md5_hash`, `table.sha256_hash`, `table.mask_data`
+- **security** (5): `table.md5_hash`, `table.sha256_hash`, `table.mask_data`, `table.stable_fingerprint`, `table.hmac_sha256`
 - **quality** (6): `table.assert_schema`, `table.assert_not_null`, `table.assert_unique`, `table.assert_range`, `table.assert_regex`, `table.coalesce`
-- **governance** (4): `table.assert_cardinality`, `table.assert_metadata`, `table.assert_foreign_key`, `table.reconcile`
-- **utility** (3): `table.add_row_number`, `table.date_extract`, `table.uuid_generator`
+- **governance** (5): `table.assert_cardinality`, `table.assert_metadata`, `table.assert_foreign_key`, `table.reconcile`, `table.validate_rules`
+- **utility** (4): `table.add_row_number`, `table.date_extract`, `table.uuid_generator`, `table.limit`
 - **formula** (1): `table.formula`
 - **expressions** (1): `table.expression`
 
-### Operazioni geografiche (65)
+### Operazioni geografiche (75)
 
 - **Geo Manipola-compat** (33): `geo.centroid`, `geo.convex_hull`, `geo.envelope`, `geo.sjoin`, `geo.area`, `geo.boundary`, `geo.bounds_extractor`, `geo.buffer`, `geo.clean_topology`, `geo.clip`, `geo.count_points_in_polygons`, `geo.difference`, `geo.dissolve`, `geo.distance`, `geo.explode`, `geo.from_coords`, `geo.intersection`, `geo.length`, `geo.line_builder`, `geo.nearest`, `geo.overlay`, `geo.perimeter`, `geo.point_on_surface`, `geo.polygon_builder`, `geo.simplify`, `geo.symmetric_difference`, `geo.to_wkt`, `geo.union`, `geo.vertex_count`, `geo.voronoi`, `geo.within`, `geo.make_valid`, `geo.reproject`
 - **Predicati DE-9IM (estensioni geo)** (11): `geo.predicate_intersects`, `geo.predicate_disjoint`, `geo.predicate_contains`, `geo.predicate_within`, `geo.predicate_equals_topo`, `geo.predicate_covers`, `geo.predicate_covered_by`, `geo.predicate_contains_properly`, `geo.predicate_touches`, `geo.predicate_crosses`, `geo.predicate_overlaps`
-- **Estensioni geo** (21): `geo.affine_transform`, `geo.translate`, `geo.scale`, `geo.rotate`, `geo.concave_hull`, `geo.hausdorff_distance`, `geo.haversine_distance`, `geo.geodesic_distance`, `geo.geodesic_line_length`, `geo.densify`, `geo.snap_to_grid`, `geo.delaunay`, `geo.polygonize`, `geo.line_merge`, `geo.split`, `geo.line_substring`, `geo.line_interpolate_point`, `geo.frechet_distance`, `geo.bearing`, `geo.geodesic_area`, `geo.geometry_diagnostics`
+- **Estensioni geo** (31): `geo.affine_transform`, `geo.translate`, `geo.scale`, `geo.rotate`, `geo.concave_hull`, `geo.hausdorff_distance`, `geo.haversine_distance`, `geo.geodesic_distance`, `geo.geodesic_line_length`, `geo.densify`, `geo.snap_to_grid`, `geo.delaunay`, `geo.polygonize`, `geo.line_merge`, `geo.split`, `geo.line_substring`, `geo.line_interpolate_point`, `geo.frechet_distance`, `geo.bearing`, `geo.geodesic_area`, `geo.geometry_diagnostics`, `geo.from_wkt`, `geo.geometry_accessors`, `geo.collect`, `geo.line_locate_point`, `geo.generate_grid`, `geo.subdivide`, `geo.snap`, `geo.coverage_validate`, `geo.shared_paths`, `geo.cluster_dbscan`
 
 ## Tabellari — filtering
 
@@ -223,6 +223,21 @@ del catalogo (spilling interno degli operatori blocking) e non ha una firma.
 **Input:** tabella unaria; `column` numerica, `group_by`/`order_column` esistenti se specificati.
 **Output:** tutte le colonne dell'input più la colonna risultato (Float64 nullable; nome da `output_column` o `<column>_<suffix>`), eventuale riordino su `order_column`. Stesse righe. Tabella.
 
+### table.top_n
+
+*estensione · arietà: unaria · execution class: blocking*
+
+**Config** — `TopN` (`aggregation/sort.rs:204`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `columns` | `array[string]` | obbligatorio | non vuoto; ogni colonna deve esistere ed essere ordinabile |
+| `n` | `integer` | obbligatorio | `≤ max_rows` dei limiti effettivi |
+| `descending` | `boolean` | `false` | — |
+
+**Input:** una tabella; le colonne chiave devono essere di tipo ordinabile.
+**Output:** schema invariato, esattamente `min(n, righe)` righe. L'output è **ordinato sulle chiavi** (`sorted_by` diventa provato). Null in coda in ordine ascendente, confronto totale sui float, ordinamento **stabile** con spareggio sull'indice originale: il risultato è identico bit per bit a un `sort` seguito da `limit(n)`. Con `n = 0` produce un batch vuoto con lo schema invariato.
+
 ## Tabellari — joins
 
 
@@ -311,6 +326,41 @@ Config vuota (`{}`).
 
 **Input:** due o più tabelle (l'analyzer accetta N input) con schema identico: stesso numero di colonne, nomi e tipi Arrow identici campo per campo (nullability ignorata).
 **Output:** una tabella con lo schema del primo input (metadata inclusi; nullability = OR dei nullable degli input) e righe = somma delle righe degli input, nell'ordine dato.
+
+### table.concat_by_name
+
+*estensione · arietà: n-aria · execution class: blocking*
+
+**Config** — `ConcatByName` (`joins.rs:1021`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `strict` | `boolean` | `false` | `true`: tutti gli schemi devono essere identici — stesse colonne, stessi tipi, stesso ordine |
+
+**Input:** N tabelle (operazione n-aria), almeno una.
+**Output:** unione per **nome**. Senza `strict` le colonne compaiono nell'ordine di prima apparizione scorrendo gli input in ordine; per ogni nome il tipo dev'essere **identico ovunque** (nessun cast: una divergenza è un errore che nomina la colonna e i due tipi), e il campo è nullable se lo è in almeno un input oppure se manca in almeno un input. Con `strict` vale la sequenza del primo input. Le righe sono la somma di tutte le righe, nell'ordine degli input; un input privo di una colonna contribuisce con null. I metadati di schema sono fusi fra le sorgenti e una chiave con valori diversi è un errore esplicito, mai «vince il primo». La geometria è propagata solo se **tutti** gli input hanno quella colonna con lo stesso tipo; `sorted_by` è azzerato.
+
+### table.fuzzy_join
+
+*estensione · arietà: binaria (left, right) · execution class: binary-blocking*
+
+**Config** — `FuzzyJoin` (`fuzzy.rs:87`), con `FuzzyMetric` (`fuzzy.rs:61`), `FuzzyBlocking` (`fuzzy.rs:69`) e `FuzzyHow` (`fuzzy.rs:81`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `left_key` | `string` | obbligatorio | colonna esistente nell'input sinistro, di tipo Utf8 |
+| `right_key` | `string` | obbligatorio | colonna esistente nell'input destro, di tipo Utf8 |
+| `metric` | `string` | obbligatorio | `jaro_winkler`, `levenshtein` o `jaccard` |
+| `threshold` | `number` | obbligatorio | finito, in `(0, 1]` |
+| `blocking` | `string` | obbligatorio | `prefix`, `soundex` o `none` |
+| `blocking_param` | `integer` | `2` (solo con `blocking = "prefix"`) | con `prefix`: lunghezza ≥ 1. Con `soundex` o `none` **dev'essere assente** |
+| `how` | `string` | `"inner"` | `inner` o `left` |
+| `score_column` | `string` | `"score"` | nome valido; non deve collidere con nessuna colonna dell'output |
+| `max_candidates` | `integer` | `50` | ≥ 1. A runtime un blocco destro più grande è un `resource_limit`, e il blocco citato è scelto deterministicamente (il più grande; a parità, la chiave lessicograficamente minore) |
+| `case_sensitive` | `boolean` | `false` | con `false` le chiavi sono normalizzate a minuscolo |
+
+**Input:** due tabelle, ordinate (`["left", "right"]`).
+**Output:** colonne di sinistra, poi colonne di destra — **chiave destra inclusa**, perché nel fuzzy join le due chiavi sono diverse — con suffisso `_R` in caso di collisione di nome; in coda `score_column` di tipo Float64, nullable solo con `how = "left"`. Il numero di righe **dipende dai dati** (una riga di sinistra può avere più candidati): `row_count` e `sorted_by` sono azzerati e la geometria attiva non è propagata. L'ordine è la scansione sinistra, e per ciascuna riga i candidati destri in ordine di indice.
 
 ## Tabellari — cleansing
 
@@ -583,6 +633,36 @@ Config vuota (`{}`).
 
 **Input:** una tabella; la colonna `column` deve essere Utf8.
 **Output:** aggiunge (o sostituisce) le colonne in `new_columns`, tutte Utf8 nullable, con le parti dello split (null oltre le parti disponibili); la colonna sorgente resta; righe invariate.
+
+### table.select_columns
+
+*estensione · arietà: unaria · execution class: streaming*
+
+**Config** — `SelectColumns` (`columns.rs:55`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `columns` | `array[string]` | obbligatorio | non vuoto; nessun nome ripetuto; ogni colonna deve esistere in input |
+
+**Input:** una tabella qualsiasi.
+**Output:** proiezione **positiva**: esattamente le colonne elencate, **nell'ordine dato** (i campi sono clonati integri, metadati compresi). Righe invariate, ordine preservato. La geometria è propagata solo se la sua colonna sopravvive; `sorted_by` è azzerato se una qualsiasi colonna è stata rimossa, altrimenti preservato. Zero-copy.
+
+### table.align_schema
+
+*estensione · arietà: unaria · execution class: streaming*
+
+**Config** — `AlignSchema` (`columns.rs:156`), con `AlignColumn` (`columns.rs:144`) e `AlignType` (`columns.rs:110`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `columns` | `array[object]` | obbligatorio | non vuoto; nessun `name` ripetuto |
+| `columns[].name` | `string` | obbligatorio | non vuoto dopo trim, ≤ 1024 byte |
+| `columns[].type` | `string` | obbligatorio | una di: `Utf8`, `Int64`, `UInt64`, `Float64`, `Boolean`, `Date32`, `Timestamp`, `Decimal128` (nomi esatti delle varianti, non snake_case). `Timestamp` → `Timestamp(Millisecond, None)`; `Decimal128` → `Decimal128(38, 10)` |
+| `columns[].default` | `any` (JSON) | `null` | valore usato se la colonna **manca** in input; validato a secco con la stessa conversione del kernel (guardia epoch per `Date32`, precisione e scala per `Decimal128`). Ignorato se la colonna esiste già |
+| `keep_extra` | `boolean` | `false` | `true`: le colonne di input non elencate restano in coda nell'ordine originale; `false`: sono scartate |
+
+**Input:** una tabella qualsiasi.
+**Output:** riordino e proiezione secondo `columns`. Se la colonna **esiste**, il tipo dichiarato dev'essere identico a quello effettivo — **mai un cast implicito**: una divergenza è un errore di contratto. Se **manca**, viene aggiunta: con `default` è non nullable e riempita col valore, senza `default` è nullable e tutta null. Righe 1:1. `sorted_by` è preservato solo se non ci sono state né aggiunte né rimozioni (permutazione pura).
 
 ## Tabellari — analysis
 
@@ -863,6 +943,38 @@ Campi di `Masking`:
 **Input:** tabella; colonne indicate nelle masking (tipo scalare testuale).
 **Output:** stesse righe; per ogni masking una colonna Utf8 nullable: `<colonna>_masked` aggiunta, oppure la colonna originale sostituita se `overwrite = true`.
 
+### table.stable_fingerprint
+
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
+
+**Config** — `StableFingerprint` (`security.rs:264`), con `FingerprintAlgorithm` (`security.rs:256`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `columns` | `array[string]` | `[]` = **tutte** le colonne, nell'ordine dello schema | se non vuoto: nessun duplicato, ogni colonna deve esistere ed essere leggibile come scalare testuale. Se vuoto, **tutti** i campi devono esserlo (fail-closed in analisi) |
+| `output_column` | `string` | `"fingerprint"` | non vuoto dopo trim, ≤ 1024 byte |
+| `algorithm` | `string` | `"sha256"` | `sha256` o `md5` |
+
+**Input:** una tabella con le colonne scelte convertibili a testo.
+**Output:** schema invariato più la colonna `output_column` di tipo Utf8 non nullable, con semantica **sostituisci-o-appendi**: se il nome esiste già la colonna è sostituita in posizione, altrimenti è appesa in coda. Righe 1:1, ordine preservato. L'encoding per riga è canonico: separatore di dominio, poi per ogni colonna nome, tipo, byte di presenza e valore, ciascuno preceduto dalla propria lunghezza a 64 bit big-endian — così due valori diversi non possono produrre la stessa sequenza di byte.
+
+### table.hmac_sha256
+
+*estensione · arietà: unaria · execution class: streaming · kernel v2*
+
+**Config** — `HmacSha256` (`security.rs:539`), con `HmacNullPolicy` (`security.rs:530`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `columns` | `array[string]` | obbligatorio | non vuoto; nessun duplicato; ogni colonna esistente e leggibile come scalare testuale |
+| `key_env` | `string` | obbligatorio | non vuoto dopo trim. È il **nome di una variabile d'ambiente**, mai la chiave |
+| `output_column` | `string` | `"hmac"` | non vuoto dopo trim, ≤ 1024 byte |
+| `null_policy` | `string` | `"empty"` | `empty`, `null` o `skip`. Token **legacy**: nessuno dei tre autorizza una rimediazione implicita — ogni null sorgente è rifiutato con `data_mapping` e diagnostica per riga |
+
+**Input:** una tabella con le colonne scelte convertibili a testo, e la variabile d'ambiente `key_env` valorizzata.
+**Output:** schema invariato più `output_column` di tipo Utf8, sostituisci-o-appendi; nullable solo con `null_policy = "null"`. Righe 1:1, ordine preservato. HMAC-SHA256 (RFC 2104) sullo stesso framing canonico di `table.stable_fingerprint`, con separatore di dominio proprio.
+**La chiave non compare mai** nel piano, negli errori o nei log: se manca o è vuota a runtime l'errore è generico e non rivela nemmeno il nome della variabile.
+
 ## Tabellari — quality
 
 
@@ -1025,6 +1137,29 @@ Campi di `SchemaExpectation`:
 **Input:** due tabelle; chiavi con tipi Arrow identici a coppie.
 **Output:** tabella di schema fisso `metric` (Utf8) / `value` (UInt64) con 5 righe: `matched_rows`, `left_only_rows`, `right_only_rows`, `left_duplicate_rows`, `right_duplicate_rows`.
 
+### table.validate_rules
+
+*estensione · arietà: unaria · execution class: streaming*
+
+**Config** — `ValidateRules` (`governance.rs:556`), con `ValidateRule` (`governance.rs:543`), `RuleOperator` (`governance.rs:510`), `RuleSeverity` (`governance.rs:525`) e `ValidateOutputMode` (`governance.rs:533`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `rules` | `array[object]` | obbligatorio | non vuoto |
+| `rules[].name` | `string` | obbligatorio | non vuoto dopo trim; **unico** fra le regole |
+| `rules[].operator` | `string` | obbligatorio | `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `isnull`, `notnull`, `regex`, `range` |
+| `rules[].column` | `string` | obbligatorio di fatto | assente è un errore; la colonna deve esistere |
+| `rules[].value` | `any` (JSON) | `null` | obbligatorio per tutti gli operatori tranne `isnull`/`notnull`, per i quali è **vietato** |
+| `rules[].severity` | `string` | `"error"` | `error` o `warning` |
+| `output_mode` | `string` | `"annotate"` | `annotate` o `summary` |
+
+Vincoli per operatore, verificati **prima di leggere una sola riga**: `eq`/`ne` su colonne numeriche, Utf8, Boolean o Binary (se numerica il valore dev'essere un numero); `gt`/`ge`/`lt`/`le` e `range` su colonne numeriche, Date32, Timestamp al millisecondo o Decimal128; `range` vuole un valore testuale `"min,max"` con estremi numerici; `regex` vuole una colonna esattamente Utf8, un pattern entro `max_regex_bytes` e una regex **compilabile**.
+
+**Input:** una tabella; ogni regola riferisce una colonna esistente.
+**Output:** dipende da `output_mode`.
+- `annotate`: schema invariato più tre colonne non nullable, sostituisci-o-appendi — `_valid` Boolean, `_errors` Utf8, `_warnings` Utf8 (nomi delle regole fallite separati da `;`, stringa vuota se nessuna). Righe 1:1, ordine e geometria preservati. **Non fallisce mai sui dati**: annota.
+- `summary`: dataset completamente nuovo, nessuna colonna dell'input — `name` Utf8, `errors` Int64, `warnings` Int64, tutte non nullable, **una riga per regola**. I metadati di schema dell'input non sono ereditati.
+
 ## Tabellari — utility
 
 
@@ -1074,6 +1209,21 @@ Campi di `SchemaExpectation`:
 
 **Input:** una tabella qualsiasi.
 **Output:** aggiunge (o sostituisce) la colonna `output_column` di tipo Utf8 non nullable con un UUID v4 con trattini per riga; righe invariate.
+
+### table.limit
+
+*estensione · arietà: unaria · execution class: streaming*
+
+**Config** — `Limit` (`utility.rs:356`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `n` | `integer` | obbligatorio | `≤ max_rows` dei limiti effettivi |
+| `offset` | `integer` | `0` | `≤ max_rows` dei limiti effettivi |
+
+**Input:** una tabella qualsiasi.
+**Output:** schema, tipi, metadati e geometria invariati; le righe sono la finestra `[offset, offset + n)`, zero-copy. `row_count` diventa sconosciuto, `sorted_by` è preservato.
+**Attenzione — semantica per batch:** l'operazione è `Streaming` e non ha stato fra un batch e l'altro, quindi il limite è applicato **a ciascun batch**, non globalmente sul dataset.
 
 ## Tabellari — formula
 
@@ -1954,26 +2104,151 @@ Config vuota (`{}`).
 **Input:** esattamente una colonna geometria (WKB).
 **Output:** la colonna geometria è **sostituita** (nella stessa posizione) dalle 10 colonne diagnostiche, tutte nullable: `geometry_type` (Utf8), `coordinate_count` (UInt64), `is_empty` (Boolean), `is_finite` (Boolean), `is_valid` (Boolean), `validity_reason` (Utf8), `bounds_minx` (Float64), `bounds_miny` (Float64), `bounds_maxx` (Float64), `bounds_maxy` (Float64); il contratto diventa non-geografico; righe 1:1.
 
-## Operazioni catalogate non ancora documentate
+### geo.from_wkt
 
-Queste 19 operazioni esistono nel catalogo e **non hanno ancora una firma in questo documento**. Sono elencate perche' un documento che tace su cio' che non copre sembra completo:
+*estensione · arietà: unaria · execution class: streaming · CRS: known · shape: FromCoords · kernel v2*
 
-- `geo.cluster_dbscan`
-- `geo.collect`
-- `geo.coverage_validate`
-- `geo.from_wkt`
-- `geo.generate_grid`
-- `geo.geometry_accessors`
-- `geo.line_locate_point`
-- `geo.shared_paths`
-- `geo.snap`
-- `geo.subdivide`
-- `table.align_schema`
-- `table.concat_by_name`
-- `table.fuzzy_join`
-- `table.hmac_sha256`
-- `table.limit`
-- `table.select_columns`
-- `table.stable_fingerprint`
-- `table.top_n`
-- `table.validate_rules`
+**Config** — `FromWktConfig` (`analyze/config.rs:190`), con `OnWktError` (`extensions.rs:73`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `wkt_column` | `string` | obbligatorio | non vuoto; colonna esistente di tipo **esattamente Utf8** |
+| `output_column` | `string` | nome canonico della geometria | non vuoto; non deve collidere con una colonna esistente |
+| `on_error` | `string` | `"null"` | `null` o `fail`. **Entrambi fail-closed**: nessuno dei due autorizza una rimediazione |
+| `crs` | `string` | CRS del piano | se assente e il piano non dichiara un CRS è un errore; validato contro il requisito CRS dell'operazione |
+
+**Input:** una tabella **senza** colonna geometrica (un input che ne ha già una è rifiutato).
+**Output:** schema di input invariato più una colonna geometria appesa in coda, nullable, codifica WKB, dimensioni XY, tipi geometrici dichiarati come misti. Righe 1:1, ordine preservato, proprietà del contratto conservate. La conversione è parallela ma con ordine deterministico; i null di input restano null.
+
+### geo.geometry_accessors
+
+*estensione · arietà: unaria · execution class: streaming · CRS: known · shape: OneToOne*
+
+**Config** — `GeometryAccessorsConfig` (`analyze/config.rs:225`), con `AccessorFieldParam` (`analyze/config.rs:200`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `fields` | `array[string]` | tutti e sei | se presente: non vuoto, **senza duplicati**. Valori: `geometry_type`, `num_geometries`, `num_interior_rings`, `start_point`, `end_point`, `is_closed` |
+| `output_prefix` | `string` | `""` | il nome risultante `{prefix}{campo}` non dev'essere vuoto né collidere |
+
+**Input:** una tabella con esattamente una colonna geometrica identificabile, dimensioni XY.
+**Output:** schema invariato più le colonne richieste, appese in **ordine canonico** — indipendente dall'ordine in cui compaiono in `fields` — tutte nullable: `geometry_type` Utf8, `num_geometries` UInt64, `num_interior_rings` UInt64, `start_point` Utf8, `end_point` Utf8, `is_closed` Boolean. Righe 1:1, ordine, geometria e proprietà preservati.
+
+### geo.collect
+
+*estensione · arietà: unaria · execution class: blocking · CRS: known · shape: ManyToOne*
+
+**Config** — `CollectConfig` (`analyze/config.rs:232`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `group_by` | `array[string]` | obbligatorio | non vuoto; nomi non vuoti; **non può contenere la colonna geometrica**; ogni colonna deve esistere; nessun duplicato |
+
+**Input:** una tabella con una colonna geometrica.
+**Output:** schema **completamente nuovo**: la geometria seguita dalle sole colonne di `group_by`. Le altre colonne **non sono propagate**. La geometria diventa nullable, perché un gruppo senza geometrie non null produce null. Le colonne chiave conservano i loro campi interi, metadati compresi. Righe: **una per gruppo**. Ordine di output **canonico** sulla chiave. Le geometrie di un gruppo omogeneo diventano il corrispondente tipo multiplo, un gruppo misto diventa una collezione; una sola geometria resta singola; i null sono saltati. **Nessuna unione topologica**: le geometrie sono raccolte, non fuse.
+
+### geo.line_locate_point
+
+*estensione · arietà: unaria · execution class: streaming · CRS: known · shape: OneToOne*
+
+**Config** — `LineLocatePointConfig` (`analyze/config.rs:238`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `point_wkb` | `string` | obbligatorio | WKB **esadecimale** valido, decodificabile, e dev'essere un `Point` |
+| `output_column` | `string` | `"fraction"` | non vuoto; non deve collidere |
+
+**Input:** una tabella con una colonna geometrica.
+**Output:** schema invariato più una colonna Float64 nullable in coda, con la frazione in `[0, 1]` della posizione più vicina lungo la linea. È null per le geometrie che non sono `LineString` — incluse le `MultiLineString`, non supportate in v1 — e per le linee degeneri. Righe 1:1, ordine e proprietà preservati.
+
+### geo.generate_grid
+
+*estensione · arietà: unaria · execution class: blocking · CRS: known · shape: WholeToMany*
+
+**Config** — `GenerateGridConfig` (`analyze/config.rs:258`), con `GridExtentConfig` (`analyze/config.rs:247`) e `GridShape` (`extensions2.rs:112`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `extent.xmin`, `extent.ymin`, `extent.xmax`, `extent.ymax` | `number` | obbligatori | tutti finiti; `xmax > xmin` e `ymax > ymin` |
+| `cell_size` | `number` | obbligatorio | finito e `> 0`; il numero di celle risultante non deve superare 1 000 000 |
+| `shape` | `string` | `"square"` | `square` o `hex` |
+| `crs` | `string` | CRS del piano | come `geo.from_wkt` |
+| `include_centroid` | `boolean` | `false` | — |
+
+**Input:** una tabella **senza** geometria; funge da solo innesco.
+**Output:** **generativo**: nessuna colonna dell'input è propagata. Schema nuovo con la geometria (non nullable, WKB, XY, tipo dichiarato `Polygon`), `cell_i` e `cell_j` UInt64 non nullable, e con `include_centroid` anche `centroid_x` e `centroid_y` Float64 non nullable. Il numero di righe è il numero esatto di celle, riportato come stima nel contratto. Ordine deterministico per colonna e riga della griglia. L'operazione è esente dal fattore di espansione.
+
+### geo.subdivide
+
+*estensione · arietà: unaria · execution class: streaming · CRS: known · shape: OneToMany*
+
+**Config** — `SubdivideConfig` (`analyze/config.rs:270`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `max_vertices` | `integer` | obbligatorio | **≥ 4** (l'anello chiuso minimo) |
+| `output_column` | `string` | il nome della geometria, invariato | non vuoto; se diverso dal nome corrente non deve collidere |
+
+**Input:** una tabella con una colonna geometrica.
+**Output:** schema invariato — la colonna geometrica è eventualmente rinominata **in posizione**, conservando identità e metadati — più `__parent_index` UInt64 non nullable in coda, che riporta l'indice della riga d'origine. **Espansione 1:N**: `row_count` è azzerato, `sorted_by` è **preservato** perché l'espansione è stabile.
+
+### geo.snap
+
+*estensione · arietà: unaria · execution class: streaming · CRS: same-projected · shape: OneToOne*
+
+**Config** — `SnapConfig` (`analyze/config.rs:279`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `reference_wkb` | `string` | obbligatorio | WKB esadecimale valido e decodificabile; assunto **nello stesso CRS dell'input** |
+| `tolerance` | `number` | obbligatorio | finita e non negativa |
+
+**Input:** una tabella con una colonna geometrica; il CRS dev'essere proiettato e lo stesso del riferimento.
+**Output:** schema, tipi e proprietà **completamente invariati**: la colonna geometrica è sostituita in posizione con i vertici agganciati al riferimento entro la tolleranza. Righe 1:1, ordine e null preservati, tipo geometrico preservato.
+
+### geo.coverage_validate
+
+*estensione · arietà: unaria · execution class: blocking · CRS: same-projected · shape: WholeToMany*
+
+**Config** — `CoverageValidateConfig` (`analyze/config.rs:288`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `tolerance` | `number` | `0.0` | se presente: finita e non negativa |
+| `max_issues` | `integer` | `1000` | se presente: `> 0` |
+
+Entrambi opzionali: `"config": {}` è valido.
+
+**Input:** una tabella con geometria poligonale, CRS proiettato.
+**Output:** dataset **completamente nuovo**, nessuna colonna dell'input propagata: `issue_type` Utf8, `index_a` UInt64, `index_b` UInt64, `area` Float64 e la geometria del problema, tutte non nullable. **Una riga per sovrapposizione**. Superare `max_issues` **fallisce**, non tronca: un elenco troncato in silenzio direbbe che la copertura è migliore di quanto sia. L'operazione è esente dal fattore di espansione.
+
+### geo.shared_paths
+
+*estensione · arietà: unaria · execution class: blocking · CRS: same-projected · shape: WholeToMany*
+
+**Config** — `SharedPathsConfig` (`analyze/config.rs:297`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `tolerance` | `number` | `0.0` | se presente: finita e non negativa |
+| `min_length` | `number` | `0.0` | se presente: finita e non negativa |
+
+Entrambi opzionali: `"config": {}` è valido.
+
+**Input:** una tabella con geometria, CRS proiettato.
+**Output:** dataset completamente nuovo: `index_a` UInt64, `index_b` UInt64, `shared_length` Float64 e la geometria condivisa, tutte non nullable. **Una riga per coppia** con un confine in comune, con `index_a < index_b`; la geometria è una `LineString` se il tratto è unico, altrimenti una `MultiLineString`. Esente dal fattore di espansione.
+
+### geo.cluster_dbscan
+
+*estensione · arietà: unaria · execution class: blocking · CRS: projected · shape: OneToOne*
+
+**Config** — `ClusterDbscanConfig` (`analyze/config.rs:306`)
+
+| Campo | Tipo | Default | Vincoli |
+|---|---|---|---|
+| `eps` | `number` | obbligatorio | finito e `> 0`, in **unità di mappa** |
+| `min_points` | `integer` | obbligatorio | `≥ 1` |
+| `output_column` | `string` | `"cluster_id"` | non vuoto; non deve collidere |
+
+**Input:** una tabella con geometria **puntuale** e CRS proiettato. Ogni altro tipo geometrico è rifiutato fail-closed.
+**Output:** schema invariato più una colonna UInt64 nullable in coda con l'etichetta del cluster (`0..k-1`); è null sia per i punti di rumore mai assegnati sia dove la geometria di input è null. **Righe 1:1, ordine e proprietà preservati** benché il calcolo sia globale. I cluster sono numerati **in ordine di scoperta** per indice di riga crescente, così l'etichetta non dipende dallo scheduling.

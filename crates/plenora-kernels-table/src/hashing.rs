@@ -31,7 +31,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 /// `FastHasher` prima di essere introdotta. Fino ad allora il rischio e'
 /// questo, dichiarato, non «le chiavi non sono controllabili».
 ///
-/// Registrato come **DER-009** in `docs/deroghe.md`: un rischio residuo
+/// Registrato come **errori-e-limiti.md#limiti-dichiarati** in `docs/errori-e-limiti.md`: un rischio residuo
 /// accettato vive nel registro delle deroghe, con owner e condizione di
 /// rientro, non solo in un commento che nessun processo rilegge.
 ///

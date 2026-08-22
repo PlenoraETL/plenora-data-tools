@@ -236,7 +236,7 @@ fn masking_defaults_and_real_formats_have_exact_non_destructive_output() {
     )
     .expect("defaults");
     assert!(defaults.column_by_name("secret_masked").is_some());
-    // Semantica storica (P1-3 review 2026-08-03): con null_policy di default
+    // Semantica storica: con null_policy di default
     // (Empty) il null e' sostituito da stringa vuota — digest dell'hash
     // storico della sola colonna, nessun rifiuto. Il rifiuto row-scoped
     // resta SOLO per null_policy=error (test dedicati in kernels-table).

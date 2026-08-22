@@ -1,5 +1,5 @@
-//! Test del resource accounting (ADR-0002) e della sequenza logica
-//! (ADR-0001) nell'executor — Fase 2B, milestone M1a/M1b.
+//! Test del resource accounting (architettura.md#memoria) e della sequenza logica
+//! (architettura.md#determinismo) nell'executor — Fase 2B, milestone del governor.
 
 use std::sync::Arc;
 
@@ -69,7 +69,7 @@ fn streaming_plan() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// Tee fan-out: accounting unico (ADR-0002)
+// Tee fan-out: accounting unico (architettura.md#memoria)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -118,7 +118,7 @@ fn tee_fan_out_counts_quota_once_and_releases_after_last_reader() {
 }
 
 // ---------------------------------------------------------------------------
-// BatchSequence: assegnazione in ingresso e propagazione (ADR-0001)
+// BatchSequence: assegnazione in ingresso e propagazione (architettura.md#determinismo)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -146,7 +146,7 @@ fn input_edge_assigns_lease_and_batch_sequence() {
         assert_eq!(lease.bytes(), batch.batch.get_array_memory_size() as u64);
         assert_eq!(lease.owner(), "main");
     }
-    // I batch raccolti trattengono ancora i lease: osservabilita' ADR-0002.
+    // I batch raccolti trattengono ancora i lease: osservabilita' architettura.md#memoria.
     let held: u64 = governed.iter().map(GovernedBatch::accounted_bytes).sum();
     assert_eq!(metrics.memory.reserved_bytes, held);
     assert_eq!(metrics.memory.live_leases, 2);
@@ -223,7 +223,7 @@ fn blocking_segment_reassigns_sequence_deterministically() {
 }
 
 // ---------------------------------------------------------------------------
-// Metriche e budget (ADR-0002)
+// Metriche e budget (architettura.md#memoria)
 // ---------------------------------------------------------------------------
 
 #[test]

@@ -1,5 +1,5 @@
 //! Oracolo esteso agli errori dei binari geo nel piano v4 contro il
-//! trasporto CLI `pair-arrow` v3 (ADR-0014 D14.9, gate di M2): per i quattro
+//! trasporto CLI `pair-arrow` v3 (architettura.md#geometrie D14.9): per i quattro
 //! op del perimetro (`geo.sjoin`, `geo.nearest`, `geo.within`,
 //! `geo.count_points_in_polygons`) lo stesso input produce sui due percorsi
 //! lo stesso risultato — confronto SEMANTICO contro attesi codificati nel
@@ -28,24 +28,24 @@
 //!   da un test di integrazione senza modificare il codice di produzione;
 //! - (f) espansione oltre il vincolo: questo file (`f_*`);
 //! - (g) governor che rifiuta la reservation decodificata (condizione di
-//!   attivazione del perimetro, ruolo DER-003): questo file (`g_*`);
+//!   attivazione del perimetro, ruolo errori-e-limiti.md#limiti-dichiarati): questo file (`g_*`);
 //! - (h) conservativita' di `decoded_size_xy` su corpus: test di modulo in
-//!   `crates/plenora-kernels-geo/src/decoded_size.rs` (M2), non duplicato.
+//!   `crates/plenora-kernels-geo/src/decoded_size.rs`, non duplicato.
 //!
-//! Divergenze osservate rispetto alla lettera dell'ADR (regola 4 del
+//! Divergenze osservate rispetto alla specifica di partenza (regola 4 del
 //! progetto: asserito il comportamento REALE, motivazione nel commento del
-//! test; segnalate nel report di M2):
+//! test):
 //!
-//! 1. (f)/(g) gli errori di `check_join_expansion` (ADR 6) e del governor
-//!    (`reserve`, ADR-0002) arrivano al chiamante come `InvalidPlan` GREZZO
+//! 1. (f)/(g) gli errori di `check_join_expansion` (errori-e-limiti.md) e del governor
+//!    (`reserve`, architettura.md#memoria) arrivano al chiamante come `InvalidPlan` GREZZO
 //!    — nodo/owner nel testo, fase `Validate` derivata dalla variante — NON
 //!    come `Execution { node: "j" }` della lettera di D14.5.1: propagano via
 //!    `?` dal guscio di `run_geo_binary_blocking`, mai dal carrier
 //!    `GeoBinaryStepError`. Stessa forma del ramo tabellare e del test
-//!    governor DER-003 di ADR-0012: la divergenza e' di attribuzione, non di
+//!    governor errori-e-limiti.md#limiti-dichiarati di architettura.md#geometrie: la divergenza e' di attribuzione, non di
 //!    rifiuto (fail-closed in entrambe le forme);
 //! 2. (f) i due meccanismi NON sono omologhi: il v4 applica il vincolo
-//!    RELATIVO di catalogo (`MaxRelative` per `geo.sjoin`, ADR 6), il v3 non
+//!    RELATIVO di catalogo (`MaxRelative` per `geo.sjoin`, errori-e-limiti.md), il v3 non
 //!    ha alcun vincolo di espansione — si usa il suo tetto assoluto
 //!    `max_output_rows` (`OutputRowsExceeded`): stesso output rifiutato
 //!    fail-closed, asserzioni separate per lato;
@@ -64,7 +64,7 @@
 //!    byte della cella) differiscono — asserzioni separate per lato. Il
 //!    gate del nodo resta difesa in profondita' (anche gli archi intermedi
 //!    non possono portare celle oltre soglia: ogni kernel geo valida il
-//!    proprio output, ADR-0012 D12.3);
+//!    proprio output, architettura.md#geometrie D12.3);
 //! 4. (d) la fase osservata degli errori `Cancelled` e' `Write` per
 //!    derivazione di variante (`PlenoraError::phase`): la cancellazione non
 //!    e' taggata di fase ai confini dell'executor.
@@ -197,8 +197,8 @@ fn holed_polygon_wkb() -> Vec<u8> {
 /// WKB di poligono a farfalla (anello auto-intersecante): strutturalmente
 /// ben formato (anello chiuso, coordinate finite) ma OGC-invalido — supera la
 /// validazione strutturale dell'arco di input e fallisce al check OGC del
-/// decode del nodo (`geometry_from_wkb`, ADR-0011). Stessa costruzione della
-/// fixture dell'oracolo ADR-0012.
+/// decode del nodo (`geometry_from_wkb`, architettura.md#geometrie). Stessa costruzione della
+/// fixture dell'oracolo architettura.md#geometrie.
 fn bowtie_wkb(origin_x: f64, origin_y: f64) -> Vec<u8> {
     to_wkb(&Geometry::Polygon(polygon![
         (x: origin_x, y: origin_y),
@@ -214,7 +214,7 @@ fn bowtie_wkb(origin_x: f64, origin_y: f64) -> Vec<u8> {
 /// (~67 MiB). Linee e non poligoni: la validazione OGC dei poligoni e'
 /// appaiata O(n^2) e renderebbe la fixture troppo lenta in debug, le linee
 /// si validano in O(n) — stessa scelta di `oversized_cell_batches`
-/// dell'oracolo ADR-0012. Le parti sono disgiunte (fascia y di 1 ogni 10) e
+/// dell'oracolo architettura.md#geometrie. Le parti sono disgiunte (fascia y di 1 ogni 10) e
 /// monotone: nessuna auto-intersezione.
 fn oversized_cell_wkb() -> Vec<u8> {
     let lines: Vec<LineString<f64>> = (0..1_000_u32)
@@ -300,7 +300,7 @@ fn two_geo_inputs(left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> Inputs {
         .expect("input right")
 }
 
-/// Diagnostica attiva (ADR 3 M1d): il dettaglio strutturato `side=… row=…`
+/// Diagnostica attiva (errori-e-limiti.md, errori arricchiti): il dettaglio strutturato `side=… row=…`
 /// di D14.5.2 esiste solo in questo canale (mai nel testo base, regola 8).
 fn runtime() -> RuntimeContext {
     RuntimeContext {
@@ -341,7 +341,7 @@ fn run_err_v4(plan: &Value, left: Vec<RecordBatch>, right: Vec<RecordBatch>) -> 
 /// operazione, motivo (con il suffisso diagnostico `side=… row=…`),
 /// categoria e fase. `execution_id` e' escluso PER COSTRUZIONE (UUID nuovo a
 /// ogni esecuzione, non un osservabile confrontabile). Stessa forma di
-/// `ErrorSignature` dell'oracolo ADR-0012.
+/// `ErrorSignature` dell'oracolo architettura.md#geometrie.
 #[derive(Debug, PartialEq, Eq)]
 struct ErrorSignature {
     variant: &'static str,
@@ -838,7 +838,8 @@ fn a_nearest_happy_path() {
 /// punto (37,37) nel buco NON rende il poligono bucato within nulla. Gli
 /// schemi v3/v4 differiscono solo per contratto (D14.8): la colonna flag e'
 /// `WITHIN_COLUMN` nel v3, il nome dal contratto di output nel v4 (letto dal
-/// grafo, fonte unica di verita' E1) — il confronto e' sui valori.
+/// grafo, fonte unica di verita', con le configurazioni preparate) — il
+/// confronto e' sui valori.
 #[test]
 fn a_within_happy_path() {
     let case = "a-within";
@@ -1295,7 +1296,7 @@ fn c_cell_over_max_cell_bytes_on_right() {
 // ---------------------------------------------------------------------------
 
 /// Input geo lazy che cancella il token in due punti possibili (pattern dei
-/// test di cancellazione dell'executor e dell'oracolo ADR-0012):
+/// test di cancellazione dell'executor e dell'oracolo architettura.md#geometrie):
 ///
 /// - `cancel_at_pull: Some(n)`: quando l'executor tira il batch numero `n`
 ///   (1-based) — il Ctrl-C arriva a meta' stream ed e' osservato al confine
@@ -1451,7 +1452,7 @@ fn d2_cancellation_post_drain_pre_kernel() {
 /// (f) Fixture 1-a-molti: un poligono left che interseca K=4 poligoni right
 /// -> 4 coppie. I due meccanismi NON sono omologhi (divergenza dichiarata
 /// nell'header, punto 2): il v4 applica il vincolo RELATIVO di catalogo
-/// (`MaxRelative` per `geo.sjoin`, ADR 6 — binding = max(output/left,
+/// (`MaxRelative` per `geo.sjoin`, errori-e-limiti.md — binding = max(output/left,
 /// output/right) = 4 > 1 con `max_expansion_factor: 1`), il v3 non ha
 /// vincolo di espansione e rifiuta lo stesso output col tetto assoluto
 /// `max_output_rows: K-1` (`OutputRowsExceeded`). Entrambi fail-closed sullo
@@ -1480,12 +1481,12 @@ fn f_expansion_beyond_constraint() {
 
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
-    // Il vincolo ADR 6 e' un limite di RISORSA: il piano e' corretto, sono i
+    // Il vincolo errori-e-limiti.md e' un limite di RISORSA: il piano e' corretto, sono i
     // dati a non entrarci. Categoria `resource_limit` (settimo giro, finding
     // 7), non `invalid_plan`; resta grezzo, non `Execution`.
     assert_eq!(
         signature.variant, "ResourceLimit",
-        "{case} v4: vincolo ADR 6 grezzo, non Execution (vedi header, punto 1)"
+        "{case} v4: vincolo errori-e-limiti.md grezzo, non Execution (vedi header, punto 1)"
     );
     assert_eq!(signature.node, None, "{case} v4: nessun nodo strutturato");
     assert_eq!(
@@ -1548,7 +1549,7 @@ fn f_expansion_beyond_constraint() {
 
 // ---------------------------------------------------------------------------
 // (g) Governor che rifiuta la reservation DECODIFICATA (solo v4 — condizione
-// di attivazione del perimetro, ruolo DER-003; il v3 non ha governor)
+// di attivazione del perimetro, ruolo errori-e-limiti.md#limiti-dichiarati; il v3 non ha governor)
 // ---------------------------------------------------------------------------
 
 /// (g) Fixture a batch singolo per lato (misura Arrow esatta per
@@ -1579,7 +1580,7 @@ fn f_expansion_beyond_constraint() {
 /// Divergenza di attribuzione (punto 1 dell'header): l'errore arriva come
 /// `InvalidPlan` grezzo del governor (`max_governed_memory_bytes superato: `j`
 /// richiede …`), fase `Validate` derivata — non `Execution` della lettera
-/// di D14.5.1 (stessa forma del test DER-003 di ADR-0012).
+/// di D14.5.1 (stessa forma del test errori-e-limiti.md#limiti-dichiarati di architettura.md#geometrie).
 #[test]
 fn g_governor_rejects_decoded_reservation() {
     let case = "g";
@@ -1630,7 +1631,7 @@ fn g_governor_rejects_decoded_reservation() {
         // Nono giro: la variante e' `ResourceLimit`, che deriva `Write` — la
         // reservation fallisce mentre il nodo PRODUCE, non mentre si valida.
         // I tetti del confine d'INGRESSO dichiarano invece `Read` con un tag
-        // esplicito (ADR-0009, emendamento 2026-08-17).
+        // esplicito (piano-v5.md#contratti-di-input, emendamento 2026-08-17).
         ErrorPhase::Write,
         "{case}: fase derivata dalla variante"
     );

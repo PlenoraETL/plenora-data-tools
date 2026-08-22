@@ -1,21 +1,26 @@
-//! Executor del DAG — fase 2 `execute` (Architetture.md par. 6.3, ADR 5;
-//! Prestazioni.md V2-V4, V7-V10, E3) — Fase 2A-4.
+//! Executor del DAG — fase 2 `execute`.
+//!
+//! Vincoli che governano questo modulo: streaming reale, hot path minimale,
+//! materializzazione minima, e osservabilita' per nodo anche dentro ai
+//! segmenti fusi (architettura.md#planner-ed-executor).
 //!
 //! [`execute`] accetta solo un [`ValidatedGraph`] (type-state: nessun
 //! percorso non validato raggiunge l'esecuzione), svolge internamente
-//! `prepare` + `execute_physical` (ADR 5) e restituisce un [`Output`] a
+//! `prepare` + `execute_physical` (architettura.md#planner-ed-executor) e restituisce un [`Output`] a
 //! **pull**: i batch finali sono uno stream lazy, l'input e' consumato
-//! batch-per-batch man mano che il chiamante tira l'output (V3: una
+//! batch-per-batch man mano che il chiamante tira l'output (streaming reale: una
 //! pipeline streaming non materializza l'intera tabella).
 //!
-//! Esecuzione v1: **seriale** ovunque (`SerialFused`, V8 — parallelismo e
-//! spill restano Fase 2B: M2/M3; il governor della memoria e' entrato con
-//! M1a/M1b, la cancellazione cooperativa e gli errori arricchiti con
-//! M1c/M1d, vedi sotto). Per questo lo stream usa `Rc`/`RefCell` e
+//! Esecuzione v1: **seriale** ovunque (`SerialFused`); il parallelismo
+//! resta da fare (M3), lo spill c'e' solo per i kernel che lo prevedono.
+//! Il governor della memoria, la cancellazione cooperativa e gli errori
+//! arricchiti sono invece attivi (vedi sotto). Per questo lo stream usa
+//! `Rc`/`RefCell` e
 //! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
 //! nascosto.
 //!
-//! Fase 2B M1c — cancellazione cooperativa (ADR 3): il chiamante passa un
+//! Fase 2B, cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+//! il chiamante passa un
 //! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
 //! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
 //! ai confini dell'executor — tra batch nelle catene streaming, tra kernel,
@@ -24,7 +29,7 @@
 //! (check a ogni batch), `BoundaryOnly` (check tra kernel/a fine kernel e
 //! durante il drenaggio), `NonInterruptible` (mai: l'op completa; i confini
 //! di piano a valle restano attivi — nessuna nuova attivita' dopo la
-//! cancellazione, publish compreso). I kernel NON vedono il token in M1 (il
+//! cancellazione, publish compreso). I kernel NON vedono il token (il
 //! passaggio e' M3). Al cancel l'errore e' `PlenoraError::Cancelled` con
 //! `node`/`operation`/`execution_id`; nessun output e' pubblicato (publish
 //! atomico) e le metriche parziali restano osservabili iterando [`Output`]
@@ -32,29 +37,29 @@
 //! comodo `collect_batches`/`write_ipc_file*` consumano l'`Output`: con
 //! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
 //!
-//! Fase 2B M1d — errori arricchiti (ADR 3): ogni `execute` genera un
+//! Fase 2B, errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
 //! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
 //! nessuna versione nuova) riportato negli errori `Execution`/`Cancelled` e nel
 //! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
 //! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
-//! gli assi §9; R9.7 ha sostituito il `retryable()` di M1d). La modalita'
+//! gli assi §9; R9.7 ha sostituito il `retryable()` della prima tassonomia). La modalita'
 //! diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
 //! motivazione contesto strutturale — indice di batch, riga, colonna dove
 //! disponibile — MAI valori; a flag spento i messaggi sono invariati.
 //!
-//! Fase 2B — `TempStore` (ADR 3): `execute` esegue lo scavenging
+//! Fase 2B — `TempStore` (errori-e-limiti.md): `execute` esegue lo scavenging
 //! best-effort delle directory orfane all'avvio (sulla radice configurata,
 //! default temp di sistema) e crea lo store dell'esecuzione **fail-closed**
 //! (decisione documentata: niente degrado a tempdir semplice — lo store e'
-//! la difesa strutturale contro i crash non intercettabili e lo spill di M2
+//! la difesa strutturale contro i crash non intercettabili e lo spill
 //! ci scrivera'; se non e' creabile l'esecuzione fallisce prima di toccare
 //! i dati). L'heartbeat e' scritto al punto centrale (ogni batch processato
 //! passa dal conteggio metriche) con throttle di
 //! [`HEARTBEAT_MIN_INTERVAL`]; il cleanup e' RAII al `Drop` dello stato.
 //!
-//! Fase 2B M1a/M1b — resource accounting (ADR-0002) e sequenza logica
-//! (ADR-0001): i batch attraversano gli archi come [`GovernedBatch`]
+//! Fase 2B, governor della memoria — resource accounting (architettura.md#memoria) e sequenza logica
+//! (architettura.md#determinismo): i batch attraversano gli archi come [`GovernedBatch`]
 //! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_governed_memory_bytes`
 //! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
 //! reference-counted al fan-out; i kernel restano su `RecordBatch` puro — il
@@ -68,23 +73,23 @@
 //! Struttura fisica:
 //!
 //! - ogni arco del DAG e' un canale condiviso ([`EdgeShared`]): un solo
-//!   consumatore = pass-through puro; piu' consumatori (fan-out, D9/V9) =
+//!   consumatore = pass-through puro; piu' consumatori (fan-out, D9) =
 //!   tee che condivide i `RecordBatch` immutabili senza copie di buffer e
 //!   rilascia ciascun batch quando tutti i consumatori lo hanno letto
-//!   (V10). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
+//!   (rilascio al last consumer). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
 //!   `Arc`) tra i consumatori, la quota resta contata una sola volta e torna
 //!   al governor con `release_consumed` + `Drop` dell'ultimo riferimento.
 //!   In esecuzione seriale i consumatori drenano in sequenza, quindi
 //!   il tee coincide con la materializzazione conservativa di D9;
 //! - `LinearStreaming`/`GeoFused`: il batch attraversa la catena di kernel
-//!   senza code ne' materializzazioni (V4). Nei segmenti `GeoFused` i run di
+//!   senza code ne' materializzazioni (segmenti lineari senza code). Nei segmenti `GeoFused` i run di
 //!   kernel fondibili annotati da `prepare` (campo `fusion_group`) sono
-//!   eseguiti col runner fuso di ADR-0012 — un decode/encode per gruppo su
+//!   eseguiti col runner fuso di architettura.md#geometrie — un decode/encode per gruppo su
 //!   ogni batch, con errori/metriche/cancellazione per nodo preservati e
 //!   fallback strumentato al percorso nodo-per-nodo a reservation governor
 //!   fallita (D12.6/D12.7);
 //! - `Blocking`/`BinaryBlocking`: alla prima pull drenano gli input del
-//!   segmento (materializzazione prevista dal piano, V9), concatenano ed
+//!   segmento (materializzazione prevista dal piano, materializzazione minima), concatenano ed
 //!   eseguono il kernel una sola volta;
 //! - dispatch nodi: `table.*` via [`crate::table_engine`] (`execute_batch`
 //!   per gli unari, `execute_binary` per i binari, con la config gia'
@@ -108,17 +113,17 @@
 //!   `max_rows_per_edge` per arco intermedio, `max_output_rows`,
 //!   `max_expansion_factor` per nodo (base: input per gli unari; per i
 //!   binari calcolate tutte le metriche [`JoinExpansion`] e applicato il
-//!   vincolo vincolante dichiarato in catalogo, ADR 6; le op `WholeToMany`
+//!   vincolo vincolante dichiarato in catalogo, errori-e-limiti.md; le op `WholeToMany`
 //!   generative/diagnostiche sono esenti — esenzione dichiarata in
 //!   catalogo, la base input e' un trigger, insensata come denominatore),
 //!   `max_batches` per arco, `max_wkb_cell_bytes` per cella,
 //!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
-//!   annidamento WKB, `max_batch_bytes` per batch (V7, tetto duro, applicato
+//!   annidamento WKB, `max_batch_bytes` per batch (tetto in byte per batch, tetto duro, applicato
 //!   anche al batch concatenato dei segmenti blocking);
 //! - nessun output parziale: [`Output::write_ipc_file`] scrive via
 //!   [`crate::geo_transport::publish::publish_atomic`] (tempfile + persist
 //!   no-clobber solo a stream completato con successo);
-//! - metriche per nodo logico e per segmento (E3), prefilled per tutti i
+//! - metriche per nodo logico e per segmento (osservabilita' per nodo), prefilled per tutti i
 //!   nodi del piano e aggiornate batch per batch.
 //!
 //! Errore a meta' stream: il batch in errore propaga `Err` nello stream di
@@ -126,7 +131,7 @@
 //! `publish_atomic`) e le metriche restano consultabili fino al punto di
 //! fallimento.
 //!
-//! Panic dei kernel (ADR 3): intercettati con `catch_unwind` al punto di
+//! Panic dei kernel (errori-e-limiti.md#panic-policy): intercettati con `catch_unwind` al punto di
 //! dispatch — [`run_kernel`] per i kernel unari (streaming e blocking) e la
 //! chiamata `execute_binary` per i segmenti binari, il livello piu' interno
 //! che conserva l'attribuzione di nodo — e convertiti in
@@ -203,8 +208,8 @@ use crate::table_engine;
 use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
 
 /// Stream di batch del grafo (seriale, thread-locale nella v1): i batch
-/// viaggiano governati — quota di memoria (ADR-0002) e sequenza logica
-/// (ADR-0001) — e sono spaccati/ricomposti solo ai confini dei kernel.
+/// viaggiano governati — quota di memoria (architettura.md#memoria) e sequenza logica
+/// (architettura.md#determinismo) — e sono spaccati/ricomposti solo ai confini dei kernel.
 type BatchStream = Box<dyn Iterator<Item = Result<GovernedBatch>>>;
 
 // ---------------------------------------------------------------------------
@@ -270,7 +275,7 @@ impl Input {
     ///
     /// I batch entrano nel perimetro nudi (API pubblica su `RecordBatch`) e
     /// sono avvolti in [`GovernedBatch`] senza lease: quota e sequenza sono
-    /// assegnate all'ingresso dell'arco di input (ADR-0002/ADR-0001).
+    /// assegnate all'ingresso dell'arco di input (architettura.md#memoria e #determinismo).
     #[must_use]
     pub fn from_iter<I>(schema: SchemaRef, iter: I) -> Self
     where
@@ -545,10 +550,10 @@ impl Inputs {
 }
 
 // ---------------------------------------------------------------------------
-// Metriche (E3)
+// Metriche (osservabilita' per nodo)
 // ---------------------------------------------------------------------------
 
-/// Metriche di un nodo logico (presenti anche dentro ai segmenti fusi, E3).
+/// Metriche di un nodo logico (presenti anche dentro ai segmenti fusi, osservabilita' per nodo).
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct NodeMetrics {
@@ -562,9 +567,9 @@ pub struct NodeMetrics {
     pub batches_in: u64,
     /// Batch prodotti dal nodo.
     pub batches_out: u64,
-    /// Byte Arrow in ingresso al nodo (metadati dei buffer, E3/ADR-0002).
+    /// Byte Arrow in ingresso al nodo (metadati dei buffer, osservabilita' per nodo; architettura.md#memoria).
     pub bytes_in: u64,
-    /// Byte Arrow prodotti dal nodo (metadati dei buffer, E3/ADR-0002).
+    /// Byte Arrow prodotti dal nodo (metadati dei buffer, osservabilita' per nodo; architettura.md#memoria).
     pub bytes_out: u64,
     /// Wall time cumulato del kernel.
     pub wall_time: Duration,
@@ -606,20 +611,20 @@ pub struct ExecutionMetrics {
     /// Batch pubblicati sull'output del piano.
     pub output_batches: u64,
     /// Righe processate complessivamente: somma delle righe in ingresso a
-    /// ogni nodo del piano (ADR 6: metrica obbligatoria, **non** limite v1 —
+    /// ogni nodo del piano (errori-e-limiti.md: metrica obbligatoria, **non** limite v1 —
     /// dipende dal piano fisico, es. segmenti fusi).
     pub total_rows_processed: u64,
-    /// Osservabilita' dei lease (ADR-0002): snapshot del governor al momento
+    /// Osservabilita' dei lease (architettura.md#memoria): snapshot del governor al momento
     /// della lettura delle metriche — lease vivi, byte trattenuti attuali e
     /// di picco, eta' del lease piu' vecchio.
     pub memory: MemoryMetrics,
-    /// Metriche di spill aggregate sull'esecuzione (ADR-0002, Fase 2B M2c):
+    /// Metriche di spill aggregate sull'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
     /// byte scritti/letti sui file temporanei e numero di file
     /// materializzati dai percorsi `*_spilled` di sort/distinct/aggregate.
     /// Tutte zero se nessun nodo ha spillato.
     pub spill: SpillMetrics,
     /// Batch per cui il runner fuso geo e' ricaduto sul percorso non fuso
-    /// per reservation governor fallita (ADR-0012 D12.7): mai silenzioso —
+    /// per reservation governor fallita (architettura.md#geometrie D12.7): mai silenzioso —
     /// una pressione ricorrente e' osservabile qui invece di manifestarsi
     /// come rallentamento inspiegabile. Nessun errore nuovo: il risultato e'
     /// identico, cambia solo la scelta fisica.
@@ -671,29 +676,30 @@ const fn sum_rows(left: u64, right: u64, saturated: &mut bool) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Stato mutabile condiviso tra le chiusure dello stream (contatori per i
-/// limiti effettivi e metriche). `Rc`/`RefCell`: esecuzione seriale v1 (V8).
+/// limiti effettivi e metriche). `Rc`/`RefCell`: esecuzione seriale v1 (parallelismo solo dove conviene).
 struct ExecState {
     plan: Rc<ExecutionPlan>,
     metrics: RefCell<ExecutionMetrics>,
-    /// Governor del budget memoria globale di piano (ADR-0002, M1a).
+    /// Governor del budget memoria globale di piano (architettura.md#memoria).
     governor: MemoryGovernor,
-    /// Identita' dell'esecuzione (ADR 3, M1d): riportata negli errori
+    /// Identita' dell'esecuzione (errori-e-limiti.md, errori arricchiti): riportata negli errori
     /// `Execution`/`Cancelled` e nel lock del `TempStore`.
     execution_id: String,
-    /// Token di cancellazione cooperativa (ADR 3, M1c): osservato solo ai
+    /// Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+    /// osservato solo ai
     /// confini dell'executor, mai dentro ai kernel (M3).
     cancellation: CancellationToken,
-    /// Diagnostica opt-in (ADR 3, M1d): arricchisce le motivazioni degli
+    /// Diagnostica opt-in (errori-e-limiti.md, errori arricchiti): arricchisce le motivazioni degli
     /// errori con contesto strutturale, mai valori.
     diagnostics: bool,
-    /// Store temporaneo dell'esecuzione (ADR 3): heartbeat al punto
+    /// Store temporaneo dell'esecuzione (errori-e-limiti.md): heartbeat al punto
     /// centrale, cleanup RAII al `Drop`.
     temp_store: RefCell<TempStore>,
-    /// Directory di spill condivisa (ADR-0002, Fase 2B M2c): `spill/`
-    /// sotto il `TempStore`, risolta UNA volta alla costruzione (V2) —
+    /// Directory di spill condivisa (architettura.md#memoria, Fase 2B, spill generalizzato): `spill/`
+    /// sotto il `TempStore`, risolta UNA volta alla costruzione (hot path minimale) —
     /// il path e' fisso per tutta l'esecuzione.
     spill_directory: PathBuf,
-    /// Metriche di spill aggregate (ADR-0002, Fase 2B M2c): alimentate dai
+    /// Metriche di spill aggregate (architettura.md#memoria, Fase 2B, spill generalizzato): alimentate dai
     /// percorsi `*_spilled` attivati nei nodi tabellari.
     spill_metrics: RefCell<SpillMetrics>,
     /// Istante dell'ultimo heartbeat scritto (throttle).
@@ -706,12 +712,12 @@ struct ExecState {
     /// Righe in/out cumulate per nodo (`max_expansion_factor`).
     node_rows: RefCell<HashMap<String, (u64, u64)>>,
     /// Handle prepared delle operazioni geo 1:1, costruito una volta per
-    /// nodo (V2): indice di colonna e schema di output non sono piu'
+    /// nodo (hot path minimale): indice di colonna e schema di output non sono piu'
     /// risolti a ogni batch.
     prepared_one_to_one: RefCell<HashMap<String, Rc<OneToOnePrepared>>>,
 }
 
-/// Intervallo minimo tra due heartbeat del `TempStore` (ADR 3): il punto
+/// Intervallo minimo tra due heartbeat del `TempStore` (errori-e-limiti.md): il punto
 /// naturale e' "ogni batch processato", ma la scrittura del lock file ha un
 /// costo — un heartbeat al secondo e' di gran lunga piu' frequente del TTL
 /// di scavenging (24 ore di default) anche con batch piccolissimi.
@@ -827,7 +833,7 @@ impl ExecState {
     }
 
     /// Handle prepared dell'operazione geo 1:1 del nodo, costruito alla
-    /// prima occorrenza (V2): indice di colonna e schema di output sono
+    /// prima occorrenza (hot path minimale): indice di colonna e schema di output sono
     /// risolti UNA volta per kernel, non per batch. La chiave e' l'id del
     /// nodo: lo schema di input di un arco e' fisso per contratto.
     fn one_to_one_prepared(
@@ -850,7 +856,7 @@ impl ExecState {
     }
 
     /// Snapshot delle metriche correnti (con l'osservabilita' dei lease
-    /// letta dal governor al momento della chiamata, ADR-0002).
+    /// letta dal governor al momento della chiamata, architettura.md#memoria).
     fn metrics(&self) -> ExecutionMetrics {
         let mut metrics = self.metrics.borrow().clone();
         metrics.memory = self.governor.snapshot();
@@ -859,10 +865,10 @@ impl ExecState {
         metrics
     }
 
-    /// Directory di spill condivisa dell'esecuzione (ADR-0002, Fase 2B M2c):
+    /// Directory di spill condivisa dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
     /// sotto-directory `spill/` del `TempStore` — creata dal workspace di
     /// spill al primo uso, ripulita dei file a fine operazione e rimossa
-    /// interamente dal `Drop` RAII dello store. Risolta in `new` (V2).
+    /// interamente dal `Drop` RAII dello store. Risolta in `new` (hot path minimale).
     fn spill_directory(&self) -> &Path {
         &self.spill_directory
     }
@@ -896,7 +902,7 @@ impl ExecState {
     }
 
     /// Un batch e' ricaduto dal runner fuso geo al percorso non fuso
-    /// (ADR-0012 D12.7): contatore dedicato, mai silenzioso — nessun errore
+    /// (architettura.md#geometrie D12.7): contatore dedicato, mai silenzioso — nessun errore
     /// nuovo, il risultato resta identico.
     fn record_geo_fusion_fallback(&self) {
         let mut metrics = self.metrics.borrow_mut();
@@ -911,7 +917,7 @@ impl ExecState {
     /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
     /// passa dal conteggio delle metriche), con throttle di
     /// [`HEARTBEAT_MIN_INTERVAL`]. Best-effort: un heartbeat fallito degrada
-    /// un segnale diagnostico (ADR 3: mai una prova), non deve fermare
+    /// un segnale diagnostico (errori-e-limiti.md: mai una prova), non deve fermare
     /// l'esecuzione — il cleanup RAII resta la pulizia principale.
     fn heartbeat(&self) {
         if self.last_heartbeat.get().elapsed() < HEARTBEAT_MIN_INTERVAL {
@@ -921,7 +927,8 @@ impl ExecState {
         let _ = self.temp_store.borrow_mut().heartbeat();
     }
 
-    /// Errore di cancellazione attribuito a un punto del DAG (ADR 3):
+    /// Errore di cancellazione attribuito a un punto del DAG
+    /// (errori-e-limiti.md#cancellazione):
     /// contesto (nodo, operazione, `execution_id`), mai dati.
     fn cancelled(&self, node: &str, operation: &str) -> PlenoraError {
         PlenoraError::Cancelled {
@@ -932,7 +939,7 @@ impl ExecState {
         }
     }
 
-    /// Check di cancellazione al confine di un kernel (ADR 3, M1c): onora il
+    /// Check di cancellazione al confine di un kernel (errori-e-limiti.md#cancellazione): onora il
     /// `CancellationBehavior` dichiarato in catalogo — `NonInterruptible`
     /// non offre punti di interruzione (mai check).
     fn check_cancellation(&self, kernel: &PreparedKernel) -> Result<()> {
@@ -944,7 +951,7 @@ impl ExecState {
 
     /// Check di cancellazione a un confine di piano (output) o di batch in
     /// ingresso a un segmento: e' lavoro dell'executor, non del kernel —
-    /// sempre attivo, anche a valle di op `NonInterruptible` (ADR 3: nessuna
+    /// sempre attivo, anche a valle di op `NonInterruptible` (errori-e-limiti.md: nessuna
     /// nuova attivita' dopo la cancellazione, publish compreso).
     fn check_cancellation_point(&self, node: &str, operation: &str) -> Result<()> {
         if self.cancellation.is_cancelled() {
@@ -953,14 +960,14 @@ impl ExecState {
         Ok(())
     }
 
-    /// Tag M1d al confine di uscita: ogni errore `Execution` che lascia il DAG
+    /// Tag di categoria al confine di uscita: ogni errore `Execution` che lascia il DAG
     /// porta l'`execution_id` (riempito qui se il punto di origine, in
     /// profondita' nel dispatch, non lo aveva a disposizione).
     fn tag_execution(&self, error: PlenoraError) -> PlenoraError {
         error.with_execution_id(&self.execution_id)
     }
 
-    /// Arricchimento diagnostico opt-in (ADR 3, M1d): con `diagnostics`
+    /// Arricchimento diagnostico opt-in (errori-e-limiti.md, errori arricchiti): con `diagnostics`
     /// attivo aggiunge alla motivazione contesto strutturale — indice di
     /// batch, riga, colonna dove disponibile, MAI valori. A flag spento (o
     /// dettaglio assente) l'errore passa invariato: messaggi retrocompatibili.
@@ -976,7 +983,8 @@ impl ExecState {
 }
 
 // ---------------------------------------------------------------------------
-// Canale d'arco condiviso (fan-out tee, D9/V9/V10)
+// Canale d'arco condiviso (fan-out tee, D9: materializzazione minima,
+// rilascio al last consumer)
 // ---------------------------------------------------------------------------
 
 /// Errore di un arco conservato in forma scomposta per la riproduzione ai
@@ -1045,7 +1053,7 @@ impl StoredEdgeError {
 /// cursore di lettura per ciascuno. Il buffer trattiene [`GovernedBatch`]:
 /// il lease e' condiviso (clone `Arc`) tra i consumatori — la quota del
 /// batch e' contata UNA volta all'ingresso dell'arco e torna al governor al
-/// `Drop` dell'ultimo riferimento (ADR-0002).
+/// `Drop` dell'ultimo riferimento (architettura.md#memoria).
 struct EdgeShared {
     upstream: RefCell<Option<BatchStream>>,
     buffer: RefCell<Vec<GovernedBatch>>,
@@ -1088,7 +1096,7 @@ struct EdgeStream {
 }
 
 impl EdgeStream {
-    /// Rilascia i batch letti da tutti i consumatori (V10).
+    /// Rilascia i batch letti da tutti i consumatori (rilascio al last consumer).
     ///
     /// Nel caso a consumatore singolo i batch non sono bufferizzati affatto:
     /// il cursore e' clam-pato alla lunghezza del buffer condiviso.
@@ -1179,7 +1187,7 @@ impl Iterator for EdgeStream {
 ///   [`canonical_geometry_metadata`] sono fuse nel metadata del campo
 ///   omonimo. `GeometryMetadataDetails::default()` (nessun dettaglio
 ///   opzionale modellato dal contratto) attiva la cascata di completamento
-///   DELL'ASSENTE (R2.7, ADR-0009 emendamento 2026-07-31): normalmente
+///   DELL'ASSENTE (R2.7, piano-v5.md#contratti-di-input emendamento 2026-07-31): normalmente
 ///   `axis_order` e `srid` sono DEDOTTI dalla definizione canonica d'autorita'
 ///   ([`ResolvedCrs::authority_axis_order`]/[`ResolvedCrs::authority_srid`]
 ///   — lo stesso oggetto con cui il kernel ha operato; deduzione da
@@ -1193,7 +1201,7 @@ impl Iterator for EdgeStream {
 /// - R2.6: una chiave canonica gia' presente sul campo (o la versione sullo
 ///   schema) con valore DIVERSO da quello imposto dal contratto e' un
 ///   errore, mai una sovrascrittura silenziosa; valore uguale e'
-///   idempotente. Le chiavi che l'operazione RISCRIVE di mestiere (ADR-0009,
+///   idempotente. Le chiavi che l'operazione RISCRIVE di mestiere (piano-v5.md#contratti-di-input,
 ///   decisione 8 — il blocco CRS per `reproject`, `types`/
 ///   `types_declaration` per le trasformazioni che cambiano il tipo
 ///   geometrico) non passano MAI di qui come divergenze: la sostituzione
@@ -1260,7 +1268,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
                     // (R2.7), mai per arbitrato: una chiave di lineage
                     // PRESENTE vince sempre, qualunque sia il valore emesso —
                     // anche un valore dedotto dalla definizione d'autorita'
-                    // (ADR-0009, emendamento 2026-07-31): la deduzione riempie
+                    // (piano-v5.md#contratti-di-input, emendamento 2026-07-31): la deduzione riempie
                     // solo le chiavi assenti e non deve mai trasformarsi in
                     // un falso conflitto R2.6 su un passthrough (R2.4: la
                     // dichiarazione del produttore resta). Prima
@@ -1276,7 +1284,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
                     // vietato. E' l'unica sovrascrittura ammessa su una
                     // chiave canonica: una sola chiave, una sola direzione
                     // (`resolved` -> `declared_unresolved`), mai il
-                    // contrario (ADR-0009, decisione 7). La direzione
+                    // contrario (piano-v5.md#contratti-di-input, decisione 7). La direzione
                     // opposta (`declared_unresolved` -> `resolved`) non
                     // passa di qui: con una decisione del piano le
                     // dichiarazioni della sorgente sono gia' state rimosse
@@ -1331,7 +1339,7 @@ fn canonical_output_schema(contract: &DataContract) -> Result<SchemaRef> {
 /// Output di un'esecuzione: stream lazy dei batch finali + metriche.
 ///
 /// Iterare l'`Output` guida l'esecuzione: l'input e' consumato
-/// batch-per-batch (V3). Non e' `Send` nella v1 seriale (V8).
+/// batch-per-batch (streaming reale). Non e' `Send` nella v1 seriale (parallelismo solo dove conviene).
 pub struct Output {
     contract: DataContract,
     /// Schema IPC emesso: quello del contratto piu' il blocco canonico
@@ -1368,7 +1376,7 @@ impl Output {
         &self.contract
     }
 
-    /// Identita' dell'esecuzione (ADR 3, M1d): la stessa riportata negli
+    /// Identita' dell'esecuzione (errori-e-limiti.md, errori arricchiti): la stessa riportata negli
     /// errori `Execution`/`Cancelled` e nel lock del `TempStore`.
     #[must_use]
     pub fn execution_id(&self) -> &str {
@@ -1406,7 +1414,7 @@ impl Output {
 
     /// Drena lo stream conservando i wrapper governati (lease + sequenza).
     ///
-    /// Seam interno per i test M1a/M1b (ADR-0001/ADR-0002): in questa
+    /// Seam interno per i test del governor (architettura.md#determinismo e #memoria): in questa
     /// milestone nessun consumatore pubblico riordina per `BatchSequence`.
     #[cfg(test)]
     pub(crate) fn collect_governed(self) -> Result<(Vec<GovernedBatch>, ExecutionMetrics)> {
@@ -1415,7 +1423,7 @@ impl Output {
     }
 
     /// Scrive l'output in Arrow IPC file format con publish atomico
-    /// (decisione D22/ADR 7): tempfile nella directory di destinazione,
+    /// (decisione D22/errori-e-limiti.md#publish-e-cleanup): tempfile nella directory di destinazione,
     /// persist no-clobber solo a stream completato con successo — nessun
     /// output parziale e' mai visibile. Profilo [`PublishProfile::Atomic`]:
     /// wrapper su [`Output::write_ipc_file_with_profile`], l'esito tipizzato
@@ -1431,14 +1439,14 @@ impl Output {
     /// Propaga errori di stream e di I/O; `PlenoraError::InvalidPlan` se la
     /// destinazione esiste gia' o la directory non esiste;
     /// `PlenoraError::Unsupported` se il filesystem di
-    /// destinazione e' di rete o non identificabile (ADR 7).
+    /// destinazione e' di rete o non identificabile (errori-e-limiti.md#publish-e-cleanup).
     pub fn write_ipc_file(self, path: &Path) -> Result<ExecutionMetrics> {
         let (metrics, _outcome) = self.write_ipc_file_with_profile(path, PublishProfile::Atomic)?;
         Ok(metrics)
     }
 
     /// Come [`Output::write_ipc_file`], ma con profilo di publish
-    /// selezionabile (ADR 7) ed esito tipizzato restituito al chiamante:
+    /// selezionabile (errori-e-limiti.md#publish-e-cleanup) ed esito tipizzato restituito al chiamante:
     /// [`PublishOutcome::PublishedButDurabilityUnconfirmed`] se il publish e'
     /// riuscito ma la durabilita' non e' confermata (es. `fsync` di directory
     /// non supportato dalla piattaforma).
@@ -1460,7 +1468,7 @@ impl Output {
             // batch di uno stream condividono lo stesso Arc (lo schema del
             // contratto del kernel), quindi il confronto profondo di
             // `Schema` (campi + mappe metadata) si esegue solo al primo
-            // batch di ogni schema distinto (V2: lavoro hoistable fuori
+            // batch di ogni schema distinto (hot path minimale: lavoro hoistable fuori
             // dal loop). Il rivestimento resta fail-closed: `try_new`
             // rivalida ogni batch rivestito.
             let mut schema_decision: Option<(SchemaRef, bool)> = None;
@@ -1495,7 +1503,7 @@ impl Output {
             // Controllo di salute PRIMA del publish atomico: una corruzione
             // della contabilita' rilevata dentro un `Drop` non puo' propagare
             // un errore da li', e il publish e' irreversibile. Qui il file
-            // temporaneo non e' ancora stato reso visibile (ADR 7), quindi
+            // temporaneo non e' ancora stato reso visibile (errori-e-limiti.md#publish-e-cleanup), quindi
             // fallire ora significa non pubblicare nulla.
             governor.verifica_salute("output")?;
             Ok(())
@@ -1538,11 +1546,11 @@ impl Iterator for Output {
 // execute
 // ---------------------------------------------------------------------------
 
-/// Fase 2 `execute` (Architetture.md par. 6.3, ADR 5): accetta solo il
+/// Fase 2 `execute` (architettura.md, architettura.md#planner-ed-executor): accetta solo il
 /// prodotto di [`crate::planner::validate`] (type-state), esegue
 /// internamente `prepare` + `execute_physical`.
 ///
-/// All'ingresso l'identita' ADR 4 del grafo e' riverificata contro l'ambiente
+/// All'ingresso l'identita' piano-v5.md#identita-e-fingerprint del grafo e' riverificata contro l'ambiente
 /// corrente ([`check_compatibility`]: catalogo, versioni engine/Arrow,
 /// capability): l'executor rifiuta su qualunque mismatch, mai procedere alla
 /// cieca. Nella v1 il grafo e' validato e usato nello stesso processo, quindi
@@ -1564,8 +1572,8 @@ impl Iterator for Output {
 /// - `PlenoraError::Schema`: schema di un input diverso dal contratto
 ///   validato;
 /// - `PlenoraError::Io`/`PlenoraError::InvalidPlan`: `TempStore` non creabile
-///   (fail-closed ADR 3, vedi l'header del modulo).
-#[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da ADR 5.
+///   (fail-closed errori-e-limiti.md, vedi l'header del modulo).
+#[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da architettura.md#planner-ed-executor.
 pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) -> Result<Output> {
     check_compatibility(
         graph,
@@ -1576,7 +1584,7 @@ pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) 
     )?;
     // `max_parallelism` si applica QUI, prima di qualunque uso di Rayon:
     // dimensiona il pool del processo, l'unica leva che vincola davvero tutti
-    // i percorsi paralleli dei kernel (ADR-0006, DER-006). Farlo solo nella
+    // i percorsi paralleli dei kernel (errori-e-limiti.md, errori-e-limiti.md#limiti-dichiarati). Farlo solo nella
     // CLI lasciava il limite inapplicato per chi incorpora l'engine come
     // libreria — cioe' proprio dove nessuno lo avrebbe notato.
     crate::parallelism::configure(graph.effective_limits().max_parallelism)?;
@@ -1584,7 +1592,7 @@ pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) 
     execute_physical(&plan, graph, inputs, &runtime)
 }
 
-/// `execute_physical` (ADR 5, interno): verifica degli input contro i
+/// `execute_physical` (architettura.md#planner-ed-executor, interno): verifica degli input contro i
 /// contratti validati e costruzione della rete di stream.
 // Orchestrazione lineare della rete di stream: lunga per costruzione.
 #[allow(clippy::too_many_lines)]
@@ -1644,12 +1652,12 @@ fn execute_physical(
         }
     }
 
-    // ADR 3, M1d: identita' dell'esecuzione — UUID v4 (dipendenza `uuid`
+    // errori-e-limiti.md, errori arricchiti: identita' dell'esecuzione — UUID v4 (dipendenza `uuid`
     // gia' pinnata nel workspace, nessuna versione nuova) con prefisso
     // leggibile; il charset rispetta la validazione restrittiva del
     // `TempStore` ([A-Za-z0-9._-]).
     let execution_id = format!("exec-{}", uuid::Uuid::new_v4().simple());
-    // ADR 3: scavenging all'avvio delle directory temporanee orfane, sulla
+    // errori-e-limiti.md: scavenging all'avvio delle directory temporanee orfane, sulla
     // radice dello store (default: temp di sistema; configurabile via
     // `RuntimeContext::temp_root`). Best-effort: un fallimento dello
     // scavenging non deve mai impedire un'esecuzione valida — le directory
@@ -1657,8 +1665,8 @@ fn execute_physical(
     let temp_root = runtime.temp_root.clone().unwrap_or_else(std::env::temp_dir);
     let _ = scavenge_stale_temp_dirs(&temp_root, DEFAULT_SCAVENGE_TTL);
     // Fail-closed, decisione documentata: niente degrado a tempdir semplice.
-    // Il `TempStore` e' la difesa strutturale ADR 3 contro i crash non
-    // intercettabili (lo spill di M2 ci scrivera'): eseguire senza
+    // Il `TempStore` e' la difesa strutturale errori-e-limiti.md contro i crash non
+    // intercettabili (lo spill ci scrivera'): eseguire senza
     // nasconderebbe la perdita di protezione. Se non e' creabile,
     // l'esecuzione fallisce qui, prima di toccare i dati.
     let temp_store = TempStore::with_root(&execution_id, &temp_root)?;
@@ -1696,14 +1704,14 @@ fn execute_physical(
     // Wrapper dell'output: max_output_rows, max_batches, byte per batch e
     // metriche di pubblicazione. Il batch resta governato fino alla consegna
     // al chiamante (il lease e' rilasciato dallo spacchettamento in
-    // `Output`), cosi' la coda d'uscita resta dentro il perimetro ADR-0002.
+    // `Output`), cosi' la coda d'uscita resta dentro il perimetro architettura.md#memoria.
     let output_state = Rc::clone(&state);
     let output_edge = plan.output_edge().to_owned();
     let mut output_counts = (0_u64, 0_u64);
     let stream = Box::new(stream.map(move |item| {
-        // Tag M1d: ogni errore `Execution` che esce dal DAG porta l'execution_id.
+        // Tag di categoria: ogni errore `Execution` che esce dal DAG porta l'execution_id.
         let governed = item.map_err(|error| output_state.tag_execution(error))?;
-        // ADR 3, M1c: confine di piano — sempre attivo, anche a valle di op
+        // errori-e-limiti.md#cancellazione: confine di piano — sempre attivo, anche a valle di op
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
@@ -1761,7 +1769,7 @@ struct Network {
 
 impl Network {
     /// Stream di lettura di un arco (nome di input o id nodo). Archi con
-    /// piu' consumatori (fan-out) sono condivisi via tee (D9/V9).
+    /// piu' consumatori (fan-out) sono condivisi via tee (D9).
     fn edge_stream(&mut self, edge: &str) -> Result<EdgeStream> {
         if let Some(shared) = self.edges.get(edge) {
             return Ok(shared.register_reader());
@@ -1786,8 +1794,8 @@ impl Network {
     /// coerenza per-batch dello schema sono taggati [`ErrorPhase::Read`].
     ///
     /// Punto di ingresso nel perimetro governato: qui ogni batch riceve il
-    /// lease di memoria (ADR-0002, quota contata UNA volta per arco) e la
-    /// sequenza logica (ADR-0001: `source_node` = nome dell'input,
+    /// lease di memoria (architettura.md#memoria, quota contata UNA volta per arco) e la
+    /// sequenza logica (architettura.md#determinismo: `source_node` = nome dell'input,
     /// `input_partition` = 0 — nessun ramo parallelo della sorgente in v1 —
     /// `sequence_number` = contatore seriale per input).
     ///
@@ -1862,7 +1870,7 @@ impl Network {
             }
             {
                 let mut counts = state.input_counts.borrow_mut();
-                // Chiave clonata solo al primo batch dell'input (V2): i
+                // Chiave clonata solo al primo batch dell'input (hot path minimale): i
                 // batch successivi entrano dal `get_mut` sul nome esistente.
                 if let Some(entry) = counts.get_mut(&edge_name) {
                     entry.0 = entry
@@ -1889,7 +1897,7 @@ impl Network {
                 // confine due limiti sulla stessa lettura dichiaravano fasi
                 // diverse: un tetto di byte diceva «lettura», un tetto di
                 // righe diceva «validazione». Il tag esplicito vince sulla
-                // derivazione, come stabilito in ADR-0009.
+                // derivazione, come stabilito in piano-v5.md#contratti-di-input.
                 if entry.0 > limits.rows.max_input_rows {
                     return Err(PlenoraError::ResourceLimit(format!(
                         "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
@@ -1912,7 +1920,7 @@ impl Network {
                     .with_phase(ErrorPhase::Read));
                 }
             }
-            // ADR-0002: reservation immediata (v1 seriale — regola in
+            // architettura.md#memoria: reservation immediata (v1 seriale — regola in
             // `MemoryGovernor::try_reserve`); i limiti per input sopra sono
             // gia' passati, quindi qui il fallimento e' solo per budget
             // globale esaurito.
@@ -1925,7 +1933,7 @@ impl Network {
                 .governor
                 .reserve(bytes, &edge_name)
                 .map_err(|error| error.with_phase(ErrorPhase::Read))?;
-            // ADR-0001: sequenza logica d'ingresso (contatore seriale).
+            // architettura.md#determinismo: sequenza logica d'ingresso (contatore seriale).
             let seq = BatchSequence {
                 source_node: edge_name.clone(),
                 input_partition: 0,
@@ -1947,7 +1955,7 @@ impl Network {
         }
     }
 
-    /// Stream prodotto da un segmento, secondo la sua modalita' (E2).
+    /// Stream prodotto da un segmento, secondo la sua modalita' (modalita' fisiche esplicite).
     fn segment_stream(&mut self, index: usize) -> Result<BatchStream> {
         let (mode, input_edges) = {
             let segment = &self.plan.segments()[index];
@@ -1981,7 +1989,7 @@ impl Network {
                             "segmento blocking senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // ADR-0002 (Fase 2B M2c): verso un kernel spill-capable
+                    // architettura.md#memoria (Fase 2B, spill generalizzato): verso un kernel spill-capable
                     // la quota governor dei batch drenati e' rilasciata
                     // subito. La soglia di attivazione dello spill ha la
                     // stessa grandezza del budget (byte stimati dell'input vs
@@ -1992,7 +2000,7 @@ impl Network {
                     // la materializzazione dell'input resta in RAM (lo spill
                     // in streaming durante il drenaggio e' M3).
                     let spill_capable = spill_capable_unary(kernel);
-                    // ADR 3, M1c: drenaggio dell'input — check a ogni
+                    // errori-e-limiti.md#cancellazione: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che
                     // ricevera' i dati (`NonInterruptible`: mai).
                     let mut batches = Vec::new();
@@ -2021,7 +2029,7 @@ impl Network {
                             "segmento binario senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // ADR 3, M1c: come per il blocking unario — check a ogni
+                    // errori-e-limiti.md#cancellazione: come per il blocking unario — check a ogni
                     // confine di batch durante il drenaggio dei due rami.
                     let mut left_batches = Vec::new();
                     for item in &mut left {
@@ -2047,8 +2055,8 @@ impl Network {
 // Limiti e validazione dinamica
 // ---------------------------------------------------------------------------
 
-/// Tetto duro sui byte di un batch (V7: `max_batch_bytes`). Restituisce i
-/// byte del batch (V2: un solo conteggio, riusato da lease e contatori).
+/// Tetto duro sui byte di un batch (tetto in byte per batch: `max_batch_bytes`). Restituisce i
+/// byte del batch (hot path minimale: un solo conteggio, riusato da lease e contatori).
 fn check_batch_bytes(state: &ExecState, batch: &RecordBatch, where_: &str) -> Result<u64> {
     let bytes = batch.get_array_memory_size();
     let max = state.plan.batch_target().max_batch_bytes;
@@ -2111,7 +2119,7 @@ impl std::io::Write for CountingFile {
 
 /// Metadati per-batch dello staging IPC: byte da ri-riservare al replay
 /// (gli stessi della riserva originale, rilasciata allo staging) e
-/// sequenza logica ADR-0001 catturata allo staging e ripubblicata
+/// sequenza logica architettura.md#determinismo catturata allo staging e ripubblicata
 /// invariata al replay.
 struct StagedBatchMeta {
     bytes: u64,
@@ -2130,7 +2138,7 @@ struct StagedReplay {
 /// Replay di UN batch dallo staging IPC: compattazione right-sized, lease
 /// ri-riservato per batch (memoria bounded) e sequenza logica ripubblicata
 /// invariata. Condiviso dal gate input WKB e dallo staging degli output
-/// accettati dei segmenti row-diagnostics (P1): nessuna logica duplicata.
+/// accettati dei segmenti row-diagnostics: nessuna logica duplicata.
 fn replay_staged_batch(
     state: &ExecState,
     replay: &mut StagedReplay,
@@ -2207,14 +2215,14 @@ enum StagingOutcome {
     Replay(StagedReplay),
     /// Coda ordinata degli accepted trattenuti in memoria, con i lease
     /// originali ancora vivi: consegnata direttamente, senza IPC ne' copie
-    /// (ADR-0002 M2d). Prodotta SOLO dai segmenti row-diagnostics; il gate
+    /// (architettura.md#memoria, staging memory-first). Prodotta SOLO dai segmenti row-diagnostics; il gate
     /// WKB dell'input resta su disco.
     Memoria(std::collections::VecDeque<GovernedBatch>),
 }
 
 /// Staging degli accepted di un segmento row-diagnostics: **prima in
 /// memoria**, con passaggio definitivo su disco quando il budget non basta
-/// piu' (ADR-0002 M2d).
+/// piu' (architettura.md#memoria, staging memory-first).
 ///
 /// # Perche' esiste
 ///
@@ -2236,7 +2244,7 @@ enum StagingOutcome {
 /// Si entra nella passata `k` in modalita' memoria **solo se**
 /// `trattenuti + input_k + max_batch_bytes <= budget`, dove `input_k` e' la
 /// dimensione REALE del batch gia' prelevato e `max_batch_bytes` e' il tetto
-/// duro del piano (V7). Ogni batch di output attraversa il wrapper d'uscita,
+/// duro del piano (tetto in byte per batch). Ogni batch di output attraversa il wrapper d'uscita,
 /// che applica lo stesso tetto: `output_k > max_batch_bytes` fa fallire il
 /// piano **in entrambe le modalita'**. Per un piano che prima riusciva vale
 /// quindi `output_k <= max_batch_bytes`, e il picco in memoria non supera il
@@ -2555,8 +2563,8 @@ fn validate_wkb_cells(
     let limits = state.plan.limits();
     let max_cell = limits.max_wkb_cell_bytes;
     let max_depth = limits.max_geometry_depth as usize;
-    // Diagnostica opt-in (M1d): il nome della colonna e' contesto
-    // strutturale, non un valore — risolto solo nel ramo d'errore (V2),
+    // Diagnostica opt-in (errori arricchiti): il nome della colonna e' contesto
+    // strutturale, non un valore — risolto solo nel ramo d'errore (hot path minimale),
     // mai allocato sul percorso felice.
     let column = batch.schema().field(geometry_index).name().clone();
     let mut rejected = Vec::new();
@@ -2712,12 +2720,12 @@ fn check_edge_batch(state: &ExecState, edge: &str, batch: &RecordBatch) -> Resul
 
 /// Conteggi righe/batch di un arco intermedio e limiti corrispondenti
 /// (`max_rows_per_edge`, `max_batches`) SENZA il tetto byte del batch:
-/// archi interni dei gruppi fusi geo (ADR-0012 D12.8, deroga DER-003 di
-/// `docs/deroghe.md` — il batch non e' materializzato e H-03 e' coperto dal
+/// archi interni dei gruppi fusi geo (architettura.md#geometrie D12.8, deroga errori-e-limiti.md#limiti-dichiarati di
+/// `docs/errori-e-limiti.md` — il batch non e' materializzato e H-03 e' coperto dal
 /// governor, reservation D12.7). Righe e batch restano esatti (1:1).
 fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     let mut counts = state.edge_counts.borrow_mut();
-    // Chiave clonata solo al primo batch dell'arco (V2): i batch successivi
+    // Chiave clonata solo al primo batch dell'arco (hot path minimale): i batch successivi
     // entrano dal `get_mut` sul nome esistente.
     if let Some(entry) = counts.get_mut(edge) {
         entry.0 = entry
@@ -2748,18 +2756,18 @@ fn check_edge_counts(state: &ExecState, edge: &str, rows: u64) -> Result<()> {
     Ok(())
 }
 
-/// Esenzione da `max_expansion_factor` dichiarata in catalogo (ADR 6):
+/// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md):
 /// le op `WholeToMany` (`geo.generate_grid`, `geo.coverage_validate`,
 /// `geo.shared_paths`) sono generative/diagnostiche — l'input funge da
 /// trigger o da insieme da analizzare, non da base proporzionale
-/// dell'output. Risolta in `prepare` (V2: nessuno scan del catalogo nel
+/// dell'output. Risolta in `prepare` (hot path minimale: nessuno scan del catalogo nel
 /// loop per batch).
 const fn expansion_exempt(kernel: &PreparedKernel) -> bool {
     kernel.expansion_factor_exempt
 }
 
-/// Comportamento alla cancellazione del kernel (ADR 3, M1c): dichiarato in
-/// catalogo dal descriptor dell'operazione e risolto in `prepare` (V2:
+/// Comportamento alla cancellazione del kernel (errori-e-limiti.md#cancellazione): dichiarato in
+/// catalogo dal descriptor dell'operazione e risolto in `prepare` (hot path minimale:
 /// nessuno scan del catalogo nel loop per batch).
 // Non const fn: sotto cfg(test) chiama l'hook `test_behavior_override`
 // (non const) — nel build normale il corpo e' la sola lettura di campo.
@@ -2772,7 +2780,8 @@ fn cancellation_behavior(kernel: &PreparedKernel) -> CancellationBehavior {
     kernel.cancellation_behavior
 }
 
-/// Hook di test (ADR 3): override del `CancellationBehavior` di catalogo
+/// Hook di test (errori-e-limiti.md#cancellazione): override del
+/// `CancellationBehavior` di catalogo
 /// per id nodo. Serve a verificare il rispetto dei behavior senza i backend
 /// opzionali: le sole op `NonInterruptible` del catalogo v1
 /// (`geo.make_valid`, `geo.reproject`, `geo.polygonize`, `geo.split`)
@@ -2793,7 +2802,7 @@ fn test_behavior_override(node_id: &str) -> Option<CancellationBehavior> {
         .find_map(|(node, behavior)| (node == node_id).then_some(*behavior))
 }
 
-/// Fattore di espansione per nodo unario (ADR 6: base = righe di input;
+/// Fattore di espansione per nodo unario (errori-e-limiti.md: base = righe di input;
 /// per i binari si veda [`check_join_expansion`]).
 ///
 /// Per le op esenti (dichiarato in catalogo, [`expansion_exempt`]) il
@@ -2804,7 +2813,7 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
         return Ok(());
     }
     let mut rows = state.node_rows.borrow_mut();
-    // Chiave clonata solo al primo batch del nodo (V2): i batch successivi
+    // Chiave clonata solo al primo batch del nodo (hot path minimale): i batch successivi
     // entrano dal `get_mut` sull'id esistente.
     if let Some(entry) = rows.get_mut(&kernel.node_id) {
         entry.0 = entry.0.saturating_add(base_rows);
@@ -2823,13 +2832,14 @@ fn check_expansion(state: &ExecState, kernel: &PreparedKernel, base_rows: u64) -
     Ok(())
 }
 
-/// Fattore di espansione per nodo binario (ADR 6): calcola tutte le
+/// Fattore di espansione per nodo binario (errori-e-limiti.md): calcola tutte le
 /// metriche [`JoinExpansion`] e applica il vincolo vincolante dichiarato in
 /// catalogo per l'operazione (default `SumRelative` se l'op non e' in
 /// catalogo — non dovrebbe accadere: il piano e' validato sul catalogo).
 /// La soglia e' `max_expansion_factor` dei limiti effettivi, tranne per il
 /// vincolo `Custom(fattore)`: il fattore dichiarato in catalogo la
-/// sovrascrive per la singola operazione (stima a priori, ADR 5/6).
+/// sovrascrive per la singola operazione (stima a priori,
+/// architettura.md#planner-ed-executor, errori-e-limiti.md).
 fn check_join_expansion(
     state: &ExecState,
     kernel: &PreparedKernel,
@@ -2864,9 +2874,9 @@ fn check_join_expansion(
     )))
 }
 
-/// Errore di un kernel attribuito al nodo logico (E3), preservando la
+/// Errore di un kernel attribuito al nodo logico (osservabilita' per nodo), preservando la
 /// diagnosi senza dati sensibili. L'`execution_id` e' vuoto qui (il dispatch
-/// in profondita' non lo ha a disposizione): lo riempie il tag M1d al
+/// in profondita' non lo ha a disposizione): lo riempie il tag di categoria al
 /// confine di uscita (`ExecState::tag_execution`).
 fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
     if let Some(diagnostics) = error.row_diagnostics().cloned() {
@@ -2990,7 +3000,7 @@ fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index: usize) -> 
 ///
 /// Non e' una verifica seguita da una prenotazione: e' **una sola
 /// operazione**. Si chiede al governor un permesso per `max_batch_bytes` —
-/// il tetto duro per batch (V7), che il wrapper d'uscita applica a ogni
+/// il tetto duro per batch (tetto in byte per batch), che il wrapper d'uscita applica a ogni
 /// batch di output ed e' quindi un maggiorante valido dell'unica prenotazione
 /// che la passata aggiunge. Se il permesso e' concesso, quella quota e'
 /// **gia' nostra**: la passata puo' ritagliarne l'output senza che nessun
@@ -3029,7 +3039,7 @@ fn permesso_di_trattenere(
     let Ok(tetto_batch) = u64::try_from(state.plan.batch_target().max_batch_bytes) else {
         return Ok(None);
     };
-    // L'owner e' l'arco, non una costante: ADR-0002 vuole che un lease vivo
+    // L'owner e' l'arco, non una costante: architettura.md#memoria vuole che un lease vivo
     // sia attribuibile, e `oldest_lease_age` con `owner` e' l'unico modo di
     // sapere CHI sta trattenendo quota. Un nome generico renderebbe la
     // diagnosi impossibile proprio sul lease piu' grande del piano.
@@ -3127,7 +3137,7 @@ fn scan_row_diagnostic_segment(
         if diagnostics.is_some() && input_rejected {
             continue;
         }
-        // ADR-0002 M2d: la decisione memoria/disco si prende QUI, con il
+        // architettura.md#memoria, staging memory-first: la decisione memoria/disco si prende QUI, con il
         // batch d'ingresso gia' prelevato e quindi di dimensione NOTA, e
         // PRIMA di eseguire la catena su di esso. Cosi' la passata successiva
         // non puo' superare il budget: se non ci sta, i trattenuti vanno su
@@ -3326,7 +3336,8 @@ fn row_diagnostic_stream(
     }))
 }
 
-/// Conversione di un panic di kernel in errore di nodo (ADR 3): il payload
+/// Conversione di un panic di kernel in errore di nodo
+/// (errori-e-limiti.md#panic-policy): il payload
 /// testuale (`&str`/`String`) diventa il motivo, mai dati dei batch (regola
 /// di error.rs: contesto, non valori). Payload non testuale: motivo generico.
 fn panic_step_error(kernel: &PreparedKernel, payload: &(dyn std::any::Any + Send)) -> PlenoraError {
@@ -3366,10 +3377,10 @@ impl GeoBinarySide {
 }
 
 /// Carrier degli errori di uno step binario geo prima dell'attribuzione al
-/// nodo (ADR-0014 D14.5.2): sorgente grezza + fase + side + indice di riga
+/// nodo (architettura.md#geometrie D14.5.2): sorgente grezza + fase + side + indice di riga
 /// come campi strutturati. La posizione NON entra MAI nel testo base del
 /// messaggio (regola 8): e' pubblicata solo nel dettaglio diagnostico
-/// opt-in (`side=… row=…`, stesso canale di `batch_seq`, ADR 3 M1d).
+/// opt-in (`side=… row=…`, stesso canale di `batch_seq`, errori-e-limiti.md, errori arricchiti).
 struct GeoBinaryStepError {
     /// Fase del ciclo (D14.5.4): `Read` per drenaggio/decode, `Write` per
     /// kernel e costruzione dell'output.
@@ -3382,8 +3393,8 @@ struct GeoBinaryStepError {
     source: PlenoraError,
 }
 
-/// Conversione del carrier D14.5 in errore di nodo: `Execution { node,
-/// operation, execution_id }` via `step_error` (D14.5.1); la fase `Read`
+/// Conversione del carrier D14.5 in errore di nodo: `step_error` aggiunge il
+/// contesto **preservando la categoria** (D14.5.1); la fase `Read`
 /// del decode e' taggata al confine (`Write` e' gia' la fase derivata di
 /// `Execution`, D14.5.4); side/riga solo come dettaglio diagnostico opt-in.
 fn geo_binary_step_error(
@@ -3408,11 +3419,11 @@ fn geo_binary_step_error(
     }
 }
 
-/// Metriche di un'esecuzione di kernel (per nodo e per segmento, E3).
+/// Metriche di un'esecuzione di kernel (per nodo e per segmento, osservabilita' per nodo).
 /// `first`/`last` indicano la posizione del kernel nel segmento (righe e
 /// batch di ingresso contati solo sul primo, di uscita solo sull'ultimo).
 /// I byte sono i metadati dei buffer Arrow ai confini del kernel
-/// (E3/ADR-0002: il governor non riconta — questi conteggi sono metriche,
+/// (osservabilita' per nodo; architettura.md#memoria: il governor non riconta — questi conteggi sono metriche,
 /// non reservation).
 #[allow(clippy::too_many_arguments)]
 fn record_kernel_metrics(
@@ -3427,14 +3438,14 @@ fn record_kernel_metrics(
     first: bool,
     last: bool,
 ) {
-    // ADR 3: heartbeat del TempStore al punto centrale — ogni batch
+    // errori-e-limiti.md: heartbeat del TempStore al punto centrale — ogni batch
     // processato passa di qui (throttled, vedi `ExecState::heartbeat`).
     state.heartbeat();
     let config = state.plan.metrics_config();
     let mut borrowed = state.metrics.borrow_mut();
     let metrics = &mut *borrowed;
     let saturated = &mut metrics.counters_saturated;
-    // Metrica obbligatoria ADR 6: sempre aggiornata, indipendente dalla
+    // Metrica obbligatoria errori-e-limiti.md: sempre aggiornata, indipendente dalla
     // configurazione per-nodo/per-segmento.
     accumulate(&mut metrics.total_rows_processed, rows_in, saturated);
     if config.per_node {
@@ -3468,14 +3479,14 @@ fn record_kernel_metrics(
 // ---------------------------------------------------------------------------
 
 /// Sequenza logica riassegnata all'output di un segmento blocking
-/// (ADR-0001): la cardinalita' cambia (concatenazione + kernel una tantum),
+/// (architettura.md#determinismo): la cardinalita' cambia (concatenazione + kernel una tantum),
 /// quindi la sequenza degli input non e' propagabile 1:1.
 ///
 /// Regola v1 — deterministica, per ordine di scansione seriale: il segmento
 /// blocking emette UN batch per esecuzione (per i binari il contenuto
 /// dipende dalla scansione left-then-right, anch'essa seriale), quindi la
 /// sequenza e' sempre `source_node` = nodo del kernel, `input_partition` =
-/// 0, `sequence_number` = 0. In M1 nessun consumatore riordina: la sequenza
+/// 0, `sequence_number` = 0. Oggi nessun consumatore riordina: la sequenza
 /// e' osservabilita' e predisposizione per il collect indicizzato di M3.
 fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
     BatchSequence {
@@ -3485,10 +3496,10 @@ fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
     }
 }
 
-/// Catena streaming (V4): il batch attraversa i kernel in sequenza senza
+/// Catena streaming (segmenti lineari senza code): il batch attraversa i kernel in sequenza senza
 /// materializzazione; limiti per arco ed espansione dopo ogni kernel.
 ///
-/// Confine ADR-0002/ADR-0001: il wrapper si spacca in ingresso (i kernel
+/// Confine architettura.md#memoria e #determinismo: il wrapper si spacca in ingresso (i kernel
 /// restano su `RecordBatch` puro) e si ricompone in uscita — lease NUOVO
 /// sui byte dell'output, acquisito PRIMA di rilasciare quello di input (mai
 /// sotto-conteggio al confine: il picco reale del kernel e' input+output),
@@ -3523,8 +3534,8 @@ fn run_streaming_chain(
         MemoryLease::bytes,
     );
     let kernels = &segment.kernels;
-    // Diagnostica opt-in (M1d): la sequenza logica e' contesto strutturale
-    // (indice di batch), mai un valore. Formattata solo a flag attivo (V2):
+    // Diagnostica opt-in (errori arricchiti): la sequenza logica e' contesto strutturale
+    // (indice di batch), mai un valore. Formattata solo a flag attivo (hot path minimale):
     // `with_diagnostics` la ignorerebbe comunque a diagnostica spenta.
     let batch_detail = if state.diagnostics {
         seq.as_ref()
@@ -3535,7 +3546,7 @@ fn run_streaming_chain(
     let mut position = 0_usize;
     let mut stopped_early = false;
     while position < kernels.len() {
-        // ADR-0012: se il kernel apre un gruppo di fusione geo (>= 2 membri)
+        // architettura.md#geometrie: se il kernel apre un gruppo di fusione geo (>= 2 membri)
         // il gruppo e' eseguito col runner fuso su QUESTO batch; a
         // reservation governor fallita si ricade sul percorso non fuso per
         // il batch (D12.7, fallback strumentato) e il loop standard
@@ -3558,7 +3569,7 @@ fn run_streaming_chain(
             continue;
         }
         let kernel = &kernels[position];
-        // ADR 3, M1c: check cooperativo al confine di kernel — per il primo
+        // errori-e-limiti.md#cancellazione: check cooperativo al confine di kernel — per il primo
         // kernel della catena e' anche il check "tra batch"; onora il
         // `CancellationBehavior` di catalogo (`NonInterruptible`: mai).
         state.check_cancellation(kernel)?;
@@ -3606,7 +3617,7 @@ fn run_streaming_chain(
         return Ok(GovernedBatch::new(batch, None, seq));
     }
     // Ricomposizione: quota dell'output acquisita prima di rilasciare
-    // l'input (mai sotto-conteggio al confine, ADR-0002).
+    // l'input (mai sotto-conteggio al confine, architettura.md#memoria).
     //
     // Se il chiamante ha gia' un permesso, l'output si RITAGLIA da quello:
     // la quota e' gia' sua, e riprenotarla aprirebbe la finestra che il
@@ -3631,7 +3642,7 @@ fn run_streaming_chain(
 }
 
 /// Lunghezza del gruppo di fusione geo che si apre a `position` (0 se il
-/// kernel non apre un gruppo, ADR-0012): i membri condividono l'id assegnato
+/// kernel non apre un gruppo, architettura.md#geometrie): i membri condividono l'id assegnato
 /// in `prepare` e l'apertura e' il primo membro del run.
 fn fusion_group_len(kernels: &[PreparedKernel], position: usize) -> usize {
     let Some(group) = kernels[position].fusion_group else {
@@ -3647,7 +3658,7 @@ fn fusion_group_len(kernels: &[PreparedKernel], position: usize) -> usize {
     len
 }
 
-/// Stima iniziale dei byte decodificati del gruppo sul batch (ADR-0012
+/// Stima iniziale dei byte decodificati del gruppo sul batch (architettura.md#geometrie
 /// D12.7): somma ESATTA dei payload WKB non null della colonna geometria —
 /// camminata sui payload di input, perche' la forma decodificata transiente
 /// non esiste ancora. `None` se la colonna non e' Binary: il percorso non
@@ -3662,7 +3673,7 @@ fn fused_group_decoded_bytes(batch: &RecordBatch, kernel: &PreparedKernel) -> Op
     Some(total)
 }
 
-/// Contesto di un tentativo fuso su un batch (ADR-0012): argomenti condivisi
+/// Contesto di un tentativo fuso su un batch (architettura.md#geometrie): argomenti condivisi
 /// della contabilita' per kernel tra i percorsi di successo e di fallimento.
 struct FusedAttempt<'a> {
     state: &'a ExecState,
@@ -3678,14 +3689,14 @@ struct FusedAttempt<'a> {
 }
 
 impl FusedAttempt<'_> {
-    /// Contabilita' dei kernel COMPLETATI del gruppo (ADR-0012 D12.6):
+    /// Contabilita' dei kernel COMPLETATI del gruppo (architettura.md#geometrie D12.6):
     /// stessa sequenza del loop non fuso — righe per nodo, espansione,
     /// limiti d'arco, metriche per kernel — per i primi `completed` kernel.
     /// Sugli archi interni fusi il batch non e' materializzato: conteggi
-    /// righe/batch esatti (1:1), niente tetto byte (D12.8, deroga DER-003);
+    /// righe/batch esatti (1:1), niente tetto byte (D12.8, deroga errori-e-limiti.md#limiti-dichiarati);
     /// il batch materiale esiste solo a gruppo completato (ultimo kernel).
     /// I byte ai confini interni fusi sono zero: i buffer Arrow intermedi
-    /// non esistono (metriche E3, non reservation).
+    /// non esistono (metriche per nodo, non reservation).
     ///
     /// # Errors
     ///
@@ -3725,7 +3736,7 @@ impl FusedAttempt<'_> {
                     }
                 }
                 None => {
-                    // Arco interno fuso (D12.8/DER-003): conteggi esatti 1:1,
+                    // Arco interno fuso (D12.8/errori-e-limiti.md#limiti-dichiarati): conteggi esatti 1:1,
                     // il tetto byte e' coperto dal governor (D12.7).
                     check_edge_counts(self.state, &kernel.node_id, self.rows)?;
                 }
@@ -3747,7 +3758,7 @@ impl FusedAttempt<'_> {
     }
 }
 
-/// Tentativo di esecuzione FUSA di un gruppo geo su un batch (ADR-0012):
+/// Tentativo di esecuzione FUSA di un gruppo geo su un batch (architettura.md#geometrie):
 /// reservation dei byte decodificati sul governor (D12.7) e, a concessione
 /// avvenuta, runner fuso con un solo decode/encode. Restituisce `true` se il
 /// gruppo e' stato eseguito (batch e byte al confine aggiornati); `false` se
@@ -3756,7 +3767,7 @@ impl FusedAttempt<'_> {
 /// nuovo, il loop standard produce l'esito identico.
 ///
 /// Un gruppo e' un run di trasformazioni `TransformInPlace` (>= 1) piu' UNA
-/// misura terminale opzionale in coda (M2, capability `TerminalMeasure`):
+/// misura terminale opzionale in coda (capability `TerminalMeasure`):
 /// la misura consuma la forma decodificata dell'ultimo passo e appende la
 /// colonna scalare (semantica v4 "add column" — la colonna geometria
 /// sopravvive e viene ri-encodata una sola volta al confine). La reservation
@@ -3808,7 +3819,7 @@ fn try_run_fused_group(
             return Ok(false);
         }
     };
-    // Misura terminale (ADR-0012 M2): se l'ultimo membro del gruppo e' una
+    // Misura terminale (architettura.md#geometrie): se l'ultimo membro del gruppo e' una
     // misura "add column" (`GeoMeasure`), il gruppo eseguito dal runner fuso
     // e' il run di trasformazioni che la precede + la misura in coda, che
     // consuma la forma decodificata dell'ultimo passo e appende la colonna
@@ -3835,13 +3846,14 @@ fn try_run_fused_group(
     let prepared = state
         .one_to_one_prepared(&kernels[0], &batch.schema(), params[0])
         .map_err(|error| state.with_diagnostics(error, batch_detail))?;
-    // ADR-0012 M3: lo schema di output del gruppo e' quello dell'ULTIMA
+    // architettura.md#geometrie M3: lo schema di output del gruppo e' quello dell'ULTIMA
     // trasformazione — con `reproject` nel gruppo il CRS del campo geometria
     // cambia a meta' catena. La ricostruzione canonica del campo dipende
     // solo da (nome, CRS di output) e gli altri campi passano invariati,
     // quindi l'handle risolto sullo schema del batch e' IDENTICO a quello
     // che il percorso non fuso risolverebbe sullo schema intermedio; per le
-    // op M1/M2 (CRS invariato) coincide con l'handle del primo kernel.
+    // op di trasformazione o di misura (CRS invariato) coincide con
+    // l'handle del primo kernel.
     let last_transform = transforms.len() - 1;
     let output_prepared = state
         .one_to_one_prepared(
@@ -3921,7 +3933,7 @@ fn try_run_fused_group(
             Err(state.with_diagnostics(error, batch_detail))
         }
         Err(FusedStepError::Measure { index, error }) => {
-            // Misura terminale (M2): l'errore e' gia' nella forma del
+            // Misura terminale: l'errore e' gia' nella forma del
             // percorso non fuso (`geo_measure_batch` chiude il `PlenoraError`
             // grezzo con `step_error`, senza wrap in `InvalidPlan`).
             attempt.account(index, None, finished)?;
@@ -3931,7 +3943,7 @@ fn try_run_fused_group(
     }
 }
 
-/// Scomposizione di un gruppo fuso (ADR-0012 M2): il run di trasformazioni
+/// Scomposizione di un gruppo fuso (architettura.md#geometrie): il run di trasformazioni
 /// e la misura terminale opzionale in coda (presente se l'ultimo membro e'
 /// un `GeoMeasure` — invariante di `prepare`: la misura puo' solo chiudere
 /// un gruppo, mai aprirlo o proseguirlo).
@@ -3957,7 +3969,8 @@ fn fused_group_terminal(
     )
 }
 
-/// Hook di test (ADR 3): id dei nodi in cui iniettare un panic, per
+/// Hook di test (errori-e-limiti.md#panic-policy): id dei nodi in cui
+/// iniettare un panic, per
 /// verificare la conversione panic → errore `Execution` al confine dell'executor.
 /// Solo `cfg(test)`: i kernel non usano panic per errori attesi. Insieme
 /// (non singolo id): i test girano in parallelo nello stesso processo e
@@ -3978,7 +3991,8 @@ fn inject_test_panic(node_id: &str) {
     }
 }
 
-/// Un kernel su un batch: confine ADR 3 dell'executor. Un panic del kernel
+/// Un kernel su un batch: confine di panic policy dell'executor
+/// (errori-e-limiti.md#panic-policy). Un panic del kernel
 /// e' intercettato qui — il livello piu' interno che conserva l'attribuzione
 /// di nodo — e convertito in errore `Execution` con il solo messaggio del panic
 /// ([`panic_step_error`]); l'errore propaga nello stream, quindi il publish
@@ -4008,7 +4022,7 @@ fn run_kernel(
 /// Dispatch per famiglia di un kernel su un batch.
 ///
 /// I kernel tabellari unari ricevono la directory di spill condivisa
-/// dell'esecuzione (ADR-0002, Fase 2B M2c): `sort`/`distinct`/`aggregate`
+/// dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato): `sort`/`distinct`/`aggregate`
 /// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
 /// accumulate in [`ExecState`].
 fn dispatch_kernel(
@@ -4078,9 +4092,9 @@ fn dispatch_kernel(
 }
 
 /// Trasformazione geo 1:1 in place via `geo_transport` (per batch, senza
-/// envelope): i parametri sono tipizzati e risolti da `prepare` (E1);
+/// envelope): i parametri sono tipizzati e risolti da `prepare` (configurazioni preparate);
 /// indice di colonna e schema di output arrivano dall'handle prepared del
-/// nodo, costruito una volta per esecuzione (V2).
+/// nodo, costruito una volta per esecuzione (hot path minimale).
 fn geo_transform_batch(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
@@ -4211,7 +4225,7 @@ fn geo_measure_batch(
         ));
     }
     // Lo schema di output e' quello del contratto (input + colonna misura),
-    // un clone di Arc condiviso: nessuna ricostruzione per batch (V1),
+    // un clone di Arc condiviso: nessuna ricostruzione per batch (Arrow come rappresentazione unica),
     // stesso percorso degli altri kernel add-column.
     append_output_column(kernel, batch, column)
 }
@@ -4293,7 +4307,7 @@ fn measure_row_diagnostics(rows: &[(u64, &'static str)]) -> RowDiagnostics {
 // ---------------------------------------------------------------------------
 
 /// Celle WKB della colonna geometria attiva del batch (indice risolto in
-/// `prepare`, V2), con errore attribuito al nodo logico.
+/// `prepare`, hot path minimale), con errore attribuito al nodo logico.
 fn kernel_geometry_cells<'a>(
     kernel: &PreparedKernel,
     batch: &'a RecordBatch,
@@ -4311,7 +4325,7 @@ fn kernel_geometry_cells<'a>(
         .map_err(|error| step_error(kernel, error))
 }
 
-/// Indice risolto della colonna geometria attiva (V2), con errore di nodo.
+/// Indice risolto della colonna geometria attiva (hot path minimale), con errore di nodo.
 fn kernel_geometry_index(kernel: &PreparedKernel) -> Result<usize> {
     kernel.geometry_column_index.ok_or_else(|| {
         step_error(
@@ -4322,7 +4336,7 @@ fn kernel_geometry_index(kernel: &PreparedKernel) -> Result<usize> {
 }
 
 /// Batch con una colonna aggiunta in coda: lo schema e' quello del contratto
-/// di output inferito dal planner (fonte unica di verita', E1).
+/// di output inferito dal planner (fonte unica di verita', configurazioni preparate).
 fn append_output_column(
     kernel: &PreparedKernel,
     batch: &RecordBatch,
@@ -4745,8 +4759,8 @@ fn geo_cluster_dbscan_batch(
     )
 }
 
-/// Il kernel di un segmento blocking unario e' spill-capable (ADR-0002,
-/// Fase 2B M2c): `table.sort`/`distinct`/`aggregate` hanno la variante
+/// Il kernel di un segmento blocking unario e' spill-capable (architettura.md#memoria,
+/// Fase 2B, spill generalizzato): `table.sort`/`distinct`/`aggregate` hanno la variante
 /// `*_spilled` in kernels-table (cfr. `table_engine::unary_spill_capable`).
 fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     matches!(
@@ -4755,10 +4769,10 @@ fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     )
 }
 
-/// Segmento blocking unario: input materializzato (previsto dal piano, V9),
+/// Segmento blocking unario: input materializzato (previsto dal piano, materializzazione minima),
 /// concatenato ed eseguito una sola volta.
 ///
-/// Confine ADR-0002: i lease degli input sono trattenuti durante la
+/// Confine architettura.md#memoria: i lease degli input sono trattenuti durante la
 /// concatenazione (i buffer sorgente sono vivi), poi la materializzazione
 /// concatenata riceve il suo lease — reservation completa prima di iniziare
 /// (categoria "memoria stimabile"), acquisita PRIMA di rilasciare gli input
@@ -4791,17 +4805,17 @@ fn run_blocking(
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
     // Il batch concatenato non ha un produttore a monte che ne abbia
-    // verificato i byte: il tetto duro V7 si applica anche qui (fail-closed).
-    // I byte restituiti alimentano la reservation (V2: un solo conteggio).
+    // verificato i byte: il tetto duro in byte per batch si applica anche qui (fail-closed).
+    // I byte restituiti alimentano la reservation (hot path minimale: un solo conteggio).
     let full_bytes = check_batch_bytes(state, &full, &kernel.node_id)?;
-    // ADR-0002 (Fase 2B M2c): se il kernel spillera' — stessa soglia
+    // architettura.md#memoria (Fase 2B, spill generalizzato): se il kernel spillera' — stessa soglia
     // deterministica valutata al dispatch tabellare (`should_spill_unary`
     // sui byte stimati dell'input), stessi limiti — l'intermedio
     // concatenato NON consuma quota governor: la memoria di lavoro
     // dell'operatore e' auto-limitata dallo spill su disco e la
     // reservation fallirebbe per costruzione (la soglia ha la stessa
     // grandezza del budget). Altrimenti reservation completa
-    // dell'intermedio prima di rilasciare i lease degli input (ADR-0002:
+    // dell'intermedio prima di rilasciare i lease degli input (architettura.md#memoria:
     // mai attesa con reservation parziale).
     let spill_path = match &kernel.config {
         PreparedConfig::TableUnary(table_plan) if table_engine::unary_spill_capable(table_plan) => {
@@ -4815,7 +4829,7 @@ fn run_blocking(
         Some(state.governor.reserve(full_bytes, &kernel.node_id)?)
     };
     drop(batches);
-    // ADR 3, M1c: a fine drenaggio, prima del kernel monolitico
+    // errori-e-limiti.md#cancellazione: a fine drenaggio, prima del kernel monolitico
     // (`BoundaryOnly`: check tra kernel/a fine kernel; `NonInterruptible`:
     // mai).
     state.check_cancellation(kernel)?;
@@ -4847,13 +4861,13 @@ fn run_blocking(
 /// Segmento blocking binario: left e right materializzati, concatenati ed
 /// eseguiti una sola volta via `execute_binary`.
 ///
-/// Confine ADR-0002 come [`run_blocking`], con reservation multiple in
+/// Confine architettura.md#memoria come [`run_blocking`], con reservation multiple in
 /// ORDINE GLOBALE FISSO — left prima di right — completa prima di iniziare
 /// (mai attesa con reservation parziale; in v1 fail-fast non c'e' attesa,
 /// ma l'ordine e' gia' quello richiesto al runtime parallelo M3 per evitare
 /// deadlock). Sequenza riassegnata con la regola documentata in
 /// [`blocking_output_sequence`] (scansione seriale left-then-right).
-// La lunghezza e' data dal guscio ADR-0002 completo (concat, reservation,
+// La lunghezza e' data dal guscio architettura.md#memoria completo (concat, reservation,
 // metriche) piu' lo smistamento D14.2: sequenza lineare, non complessita'
 // logica (stesso criterio di `pair_arrow`).
 #[allow(clippy::too_many_lines)]
@@ -4870,7 +4884,7 @@ fn run_binary_blocking(
             "segmento binario senza kernel: invariante del planner violata".into(),
         )
     })?;
-    // Smistamento ADR-0014 D14.2 sul `PreparedConfig`: il ramo geo ha il
+    // Smistamento architettura.md#geometrie D14.2 sul `PreparedConfig`: il ramo geo ha il
     // percorso dedicato [`run_geo_binary_blocking`] (stesso guscio, cuore
     // decode → kernel validated → output v4); il ramo tabellare prosegue
     // qui sotto, invariato.
@@ -4920,8 +4934,8 @@ fn run_binary_blocking(
         concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
-    // Come per il blocking unario: tetto duro V7 sui batch concatenati; i
-    // byte restituiti alimentano le reservation (V2: un solo conteggio).
+    // Come per il blocking unario: tetto duro in byte per batch sui batch concatenati; i
+    // byte restituiti alimentano le reservation (hot path minimale: un solo conteggio).
     let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
     let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
     // Reservation complete degli intermedi in ordine globale fisso (left,
@@ -4930,11 +4944,12 @@ fn run_binary_blocking(
     let right_lease = state.governor.reserve(right_bytes, &kernel.node_id)?;
     drop(left_batches);
     drop(right_batches);
-    // ADR 3, M1c: a fine drenaggio, prima del kernel binario monolitico
+    // errori-e-limiti.md#cancellazione: a fine drenaggio, prima del kernel binario monolitico
     // (come `run_blocking`).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
-    // Confine ADR 3 come `run_kernel`: panic del kernel binario convertito
+    // Confine di panic policy (errori-e-limiti.md#panic-policy) come
+    // `run_kernel`: panic del kernel binario convertito
     // in errore `Execution` attribuito al nodo, mai publish dopo panic.
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]
@@ -4951,7 +4966,7 @@ fn run_binary_blocking(
     drop(right_lease);
     let rows_out = output.num_rows() as u64;
     state.add_node_rows_out(&kernel.node_id, rows_out);
-    // ADR 6: per le operazioni binarie il runtime calcola tutte le metriche
+    // errori-e-limiti.md: per le operazioni binarie il runtime calcola tutte le metriche
     // di espansione e applica il vincolo vincolante dichiarato in catalogo.
     check_join_expansion(state, kernel, left_rows, right_rows, rows_out)?;
     if segment.output_edge != plan.output_edge() {
@@ -4959,14 +4974,14 @@ fn run_binary_blocking(
     }
     // Metriche per nodo: righe in = left + right, batch in = quelli reali
     // drenati dai due rami.
-    // ADR 3: heartbeat del TempStore al punto centrale (come
+    // errori-e-limiti.md: heartbeat del TempStore al punto centrale (come
     // `record_kernel_metrics`, non riusata qui per i conteggi doppi input).
     state.heartbeat();
     let config = state.plan.metrics_config();
     let mut borrowed = state.metrics.borrow_mut();
     let metrics = &mut *borrowed;
     let saturated = &mut metrics.counters_saturated;
-    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`). Le righe
+    // Metrica obbligatoria errori-e-limiti.md (come in `record_kernel_metrics`). Le righe
     // in ingresso di un nodo binario sono la somma dei due lati: con limiti
     // configurabili fino a `u64::MAX` la somma non e' rappresentabile per
     // costruzione, e non e' una metrica che possa abortire l'esecuzione.
@@ -4999,9 +5014,9 @@ fn run_binary_blocking(
     ))
 }
 
-/// Ramo geo di [`run_binary_blocking`] (ADR-0014 M1/M2, D14.2): stesso
+/// Ramo geo di [`run_binary_blocking`] (architettura.md#geometrie, D14.2): stesso
 /// guscio del ramo tabellare — drenaggio dei due rami a monte,
-/// `concat_batches`, tetti V7, reservation in ordine globale fisso
+/// `concat_batches`, tetti in byte per batch, reservation in ordine globale fisso
 /// left→right, cancellazione post-drenaggio, `catch_unwind`,
 /// `check_join_expansion`, `blocking_output_sequence`, metriche — con il
 /// cuore sostituito da decode totale D14.3 → kernel `*_validated` → output
@@ -5011,7 +5026,7 @@ fn run_binary_blocking(
 /// esistenti (batch in drenaggio + post-drenaggio pre-kernel), nessun check
 /// dentro il kernel — comportamento voluto, non lacuna.
 ///
-/// Contabilita' D14.4 (M2): per ciascun lato, nell'ordine globale fisso
+/// Contabilita' D14.4: per ciascun lato, nell'ordine globale fisso
 /// left→right — reservation dei byte Arrow, preflight della forma
 /// decodificata ([`preflight_decoded_bytes`]), reservation della forma
 /// decodificata, decode. Rifiuto fail-closed PRIMA dell'allocazione: una
@@ -5020,11 +5035,11 @@ fn run_binary_blocking(
 /// resta per take/passthrough); i lease decodificati dopo il lease
 /// dell'output.
 ///
-/// Errori D14.5 (M2): decode → fase `Read` con side/riga strutturati,
+/// Errori D14.5: decode → fase `Read` con side/riga strutturati,
 /// kernel e costruzione output → fase `Write` (carrier
 /// [`GeoBinaryStepError`], conversione [`geo_binary_step_error`]); il primo
 /// errore e' in ordine (side, riga) per costruzione della sequenza.
-// La lunghezza e' data dal guscio ADR-0002 completo (concat, reservation,
+// La lunghezza e' data dal guscio architettura.md#memoria completo (concat, reservation,
 // metriche) piu' la sequenza D14.4 per lato: sequenza lineare, non
 // complessita' logica (stesso criterio di `pair_arrow`).
 #[allow(clippy::too_many_lines)]
@@ -5072,8 +5087,8 @@ fn run_geo_binary_blocking(
         concat_batches(&right_schema, &unwrapped)
             .map_err(|error| step_error(kernel, PlenoraError::from(error)))?
     };
-    // Come nel ramo tabellare: tetto duro V7 sui batch concatenati; i byte
-    // restituiti alimentano le reservation (V2: un solo conteggio).
+    // Come nel ramo tabellare: tetto duro in byte per batch sui batch concatenati; i byte
+    // restituiti alimentano le reservation (hot path minimale: un solo conteggio).
     let left_bytes = check_batch_bytes(state, &left, &kernel.node_id)?;
     let right_bytes = check_batch_bytes(state, &right, &kernel.node_id)?;
     // I batch d'ingresso non servono piu' (il concat possiede i nuovi
@@ -5141,11 +5156,12 @@ fn run_geo_binary_blocking(
     // per take/passthrough); il batch right non serve piu'.
     drop(right_lease);
     drop(right);
-    // ADR 3 / D14.5.5: a fine drenaggio, prima del kernel binario
+    // errori-e-limiti.md / D14.5.5: a fine drenaggio, prima del kernel binario
     // monolitico (come `run_blocking` e il ramo tabellare).
     state.check_cancellation(kernel)?;
     let start = Instant::now();
-    // Confine ADR 3 / D14.5.6 come il ramo tabellare: panic del kernel
+    // Confine di panic policy (errori-e-limiti.md#panic-policy, D14.5.6)
+    // come il ramo tabellare: panic del kernel
     // convertito in errore `Execution` attribuito al nodo, mai publish
     // dopo panic; hook `PANIC_AT_NODES` esteso al ramo.
     let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -5177,7 +5193,7 @@ fn run_geo_binary_blocking(
     drop(left_lease);
     let rows_out = output.num_rows() as u64;
     state.add_node_rows_out(&kernel.node_id, rows_out);
-    // ADR 6: il vincolo relativo vincolante di catalogo si applica come nel
+    // errori-e-limiti.md: il vincolo relativo vincolante di catalogo si applica come nel
     // ramo tabellare; il tetto assoluto D14.6 e' gia' stato fatto rispettare
     // dal kernel (`max_pairs`/`max_results` risolti in prepare dai limiti
     // effettivi del piano, prima della materializzazione completa).
@@ -5187,13 +5203,13 @@ fn run_geo_binary_blocking(
     }
     // Metriche per nodo: righe in = left + right, batch in = quelli reali
     // drenati dai due rami (stesso blocco del ramo tabellare).
-    // ADR 3: heartbeat del TempStore al punto centrale.
+    // errori-e-limiti.md: heartbeat del TempStore al punto centrale.
     state.heartbeat();
     let config = state.plan.metrics_config();
     let mut borrowed = state.metrics.borrow_mut();
     let metrics = &mut *borrowed;
     let saturated = &mut metrics.counters_saturated;
-    // Metrica obbligatoria ADR 6 (come in `record_kernel_metrics`). Le righe
+    // Metrica obbligatoria errori-e-limiti.md (come in `record_kernel_metrics`). Le righe
     // in ingresso di un nodo binario sono la somma dei due lati: con limiti
     // configurabili fino a `u64::MAX` la somma non e' rappresentabile per
     // costruzione, e non e' una metrica che possa abortire l'esecuzione.
@@ -5226,7 +5242,7 @@ fn run_geo_binary_blocking(
     ))
 }
 
-/// Cuore del ramo geo (D14.2): kernel `*_validated` (ADR-0013:
+/// Cuore del ramo geo (D14.2): kernel `*_validated` (architettura.md#geometrie:
 /// precondizione soddisfatta per costruzione dal decode totale D14.3,
 /// eseguito dal chiamante) e costruzione dell'output secondo il contratto
 /// v4:
@@ -5240,13 +5256,14 @@ fn run_geo_binary_blocking(
 ///   e' null).
 ///
 /// Lo schema di output e' quello del contratto inferito dal planner
-/// (fonte unica di verita', E1) — identico per costruzione allo schema del
+/// (fonte unica di verita', configurazioni preparate) — identico per costruzione allo schema del
 /// contratto analyze v4, verificato dai test di identita'.
 ///
 /// Gli errori propagano come sorgente grezza: fase (`Write`), side e riga
 /// sono aggiunti dal chiamante nel carrier [`GeoBinaryStepError`] (D14.5.2).
 // La lunghezza e' data dalla sequenza lineare dei quattro casi del
-// perimetro M1 (kernel + costruzione output per op), non da complessita'
+// perimetro della fusione (kernel e costruzione output per op), non da
+// complessita'
 // logica (stesso criterio di `pair_arrow`).
 #[allow(clippy::too_many_lines)]
 fn execute_geo_binary(

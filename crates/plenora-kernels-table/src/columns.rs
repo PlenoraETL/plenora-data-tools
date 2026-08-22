@@ -543,7 +543,7 @@ pub fn concat_columns(
         .map(|name| utf8_column(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let mut output = Vec::with_capacity(batch.num_rows());
-    // String di lavoro riusata fra le righe (V2): stessi byte di
+    // String di lavoro riusata fra le righe (hot path minimale): stessi byte di
     // `parts.join(separator)` — separatore solo FRA le parti incluse —
     // senza il `Vec` di parti e il join allocati a ogni riga.
     let mut joined = String::new();

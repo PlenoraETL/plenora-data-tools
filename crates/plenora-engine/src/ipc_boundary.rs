@@ -38,8 +38,8 @@
 //! rename, symlink swap, ricreazione — ma non uno scrittore concorrente che
 //! riscriva lo stesso inode. In quel caso resta attiva la barriera
 //! anti-panico e decade il tetto sulle allocazioni, che vale solo sui byte
-//! effettivamente controllati. La condizione e' dichiarata in DER-008
-//! (`docs/deroghe.md`) con il requisito operativo corrispondente.
+//! effettivamente controllati. La condizione e' dichiarata in errori-e-limiti.md#limiti-dichiarati
+//! (`docs/errori-e-limiti.md`) con il requisito operativo corrispondente.
 
 use std::fs::File;
 use std::io::Read as _;

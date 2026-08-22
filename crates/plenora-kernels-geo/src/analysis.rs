@@ -168,7 +168,7 @@ fn minimum_distances_impl(
 /// matching the duplicate-on-tie behaviour of `GeoPandas` `sjoin_nearest`.
 ///
 /// Matches are returned in stable lexicographic `(left, right)` order —
-/// the canonical pair order of ADR-0014 D14.7, shared by the v3 transport
+/// the canonical pair order of architettura.md#geometrie D14.7, shared by the v3 transport
 /// and the v4 plan executor (identical construction in
 /// `nearest_matches_impl`).
 ///
@@ -264,7 +264,7 @@ fn nearest_matches_impl(
     }
 
     let result_count = AtomicU64::new(0);
-    // ADR-0001: i `Result` sono raccolti per riga (ordine preservato) e il
+    // architettura.md#determinismo: i `Result` sono raccolti per riga (ordine preservato) e il
     // primo errore IN ORDINE DI RIGA e' selezionato dal collect
     // sequenziale — il collect parallelo diretto sarebbe non deterministico.
     let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left

@@ -195,8 +195,8 @@ mod tests {
     #[test]
     fn no_transformation_ever_reorders_the_axes() {
         // Perche' `analyze_reproject` deve rifiutare una colonna che dichiara
-        // un `axis_order` diverso da quello GIS normalizzato (P1 della review
-        // indipendente): il backend non riordina MAI le coordinate, quindi
+        // un `axis_order` diverso da quello GIS normalizzato: il backend non
+        // riordina MAI le coordinate, quindi
         // nessun percorso puo' rendere vera a posteriori l'etichetta
         // `lon_lat`/`easting_northing` che l'analisi riscrive.
         //

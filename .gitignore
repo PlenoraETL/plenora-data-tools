@@ -8,3 +8,6 @@ target-*/
 # I checker di rilascio si invocano anche direttamente, non solo con
 # PYTHONDONTWRITEBYTECODE: il bytecode non deve finire nel diff.
 __pycache__/
+
+# Scratch di lavoro degli agenti: mai committato.
+/.agent-temp/

@@ -1,12 +1,12 @@
 #![no_main]
 
 //! Parser del piano v5 e migrazione di versione contro JSON ostili
-//! (Fase 2A, ADR 6; ADR 15): byte arbitrari, JSON malformati, strutture
+//! (Fase 2A, errori-e-limiti.md#memoria-governata): byte arbitrari, JSON malformati, strutture
 //! enormi o profondamente annidate, identificatori lunghi. Invarianti: mai
 //! panic, mai hang; ogni input produce `Ok` o un errore tipizzato; i
 //! `PlanLimits` (default o ristretti dal payload) sono applicati durante il
 //! parsing. Se il parse riesce, la serializzazione canonica deve ri-parsare
-//! (idempotenza, ADR 4).
+//! (idempotenza, piano-v5.md#identita-e-fingerprint).
 //!
 //! Il target copre **due** ingressi, non uno: il parser canonico e il
 //! dispatcher di versione, che e' l'ingresso reale del planner. Fuzzare solo

@@ -737,7 +737,7 @@ mod tests {
                                     })?;
                                     let weight = position - position.floor();
                                     // Niente mul_add/FMA: forma non fusa
-                                    // (contratto numerico, ADR-0001) — la
+                                    // (contratto numerico, architettura.md#determinismo) — la
                                     // STESSA della produzione, equivalenza
                                     // bit-a-bit per costruzione.
                                     #[allow(clippy::suboptimal_flops)]

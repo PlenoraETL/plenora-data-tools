@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.92"
 publish = false
 
-# Unico punto di versione delle dipendenze (decisione D0, Architetture.md §2).
+# Unico punto di versione delle dipendenze (decisione D0, architettura.md).
 [workspace.dependencies]
 # Arrow =59.1.0 — versione comune dei due progetti di origine.
 arrow-array = "=59.1.0"
@@ -43,12 +43,12 @@ md-5 = "=0.10.6"
 sha2 = "=0.10.9"
 uuid = { version = "=1.18.1", features = ["v4"] }
 tempfile = "=3.27.0"
-# Handler Ctrl-C della CLI (ADR 3, M1c): setta il token di cancellazione
+# Handler Ctrl-C della CLI (errori-e-limiti.md#cancellazione): setta il token di cancellazione
 # cooperativa. Piccola, mantenuta, nessun unsafe nel perimetro del workspace
 # (unsafe_code e' proibito solo nei crate del workspace).
 ctrlc = "=3.5.2"
-# statfs per il riconoscimento fail-closed del filesystem (ADR 7, solo
-# Linux) e kill(pid, 0) per lo scavenging dei temp store (ADR 3, feature
+# statfs per il riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup, solo
+# Linux) e kill(pid, 0) per lo scavenging dei temp store (errori-e-limiti.md, feature
 # "process"): stessa versione gia' presente nel lockfile come dipendenza di
 # tempfile; API safe (unsafe_code e' proibito nel workspace).
 rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs", "process"] }

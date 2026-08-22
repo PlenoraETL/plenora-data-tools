@@ -15,7 +15,7 @@
 //! motore oggi: decode WKB (con validazione contratto + OGC) -> kernel ->
 //! encode WKB. `chain_wkb` replica una catena buffer -> simplify -> centroid ->
 //! area con round-trip WKB tra i nodi; `chain_fused` esegue la stessa catena
-//! con un solo decode iniziale (riferimento per il vincolo V6).
+//! con un solo decode iniziale (riferimento per il vincolo decode/encode geo minimizzato).
 
 use std::hint::black_box;
 use std::time::Instant;

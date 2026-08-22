@@ -237,7 +237,7 @@ fn hex_centers(
     let vertical_step = cell_size * 3.0_f64.sqrt();
     let column_step = 1.5 * cell_size;
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let columns_f = ((extent.width() - 2.0 * cell_size) / column_step).floor();
@@ -270,7 +270,7 @@ fn hex_centers(
         // cell_i < columns <= MAX_GRID_CELLS (1e6, verificato sopra): ben
         // sotto 2^52, la conversione in f64 e' esatta.
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
         // fusa e' il contratto numerico.
         #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
         let cx = extent.xmin + cell_size + cell_i as f64 * column_step;
@@ -333,13 +333,13 @@ fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) ->
     // prodotto e' <= MAX_GRID_CELLS (1e6, verificato in square_dimensions):
     // ben sotto 2^52, le conversioni in f64 sono esatte.
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let x0 = extent.xmin + cell_i as f64 * cell_size;
     let x1 = (x0 + cell_size).min(extent.xmax);
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (ADR-0001); la forma non
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let y0 = extent.ymin + cell_j as f64 * cell_size;
@@ -756,7 +756,7 @@ pub fn snap_column(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     ensure_valid(reference).map_err(|error| snap_error(&error))?;
     check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
-    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (V2: il
+    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (hot path minimale: il
     // riferimento non cambia mai tra le righe), non per cella — il costo
     // O(V log V) e' condiviso da tutte le query delle N righe.
     let reference_vertices: Vec<[f64; 2]> = reference

@@ -3,7 +3,7 @@
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep2` (seed logico 42,
 //! xorshift64*, stesse colonne), cosi' lo scenario `unique_id` e'
-//! confrontabile con la baseline di `benchmarks/sweep/sweep2.md`
+//! confrontabile con la baseline di `benchmarks/sweep/sweep2.json`
 //! (`table.assert_unique`, "chiave id unica", 5.03M righe/s).
 //!
 //! Scenari (duplicati in posizioni diverse, piu' la scansione completa):

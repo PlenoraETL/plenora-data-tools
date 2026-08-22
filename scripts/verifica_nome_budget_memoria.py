@@ -2,7 +2,7 @@
 """Gate: il nome della v4 non torna nel codice, e il nome della v5 non entra
 dove non appartiene.
 
-ADR 15 ha deciso che il limite della libreria si chiama
+errori-e-limiti.md#memoria-governata ha deciso che il limite della libreria si chiama
 `max_governed_memory_bytes`, e che **non c'e' alias**: un nome che continua a
 funzionare continua a promettere un tetto sull'intero processo che in-process
 non esiste.
@@ -254,7 +254,7 @@ def main():
             for numero, attributo in alias_negli_attributi(contenuto):
                 problemi.append(
                     'ALIAS %s:%d: %s\n'
-                    '  ADR 15: nessun alias sui limiti. Una traduzione fra '
+                    '  errori-e-limiti.md#memoria-governata: nessun alias sui limiti. Una traduzione fra '
                     'formati e\' un\'altra cosa, e rifiuta il nome dell\'altro '
                     'formato in modo simmetrico.' % (percorso, numero, attributo))
 
@@ -291,12 +291,12 @@ def main():
 
     if problemi:
         sys.stderr.write(
-            'i nomi del budget di memoria non sono quelli decisi da ADR 15:\n\n')
+            'i nomi del budget di memoria non sono quelli decisi da errori-e-limiti.md#memoria-governata:\n\n')
         for problema in problemi:
             sys.stderr.write('- %s\n' % problema)
         raise SystemExit(1)
 
-    print('nomi del budget di memoria coerenti con ADR 15: `%s` in produzione, '
+    print('nomi del budget di memoria coerenti con errori-e-limiti.md#memoria-governata: `%s` in produzione, '
           '`%s` in %d moduli autorizzati e in %d file di test dichiarati; '
           'alias multilinea iniettato e rifiutato in entrambi i moduli'
           % (NUOVO, VECCHIO, len(PRODUZIONE_AMMESSA), len(TEST_AMMESSI)))

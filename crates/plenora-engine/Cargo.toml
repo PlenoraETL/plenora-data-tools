@@ -1,6 +1,6 @@
 [package]
 name = "plenora-engine"
-description = "Contratto piano, planner (validate), preparer ed executor del DAG (Architetture.md par. 3.4)"
+description = "Contratto piano, planner (validate), preparer ed executor del DAG (architettura.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -24,7 +24,7 @@ thiserror.workspace = true
 rayon.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
-# execution_id delle esecuzioni (ADR 3, M1d): UUID v4 — versione gia'
+# execution_id delle esecuzioni (errori-e-limiti.md, errori arricchiti): UUID v4 — versione gia'
 # pinnata nel workspace (usata da plenora-kernels-table), nessuna dep nuova.
 uuid.workspace = true
 # Usati dalla validazione delle config portata da nogeo (regex, timezone).
@@ -35,7 +35,7 @@ geo.workspace = true
 geozero.workspace = true
 
 # statfs per il riconoscimento fail-closed del filesystem di publish
-# (ADR 7, geo_transport::publish); solo Linux.
+# (errori-e-limiti.md#publish-e-cleanup, geo_transport::publish); solo Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
 

@@ -4,7 +4,7 @@
 # (conteggio catalogo) e' sopravvissuto per giorni su main. Questo
 # workflow e' il minimo sindacale per impedirlo di nuovo.
 #
-# Matrice Linux/Windows: il publish atomico (ADR-0007) ha rami per
+# Matrice Linux/Windows: il publish atomico (errori-e-limiti.md#publish-e-cleanup) ha rami per
 # piattaforma (cfg) che un test solo-Linux non eserciterebbe.
 name: ci
 
@@ -93,21 +93,21 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
 
-      # ADR 15: il budget di memoria della libreria si chiama
+      # errori-e-limiti.md#memoria-governata: il budget di memoria della libreria si chiama
       # `max_governed_memory_bytes` e NON ha alias. Il nome della v4 vive
       # solo nel modulo di migrazione. Senza questo gate la decisione
       # sopravvive finche' qualcuno non riaggiunge il vecchio nome «per
       # compatibilita'»: e' esattamente il modo in cui una promessa
       # ritirata torna in circolazione.
-      - name: Gate nome del budget di memoria (ADR 15)
+      - name: Gate nome del budget di memoria (errori-e-limiti.md#memoria-governata)
         run: python scripts/verifica_nome_budget_memoria.py
 
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami erano verificati solo localmente — lint pedantic su pair.rs sono
-  # emersi mesi dopo perche' nessuna CI li compilava (M3, ADR-0012).
+  # emersi mesi dopo perche' nessuna CI li compilava (M3, architettura.md#geometrie).
   # Solo Linux: e' la piattaforma di riferimento dei backend; le dipendenze
-  # di build (cmake, sqlite3) sono quelle documentate in ADR-0012.
+  # di build (cmake, sqlite3) sono quelle documentate in architettura.md#geometrie.
   backends:
     name: test full-backends (linux)
     runs-on: ubuntu-latest
@@ -317,7 +317,7 @@ jobs:
         if: always() && steps.llvm-cov.conclusion == 'success'
         run: python scripts/pulisci_coverage.py
 
-  # `docs/kernel-signatures.md` e' generato: il file committato deve coincidere
+  # `docs/operazioni.md` e' generato: il file committato deve coincidere
   # BYTE PER BYTE con la rigenerazione.
   #
   # Fino al 2026-08-21 non esisteva questo gate, e il generatore era rotto da
@@ -325,8 +325,7 @@ jobs:
   # del catalogo e la regex del parser aveva smesso di agganciarla, quindi lo
   # script usciva con MISMATCH e non riscriveva niente. Un generatore che si
   # ferma non rompe nulla di visibile — il documento resta com'era e sembra
-  # aggiornato. I verbali di review del 2026-08-18 lo registravano gia', e la
-  # CI restava verde lo stesso perche' nessuno rigenerava.
+  # aggiornato: la CI restava verde perche' nessuno rigenerava.
   #
   # Nessuna dipendenza: `assemble.py` usa la sola libreria standard. Niente
   # pip, niente container, niente font — il PDF e' stato ritirato il
@@ -335,7 +334,7 @@ jobs:
   # Job PROPRIO, come i manifesti: un documento fuori data non deve nascondere
   # un test rosso, ne' viceversa.
   docs-riproducibili:
-    name: gate riproducibilita documentazione
+    name: gate documentazione
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -350,32 +349,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Nessun bytecode Python tracciato. `docs/_build/__pycache__/
-      # md2pdf.cpython-312.pyc` era in Git dal commit iniziale, sopravvissuto
-      # sia al `.gitignore` (che non tocca cio' che e' gia' tracciato) sia
-      # alla rimozione del convertitore PDF: il sorgente era sparito e il suo
-      # bytecode no. Un artefatto compilato di uno strumento che non esiste
-      # piu' e' la forma piu' silenziosa di rimozione incompleta.
-      - name: Nessun bytecode Python tracciato
-        run: |
-          residuo="$(git ls-files '*.pyc' '*.pyo' '__pycache__/*')"
-          if [ -n "$residuo" ]; then
-            echo "bytecode Python tracciato da Git:"
-            echo "$residuo"
-            exit 1
-          fi
-
       # Il gate lavora su una COPIA e confronta li'. Un gate che rigenera il
       # file che sta verificando non verifica nulla: dichiara verde qualunque
       # cosa produca.
       - name: Copia il repository fuori dal worktree
         run: cp -a "$GITHUB_WORKSPACE" "$RUNNER_TEMP/doc-check"
 
-      - name: Rigenera e confronta
+      # Il gate documentale copre superficie, collegamenti, riferimenti
+      # morti, allineamento catalogo/operazioni, divergenza del generato e
+      # artefatti tracciati. Gira sulla COPIA, come la rigenerazione.
+      - name: Superficie, collegamenti e documento generato
         working-directory: ${{ runner.temp }}/doc-check
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python docs/_build/assemble.py --verify
+        run: python scripts/verifica_documentazione.py
+
+      # I siti di allocazione e prenotazione descritti in
+      # docs/errori-e-limiti.md devono esistere ancora nella forma descritta.
+      # Un documento che descrive una garanzia marcisce in silenzio: basta
+      # spostare una reservation e il testo resta convincente e falso.
+      - name: Memoria governata coerente con la descrizione
+        working-directory: ${{ runner.temp }}/doc-check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_memoria_governata.py
 
       # Il controllo va fatto sulla COPIA, che e' l'unico albero che il gate
       # ha toccato: verificare il worktree originale non direbbe niente, ed e'

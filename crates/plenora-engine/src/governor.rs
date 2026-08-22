@@ -1,12 +1,14 @@
-//! Governor della memoria del piano e batch governati (ADR-0002, Fase 2B —
-//! milestone M1a/M1b; Architetture.md par. 6.4, Prestazioni.md par. 3).
+//! Governor della memoria del piano e batch governati.
+//!
+//! Il budget, che cosa comprende e dove la garanzia si ferma sono in
+//! architettura.md#memoria e in errori-e-limiti.md#memoria-governata.
 //!
 //! Perimetro di `max_governed_memory_bytes`: la memoria Arrow governata dall'engine —
 //! i batch che attraversano gli archi del DAG e le materializzazioni
 //! intermedie dei segmenti blocking. Il conteggio avviene **ai confini di
 //! batch**, mai per riga, e il governor non percorre mai ricorsivamente i
 //! batch: i byte di un lease sono fissati all'acquisizione e nessun nodo li
-//! riconta (overhead ADR-0002).
+//! riconta (overhead architettura.md#memoria).
 //!
 //! Ownership: ogni batch viaggia in un [`GovernedBatch`] con il suo
 //! [`MemoryLease`] — reference-counted (`Arc` interno), condiviso al fan-out
@@ -14,14 +16,14 @@
 //! batch e' contata **una sola volta**, all'ingresso dell'arco; i cloni del
 //! tee condividono il lease senza mai duplicare il conteggio.
 //!
-//! Protocollo di reservation a tre vie ([`ReservationResult`], ADR-0002):
+//! Protocollo di reservation a tre vie ([`ReservationResult`], architettura.md#memoria):
 //! in questa milestone l'esecuzione e' seriale e il governor emette solo
 //! `Granted` — vedi [`MemoryGovernor::try_reserve`] per la regola v1 e il
 //! perche' gli altri due esiti non sono attuabili in seriale.
 //!
-//! Spill (Fase 2B M2c): `sort`/`distinct`/`aggregate` hanno una variante
+//! Spill (Fase 2B): `sort`/`distinct`/`aggregate` hanno una variante
 //! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
-//! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", ADR-0002
+//! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", architettura.md#memoria
 //! "attivazione prima dell'esaurimento"), NON guidata da una reservation
 //! fallita: `MustSpill` resta non emesso in v1 — il re-scheduling su
 //! reservation fallita richiede il planner che riprova (M3).
@@ -35,7 +37,7 @@ use plenora_core::arrow::array::RecordBatch;
 use plenora_core::contract::BatchSequence;
 use plenora_core::{PlenoraError, Result};
 
-/// Esito di una richiesta di reservation (ADR-0002, protocollo
+/// Esito di una richiesta di reservation (architettura.md#memoria, protocollo
 /// anti-deadlock: niente fail-fast immediato quando la quota potrebbe
 /// liberarsi a breve).
 #[derive(Debug)]
@@ -44,14 +46,14 @@ pub enum ReservationResult {
     /// dell'ultimo clone.
     Granted(MemoryLease),
     /// La quota potrebbe liberarsi dopo un progresso globale del piano: il
-    /// ramo richiedente (che per invariante ADR-0002 non trattiene risorse)
+    /// ramo richiedente (che per invariante architettura.md#memoria non trattiene risorse)
     /// puo' essere sospeso e riprovare, senza busy-waiting. Richiede uno
     /// scheduler con rami sospendibili: esiste nell'API per il runtime
     /// parallelo (M3) ma non e' MAI emesso dalla v1 seriale.
     RetryAfterProgress,
     /// Il richiedente ha una strategia di spill e deve attivarla (preferita
-    /// a nuova quota, ADR-0002). Resta MAI emesso in v1: lo spill selettivo
-    /// esiste (Fase 2B M2c: sort/distinct/aggregate spilled) ma la sua
+    /// a nuova quota, architettura.md#memoria). Resta MAI emesso in v1: lo spill selettivo
+    /// esiste (Fase 2B: sort/distinct/aggregate spilled) ma la sua
     /// attivazione e' PREVENTIVA ai punti di dispatch, su soglia stimata —
     /// non su reservation fallita. Emetterlo richiede il planner che
     /// riprova il nodo con una strategia diversa (re-scheduling, M3).
@@ -69,7 +71,7 @@ struct LeaseInner {
     /// differenza appena la dimensione esatta e' nota, senza mai rilasciare e
     /// riprenotare.
     bytes: AtomicU64,
-    /// Nodo/arco che ha acquisito la quota (osservabilita' ADR-0002).
+    /// Nodo/arco che ha acquisito la quota (osservabilita' architettura.md#memoria).
     owner: String,
     created: Instant,
 }
@@ -104,7 +106,7 @@ impl Drop for LeaseInner {
     }
 }
 
-/// Lease di memoria RAII (ADR-0002): `bytes` byte di quota del budget
+/// Lease di memoria RAII (architettura.md#memoria): `bytes` byte di quota del budget
 /// globale di piano.
 ///
 /// Reference-counted: i cloni condividono la STESSA quota (mai doppio
@@ -123,7 +125,7 @@ impl MemoryLease {
         self.inner.bytes.load(Ordering::Acquire)
     }
 
-    /// Nodo/arco proprietario originario (osservabilita' ADR-0002).
+    /// Nodo/arco proprietario originario (osservabilita' architettura.md#memoria).
     #[must_use]
     pub fn owner(&self) -> &str {
         &self.inner.owner
@@ -187,7 +189,7 @@ impl GovernorShared {
     }
 }
 
-/// Governor della memoria del piano (ADR-0002): unico budget globale
+/// Governor della memoria del piano (architettura.md#memoria): unico budget globale
 /// (`max_governed_memory_bytes` dei limiti effettivi).
 ///
 /// Il budget e' condiviso da tutti gli archi e i segmenti — in prospettiva
@@ -259,7 +261,7 @@ impl MemoryGovernor {
             .map(Instant::elapsed)
     }
 
-    /// Snapshot di osservabilita' ADR-0002 per le metriche di esecuzione.
+    /// Snapshot di osservabilita' architettura.md#memoria per le metriche di esecuzione.
     ///
     /// **Linearizzabile**: tutti i campi sono letti sotto lo stesso lock che
     /// acquisizioni e rilasci usano per mutarli, quindi descrivono uno stato
@@ -297,17 +299,17 @@ impl MemoryGovernor {
         Ok(())
     }
 
-    /// Reservation a tre vie (ADR-0002).
+    /// Reservation a tre vie (architettura.md#memoria).
     ///
-    /// Regola v1 (seriale, M1a): l'acquisizione e' **immediata** —
+    /// Regola v1 (seriale): l'acquisizione e' **immediata** —
     /// `Granted` se il budget residuo copre `bytes`. Se la quota manca,
-    /// l'ADR-0002 prescriverebbe `RetryAfterProgress` (sospensione del ramo
+    /// l'architettura.md#memoria prescriverebbe `RetryAfterProgress` (sospensione del ramo
     /// e retry dopo un progresso globale) o `MustSpill` (strategia di spill
     /// preferita): in seriale NESSUNO dei due esiti e' attuabile — non
     /// esiste uno scheduler che sospenda i rami (M3) ne' un planner che
-    /// riprovi il nodo con lo spill (M3; lo spill M2c e' attivato
+    /// riprovi il nodo con lo spill (M3; lo spill e' attivato
     /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
-    /// resta l'unico esito residuo dell'ADR-0002, il fail-fast "nessuna
+    /// resta l'unico esito residuo dell'architettura.md#memoria, il fail-fast "nessuna
     /// strategia sicura disponibile".
     /// Per questo `RetryAfterProgress` e `MustSpill` esistono nell'API ma
     /// non sono MAI emessi da questa implementazione.
@@ -654,7 +656,7 @@ impl MemoryPermit {
     }
 }
 
-/// Osservabilita' dei lease (ADR-0002): snapshot del governor nelle metriche
+/// Osservabilita' dei lease (architettura.md#memoria): snapshot del governor nelle metriche
 /// di esecuzione. Un riferimento trattenuto e' quota occupata e deve essere
 /// diagnosticabile.
 #[derive(Clone, Debug, Default)]
@@ -686,7 +688,7 @@ pub struct MemoryMetrics {
 }
 
 /// Batch che attraversa il DAG con la sua quota di memoria e la sua sequenza
-/// logica (ownership ADR-0002, ordine logico ADR-0001).
+/// logica (ownership architettura.md#memoria, ordine logico architettura.md#determinismo).
 ///
 /// Il wrapper esiste solo AI CONFINI dell'engine (archi, tee,
 /// materializzazioni blocking): i kernel restano su `RecordBatch` puro — il
@@ -703,7 +705,7 @@ pub struct GovernedBatch {
     /// Quota di memoria del batch (`None` solo per batch nati fuori dal
     /// perimetro del governor, es. sorgenti di test o wrapper di comodo).
     pub lease: Option<MemoryLease>,
-    /// Sequenza logica ADR-0001 (`None` solo fuori dal perimetro).
+    /// Sequenza logica architettura.md#determinismo (`None` solo fuori dal perimetro).
     pub seq: Option<BatchSequence>,
 }
 

@@ -828,7 +828,7 @@ fn hash_null_policies_and_defaults_are_explicit() {
         vec![Arc::new(StringArray::from(vec![Some(" A "), None]))],
     )
     .expect("hash null fixture");
-    // Semantica storica (P1-3 review): solo null_policy=error rifiuta;
+    // Semantica storica: solo null_policy=error rifiuta;
     // Empty(default)/Literal sostituiscono. Oracolo: sostituire il null col
     // valore dichiarato in una colonna tutta valida deve dare lo STESSO
     // digest (la sostituzione e' la semantica dichiarata, non remediation).

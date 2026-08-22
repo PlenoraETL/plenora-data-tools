@@ -284,7 +284,7 @@ fn carichi() -> Vec<Carico> {
         },
         Carico {
             nome: "fan_out_tee",
-            perche: "un input, due consumatori: costo del tee (D9/V10)",
+            perche: "un input, due consumatori: costo del tee, rilascio al last consumer",
             piano: json!({
                 "schema_version": 5,
                 "inputs": ["main"],
@@ -1550,8 +1550,8 @@ fn main() {
         // hanno prodotto un fattore, o il dato e' dichiarato NON DISPONIBILE.
         // Con `filter_map` una campagna che dichiara il parallelismo non
         // misurabile (CLK_TCK illeggibile) spariva, e si pubblicava un
-        // «range su 3 processi» calcolato su uno o due: la colonna del
-        // verbale avrebbe detto una cosa che non era vera.
+        // «range su 3 processi» calcolato su uno o due: la colonna
+        // pubblicata avrebbe detto una cosa che non era vera.
         let fattori: Vec<Option<f64>> = campagne
             .iter()
             .map(|c| c["parallelismo"]["fattore"].as_f64())

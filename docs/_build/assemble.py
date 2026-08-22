@@ -1,4 +1,4 @@
-# Assembla docs/kernel-signatures.md dai frammenti (_fragments/*.md) e dai
+# Assembla docs/operazioni.md dai frammenti (_fragments/*.md) e dai
 # metadati del catalogo (crates/plenora-core/src/catalog.rs).
 # Uso: python docs/_build/assemble.py   (dalla radice del repo)
 import re
@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "crates/plenora-core/src/catalog.rs"
 FRAG_DIR = ROOT / "docs/_fragments"
-OUT = ROOT / "docs/kernel-signatures.md"
+OUT = ROOT / "docs/operazioni.md"
 
 ARITY = {"Unary": "unaria", "BinaryOrdered": "binaria (left, right)", "NAry": "n-aria"}
 EXEC = {"Streaming": "streaming", "Blocking": "blocking", "BinaryBlocking": "binary-blocking"}
@@ -29,37 +29,6 @@ CHIAVI_OPZIONALI = {"semantic_version", "config_schema_version",
                     "geo_fusion"}
 
 ANCORA_CATALOGO = "pub static CATALOG: &[OperationDescriptor] = &["
-
-# Operazioni presenti nel catalogo e NON ancora documentate: nessuna sezione,
-# nessun frammento. Sono elencate qui, e nel documento generato, invece di
-# sparire in un conteggio: il generatore controllava che ogni op documentata
-# esistesse nel catalogo, mai il verso opposto, e diciannove operazioni sono
-# rimaste fuori senza che nulla lo dicesse.
-#
-# L'elenco e' un'ASSERZIONE, non una configurazione: se il divario cambia — in
-# meglio o in peggio — la generazione fallisce e va aggiornato a mano. Chiuderlo
-# significa scrivere diciannove firme, ed e' un lavoro suo, non di questo blocco.
-NON_DOCUMENTATE = (
-    "geo.cluster_dbscan",
-    "geo.collect",
-    "geo.coverage_validate",
-    "geo.from_wkt",
-    "geo.generate_grid",
-    "geo.geometry_accessors",
-    "geo.line_locate_point",
-    "geo.shared_paths",
-    "geo.snap",
-    "geo.subdivide",
-    "table.align_schema",
-    "table.concat_by_name",
-    "table.fuzzy_join",
-    "table.hmac_sha256",
-    "table.limit",
-    "table.select_columns",
-    "table.stable_fingerprint",
-    "table.top_n",
-    "table.validate_rules",
-)
 
 
 class ErroreCatalogo(Exception):
@@ -328,27 +297,33 @@ def parse_fragments(sorgenti=None):
 TABLE_SECTIONS = [
     ("filtering", ["table.filter", "table.conditional"]),
     ("aggregation", ["table.sort", "table.distinct", "table.dedup_advanced",
-                     "table.aggregate", "table.rolling_window", "table.window_function"]),
+                     "table.aggregate", "table.rolling_window", "table.window_function",
+                     "table.top_n"]),
     ("joins", ["table.join", "table.semi_join", "table.anti_join",
-               "table.asof_join", "table.cross_join", "table.concat"]),
+               "table.asof_join", "table.cross_join", "table.concat",
+               "table.concat_by_name", "table.fuzzy_join"]),
     ("cleansing", ["table.fill_na", "table.replace", "table.type_cast"]),
     ("strings", ["table.string_pad", "table.string_length",
                  "table.string_extract", "table.text_normalize"]),
     ("dates", ["table.date_format", "table.date_add",
                "table.date_diff", "table.timezone_convert"]),
     ("columns", ["table.drop_columns", "table.rename", "table.reorder_columns",
-                 "table.concat_columns", "table.split_column"]),
+                 "table.concat_columns", "table.split_column",
+                 "table.select_columns", "table.align_schema"]),
     ("analysis", ["table.lookup", "table.bin", "table.flatten_json",
                   "table.statistics", "table.sample"]),
     ("reshape", ["table.melt", "table.pivot", "table.transpose",
                  "table.explode", "table.unnest", "table.table_diff"]),
     ("setops", ["table.except", "table.intersect", "table.union_distinct"]),
-    ("security", ["table.md5_hash", "table.sha256_hash", "table.mask_data"]),
+    ("security", ["table.md5_hash", "table.sha256_hash", "table.mask_data",
+                  "table.stable_fingerprint", "table.hmac_sha256"]),
     ("quality", ["table.assert_schema", "table.assert_not_null", "table.assert_unique",
                  "table.assert_range", "table.assert_regex", "table.coalesce"]),
     ("governance", ["table.assert_cardinality", "table.assert_metadata",
-                    "table.assert_foreign_key", "table.reconcile"]),
-    ("utility", ["table.add_row_number", "table.date_extract", "table.uuid_generator"]),
+                    "table.assert_foreign_key", "table.reconcile",
+                    "table.validate_rules"]),
+    ("utility", ["table.add_row_number", "table.date_extract", "table.uuid_generator",
+                 "table.limit"]),
     ("formula", ["table.formula"]),
     ("expressions", ["table.expression"]),
 ]
@@ -375,7 +350,10 @@ GEO_SECTIONS = [
       "geo.snap_to_grid", "geo.delaunay", "geo.polygonize", "geo.line_merge",
       "geo.split", "geo.line_substring", "geo.line_interpolate_point",
       "geo.frechet_distance", "geo.bearing", "geo.geodesic_area",
-      "geo.geometry_diagnostics"]),
+      "geo.geometry_diagnostics", "geo.from_wkt", "geo.geometry_accessors",
+      "geo.collect", "geo.line_locate_point", "geo.generate_grid",
+      "geo.subdivide", "geo.snap", "geo.coverage_validate",
+      "geo.shared_paths", "geo.cluster_dbscan"]),
 ]
 
 
@@ -394,16 +372,16 @@ def metadata_line(oid, meta):
     return "*" + " · ".join(parts) + "*"
 
 
-INTRO = """# plenora-data-tools — Firme dei kernel (v1)
+INTRO = """# Operazioni
 
 Documento generato dal codice sorgente del workspace (`crates/plenora-core`,
-`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre **@documentate@
-delle @catalogate@ operazioni** del catalogo unificato: @tabellari@ tabellari (`table.*`) e
-@geografiche@ geografiche (`geo.*`).
+`crates/plenora-kernels-table`, `crates/plenora-kernels-geo`). Copre **tutte e
+@catalogate@ le operazioni** del catalogo unificato: @tabellari@ tabellari
+(`table.*`) e @geografiche@ geografiche (`geo.*`).
 
-Le @non_documentate@ operazioni catalogate e **non ancora documentate** sono elencate in
-fondo. Il conteggio qui sopra e l'elenco sono generati dal catalogo: non
-possono divergere da esso senza che la generazione fallisca.
+I conteggi sono calcolati dal catalogo, non ricordati a mano, e la copertura è
+un'asserzione: un'operazione catalogata senza firma fa **fallire la
+generazione**.
 
 ## Come si legge una firma
 
@@ -658,41 +636,39 @@ def autotest():
 
 
 def genera():
-    """Il testo completo di `kernel-signatures.md`, senza scriverlo."""
+    """Il testo completo di `operazioni.md`, senza scriverlo."""
     catalog = parse_catalog()
     blocks = parse_fragments()
     documentate = _elenco_documentato(TABLE_SECTIONS + GEO_SECTIONS)
     missing_cat = [oid for oid in documentate if oid not in catalog]
     missing_blk = [oid for oid in documentate if oid not in blocks]
     extra_blk = sorted(set(blocks) - set(documentate))
-    # Il verso che mancava: operazioni catalogate che nessuna sezione copre.
+    # Il verso che mancava fino al 2026-08-21: operazioni catalogate che
+    # nessuna sezione copre. Il documento controllava che ogni op documentata
+    # esistesse nel catalogo, mai il contrario, e diciannove operazioni sono
+    # rimaste fuori senza che nulla lo dicesse.
     scoperte = sorted(set(catalog) - set(documentate))
-    divario_atteso = sorted(NON_DOCUMENTATE)
     if missing_cat or missing_blk or extra_blk:
         raise ErroreCatalogo(
             "MISMATCH fra sezioni, catalogo e frammenti: "
             "documentate assenti dal catalogo %r, senza frammento %r, "
             "frammenti non sezionati %r" % (missing_cat, missing_blk, extra_blk))
-    if scoperte != divario_atteso:
-        nuove = sorted(set(scoperte) - set(divario_atteso))
-        chiuse = sorted(set(divario_atteso) - set(scoperte))
+    if scoperte:
         raise ErroreCatalogo(
-            "il divario fra catalogo e documento e' cambiato.\n"
-            "  operazioni nuove non documentate: %r\n"
-            "  operazioni non piu' scoperte: %r\n"
-            "Aggiornare NON_DOCUMENTATE in questo file: l'elenco e' "
-            "un'asserzione, non una configurazione." % (nuove, chiuse))
+            "operazioni catalogate senza firma: %r.\n"
+            "La copertura del catalogo e' totale per contratto: scrivere il "
+            "frammento e aggiungerle a una sezione, oppure toglierle dal "
+            "catalogo. Un documento che tace su cio' che non copre sembra "
+            "completo." % scoperte)
 
     tabellari = sum(len(ops) for _, ops in TABLE_SECTIONS)
     geografiche = sum(len(ops) for _, ops in GEO_SECTIONS)
     # Sostituzione a segnaposti `@nome@` e non `str.format`: l'INTRO contiene
     # un esempio JSON, e le graffe di quello non sono campi da formattare.
     intro = INTRO
-    for chiave, valore in (("documentate", len(documentate)),
-                           ("catalogate", len(catalog)),
+    for chiave, valore in (("catalogate", len(catalog)),
                            ("tabellari", tabellari),
-                           ("geografiche", geografiche),
-                           ("non_documentate", len(scoperte))):
+                           ("geografiche", geografiche)):
         intro = intro.replace("@%s@" % chiave, str(valore))
     residui = re.findall(r"@[a-z_]+@", intro)
     if residui:
@@ -718,14 +694,6 @@ def genera():
         out.append(f"\n## Geo — {name}\n")
         for oid in ops:
             emit(oid)
-
-    out.append("\n## Operazioni catalogate non ancora documentate\n")
-    out.append(
-        f"Queste {len(scoperte)} operazioni esistono nel catalogo e **non hanno "
-        "ancora una firma in questo documento**. Sono elencate perche' un "
-        "documento che tace su cio' che non copre sembra completo:\n")
-    for oid in scoperte:
-        out.append(f"- `{oid}`")
 
     return "\n".join(out) + "\n"
 

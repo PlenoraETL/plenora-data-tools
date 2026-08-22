@@ -117,7 +117,7 @@ pub fn from_wkt_column_named(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     const EXAMPLES_LIMIT: u64 = 10;
     let cells: Vec<Option<&str>> = values.iter().collect();
-    // Come `map_nullable` (ADR-0001): il primo errore IN ORDINE DI RIGA e'
+    // Come `map_nullable` (architettura.md#determinismo): il primo errore IN ORDINE DI RIGA e'
     // selezionato dal collect sequenziale — la riga riportata nel messaggio
     // non puo' dipendere dallo scheduling di rayon.
     let results: Vec<Result<Option<Vec<u8>>, &'static str>> = cells

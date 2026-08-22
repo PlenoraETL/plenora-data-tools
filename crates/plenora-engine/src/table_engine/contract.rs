@@ -71,7 +71,7 @@ pub struct Plan {
 
 /// Il blocco `limits` del formato lineare **v1**, sul filo.
 ///
-/// ADR 15 ha rinominato il budget di memoria della libreria, e il tipo Rust
+/// errori-e-limiti.md#memoria-governata ha rinominato il budget di memoria della libreria, e il tipo Rust
 /// [`Limits`] porta il nome nuovo. Il formato v1 **no**: e' un formato
 /// pubblicato, distinguibile dagli altri proprio da `schema_version: 1`, e un
 /// piano gia' scritto non cambia perche' noi abbiamo cambiato idea sul nome.
@@ -192,7 +192,7 @@ mod limiti_v1 {
 pub struct ValidatedPlan {
     limits: Limits,
     steps: Vec<Step>,
-    /// Config tipizzate dei passi, allineate per indice a `steps` (E1/V2):
+    /// Config tipizzate dei passi, allineate per indice a `steps` (configurazioni preparate, hot path minimale):
     /// deserializzate una volta in `Plan::validate`, mai nel percorso per
     /// batch. `Arc` per clonare il piano senza ri-allocare le config.
     prepared: std::sync::Arc<[super::executor::PreparedStep]>,
@@ -271,7 +271,7 @@ impl Plan {
             })?;
         }
 
-        // E1/V2: la config di ogni passo e' deserializzata nella sua forma
+        // configurazioni preparate, hot path minimale: la config di ogni passo e' deserializzata nella sua forma
         // tipizzata UNA VOLTA qui; l'esecuzione per batch usa solo queste
         // (irraggiungibile un fallimento: stessa validazione di cui sopra).
         let prepared = self
@@ -330,7 +330,7 @@ impl ValidatedPlan {
     }
 
     /// Config tipizzate dei passi, allineate per indice a [`Self::steps`]
-    /// (E1/V2: percorso per batch senza parsing JSON).
+    /// (configurazioni preparate, hot path minimale: percorso per batch senza parsing JSON).
     #[must_use]
     pub(crate) fn prepared_steps(&self) -> &[super::executor::PreparedStep] {
         &self.prepared
@@ -472,8 +472,8 @@ mod tests {
 
 #[cfg(test)]
 mod tests_limiti_v1 {
-    //! Il formato v1 sul filo (ADR 15 §7): conserva il proprio nome, e non
-    //! accetta quello della v5.
+    //! Il formato v1 sul filo (errori-e-limiti.md#memoria-governata):
+    //! conserva il proprio nome, e non accetta quello della v5.
 
     use serde_json::json;
 

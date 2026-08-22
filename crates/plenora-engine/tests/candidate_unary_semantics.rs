@@ -408,7 +408,7 @@ fn aggregation_window_and_formula_variants_have_exact_semantics() {
         json!({"new_column":"label","formula":"group + '-' + text"}),
     );
     assert_eq!(utf8(&text, "label").value(1), "a-2");
-    // P2 review 2026-08-03: divisore LETTERALE zero -> errore di
+    // Divisore LETTERALE zero -> errore di
     // configurazione, rilevato gia' alla validazione del piano.
     assert!(Plan {
         schema_version: SCHEMA_VERSION,
@@ -450,7 +450,7 @@ fn utility_and_security_profiles_cover_unicode_nulls_and_identifiers() {
     assert_eq!(utf8(&uuids, "uuid").value(0).len(), 36);
     assert_ne!(utf8(&uuids, "uuid").value(0), utf8(&uuids, "uuid").value(1));
     for columns in [json!(["text", "group"]), json!(["group", "text"])] {
-        // Semantica storica (P1-3 review): null_policy di default = Empty,
+        // Semantica storica: null_policy di default = Empty,
         // il null e' sostituito da "" — nessun rifiuto, digest deterministico
         // che dipende dall'ORDINE delle colonne.
         let output = execute_batch(
@@ -516,7 +516,7 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
     .validate()
     .is_err());
 
-    // Semantica storica (P1-3 review): Empty/Literal sostituiscono il null
+    // Semantica storica: Empty/Literal sostituiscono il null
     // col valore dichiarato — nessun rifiuto; il digest e' quello storico.
     let empty = execute_batch(
         input.clone(),

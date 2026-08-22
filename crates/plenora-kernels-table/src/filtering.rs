@@ -84,7 +84,7 @@ fn json_text(value: &serde_json::Value) -> String {
 }
 
 /// Condizione di filtro con il valore atteso risolto UNA volta per batch
-/// (V2: nessun parse del letterale per riga nel percorso generico).
+/// (hot path minimale: nessun parse del letterale per riga nel percorso generico).
 ///
 /// Il parse avviene alla PRIMA valutazione di riga e il risultato
 /// (successo o messaggio d'errore) e' riusato per tutte le righe
@@ -485,7 +485,7 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     let rows = if let Some(result) = fast_rows(array, &config.operator, &config.value) {
         result?
     } else {
-        // Il valore atteso e' risolto una volta per batch (V2): il
+        // Il valore atteso e' risolto una volta per batch (hot path minimale): il
         // primo errore di parse scatta alla prima riga valutata, come
         // nel percorso per riga.
         let condition = PreparedCondition::new(&config.operator, &config.value, &config.value);
@@ -513,7 +513,7 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    // Valori attesi e testi di risultato risolti una volta per batch (V2):
+    // Valori attesi e testi di risultato risolti una volta per batch (hot path minimale):
     // per riga restano solo valutazione e clone della stringa di output.
     let conditions: Vec<PreparedCondition> = config
         .conditions

@@ -101,7 +101,7 @@ fn is_literal_zero(expr: &Expression) -> bool {
     }
 }
 
-/// Rifiuta le divisioni con divisore letterale zero (P2 review 2026-08-03).
+/// Rifiuta le divisioni con divisore letterale zero.
 ///
 /// Errore di configurazione (`InvalidPlan`), mai un rifiuto row-scoped
 /// attribuito a tutte le righe. Un divisore dipendente dalla riga resta
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn divisione_per_zero_letterale_e_errore_di_configurazione() {
-        // P2 review 2026-08-03: divisore LETTERALE zero (anche negato) ->
+        // Divisore LETTERALE zero (anche negato) ->
         // errore di configurazione senza diagnostica row-scoped; mai un
         // rifiuto attribuito a tutte le righe.
         let batch = fixture();

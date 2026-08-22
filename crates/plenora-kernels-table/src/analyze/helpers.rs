@@ -229,7 +229,7 @@ pub(in crate::analyze) fn merge_geometry(
 /// SOLO la chiave (mai i valori, regola 8). Le sorgenti sono esaminate in
 /// ordine di dichiarazione e le chiavi di ciascuna in ordine
 /// lessicografico: il primo conflitto riportato e' deterministico
-/// (ADR-0001), mai dipendente dall'ordine di iterazione delle `HashMap`.
+/// (architettura.md#determinismo), mai dipendente dall'ordine di iterazione delle `HashMap`.
 fn merge_metadata_maps(
     op: &str,
     merged: &mut HashMap<String, String>,
@@ -323,7 +323,7 @@ pub(in crate::analyze) fn sorted_only(input: &DataContract) -> ContractPropertie
 }
 
 /// `sorted_by = Proven(chiavi, Stream)`: op blocking che riordina l'intero
-/// stream di output (Architetture.md par. 4.3; `execution_class` Blocking).
+/// stream di output (architettura.md; `execution_class` Blocking).
 pub(in crate::analyze) const fn proven_sorted(
     keys: Vec<FieldId>,
 ) -> ContractProperty<Vec<FieldId>> {
