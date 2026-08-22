@@ -173,6 +173,10 @@ jobs:
   # toolchain pinnata c'e' gia' e il docker-in-docker sarebbe solo overhead.
   # Le soglie sono le stesse nei due punti — se cambiano qui, vanno cambiate
   # anche nello script, che e' il modo di riprodurre il verdetto in locale.
+  # La PULIZIA invece non e' duplicata: e' lo stesso
+  # `scripts/pulisci_coverage.py` che coverage.sh invoca nel container, ed e'
+  # lo script stesso a pretendere — a ogni invocazione, quindi anche qui —
+  # che entrambi i percorsi lo chiamino PRIMA di misurare.
   #
   # Perimetro: feature di default. I backend nativi (geos static, proj
   # bundled) NON sono strumentati — il loro codice feature-gated e' compilato
@@ -219,15 +223,27 @@ jobs:
           # v2 dal 2026-08-21: le cache di GitHub sono IMMUTABILI, e quelle
           # esistenti contengono i `.profraw` accumulati dalle esecuzioni
           # precedenti. Senza cambiare chiave, il job continuerebbe a
-          # ripristinare proprio i residui che questo cambiamento elimina.
-          key: cargo-ci-cov-v2-1.92.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-cov-v2-1.92.0-
+          # ripristinare proprio i residui che quel cambiamento elimina.
+          # v3 dal 2026-08-22, per la stessa ragione applicata all'altra
+          # classe: le cache v2 contengono i BINARI STRUMENTATI delle build
+          # precedenti, e la loro mappa di copertura gonfia il denominatore
+          # con righe che nessun test esegue. La pulizia introdotta qui li
+          # rimuove a ogni run, ma senza cambiare chiave il primo run
+          # ripartirebbe da una cache che li contiene ancora — e la
+          # `restore-keys` v2 li rimetterebbe sul disco a ogni giro
+          # successivo.
+          key: cargo-ci-cov-v3-1.92.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-cov-v3-1.92.0-
 
       # Versione pinnata come ogni altra dipendenza (R13.2): un aggiornamento
       # del tool puo' spostare i conteggi e quindi il verdetto del gate.
       - name: Installa cargo-llvm-cov (pin 0.8.7)
+        id: llvm-cov
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
 
+      # Due classi di residuo, entrambe ripristinate dalla cache, entrambe
+      # rimosse qui — dallo stesso script che invoca scripts/coverage.sh.
+      #
       # I `.profraw` hanno nomi che contengono il pid, e il pid il sistema lo
       # ricicla: con i profili di una esecuzione precedente ancora sul disco —
       # ed e' esattamente cio' che la cache ripristina — un processo nuovo
@@ -236,8 +252,14 @@ jobs:
       # ha nulla a che vedere col codice. Il 2026-08-21 e' successo in locale
       # con 6 770 profili accumulati: due campagne consecutive rosse, verdi
       # subito dopo la pulizia.
-      - name: Rimuovi i profili delle esecuzioni precedenti
-        run: python scripts/pulisci_profili_coverage.py "$GITHUB_WORKSPACE/target-cov"
+      #
+      # I BINARI STRUMENTATI di una build precedente sono il difetto opposto e
+      # silenzioso: portano la mappa di copertura del codice di allora, le
+      # loro righe entrano nel denominatore senza che nessun test le esegua e
+      # il gate misura piu' basso del vero. Nessun errore, solo un numero
+      # sbagliato — un gate non ermetico che produce rossi falsi.
+      - name: Pulisci gli artefatti della campagna precedente
+        run: python scripts/pulisci_coverage.py
 
       - name: Misura coverage del workspace
         run: cargo llvm-cov --workspace --locked --no-report
@@ -261,13 +283,39 @@ jobs:
           --fail-under-functions 85
           --fail-under-regions 89
 
-      # `always()`: anche quando il gate sopra fallisce. I profili non devono
+      # `always()`: anche quando il gate sopra fallisce. I residui non devono
       # finire nella cache, altrimenti il prossimo job riparte con il problema
       # che questo ha appena risolto — e la cache, essendo immutabile, se lo
       # porterebbe dietro fino al prossimo cambio di `Cargo.lock`.
-      - name: Rimuovi i profili prima della cache
-        if: always()
-        run: python scripts/pulisci_profili_coverage.py "$GITHUB_WORKSPACE/target-cov"
+      #
+      # Pulizia COMPLETA, non solo i profili, per tre ragioni:
+      #
+      #   - peso. Misurato in LOCALE il 2026-08-22 a fine campagna:
+      #     `target-cov` sono 5 748 file / 7,49 GiB di spazio occupato, di cui
+      #     4 481 file e 6,78 GiB — il 90% dei byte — artefatti del workspace
+      #     che la pulizia a inizio job cancella comunque. Qui la cifra e'
+      #     piu' bassa, perche' `CARGO_INCREMENTAL: 0` toglie di mezzo
+      #     `debug/incremental/`, che in locale e' la fetta grossa; la classe
+      #     pero' e' la stessa, e salvarla significa spendere upload, download
+      #     e quota per roba buttata prima di essere usata;
+      #   - quota. Il limite di GitHub e' 10 GB per repository, condivisi con
+      #     le cache dei job `test` e `backends`: una cache di coverage gonfia
+      #     sfratta per anzianita' proprio le dipendenze che la rendono utile;
+      #   - difesa in profondita'. Se un domani la pulizia a inizio job venisse
+      #     indebolita, una cache senza binari strumentati non avrebbe nulla da
+      #     restituire: il difetto resterebbe senza combustibile.
+      #
+      # In locale `scripts/coverage.sh` fa invece la sola pulizia dei profili:
+      # li' non c'e' cache da proteggere, e gli artefatti servono a rieseguire
+      # `cargo llvm-cov report --html` dopo una campagna rossa per vedere DOVE
+      # e' scesa. Qui quel bisogno lo copre l'artifact LCOV caricato sopra.
+      #
+      # La condizione sull'installazione del tool: `clean` e' un sottocomando
+      # di cargo-llvm-cov, e se il job e' morto prima di installarlo non c'e'
+      # niente da pulire (nessuna misura e' partita) ne' con che cosa farlo.
+      - name: Pulisci gli artefatti prima della cache
+        if: always() && steps.llvm-cov.conclusion == 'success'
+        run: python scripts/pulisci_coverage.py
 
   # `docs/kernel-signatures.md` e' generato: il file committato deve coincidere
   # BYTE PER BYTE con la rigenerazione.
