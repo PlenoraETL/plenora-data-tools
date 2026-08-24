@@ -4,6 +4,10 @@
 //! il fingerprint del catalogo deriva dalle versioni esplicite per-componente,
 //! mai da hash del binario.
 
+mod operation_id;
+
+pub use operation_id::OperationId;
+
 /// Famiglia di appartenenza (namespace dell'`id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
@@ -3673,6 +3677,68 @@ mod tests {
                 ),
                 (*semantic, *config_schema, *contract_analysis, *kernel),
                 "{id}: versioni non allineate al bump dichiarato (piano-v5.md#identita-e-fingerprint)"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod prove_identita {
+    use super::{OperationId, ALIASES, CATALOG};
+
+    /// L'enum e il catalogo sono due elenchi delle stesse operazioni, e due
+    /// elenchi divergono. Il confronto e' in ENTRAMBE le direzioni: una sola
+    /// lascerebbe passare meta' dei modi di sbagliare.
+    #[test]
+    fn l_enum_e_il_catalogo_sono_in_bijezione() {
+        let dal_catalogo: std::collections::BTreeSet<&str> =
+            CATALOG.iter().map(|descrittore| descrittore.id).collect();
+
+        let senza_variante: Vec<&str> = dal_catalogo
+            .iter()
+            .copied()
+            .filter(|id| OperationId::from_canonical(id).is_none())
+            .collect();
+        assert!(
+            senza_variante.is_empty(),
+            "operazioni a catalogo senza variante in OperationId: {senza_variante:?}"
+        );
+
+        let dalle_varianti: std::collections::BTreeSet<&str> =
+            OperationId::tutte().iter().map(|op| op.as_str()).collect();
+        assert_eq!(
+            dalle_varianti, dal_catalogo,
+            "l'insieme delle varianti non coincide con quello del catalogo"
+        );
+    }
+
+    /// `as_str` e `from_canonical` devono essere inverse. Una riga sbagliata
+    /// nella tabella di conversione sarebbe invisibile: l'operazione verrebbe
+    /// riconosciuta e poi rinominata.
+    #[test]
+    fn la_conversione_e_invertibile_su_ogni_operazione() {
+        for descrittore in CATALOG {
+            let id = descrittore.id;
+            let operazione =
+                OperationId::from_canonical(id).unwrap_or_else(|| panic!("`{id}` riconosciuta"));
+            assert_eq!(
+                operazione.as_str(),
+                id,
+                "`{id}` non torna a se stessa dopo la conversione"
+            );
+        }
+    }
+
+    /// Gli alias legacy NON sono id canonici: risolverli e' compito della
+    /// tabella versionata, perche' la stessa stringa puo' significare
+    /// operazioni diverse a versioni diverse del formato piano.
+    #[test]
+    fn gli_alias_legacy_non_sono_id_canonici() {
+        for (versione, alias, canonico) in ALIASES {
+            assert!(
+                OperationId::from_canonical(alias).is_none() || alias == canonico,
+                "l'alias `{alias}` (schema_version {versione}) e' anche un id canonico: \
+                 `from_canonical` lo accetterebbe saltando la risoluzione versionata"
             );
         }
     }
