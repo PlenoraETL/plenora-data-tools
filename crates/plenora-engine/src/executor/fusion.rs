@@ -23,8 +23,8 @@ use crate::planner::{
     ARROW_VERSION, ENGINE_VERSION,
 };
 use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedKernel,
-    RuntimeContext, SegmentMode,
+    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedGeoKernel,
+    PreparedKernel, PreparedTableKernel, RuntimeContext, SegmentMode,
 };
 use crate::table_engine;
 use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
@@ -248,7 +248,9 @@ pub(super) fn try_run_fused_group(
     let mut params: Vec<&TransformArrowSchema> = Vec::with_capacity(transforms.len());
     for kernel in transforms {
         match &kernel.config {
-            PreparedConfig::GeoTransform(kernel_params) => params.push(kernel_params),
+            PreparedConfig::Geo(PreparedGeoKernel::Transform(kernel_params)) => {
+                params.push(kernel_params);
+            }
             _ => {
                 return Err(PlenoraError::Internal(format!(
                     "nodo `{}`: kernel non GeoTransform in un gruppo fuso",
@@ -366,7 +368,9 @@ pub(super) fn try_run_fused_group(
 pub(super) fn fused_group_terminal(
     kernels: &[PreparedKernel],
 ) -> (&[PreparedKernel], Option<FusedTerminal<'_>>) {
-    let PreparedConfig::GeoMeasure { measure, .. } = &kernels[kernels.len() - 1].config else {
+    let PreparedConfig::Geo(PreparedGeoKernel::Measure { measure, .. }) =
+        &kernels[kernels.len() - 1].config
+    else {
         return (kernels, None);
     };
     let measure = match measure {

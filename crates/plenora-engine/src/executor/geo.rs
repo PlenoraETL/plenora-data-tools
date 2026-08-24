@@ -14,7 +14,10 @@
 use crate::geo_transport::pair::{decode_geometry_batches, preflight_decoded_bytes, PairOperation};
 use crate::geo_transport::transport::TransformArrowSchema;
 use crate::governor::GovernedBatch;
-use crate::prepare::{AccessorKind, ExecutionPlan, GeoBinaryPlan, PreparedConfig, PreparedKernel};
+use crate::prepare::{
+    AccessorKind, ExecutionPlan, GeoBinaryPlan, PreparedConfig, PreparedGeoKernel, PreparedKernel,
+    PreparedTableKernel,
+};
 use crate::table_engine;
 use crate::temp_store::TempStore;
 use plenora_core::arrow::array::{
@@ -502,7 +505,7 @@ pub(super) fn geo_cluster_dbscan_batch(
 pub(super) fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     matches!(
         &kernel.config,
-        PreparedConfig::TableUnary(table_plan) if table_engine::unary_spill_capable(table_plan)
+        PreparedConfig::Table(PreparedTableKernel::Unary(table_plan)) if table_engine::unary_spill_capable(table_plan)
     )
 }
 
@@ -558,7 +561,9 @@ pub(super) fn run_blocking(
     // dell'intermedio prima di rilasciare i lease degli input (architettura.md#memoria:
     // mai attesa con reservation parziale).
     let spill_path = match &kernel.config {
-        PreparedConfig::TableUnary(table_plan) if table_engine::unary_spill_capable(table_plan) => {
+        PreparedConfig::Table(PreparedTableKernel::Unary(table_plan))
+            if table_engine::unary_spill_capable(table_plan) =>
+        {
             plenora_kernels_table::spill::should_spill_unary(&full, table_plan.limits())
         }
         _ => false,
@@ -634,7 +639,7 @@ pub(super) fn run_binary_blocking(
     // percorso dedicato [`run_geo_binary_blocking`] (stesso guscio, cuore
     // decode → kernel validated → output v4); il ramo tabellare prosegue
     // qui sotto, invariato.
-    if let PreparedConfig::GeoBinary(geo_plan) = &kernel.config {
+    if let PreparedConfig::Geo(PreparedGeoKernel::Binary(geo_plan)) = &kernel.config {
         return run_geo_binary_blocking(
             plan,
             segment_index,
@@ -644,7 +649,7 @@ pub(super) fn run_binary_blocking(
             right_batches,
         );
     }
-    let PreparedConfig::TableBinary(binary_plan) = &kernel.config else {
+    let PreparedConfig::Table(PreparedTableKernel::Binary(binary_plan)) = &kernel.config else {
         return Err(PlenoraError::Internal(format!(
             "nodo `{}`: config non binaria in un segmento BinaryBlocking",
             kernel.node_id

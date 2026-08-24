@@ -24,8 +24,8 @@ use crate::planner::{
     ARROW_VERSION, ENGINE_VERSION,
 };
 use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedKernel,
-    RuntimeContext, SegmentMode,
+    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedGeoKernel,
+    PreparedKernel, PreparedTableKernel, RuntimeContext, SegmentMode,
 };
 use crate::table_engine;
 use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
@@ -94,69 +94,116 @@ pub(super) fn run_kernel(
 /// dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato): `sort`/`distinct`/`aggregate`
 /// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
 /// accumulate in [`ExecState`].
+///
+/// Smista per FAMIGLIA, non per operazione. Le quindici forme che l'executor
+/// conosceva una per una vivono ora dentro la famiglia che le possiede:
+/// all'orchestrazione restano le tre cose che la riguardano davvero — classe
+/// di esecuzione, contratto, cancellazione.
 pub(super) fn dispatch_kernel(
     kernel: &PreparedKernel,
     batch: RecordBatch,
     state: &ExecState,
 ) -> Result<RecordBatch> {
     match &kernel.config {
-        PreparedConfig::TableUnary(plan) => {
-            let (output, spill_metrics) = table_engine::execute_batch_with_spill_row_diagnostics(
-                batch,
-                plan,
-                Some(state.spill_directory()),
-            )
-            .map_err(|error| step_error(kernel, error))?;
-            state.add_spill_metrics(spill_metrics);
-            Ok(output)
+        PreparedConfig::Table(tabellare) => tabellare.esegui_batch(kernel, batch, state),
+        PreparedConfig::Geo(geometrico) => geometrico.esegui_batch(kernel, &batch, state),
+    }
+}
+
+impl PreparedTableKernel {
+    /// Esegue un batch. Facciata della famiglia tabellare: chi orchestra non
+    /// ha bisogno di sapere quali forme esistono qui dentro.
+    ///
+    /// # Errors
+    ///
+    /// L'errore del kernel, attribuito al nodo logico.
+    fn esegui_batch(
+        &self,
+        kernel: &PreparedKernel,
+        batch: RecordBatch,
+        state: &ExecState,
+    ) -> Result<RecordBatch> {
+        match self {
+            Self::Unary(plan) => {
+                let (output, spill_metrics) =
+                    table_engine::execute_batch_with_spill_row_diagnostics(
+                        batch,
+                        plan,
+                        Some(state.spill_directory()),
+                    )
+                    .map_err(|error| step_error(kernel, error))?;
+                state.add_spill_metrics(spill_metrics);
+                Ok(output)
+            }
+            Self::Binary(_) => Err(PlenoraError::Internal(format!(
+                "nodo `{}`: kernel binario in una catena streaming",
+                kernel.node_id
+            ))),
         }
-        PreparedConfig::TableBinary(_) => Err(PlenoraError::Internal(format!(
-            "nodo `{}`: kernel binario in una catena streaming",
-            kernel.node_id
-        ))),
-        PreparedConfig::GeoBinary(_) => Err(PlenoraError::Internal(format!(
-            "nodo `{}`: kernel binario geo in una catena streaming",
-            kernel.node_id
-        ))),
-        PreparedConfig::GeoTransform(params) => geo_transform_batch(kernel, &batch, params, state),
-        PreparedConfig::GeoMeasure { measure, .. } => geo_measure_batch(kernel, &batch, *measure),
-        PreparedConfig::GeoFromWkt {
-            wkt_column_index,
-            on_error,
-        } => geo_from_wkt_batch(kernel, &batch, *wkt_column_index, *on_error),
-        PreparedConfig::GeoAccessors { columns } => geo_accessors_batch(kernel, &batch, columns),
-        PreparedConfig::GeoLineLocatePoint {
-            point,
-            output_column,
-        } => geo_line_locate_point_batch(kernel, &batch, point, output_column),
-        PreparedConfig::GeoSubdivide { max_vertices } => {
-            geo_subdivide_batch(kernel, &batch, *max_vertices)
+    }
+}
+
+impl PreparedGeoKernel {
+    /// Esegue un batch. Facciata della famiglia geometrica.
+    ///
+    /// Il `match` e' esaustivo su QUESTA famiglia: una variante nuova non
+    /// compila finche' qualcuno non decide che cosa farne. E' la garanzia
+    /// che nel dispatch unico precedente non esisteva, perche' un enum di
+    /// quindici varianti condivise fra due famiglie non dice a quale delle
+    /// due manca un caso.
+    ///
+    /// # Errors
+    ///
+    /// L'errore del kernel, attribuito al nodo logico.
+    fn esegui_batch(
+        &self,
+        kernel: &PreparedKernel,
+        batch: &RecordBatch,
+        state: &ExecState,
+    ) -> Result<RecordBatch> {
+        match self {
+            Self::Binary(_) => Err(PlenoraError::Internal(format!(
+                "nodo `{}`: kernel binario geo in una catena streaming",
+                kernel.node_id
+            ))),
+            Self::Transform(params) => geo_transform_batch(kernel, batch, params, state),
+            Self::Measure { measure, .. } => geo_measure_batch(kernel, batch, *measure),
+            Self::FromWkt {
+                wkt_column_index,
+                on_error,
+            } => geo_from_wkt_batch(kernel, batch, *wkt_column_index, *on_error),
+            Self::Accessors { columns } => geo_accessors_batch(kernel, batch, columns),
+            Self::LineLocatePoint {
+                point,
+                output_column,
+            } => geo_line_locate_point_batch(kernel, batch, point, output_column),
+            Self::Subdivide { max_vertices } => geo_subdivide_batch(kernel, batch, *max_vertices),
+            Self::Snap {
+                reference,
+                tolerance,
+            } => geo_snap_batch(kernel, batch, reference, *tolerance),
+            Self::Collect { group_by_indices } => {
+                geo_collect_batch(kernel, batch, group_by_indices)
+            }
+            Self::GenerateGrid {
+                extent,
+                cell_size,
+                shape,
+            } => geo_generate_grid_batch(kernel, extent, *cell_size, *shape),
+            Self::CoverageValidate {
+                tolerance,
+                max_issues,
+            } => geo_coverage_validate_batch(kernel, batch, *tolerance, *max_issues),
+            Self::SharedPaths {
+                tolerance,
+                min_length,
+            } => geo_shared_paths_batch(kernel, batch, *tolerance, *min_length),
+            Self::ClusterDbscan {
+                eps,
+                min_points,
+                output_column,
+            } => geo_cluster_dbscan_batch(kernel, batch, *eps, *min_points, output_column),
         }
-        PreparedConfig::GeoSnap {
-            reference,
-            tolerance,
-        } => geo_snap_batch(kernel, &batch, reference, *tolerance),
-        PreparedConfig::GeoCollect { group_by_indices } => {
-            geo_collect_batch(kernel, &batch, group_by_indices)
-        }
-        PreparedConfig::GeoGenerateGrid {
-            extent,
-            cell_size,
-            shape,
-        } => geo_generate_grid_batch(kernel, extent, *cell_size, *shape),
-        PreparedConfig::GeoCoverageValidate {
-            tolerance,
-            max_issues,
-        } => geo_coverage_validate_batch(kernel, &batch, *tolerance, *max_issues),
-        PreparedConfig::GeoSharedPaths {
-            tolerance,
-            min_length,
-        } => geo_shared_paths_batch(kernel, &batch, *tolerance, *min_length),
-        PreparedConfig::GeoClusterDbscan {
-            eps,
-            min_points,
-            output_column,
-        } => geo_cluster_dbscan_batch(kernel, &batch, *eps, *min_points, output_column),
     }
 }
 

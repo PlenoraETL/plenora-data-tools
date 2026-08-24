@@ -356,32 +356,44 @@ pub struct GeoBinaryPlan {
     pub output_crs: String,
 }
 
-/// Configurazione preparata di un kernel (configurazioni preparate): tipizzata, rivalidata in
-/// `prepare`, senza JSON nel percorso per batch.
+/// Configurazione preparata di un kernel TABELLARE.
+///
+/// Due sole forme, entrambe piani legacy di un solo step gia' validati: il
+/// dispatch tabellare vive in `table_engine`, non qui.
 #[derive(Debug)]
-pub enum PreparedConfig {
+pub enum PreparedTableKernel {
     /// Op tabellare unaria: piano legacy di un solo step gia' validato
     /// (config deserializzata e controllata da `ValidatedPlan`); eseguito
     /// per batch da `table_engine::execute_batch`.
-    TableUnary(Box<table_engine::ValidatedPlan>),
+    Unary(Box<table_engine::ValidatedPlan>),
     /// Op tabellare binaria (o `table.concat` a due input): piano legacy di
     /// un solo step binario, eseguito una sola volta da
     /// `table_engine::execute_binary` su input materializzati.
-    TableBinary(Box<table_engine::ValidatedPlan>),
+    Binary(Box<table_engine::ValidatedPlan>),
+}
+
+/// Configurazione preparata di un kernel GEOMETRICO.
+///
+/// Tredici forme, perche' le operazioni geo non condividono un dispatch
+/// unico: alcune trasformano in place, altre aggiungono colonne, altre
+/// riducono. Il `match` che le smista e' esaustivo su QUESTA famiglia — una
+/// variante nuova non compila finche' qualcuno non decide che cosa farne.
+#[derive(Debug)]
+pub enum PreparedGeoKernel {
     /// Op geo binaria di architettura.md#geometrie (senza ri-encode, D14.1):
     /// piano fisico [`GeoBinaryPlan`] con parametri tipizzati rivalidati e
     /// tetti assoluti D14.6 risolti. Eseguita una sola volta dal ramo geo
     /// di `run_binary_blocking` sui due input materializzati.
-    GeoBinary(Box<GeoBinaryPlan>),
+    Binary(Box<GeoBinaryPlan>),
     /// Trasformazione geo 1:1 in place: parametri tipizzati di
     /// [`TransformArrowSchema`] con CRS e colonna geometria risolti,
     /// `validate_parameters` gia' chiamato. Eseguita per batch da
     /// `geo_transport::transport::transform_batches`.
-    GeoTransform(Box<TransformArrowSchema>),
+    Transform(Box<TransformArrowSchema>),
     /// Misura geo con semantica v4 "add column" (il trasporto legacy
     /// sostituirebbe la colonna geometria): dispatch dedicato dell'executor
     /// sui kernel `plenora_kernels_geo::operations`.
-    GeoMeasure {
+    Measure {
         /// Misura da applicare cella per cella.
         measure: MeasureKind,
         /// Nome della colonna prodotta (derivato dal contratto di output).
@@ -391,7 +403,7 @@ pub enum PreparedConfig {
     /// geometria WKB; indice della colonna WKT e politica d'errore risolti
     /// qui. Eseguito per batch su `extensions::from_wkt_column_named`; il
     /// token `on_error=null` resta parsabile ma non autorizza null sintetici.
-    GeoFromWkt {
+    FromWkt {
         /// Indice risolto della colonna WKT nel batch di input (hot path minimale).
         wkt_column_index: usize,
         /// Token legacy della politica; ogni cella invalida e' fail-closed.
@@ -400,13 +412,13 @@ pub enum PreparedConfig {
     /// `geo.geometry_accessors` (streaming 1:1): colonne accessorie scelte,
     /// con i nomi di output risolti dal contratto (prefisso applicato).
     /// Eseguito per batch su `extensions::geometry_accessors`.
-    GeoAccessors {
+    Accessors {
         /// Colonne prodotte: (nome di output, accessore) in ordine canonico.
         columns: Box<[(String, AccessorKind)]>,
     },
     /// `geo.line_locate_point` (streaming 1:1 "add column"): punto di
     /// riferimento decodificato una volta qui (configurazioni preparate), frazione per riga.
-    GeoLineLocatePoint {
+    LineLocatePoint {
         /// Punto di riferimento (da `point_wkb` hex, convenzione D16).
         point: Point<f64>,
         /// Nome della colonna prodotta (derivato dal contratto di output).
@@ -414,13 +426,13 @@ pub enum PreparedConfig {
     },
     /// `geo.subdivide` (streaming OneToMany): espansione 1:N per batch con
     /// `__parent_index` di lineage, come `explode`.
-    GeoSubdivide {
+    Subdivide {
         /// Soglia di vertici per parte (rivalidato >= 4).
         max_vertices: usize,
     },
     /// `geo.snap` (streaming 1:1 in place): riferimento decodificato una
     /// volta qui (configurazioni preparate), tolleranza rivalidata.
-    GeoSnap {
+    Snap {
         /// Geometria di riferimento (da `reference_wkb` hex, D16).
         reference: Geometry<f64>,
         /// Distanza massima di aggancio (finita, non negativa).
@@ -429,14 +441,14 @@ pub enum PreparedConfig {
     /// `geo.collect` (blocking, ManyToOne): raggruppamento per chiavi
     /// (responsabilita' dell'engine, come `dissolve`) e collezione per
     /// gruppo via `extensions::collect_geometries`.
-    GeoCollect {
+    Collect {
         /// Indici risolti delle colonne chiave nel batch di input (hot path minimale).
         group_by_indices: Box<[usize]>,
     },
     /// `geo.generate_grid` (blocking, `WholeToMany`, generativa): l'input
     /// funge da trigger; la griglia e' prodotta da
     /// `extensions2::generate_grid_rows` con parametri rivalidati.
-    GeoGenerateGrid {
+    GenerateGrid {
         /// Extent della griglia (finito, non degenere).
         extent: GridExtent,
         /// Lato cella (finito, > 0).
@@ -446,7 +458,7 @@ pub enum PreparedConfig {
     },
     /// `geo.coverage_validate` (blocking, WholeToMany): overlap della
     /// copertura via `extensions3::coverage_validate_rows`.
-    GeoCoverageValidate {
+    CoverageValidate {
         /// Area minima di overlap segnalata (default 0).
         tolerance: f64,
         /// Limite di issue (default `DEFAULT_MAX_ISSUES`).
@@ -454,7 +466,7 @@ pub enum PreparedConfig {
     },
     /// `geo.shared_paths` (blocking, WholeToMany): confini condivisi via
     /// `extensions3::shared_paths_rows`.
-    GeoSharedPaths {
+    SharedPaths {
         /// Lunghezza minima del segmento collineare (default 0).
         tolerance: f64,
         /// Lunghezza minima del tratto condiviso (default 0).
@@ -463,7 +475,7 @@ pub enum PreparedConfig {
     /// `geo.cluster_dbscan` (blocking, output `OneToOne` allineato alle
     /// righe): etichetta `UInt64` nullable per riga via
     /// `cluster::dbscan_column`.
-    GeoClusterDbscan {
+    ClusterDbscan {
         /// Raggio di vicinato (finito, > 0).
         eps: f64,
         /// Punti minimi per un cluster (>= 1).
@@ -471,6 +483,23 @@ pub enum PreparedConfig {
         /// Nome della colonna prodotta (derivato dal contratto di output).
         output_column: String,
     },
+}
+
+/// Configurazione preparata, per famiglia.
+///
+/// # Perche' due enum e non uno
+///
+/// Prima era un enum solo con quindici varianti, e l'executor le smistava
+/// tutte: conosceva il tipo di configurazione di OGNI operazione delle due
+/// famiglie. Separarle sposta quella conoscenza dentro la famiglia che la
+/// possiede, e lascia all'orchestrazione le tre cose che la riguardano
+/// davvero — classe di esecuzione, contratto, cancellazione.
+#[derive(Debug)]
+pub enum PreparedConfig {
+    /// Kernel tabellare.
+    Table(PreparedTableKernel),
+    /// Kernel geometrico.
+    Geo(PreparedGeoKernel),
 }
 
 /// Kernel fisico di un segmento (configurazioni preparate, osservabilita' per nodo).
@@ -916,7 +945,10 @@ fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
     let fusible_transform = |kernel: &PreparedKernel| {
         kernel.geo_fusion == plenora_core::catalog::GeoFusion::TransformInPlace
             && kernel.geo_role == Some(GeoRole::TransformInPlace)
-            && matches!(kernel.config, PreparedConfig::GeoTransform(_))
+            && matches!(
+                kernel.config,
+                PreparedConfig::Geo(PreparedGeoKernel::Transform(_))
+            )
             && kernel.geometry_column_index.is_some()
     };
     // Misura terminale: puo' solo CHIUDERE un run di transform, mai
@@ -924,7 +956,10 @@ fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
     let terminal_measure = |kernel: &PreparedKernel| {
         kernel.geo_fusion == plenora_core::catalog::GeoFusion::TerminalMeasure
             && kernel.geo_role == Some(GeoRole::MeasureAddColumn)
-            && matches!(kernel.config, PreparedConfig::GeoMeasure { .. })
+            && matches!(
+                kernel.config,
+                PreparedConfig::Geo(PreparedGeoKernel::Measure { .. })
+            )
             && kernel.geometry_column_index.is_some()
     };
     let mut next_group = 0_u32;
@@ -1124,14 +1159,18 @@ fn prepare_table(
         ))
     })?;
     match descriptor.arity {
-        plenora_core::catalog::Arity::Unary => Ok(PreparedConfig::TableUnary(Box::new(validated))),
-        plenora_core::catalog::Arity::BinaryOrdered => {
-            Ok(PreparedConfig::TableBinary(Box::new(validated)))
-        }
+        plenora_core::catalog::Arity::Unary => Ok(PreparedConfig::Table(
+            PreparedTableKernel::Unary(Box::new(validated)),
+        )),
+        plenora_core::catalog::Arity::BinaryOrdered => Ok(PreparedConfig::Table(
+            PreparedTableKernel::Binary(Box::new(validated)),
+        )),
         plenora_core::catalog::Arity::NAry => {
             if node.inputs.len() == 2 {
                 // `table.concat` a due input usa il dispatch binario legacy.
-                Ok(PreparedConfig::TableBinary(Box::new(validated)))
+                Ok(PreparedConfig::Table(PreparedTableKernel::Binary(
+                    Box::new(validated),
+                )))
             } else {
                 Err(PlenoraError::Unsupported(format!(
                     "nodo `{}`: {} con {} input: l'executor v1 supporta solo 2 \
@@ -1427,7 +1466,7 @@ fn prepare_geo_binary(
         .definition()
         .to_owned();
     Ok(Some((
-        PreparedConfig::GeoBinary(Box::new(GeoBinaryPlan {
+        PreparedConfig::Geo(PreparedGeoKernel::Binary(Box::new(GeoBinaryPlan {
             operation,
             predicate,
             max_distance,
@@ -1437,7 +1476,7 @@ fn prepare_geo_binary(
             left_geometry_index,
             right_geometry_index,
             output_crs,
-        })),
+        }))),
         GeoRole::BinaryBlocking,
     )))
 }
@@ -1563,7 +1602,7 @@ fn prepare_geo(
             ))
         })?;
         return Ok((
-            PreparedConfig::GeoTransform(Box::new(params)),
+            PreparedConfig::Geo(PreparedGeoKernel::Transform(Box::new(params))),
             GeoRole::TransformInPlace,
         ));
     }
@@ -1585,10 +1624,10 @@ fn prepare_geo(
             parsed.output_column.as_deref(),
         )?;
         return Ok((
-            PreparedConfig::GeoMeasure {
+            PreparedConfig::Geo(PreparedGeoKernel::Measure {
                 measure,
                 output_column,
-            },
+            }),
             GeoRole::MeasureAddColumn,
         ));
     }
@@ -1652,10 +1691,10 @@ fn prepare_geo_extension(
                     ))
                 })?;
             (
-                PreparedConfig::GeoFromWkt {
+                PreparedConfig::Geo(PreparedGeoKernel::FromWkt {
                     wkt_column_index,
                     on_error: parsed.on_error.unwrap_or(OnWktError::Null),
-                },
+                }),
                 GeoRole::ProduceFromText,
             )
         }
@@ -1699,9 +1738,9 @@ fn prepare_geo_extension(
                 columns.push((name, kind));
             }
             (
-                PreparedConfig::GeoAccessors {
+                PreparedConfig::Geo(PreparedGeoKernel::Accessors {
                     columns: columns.into_boxed_slice(),
-                },
+                }),
                 GeoRole::MeasureAddColumn,
             )
         }
@@ -1721,10 +1760,10 @@ fn prepare_geo_extension(
                 parsed.output_column.as_deref(),
             )?;
             (
-                PreparedConfig::GeoLineLocatePoint {
+                PreparedConfig::Geo(PreparedGeoKernel::LineLocatePoint {
                     point,
                     output_column,
-                },
+                }),
                 GeoRole::MeasureAddColumn,
             )
         }
@@ -1740,9 +1779,9 @@ fn prepare_geo_extension(
                 )));
             }
             (
-                PreparedConfig::GeoSubdivide {
+                PreparedConfig::Geo(PreparedGeoKernel::Subdivide {
                     max_vertices: parsed.max_vertices,
-                },
+                }),
                 GeoRole::OneToMany,
             )
         }
@@ -1756,10 +1795,10 @@ fn prepare_geo_extension(
                 )));
             }
             (
-                PreparedConfig::GeoSnap {
+                PreparedConfig::Geo(PreparedGeoKernel::Snap {
                     reference,
                     tolerance: parsed.tolerance,
-                },
+                }),
                 GeoRole::TransformInPlace,
             )
         }
@@ -1779,9 +1818,9 @@ fn prepare_geo_extension(
                 indices.push(index);
             }
             (
-                PreparedConfig::GeoCollect {
+                PreparedConfig::Geo(PreparedGeoKernel::Collect {
                     group_by_indices: indices.into_boxed_slice(),
-                },
+                }),
                 GeoRole::WholeTable,
             )
         }
@@ -1804,11 +1843,11 @@ fn prepare_geo_extension(
                     PlenoraError::InvalidPlan(format!("nodo `{}`: {error}", node.id))
                 })?;
             (
-                PreparedConfig::GeoGenerateGrid {
+                PreparedConfig::Geo(PreparedGeoKernel::GenerateGrid {
                     extent,
                     cell_size: parsed.cell_size,
                     shape,
-                },
+                }),
                 GeoRole::WholeTable,
             )
         }
@@ -1822,12 +1861,12 @@ fn prepare_geo_extension(
                 )));
             }
             (
-                PreparedConfig::GeoCoverageValidate {
+                PreparedConfig::Geo(PreparedGeoKernel::CoverageValidate {
                     tolerance,
                     max_issues: parsed
                         .max_issues
                         .unwrap_or(plenora_kernels_geo::extensions3::DEFAULT_MAX_ISSUES),
-                },
+                }),
                 GeoRole::WholeTable,
             )
         }
@@ -1844,10 +1883,10 @@ fn prepare_geo_extension(
                 }
             }
             (
-                PreparedConfig::GeoSharedPaths {
+                PreparedConfig::Geo(PreparedGeoKernel::SharedPaths {
                     tolerance,
                     min_length,
-                },
+                }),
                 GeoRole::WholeTable,
             )
         }
@@ -1872,11 +1911,11 @@ fn prepare_geo_extension(
                 parsed.output_column.as_deref(),
             )?;
             (
-                PreparedConfig::GeoClusterDbscan {
+                PreparedConfig::Geo(PreparedGeoKernel::ClusterDbscan {
                     eps: parsed.eps,
                     min_points: parsed.min_points,
                     output_column,
-                },
+                }),
                 GeoRole::MeasureAddColumn,
             )
         }

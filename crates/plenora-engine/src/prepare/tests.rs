@@ -1,5 +1,6 @@
 //! Test del preparer (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor).
 
+use crate::prepare::{PreparedGeoKernel, PreparedTableKernel};
 use std::sync::Arc;
 
 use serde_json::json;
@@ -157,10 +158,10 @@ fn pure_geo_chain_is_geo_fused_mixed_chain_is_linear() {
     let measure = &plan.segments()[0].kernels[2];
     assert_eq!(measure.geo_role, Some(GeoRole::MeasureAddColumn));
     match &measure.config {
-        PreparedConfig::GeoMeasure {
+        PreparedConfig::Geo(PreparedGeoKernel::Measure {
             measure,
             output_column,
-        } => {
+        }) => {
             assert_eq!(*measure, MeasureKind::Area);
             assert_eq!(output_column, "area");
         }
@@ -371,17 +372,21 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
     // Config tipizzate risolte in prepare (configurazioni preparate): riferimento decodificato,
     // soglia e colonne accessorie gia' pronte per il loop per batch.
     match &segment.kernels[0].config {
-        PreparedConfig::GeoSnap { tolerance, .. } => {
+        PreparedConfig::Geo(PreparedGeoKernel::Snap { tolerance, .. }) => {
             assert!((*tolerance - 0.5).abs() < f64::EPSILON);
         }
         other => panic!("config inattesa: {other:?}"),
     }
     match &segment.kernels[1].config {
-        PreparedConfig::GeoSubdivide { max_vertices } => assert_eq!(*max_vertices, 8),
+        PreparedConfig::Geo(PreparedGeoKernel::Subdivide { max_vertices }) => {
+            assert_eq!(*max_vertices, 8);
+        }
         other => panic!("config inattesa: {other:?}"),
     }
     match &segment.kernels[2].config {
-        PreparedConfig::GeoAccessors { columns } => assert_eq!(columns.len(), 6),
+        PreparedConfig::Geo(PreparedGeoKernel::Accessors { columns }) => {
+            assert_eq!(columns.len(), 6);
+        }
         other => panic!("config inattesa: {other:?}"),
     }
 }
@@ -405,10 +410,10 @@ fn line_locate_point_prepares_typed_point_and_output_column() {
     let segment = &plan.segments()[0];
     assert_eq!(segment.mode, SegmentMode::GeoFused);
     match &segment.kernels[0].config {
-        PreparedConfig::GeoLineLocatePoint {
+        PreparedConfig::Geo(PreparedGeoKernel::LineLocatePoint {
             point,
             output_column,
-        } => {
+        }) => {
             assert_eq!((point.x(), point.y()), (0.0, 0.0));
             assert_eq!(output_column, "fraction");
         }
@@ -487,7 +492,10 @@ fn fuzzy_join_prepares_as_binary_blocking() {
     let segment = &plan.segments()[0];
     assert_eq!(segment.mode, SegmentMode::BinaryBlocking);
     assert!(
-        matches!(&segment.kernels[0].config, PreparedConfig::TableBinary(_)),
+        matches!(
+            &segment.kernels[0].config,
+            PreparedConfig::Table(PreparedTableKernel::Binary(_))
+        ),
         "fuzzy_join usa il dispatch binario tabellare"
     );
     assert_eq!(
@@ -515,7 +523,7 @@ fn top_n_prepares_as_blocking_table_unary() {
     assert!(
         matches!(
             &plan.segments()[0].kernels[0].config,
-            PreparedConfig::TableUnary(_)
+            PreparedConfig::Table(PreparedTableKernel::Unary(_))
         ),
         "top_n unaria blocking via execute_batch"
     );
@@ -541,10 +549,10 @@ fn generative_geo_extensions_prepare_with_their_roles() {
     let kernel = &plan.segments()[0].kernels[0];
     assert_eq!(kernel.geo_role, Some(GeoRole::ProduceFromText));
     match &kernel.config {
-        PreparedConfig::GeoFromWkt {
+        PreparedConfig::Geo(PreparedGeoKernel::FromWkt {
             wkt_column_index,
             on_error,
-        } => {
+        }) => {
             assert_eq!(*wkt_column_index, 1);
             assert_eq!(*on_error, plenora_kernels_geo::extensions::OnWktError::Null);
         }
@@ -574,7 +582,7 @@ fn generative_geo_extensions_prepare_with_their_roles() {
     assert!(
         matches!(
             &segment.kernels[0].config,
-            PreparedConfig::GeoGenerateGrid { .. }
+            PreparedConfig::Geo(PreparedGeoKernel::GenerateGrid { .. })
         ),
         "config tipizzata della griglia"
     );
@@ -677,7 +685,7 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
     );
     assert!(matches!(
         kernels[2].config,
-        PreparedConfig::GeoMeasure { .. }
+        PreparedConfig::Geo(PreparedGeoKernel::Measure { .. })
     ));
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
 }
@@ -906,10 +914,10 @@ fn from_wkt_extension_resolves_column_index_and_error_policy() {
             .expect("prepare")
             .expect("estensione coperta");
     match config {
-        PreparedConfig::GeoFromWkt {
+        PreparedConfig::Geo(PreparedGeoKernel::FromWkt {
             wkt_column_index,
             on_error,
-        } => {
+        }) => {
             assert_eq!(wkt_column_index, 1);
             assert_eq!(on_error, OnWktError::Null);
         }
@@ -926,7 +934,9 @@ fn from_wkt_extension_resolves_column_index_and_error_policy() {
         .expect("prepare")
         .expect("estensione coperta");
     match config {
-        PreparedConfig::GeoFromWkt { on_error, .. } => assert_eq!(on_error, OnWktError::Fail),
+        PreparedConfig::Geo(PreparedGeoKernel::FromWkt { on_error, .. }) => {
+            assert_eq!(on_error, OnWktError::Fail);
+        }
         other => panic!("config inattesa: {other:?}"),
     }
 
@@ -961,11 +971,11 @@ fn generate_grid_extension_revalidates_extent_and_cell_size() {
     .expect("prepare")
     .expect("estensione coperta");
     match config {
-        PreparedConfig::GeoGenerateGrid {
+        PreparedConfig::Geo(PreparedGeoKernel::GenerateGrid {
             extent,
             cell_size,
             shape,
-        } => {
+        }) => {
             assert_eq!(
                 extent,
                 GridExtent::new(0.0, 0.0, 10.0, 10.0).expect("extent")
@@ -1209,7 +1219,8 @@ fn geo_binary_graph_with_limits(
 
 /// Config `GeoBinary` del primo kernel del segmento (panico altrimenti).
 fn geo_binary_config(segment: &PhysicalSegment) -> &GeoBinaryPlan {
-    let PreparedConfig::GeoBinary(geo_plan) = &segment.kernels[0].config else {
+    let PreparedConfig::Geo(PreparedGeoKernel::Binary(geo_plan)) = &segment.kernels[0].config
+    else {
         panic!("atteso GeoBinary, ottenuto {:?}", segment.kernels[0].config);
     };
     geo_plan
