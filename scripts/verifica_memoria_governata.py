@@ -20,6 +20,8 @@ ESECUTORE = 'crates/plenora-engine/src/executor.rs'
 # La consegna dell'output vive in un modulo proprio dal 2026-08-24
 # (PR 2 del refactor strutturale): le garanzie sono le stesse, il file no.
 USCITA = 'crates/plenora-engine/src/executor/output.rs'
+STAGING = 'crates/plenora-engine/src/executor/staging.rs'
+DIAGNOSTICA = 'crates/plenora-engine/src/executor/diagnostics.rs'
 GOVERNOR = 'crates/plenora-engine/src/governor.rs'
 
 # (file, frammento, che cosa dimostra la sua presenza)
@@ -42,13 +44,13 @@ ANCORE = [
     (ESECUTORE,
      '.try_reserve(decoded_bytes, &kernels[0].node_id)',
      'gruppo geo fuso: la reservation precede l\'allocazione'),
-    (ESECUTORE,
+    (DIAGNOSTICA,
      'fn permesso_di_trattenere(',
      'segmenti row-diagnostics: permesso PRIMA della passata'),
     (ESECUTORE,
      'permesso.ritaglia(bytes_at_boundary)',
      'l\'uscita si ritaglia dal permesso invece di riprenotare'),
-    (ESECUTORE,
+    (STAGING,
      'match replay.reader.next()',
      'replay dello staging: la decodifica precede la ri-riserva'),
     (GOVERNOR,
