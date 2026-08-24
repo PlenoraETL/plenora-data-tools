@@ -67,15 +67,47 @@ preparato.
 L'ordine delle fasi va letto così: le prime tre non cambiano comportamento e
 servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 
-| fase | contenuto | cambia semantica |
-|---|---|---|
-| 0 | baseline e oracoli | no |
-| 1 | alleggerire la CLI, scomporre l'executor | no |
-| 2 | autorità unica per Arrow/CRS, errori, limiti | no |
-| 3 | `OperationId` esaustivo, facciate di famiglia | no |
-| **4** | **profilo di allocazione fail-closed — questo punto 2** | **sì** |
-| 5 | il legacy ridotto a un confine di migrazione | sì |
-| 6 | superficie pubblica e commenti | no |
+| fase | contenuto | cambia semantica | stato |
+|---|---|---|---|
+| 0 | baseline e oracoli | no | ✅ |
+| 1 | alleggerire la CLI, scomporre l'executor | no | ✅ |
+| 2 | autorità unica per Arrow/CRS, errori, limiti | no | parziale |
+| 3 | `OperationId` esaustivo, facciate di famiglia | no | ✅ |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | da progettare |
+| 5 | il legacy ridotto a un confine di migrazione | sì | |
+| 6 | superficie pubblica e commenti | no | |
+
+**Che cosa hanno prodotto le fasi 0-3.** `main.rs` da 5116 a 2829 righe in
+nove moduli; `executor.rs` da 5481 a 974 in dodici; `OperationId`, enum
+esaustivo delle 146 operazioni, in bijezione verificata col catalogo; e le
+facciate `PreparedTableKernel`/`PreparedGeoKernel`, dove prima c'era un enum
+solo con quindici varianti che l'executor smistava una per una.
+
+Quattro oracoli sorvegliano che nulla di osservabile cambi: snapshot del
+catalogo, identità dei piani (`plan_hash` e fingerprint), superficie CLI byte
+per byte, metriche deterministiche dell'executor.
+
+### La fase 4 non è ancora decisa, ed è deliberato
+
+Le facciate espongono l'esecuzione e **non** un `memory_profile()`. Il metodo
+sembra preparazione neutra e non lo è: incorpora già un modello, quello in cui
+la correttezza si ottiene *prevedendo* quanta memoria servirà. Metterlo
+nell'interfaccia adesso deciderebbe la fase 4 prima di averla progettata.
+
+I quattro livelli vanno tenuti distinti, perché solo il terzo garantisce la
+correttezza:
+
+| livello | che cosa dà |
+|---|---|
+| `OperationId` e facciate | struttura e tipizzazione, indipendenti dalla strategia di memoria |
+| profilo di allocazione | prima decisione concreta della fase 4, non un prerequisito |
+| **supervisore, isolamento, pubblicazione atomica verificata** | **la garanzia effettiva che il risultato sia valido** |
+| profilazione preventiva | ottimizzazione successiva, mai fondamento della correttezza |
+
+Per le operazioni che dipendono dai dati una stima resta una stima. Se la
+strada scelta sarà un worker isolato con un limite imposto dal sistema
+operativo e una pubblicazione atomica verificata, il profilo preventivo non
+serve a garantire nulla — serve semmai a fallire prima e meglio.
 
 **Stato della fase 0.** Working tree pulito e suite eseguita nel container
 1.98. Gli oracoli: il catalogo era già coperto da
