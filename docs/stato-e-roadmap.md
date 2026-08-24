@@ -7,7 +7,7 @@ e negli altri documenti; qui c'è ciò che manca, in ordine.
 
 Il core è una release candidate credibile: il piano v5 è il formato canonico,
 la CLI è l'eseguibile distribuito, le 146 operazioni del catalogo sono
-documentate, e la CI verifica Linux e Windows con tredici job.
+documentate, e la CI verifica Linux e Windows con quindici job.
 
 Non è ancora rilasciabile in produzione. Le ragioni sono qui sotto, in
 ordine di precedenza.
@@ -161,4 +161,9 @@ Non blocca la release, ma è scritto perché non si perda.
 | `max_parallelism` di processo, non di piano | idem |
 | `max_temp_bytes` per dominio: picco fino a ~3× | idem |
 | chiavi canoniche emesse prima della ratifica normativa | idem |
+| nessuna policy dell'host sui limiti dati/runtime: un piano non fidato sceglie il proprio budget | idem |
+| tetti strutturali del piano applicati dopo la deserializzazione: in parse limita il solo tetto sui byte | idem |
+| messaggi delle dipendenze: la riga di confine è il **percorso**, non la libreria, e nessun controllo automatico la tiene onesta | idem |
+| scavenging temporaneo: l'hostname non è un'identità di macchina, e il PID è verificabile solo su Linux | idem |
 | fuzzing su toolchain nightly | [`release.md`](release.md) |
+| `rstar` fermo a 0.12.2: `geo` lo impone come dipendenza obbligatoria, e aggiornarlo da solo metterebbe due R-tree nello stesso binario | idem |

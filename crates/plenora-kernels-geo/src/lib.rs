@@ -553,7 +553,11 @@ pub fn wkb_hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::with_capacity(cifre.len() / 2);
-    for coppia in cifre.chunks_exact(2) {
+    // `as_chunks::<2>()` invece di `chunks_exact(2)`: il tipo diventa
+    // `[u8; 2]`, quindi l'indicizzazione e' totale per costruzione invece che
+    // per convenzione. Il resto (un'eventuale cifra spaiata) e' gia' escluso
+    // dal controllo di parita' qui sopra.
+    for coppia in cifre.as_chunks::<2>().0 {
         let (Some(alto), Some(basso)) = (cifra(coppia[0]), cifra(coppia[1])) else {
             return None;
         };

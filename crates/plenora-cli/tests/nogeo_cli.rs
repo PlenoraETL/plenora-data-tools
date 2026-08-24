@@ -489,7 +489,7 @@ fn capabilities_emette_il_documento_dichiarativo_icd10() {
     );
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
     assert_eq!(document["protocol_version"], 1);
-    assert_eq!(document["arrow_version"], "59.1.0");
+    assert_eq!(document["arrow_version"], "59.2.0");
     // Modello geometrico: tutte e cinque le dimensioni propagate (R3.3),
     // elaborazione solo XY (R3.3.1), encoding chiusi (R3.5).
     assert_eq!(

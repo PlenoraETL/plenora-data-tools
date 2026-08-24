@@ -22,11 +22,15 @@
 //! Scelte v1 documentate:
 //!
 //! - i `PlanLimits` di parsing arrivano dal CHIAMANTE (default fail-closed
-//!   [`PlanLimits::default`]): `max_plan_json_bytes` va applicato prima del
-//!   parse, quindi non può provenire dal piano stesso. Il campo `limits` del
-//!   piano (override opzionali, [`LimitsOverride`]) riguarda dati/runtime ed è
-//!   materializzato nella canonicalizzazione; la sua sotto-sezione `plan`
-//!   NON influenza il parsing in corso;
+//!   [`PlanLimits::default`]) e sono il **tetto**: il campo `limits` del piano
+//!   ([`LimitsOverride`]) può solo restringerlo, mai allargarlo
+//!   ([`LimitsOverride::ensure_restringe`]). La sotto-sezione `plan` governa
+//!   il piano che la dichiara: i conteggi strutturali si applicano con i
+//!   limiti così ristretti. Il tetto sui byte fa eccezione — resta quello del
+//!   chiamante, perché va applicato prima di costruire qualunque albero JSON
+//!   e quindi non può provenire dal documento che si sta ancora leggendo. Il
+//!   valore dichiarato entra comunque nella forma canonica, che è dove è
+//!   sempre stato;
 //! - `output` può riferire un nodo o un input (piano pass-through); ogni nodo
 //!   deve essere antenato dell'output (niente nodi morti) e ogni input
 //!   dichiarato deve essere referenziato da almeno un nodo (niente input
@@ -76,8 +80,9 @@ pub const PLAN_SCHEMA_VERSION_V4: u16 = 4;
 ///
 /// Specchio di [`Limits`] con tutti i campi opzionali: un piano dichiara solo
 /// ciò che vuole restringere, i default di [`Limits::default`] coprono il
-/// resto. La sotto-sezione `plan` è riservata alle fasi successive e NON
-/// influenza il parsing del piano che la contiene.
+/// resto. «Restringere» è un vincolo imposto, non una convenzione: vedi
+/// [`LimitsOverride::ensure_restringe`]. La sotto-sezione `plan` è applicata
+/// al parsing del piano che la contiene ([`PlanV5::parse`]).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LimitsOverride {
@@ -169,6 +174,31 @@ impl LimitsOverride {
     pub fn effective(&self) -> Limits {
         self.apply_to(&Limits::default())
     }
+
+    /// Verifica che i limiti **di piano** dichiarati non superino quelli
+    /// di chi esegue il parse (piano-v5.md#limiti-dichiarabili-nel-piano).
+    ///
+    /// La policy di parsing e' l'unica che esista davvero come argomento:
+    /// `PlanV5::parse` la riceve dal chiamante, e un documento che la alzasse
+    /// deciderebbe da se' quanto puo' costare interpretarlo. `apply_to`
+    /// sostituiva i valori e basta, quindi la sotto-sezione `plan` poteva
+    /// ampliarla.
+    ///
+    /// Sui limiti **dati/runtime** non c'e' invece alcuna policy da
+    /// restringere: la base e' [`Limits::default`], cioe' il valore che vale
+    /// quando il piano non dichiara nulla, non un tetto imposto da un host.
+    /// Dichiararli — anche piu' alti del default — e' il modo previsto per
+    /// configurare l'esecuzione, e resta chiuso da [`Limits::validate`].
+    /// Che cosa questo NON protegge, per chi accetta piani non fidati, e'
+    /// registrato in errori-e-limiti.md.
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::InvalidPlan` al primo campo che amplia la policy,
+    /// nominando il campo, il valore chiesto e quello consentito.
+    pub fn ensure_restringe(&self, base: &Limits) -> Result<()> {
+        self.plan.ensure_restringe(&base.plan)
+    }
 }
 
 /// Override opzionali dei [`PlanLimits`] (stessa logica di [`LimitsOverride`]).
@@ -223,6 +253,60 @@ impl PlanLimitsOverride {
             effective.max_identifier_bytes = value;
         }
         effective
+    }
+
+    /// Come [`LimitsOverride::ensure_restringe`], sui limiti di piano: sono
+    /// tutti tetti monotoni, quindi «restringere» e' sempre «non superare».
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::InvalidPlan` al primo campo che amplia la base.
+    pub fn ensure_restringe(&self, base: &PlanLimits) -> Result<()> {
+        let campi: [(&str, Option<usize>, usize); 8] = [
+            (
+                "plan.max_plan_json_bytes",
+                self.max_plan_json_bytes,
+                base.max_plan_json_bytes,
+            ),
+            (
+                "plan.max_plan_nodes",
+                self.max_plan_nodes,
+                base.max_plan_nodes,
+            ),
+            (
+                "plan.max_plan_edges",
+                self.max_plan_edges,
+                base.max_plan_edges,
+            ),
+            (
+                "plan.max_plan_depth",
+                self.max_plan_depth,
+                base.max_plan_depth,
+            ),
+            ("plan.max_fan_out", self.max_fan_out, base.max_fan_out),
+            ("plan.max_inputs", self.max_inputs, base.max_inputs),
+            (
+                "plan.max_config_bytes_per_node",
+                self.max_config_bytes_per_node,
+                base.max_config_bytes_per_node,
+            ),
+            (
+                "plan.max_identifier_bytes",
+                self.max_identifier_bytes,
+                base.max_identifier_bytes,
+            ),
+        ];
+        for (nome, richiesto, consentito) in campi {
+            if let Some(valore) = richiesto {
+                if valore > consentito {
+                    return Err(contract_error(format!(
+                        "il piano puo' solo restringere i limiti: {nome} chiesto {valore}, \
+                         consentito al massimo {consentito}"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -287,6 +371,19 @@ pub struct ValidatedPlanV5 {
     /// lessicografico): è l'ordine usato da `analyze_contract` e dalla
     /// canonicalizzazione.
     topo_order: Vec<String>,
+    /// I `PlanLimits` con cui il piano è stato **effettivamente** validato:
+    /// quelli di chi ha eseguito il parse, ristretti da ciò che il piano ha
+    /// dichiarato.
+    ///
+    /// Sono conservati perché la forma canonica li materializza, e
+    /// materializzare i default della libreria al posto loro produceva un
+    /// canonico che dichiarava vincoli che il piano non rispetta: una catena
+    /// profonda 300, accettata da un chiamante con `max_plan_depth` 512,
+    /// veniva canonicalizzata dichiarando il default 256 — e quel canonico,
+    /// riletto, si rifiutava da solo. Con la policy di default il valore
+    /// coincide con quello di prima, quindi i `plan_hash` esistenti non
+    /// cambiano.
+    plan_limits: PlanLimits,
 }
 
 impl ValidatedPlanV5 {
@@ -307,12 +404,35 @@ impl ValidatedPlanV5 {
     }
 
     /// Limiti dati/runtime effettivi (override del piano sui default).
+    ///
+    /// La sotto-sezione `plan` riporta i limiti con cui il piano e' stato
+    /// davvero validato, non i default della libreria.
     #[must_use]
     pub fn effective_limits(&self) -> Limits {
-        self.plan.limits.effective()
+        let mut limits = self.plan.limits.effective();
+        limits.plan = self.plan_limits.clone();
+        limits
     }
 
-    /// Serializzazione canonica ai fini del futuro `plan_hash` (piano-v5.md#identita-e-fingerprint).
+    /// I `PlanLimits` con cui il piano e' stato validato.
+    #[must_use]
+    pub const fn plan_limits(&self) -> &PlanLimits {
+        &self.plan_limits
+    }
+
+    /// Serializzazione canonica ai fini del `plan_hash` (piano-v5.md#identita-e-fingerprint).
+    ///
+    /// Materializza i limiti di piano contro i **default della libreria**,
+    /// non contro la policy di chi ha eseguito il parse. L'identita' di un
+    /// piano e' una proprieta' del piano: se dipendesse dalla policy
+    /// esterna, lo stesso documento — con la stessa esecuzione — avrebbe due
+    /// `plan_hash` diversi sotto due chiamanti diversi, e un grafo
+    /// persistito non sarebbe piu' confrontabile con se stesso.
+    ///
+    /// Il prezzo e' dichiarato in piano-v5.md: un piano accettato **solo**
+    /// grazie a una policy piu' larga del default ha un canonico che, riletto
+    /// con i default, verrebbe rifiutato. Non e' una contraddizione — quel
+    /// piano non e' valido sotto i default, e il canonico lo dice.
     #[must_use]
     pub fn canonical_json(&self) -> Value {
         canonical_json(&self.plan)
@@ -348,8 +468,50 @@ impl PlanV5 {
         // testi diversi con lo stesso piano canonico e lo stesso hash.
         plenora_core::json::ensure_no_duplicate_keys(json_text)?;
         let mut plan: Self = serde_json::from_str(json_text)?;
-        let topo_order = plan.validate_structure(plan_limits)?;
-        Ok(ValidatedPlanV5 { plan, topo_order })
+        // Il blocco `limits` puo' solo RESTRINGERE la policy di chi esegue
+        // (piano-v5.md#limiti-dichiarabili-nel-piano). La base e' quella del
+        // chiamante per i limiti di piano e quella della libreria per i
+        // limiti dati/runtime, che e' l'unica policy che la v1 conosce.
+        let base = Limits {
+            plan: plan_limits.clone(),
+            ..Limits::default()
+        };
+        plan.limits.ensure_restringe(&base)?;
+        // ...e, una volta accertato che restringono, i limiti di piano
+        // dichiarati governano DAVVERO il piano che li dichiara. Prima
+        // finivano nella forma canonica e quindi nel `plan_hash` senza che
+        // nulla li applicasse: l'identita' del piano affermava una proprieta'
+        // che il parser non aveva verificato.
+        let effective_plan_limits = plan.limits.plan.apply_to(plan_limits);
+        // `max_plan_json_bytes` e' l'unico degli otto a non essere applicato
+        // al documento che lo dichiara.
+        //
+        // Non e' una dimenticanza, e' una proprieta' del limite: un tetto sul
+        // testo va applicato prima di leggere il testo, quindi non puo'
+        // venire dal testo. Riapplicarlo dopo il parse sembrava innocuo ed
+        // era una trappola: la forma canonica materializza tutti i limiti
+        // effettivi, quindi e' sempre piu' grande del documento compatto che
+        // l'ha prodotta. Un piano che dichiarasse 300 byte sarebbe stato
+        // accettato, e la sua forma canonica — quella che porta il
+        // `plan_hash` ed e' pensata per essere conservata e riletta — non
+        // sarebbe piu' rientrata. Il campo resta comunque soggetto alla
+        // regola di sola restrizione: un piano non puo' dichiararlo piu'
+        // largo di quello di chi esegue.
+        //
+        // Il valore DICHIARATO resta pero' quello che entra nella forma
+        // canonica, come e' sempre stato. Sovrascriverlo qui con il tetto del
+        // chiamante cambiava il `plan_hash` di ogni piano che lo dichiara
+        // esplicitamente, anche con la policy di default: un'identita' gia'
+        // persistita sarebbe diventata un'altra senza cambio di dominio.
+        // `validate_structure` non lo legge — il tetto sui byte si applica
+        // prima del parse — quindi lasciarlo al valore dichiarato non cambia
+        // nulla della validazione.
+        let topo_order = plan.validate_structure(&effective_plan_limits)?;
+        Ok(ValidatedPlanV5 {
+            plan,
+            topo_order,
+            plan_limits: effective_plan_limits,
+        })
     }
 
     /// Parse con i `PlanLimits` di default (fail-closed).
@@ -785,6 +947,7 @@ fn ancestors_of_output(plan: &PlanV5) -> HashSet<&str> {
 /// quello lessicografico degli id, mantenendo la funzione totale.
 #[must_use]
 pub fn canonical_json(plan: &PlanV5) -> Value {
+    let plan_limits = plan.limits.plan.apply_to(&PlanLimits::default());
     let order = canonical_node_order(plan);
     let by_id: HashMap<&str, &NodeV5> = plan
         .nodes
@@ -813,10 +976,9 @@ pub fn canonical_json(plan: &PlanV5) -> Value {
 
     let mut root = Map::new();
     root.insert("schema_version".to_owned(), json!(PLAN_SCHEMA_VERSION_V5));
-    root.insert(
-        "limits".to_owned(),
-        canonical_limits(&plan.limits.effective()),
-    );
+    let mut limiti_effettivi = plan.limits.effective();
+    limiti_effettivi.plan = plan_limits;
+    root.insert("limits".to_owned(), canonical_limits(&limiti_effettivi));
     if let Some(crs) = &plan.crs {
         root.insert("crs".to_owned(), json!(crs));
     }

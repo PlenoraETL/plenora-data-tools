@@ -1608,7 +1608,7 @@ fn verify_declared_coherence(
     let simple_identifier = plenora_core::crs::authority_code_identifier(crs_id);
     let coherent = simple_identifier.map_or_else(
         || {
-            resolve_crs(crs_id, "crs").ok().is_some_and(|declared| {
+            resolve_crs(crs_id, "crs").is_ok_and(|declared| {
                 matches!(
                     (declared.authority_identifier(), resolved_identifier),
                     (Some(left), Some(right))
@@ -3061,7 +3061,7 @@ fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json:
     let mut retry = serde_json::json!({ "kind": disposition.as_str() });
     if let Some(delay) = disposition.delay() {
         retry["delay_ms"] =
-            serde_json::Value::from(u64::try_from(delay.as_millis()).map_or(u64::MAX, |v| v));
+            serde_json::Value::from(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
     }
     let message = if cancelled {
         format!("esecuzione annullata: {error}")
@@ -3586,7 +3586,7 @@ mod tests {
         let mut serialized = serde_json::json!({ "kind": retry.as_str() });
         if let Some(delay) = retry.delay() {
             serialized["delay_ms"] =
-                serde_json::Value::from(u64::try_from(delay.as_millis()).map_or(u64::MAX, |v| v));
+                serde_json::Value::from(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
         }
         assert_eq!(
             serialized,

@@ -446,11 +446,21 @@ impl MemoryGovernor {
             stato.live = live;
             stato.next_id = next_id;
             stato.births.insert(id, created);
-            debug_assert_eq!(
-                stato.live,
-                stato.births.len() as u64,
-                "biiezione fra lease vivi e nascite registrate"
-            );
+            // Biiezione `live == births.len()` verificata SEMPRE e in modo
+            // fallibile. Un `debug_assert_eq!` qui era una primitiva di
+            // panico nel codice di produzione (errori-e-limiti.md#panic-policy)
+            // nel punto peggiore: il panico partirebbe con il mutex tenuto e
+            // a mutazioni gia' scritte, lasciando la contabilita' avvelenata
+            // e non dichiarata corrotta. Se l'invariante cade, lo stato viene
+            // marcato corrotto PRIMA di tornare osservabile.
+            if u64::try_from(stato.births.len()) != Ok(stato.live) {
+                stato.corrotta = Some("biiezione fra lease vivi e nascite registrate violata");
+                drop(stato);
+                return Err(contabilita_corrotta(
+                    "biiezione fra lease vivi e nascite registrate violata",
+                    owner,
+                ));
+            }
             // Il lock si rilascia QUI, prima di costruire il permesso:
             // l'allocazione dell'`Arc` non ha bisogno della sezione critica e
             // tenercela dentro allungherebbe l'attesa di chi aspetta.

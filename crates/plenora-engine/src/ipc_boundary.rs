@@ -2,7 +2,7 @@
 //!
 //! # Perche' esiste
 //!
-//! `arrow-ipc` 59.1.0 ha due esposizioni note su input ostile, entrambe
+//! `arrow-ipc` 59.2.0 ha due esposizioni note su input ostile, entrambe
 //! raggiungibili dal primo byte letto:
 //!
 //! 1. **panico** — `convert::fb_to_schema` scarta con `unwrap()` il campo

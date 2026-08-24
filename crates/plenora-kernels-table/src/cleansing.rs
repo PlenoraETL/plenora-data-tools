@@ -739,7 +739,11 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
                 builder.append_value(values.value(row).to_string());
             }
         }
-    } else if let Some(values) = source.as_any().downcast_ref::<BooleanArray>() {
+    } else {
+        // Ultimo tipo della catena: un downcast fallito qui significa tipo
+        // non gestito, ed e' lo stesso `None` di prima — scritto con `?`
+        // invece che con un ramo `else` che ritorna.
+        let values = source.as_any().downcast_ref::<BooleanArray>()?;
         for row in 0..len {
             if values.is_null(row) {
                 builder.append_null();
@@ -747,8 +751,6 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
                 builder.append_value(values.value(row).to_string());
             }
         }
-    } else {
-        return None;
     }
     Some(Arc::new(builder.finish()))
 }

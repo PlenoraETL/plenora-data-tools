@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Coverage del workspace con cargo-llvm-cov nel container rust:1.92 (come
+# Coverage del workspace con cargo-llvm-cov nel container rust:1.98 (come
 # AGENTS.md: stessa toolchain di CI). Prima run: lento (build strumentata).
 # Uso: scripts/coverage.sh [--html]
 #
@@ -41,7 +41,7 @@
 # cancella comunque.
 set -euo pipefail
 
-IMAGE=rust:1.92
+IMAGE=rust:1.98
 # Pin del tool: un aggiornamento di cargo-llvm-cov puo' spostare i conteggi
 # e quindi il verdetto del gate (stesso pin del job `coverage` in CI).
 LLVM_COV_VERSION=0.8.7

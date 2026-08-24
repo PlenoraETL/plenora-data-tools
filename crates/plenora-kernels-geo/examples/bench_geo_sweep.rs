@@ -156,8 +156,16 @@ fn random_walk(rng: &mut Rng, x0: f64, y0: f64, step: f64, vertices: usize) -> L
     for _ in 0..vertices {
         coords.push(Coord { x, y });
         let angle = rng.range(0.0, std::f64::consts::TAU);
-        x += step * angle.cos();
-        y += step * angle.sin();
+        // Niente mul_add/FMA, come nei kernel: qui la ragione non e' il
+        // contratto numerico ma la COMPARABILITA' della misura. La fusione
+        // cambia l'arrotondamento, quindi cambierebbe le geometrie generate
+        // e i numeri non sarebbero piu' confrontabili con la baseline
+        // registrata in benchmarks/baseline/.
+        #[allow(clippy::suboptimal_flops)]
+        {
+            x += step * angle.cos();
+            y += step * angle.sin();
+        }
     }
     LineString::new(coords)
 }

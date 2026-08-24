@@ -526,8 +526,8 @@ mod tests {
         if config.aggregations.is_empty() {
             let counts = groups
                 .values()
-                .map(|rows| i64::try_from(rows.len()).ok())
-                .collect::<Vec<_>>();
+                .map(|rows| aggregate::conteggio_gruppo(rows.len()))
+                .collect::<Result<Vec<_>>>()?;
             return replace_or_append(
                 &result,
                 "count",

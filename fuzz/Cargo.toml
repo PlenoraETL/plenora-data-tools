@@ -18,9 +18,9 @@ plenora-kernels-table = { path = "../crates/plenora-kernels-table" }
 plenora-kernels-geo = { path = "../crates/plenora-kernels-geo" }
 plenora-engine = { path = "../crates/plenora-engine" }
 libfuzzer-sys = "=0.4.10"
-arrow-array = "=59.1.0"
-arrow-schema = "=59.1.0"
-arrow-select = "=59.1.0"
+arrow-array = "=59.2.0"
+arrow-schema = "=59.2.0"
+arrow-select = "=59.2.0"
 serde_json = "=1.0.151"
 num-traits = "=0.2.19"
 geo = "=0.33.1"

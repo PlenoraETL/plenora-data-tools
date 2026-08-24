@@ -20,6 +20,29 @@ use super::grouping::{
 };
 use super::sort::default_true;
 
+/// Cardinalita' di un gruppo come `i64`, in modo **fallibile**.
+///
+/// La colonna `count` e' dichiarata non-nullable: convertire con
+/// `i64::try_from(..).ok()` trasformava un fallimento di conversione in un
+/// `null`, cioe' in una violazione silenziosa dello schema appena dichiarato.
+/// Il caso e' irraggiungibile sulle piattaforme correnti — non esiste un
+/// `Vec` con piu' di `i64::MAX` elementi — ma «irraggiungibile» non e' «esatto
+/// per costruzione», e la stessa forma era duplicata su due percorsi di
+/// aggregazione. Qui la conversione o riesce o produce un errore esplicito.
+///
+/// # Errors
+///
+/// `PlenoraError::Internal` se la cardinalita' non e' rappresentabile in
+/// `i64`.
+pub(super) fn conteggio_gruppo(righe: usize) -> Result<i64> {
+    i64::try_from(righe).map_err(|_| {
+        PlenoraError::Internal(
+            "cardinalita' di un gruppo non rappresentabile in i64 per la colonna `count`"
+                .to_owned(),
+        )
+    })
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggFunction {
@@ -348,8 +371,8 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
     if config.aggregations.is_empty() {
         let counts = groups
             .iter()
-            .map(|rows| i64::try_from(rows.len()).ok())
-            .collect::<Vec<_>>();
+            .map(|rows| conteggio_gruppo(rows.len()))
+            .collect::<Result<Vec<_>>>()?;
         return replace_or_append(
             &result,
             "count",

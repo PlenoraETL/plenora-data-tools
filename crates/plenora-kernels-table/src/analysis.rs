@@ -164,7 +164,14 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         })
         .collect::<Result<Vec<_>>>()?;
     // pandas.cut uses right-closed intervals and expands only the open side.
-    edges[0] -= (max - min) * 0.001;
+    // Come sopra: forma non fusa (niente mul_add/FMA). Il lint e' nuovo con
+    // la 1.98 e colpisce un sito che prima non vedeva, ma la ragione non
+    // cambia — la fusione altera l'arrotondamento IEEE e romperebbe il
+    // determinismo bit-esatto.
+    #[allow(clippy::suboptimal_flops)]
+    {
+        edges[0] -= (max - min) * 0.001;
+    }
     Ok(edges)
 }
 

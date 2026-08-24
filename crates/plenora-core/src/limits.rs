@@ -174,6 +174,31 @@ impl Limits {
         if self.max_regex_bytes == 0 {
             return nullo("max_regex_bytes");
         }
+        // Limiti di piano: si rifiuta lo zero SOLO dove nessun documento
+        // valido potrebbe rispettarlo.
+        //
+        // La distinzione non e' pedanteria. I tetti sui NODI — nodi, archi,
+        // profondita', fan-out, byte di config — valgono legittimamente zero
+        // per un piano **pass-through** (`nodes: []`, `output` che riferisce
+        // un input), che questo formato documenta e testa come valido: una
+        // policy che ammette solo pass-through e' una policy sensata.
+        // Rifiutarli in blocco la rendeva impossibile, e faceva di peggio —
+        // il parse accettava il piano (zero nodi non superano un tetto di
+        // zero) e la validazione dei limiti lo rifiutava dopo: due verdetti
+        // discordi sullo stesso documento.
+        //
+        // Restano incompatibili con qualunque documento: un piano ha dei
+        // byte, ha almeno un input da cui leggere, e ha identificatori non
+        // vuoti.
+        if self.plan.max_plan_json_bytes == 0 {
+            return nullo("plan.max_plan_json_bytes");
+        }
+        if self.plan.max_inputs == 0 {
+            return nullo("plan.max_inputs");
+        }
+        if self.plan.max_identifier_bytes == 0 {
+            return nullo("plan.max_identifier_bytes");
+        }
         if self.spill_partitions < Self::MIN_SPILL_PARTITIONS
             || self.spill_partitions > Self::MAX_SPILL_PARTITIONS
         {
@@ -301,7 +326,56 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
 
 #[cfg(test)]
 mod tests {
-    use super::expansion_exceeded;
+    use super::{expansion_exceeded, Limits, PlanLimits};
+
+    #[test]
+    fn un_limite_di_piano_a_zero_e_rifiutato() {
+        // Gli otto tetti strutturali restavano fuori da `validate`: un piano
+        // poteva dichiararne uno a zero, entrare nella forma canonica e
+        // quindi nel `plan_hash`, e nessuno lo diceva.
+        fn azzerato(muta: impl FnOnce(&mut PlanLimits)) -> Limits {
+            let mut limits = Limits::default();
+            muta(&mut limits.plan);
+            limits
+        }
+        // Incompatibili con qualunque documento valido: rifiutati.
+        let rifiutati = [
+            (
+                "plan.max_plan_json_bytes",
+                azzerato(|p| p.max_plan_json_bytes = 0),
+            ),
+            ("plan.max_inputs", azzerato(|p| p.max_inputs = 0)),
+            (
+                "plan.max_identifier_bytes",
+                azzerato(|p| p.max_identifier_bytes = 0),
+            ),
+        ];
+        for (nome, limits) in rifiutati {
+            let errore = limits
+                .validate()
+                .expect_err("un limite di piano a zero deve essere rifiutato");
+            let testo = errore.to_string();
+            assert!(testo.contains(nome), "{nome}: {testo}");
+        }
+        // Tetti sui NODI: zero e' legittimo, lo rispetta un pass-through.
+        // Rifiutarli qui darebbe un verdetto discorde da quello del parse,
+        // che un piano senza nodi lo accetta.
+        let ammessi = [
+            azzerato(|p| p.max_plan_nodes = 0),
+            azzerato(|p| p.max_plan_edges = 0),
+            azzerato(|p| p.max_plan_depth = 0),
+            azzerato(|p| p.max_fan_out = 0),
+            azzerato(|p| p.max_config_bytes_per_node = 0),
+        ];
+        for limits in ammessi {
+            assert!(
+                limits.validate().is_ok(),
+                "un tetto sui nodi a zero e' rispettabile da un pass-through"
+            );
+        }
+        // I default restano validi: la regola nuova non ne rifiuta nessuno.
+        assert!(Limits::default().validate().is_ok());
+    }
 
     #[test]
     fn il_predicato_e_totale_su_tutto_il_dominio_dei_conteggi() {

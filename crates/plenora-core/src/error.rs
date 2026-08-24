@@ -183,11 +183,54 @@ pub enum PlenoraError {
     },
 }
 
+/// Codice stabile della variante di un [`arrow_schema::ArrowError`].
+///
+/// I messaggi di arrow-rs sono scritti dalla dipendenza e citano
+/// regolarmente il valore che ha causato il difetto (`Cannot cast string
+/// '<valore>' to Int64`, `Parser error: ... '<cella>'`): farli attraversare
+/// il confine cosi' come sono e' esattamente cio' che la regola «errori
+/// senza dati» vieta (errori-e-limiti.md#privacy-dei-messaggi), e la privacy
+/// dell'errore dipenderebbe dal comportamento di una libreria esterna invece
+/// che dalla nostra costruzione.
+///
+/// Si conserva quindi la sola **variante**, che e' una proprieta' strutturale
+/// dell'errore: dice che genere di difetto e' senza dire su quale dato. Il
+/// `match` e' esaustivo di proposito e `arrow-schema` e' pinnato a una
+/// versione esatta: una variante nuova non compila, invece di ricadere in
+/// silenzio su un ramo generico.
+#[must_use]
+pub const fn arrow_error_code(error: &arrow_schema::ArrowError) -> &'static str {
+    use arrow_schema::ArrowError as E;
+    match error {
+        E::NotYetImplemented(_) => "not_yet_implemented",
+        E::ExternalError(_) => "external",
+        E::CastError(_) => "cast",
+        E::MemoryError(_) => "memory",
+        E::ParseError(_) => "parse",
+        E::SchemaError(_) => "schema",
+        E::ComputeError(_) => "compute",
+        E::DivideByZero => "divide_by_zero",
+        E::ArithmeticOverflow(_) => "arithmetic_overflow",
+        E::CsvError(_) => "csv",
+        E::JsonError(_) => "json",
+        E::AvroError(_) => "avro",
+        E::IoError(_, _) => "io",
+        E::IpcError(_) => "ipc",
+        E::InvalidArgumentError(_) => "invalid_argument",
+        E::ParquetError(_) => "parquet",
+        E::CDataInterface(_) => "c_data_interface",
+        E::DictionaryKeyOverflowError => "dictionary_key_overflow",
+        E::RunEndIndexOverflowError => "run_end_index_overflow",
+        E::OffsetOverflowError(_) => "offset_overflow",
+    }
+}
+
 impl From<arrow_schema::ArrowError> for PlenoraError {
     fn from(error: arrow_schema::ArrowError) -> Self {
-        // Testo invariato rispetto alla variante `Arrow` pre-rinomina; la
-        // sorgente tipizzata resta nel messaggio (fusione §9, dichiarata).
-        Self::DataMapping(format!("arrow error: {error}"))
+        // Prefisso invariato (`arrow error: `, fusione §9): cambia solo cio'
+        // che lo segue, che ora e' un codice scritto da noi e non il testo
+        // della dipendenza. Vedi [`arrow_error_code`].
+        Self::DataMapping(format!("arrow error: {}", arrow_error_code(&error)))
     }
 }
 
@@ -979,6 +1022,41 @@ mod tests {
             .into();
         assert_eq!(json.category(), ErrorCategory::DataMapping);
         assert!(json.to_string().starts_with("json error: "));
+    }
+
+    /// Sentinella di privacy: il testo di arrow-rs cita i valori che hanno
+    /// causato il difetto, e non deve attraversare il confine
+    /// (errori-e-limiti.md#privacy-dei-messaggi). Resta il codice della
+    /// variante, che e' strutturale.
+    #[test]
+    fn il_testo_di_arrow_non_attraversa_il_confine() {
+        const SENTINELLA: &str = "mario.rossi@example.com";
+        let casi = [
+            arrow_schema::ArrowError::CastError(format!("Cannot cast '{SENTINELLA}' to Int64")),
+            arrow_schema::ArrowError::ParseError(SENTINELLA.to_owned()),
+            arrow_schema::ArrowError::ComputeError(SENTINELLA.to_owned()),
+            arrow_schema::ArrowError::SchemaError(SENTINELLA.to_owned()),
+            arrow_schema::ArrowError::InvalidArgumentError(SENTINELLA.to_owned()),
+        ];
+        for grezzo in casi {
+            let atteso = arrow_error_code(&grezzo);
+            let convertito: PlenoraError = grezzo.into();
+            let testo = convertito.to_string();
+            assert!(
+                !testo.contains(SENTINELLA),
+                "il valore ha attraversato il confine: {testo}"
+            );
+            assert_eq!(testo, format!("arrow error: {atteso}"));
+        }
+        // Il codice distingue le varianti: non e' una stringa unica.
+        assert_eq!(
+            arrow_error_code(&arrow_schema::ArrowError::DivideByZero),
+            "divide_by_zero"
+        );
+        assert_ne!(
+            arrow_error_code(&arrow_schema::ArrowError::CastError(String::new())),
+            arrow_error_code(&arrow_schema::ArrowError::SchemaError(String::new()))
+        );
     }
 
     #[test]

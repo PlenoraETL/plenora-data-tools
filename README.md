@@ -11,7 +11,7 @@ atomico.
 
 ## Installazione
 
-Toolchain Rust **1.92.0**, pinnata da `rust-toolchain.toml`.
+Toolchain Rust **1.98.0**, pinnata da `rust-toolchain.toml`.
 
 ```sh
 cargo build --release --locked

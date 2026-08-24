@@ -650,6 +650,205 @@ fn canonical_json_normalizes_numbers() {
     assert_eq!(imin["nodes"][0]["config"]["value"], json!(i64::MIN));
 }
 
+/// Piano minimo con un blocco `limits` arbitrario.
+fn plan_with_limits(limits: &Value) -> String {
+    json!({
+        "schema_version": 5,
+        "limits": limits,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "a", "op": "table.filter", "in": ["main"], "config": {}},
+            {"id": "b", "op": "table.sort", "in": ["a"], "config": {}}
+        ],
+        "output": "b"
+    })
+    .to_string()
+}
+
+/// I limiti dati/runtime del piano sono **configurazione**: il piano puo'
+/// dichiararli sopra o sotto il default, ed e' il modo previsto per
+/// dimensionare l'esecuzione. Il dominio resta chiuso da `Limits::validate`.
+#[test]
+fn i_limiti_dati_runtime_si_dichiarano_in_entrambi_i_versi() {
+    for (campo, valore) in [
+        ("max_input_rows", json!(10)),
+        ("max_output_rows", json!(20_000_000)),
+        ("max_rows_per_edge", json!(10)),
+        ("max_expansion_factor", json!(2.0)),
+        ("max_governed_memory_bytes", json!(1_099_511_627_776_u64)),
+        ("max_temp_bytes", json!(1_048_576)),
+        ("max_wkb_cell_bytes", json!(1024)),
+        ("max_payload_bytes", json!(1_048_576)),
+        ("max_batches", json!(8)),
+        ("max_geometry_depth", json!(4)),
+        ("max_string_bytes", json!(1024)),
+        ("max_regex_bytes", json!(256)),
+        ("max_parallelism", json!(2)),
+        ("spill_partitions", json!(128)),
+    ] {
+        let piano = plan_with_limits(&json!({ campo: valore }));
+        assert!(
+            PlanV5::parse_default(&piano).is_ok(),
+            "dichiarazione rifiutata su {campo}"
+        );
+    }
+    // Fuori dominio resta rifiutato, dove il controllo e' sempre stato.
+    let fuori = plan_with_limits(&json!({"spill_partitions": 1}));
+    let validato = PlanV5::parse_default(&fuori).expect("il parse non giudica il dominio");
+    assert!(validato.effective_limits().validate().is_err());
+}
+
+/// I limiti di piano dichiarati governano il piano che li dichiara: prima
+/// finivano nel `plan_hash` senza che nulla li applicasse.
+#[test]
+fn i_limiti_di_piano_dichiarati_governano_il_piano_che_li_dichiara() {
+    // Due nodi, tetto dichiarato a uno.
+    let piano = plan_with_limits(&json!({"plan": {"max_plan_nodes": 1}}));
+    let errore = parse_err(&piano, &PlanLimits::default());
+    assert!(errore.contains("max_plan_nodes"), "{errore}");
+
+    // `max_plan_json_bytes` e' l'eccezione dichiarata: un tetto sul testo va
+    // applicato prima di leggerlo, quindi non puo' venire dal testo. Il
+    // piano lo dichiara, resta soggetto alla sola restrizione, ma non
+    // governa se stesso — altrimenti la forma canonica, che materializza
+    // tutti i limiti ed e' sempre piu' grande, non rientrerebbe piu'.
+    let piano = plan_with_limits(&json!({"plan": {"max_plan_json_bytes": 16}}));
+    let validato = PlanV5::parse_default(&piano).expect("il tetto sui byte e' del chiamante");
+    let canonico = validato.canonical_json().to_string();
+    assert!(
+        canonico.len() > 16,
+        "la forma canonica materializza i limiti: e' piu' grande del documento"
+    );
+    // ...e la forma canonica rientra: e' la proprieta' che il ricontrollo
+    // avrebbe rotto.
+    let riletto = PlanV5::parse_default(&canonico).expect("round-trip canonico");
+    assert_eq!(riletto.canonical_json(), validato.canonical_json());
+
+    // Profondita' due, tetto dichiarato a uno.
+    let piano = plan_with_limits(&json!({"plan": {"max_plan_depth": 1}}));
+    let errore = parse_err(&piano, &PlanLimits::default());
+    assert!(errore.contains("max_plan_depth"), "{errore}");
+
+    // Un tetto dichiarato ma rispettato non cambia nulla.
+    let piano = plan_with_limits(&json!({"plan": {"max_plan_nodes": 2}}));
+    assert!(PlanV5::parse_default(&piano).is_ok());
+}
+
+/// L'identita' di un piano NON dipende dalla policy di chi lo valida.
+///
+/// Lo stesso documento, accettato sotto due tetti diversi, deve avere lo
+/// stesso canonico e quindi lo stesso `plan_hash`: l'esecuzione e' la
+/// stessa, e un grafo persistito dev'essere confrontabile con se stesso.
+#[test]
+fn il_canonico_non_dipende_dalla_policy_di_chi_valida() {
+    // Catena profonda 300: OLTRE il `max_plan_depth` di default (256), quindi
+    // accettabile solo con una policy piu' larga. E' il caso che mette alla
+    // prova sia l'identita' sia la rileggibilita' del canonico.
+    let mut nodes = Vec::new();
+    let mut previous = "main".to_owned();
+    for index in 0..300 {
+        let id = format!("n{index:03}");
+        nodes.push(json!({"id": id, "op": "table.filter", "in": [previous], "config": {}}));
+        previous = format!("n{index:03}");
+    }
+    let profondo = json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": nodes,
+        "output": previous,
+    })
+    .to_string();
+
+    // Due policy diverse, entrambe abbastanza larghe da accettare il piano.
+    // Si allarga SOLO la profondita': allargare anche il fan-out
+    // confonderebbe il rifiuto per profondita' con quello per restrizione,
+    // dato che il canonico dichiara il fan-out di default.
+    let larghi = limits_with(|l| l.max_plan_depth = 512);
+    let larghissimi = limits_with(|l| l.max_plan_depth = 4096);
+    let sotto_larghi = PlanV5::parse(&profondo, &larghi).expect("valido con policy larga");
+    let sotto_larghissimi =
+        PlanV5::parse(&profondo, &larghissimi).expect("valido con policy larghissima");
+    assert_eq!(
+        sotto_larghi.canonical_json(),
+        sotto_larghissimi.canonical_json(),
+        "l'identita' e' una proprieta' del piano, non di chi lo valida"
+    );
+    // ...e coincide con quella prodotta senza conoscere il chiamante: sono i
+    // default della libreria a essere materializzati.
+    assert_eq!(
+        sotto_larghi.canonical_json(),
+        canonical_json(sotto_larghi.plan())
+    );
+    assert_eq!(
+        sotto_larghi.canonical_json()["limits"]["plan"]["max_plan_depth"],
+        json!(256),
+        "il canonico materializza il default, non la policy del chiamante"
+    );
+    // Il prezzo, verificato invece che solo dichiarato: quel canonico NON e'
+    // rileggibile con nessuna policy, perche' dichiara i default e li viola.
+    // E' un input di hash, non un documento riproponibile.
+    let testo_canonico = sotto_larghi.canonical_json().to_string();
+    let con_policy_larga = parse_err(&testo_canonico, &larghi);
+    assert!(
+        con_policy_larga.contains("max_plan_depth"),
+        "il canonico dichiara 256 e la catena e' profonda 300: non rientra          nemmeno con la policy che l'aveva accettato — {con_policy_larga}"
+    );
+    let con_default = parse_err(&testo_canonico, &PlanLimits::default());
+    assert!(con_default.contains("max_plan_depth"), "{con_default}");
+
+    // Per un piano che sta DENTRO i default il canonico si rilegge, ed e' la
+    // condizione di ogni piano prodotto dalla CLI.
+    let dentro = PlanV5::parse_default(&minimal_plan_json()).expect("valido");
+    let riletto = PlanV5::parse_default(&dentro.canonical_json().to_string())
+        .expect("il canonico di un piano dentro i default rientra");
+    assert_eq!(riletto.canonical_json(), dentro.canonical_json());
+
+    // Con la policy di DEFAULT il canonico e' quello di sempre: i
+    // `plan_hash` gia' emessi non cambiano.
+    let semplice = minimal_plan_json();
+    let validato_default = PlanV5::parse_default(&semplice).expect("valido");
+    assert_eq!(
+        validato_default.canonical_json()["limits"]["plan"],
+        canonical_json(validato_default.plan())["limits"]["plan"],
+        "con la policy di default la forma canonica non cambia"
+    );
+
+    // ...compreso il caso in cui il piano DICHIARA un limite di piano: il
+    // valore dichiarato dev'essere quello che entra nel canonico, non
+    // quello del chiamante. Sostituirlo cambiava il `plan_hash` di ogni
+    // piano che lo dichiara, senza cambio di dominio.
+    for (campo, valore) in [
+        ("max_plan_json_bytes", 4096_u64),
+        ("max_plan_nodes", 8),
+        ("max_identifier_bytes", 32),
+    ] {
+        let dichiarato = plan_with_limits(&json!({"plan": { campo: valore }}));
+        let validato = PlanV5::parse_default(&dichiarato).expect("valido");
+        assert_eq!(
+            validato.canonical_json()["limits"]["plan"][campo],
+            json!(valore),
+            "il canonico deve portare il valore dichiarato di {campo}"
+        );
+        assert_eq!(
+            validato.canonical_json(),
+            canonical_json(validato.plan()),
+            "con la policy di default il canonico coincide con quello libero"
+        );
+    }
+}
+
+/// Anche i limiti di piano possono solo restringere quelli del chiamante.
+#[test]
+fn i_limiti_di_piano_non_possono_allargare_quelli_del_chiamante() {
+    let stretti = limits_with(|l| l.max_plan_nodes = 2);
+    let piano = plan_with_limits(&json!({"plan": {"max_plan_nodes": 1024}}));
+    let errore = parse_err(&piano, &stretti);
+    assert!(
+        errore.contains("solo restringere") && errore.contains("plan.max_plan_nodes"),
+        "{errore}"
+    );
+}
+
 #[test]
 fn effective_limits_combine_plan_overrides_and_defaults() {
     let overrides = LimitsOverride {

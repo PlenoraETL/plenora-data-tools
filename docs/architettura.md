@@ -236,7 +236,7 @@ solo ciò che vale oggi.
 
 | id | decisione |
 |---|---|
-| **D0** | Un solo punto di versione per le dipendenze: Arrow è pinnato a `=59.1.0` nel manifesto del workspace, e nessun crate lo ridichiara. |
+| **D0** | Un solo punto di versione per le dipendenze: Arrow è pinnato a `=59.2.0` nel manifesto del workspace, e nessun crate lo ridichiara. |
 | **D6** | Il `DataContract` è l'unità di contratto fra i nodi: schema Arrow, geometrie, proprietà dichiarate. Ogni operazione lo inferisce **a secco** con `analyze_contract`, senza leggere dati. |
 | **D8** | Validazione statica e dinamica sono distinte. La fase 1 legge solo header e metadati e **non può** verificare il contenuto delle celle: limiti, struttura del grafo, config, schema e metadati geo sono statici; la validità strutturale del WKB per cella è dinamica, in lettura. |
 | **D9** | Materializzazione ai fan-out e fan-in: strategia conservativa della v1. Il fan-out resta una proprietà logica del DAG, e alternative fisiche — rilettura di sorgenti seekable, spill condiviso — restano possibili senza cambiare la semantica. |

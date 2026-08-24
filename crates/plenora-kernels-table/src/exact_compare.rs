@@ -21,7 +21,7 @@
 //! # Dimensione dell'aritmetica
 //!
 //! La scala di un `Decimal128` **non e' limitata inferiormente** da Arrow:
-//! `validate_decimal_precision_and_scale` (arrow-array 59.1.0) rifiuta solo
+//! `validate_decimal_precision_and_scale` (arrow-array 59.2.0) rifiuta solo
 //! `scale > 38`, quindi `Decimal128(38, -100)` e' un tipo valido e i suoi
 //! valori vanno confrontati, non dichiarati indecidibili. Con `scale = -128`
 //! il fattore e' `5^128 < 2^298`, che moltiplicato per `|u| < 2^127` arriva a

@@ -11,16 +11,16 @@ members = [
 [workspace.package]
 version = "1.0.3"
 edition = "2021"
-rust-version = "1.92"
+rust-version = "1.98"
 publish = false
 
 # Unico punto di versione delle dipendenze (decisione D0, architettura.md).
 [workspace.dependencies]
-# Arrow =59.1.0 — versione comune dei due progetti di origine.
-arrow-array = "=59.1.0"
-arrow-schema = "=59.1.0"
-arrow-ipc = "=59.1.0"
-arrow-select = "=59.1.0"
+# Arrow =59.2.0 — versione comune dei due progetti di origine.
+arrow-array = "=59.2.0"
+arrow-schema = "=59.2.0"
+arrow-ipc = "=59.2.0"
+arrow-select = "=59.2.0"
 # Geometrie
 geo = "=0.33.1"
 geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
@@ -33,15 +33,15 @@ proj = { version = "=0.31.0", features = ["bundled_proj"] }
 # Comuni
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-thiserror = "=2.0.19"
-chrono = { version = "=0.4.42", default-features = false, features = ["std"] }
+thiserror = "=2.0.20"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 chrono-tz = "=0.10.4"
-regex = "=1.12.2"
+regex = "=1.13.1"
 unicode-normalization = "=0.1.25"
 num-traits = "=0.2.19"
-md-5 = "=0.10.6"
-sha2 = "=0.10.9"
-uuid = { version = "=1.18.1", features = ["v4"] }
+md-5 = "=0.11.0"
+sha2 = "=0.11.0"
+uuid = { version = "=1.25.0", features = ["v4"] }
 tempfile = "=3.27.0"
 # Handler Ctrl-C della CLI (errori-e-limiti.md#cancellazione): setta il token di cancellazione
 # cooperativa. Piccola, mantenuta, nessun unsafe nel perimetro del workspace
@@ -53,7 +53,7 @@ ctrlc = "=3.5.2"
 # tempfile; API safe (unsafe_code e' proibito nel workspace).
 rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs", "process"] }
 # Dev
-proptest = "=1.10.0"
+proptest = "=1.11.0"
 
 # Crate interni
 plenora-core = { path = "crates/plenora-core" }

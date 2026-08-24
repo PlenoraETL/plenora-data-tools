@@ -17,6 +17,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Permessi minimi ed espliciti: nessun job qui usa `GITHUB_TOKEN`, quindi la
+# sola lettura del contenuto basta. Senza questa riga il token eredita i
+# permessi di default del repository, che possono essere in scrittura: un
+# passo compromesso avrebbe potuto scrivere sul repository che sta
+# verificando.
+permissions:
+  contents: read
+
 env:
   CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
@@ -29,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -41,12 +49,17 @@ jobs:
         # Versione esatta fissata anche in rust-toolchain.toml per lo
         # sviluppo locale; qui la ripetiamo esplicitamente perche' la CI
         # non deve dipendere dal canale "stable" mobile.
-        uses: dtolnay/rust-toolchain@1.92.0
+        # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
+        # commit poteva essere verificato con codice di action diverso. Con
+        # la SHA il ramo non seleziona piu' la toolchain, che va percio'
+        # dichiarata esplicitamente qui.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
         with:
+          toolchain: 1.98.0
           components: clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -55,8 +68,8 @@ jobs:
           # La chiave include la toolchain: artefatti compilati da versioni
           # diverse del compilatore non sono riusabili (ld bus error su
           # restore incrociato, osservato 2026-07-27).
-          key: cargo-ci-1.92.0-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-1.92.0-${{ matrix.os }}-
+          key: cargo-ci-1.98.0-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-1.98.0-${{ matrix.os }}-
 
       # R13.2: --locked. Un Cargo.lock modificato dalla build e' un
       # fallimento, non un aggiornamento.
@@ -102,6 +115,73 @@ jobs:
       - name: Gate nome del budget di memoria (errori-e-limiti.md#memoria-governata)
         run: python scripts/verifica_nome_budget_memoria.py
 
+  # I gate che leggono i SORGENTI, in un job proprio.
+  #
+  # release.md impone job separati, e la ragione e' operativa: in serie il
+  # primo fallimento nasconde tutto cio' che segue, e questi due non
+  # dipendono ne' l'uno dall'altro ne' dalla compilazione. Tenerli come step
+  # del job `test` significava che un assert di troppo impediva di vedere
+  # nella stessa esecuzione lo stato del pin delle action.
+  #
+  # Nessuna toolchain Rust: leggono testo.
+  gate-assert:
+    name: gate assert nel codice di produzione
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # Il gate R6 copre le primitive che Clippy sa nominare, ma non le macro
+      # di assert: `assert!`, `assert_eq!`, `assert_ne!` e le varianti
+      # `debug_assert*` sono panici a tutti gli effetti e non hanno un lint
+      # corrispondente. Senza questo gate la promessa «nel codice di
+      # produzione non esistono primitive di panico» era piu' larga del
+      # controllo che avrebbe dovuto imporla, e due `debug_assert_eq!` erano
+      # rimasti (governor, columns) — uno dei due con il mutex della
+      # contabilita' tenuto.
+      - name: Gate assert nel codice di produzione (errori-e-limiti.md#panic-policy)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_assenza_assert.py
+
+  # Secondo gate sui sorgenti, in un job PROPRIO e non in coda al primo.
+  #
+  # In serie GitHub salta lo step successivo appena uno fallisce: un assert
+  # di troppo impediva di vedere nella stessa esecuzione lo stato del pin
+  # delle action. E' esattamente l'oscuramento che release.md vieta.
+  gate-pin-action:
+    name: gate pin delle action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # Le action sono pinnate a SHA completa: questo gate impedisce che un
+      # tag o un ramo mobile rientri di soppiatto in un workflow o in una
+      # composite action locale.
+      - name: Gate pin delle action (release.md)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_pin_workflow.py
+
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami erano verificati solo localmente — lint pedantic su pair.rs sono
@@ -112,7 +192,7 @@ jobs:
     name: test full-backends (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -124,12 +204,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake sqlite3 libsqlite3-dev
 
       - name: Installa toolchain (baseline ICD R13.1)
-        uses: dtolnay/rust-toolchain@1.92.0
+        # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
+        # commit poteva essere verificato con codice di action diverso. Con
+        # la SHA il ramo non seleziona piu' la toolchain, che va percio'
+        # dichiarata esplicitamente qui.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
         with:
+          toolchain: 1.98.0
           components: clippy
 
       - name: Cache cargo (backends)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -137,8 +222,8 @@ jobs:
             target
           # Chiave separata: gli artefatti nativi dei backend non sono
           # riusabili tra feature set diversi.
-          key: cargo-ci-backends-1.92.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-backends-1.92.0-
+          key: cargo-ci-backends-1.98.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-backends-1.98.0-
 
       - name: Clippy full-backends (gate)
         run: >
@@ -169,7 +254,7 @@ jobs:
   # plenora-database-tools lo hanno da tempo, soglia lines 80).
   #
   # Il job non riusa scripts/coverage.sh perche' quello script gira dentro il
-  # container rust:1.92 (toolchain riproducibile in locale): sul runner la
+  # container rust:1.98 (toolchain riproducibile in locale): sul runner la
   # toolchain pinnata c'e' gia' e il docker-in-docker sarebbe solo overhead.
   # Le soglie sono le stesse nei due punti — se cambiano qui, vanno cambiate
   # anche nello script, che e' il modo di riprodurre il verdetto in locale.
@@ -198,7 +283,7 @@ jobs:
       # strumentati non sono riusabili dalle build normali.
       CARGO_TARGET_DIR: target-cov
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -207,12 +292,17 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Installa toolchain (baseline ICD R13.1)
-        uses: dtolnay/rust-toolchain@1.92.0
+        # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
+        # commit poteva essere verificato con codice di action diverso. Con
+        # la SHA il ramo non seleziona piu' la toolchain, che va percio'
+        # dichiarata esplicitamente qui.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
         with:
+          toolchain: 1.98.0
           components: llvm-tools-preview
 
       - name: Cache cargo (coverage)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -232,8 +322,8 @@ jobs:
           # ripartirebbe da una cache che li contiene ancora — e la
           # `restore-keys` v2 li rimetterebbe sul disco a ogni giro
           # successivo.
-          key: cargo-ci-cov-v3-1.92.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-ci-cov-v3-1.92.0-
+          key: cargo-ci-cov-v3-1.98.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ci-cov-v3-1.98.0-
 
       # Versione pinnata come ogni altra dipendenza (R13.2): un aggiornamento
       # del tool puo' spostare i conteggi e quindi il verdetto del gate.
@@ -270,7 +360,7 @@ jobs:
       - name: Esporta report LCOV
         run: cargo llvm-cov report --lcov --output-path lcov.info
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rust-coverage-lcov
           path: lcov.info
@@ -337,7 +427,7 @@ jobs:
     name: gate documentazione
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -345,7 +435,7 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -417,7 +507,7 @@ jobs:
     steps:
       # fetch-depth 0: il checker verifica che le revisioni e i tag citati
       # esistano nella storia (git cat-file, rev-parse, merge-base).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
@@ -447,7 +537,7 @@ jobs:
     name: gate test dei checker di rilascio
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
@@ -482,7 +572,7 @@ jobs:
     name: gate audit supply-chain
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -491,7 +581,13 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Installa toolchain (baseline ICD R13.1)
-        uses: dtolnay/rust-toolchain@1.92.0
+        # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
+        # commit poteva essere verificato con codice di action diverso. Con
+        # la SHA il ramo non seleziona piu' la toolchain, che va percio'
+        # dichiarata esplicitamente qui.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
+        with:
+          toolchain: 1.98.0
 
       - name: Installa cargo-audit (pin 0.22.2)
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -522,7 +618,7 @@ jobs:
     name: gate compilazione target fuzz
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
 
@@ -531,7 +627,13 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Installa toolchain (baseline ICD R13.1)
-        uses: dtolnay/rust-toolchain@1.92.0
+        # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
+        # commit poteva essere verificato con codice di action diverso. Con
+        # la SHA il ramo non seleziona piu' la toolchain, che va percio'
+        # dichiarata esplicitamente qui.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
+        with:
+          toolchain: 1.98.0
 
       - name: Compilazione dei target fuzz (stabile, --locked)
         run: cargo check --manifest-path fuzz/Cargo.toml --locked

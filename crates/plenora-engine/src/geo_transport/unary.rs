@@ -1335,7 +1335,7 @@ pub fn one_to_one_batch_prepared(
         }
     }
     RecordBatch::try_new(prepared.output_schema.clone(), columns)
-        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+        .map_err(|error| ArrowTransportError::arrow(&error))
 }
 
 // ---------------------------------------------------------------------------
@@ -2097,7 +2097,7 @@ fn explode_batches(
             } else {
                 columns.push(
                     plenora_core::arrow::select::take::take(column, &take_indices, None)
-                        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+                        .map_err(|error| ArrowTransportError::arrow(&error))?,
                 );
             }
         }
@@ -2183,7 +2183,7 @@ fn collect_batches(
             value.as_deref()
         ]))],
     )
-    .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+    .map_err(|error| ArrowTransportError::arrow(&error))?;
     Ok((output_schema, vec![batch]))
 }
 
@@ -2532,7 +2532,7 @@ fn geometry_rows_output(
         columns.push(std::sync::Arc::new(StringArray::from(classes)));
     }
     let batch = RecordBatch::try_new(output_schema.clone(), columns)
-        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+        .map_err(|error| ArrowTransportError::arrow(&error))?;
     Ok((output_schema, vec![batch]))
 }
 

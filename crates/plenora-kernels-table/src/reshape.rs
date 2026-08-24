@@ -1102,15 +1102,30 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         fields.push(field.as_ref().clone());
         columns.push(batch.column(position).clone());
     }
-    let parent_indices = UInt32Array::from(
-        (0..batch.num_rows())
-            .map(|row| {
-                (!structure.is_null(row))
-                    .then(|| u32::try_from(row).ok())
-                    .flatten()
-            })
-            .collect::<Vec<_>>(),
-    );
+    // L'indice di riga si converte in modo FALLIBILE.
+    //
+    // `u32::try_from(row).ok()` produceva `None` oltre `u32::MAX`, e `None`
+    // in un array di indici e' un indice NULLO: i figli di una struct non
+    // nulla sarebbero stati sostituiti da null senza che nulla lo segnalasse.
+    // I limiti di riga sono `u64` e niente vincola un batch a `u32::MAX`
+    // righe, quindi il caso non e' escluso per costruzione. E' la stessa
+    // classe della conversione silenziosa dei conteggi di gruppo.
+    let mut parent_indices = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        if structure.is_null(row) {
+            parent_indices.push(None);
+            continue;
+        }
+        let indice = u32::try_from(row).map_err(|_| {
+            PlenoraError::ResourceLimit(format!(
+                "unnest: il batch supera {} righe, oltre il dominio degli indici \
+                 di riga a 32 bit",
+                u32::MAX
+            ))
+        })?;
+        parent_indices.push(Some(indice));
+    }
+    let parent_indices = UInt32Array::from(parent_indices);
     for (child, field) in structure.columns().iter().zip(structure.fields()) {
         let name = format!("{}{}", config.prefix, field.name());
         validate_output_name(&name)?;

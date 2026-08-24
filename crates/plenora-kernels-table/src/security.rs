@@ -133,7 +133,9 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
                 .collect::<Result<Vec<_>>>()?;
             let mut digest = Md5::new();
             digest.update(parts.join("\u{1f}").as_bytes());
-            Ok(format!("{:x}", digest.finalize()))
+            let mut hex = String::new();
+            push_hex(&mut hex, &digest.finalize());
+            Ok(hex)
         })
         .collect::<Result<Vec<_>>>()?;
     replace_or_append(
@@ -239,7 +241,9 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
                     }
                 }
             }
-            Ok(format!("{:x}", digest.finalize()))
+            let mut hex = String::new();
+            push_hex(&mut hex, &digest.finalize());
+            Ok(hex)
         })
         .collect::<Result<Vec<_>>>()?;
     replace_or_append(
@@ -1019,7 +1023,13 @@ mod tests {
             .map(|parts| {
                 let mut digest = Md5::new();
                 digest.update(parts.as_bytes());
-                Some(format!("{:x}", digest.finalize()))
+                // Oracolo indipendente da `push_hex`: se lo usasse, il test
+                // confronterebbe l'implementazione con se stessa.
+                let mut hex = String::new();
+                for byte in digest.finalize() {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                Some(hex)
             })
             .collect();
         assert_eq!(digest_column(&md5_empty, "digest"), expected_empty);

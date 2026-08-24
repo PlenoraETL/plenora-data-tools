@@ -27,7 +27,7 @@ agente — segue queste regole. Non sono opzionali.
 6. **Nessun `unsafe`** nel workspace (lint attivo). Nessuna dipendenza nuova
    senza motivazione documentata; pin esatti delle versioni.
 7. **Suite completa prima del commit**: `cargo test --workspace
-   --no-fail-fast` (container `rust:1.92`). CI su Linux+Windows deve restare
+   --no-fail-fast` (container `rust:1.98`). CI su Linux+Windows deve restare
    verde.
 8. **Errori senza dati.** Mai valori di righe/colonne nei messaggi di errore
    (regola di `plenora-core/src/error.rs`), neanche in modalità diagnostica.
@@ -59,7 +59,7 @@ ai collegamenti interni.
 
 ```sh
 # test completi (container, toolchain del progetto)
-docker run --rm -v $PWD:/work -w /work rust:1.92 cargo test --workspace --no-fail-fast
+docker run --rm -v $PWD:/work -w /work rust:1.98 cargo test --workspace --no-fail-fast
 # gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nel
 # codice di produzione — lib di tutti i crate + bin della CLI.
 # MAI aggiungere --cap-lints=warn: cappera' anche i -D espliciti (li
@@ -75,6 +75,14 @@ cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
   --lib --bins --locked --features full-backends -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+# gate assert (bloccante, identico alla CI): le macro `assert!`/`assert_eq!`/
+# `debug_assert*` sono primitive di panic che clippy non sa nominare, quindi
+# il gate R6 non le vede. Perimetro identico: crates/*/src meno il codice di
+# test.
+python scripts/verifica_assenza_assert.py
+# gate pin delle action (bloccante): ogni `uses:` dei workflow riferisce una
+# SHA completa con il commento della versione. Tag e rami sono mobili.
+python scripts/verifica_pin_workflow.py
 # gate di coverage (soglie identiche alla CI: lines 90/functions 85/regions 89)
 scripts/coverage.sh
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:

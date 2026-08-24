@@ -16,8 +16,19 @@ use super::transport::{MAX_BATCHES, MAX_COLUMNS, MAX_IPC_METADATA_BYTES};
 /// Allineamento a 8 byte degli offset del framing IPC, su 64 bit: un file
 /// puo' superare `usize` su piattaforme a 32 bit e gli offset non vanno mai
 /// troncati.
-const fn align8_u64(value: u64) -> u64 {
-    value.saturating_add(7) & !7
+///
+/// Fallisce in overflow invece di saturare. `saturating_add(7) & !7` sembrava
+/// prudente ed era il contrario: vicino a `u64::MAX` la somma satura su
+/// `u64::MAX` e il mascheramento la riporta **sotto** il valore di partenza —
+/// l'offset allineato risultava minore di quello da allineare, e la
+/// monotonicita' su cui poggia l'avanzamento del parsing cadeva in silenzio.
+/// Con `checked_add` un offset che non e' allineabile a 64 bit e' un
+/// messaggio malformato, cioe' un errore di framing esplicito.
+const fn align8_u64(value: u64) -> Option<u64> {
+    match value.checked_add(7) {
+        Some(somma) => Some(somma & !7),
+        None => None,
+    }
 }
 
 /// Prefisso di continuazione dei messaggi IPC incapsulati.
@@ -711,11 +722,10 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
             .checked_add(header)
             .and_then(|start| start.checked_add(metadata_bytes))
             .ok_or(ArrowTransportError::IpcTruncated)?;
-        let end = align8_u64(
-            align8_u64(metadata_end)
-                .checked_add(body_len)
-                .ok_or(ArrowTransportError::IpcTruncated)?,
-        );
+        let end = align8_u64(metadata_end)
+            .and_then(|allineato| allineato.checked_add(body_len))
+            .and_then(align8_u64)
+            .ok_or(ArrowTransportError::IpcTruncated)?;
         if end > end_limit {
             return Err(ArrowTransportError::IpcTruncated);
         }
@@ -766,11 +776,10 @@ fn validate_message_at<S: IpcSource + ?Sized>(
     let body_len = to_u64(body_len)?;
     // Stesso criterio per il corpo: se i byte dichiarati non stanno nella
     // regione, il messaggio e' troncato, non oltre budget.
-    let fine = align8_u64(
-        align8_u64(metadata_end)
-            .checked_add(body_len)
-            .ok_or(ArrowTransportError::IpcTruncated)?,
-    );
+    let fine = align8_u64(metadata_end)
+        .and_then(|allineato| allineato.checked_add(body_len))
+        .and_then(align8_u64)
+        .ok_or(ArrowTransportError::IpcTruncated)?;
     if fine > end_limit {
         return Err(ArrowTransportError::IpcTruncated);
     }
@@ -1118,11 +1127,10 @@ fn validate_footer_block<S: IpcSource + ?Sized>(
     // Per la specifica del formato incapsulato `metaDataLength` comprende il
     // prefisso e il padding a 8 byte, quindi l'uguaglianza esatta e'
     // `align8(prefisso + metadata_len)`.
-    let declared = align8_u64(
-        header
-            .checked_add(to_u64(metadata_len)?)
-            .ok_or(ArrowTransportError::IpcTruncated)?,
-    );
+    let declared = header
+        .checked_add(to_u64(metadata_len)?)
+        .and_then(align8_u64)
+        .ok_or(ArrowTransportError::IpcTruncated)?;
     if declared != block.metadata_len {
         return Err(ArrowTransportError::IpcFooterInvalid(
             "metadati del messaggio diversi dalla lunghezza dichiarata dal blocco",
@@ -1155,7 +1163,7 @@ fn validate_footer_block<S: IpcSource + ?Sized>(
 /// limiti di risorse.
 pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     validate_ipc_framing(payload)?;
-    // `arrow-ipc` 59.1.0 va in panico dentro `convert::fb_to_schema` su schemi
+    // `arrow-ipc` 59.2.0 va in panico dentro `convert::fb_to_schema` su schemi
     // che il decoder FlatBuffer accetta: `fields` e' opzionale e viene scartato
     // con `unwrap()` (convert.rs:198), e la conversione dei tipi ha una
     // ventina fra `panic!` e `unimplemented!` sui valori di enum che non
@@ -1230,8 +1238,8 @@ pub fn descrivi_panico(panico: &Box<dyn std::any::Any + Send>) -> &'static str {
 fn decode_ipc_unguarded(
     payload: &[u8],
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
-    let reader = StreamReader::try_new(payload, None)
-        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+    let reader =
+        StreamReader::try_new(payload, None).map_err(|error| ArrowTransportError::arrow(&error))?;
     let schema = reader.schema();
     if schema.fields().len() > MAX_COLUMNS {
         return Err(ArrowTransportError::TooManyColumns(schema.fields().len()));
@@ -1239,7 +1247,7 @@ fn decode_ipc_unguarded(
     let mut batches = Vec::new();
     let mut rows = 0_u64;
     for batch in reader {
-        let batch = batch.map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+        let batch = batch.map_err(|error| ArrowTransportError::arrow(&error))?;
         if batches.len() >= MAX_BATCHES {
             return Err(ArrowTransportError::TooManyBatches(batches.len() + 1));
         }
@@ -1272,15 +1280,15 @@ pub fn encode_ipc(
     let mut payload = Vec::new();
     {
         let mut writer = StreamWriter::try_new(&mut payload, schema)
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+            .map_err(|error| ArrowTransportError::arrow(&error))?;
         for batch in batches {
             writer
                 .write(batch)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+                .map_err(|error| ArrowTransportError::arrow(&error))?;
         }
         writer
             .finish()
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+            .map_err(|error| ArrowTransportError::arrow(&error))?;
     }
     if payload.len() as u64 > MAX_STREAM_BYTES {
         return Err(ArrowTransportError::StreamTooLarge);
@@ -1305,15 +1313,15 @@ pub fn encode_ipc_file(
     let mut payload = Vec::new();
     {
         let mut writer = FileWriter::try_new(&mut payload, schema)
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+            .map_err(|error| ArrowTransportError::arrow(&error))?;
         for batch in batches {
             writer
                 .write(batch)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+                .map_err(|error| ArrowTransportError::arrow(&error))?;
         }
         writer
             .finish()
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+            .map_err(|error| ArrowTransportError::arrow(&error))?;
     }
     if payload.len() as u64 > MAX_STREAM_BYTES {
         return Err(ArrowTransportError::StreamTooLarge);

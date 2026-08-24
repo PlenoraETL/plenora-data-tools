@@ -3,13 +3,15 @@
 ## Gate
 
 Nessuno di questi è facoltativo. La CI li esegue tutti a ogni PR e a ogni push
-su `main`: **tredici job**, e un rosso qualsiasi ferma il rilascio.
+su `main`: **quindici job**, e un rosso qualsiasi ferma il rilascio.
 
 | gate | comando |
 |---|---|
 | formattazione | `cargo fmt --all --check` |
 | suite completa | `cargo test --workspace --locked` |
 | **anti-panico (R6)** | `cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable -D clippy::todo -D clippy::unimplemented` |
+| **assert nel codice di produzione** | `python scripts/verifica_assenza_assert.py` |
+| **pin delle action** | `python scripts/verifica_pin_workflow.py` |
 | lint | `cargo clippy --workspace --all-targets --locked` |
 | backend nativi | gli stessi, con `--features full-backends`, solo Linux |
 | coverage | `cargo llvm-cov report --fail-under-lines 90 --fail-under-functions 85 --fail-under-regions 89` |
@@ -20,27 +22,137 @@ su `main`: **tredici job**, e un rosso qualsiasi ferma il rilascio.
 | superficie documentale | `python scripts/verifica_documentazione.py` |
 | memoria governata | `python scripts/verifica_memoria_governata.py` |
 
-Due note sul gate anti-panico, entrambe imparate a caro prezzo:
+Tre note sul gate anti-panico, tutte imparate a caro prezzo:
 
 - **mai** aggiungere `--cap-lints=warn`: cappa anche i `-D` espliciti,
   declassandoli a warning. È già successo, e il gate non ha bloccato nulla per
   giorni mentre si accumulavano ventisette siti;
 - il perimetro include `plenora-cli` con `--bins`: la CLI è codice di
   produzione a tutti gli effetti — è l'unico eseguibile distribuito — ma non
-  ha un target `--lib`, quindi senza `--bins` resterebbe fuori.
+  ha un target `--lib`, quindi senza `--bins` resterebbe fuori;
+- clippy non ha un lint per `assert!`, `assert_eq!`, `assert_ne!` e le
+  varianti `debug_assert*`, che sono primitive di panico quanto le altre.
+  Servono due gate, non uno: il secondo è una scansione dei sorgenti
+  (`scripts/verifica_assenza_assert.py`) con lo stesso perimetro, e si
+  autoverifica iniettando mutazioni. Senza, la promessa era più larga del
+  controllo che avrebbe dovuto imporla.
 
 I gate di rilascio stanno in **job separati**, non in step dello stesso job:
 con controlli in serie il primo fallimento nasconde tutto ciò che segue.
 
+## Riproducibilità della CI
+
+Lo stesso commit dev'essere verificato dallo **stesso codice**, non solo dalla
+stessa toolchain. Ogni `uses:` dei workflow riferisce quindi una **SHA
+completa** con un commento che ne dice la versione; un tag come `v4` o un ramo
+come `1.98.0` è mobile, e chi lo controlla può spostarlo fra due esecuzioni
+della stessa PR. Con la SHA il ramo non seleziona più la toolchain, che va
+perciò dichiarata esplicitamente nell'input `toolchain:`.
+
+`scripts/verifica_pin_workflow.py` è il gate che tiene la regola: rifiuta i
+riferimenti mobili, le SHA abbreviate — ambigue per costruzione — e le SHA
+senza commento di versione, che diventano illeggibili e quindi non si
+aggiornano più. Anche gli strumenti installati con `cargo install` sono
+pinnati a una versione esatta (`cargo-llvm-cov`, `cargo-audit`, `cargo-fuzz`),
+e il fuzzing usa una **nightly datata** invece del canale mobile.
+
 ## Riprodurre i gate in locale
 
-La toolchain è pinnata a **1.92.0** da `rust-toolchain.toml`, e ogni comando
+La toolchain è pinnata a **1.98.0** da `rust-toolchain.toml`, e ogni comando
 usa `--locked`: un `Cargo.lock` modificato dalla build è un fallimento, non un
 aggiornamento.
 
 `scripts/coverage.sh` riproduce il verdetto del gate coverage dentro un
 container con la stessa toolchain; le soglie sono le stesse dei due punti e se
 cambiano vanno cambiate in entrambi.
+
+## Baseline di compilazione: analisi di impatto
+
+`rust-toolchain.toml` dichiara che ogni variazione della baseline richiede una
+change impact analysis (R13.5). Questa è quella della revisione corrente.
+
+### Toolchain
+
+Da **1.92.0** a **1.98.0**. `cargo fmt` non ha prodotto differenze e il codice
+ha compilato invariato: l'unico effetto sono stati **lint nuovi**, perché il
+workspace tiene `clippy::all`, `pedantic` e `nursery` a `deny`. Quattordici
+sono stati risolti riscrivendo il codice; tre sono stati **rifiutati con
+motivazione** — due proposte di `mul_add`, che cambierebbe il risultato in
+virgola mobile e quindi il determinismo, e sono marcate `#[allow]` con il
+perché accanto.
+
+Un canale che alza le lint a `deny` fa fallire la build su codice corretto: è
+un costo previsto e voluto, non una sorpresa. Va messo in conto a ogni bump.
+
+### Dipendenze dirette
+
+| crate | da | a | note |
+|---|---|---|---|
+| `arrow-array` / `-schema` / `-ipc` / `-select` | 59.1.0 | 59.2.0 | vedi impatto sotto |
+| `thiserror` | 2.0.19 | 2.0.20 | |
+| `chrono` | 0.4.42 | 0.4.45 | |
+| `regex` | 1.12.2 | 1.13.1 | |
+| `uuid` | 1.18.1 | 1.25.0 | |
+| `proptest` | 1.10.0 | 1.11.0 | solo test |
+| `md-5` | 0.10.6 | 0.11.0 | `digest` 0.11 |
+| `sha2` | 0.10.9 | 0.11.0 | `digest` 0.11 |
+
+Nessuno di questi aggiornamenti è forzato da una vulnerabilità: `cargo audit`
+era pulito **prima** di applicarli, su 187 dipendenze del workspace e 152 del
+progetto fuzz. Sono manutenzione, e la conseguenza pratica è che qualunque di
+essi può essere annullato senza aprire un buco.
+
+### Impatto: `arrow_version` invalida i grafi già validati
+
+La versione di Arrow entra nell'identità di `ValidatedGraph`, e
+`check_compatibility` la confronta: un grafo validato sotto 59.1.0 viene ora
+respinto con `GRAPH_MISMATCH`. È la semantica voluta — la stessa di un bump di
+`engine_version` — e va **prevista da chi conserva grafi validati fra le
+esecuzioni**: vanno rivalidati, non riusati.
+
+Il `plan_hash` **non** è toccato: è `SHA256(dominio ‖ canonical_json)` e non
+include la versione di Arrow. I piani mantengono la loro identità.
+
+### Impatto: `digest` 0.11 cambia i tipi, non i byte
+
+`digest` 0.11 sostituisce `generic-array` con `hybrid-array`, e il valore
+restituito da `finalize()` non implementa più `LowerHex`. I due siti che
+formattavano un digest con `{:x}` usano ora `push_hex`, già presente e già
+documentato come equivalente byte a byte.
+
+MD5 e SHA-256 sono algoritmi fissi, quindi l'output non poteva cambiare; ma
+«non poteva» non è una verifica. La verifica sono i **valori d'oro** già
+presenti nella suite — fra cui `d41d8cd98f00b204e9800998ecf8427e`, l'MD5 noto
+della stringa vuota — che sono indipendenti da qualunque libreria e passano.
+
+### Sospeso: `rstar` resta a 0.12.2
+
+`rstar` 0.13.0 esiste, ma **nessuna versione pubblicata di `geo` lo supporta**:
+anche l'ultima, la 0.33.1 che già usiamo, dichiara `rstar = "0.12.0"` come
+dipendenza **obbligatoria** — non opzionale, non dietro una feature. Non c'è
+un interruttore da spegnere.
+
+`geo-types` è invece già pronto: usa dipendenze opzionali rinominate
+(`package = "rstar"`) per offrire una feature per versione, e la 0.7.20 ha
+aggiunto `rstar_0_13`. Non ci aiuta finché `geo` impone la 0.12, perché
+l'albero conterrebbe comunque entrambe.
+
+Aggiornare solo il nostro pin farebbe quindi convivere due implementazioni di
+R-tree nello stesso binario, in una libreria che ha un contratto di
+determinismo sui join spaziali, senza alcun beneficio in cambio.
+
+Condizione di rientro: `geo` pubblica una versione che dipende da `rstar`
+0.13. La feature già presente in `geo-types` dice che l'ecosistema si sta
+muovendo in quella direzione; quando succede, si aggiornano insieme.
+
+### Fuori dall'analisi: `benchmarks/baseline/`
+
+Quei file **non** sono stati aggiornati, ed è deliberato: registrano una
+misura presa il 2026-07-24, con la toolchain e le dipendenze di allora.
+Riscriverne le versioni renderebbe falso il registro. L'harness resta pinnato
+alle versioni di quel giorno perché è la riproduzione congelata della misura;
+il confronto con i numeri attuali è un'attività separata, che deve dichiarare
+di stare confrontando due ambienti diversi.
 
 ## Piattaforme
 
@@ -196,6 +308,8 @@ cambiata in modo incompatibile.
 | categoria d'errore dei limiti di piano malformati | `data_mapping` in v4 e in v5, dove prima il percorso v4 dava `invalid_plan`: cambia l'exit code |
 | `Inputs::add` / `Inputs::with` deprecate | il percorso senza contratto non è più una forma sostenuta |
 | struct di metriche `#[non_exhaustive]` | da qui in avanti un campo nuovo non sarà più una rottura |
+| i limiti dichiarati in `limits.plan` governano davvero il piano | un piano che li dichiarava più larghi della policy di chi esegue, o che li dichiarava e poi li violava, era accettato e ora è rifiutato: vedi [`piano-v5.md`](piano-v5.md) |
+| errori sanitizzati di arrow, GEOS e della trasformazione PROJ | il testo della dipendenza non attraversa più il confine: chi confrontava quei messaggi non li ritrova |
 
 L'artefatto distribuito è il binario `plenora-data-tools`. Non esiste ancora
 un pacchetto Python: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).

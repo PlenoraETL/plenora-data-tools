@@ -100,27 +100,75 @@ pub mod arrow {
     /// Versione dei crate Arrow in uso (`arrow-schema` & co., unica per
     /// decisione D0).
     ///
-    /// I crate Arrow non espongono la propria versione a runtime: la
-    /// costante e' tenuta allineata al pin del workspace (`arrow-schema =
-    /// "=…"` nel `Cargo.toml` di root) da un test dedicato. Entra
-    /// nell'identita' dei grafi validati (piano-v5.md#identita-e-fingerprint).
-    pub const VERSION: &str = "59.1.0";
+    /// I crate Arrow non espongono la propria versione a runtime: la costante
+    /// e' tenuta allineata da test dedicati a TUTTI i pin che la incarnano —
+    /// i quattro del `Cargo.toml` di root e quelli del progetto fuzz, che ha
+    /// un lock proprio. Entra nell'identita' dei grafi validati
+    /// (piano-v5.md#identita-e-fingerprint): un bump la fa divergere dai grafi
+    /// gia' validati, che `check_compatibility` respinge con `GRAPH_MISMATCH`.
+    /// Non entra invece nel `plan_hash`, che resta stabile fra versioni Arrow.
+    pub const VERSION: &str = "59.2.0";
 }
 
 #[cfg(test)]
 mod tests {
+    /// I quattro crate Arrow del workspace sono un solo numero di versione
+    /// (decisione D0): il test li verifica tutti, non solo `arrow-schema`.
+    const CRATE_ARROW: [&str; 4] = ["arrow-array", "arrow-schema", "arrow-ipc", "arrow-select"];
+
     /// `arrow::VERSION` deve restare allineata al pin del workspace: un bump
     /// di Arrow senza aggiornarla renderebbe silenziosamente falso il check
     /// di versione nell'identita' dei grafi (piano-v5.md#identita-e-fingerprint).
+    ///
+    /// La versione dichiarata e' una sola (D0), ma i pin che la incarnano sono
+    /// quattro: sorvegliarne uno solo lasciava agli altri tre la liberta' di
+    /// divergere in silenzio.
     #[test]
     fn arrow_version_matches_the_workspace_pin() {
         let manifest =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
                 .expect("Cargo.toml del workspace leggibile");
-        let pin = format!("arrow-schema = \"={}\"", super::arrow::VERSION);
-        assert!(
-            manifest.contains(&pin),
-            "pin di arrow-schema non allineato ad arrow::VERSION: atteso `{pin}`"
-        );
+        for nome in CRATE_ARROW {
+            let pin = format!("{nome} = \"={}\"", super::arrow::VERSION);
+            assert!(
+                manifest.contains(&pin),
+                "pin di {nome} non allineato ad arrow::VERSION: atteso `{pin}`"
+            );
+        }
+    }
+
+    /// Il progetto fuzz ha un manifesto e un lock propri: ridichiara i crate
+    /// Arrow e non partecipa al `cargo update` del workspace. Se resta
+    /// indietro, il confine sugli input ostili viene esercitato su una libreria
+    /// diversa da quella che il componente spedisce — cioe' i fuzz target
+    /// smettono di dire qualcosa sul prodotto senza fallire.
+    #[test]
+    fn arrow_version_matches_the_fuzz_pin() {
+        let manifest = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fuzz/Cargo.toml"
+        ))
+        .expect("Cargo.toml del progetto fuzz leggibile");
+        for nome in CRATE_ARROW {
+            let dichiarato = format!("{nome} = ");
+            if !manifest.contains(&dichiarato) {
+                continue; // il progetto fuzz non usa tutti e quattro i crate
+            }
+            let pin = format!("{nome} = \"={}\"", super::arrow::VERSION);
+            assert!(
+                manifest.contains(&pin),
+                "pin fuzz di {nome} non allineato ad arrow::VERSION: atteso `{pin}`"
+            );
+        }
+    }
+
+    /// `capabilities::ARROW_VERSION` e' la versione che il componente dichiara
+    /// verso l'esterno; `arrow::VERSION` e' quella che impone nel confronto di
+    /// compatibilita' dei grafi. Devono essere lo stesso valore: oggi lo sono
+    /// per costruzione (alias), e questo test lo tiene vero se qualcuno
+    /// reintroduce un letterale.
+    #[test]
+    fn la_versione_dichiarata_e_quella_imposta_coincidono() {
+        assert_eq!(crate::capabilities::ARROW_VERSION, super::arrow::VERSION);
     }
 }

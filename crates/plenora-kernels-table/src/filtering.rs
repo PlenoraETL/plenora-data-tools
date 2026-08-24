@@ -375,7 +375,10 @@ fn fast_rows(
             } else if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
                 let expected = json_text(value);
                 rows_where(values, |row| (values.value(row) == expected) != negate)
-            } else if let Some(values) = array.as_any().downcast_ref::<BooleanArray>() {
+            } else {
+                // Ultimo tipo della catena: downcast fallito = tipo non
+                // gestito, stesso `None` di prima.
+                let values = array.as_any().downcast_ref::<BooleanArray>()?;
                 // Il generico confronta "true"/"false": equivalente al
                 // confronto nativo sui soli valori booleani possibili.
                 let expected = json_text(value);
@@ -384,8 +387,6 @@ fn fast_rows(
                         || (expected == "false" && !values.value(row)))
                         != negate
                 })
-            } else {
-                return None;
             }
         }
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
@@ -403,12 +404,13 @@ fn fast_rows(
                 rows_where(values, |row| {
                     ordered_typed(compare_u64(values.value(row), bound), operator)
                 })
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+            } else {
+                // Ultimo tipo della catena: downcast fallito = tipo non
+                // gestito, stesso `None` di prima.
+                let values = array.as_any().downcast_ref::<Float64Array>()?;
                 rows_where(values, |row| {
                     ordered_typed(compare_f64(values.value(row), bound), operator)
                 })
-            } else {
-                return None;
             }
         }
         Operator::Between => {
@@ -430,15 +432,16 @@ fn fast_rows(
                         compare_u64(values.value(row), high),
                     )
                 })
-            } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
+            } else {
+                // Ultimo tipo della catena: downcast fallito = tipo non
+                // gestito, stesso `None` di prima.
+                let values = array.as_any().downcast_ref::<Float64Array>()?;
                 rows_where(values, |row| {
                     within_bounds(
                         compare_f64(values.value(row), low),
                         compare_f64(values.value(row), high),
                     )
                 })
-            } else {
-                return None;
             }
         }
         Operator::Contains | Operator::Startswith | Operator::Endswith => {

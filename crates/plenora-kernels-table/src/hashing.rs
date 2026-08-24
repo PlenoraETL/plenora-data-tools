@@ -51,16 +51,16 @@ impl Hasher for KeyHasher {
 
     fn write(&mut self, bytes: &[u8]) {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            // `chunks_exact(8)` produce blocchi di esattamente 8 byte: la
-            // copia e' totale per costruzione, nessun caso fallibile.
-            let mut block = [0_u8; 8];
-            block.copy_from_slice(chunk);
-            let value = u64::from_le_bytes(block);
+        // `as_chunks::<8>()` restituisce blocchi gia' tipizzati `[u8; 8]` e
+        // il resto: la totalita' della conversione e' nel TIPO, non piu' in
+        // un commento accanto a una copia. I valori prodotti sono gli stessi
+        // — stessi blocchi, stesso ordine, stesso trattamento del resto —
+        // quindi l'hash non cambia.
+        let (blocchi, remainder) = bytes.as_chunks::<8>();
+        for blocco in blocchi {
+            let value = u64::from_le_bytes(*blocco);
             self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(K);
         }
-        let remainder = chunks.remainder();
         if !remainder.is_empty() {
             let mut tail = 0_u64;
             for &byte in remainder {
@@ -76,8 +76,6 @@ pub type FastHasher = BuildHasherDefault<KeyHasher>;
 
 #[cfg(test)]
 mod tests {
-    use std::hash::Hasher as _;
-
     use super::*;
 
     fn hash(bytes: &[u8]) -> u64 {

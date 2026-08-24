@@ -201,6 +201,23 @@ pub enum ArrowTransportError {
 }
 
 impl ArrowTransportError {
+    /// Errore restituito da arrow-rs, **sanificato**.
+    ///
+    /// Il testo di arrow-rs cita regolarmente il valore che ha causato il
+    /// difetto: farlo attraversare il confine cosi' com'e' violerebbe la
+    /// regola «errori senza dati» (errori-e-limiti.md#privacy-dei-messaggi)
+    /// e legherebbe la privacy dei nostri errori al comportamento di una
+    /// dipendenza. Passa quindi il solo codice della variante
+    /// ([`plenora_core::error::arrow_error_code`]), che dice che genere di
+    /// difetto e' senza dire su quale dato.
+    #[must_use]
+    pub fn arrow(error: &plenora_core::arrow::ArrowError) -> Self {
+        Self::Arrow(format!(
+            "arrow error: {}",
+            plenora_core::error::arrow_error_code(error)
+        ))
+    }
+
     /// Associa un payload row-scoped senza alterare testo o variante
     /// dell'errore; un payload non valido degrada a `Internal` (mai
     /// pubblicare diagnostica non conforme).

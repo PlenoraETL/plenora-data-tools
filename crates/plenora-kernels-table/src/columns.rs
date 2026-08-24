@@ -200,13 +200,31 @@ fn parse_align_decimal(text: &str) -> Option<i128> {
     Some(if negative { -scaled } else { scaled })
 }
 
+/// Nome della forma JSON di un valore: e' una proprieta' strutturale, non il
+/// contenuto, e puo' comparire in un messaggio d'errore.
+const fn forma_json(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// Materializza una colonna costante di `rows` righe dal `default` JSON:
 /// stessa conversione validata da [`check_align_default`] (fail-closed in
 /// validazione, mai a meta' dei dati).
 fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Result<ArrayRef> {
+    // Il messaggio nomina la FORMA del default, mai il suo contenuto: il
+    // default e' materializzato in ogni cella della colonna, quindi citarlo
+    // significherebbe scrivere un valore di cella in un errore
+    // (errori-e-limiti.md#privacy-dei-messaggi).
     let invalid = || {
         PlenoraError::InvalidPlan(format!(
-            "align_schema: default {value} non convertibile in {align_type:?}"
+            "align_schema: default di tipo JSON {} non convertibile in {align_type:?}",
+            forma_json(value)
         ))
     };
     let string = || match value {
@@ -289,7 +307,15 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
             Arc::new(BinaryArray::from(vec![text.as_bytes(); rows]))
         }
     };
-    debug_assert_eq!(array.data_type(), &align_type.data_type());
+    // Invariante interna, verificata SEMPRE e in modo fallibile: un
+    // `debug_assert_eq!` sarebbe una primitiva di panico nel codice di
+    // produzione (errori-e-limiti.md#panic-policy) e in build debug farebbe
+    // abortire il chiamante invece di restituirgli un errore.
+    if array.data_type() != &align_type.data_type() {
+        return Err(PlenoraError::Internal(format!(
+            "align_schema: colonna costruita con un tipo diverso da {align_type:?}"
+        )));
+    }
     Ok(array)
 }
 

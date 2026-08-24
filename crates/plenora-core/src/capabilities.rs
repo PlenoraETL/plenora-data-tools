@@ -27,7 +27,16 @@ use crate::catalog::{
 pub const CAPABILITIES_PROTOCOL_VERSION: u32 = 1;
 
 /// Versione Arrow pinnata (R1).
-pub const ARROW_VERSION: &str = "59.1.0";
+///
+/// Deriva da [`crate::arrow::VERSION`] invece di ripeterne il letterale: la
+/// decisione D0 (architettura.md) vuole un solo punto di versione, e questa
+/// costante e' quella che finisce nel documento `capabilities` letto da fuori,
+/// mentre il confronto di compatibilita' dei grafi usa `arrow::VERSION`
+/// (planner.rs, `check_compatibility`). Due letterali indipendenti potevano
+/// divergere senza che nulla se ne accorgesse — il test di allineamento al pin
+/// ne sorvegliava uno solo — e il componente avrebbe dichiarato una versione
+/// diversa da quella che imponeva.
+pub const ARROW_VERSION: &str = crate::arrow::VERSION;
 
 /// Modello geometrico dichiarato (R3.1-R3.5): che cosa il componente sa
 /// rappresentare, propagare ed elaborare.

@@ -403,17 +403,16 @@ pub fn validate_pair_parameters(
                     required("max_coordinate_pairs", values.max_coordinate_pairs)?,
                 )?;
             }
-            PairOperation::Split => {
+            PairOperation::Split
                 if values
                     .tolerance
-                    .is_some_and(|value| !value.is_finite() || value < 0.0)
-                {
-                    return Err(ArrowTransportError::InvalidParameter {
-                        operation,
-                        name: "tolerance",
-                        reason: "deve essere finita e non negativa",
-                    });
-                }
+                    .is_some_and(|value| !value.is_finite() || value < 0.0) =>
+            {
+                return Err(ArrowTransportError::InvalidParameter {
+                    operation,
+                    name: "tolerance",
+                    reason: "deve essere finita e non negativa",
+                });
             }
             _ => {}
         }
@@ -664,7 +663,7 @@ fn pairs_batch(
         )));
     }
     RecordBatch::try_new(std::sync::Arc::new(schema.clone()), columns)
-        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))
+        .map_err(|error| ArrowTransportError::arrow(&error))
 }
 
 /// Colonna scalare allineata alle righe left da accodare agli attributi.
@@ -1061,7 +1060,7 @@ pub fn pair_arrow_with_format(
                     std::sync::Arc::new(UInt64Array::from(right_index)),
                 ],
             )
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+            .map_err(|error| ArrowTransportError::arrow(&error))?;
             (out_schema, vec![batch])
         }
         PairOperation::Within => {
@@ -1382,16 +1381,16 @@ pub fn pair_arrow_with_format(
                             .map(|batch| batch.column(index).as_ref())
                             .collect::<Vec<_>>(),
                     )
-                    .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+                    .map_err(|error| ArrowTransportError::arrow(&error))?;
                     columns.push(
                         plenora_core::arrow::select::take::take(&column, &take_indices, None)
-                            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+                            .map_err(|error| ArrowTransportError::arrow(&error))?,
                     );
                 }
             }
             columns.push(std::sync::Arc::new(UInt64Array::from(parents)));
             let batch = RecordBatch::try_new(out_schema.clone(), columns)
-                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?;
+                .map_err(|error| ArrowTransportError::arrow(&error))?;
             (out_schema, vec![batch])
         }
         #[cfg(not(feature = "geos-backend"))]

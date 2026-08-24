@@ -2489,7 +2489,7 @@ mod tests {
         .to_string()
         .contains("non supportato"));
 
-        assert!(
+        assert_eq!(
             ok(
                 "table.assert_not_null",
                 &[tabular_contract()],
@@ -2497,8 +2497,8 @@ mod tests {
             )
             .schema
             .fields()
-            .len()
-                == base_fields().len()
+            .len(),
+            base_fields().len()
         );
         assert!(err(
             "table.assert_not_null",
@@ -2508,7 +2508,7 @@ mod tests {
         .to_string()
         .contains("missing"));
 
-        assert!(
+        assert_eq!(
             ok(
                 "table.assert_unique",
                 &[tabular_contract()],
@@ -2516,8 +2516,8 @@ mod tests {
             )
             .schema
             .fields()
-            .len()
-                == base_fields().len()
+            .len(),
+            base_fields().len()
         );
         assert!(err(
             "table.assert_unique",
@@ -2527,7 +2527,7 @@ mod tests {
         .to_string()
         .contains("scalare"));
 
-        assert!(
+        assert_eq!(
             ok(
                 "table.assert_range",
                 &[tabular_contract()],
@@ -2535,8 +2535,8 @@ mod tests {
             )
             .schema
             .fields()
-            .len()
-                == base_fields().len()
+            .len(),
+            base_fields().len()
         );
         assert!(err(
             "table.assert_range",
@@ -2546,7 +2546,7 @@ mod tests {
         .to_string()
         .contains("numero"));
 
-        assert!(
+        assert_eq!(
             ok(
                 "table.assert_regex",
                 &[tabular_contract()],
@@ -2554,8 +2554,8 @@ mod tests {
             )
             .schema
             .fields()
-            .len()
-                == base_fields().len()
+            .len(),
+            base_fields().len()
         );
         assert!(err(
             "table.assert_regex",
@@ -2754,7 +2754,7 @@ mod tests {
 
     #[test]
     fn assert_cardinality_uses_proven_row_count() {
-        assert!(
+        assert_eq!(
             ok(
                 "table.assert_cardinality",
                 &[proven_contract()],
@@ -2762,8 +2762,8 @@ mod tests {
             )
             .schema
             .fields()
-            .len()
-                == base_fields().len()
+            .len(),
+            base_fields().len()
         );
         assert!(matches!(
             err(

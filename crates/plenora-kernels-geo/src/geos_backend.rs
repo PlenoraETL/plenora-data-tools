@@ -21,8 +21,17 @@ pub enum RepairMethod {
 pub enum GeosBackendError {
     #[error(transparent)]
     InputContract(#[from] PlenoraError),
-    #[error("GEOS: {0}")]
-    Geos(String),
+    /// Fallimento di una chiamata alla libreria nativa GEOS.
+    ///
+    /// Il payload e' il **contesto** della chiamata, scritto qui e non dalla
+    /// dipendenza: i messaggi di GEOS citano regolarmente le coordinate che
+    /// hanno causato il difetto («Self-intersection at or near point X Y»),
+    /// e farli attraversare il confine cosi' come sono violerebbe la regola
+    /// «errori senza dati» (errori-e-limiti.md#privacy-dei-messaggi).
+    /// Il contesto dice quale passo e' fallito, che e' l'informazione
+    /// diagnostica utile e non dipende dal contenuto del dato.
+    #[error("GEOS: {0} fallita")]
+    Geos(&'static str),
     #[error("GEOS make-valid ha prodotto una geometria ancora non valida")]
     InvalidRepair,
     #[error("tipo geometria non supportato da {operation}: {actual}")]
@@ -46,18 +55,30 @@ pub enum GeosBackendError {
     },
     #[error("output GEOS non valido: {0}")]
     InvalidOutput(String),
-    #[error("lo split poligonale non conserva l'area: input={input}, output={output}")]
-    AreaMismatch { input: f64, output: f64 },
-    #[error("lo split poligonale non ricopre esattamente l'input: symmetric_difference={area}")]
-    CoverageMismatch { area: f64 },
+    /// Le aree confrontate NON compaiono nel messaggio: sono grandezze
+    /// derivate dalla geometria di input, quindi dato di cella
+    /// (errori-e-limiti.md#privacy-dei-messaggi). L'invariante violata e'
+    /// gia' l'informazione diagnostica.
+    #[error("lo split poligonale non conserva l'area dell'input")]
+    AreaMismatch,
+    /// Come [`GeosBackendError::AreaMismatch`]: l'area della differenza
+    /// simmetrica e' derivata dai dati e resta fuori dal messaggio.
+    #[error("lo split poligonale non ricopre esattamente l'input")]
+    CoverageMismatch,
 }
 
 // Passato per valore per contratto di `map_err` (usato come fn-pointer sui
-// `Result` di GEOS): la conversione in stringa non richiede il consumo, ma il
-// puntatore a funzione si.
+// `Result` di GEOS): la conversione non richiede il consumo, ma il puntatore
+// a funzione si.
+//
+// Il testo dell'errore GEOS viene DELIBERATAMENTE scartato: e' scritto dalla
+// libreria nativa e puo' contenere coordinate dell'input
+// (errori-e-limiti.md#privacy-dei-messaggi). Resta il contesto generico; i
+// punti che sanno dire di piu' costruiscono la variante direttamente con il
+// proprio contesto statico.
 #[allow(clippy::needless_pass_by_value)]
-fn geos_error(error: geos::Error) -> GeosBackendError {
-    GeosBackendError::Geos(error.to_string())
+fn geos_error(_error: geos::Error) -> GeosBackendError {
+    GeosBackendError::Geos("chiamata alla libreria nativa")
 }
 
 /// Repairs a structurally valid 2D WKB geometry.
@@ -125,7 +146,7 @@ pub fn make_valid_geometry(
 ) -> Result<Geometry<f64>, GeosBackendError> {
     let payload = geometry
         .to_wkb(CoordDimensions::xy())
-        .map_err(|error| GeosBackendError::Geos(error.to_string()))?;
+        .map_err(|_| GeosBackendError::Geos("codifica WKB intermedia"))?;
     let repaired = make_valid_wkb(&payload, method, keep_collapsed)?;
     geometry_from_wkb(&repaired).map_err(GeosBackendError::from)
 }
@@ -168,7 +189,7 @@ fn checked_geos_input(
     }
     let payload = geometry
         .to_wkb(CoordDimensions::xy())
-        .map_err(|error| GeosBackendError::Geos(error.to_string()))?;
+        .map_err(|_| GeosBackendError::Geos("codifica WKB intermedia"))?;
     geometry_from_wkb(&payload)?;
     GeosGeometry::new_from_wkb(&payload).map_err(geos_error)
 }
@@ -499,10 +520,7 @@ pub fn split_polygon_by_linework(
     let output_area: f64 = output.iter().map(Area::unsigned_area).sum();
     let allowed_error = input_area.abs().max(1.0) * 1e-9;
     if (output_area - input_area).abs() > allowed_error {
-        return Err(GeosBackendError::AreaMismatch {
-            input: input_area,
-            output: output_area,
-        });
+        return Err(GeosBackendError::AreaMismatch);
     }
     // Area sums alone can hide a gap and an overlap of equal size. Verify the
     // actual covered set independently using GEOS' robust unary union and
@@ -510,7 +528,7 @@ pub fn split_polygon_by_linework(
     let output_geometry = Geometry::MultiPolygon(geo::MultiPolygon(output.clone()));
     let output_payload = output_geometry
         .to_wkb(CoordDimensions::xy())
-        .map_err(|error| GeosBackendError::Geos(error.to_string()))?;
+        .map_err(|_| GeosBackendError::Geos("codifica WKB intermedia"))?;
     let output_geos = GeosGeometry::new_from_wkb(&output_payload).map_err(geos_error)?;
     let merged_output = output_geos.unary_union().map_err(geos_error)?;
     let coverage_difference = source_geos
@@ -518,9 +536,7 @@ pub fn split_polygon_by_linework(
         .map_err(geos_error)?;
     let coverage_error = coverage_difference.area().map_err(geos_error)?;
     if !coverage_error.is_finite() || coverage_error > allowed_error {
-        return Err(GeosBackendError::CoverageMismatch {
-            area: coverage_error,
-        });
+        return Err(GeosBackendError::CoverageMismatch);
     }
     Ok(output)
 }

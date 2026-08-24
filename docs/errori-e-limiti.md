@@ -334,6 +334,173 @@ cioè quando la barriera non servirà più. Segnalato a monte:
 semanticamente equivalenti possono conteggiarlo diversamente, per esempio con
 segmenti fusi — quindi non può essere un criterio di rifiuto deterministico.
 
+### Non esiste una policy dell'host sui limiti dati/runtime
+
+Il blocco `limits` di un piano **dichiara** memoria governata, spazio
+temporaneo, righe, payload, batch, stringhe e geometria di quella esecuzione,
+e può dichiararli anche più alti dei default della libreria. È il modo
+previsto per dimensionare una corsa.
+
+**Regola:** sui limiti dati/runtime non c'è un tetto imposto da chi ospita la
+libreria; l'unico controllo è quello di dominio (`Limits::validate`: nessun
+limite a zero, `spill_partitions` nell'intervallo ammesso,
+`max_expansion_factor` finito e positivo).
+**Ambito:** `plenora_engine::plan::LimitsOverride`, quindi ogni ingresso di
+piano v5 e v4.
+**Hazard:** chi incorpora l'engine ed esegue piani **non fidati** non ha modo
+di imporre un massimo: il documento sceglie il proprio budget. Per la CLI e
+per chi esegue piani propri non è un hazard — piano e policy hanno lo stesso
+autore — ma per un servizio multi-tenant lo sarebbe.
+**Condizione di rientro:** una policy massima esplicita passata dal chiamante,
+distinta dai default, con intersezione campo per campo e rifiuto di ogni
+ampliamento. La stessa regola è **già imposta** sui limiti di piano
+(`limits.plan`), dove la policy esiste come argomento di `PlanV5::parse`: lì
+un piano può solo restringere.
+
+### I limiti strutturali del piano si applicano dopo la deserializzazione
+
+Il solo limite applicato **prima** di costruire un albero JSON è
+`max_plan_json_bytes`, sul testo. Nodi, archi, profondità, fan-out, input,
+byte di config e byte degli identificatori sono verificati sull'oggetto già
+deserializzato.
+
+**Regola:** l'allocazione guidata dal contenuto è limitata dal solo tetto sui
+byte del documento, non dai tetti strutturali.
+**Ambito:** `PlanV5::parse`, ogni ingresso di piano v5 (CLI, migrazione v4,
+target fuzz `plan_v5_parse`).
+**Hazard:** un chiamante che abbassa `max_plan_nodes` a dieci ma lascia
+`max_plan_json_bytes` al default accetta comunque di allocare fino a 16 MiB di
+albero JSON prima del rifiuto. Il consumo resta limitato — il tetto sui byte
+c'è ed è applicato per primo — ma non dal limite specifico che credeva di
+avere impostato.
+**Condizione di rientro:** un `serde::Visitor` che contabilizzi nodi, archi e
+byte di config **durante** la deserializzazione e rifiuti al superamento,
+verificato da un test che dimostri il rifiuto prima della materializzazione
+completa. Finché non esiste, chi vuole un tetto stretto sulle allocazioni di
+parsing deve abbassare `max_plan_json_bytes`, che è l'unico che le governa.
+
+### Messaggi delle dipendenze: che cosa è sanificato e che cosa no
+
+La regola «errori senza dati» è imposta **per costruzione** sui messaggi
+scritti da questo progetto e sui percorsi che citano valori di cella. Sui
+messaggi prodotti dalle dipendenze la copertura è quella, esplicita, che
+segue.
+
+**Sanificati** (del messaggio originale non resta nulla; passa un codice o un
+contesto scritto qui):
+
+- `arrow-rs` → `PlenoraError::DataMapping` e `ArrowTransportError::Arrow`:
+  passa il solo codice della variante (`cast`, `parse`, `schema`, …). I testi
+  di arrow citano regolarmente il valore che ha causato il difetto;
+- GEOS → `GeosBackendError::Geos`: passa il contesto della chiamata. I
+  messaggi di GEOS citano le coordinate del difetto;
+- PROJ **sul percorso dati** → `ProjBackendError::Transformation`: passa la
+  sola classe del fallimento. `Reprojector::reproject` dà a PROJ le
+  coordinate di ogni cella, quindi lì la libreria nativa sta elaborando dati,
+  non configurazione;
+- panici di `arrow-ipc` al confine IPC: passa la sola **forma** del payload.
+
+**`serde_json`: quattro percorsi, quattro trattamenti diversi.** La libreria
+è la stessa, il trattamento no — e classificarli per libreria invece che per
+percorso è già stato un errore di questo documento.
+
+| percorso | trattamento | categoria |
+|---|---|---|
+| contenuto di **cella** (`flatten_json`, analisi JSON) | il fallimento diventa una **causa statica** (`json.invalid_syntax`, `json.root_not_object`), il testo è scartato | diagnostica per riga |
+| metadato legacy `geo` **stretto** (`arrow_adapter`) | causa **statica** scritta qui, testo di serde scartato | `invalid_plan` |
+| lettura **opportunistica** dello stesso metadato (rimozione del `crs`) | l'errore è ignorato: il metadato resta com'è | nessuna |
+| **piano, configurazione, metadati di schema** (CLI, contratti) | il testo originale **resta** | `data_mapping` |
+
+L'ultima riga è l'unica in cui un messaggio di serde attraversa il confine, ed
+è deliberata: sono documenti scritti da chi invoca la libreria, e un errore
+che ne cita un frammento non rivela nulla che il chiamante non abbia scritto.
+
+**Non sanificati, e per una ragione dichiarata:**
+
+- PROJ **sulle definizioni CRS** → `CrsError::InvalidDefinition`, categoria
+  `crs` (non `data_mapping`): il testo riguarda una definizione fornita nel
+  piano o nei metadati, cioè configurazione, e senza di esso una definizione
+  malformata non sarebbe diagnosticabile. Nella stessa variante finisce anche
+  il PROJJSON malformato **prodotto da PROJ**, con il testo di serde;
+- `geo` → `ProjBackendError::InvalidInput`/`InvalidOutput` e le varianti
+  omologhe dei kernel: `geo::Validation` nomina **ruoli e indici** («anello
+  interno numero 2», «coordinate at index 7»), mai i valori. È già la forma
+  strutturale che questo progetto usa nei propri messaggi.
+
+**Hazard:** la riga di confine è il *percorso*, non la libreria. Se
+`serde_json` venisse usato per deserializzare contenuto di celle su un
+percorso che propaga l'errore, o PROJ per interpretare una definizione presa
+dai dati, quei due punti diventerebbero fughe. Non c'è oggi un controllo
+automatico che tenga la mappa onesta: è una revisione da fare a ogni nuovo
+uso di una dipendenza sul percorso dati.
+**Condizione di rientro:** adattatori tipizzati per dipendenza **e
+operazione**, che espongano solo un codice stabile e un testo controllato,
+come già fatto per arrow, GEOS e la trasformazione PROJ.
+
+### Scavenging temporaneo: comanda l'heartbeat, il PID può solo accelerare
+
+Una directory `plenora-*` è rimossa se il suo heartbeat è più vecchio del TTL,
+oppure — più in fretta — se l'heartbeat è fermo da oltre cinque minuti **e**
+il lock viene da questa macchina **e** il PID registrato non esiste più. Un
+heartbeat fresco non è mai toccato, qualunque cosa dica il PID; e su Linux,
+dove il PID è davvero interrogabile, **un processo locale vivo blocca anche la
+rimozione per TTL**.
+
+**Regola:** il PID non è mai da solo motivo di rimozione, e la scadenza non
+prevale su una prova positiva di vita.
+**Ambito:** `plenora_engine::temp_store::scavenge_stale_temp_dirs`; la
+verifica reale del PID esiste solo su Linux.
+
+**Hazard, in tre parti.**
+
+*Identità di macchina.* L'hostname registrato **non è un'identità**. Immagini
+clonate, container e host configurati allo stesso modo condividono lo stesso
+nome, quindi l'uguaglianza da sola non prova nulla. Resta il caso di
+un'esecuzione remota **sospesa** da oltre cinque minuti su un host omonimo con
+radice condivisa: non è distinguibile da un crash locale.
+
+*L'heartbeat non è un timer.* Lo scrive l'executor ai confini di batch. Un'I/O
+bloccata a lungo, un'ibernazione o un salto in avanti dell'orologio possono
+invecchiarlo oltre il TTL mentre l'esecuzione è viva. Su Linux il PID vivo la
+protegge; su **Windows e sugli altri Unix il PID non è verificabile**, quindi
+lì la scadenza decide da sola e una directory di un processo bloccato oltre le
+24 ore può essere raccolta.
+
+*PID riciclati.* Il veto su TTL usa un PID che il sistema può aver riassegnato
+a un processo estraneo: in quel caso la directory resta, contata in
+`kept_conservative`. È il verso prudente — si perde spazio, non dati.
+
+*La decisione e la rimozione non sono atomiche.* Lo scavenger classifica,
+poi rimuove. La classificazione è ripetuta immediatamente prima della
+`remove_dir_all`, con l'orologio riletto, così la finestra non è più l'intera
+scansione della radice — ma resta una finestra: fra il secondo controllo e la
+rimozione un'esecuzione può rinnovare l'heartbeat, e la directory viene
+cancellata comunque. La garanzia «un heartbeat fresco non è mai toccato» è
+quindi esatta al momento del controllo, non per l'intera durata della
+rimozione.
+
+*L'hostname può cambiare.* Il veto del PID vivo confronta l'hostname corrente
+con quello scritto nel lock. Se la macchina viene rinominata mentre
+un'esecuzione è in corso, il confronto fallisce e la sua directory torna
+cancellabile per TTL, benché il processo sia vivo e locale.
+
+*Un heartbeat che fallisce è tollerato, ma solo per cinque minuti.* La
+scrittura del lock può fallire per una ragione transitoria, e fermare per
+quello un'esecuzione lunga sarebbe sproporzionato: il singolo fallimento
+viene ritentato al batch successivo. Un fallimento **persistente** è invece
+un errore esplicito — l'esecuzione si interrompe con categoria `io` al primo
+confine di batch dopo cinque minuti senza un heartbeat riuscito. Non è
+tolleranza illimitata mascherata da robustezza: oltre quella soglia il
+timestamp nel lock smette di avanzare, e superato il TTL un altro avvio
+potrebbe raccogliere la directory con dentro lo spill di questa esecuzione.
+La soglia è ben sotto il TTL proprio perché l'errore arrivi molto prima del
+danno.
+
+**Condizione di rientro:** una lease con identità di macchina e di avvio
+verificabile (boot id, namespace) più un heartbeat scritto da un timer
+indipendente dai batch; oppure l'imposizione esplicita di uno storage
+temporaneo node-local.
+
 ### Fuzzing su toolchain nightly
 
 Il solo step `cargo fuzz run` gira su nightly, mentre build, test, clippy e

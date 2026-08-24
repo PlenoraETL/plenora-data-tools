@@ -704,6 +704,12 @@ struct ExecState {
     spill_metrics: RefCell<SpillMetrics>,
     /// Istante dell'ultimo heartbeat scritto (throttle).
     last_heartbeat: Cell<Instant>,
+    /// Istante del PRIMO fallimento di una serie consecutiva di heartbeat,
+    /// azzerato al primo successo. `None` significa «l'ultimo tentativo e'
+    /// andato bene», non «non ci sono stati tentativi»: distinguere i due
+    /// casi conta, perche' un'operazione lunga puo' non chiamare l'heartbeat
+    /// per minuti senza che nulla sia rotto.
+    heartbeat_fallito_da: Cell<Option<Instant>>,
     /// Righe/batch/byte cumulati per input (`max_input_rows`, `max_batches`,
     /// `max_payload_bytes`).
     input_counts: RefCell<HashMap<String, (u64, u64, u64)>>,
@@ -722,6 +728,16 @@ struct ExecState {
 /// costo — un heartbeat al secondo e' di gran lunga piu' frequente del TTL
 /// di scavenging (24 ore di default) anche con batch piccolissimi.
 const HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Per quanto si tollera che l'heartbeat fallisca **di seguito** prima di
+/// interrompere l'esecuzione (errori-e-limiti.md).
+///
+/// Cinque minuti: lo stesso ordine di grandezza della grazia che lo
+/// scavenging concede prima di dare retta al PID, e tre ordini di grandezza
+/// sotto il TTL di default. Abbastanza da attraversare un guasto transitorio
+/// del filesystem, abbastanza poco da accorgersi di uno permanente molto
+/// prima che la directory diventi raccoglibile.
+const HEARTBEAT_MAX_FAILURE: Duration = Duration::from_secs(300);
 
 /// Aggiunge il contesto strutturale al testo di un errore.
 ///
@@ -825,6 +841,7 @@ impl ExecState {
             spill_directory,
             spill_metrics: RefCell::new(SpillMetrics::default()),
             last_heartbeat: Cell::new(Instant::now()),
+            heartbeat_fallito_da: Cell::new(None),
             input_counts: RefCell::new(HashMap::new()),
             edge_counts: RefCell::new(HashMap::new()),
             node_rows: RefCell::new(HashMap::new()),
@@ -923,8 +940,44 @@ impl ExecState {
         if self.last_heartbeat.get().elapsed() < HEARTBEAT_MIN_INTERVAL {
             return;
         }
-        self.last_heartbeat.set(Instant::now());
-        let _ = self.temp_store.borrow_mut().heartbeat();
+        // Il throttle avanza SOLO se la scrittura e' riuscita: un heartbeat
+        // fallito va ritentato al batch successivo, non fra un intervallo.
+        if self.temp_store.borrow_mut().heartbeat().is_ok() {
+            self.last_heartbeat.set(Instant::now());
+            self.heartbeat_fallito_da.set(None);
+        } else if self.heartbeat_fallito_da.get().is_none() {
+            self.heartbeat_fallito_da.set(Some(Instant::now()));
+        }
+    }
+
+    /// Interrompe l'esecuzione se l'heartbeat fallisce da troppo tempo.
+    ///
+    /// Il singolo fallimento resta tollerato — una `write` puo' fallire per
+    /// una ragione transitoria e fermare per questo un'esecuzione lunga
+    /// sarebbe sproporzionato. Un fallimento **persistente** e' un'altra
+    /// cosa: il timestamp nel lock smette di avanzare, e superato il TTL lo
+    /// scavenging di un altro avvio puo' considerare orfana la directory di
+    /// questa esecuzione e cancellargliela sotto — con dentro lo spill.
+    /// Proseguire in silenzio sarebbe una failure silenziosa, che questo
+    /// progetto non ammette: la tolleranza e' limitata, dichiarata e
+    /// scaduta la quale l'errore e' esplicito.
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::Io` se nessun heartbeat riesce da piu' di
+    /// [`HEARTBEAT_MAX_FAILURE`].
+    fn verifica_heartbeat(&self) -> Result<()> {
+        match self.heartbeat_fallito_da.get() {
+            Some(dal) if dal.elapsed() > HEARTBEAT_MAX_FAILURE => {
+                Err(PlenoraError::Io(std::io::Error::other(format!(
+                    "heartbeat del temp store fallito senza interruzione da oltre {} secondi: \
+                     la directory temporanea dell'esecuzione puo' essere considerata orfana \
+                     e rimossa",
+                    HEARTBEAT_MAX_FAILURE.as_secs()
+                ))))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Errore di cancellazione attribuito a un punto del DAG
@@ -1409,6 +1462,11 @@ impl Output {
         // propagare un errore da li', e senza questo l'ultimo output verrebbe
         // consegnato da un governor che ha gia' perso il conto.
         self.state.governor.verifica_salute("output")?;
+        // Stesso criterio per il temp store: consegnare l'output di
+        // un'esecuzione il cui lock e' fermo da oltre la tolleranza
+        // significherebbe dichiararla riuscita mentre la sua directory e'
+        // gia' raccoglibile da un altro avvio.
+        self.state.verifica_heartbeat()?;
         Ok((batches, self.state.metrics()))
     }
 
@@ -1461,6 +1519,7 @@ impl Output {
     ) -> Result<(ExecutionMetrics, PublishOutcome)> {
         let schema = self.schema.clone();
         let governor = self.state.governor.clone();
+        let stato_publish = Rc::clone(&self.state);
         let mut stream = self.stream;
         let ((), outcome) = publish_with_profile(path, profile, move |writer| {
             let mut ipc = FileWriter::try_new(writer, &schema)?;
@@ -1506,6 +1565,11 @@ impl Output {
             // temporaneo non e' ancora stato reso visibile (errori-e-limiti.md#publish-e-cleanup), quindi
             // fallire ora significa non pubblicare nulla.
             governor.verifica_salute("output")?;
+            // Stesso cancello per il temp store: il publish e' irreversibile,
+            // e pubblicare mentre il lock e' fermo da oltre la tolleranza
+            // significherebbe dichiarare riuscita un'esecuzione la cui
+            // directory e' gia' raccoglibile.
+            stato_publish.verifica_heartbeat()?;
             Ok(())
         })?;
         Ok((self.state.metrics(), outcome))
@@ -1538,7 +1602,17 @@ impl Iterator for Output {
             return Some(item.map(GovernedBatch::into_batch));
         }
         self.esaurito = true;
-        self.state.governor.verifica_salute("output").err().map(Err)
+        // Terminale dell'iteratore: come il cancello di consegna e quello di
+        // publish, riporta sia una contabilita' corrotta sia un heartbeat
+        // fermo da troppo tempo. Chiudere lo stream in silenzio su un lock
+        // stantio sarebbe dichiarare riuscita un'esecuzione la cui directory
+        // e' gia' raccoglibile.
+        self.state
+            .governor
+            .verifica_salute("output")
+            .err()
+            .or_else(|| self.state.verifica_heartbeat().err())
+            .map(Err)
     }
 }
 
@@ -1715,6 +1789,17 @@ fn execute_physical(
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
+        // Heartbeat al confine COMUNE a ogni percorso.
+        //
+        // I tre `run_*` non bastano: un piano pass-through (`nodes: []`) non
+        // ne attraversa nessuno — l'output e' direttamente lo stream
+        // dell'input — quindi non rinnovava mai il lock e non inizializzava
+        // nemmeno il conteggio dei fallimenti, rendendo inefficace qualunque
+        // controllo finale. Un pass-through geometrico usa staging
+        // temporaneo, e su un'esecuzione lunga se lo vedeva classificare
+        // orfano. Qui passa ogni batch di ogni piano.
+        output_state.heartbeat();
+        output_state.verifica_heartbeat()?;
         let batch = &governed.batch;
         let _ = check_batch_bytes(&output_state, batch, "output")?;
         let limits = &output_state.plan.limits();
@@ -3515,6 +3600,9 @@ fn run_streaming_chain(
     stop_after_node: Option<&str>,
     permesso: Option<MemoryPermit>,
 ) -> Result<GovernedBatch> {
+    // Ogni batch passa da qui: e' il punto in cui un heartbeat che fallisce
+    // da troppo tempo smette di essere tollerato (errori-e-limiti.md).
+    state.verifica_heartbeat()?;
     let segment = &plan.segments()[segment_index];
     let output_is_plan_output = segment.output_edge == plan.output_edge();
     let (mut batch, input_lease, seq) = governed.into_parts();
@@ -4785,6 +4873,9 @@ fn run_blocking(
     state: &ExecState,
     batches: Vec<GovernedBatch>,
 ) -> Result<GovernedBatch> {
+    // Come nel percorso streaming: heartbeat persistentemente fallito =
+    // errore esplicito, mai silenzio (errori-e-limiti.md).
+    state.verifica_heartbeat()?;
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().ok_or_else(|| {
         PlenoraError::Internal(
@@ -4878,6 +4969,12 @@ fn run_binary_blocking(
     left_batches: Vec<GovernedBatch>,
     right_batches: Vec<GovernedBatch>,
 ) -> Result<GovernedBatch> {
+    // Terzo percorso di esecuzione, e va guardato come gli altri due: un
+    // segmento binario emette un solo batch, quindi non esiste
+    // necessariamente un confine successivo dove un heartbeat fermo da
+    // troppo tempo diventerebbe un errore. Senza questo controllo l'output
+    // poteva essere pubblicato con il lock ormai stantio.
+    state.verifica_heartbeat()?;
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().ok_or_else(|| {
         PlenoraError::Internal(

@@ -79,9 +79,12 @@ ANCORE = [
      'permesso.ritaglia(bytes_at_boundary)?',
      'l\'uscita si ritaglia, e un ritaglio fallito propaga invece di ripiegare'),
     (ESECUTORE,
-     'self.state.governor.verifica_salute("output").err().map(Err)',
+     '.or_else(|| self.state.verifica_heartbeat().err())',
      'il consumo per iteratore ha il controllo terminale: senza, una '
-     'corruzione rilevata nell\'ultimo Drop sarebbe un successo silenzioso'),
+     'corruzione rilevata nell\'ultimo Drop sarebbe un successo silenzioso. '
+     'Il terminale riporta ora anche un heartbeat fermo da oltre la '
+     'tolleranza, che renderebbe la directory raccoglibile mentre lo '
+     'stream si chiude dichiarando successo'),
     (ESECUTORE,
      'if self.esaurito {',
      'lo stato terminale impedisce di ripetere l\'errore a ogni chiamata'),

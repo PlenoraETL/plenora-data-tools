@@ -54,11 +54,22 @@ L'ingresso è fail-closed, e l'ordine è parte del contratto:
 6. parse, validazione strutturale, risoluzione degli alias verso gli id
    canonici.
 
-I limiti del piano (`PlanLimits`: byte del JSON, numero di nodi, archi,
-profondità, fan-out, input, byte di config per nodo, byte degli
-identificatori) si applicano **durante** il parsing, prima di qualsiasi
-allocazione guidata dal contenuto. Un piano ostile consuma risorse già in
-parse.
+I limiti del piano (`PlanLimits`) si applicano in due momenti diversi, e la
+differenza conta:
+
+- `max_plan_json_bytes` è verificato sul **testo**, prima di costruire
+  qualunque albero JSON. È l'unico che limita davvero le allocazioni di
+  parsing, ed è per questo che è anche l'unico che non può provenire dal
+  documento;
+- numero di nodi, archi, profondità, fan-out, input, byte di config per nodo e
+  byte degli identificatori sono verificati sull'oggetto **già
+  deserializzato**, subito dopo il parse e prima di qualunque lavoro
+  successivo.
+
+Un piano ostile è quindi limitato in parse dal solo tetto sui byte: chi vuole
+un tetto stretto sulle allocazioni deve abbassare quello. La limitazione è
+registrata per esteso, con hazard e condizione di rientro, in
+[`errori-e-limiti.md`](errori-e-limiti.md).
 
 ## Migrazione dalla v4
 
@@ -224,8 +235,8 @@ Seguono engine, Arrow, catalogo e capability.
 
 ## Limiti dichiarabili nel piano
 
-Il blocco `limits` restringe i default; ciò che non dichiara resta al default
-della libreria.
+Il blocco `limits` **dichiara** i limiti di questa esecuzione; ciò che non
+dichiara resta al default della libreria.
 
 | gruppo | campi |
 |---|---|
@@ -236,9 +247,120 @@ della libreria.
 | stringhe | `max_string_bytes`, `max_regex_bytes` |
 | piano | sotto-oggetto `plan`: `max_plan_json_bytes`, `max_plan_nodes`, `max_plan_edges`, `max_plan_depth`, `max_fan_out`, `max_inputs`, `max_config_bytes_per_node`, `max_identifier_bytes` |
 
+I due gruppi non hanno lo stesso statuto, e confonderli è stato un difetto
+reale:
+
+**Limiti dati/runtime** — righe, memoria, geometria, stringhe, esecuzione.
+Sono **configurazione dell'esecuzione**, e un piano può dichiararli sopra o
+sotto il default: è il modo previsto per dimensionare una corsa, e i test del
+progetto lo usano in entrambi i versi. Il default non è un tetto imposto da
+qualcun altro, è il valore che vale quando il piano tace. Ciò che li chiude è
+la validazione dei limiti effettivi. **Non esiste oggi una policy dell'host
+che il piano non possa superare**: chi accetta piani non fidati deve saperlo,
+ed è registrato in [`errori-e-limiti.md`](errori-e-limiti.md).
+
+**Limiti di piano** (sotto-oggetto `plan`) — sono invece una **policy vera**:
+`PlanV5::parse` li riceve come argomento da chi esegue il parse, e sono il
+costo massimo che quel chiamante accetta di pagare per interpretare un
+documento. Un piano può solo **restringerli**: un valore che supera quello del
+chiamante è rifiutato, nominando il campo, il valore chiesto e quello
+consentito. Un documento che alzasse il tetto di ciò che costa leggerlo
+deciderebbe da sé quanto può costare.
+
+`spill_partitions` merita una riga a parte: non è un tetto di risorsa ma una
+configurazione dello spill — più partizioni significano file più piccoli e più
+descrittori, non più consumo consentito. Il dominio ammesso (`2..=4096`) resta
+chiuso dalla validazione dei limiti effettivi.
+
+La sotto-sezione `plan` governa **il piano che la dichiara**: i conteggi
+strutturali — nodi, archi, profondità, fan-out, input, byte di config,
+byte degli identificatori — sono applicati con i limiti così ristretti. Prima
+finiva nella forma canonica, e quindi nel `plan_hash`, senza che nulla la
+applicasse: l'identità del piano affermava una proprietà che il parser non
+aveva verificato.
+
+`max_plan_json_bytes` è l'**unica eccezione**, e per una ragione strutturale:
+un tetto sul testo va applicato prima di leggere il testo, quindi non può
+venire dal testo. Resta quello di chi esegue. Il piano può dichiararlo — vale
+la regola di sola restrizione, e finisce nella forma canonica — ma non governa
+se stesso. Riapplicarlo dopo il parse sembrerebbe innocuo e non lo è: la forma
+canonica materializza *tutti* i limiti effettivi, quindi è sempre più grande
+del documento compatto che l'ha prodotta, e un piano che dichiarasse 300 byte
+verrebbe accettato mentre la sua forma canonica — quella che porta il
+`plan_hash` ed è pensata per essere conservata e riletta — non rientrerebbe
+più.
+
+La forma canonica materializza i limiti di piano contro i **default della
+libreria**, mai contro la policy di chi esegue il parse. L'identità di un
+piano è una proprietà del piano: se dipendesse dal chiamante, lo stesso
+documento — con la stessa esecuzione — avrebbe due `plan_hash` diversi sotto
+due policy diverse, e un grafo persistito non sarebbe più confrontabile con sé
+stesso. Il `plan_hash` non cambia quindi per nessun piano che resti accettato.
+
+Il prezzo, dichiarato per intero perché è più grande di quanto sembri: la
+materializzazione scrive i default come **dichiarazioni esplicite del piano**,
+e le dichiarazioni esplicite governano il piano che le contiene. Un piano
+accettato **solo** grazie a una policy più larga del default ha quindi un
+canonico che **non è rileggibile con nessuna policy** — nemmeno con la
+stessa che lo aveva accettato, perché il canonico dichiara i default e li
+viola.
+
+La forma canonica è dunque, per quei piani, un **input di hash** e non un
+documento riproponibile. Per tutti i piani che stanno dentro i default — cioè
+tutto ciò che la CLI e `validate` producono — il canonico si rilegge senza
+problemi, e un test lo verifica.
+
+Chiuderla del tutto richiederebbe di materializzare nel canonico **solo ciò
+che il piano dichiara**, omettendo i default: sarebbe l'unica forma coerente
+su tutti gli assi, ma cambierebbe la forma canonica di ogni piano e quindi
+ogni `plan_hash`, e va perciò accompagnata da un dominio nuovo. È una
+decisione di rilascio, non una correzione, ed è aperta.
+
+### Rottura di compatibilità: piani prima accettati, ora rifiutati
+
+Rendere reali i limiti di piano ha un prezzo, e va detto invece che nascosto
+dietro «gli hash non cambiano». **Alcuni piani che le versioni precedenti
+accettavano sono ora rifiutati**, e il loro `plan_hash` non è più
+rigenerabile:
+
+- un piano che **dichiara un limite di piano più largo** di quello di chi
+  esegue: prima l'override era ignorato, ora la regola di sola restrizione lo
+  rifiuta;
+- un piano che **dichiara un limite di piano che poi viola** — per esempio
+  `max_plan_nodes: 1` con due nodi: prima la dichiarazione non governava
+  nulla, ora sì;
+- un piano i cui limiti effettivi portano a **zero** `max_plan_json_bytes`,
+  `max_inputs` o `max_identifier_bytes`.
+
+In tutti e tre i casi il piano affermava una proprietà che non rispettava, e
+la sua identità certificava quella proprietà. Il rifiuto è il punto della
+correzione, non un effetto collaterale.
+
+Il bump di versione del rilascio è **maggiore** per ragioni già note (vedi
+[`release.md`](release.md)); questa rottura vi rientra e non ne aggiunge di
+nuove oltre a quelle dichiarate lì.
+
+Resta una proprietà da conoscere: **il canonico può essere più grande del
+documento che lo ha prodotto**, perché materializza tutti i limiti anche
+quando il documento li ometteva. Non è sempre così — un documento
+pretty-printed, o ricco di spaziatura, può essere più grande del canonico
+compatto — ma **esistono tetti sui byte intermedi** fra la dimensione del
+documento e quella del suo canonico, e con uno di quelli il chiamante accetta
+il piano e rifiuta la sua forma canonica. È inerente alla materializzazione,
+non un difetto del controllo.
+
+Fin dove quei tetti proteggano davvero dalle allocazioni di parsing è detto in
+[`errori-e-limiti.md`](errori-e-limiti.md).
+
 I limiti effettivi sono validati **in un punto solo**, prima di qualunque
 decisione, così li attraversano tutti i piani — compresi quelli solo-geo, che
-non passano dal preparer tabellare.
+non passano dal preparer tabellare. Un limite a zero è rifiutato lì, ma solo
+dove **nessun documento valido** potrebbe rispettarlo: byte del JSON, numero
+di input, byte degli identificatori. I tetti sui nodi — nodi, archi,
+profondità, fan-out, byte di config — possono legittimamente valere zero: li
+rispetta un piano **pass-through**, e una policy che ammette solo
+pass-through è una policy sensata. Rifiutarli avrebbe reso il parse e la
+validazione discordi sullo stesso documento.
 
 Che cosa `max_governed_memory_bytes` garantisce davvero è in
 [`errori-e-limiti.md`](errori-e-limiti.md): non è un tetto duro, e il

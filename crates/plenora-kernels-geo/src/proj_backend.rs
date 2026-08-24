@@ -11,10 +11,23 @@ use thiserror::Error;
 pub enum ProjBackendError {
     #[error(transparent)]
     Crs(#[from] CrsError),
+    /// Geometria di input non valida secondo `geo::Validation`.
+    ///
+    /// Il testo e' quello di `geo`, che nomina **ruoli e indici** (anello
+    /// esterno, «coordinate at index N»), mai i valori: e' la stessa forma
+    /// strutturale che il progetto usa nei propri messaggi.
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
-    #[error("trasformazione PROJ fallita: {0}")]
-    Transformation(String),
+    /// Fallimento della trasformazione PROJ su una coordinata.
+    ///
+    /// Il testo di PROJ **non** attraversa il confine. A differenza degli
+    /// errori sulle definizioni CRS — che riguardano la configurazione — qui
+    /// la libreria nativa sta elaborando le coordinate delle celle, e i suoi
+    /// messaggi possono riportarle
+    /// (errori-e-limiti.md#privacy-dei-messaggi). Resta la classe del
+    /// fallimento, che e' cio' che serve a diagnosticare.
+    #[error("trasformazione PROJ fallita su una coordinata dell'input")]
+    Transformation,
     #[error("PROJ ha prodotto coordinate NaN o infinite")]
     NonFiniteOutput,
     #[error("geometria riproiettata non valida: {0}")]
@@ -130,7 +143,7 @@ impl Reprojector {
 
         let output = geometry
             .try_map_coords(|coordinate| projection.convert(coordinate))
-            .map_err(|error| ProjBackendError::Transformation(error.to_string()))?;
+            .map_err(|_| ProjBackendError::Transformation)?;
         if output
             .coords_iter()
             .any(|coordinate| !coordinate.x.is_finite() || !coordinate.y.is_finite())

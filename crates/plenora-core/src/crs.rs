@@ -10,6 +10,8 @@
 //! bundled) resta in `plenora-kernels-geo` dietro la feature `proj-backend`.
 //! Senza backend [`resolve_crs`] fallisce chiuso, come nel sorgente.
 
+use std::fmt;
+
 use crate::catalog::CrsRequirement;
 use crate::contract::AxisOrder;
 use crate::error::PlenoraError;
@@ -314,6 +316,34 @@ pub fn definition_form(definition: &str) -> DefinitionForm {
     DefinitionForm::Other
 }
 
+/// Motivo strutturale di una violazione del dominio geografico.
+///
+/// Nomina l'asse e la natura del difetto, **mai il valore**: la coordinata e'
+/// un dato di cella e non puo' comparire in un messaggio d'errore
+/// (errori-e-limiti.md#privacy-dei-messaggi). Chi diagnostica ha comunque
+/// l'informazione che serve — quale asse, e se il difetto e' un valore non
+/// finito o un valore fuori intervallo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateDomainViolation {
+    /// Almeno una delle due componenti non e' finita (NaN o infinito).
+    NonFinite,
+    /// Longitudine fuori da `-180..=180`.
+    LongitudeOutOfRange,
+    /// Latitudine fuori da `-90..=90`.
+    LatitudeOutOfRange,
+}
+
+impl fmt::Display for CoordinateDomainViolation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let testo = match self {
+            Self::NonFinite => "coordinata non finita",
+            Self::LongitudeOutOfRange => "longitudine fuori da -180..=180",
+            Self::LatitudeOutOfRange => "latitudine fuori da -90..=90",
+        };
+        formatter.write_str(testo)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CrsError {
     #[error("CRS_REQUIRED: {name} e' obbligatorio")]
@@ -334,8 +364,10 @@ pub enum CrsError {
     GeographicRequired { actual: CrsKind },
     #[error("CRS_MISMATCH: gli input non usano lo stesso CRS")]
     Mismatch,
-    #[error("COORDINATE_OUT_OF_CRS_DOMAIN: ({x}, {y}) non e' longitude/latitude valida")]
-    CoordinateOutOfDomain { x: f64, y: f64 },
+    #[error("COORDINATE_OUT_OF_CRS_DOMAIN: {violation}")]
+    CoordinateOutOfDomain {
+        violation: CoordinateDomainViolation,
+    },
     #[error("CRS_CONTRACT_INVALID: {0}")]
     InvalidContract(&'static str),
 }
@@ -482,12 +514,19 @@ pub fn validate_geometry_domain(
         return Ok(());
     }
     for (x, y) in coordinates {
-        if !x.is_finite()
-            || !y.is_finite()
-            || !(-180.0..=180.0).contains(&x)
-            || !(-90.0..=90.0).contains(&y)
-        {
-            return Err(CrsError::CoordinateOutOfDomain { x, y });
+        // Il motivo e' strutturale, non numerico: nomina l'asse e la natura
+        // del difetto senza riportare la coordinata, che e' un dato di cella.
+        let violation = if !x.is_finite() || !y.is_finite() {
+            Some(CoordinateDomainViolation::NonFinite)
+        } else if !(-180.0..=180.0).contains(&x) {
+            Some(CoordinateDomainViolation::LongitudeOutOfRange)
+        } else if !(-90.0..=90.0).contains(&y) {
+            Some(CoordinateDomainViolation::LatitudeOutOfRange)
+        } else {
+            None
+        };
+        if let Some(violation) = violation {
+            return Err(CrsError::CoordinateOutOfDomain { violation });
         }
     }
     Ok(())
@@ -611,6 +650,54 @@ mod tests {
         assert!(matches!(
             validate_geometry_domain([(f64::NAN, 0.0)].into_iter(), &geographic),
             Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+    }
+
+    /// Sentinella di privacy: la coordinata che ha violato il dominio e' un
+    /// dato di cella e non deve comparire in nessuna forma del messaggio,
+    /// ne' nella variante CRS ne' nell'errore unificato che la avvolge
+    /// (errori-e-limiti.md#privacy-dei-messaggi).
+    #[test]
+    fn il_messaggio_di_dominio_non_riporta_la_coordinata() {
+        let geographic = geographic();
+        // Valori riconoscibili: se sopravvivono, si vedono.
+        let sentinelle = [[181.5, 0.25], [0.5, 91.75], [1234.5, 5678.25]];
+        for coppia in sentinelle {
+            let errore =
+                validate_geometry_domain([(coppia[0], coppia[1])].into_iter(), &geographic)
+                    .expect_err("coordinata fuori dominio");
+            let testo = errore.to_string();
+            let unificato = PlenoraError::from(errore).to_string();
+            for numero in coppia {
+                // Le cifre della coordinata, in qualunque forma stampata.
+                for forma in [format!("{numero}"), format!("{numero:?}")] {
+                    assert!(!testo.contains(&forma), "coordinata nel testo: {testo}");
+                    assert!(
+                        !unificato.contains(&forma),
+                        "coordinata nell'errore unificato: {unificato}"
+                    );
+                }
+            }
+            assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
+        }
+        // Il motivo strutturale resta, e distingue i tre casi.
+        assert!(matches!(
+            validate_geometry_domain([(f64::NAN, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::NonFinite
+            })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(181.0, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::LongitudeOutOfRange
+            })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(0.0, 91.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::LatitudeOutOfRange
+            })
         ));
     }
 
