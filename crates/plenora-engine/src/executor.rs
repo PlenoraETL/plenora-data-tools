@@ -155,7 +155,9 @@ mod state;
 mod streaming;
 mod validation;
 
-use blocking::{dispatch_kernel, run_kernel};
+use blocking::{
+    dispatch_kernel, run_binary_blocking, run_blocking, run_kernel, spill_capable_unary,
+};
 use diagnostics::{row_diagnostic_stream, segment_emits_row_diagnostics};
 #[cfg(test)]
 use fusion::PANIC_AT_NODES;
@@ -164,7 +166,6 @@ use geo::{
     append_output_column, geo_accessors_batch, geo_cluster_dbscan_batch, geo_collect_batch,
     geo_coverage_validate_batch, geo_from_wkt_batch, geo_generate_grid_batch,
     geo_line_locate_point_batch, geo_shared_paths_batch, geo_snap_batch, geo_subdivide_batch,
-    run_binary_blocking, run_blocking, spill_capable_unary,
 };
 pub use input::{Input, Inputs};
 #[cfg(test)]

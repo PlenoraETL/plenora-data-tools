@@ -502,6 +502,100 @@ pub enum PreparedConfig {
     Geo(PreparedGeoKernel),
 }
 
+impl PreparedTableKernel {
+    /// Il piano di questo kernel puo' spillare su disco?
+    ///
+    /// Domanda dell'orchestratore, risposta della famiglia: chi decide dove
+    /// materializzare non ha bisogno di sapere quali forme tabellari
+    /// esistono, ne' che la capacita' di spill dipende dal piano legacy.
+    #[must_use]
+    pub fn unary_spill_capable(&self) -> bool {
+        match self {
+            Self::Unary(piano) => table_engine::unary_spill_capable(piano),
+            Self::Binary(_) => false,
+        }
+    }
+
+    /// Il piano unario, se questa e' la forma unaria.
+    #[must_use]
+    pub const fn unary_plan(&self) -> Option<&table_engine::ValidatedPlan> {
+        match self {
+            Self::Unary(piano) => Some(piano),
+            Self::Binary(_) => None,
+        }
+    }
+
+    /// Il piano binario, se questa e' la forma binaria.
+    #[must_use]
+    pub const fn binary_plan(&self) -> Option<&table_engine::ValidatedPlan> {
+        match self {
+            Self::Binary(piano) => Some(piano),
+            Self::Unary(_) => None,
+        }
+    }
+}
+
+impl PreparedGeoKernel {
+    /// I parametri della trasformazione 1:1, se questa e' una trasformazione.
+    ///
+    /// Serve alla fusione, che compone piu' trasformazioni consecutive: e'
+    /// una domanda sulla forma, non un'ispezione delle varianti.
+    #[must_use]
+    pub const fn transform_params(&self) -> Option<&TransformArrowSchema> {
+        match self {
+            Self::Transform(parametri) => Some(parametri),
+            _ => None,
+        }
+    }
+
+    /// La misura da applicare, se questo kernel misura.
+    #[must_use]
+    pub const fn measure_kind(&self) -> Option<MeasureKind> {
+        match self {
+            Self::Measure { measure, .. } => Some(*measure),
+            _ => None,
+        }
+    }
+
+    /// Il piano geo binario, se questa e' la forma binaria.
+    #[must_use]
+    pub const fn binary_plan(&self) -> Option<&GeoBinaryPlan> {
+        match self {
+            Self::Binary(piano) => Some(piano),
+            _ => None,
+        }
+    }
+}
+
+impl PreparedConfig {
+    /// Il kernel tabellare, se la famiglia e' quella.
+    #[must_use]
+    pub const fn table(&self) -> Option<&PreparedTableKernel> {
+        match self {
+            Self::Table(kernel) => Some(kernel),
+            Self::Geo(_) => None,
+        }
+    }
+
+    /// Il kernel geometrico, se la famiglia e' quella.
+    #[must_use]
+    pub const fn geo(&self) -> Option<&PreparedGeoKernel> {
+        match self {
+            Self::Geo(kernel) => Some(kernel),
+            Self::Table(_) => None,
+        }
+    }
+
+    /// Puo' spillare su disco? Falso per tutta la famiglia geo.
+    #[must_use]
+    pub fn unary_spill_capable(&self) -> bool {
+        match self {
+            Self::Table(kernel) => kernel.unary_spill_capable(),
+            Self::Geo(_) => false,
+        }
+    }
+}
+
 /// Kernel fisico di un segmento (configurazioni preparate, osservabilita' per nodo).
 ///
 /// Mantiene la mappa verso il nodo logico originario (attribuzione errori,

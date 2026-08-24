@@ -247,11 +247,15 @@ pub(super) fn try_run_fused_group(
     // la richiede).
     let mut params: Vec<&TransformArrowSchema> = Vec::with_capacity(transforms.len());
     for kernel in transforms {
-        match &kernel.config {
-            PreparedConfig::Geo(PreparedGeoKernel::Transform(kernel_params)) => {
+        match kernel
+            .config
+            .geo()
+            .and_then(PreparedGeoKernel::transform_params)
+        {
+            Some(kernel_params) => {
                 params.push(kernel_params);
             }
-            _ => {
+            None => {
                 return Err(PlenoraError::Internal(format!(
                     "nodo `{}`: kernel non GeoTransform in un gruppo fuso",
                     kernel.node_id
@@ -368,8 +372,10 @@ pub(super) fn try_run_fused_group(
 pub(super) fn fused_group_terminal(
     kernels: &[PreparedKernel],
 ) -> (&[PreparedKernel], Option<FusedTerminal<'_>>) {
-    let PreparedConfig::Geo(PreparedGeoKernel::Measure { measure, .. }) =
-        &kernels[kernels.len() - 1].config
+    let Some(measure) = kernels[kernels.len() - 1]
+        .config
+        .geo()
+        .and_then(PreparedGeoKernel::measure_kind)
     else {
         return (kernels, None);
     };

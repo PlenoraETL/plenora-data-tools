@@ -23,6 +23,7 @@ USCITA = 'crates/plenora-engine/src/executor/output.rs'
 STAGING = 'crates/plenora-engine/src/executor/staging.rs'
 DIAGNOSTICA = 'crates/plenora-engine/src/executor/diagnostics.rs'
 GEO = 'crates/plenora-engine/src/executor/geo.rs'
+BLOCKING = 'crates/plenora-engine/src/executor/blocking.rs'
 FUSIONE = 'crates/plenora-engine/src/executor/fusion.rs'
 STREAMING = 'crates/plenora-engine/src/executor/streaming.rs'
 GOVERNOR = 'crates/plenora-engine/src/governor.rs'
@@ -32,7 +33,7 @@ ANCORE = [
     (ESECUTORE,
      '.reserve(bytes, &edge_name)',
      'arco di ingresso: il batch esiste gia\' quando lo si prenota'),
-    (GEO,
+    (BLOCKING,
      'concat_batches(&schema, &unwrapped)',
      'blocking unario: la materializzazione precede check e reservation'),
     (GEO,
