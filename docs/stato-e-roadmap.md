@@ -154,26 +154,30 @@ I quattro livelli restano distinti, e solo il terzo garantisce la correttezza:
 
 ### Requisiti della fase 4
 
+Il progetto tecnico che li attua e' in
+[`isolamento.md`](isolamento.md): garanzie e non-garanzie, macchine a stati,
+protocollo, handshake, verifica, matrici e suddivisione in PR.
+
 Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
 codice: worker, supervisore, protocollo fra i due e limiti di processo sono
 tutti da progettare.
 
-**R4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
+**F4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
 di memoria imposto dal sistema operativo, non sotto un tetto che si
 autoapplica. Un processo che decide da solo quanto può allocare non è
 vincolato: è d'accordo con se stesso.
 
-**R4-2 — Il supervisore osserva l'esito, non lo deduce.** Se il worker viene
+**F4-2 — Il supervisore osserva l'esito, non lo deduce.** Se il worker viene
 terminato, il supervisore deve distinguere «terminato per il limite» da
 «uscito con errore» da «uscito bene». Un esito ambiguo diventerebbe un errore
 inventato o un successo non verificato.
 
-**R4-3 — La pubblicazione è atomica e verificata.** Nulla è visibile prima
+**F4-3 — La pubblicazione è atomica e verificata.** Nulla è visibile prima
 della fine, e ciò che diventa visibile è confrontato con ciò che era atteso.
 La garanzia non è che il worker si comporti bene, è che un worker che si
 comporta male non pubblichi.
 
-**R4-4 — Il resolver CRS è lo stesso da entrambe le parti.** Supervisore e
+**F4-4 — Il resolver CRS è lo stesso da entrambe le parti.** Supervisore e
 worker devono usare **la stessa implementazione** di `CrsResolver`. Non è un
 dettaglio di configurazione: `plenora-core::crs::resolve_crs` e
 `plenora-kernels-geo::crs::resolve_crs` danno risposte diverse — il primo
@@ -188,12 +192,12 @@ compilazione. Il protocollo dovrà quindi trasportare quale resolver è in uso e
 il supervisore dovrà rifiutare un worker che ne dichiari uno diverso — un
 disaccordo qui è una condizione di errore, non una differenza da tollerare.
 
-**R4-5 — Nessuna allocazione critica prima dell'autorizzazione, oppure
+**F4-5 — Nessuna allocazione critica prima dell'autorizzazione, oppure
 rifiuto esplicito.** È il criterio di uscita del punto 2. Con l'isolamento,
 «autorizzazione» significa che il limite è già in vigore quando il worker
 inizia, non che qualcuno abbia stimato in anticipo quanto servirà.
 
-**R4-6 — macOS resta non supportato** per il profilo isolato finché un
+**F4-6 — macOS resta non supportato** per il profilo isolato finché un
 prototipo non dimostri copertura *e* attribuzione del limite.
 
 

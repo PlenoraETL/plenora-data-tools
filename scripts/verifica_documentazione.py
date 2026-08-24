@@ -57,6 +57,10 @@ PUBBLICI = [
     'docs/errori-e-limiti.md',
     'docs/stato-e-roadmap.md',
     'docs/release.md',
+    # Progetto tecnico della fase 4 (esecuzione isolata). Aggiunto il
+    # 2026-08-24: e' una decisione, non un effetto collaterale — il
+    # disegno non stava in stato-e-roadmap.md senza soffocarlo.
+    'docs/isolamento.md',
 ]
 
 # Documentazione viva, eseguita dalla suite: eccezione esatta, non un glob.
