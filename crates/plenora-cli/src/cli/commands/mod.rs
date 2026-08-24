@@ -3,5 +3,6 @@
 
 pub mod catalog;
 pub mod describe;
+pub mod legacy;
 pub mod run;
 pub mod validate;
