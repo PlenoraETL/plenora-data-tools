@@ -1395,3 +1395,60 @@ fn geo_binary_outside_m1_perimeter_stays_unsupported() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// L'autorita' dei limiti: che cosa viene dal piano e che cosa no
+// ---------------------------------------------------------------------------
+
+/// I limiti INTERNI dei kernel non dipendono da cio' che il piano dichiara.
+///
+/// Prima arrivavano da `Limits::default()` dentro l'adattatore, e leggendo
+/// quella funzione sembravano ereditati dal piano. Un lettore che avesse
+/// cercato `max_columns` nel formato del piano non l'avrebbe trovato, e
+/// avrebbe concluso che il valore veniva da qualche parte — senza sapere
+/// dove.
+#[test]
+fn i_limiti_interni_dei_kernel_non_vengono_dal_piano() {
+    let mut estremi = Limits::default();
+    estremi.rows.max_input_rows = 7;
+    estremi.max_string_bytes = 11;
+    estremi.max_regex_bytes = 13;
+
+    let tabellari = limiti_dei_kernel_tabellari(&estremi).expect("limiti convertibili");
+
+    assert_eq!(
+        tabellari.max_columns,
+        plenora_kernels_table::limiti_interni::MAX_COLUMNS,
+        "max_columns e' un limite interno: il piano non lo dichiara e non lo muove"
+    );
+    assert_eq!(
+        tabellari.max_split_columns,
+        plenora_kernels_table::limiti_interni::MAX_SPLIT_COLUMNS,
+        "max_split_columns e' un limite interno"
+    );
+
+    // Cio' che il piano DICHIARA arriva invece intatto: la separazione non e'
+    // un pretesto per ignorare i limiti dichiarati.
+    assert_eq!(tabellari.max_rows, 7);
+    assert_eq!(tabellari.max_string_bytes, 11);
+    assert_eq!(tabellari.max_regex_bytes, 13);
+}
+
+/// Il budget di memoria attraversa il confine INTATTO.
+///
+/// E' la dipendenza diretta del contratto di memoria: se il valore si
+/// deformasse qui, ogni ragionamento sul tetto duro varrebbe su un numero
+/// diverso da quello che l'utente ha scritto.
+#[test]
+fn il_budget_di_memoria_attraversa_il_confine_intatto() {
+    let limits = Limits {
+        max_governed_memory_bytes: 123_456_789,
+        max_temp_bytes: 987_654_321,
+        ..Limits::default()
+    };
+
+    let tabellari = limiti_dei_kernel_tabellari(&limits).expect("limiti convertibili");
+
+    assert_eq!(tabellari.max_governed_memory_bytes, 123_456_789);
+    assert_eq!(tabellari.max_temp_bytes, 987_654_321);
+}

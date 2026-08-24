@@ -34,14 +34,36 @@ pub struct Limits {
     pub spill_partitions: usize,
 }
 
+/// Limiti **interni ai kernel**: non sono dichiarabili in un piano, e nessuna
+/// conversione dai limiti del piano puo' produrli.
+///
+/// # Perche' esistono e perche' stanno qui
+///
+/// `plenora_core::limits::Limits` dichiara cio' che un piano puo' chiedere.
+/// Questi due tetti non ci sono, e non e' una dimenticanza: proteggono
+/// invarianti dei kernel — quante colonne una `flatten_json` puo' generare,
+/// quante ne puo' produrre uno `split` — che il formato del piano non nomina.
+///
+/// Prima erano campi di [`Limits`] riempiti da `Limits::default()` dentro
+/// l'adattatore dell'engine. Il risultato era che **un default nasceva durante
+/// una conversione**: leggendo l'adattatore sembravano ereditati dal piano, e
+/// leggendo il piano non c'erano. Ora sono dichiarati dove sono imposti.
+pub mod limiti_interni {
+    /// Colonne totali che un batch puo' raggiungere dopo un'espansione.
+    pub const MAX_COLUMNS: usize = 4_096;
+
+    /// Colonne che una singola operazione di split puo' produrre.
+    pub const MAX_SPLIT_COLUMNS: usize = 256;
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
             max_rows: 10_000_000,
-            max_columns: 4_096,
+            max_columns: limiti_interni::MAX_COLUMNS,
             max_string_bytes: 16 * 1024 * 1024,
             max_regex_bytes: 4_096,
-            max_split_columns: 256,
+            max_split_columns: limiti_interni::MAX_SPLIT_COLUMNS,
             max_governed_memory_bytes: 512 * 1024 * 1024,
             max_temp_bytes: 8 * 1024 * 1024 * 1024,
             spill_partitions: 64,

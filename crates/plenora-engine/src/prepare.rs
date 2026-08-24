@@ -1179,9 +1179,9 @@ fn prepare_kernel(
         None => None,
     };
 
-    let legacy_limits = legacy_limits(limits);
+    let limiti_tabellari = limiti_dei_kernel_tabellari(limits)?;
     let (config, geo_role) = match descriptor.family {
-        Family::Table => (prepare_table(node, descriptor, &legacy_limits)?, None),
+        Family::Table => (prepare_table(node, descriptor, &limiti_tabellari)?, None),
         Family::Geo => {
             let (config, role) = prepare_geo(
                 node,
@@ -1223,22 +1223,40 @@ fn prepare_kernel(
 /// restano applicati dall'executor con la semantica cumulativa corretta —
 /// mapparli sul `max_rows` legacy li farebbe scattare per batch, non per
 /// arco.
-fn legacy_limits(limits: &Limits) -> table_engine::Limits {
-    let defaults = table_engine::Limits::default();
-    table_engine::Limits {
-        max_rows: usize::try_from(limits.rows.max_input_rows).unwrap_or(usize::MAX),
-        max_columns: defaults.max_columns,
+fn limiti_dei_kernel_tabellari(limits: &Limits) -> Result<table_engine::Limits> {
+    // Le conversioni verso `usize` sono fail-closed. Prima erano
+    // `unwrap_or(usize::MAX)`: su una piattaforma dove `usize` e' piu' stretto
+    // di `u64`, un budget che non ci sta diventava il massimo rappresentabile —
+    // cioe' un tetto di sicurezza ALLARGATO in silenzio, nella direzione
+    // sbagliata. Un limite che non si puo' onorare e' una configurazione da
+    // rifiutare, non da arrotondare.
+    let stretto = |valore: u64, nome: &str| -> Result<usize> {
+        usize::try_from(valore).map_err(|_| {
+            PlenoraError::ResourceLimit(format!(
+                "{nome} dichiarato oltre quanto questa piattaforma sa rappresentare"
+            ))
+        })
+    };
+    Ok(table_engine::Limits {
+        max_rows: stretto(limits.rows.max_input_rows, "max_input_rows")?,
+        // NON derivati dal piano: sono limiti interni dei kernel, dichiarati
+        // dove sono imposti (`plenora_kernels_table::limiti_interni`). Prima
+        // arrivavano da `Limits::default()` qui dentro, e leggendo questa
+        // funzione sembravano ereditati.
+        max_columns: plenora_kernels_table::limiti_interni::MAX_COLUMNS,
+        max_split_columns: plenora_kernels_table::limiti_interni::MAX_SPLIT_COLUMNS,
         max_string_bytes: limits.max_string_bytes,
         max_regex_bytes: limits.max_regex_bytes,
-        max_split_columns: defaults.max_split_columns,
-        max_governed_memory_bytes: usize::try_from(limits.max_governed_memory_bytes)
-            .unwrap_or(usize::MAX),
+        max_governed_memory_bytes: stretto(
+            limits.max_governed_memory_bytes,
+            "max_governed_memory_bytes",
+        )?,
         max_temp_bytes: limits.max_temp_bytes,
         // Nessuna correzione qui: il minimo e' imposto da `Limits::validate`
         // all'ingresso del planner, che RIFIUTA un valore fuori dominio invece
         // di modificarlo alle spalle di chi ha scritto il piano.
-        spill_partitions: usize::try_from(limits.spill_partitions).unwrap_or(usize::MAX),
-    }
+        spill_partitions: stretto(u64::from(limits.spill_partitions), "spill_partitions")?,
+    })
 }
 
 /// Kernel tabellare: piano legacy di un solo step, validato in `prepare`
@@ -1246,7 +1264,7 @@ fn legacy_limits(limits: &Limits) -> table_engine::Limits {
 fn prepare_table(
     node: &NodeV5,
     descriptor: &plenora_core::catalog::OperationDescriptor,
-    legacy_limits: &table_engine::Limits,
+    limiti_tabellari: &table_engine::Limits,
 ) -> Result<PreparedConfig> {
     let step = table_engine::Step {
         operation: descriptor.id.to_owned(),
@@ -1254,7 +1272,7 @@ fn prepare_table(
     };
     let plan = table_engine::Plan {
         schema_version: table_engine::SCHEMA_VERSION,
-        limits: legacy_limits.clone(),
+        limits: limiti_tabellari.clone(),
         steps: vec![step],
     };
     let validated = plan.validate().map_err(|error| {
