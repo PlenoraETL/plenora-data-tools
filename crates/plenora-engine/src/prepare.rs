@@ -46,7 +46,7 @@ use std::path::PathBuf;
 use geo::{Geometry, Point};
 use serde::Deserialize;
 
-use plenora_core::catalog::{Arity, ExecutionClass, Family};
+use plenora_core::catalog::{Arity, ExecutionClass, Family, OperationId};
 use plenora_core::contract::{DataContract, RuntimeStatistic};
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
@@ -1319,11 +1319,11 @@ fn prepare_geo_binary(
     limits: &Limits,
     is_plan_output: bool,
 ) -> Result<Option<(PreparedConfig, GeoRole)>> {
-    let operation = match descriptor.id {
-        "geo.sjoin" => PairOperation::SJoin,
-        "geo.nearest" => PairOperation::Nearest,
-        "geo.within" => PairOperation::Within,
-        "geo.count_points_in_polygons" => PairOperation::CountPointsInPolygons,
+    let operation = match descrittore_tipizzato(descriptor)? {
+        OperationId::GeoSjoin => PairOperation::SJoin,
+        OperationId::GeoNearest => PairOperation::Nearest,
+        OperationId::GeoWithin => PairOperation::Within,
+        OperationId::GeoCountPointsInPolygons => PairOperation::CountPointsInPolygons,
         _ => return Ok(None),
     };
     let row_cap = if is_plan_output {
@@ -1442,28 +1442,46 @@ fn prepare_geo_binary(
     )))
 }
 
+/// L'identita' tipizzata di un descrittore del catalogo.
+///
+/// Il descrittore VIENE dal catalogo, quindi la conversione non puo' fallire:
+/// il test di bijezione in `plenora-core` lo garantisce. `Result` invece di
+/// `expect` perche' il gate R6 vieta le primitive di panico nel codice di
+/// produzione, e perche' un'invariante violata deve diventare un errore
+/// diagnosticabile, non un abort.
+fn descrittore_tipizzato(
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+) -> Result<OperationId> {
+    OperationId::from_canonical(descriptor.id).ok_or_else(|| {
+        PlenoraError::Internal(format!(
+            "operazione `{}` a catalogo senza variante in OperationId",
+            descriptor.id
+        ))
+    })
+}
+
 /// Mapping op geo v4 → [`ArrowOperation`] del trasporto (trasformazioni 1:1
 /// in place coperte dal dispatch v1).
 fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
-    match id {
-        "geo.centroid" => Some(ArrowOperation::Centroid),
-        "geo.convex_hull" => Some(ArrowOperation::ConvexHull),
-        "geo.envelope" => Some(ArrowOperation::Envelope),
-        "geo.buffer" => Some(ArrowOperation::Buffer),
-        "geo.simplify" => Some(ArrowOperation::Simplify),
-        "geo.boundary" => Some(ArrowOperation::Boundary),
-        "geo.point_on_surface" => Some(ArrowOperation::PointOnSurface),
-        "geo.make_valid" => Some(ArrowOperation::MakeValid),
-        "geo.reproject" => Some(ArrowOperation::Reproject),
-        "geo.affine_transform" => Some(ArrowOperation::AffineTransform),
-        "geo.translate" => Some(ArrowOperation::Translate),
-        "geo.scale" => Some(ArrowOperation::Scale),
-        "geo.rotate" => Some(ArrowOperation::Rotate),
-        "geo.concave_hull" => Some(ArrowOperation::ConcaveHull),
-        "geo.densify" => Some(ArrowOperation::Densify),
-        "geo.snap_to_grid" => Some(ArrowOperation::SnapToGrid),
-        "geo.line_substring" => Some(ArrowOperation::LineSubstring),
-        "geo.line_interpolate_point" => Some(ArrowOperation::LineInterpolatePoint),
+    match OperationId::from_canonical(id)? {
+        OperationId::GeoCentroid => Some(ArrowOperation::Centroid),
+        OperationId::GeoConvexHull => Some(ArrowOperation::ConvexHull),
+        OperationId::GeoEnvelope => Some(ArrowOperation::Envelope),
+        OperationId::GeoBuffer => Some(ArrowOperation::Buffer),
+        OperationId::GeoSimplify => Some(ArrowOperation::Simplify),
+        OperationId::GeoBoundary => Some(ArrowOperation::Boundary),
+        OperationId::GeoPointOnSurface => Some(ArrowOperation::PointOnSurface),
+        OperationId::GeoMakeValid => Some(ArrowOperation::MakeValid),
+        OperationId::GeoReproject => Some(ArrowOperation::Reproject),
+        OperationId::GeoAffineTransform => Some(ArrowOperation::AffineTransform),
+        OperationId::GeoTranslate => Some(ArrowOperation::Translate),
+        OperationId::GeoScale => Some(ArrowOperation::Scale),
+        OperationId::GeoRotate => Some(ArrowOperation::Rotate),
+        OperationId::GeoConcaveHull => Some(ArrowOperation::ConcaveHull),
+        OperationId::GeoDensify => Some(ArrowOperation::Densify),
+        OperationId::GeoSnapToGrid => Some(ArrowOperation::SnapToGrid),
+        OperationId::GeoLineSubstring => Some(ArrowOperation::LineSubstring),
+        OperationId::GeoLineInterpolatePoint => Some(ArrowOperation::LineInterpolatePoint),
         _ => None,
     }
 }
@@ -1550,12 +1568,12 @@ fn prepare_geo(
         ));
     }
 
-    let measure = match descriptor.id {
-        "geo.area" => Some(MeasureKind::Area),
-        "geo.length" => Some(MeasureKind::Length),
-        "geo.perimeter" => Some(MeasureKind::Perimeter),
-        "geo.vertex_count" => Some(MeasureKind::VertexCount),
-        "geo.to_wkt" => Some(MeasureKind::ToWkt),
+    let measure = match descrittore_tipizzato(descriptor)? {
+        OperationId::GeoArea => Some(MeasureKind::Area),
+        OperationId::GeoLength => Some(MeasureKind::Length),
+        OperationId::GeoPerimeter => Some(MeasureKind::Perimeter),
+        OperationId::GeoVertexCount => Some(MeasureKind::VertexCount),
+        OperationId::GeoToWkt => Some(MeasureKind::ToWkt),
         _ => None,
     };
     if let Some(measure) = measure {
@@ -1618,8 +1636,8 @@ fn prepare_geo_extension(
     input_contract: &DataContract,
     output_contract: &DataContract,
 ) -> Result<Option<(PreparedConfig, GeoRole)>> {
-    let prepared = match descriptor.id {
-        "geo.from_wkt" => {
+    let prepared = match descrittore_tipizzato(descriptor)? {
+        OperationId::GeoFromWkt => {
             let parsed: GeoFromWktConfig = serde_json::from_value(node.config.clone())?;
             // `output_column` e `crs` sono semantica di contratto (nome e CRS
             // della colonna prodotta): gia' applicati dal planner.
@@ -1641,7 +1659,7 @@ fn prepare_geo_extension(
                 GeoRole::ProduceFromText,
             )
         }
-        "geo.geometry_accessors" => {
+        OperationId::GeoGeometryAccessors => {
             let parsed: GeoAccessorsConfig = serde_json::from_value(node.config.clone())?;
             let prefix = parsed.output_prefix.as_deref().unwrap_or("");
             let selected: Vec<AccessorKind> = match &parsed.fields {
@@ -1687,7 +1705,7 @@ fn prepare_geo_extension(
                 GeoRole::MeasureAddColumn,
             )
         }
-        "geo.line_locate_point" => {
+        OperationId::GeoLineLocatePoint => {
             let parsed: GeoLineLocatePointConfig = serde_json::from_value(node.config.clone())?;
             let Geometry::Point(point) = decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)?
             else {
@@ -1710,7 +1728,7 @@ fn prepare_geo_extension(
                 GeoRole::MeasureAddColumn,
             )
         }
-        "geo.subdivide" => {
+        OperationId::GeoSubdivide => {
             let parsed: GeoSubdivideConfig = serde_json::from_value(node.config.clone())?;
             // `output_column` e' semantica di contratto (rinomina in place):
             // gia' applicata dal planner, niente da fare a runtime.
@@ -1728,7 +1746,7 @@ fn prepare_geo_extension(
                 GeoRole::OneToMany,
             )
         }
-        "geo.snap" => {
+        OperationId::GeoSnap => {
             let parsed: GeoSnapConfig = serde_json::from_value(node.config.clone())?;
             let reference = decode_wkb_hex(&node.id, "reference_wkb", &parsed.reference_wkb)?;
             if !parsed.tolerance.is_finite() || parsed.tolerance < 0.0 {
@@ -1745,7 +1763,7 @@ fn prepare_geo_extension(
                 GeoRole::TransformInPlace,
             )
         }
-        "geo.collect" => {
+        OperationId::GeoCollect => {
             let parsed: GeoCollectConfig = serde_json::from_value(node.config.clone())?;
             let mut indices: Vec<usize> = Vec::with_capacity(parsed.group_by.len());
             for name in &parsed.group_by {
@@ -1767,7 +1785,7 @@ fn prepare_geo_extension(
                 GeoRole::WholeTable,
             )
         }
-        "geo.generate_grid" => {
+        OperationId::GeoGenerateGrid => {
             let parsed: GeoGenerateGridConfig = serde_json::from_value(node.config.clone())?;
             // `crs` e `include_centroid` sono semantica di contratto (CRS e
             // colonne dell'output): gia' applicati dal planner.
@@ -1794,7 +1812,7 @@ fn prepare_geo_extension(
                 GeoRole::WholeTable,
             )
         }
-        "geo.coverage_validate" => {
+        OperationId::GeoCoverageValidate => {
             let parsed: GeoCoverageValidateConfig = serde_json::from_value(node.config.clone())?;
             let tolerance = parsed.tolerance.unwrap_or(0.0);
             if !tolerance.is_finite() || tolerance < 0.0 {
@@ -1813,7 +1831,7 @@ fn prepare_geo_extension(
                 GeoRole::WholeTable,
             )
         }
-        "geo.shared_paths" => {
+        OperationId::GeoSharedPaths => {
             let parsed: GeoSharedPathsConfig = serde_json::from_value(node.config.clone())?;
             let tolerance = parsed.tolerance.unwrap_or(0.0);
             let min_length = parsed.min_length.unwrap_or(0.0);
@@ -1833,7 +1851,7 @@ fn prepare_geo_extension(
                 GeoRole::WholeTable,
             )
         }
-        "geo.cluster_dbscan" => {
+        OperationId::GeoClusterDbscan => {
             let parsed: GeoClusterDbscanConfig = serde_json::from_value(node.config.clone())?;
             if !parsed.eps.is_finite() || parsed.eps <= 0.0 {
                 return Err(PlenoraError::InvalidPlan(format!(
