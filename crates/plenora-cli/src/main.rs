@@ -102,6 +102,8 @@ use plenora_kernels_geo::arrow_adapter::{
 #[cfg(test)]
 use plenora_kernels_geo::Operation;
 
+#[cfg(not(feature = "proj-backend"))]
+use plenora_core::crs::resolve_crs;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::crs::resolve_crs;
 
@@ -1522,7 +1524,7 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             canonical_geometry_field(DataType::Binary),
         ]);
-        let result = discover_input_contract_from_schema(schema);
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
         #[cfg(feature = "proj-backend")]
         {
             let contract = result.expect("discovery canonica");
@@ -1556,7 +1558,7 @@ mod tests {
     fn discovery_rejects_canonical_geometry_field_of_non_binary_type() {
         // (1c) chiavi canoniche coerenti ma tipo non Binary -> errore.
         let schema = schema_v1(vec![canonical_geometry_field(DataType::Utf8)]);
-        let result = discover_input_contract_from_schema(schema);
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
     }
 
@@ -1571,7 +1573,7 @@ mod tests {
                 "2".to_owned(),
             )]),
         ));
-        let result = discover_input_contract_from_schema(schema);
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
     }
 
@@ -1582,7 +1584,7 @@ mod tests {
         let schema = std::sync::Arc::new(Schema::new(vec![canonical_geometry_field(
             DataType::Binary,
         )]));
-        let result = discover_input_contract_from_schema(schema);
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
     }
 
@@ -1594,7 +1596,7 @@ mod tests {
         let mut metadata = field.metadata().clone();
         metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
         let field = field.with_metadata(metadata);
-        let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+        let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("divergente"), "{message}");
@@ -1619,7 +1621,7 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             geometry_field(None),
         ]));
-        let contract = discover_input_contract_from_schema(schema).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema, resolve_crs).expect("discovery");
         assert_eq!(contract.geometries.len(), 1);
         assert!(
             matches!(contract.geometries[0].crs, ContractCrs::Missing),
@@ -1634,7 +1636,7 @@ mod tests {
         let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some(
             r#"{"dimensions":"xy"}"#,
         ))]));
-        let contract = discover_input_contract_from_schema(schema).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema, resolve_crs).expect("discovery");
         assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
         assert_eq!(contract.geometries[0].dimensions, GeometryDimensions::Xy);
     }
@@ -1652,8 +1654,8 @@ mod tests {
             ),
         ]);
         let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
     }
 
@@ -1671,7 +1673,7 @@ mod tests {
                 ),
             ]);
             let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
-            let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+            let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
             match result {
                 Err(PlenoraError::InvalidPlan(message)) => {
                     assert!(
@@ -1689,7 +1691,7 @@ mod tests {
         // R5.1: un metadato `geo` illeggibile non diventa «CRS assente» —
         // «illeggibile» non e' «assente»: errore, come prima di R4.6.3.
         let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
-        let result = discover_input_contract_from_schema(schema);
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(result.is_err(), "metadato geo malformato -> errore");
     }
 
@@ -1723,8 +1725,8 @@ mod tests {
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
         ]);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::DeclaredUnresolved {
             crs_id, definition, ..
         } = &contract.geometries[0].crs
@@ -1757,8 +1759,8 @@ mod tests {
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
             (PLENORA_GEOMETRY_SRID_KEY, "3003"),
         ]);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::DeclaredUnresolved {
             crs_id, definition, ..
         } = &contract.geometries[0].crs
@@ -1782,8 +1784,8 @@ mod tests {
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
             (PLENORA_GEOMETRY_SRID_KEY, "3003"),
         ]);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::DeclaredUnresolved {
             crs_id, definition, ..
         } = &contract.geometries[0].crs
@@ -1816,8 +1818,8 @@ mod tests {
             (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lat_lon"),
         ]);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::DeclaredUnresolved {
             crs_id,
             definition,
@@ -1887,8 +1889,8 @@ mod tests {
             .map(|(key, value)| (*key, value.as_str()))
             .collect();
         let field = canonical_crs_field(&pairs_ref);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::Resolved(resolved) = &contract.geometries[0].crs else {
             panic!("atteso Resolved: {:?}", contract.geometries[0].crs);
         };
@@ -1908,8 +1910,8 @@ mod tests {
             .map(|(key, value)| (*key, value.as_str()))
             .collect();
         let field = canonical_crs_field(&pairs_ref);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         let ContractCrs::DeclaredUnresolved {
             crs_id,
             definition,
@@ -1938,8 +1940,8 @@ mod tests {
             .map(|(key, value)| (*key, value.as_str()))
             .collect();
         let field = canonical_crs_field(&pairs_ref);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         assert!(
             matches!(
                 contract.geometries[0].crs,
@@ -1964,7 +1966,7 @@ mod tests {
             .map(|(key, value)| (*key, value.as_str()))
             .collect();
         let field = canonical_crs_field(&pairs_ref);
-        let result = discover_input_contract_from_schema(schema_v1(vec![field]));
+        let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
         assert!(
             matches!(result, Err(PlenoraError::Crs(_))),
             "atteso errore Crs senza backend: {result:?}"
@@ -1983,8 +1985,8 @@ mod tests {
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
             (PLENORA_GEOMETRY_SRID_KEY, "32632"),
         ]);
-        let contract =
-            discover_input_contract_from_schema(schema_v1(vec![field])).expect("discovery");
+        let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+            .expect("discovery");
         assert!(
             matches!(contract.geometries[0].crs, ContractCrs::Resolved(_)),
             "srid coerente -> risoluzione"
@@ -2171,7 +2173,7 @@ mod tests {
         let mut metadata = field.metadata().clone();
         metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
         let field = field.with_metadata(metadata);
-        let error = discover_input_contract_from_schema(schema_v1(vec![field]))
+        let error = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect_err("divergenza R2.6");
         assert_eq!(error.phase(), ErrorPhase::Validate);
         assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
@@ -2313,7 +2315,7 @@ mod tests {
         };
         let ContractCrs::DeclaredUnresolved {
             crs_id, definition, ..
-        } = contract_crs_from_keys("geometry", None, &keys).expect("stato")
+        } = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("stato")
         else {
             panic!("atteso DeclaredUnresolved");
         };
@@ -2341,7 +2343,7 @@ mod tests {
             crs_id,
             definition,
             definition_format,
-        } = contract_crs_from_keys("geometry", None, &keys).expect("stato")
+        } = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("stato")
         else {
             panic!("atteso DeclaredUnresolved");
         };
@@ -2359,7 +2361,7 @@ mod tests {
             crs_resolution: Some(CrsResolution::DeclaredUnresolved),
             ..CanonicalGeometryKeys::default()
         };
-        let result = contract_crs_from_keys("geometry", None, &keys);
+        let result = contract_crs_from_keys("geometry", None, &keys, resolve_crs);
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(
@@ -2382,7 +2384,7 @@ mod tests {
             crs_resolution: Some(CrsResolution::Resolved),
             ..CanonicalGeometryKeys::default()
         };
-        let result = contract_crs_from_keys("geometry", None, &keys);
+        let result = contract_crs_from_keys("geometry", None, &keys, resolve_crs);
         assert!(
             matches!(result, Err(PlenoraError::InvalidPlan(_))),
             "`resolved` srid-only non promosso: {result:?}"
@@ -2396,13 +2398,14 @@ mod tests {
         // backend, mai `Missing` inventato).
         let legacy = r#"{"crs":"EPSG:32632"}"#.to_owned();
         let keys = CanonicalGeometryKeys::default();
-        let result = contract_crs_from_keys("geometry", Some(&legacy), &keys);
+        let result = contract_crs_from_keys("geometry", Some(&legacy), &keys, resolve_crs);
         #[cfg(feature = "proj-backend")]
         assert!(matches!(result, Ok(ContractCrs::Resolved(_))), "{result:?}");
         #[cfg(not(feature = "proj-backend"))]
         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
         // Nessuna rappresentazione: `Missing`, mai errore (R4.6.3).
-        let missing = contract_crs_from_keys("geometry", None, &keys).expect("assente");
+        let missing =
+            contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("assente");
         assert!(matches!(missing, ContractCrs::Missing));
     }
 
@@ -2415,9 +2418,10 @@ mod tests {
                 "geoarrow.point".to_owned(),
             )]),
         );
-        let result = discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(vec![
-            unknown_extension,
-        ])));
+        let result = discover_input_contract_from_schema(
+            std::sync::Arc::new(Schema::new(vec![unknown_extension])),
+            resolve_crs,
+        );
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("non supportata"), "{message}");
@@ -2428,8 +2432,10 @@ mod tests {
         let orphan = Field::new("geometry", DataType::Binary, true).with_metadata(
             std::collections::HashMap::from([(GEO_METADATA_KEY.to_owned(), "{}".to_owned())]),
         );
-        let result =
-            discover_input_contract_from_schema(std::sync::Arc::new(Schema::new(vec![orphan])));
+        let result = discover_input_contract_from_schema(
+            std::sync::Arc::new(Schema::new(vec![orphan])),
+            resolve_crs,
+        );
         match result {
             Err(PlenoraError::InvalidPlan(message)) => {
                 assert!(message.contains("incoerenti"), "{message}");

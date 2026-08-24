@@ -18,6 +18,7 @@
 //! `ContractProperty<T> { confidence, scope }`.
 
 pub mod arrow_metadata;
+pub mod arrow_schema;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
