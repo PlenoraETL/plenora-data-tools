@@ -90,9 +90,16 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | da progettare |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | progetto in review, [`isolamento.md`](isolamento.md) |
 | 5 | il legacy ridotto a un confine di migrazione | sì | |
 | 6 | superficie pubblica e commenti | no | |
+
+**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano:
+
+| fase | è chiusa quando |
+|---|---|
+| 5 | esiste **un solo executor** per tutti i piani semanticamente traducibili; i piani non traducibili sono in un modulo isolato con la matrice di ciò che li rende tali; la rimozione è pianificata per una major dichiarata |
+| 6 | nessun modulo fuori dall'API è pubblico; i `lib.rs` espongono facciate ristrette; nessun commento di produzione dichiara uno stato di avanzamento («fase», «in corso», «milestone»), mentre restano le condizioni di rientro e le ragioni `D*`/`R*`; un gate lo tiene, con la distinzione fra cronologia e hazard scritta nella sua doc |
 
 ### Baseline pre-fase-4 — freeze strutturale
 
@@ -131,9 +138,6 @@ lo dichiara.
 | `oracolo_metriche.snap` | righe, batch e spill per nodo, esclusi i tempi |
 | `oracolo_round_trip_contratto.rs` | contratto → schema → contratto, e la convergenza in un giro |
 
-Quattro oracoli sorvegliano che nulla di osservabile cambi: snapshot del
-catalogo, identità dei piani (`plan_hash` e fingerprint), superficie CLI byte
-per byte, metriche deterministiche dell'executor.
 
 ### Perché le facciate non espongono `memory_profile()`
 
@@ -160,7 +164,13 @@ protocollo, handshake, verifica, matrici e suddivisione in PR.
 
 Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
 codice: worker, supervisore, protocollo fra i due e limiti di processo sono
-tutti da progettare.
+**progettati** in [`isolamento.md`](isolamento.md) e **non implementati**.
+
+Il progetto è in review e non è congelato: due prototipi di piattaforma —
+Linux e Windows — devono dimostrare nascita già vincolata, contenimento e
+attribuzione **prima** di qualunque PR di codice. Se uno dei due non dimostra
+tutte e tre le proprietà, non c'è ripiego silenzioso: il disegno torna in
+review.
 
 **F4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
 di memoria imposto dal sistema operativo, non sotto un tetto che si
@@ -224,6 +234,28 @@ filoni — correzioni di review, migrazione a Rust 1.98, aggiornamento delle
 dipendenze. Erano intrecciati negli stessi file, e separarli avrebbe prodotto
 stati intermedi mai eseguiti. La regola vale **da lì in avanti**, dove la
 struttura è ferma e la separazione è possibile.
+
+### Blocker dichiarato: la nuova linea normativa di `plenora-contracts`
+
+La fase 4 introduce un confine pubblico nuovo (`max_domain_memory_bytes`) e
+rende costruibili categorie d'errore finora solo dichiarabili. Entrambi
+toccano ciò che `plenora-contracts` descrive.
+
+Il repository è stato **sostituito il 2026-08-18** e il suo contenuto attuale è
+una linea normativa nuova, che non descrive i requisiti citati in questo
+codice ([`architettura.md`](architettura.md)). Ne segue un blocker esplicito,
+perché finora era implicito e un blocker implicito non ferma nessuno:
+
+| | |
+|---|---|
+| **che cosa** | l'adozione della nuova linea normativa è una **modifica semantica separata** |
+| **che cosa NON è** | non è un effetto collaterale della fase 4, e non si fa «già che ci siamo» |
+| **le citazioni `R…`** | restano riferimenti storici alla fonte congelata (`v2.0-rc10`, revisione `3598259`): non vanno reinterpretate, riscritte né tradotte contro il nuovo profilo |
+| **conseguenza pratica** | finché l'adozione non è decisa e pianificata, i confini pubblici che la fase 4 aggiunge vanno descritti **nella forma attuale**, e la loro traduzione nel nuovo profilo è lavoro successivo |
+
+Chi affronterà quell'adozione dovrà decidere, per ogni citazione, se il
+requisito nuovo dice la stessa cosa, una diversa, o non dice nulla — tre esiti
+diversi che non si distinguono con una sostituzione meccanica.
 
 ## 3. Campagna fuzz finale
 

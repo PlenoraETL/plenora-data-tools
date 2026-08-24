@@ -22,9 +22,9 @@ leggere il nostro codice.
 |---|---|
 | **GA-1** | Dopo OOM, crash, panic, timeout, cancellazione o risultato invalido, **nessun output finale è visibile**. Il percorso di destinazione non esiste, oppure contiene ciò che c'era prima. |
 | **GA-2** | Un esito classificato `ResourceLimit` porta **evidenza attribuibile** del dominio di isolamento. Senza prova specifica la classificazione è `Internal`. |
-| **GA-3** | L'output pubblicato ha uno schema **verificato** contro il contratto atteso, letto dall'autorità unica `plenora_core::contract`. |
+| **GA-3** | **Nessun output incompleto o strutturalmente invalido viene pubblicato.** Schema, contratto, framing, conteggi e sigillo sono verificati dall'autorità unica `plenora_core::contract` prima che qualcosa diventi visibile. |
 | **GA-4** | La pubblicazione è **atomica**: il file finale c'è per intero o non c'è. Nessuno stato intermedio è osservabile. |
-| **GA-5** | Il worker **non conosce** la destinazione finale e non può scriverla. |
+| **GA-5** | Il worker **non riceve** la destinazione finale: il protocollo non la trasporta, e non c'è altro canale da cui dedurla. |
 | **GA-6** | Supervisore e worker concordano su identità e versione del resolver CRS **prima** che il worker tocchi dati. Un disaccordo ferma l'esecuzione. |
 | **GA-7** | Il limite di memoria è in vigore **prima** che il worker possa elaborare dati o compiere allocazioni critiche. |
 
@@ -42,6 +42,92 @@ peggio di una che si sa di non avere.
 | **NG-5** | Il cleanup degli artefatti temporanei è garantito nel percorso normale e *best-effort* dopo una terminazione violenta. La bonifica differita esiste già ([`errori-e-limiti.md`](errori-e-limiti.md)). |
 | **NG-6** | Su macOS **non c'è contenimento**: il profilo isolato non è supportato finché un prototipo non dimostri contenimento *e* attribuzione. |
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
+| **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
+| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
+
+---
+
+## 2-bis. Semantica del budget: due grandezze, non una
+
+È la decisione centrale, e va presa prima del protocollo perché ne cambia i
+messaggi.
+
+### Che cosa misurano oggi le tre grandezze
+
+| grandezza | misura | chi la impone |
+|---|---|---|
+| `max_governed_memory_bytes` | memoria **ritenuta**: i lease vivi sui risultati | il governor, in-process |
+| `memory.max` (cgroup v2) | memoria **del cgroup**: tutto ciò che il dominio tocca | il kernel Linux |
+| limite di memoria del Job | memoria **committed** del job | Windows |
+
+Le tre non sono la stessa cosa e nessuna delle tre è convertibile nelle altre.
+La memoria ritenuta è un sottoinsieme di quella del dominio: fuori restano
+l'allocatore, lo stack, il codice mappato, i buffer Arrow non ancora sotto
+lease e tutto ciò che una dipendenza alloca senza dircelo.
+
+### La decisione
+
+**Nasce un limite separato.** Le altre due strade sono respinte:
+
+| strada | perché no |
+|---|---|
+| il budget governato diventa la memoria totale del dominio | ridefinirebbe in silenzio un campo **già presente nei piani pubblicati**: lo stesso `max_governed_memory_bytes: 512Mi` significherebbe una cosa diversa prima e dopo. È una rottura semantica travestita da chiarimento |
+| solo un overhead dichiarato, senza limite nuovo | l'overhead non è una costante: dipende dall'allocatore, dalla piattaforma e dal piano. Dichiararlo come numero fisso sarebbe una stima, ed è esattamente ciò che questo progetto ha deciso di non usare come fondamento |
+
+Quindi:
+
+| | ruolo |
+|---|---|
+| `max_domain_memory_bytes` (**nuovo**) | il tetto imposto dal sistema operativo al dominio. È **la** garanzia |
+| `max_governed_memory_bytes` (esistente, invariato) | ammissione, ritenzione e diagnostica **dentro** il worker. Non è un tetto duro e non lo diventa |
+
+Il rapporto fra i due non è calcolato: è **dichiarato**. Un piano che
+dichiara un budget governato maggiore del limite di dominio è respinto in
+validazione — non perché sappiamo quanto overhead servirà, ma perché quella
+combinazione è incoerente per costruzione.
+
+### Il confine è pubblico
+
+`max_domain_memory_bytes` è osservabile dall'esterno: cambia che cosa un piano
+può chiedere e che cosa il componente promette. Appartiene quindi ai **confini
+pubblici osservabili** di `plenora-contracts`, non al progetto interno.
+
+Ciò che **non** vi appartiene, e che questo documento tiene per sé: worker,
+supervisore, protocollo, moduli, governor, cgroup e Job Object. Sono
+meccanismi, e un contratto che li prescrivesse legherebbe le mani a
+un'implementazione invece di descrivere una promessa.
+
+---
+
+## 2-ter. La verifica non può stare fuori dal limite
+
+Il supervisore rilegge l'artefatto e ricostruisce il contratto. **Anche quella
+fase alloca**, e su un artefatto grande può esaurire la memoria: senza una
+difesa, l'OOM non è eliminato, è spostato dal worker al supervisore — dove per
+giunta non c'è nessuno a osservarlo.
+
+Due difese, entrambe necessarie:
+
+**1. Verificatore in streaming con tetti dimostrabili.** La verifica non
+materializza mai più di un tetto dichiarato: legge lo schema dall'header,
+scorre i batch senza accumularli, confronta i conteggi incrementalmente. Il
+confine ostile per Arrow IPC che il progetto ha già
+([`errori-e-limiti.md`](errori-e-limiti.md)) impone tetti sul framing prima
+che arrow veda i byte: la verifica ne eredita la disciplina e vi aggiunge il
+proprio tetto sui batch trattenuti.
+
+Il tetto dev'essere **dimostrabile**, non asserito: la verifica alloca una
+quantità funzione del solo schema e del batch corrente, mai del numero di
+righe o di batch. Una verifica che debba tenere tutto in memoria per
+rispondere non è accettabile in questo disegno.
+
+**2. Il supervisore ha a sua volta un dominio.** Se la verifica in streaming
+fallisse comunque, il supervisore non deve morire in modo non classificabile.
+Il suo tetto è una seconda linea, non la prima.
+
+La sequenza di verifica in §7 va letta con questo vincolo: **ogni passo
+dichiara quanta memoria può trattenere**, e nessuno risponde «tutta quella che
+serve».
 
 ---
 
@@ -248,14 +334,43 @@ L'handshake negozia quindi:
 
 I dati ambientali sono la parte che si dimentica. PROJ consulta griglie e
 database esterni: **la stessa versione della libreria con griglie diverse dà
-risultati diversi**. Vanno quindi dichiarati la versione del database PROJ, i
-percorsi di ricerca in uso e un digest delle risorse effettivamente caricate.
+risultati diversi**.
+
+#### Perché «digest delle risorse caricate» non funziona
+
+La prima stesura di questo documento chiedeva un digest delle risorse
+*effettivamente caricate*. Non è realizzabile prima dei dati, ed è un errore
+istruttivo: PROJ sceglie quali griglie aprire **in funzione della
+trasformazione e dell'area elaborata**. Prima di vedere i dati non si sa quali
+risorse serviranno, quindi non se ne può calcolare il digest — e l'handshake
+deve concludersi *prima* dei dati.
+
+#### Che cosa si negozia davvero
+
+Si sposta la domanda da «che cosa è stato caricato» a «che cosa **può** essere
+caricato»:
+
+| | che cosa | quando |
+|---|---|---|
+| **insieme immutabile e content-addressed** | l'elenco completo delle risorse *disponibili* — database e griglie — con il digest dell'insieme, non dei singoli file usati | handshake, prima dei dati |
+| **acquisizione dinamica disabilitata** | nessun download, nessuna rete, nessuna cache che si popola da sola durante l'esecuzione | handshake, verificato da entrambi i lati |
+| **librerie e database realmente risolti** | nome, versione riportata a runtime, percorso risolto — di ciò che il caricatore ha effettivamente aperto | handshake |
+
+L'insieme è **immutabile** per costruzione: una directory di risorse fissata e
+sola-lettura, il cui contenuto è identificato dal digest dell'insieme. Se il
+contenuto cambia, cambia il digest, e i due lati non si accordano più.
+
+L'acquisizione dinamica va **disabilitata**, non solo dichiarata. Un backend
+che può scaricare una griglia a metà esecuzione rende l'insieme negoziato una
+fotografia scaduta: due worker con lo stesso digest iniziale potrebbero finire
+con risorse diverse. Disabilitarla è ciò che rende il digest una prova invece
+di un'istantanea.
 
 **Backend dinamici.** Se il backend è collegato dinamicamente, l'identità
 dell'artefatto non lo copre: il digest dell'eseguibile non dice nulla della
-libreria che verrà caricata. I backend dinamici vanno quindi identificati
-**separatamente** — nome, versione riportata a runtime, percorso risolto — e
-la loro identità entra nell'accordo come le altre.
+libreria che il caricatore risolverà. I backend dinamici vanno quindi
+identificati **separatamente** — nome, versione riportata a runtime, percorso
+risolto — e la loro identità entra nell'accordo come le altre.
 
 Un disaccordo su qualunque di questi campi ferma l'esecuzione **prima dei
 dati**, con esito `resolver incompatibile`.
@@ -364,10 +479,32 @@ iniziato.
 |---|---|---|---|
 | dominio di isolamento | cgroup v2 dedicato | Job Object | — |
 | meccanismo del limite | `memory.max` | limite di memoria del job | — |
-| chi applica | il supervisore, prima dello spawn | il supervisore, prima dello spawn | — |
+| **come nasce vincolato** | `clone3` con `CLONE_INTO_CGROUP`: il processo nasce **dentro** il cgroup, nessuna finestra | creazione **sospesa**, associazione al Job, poi `resume` | — |
 | evidenza di attribuzione | `memory.events.local` | notifica del job sulla completion port | — |
 | terminazione forzata | uccisione dell'intero cgroup | terminazione del job | — |
 | stato | da prototipare | da prototipare | **non supportato** (`F4-6`, `NG-6`) |
+
+**«Prima dello spawn» non basta, e il meccanismo cambia per piattaforma.**
+La macchina a stati §3.1 dice che il limite precede l'avvio; qui si dice
+*come*, perché le due piattaforme lo ottengono in modi diversi e con residui
+diversi.
+
+**Linux — nessuna finestra.** `clone3` con `CLONE_INTO_CGROUP` fa nascere il
+processo già dentro il cgroup di destinazione. Il tetto è in vigore dalla prima
+istruzione. La strada alternativa — `fork` e poi spostamento nel cgroup —
+**non è accettabile**: fra la nascita e lo spostamento c'è una finestra in cui
+il processo alloca senza tetto, e una finestra è abbastanza. Se il
+meccanismo non fosse disponibile sul kernel di destinazione, il profilo isolato
+non è supportato lì: non esiste un ripiego silenzioso.
+
+**Windows — una finestra residua, dichiarata.** Il processo si crea con
+`CREATE_SUSPENDED`, si associa al Job Object, poi si riprende. Il thread
+primario non ha eseguito un'istruzione, quindi il codice del worker non ha
+allocato nulla. **Ma la mappatura dell'immagine e le allocazioni del loader
+precedono l'associazione**, e non sono coperte dal limite del job. È un residuo
+piccolo e costante — non cresce coi dati — e va **misurato dal prototipo**, non
+stimato: se risultasse significativo rispetto ai budget realistici, il disegno
+torna in review.
 
 **Perché `memory.events.local` e non `memory.events`.** Il secondo aggrega i
 discendenti; il primo riguarda il cgroup che abbiamo creato noi. Attribuire a
@@ -398,14 +535,73 @@ attuali, che sono minori e dichiarate.
 | 6 | terminazione ambigua | il processo muore, evidenza assente o non attribuibile | `Internal` — **mai** dedotto come OOM | no | rimosso |
 | 7 | timeout | scadenza del timeout di esecuzione | `Timeout` | no | rimosso |
 | 8 | cancellazione | `Annulla` inviato, worker terminato | `Cancelled` | no | rimosso |
-| 9 | protocollo incompatibile | versione non riconosciuta nell'handshake | `Internal` | no | nessuno creato |
-| 10 | resolver incompatibile | disaccordo su identità, versione, capability o ambiente | `InvalidPlan` | no | nessuno creato |
+| 9 | protocollo incompatibile | versione non riconosciuta nell'handshake | **`Protocol`** | no | nessuno creato |
+| 10 | resolver incompatibile | disaccordo su identità, versione, capability o ambiente | **`InvalidConfiguration`** | no | nessuno creato |
 | 11 | output assente | verifica passo 3 | `Internal` | no | — |
 | 12 | output troncato | verifica passo 4 (sigillo) o 5 (framing) | `Internal` | no | rimosso |
 | 13 | output semanticamente invalido | verifica passo 7 (contratto) | `Schema` | no | rimosso |
 | 14 | fallimento della verifica | qualunque passo 1-8 non coperto sopra | secondo il passo | no | rimosso |
 | 15 | fallimento del publish | verifica passata, passo 9 fallito | `Io` o `Conflict` | no | rimosso |
-| 16 | fallimento del cleanup | publish riuscito, rimozione fallita | successo **con avvertenza** | **sì** | **residuo** |
+| 16 | fallimento del cleanup | publish riuscito, rimozione fallita | successo **con avvertenza machine-readable** | **sì** | **residuo** |
+
+### 10.1 Tassonomia: che cosa manca davvero
+
+`ErrorCategory` ha già `Protocol`, `Timeout`, `Conflict` e
+`InvalidConfiguration`. **Nessuna variante di `PlenoraError` le produce oggi**:
+esistono come categorie dichiarabili, non come errori costruibili.
+
+Le tre righe che ne hanno bisogno:
+
+| esito | categoria | perché non le esistenti |
+|---|---|---|
+| protocollo incompatibile | `Protocol` | è precisamente «violazione del protocollo». `Internal` direbbe «difetto nostro», e lo è solo a volte: due binari diversi in esecuzione sono una condizione di dispiegamento |
+| resolver incompatibile | `InvalidConfiguration` | **non `InvalidPlan`**: il piano può essere perfettamente valido, e lo sarebbe di nuovo con un ambiente coerente. È il componente a essere configurato male, non il piano a essere sbagliato |
+| timeout | `Timeout` | oggi non c'è modo di costruirlo |
+
+Servono quindi **varianti nuove** di `PlenoraError`. È una **modifica
+semantica di un tipo pubblico**, non un dettaglio: va in una PR propria, con
+il proprio impatto sulla superficie e sugli exit code, prima di qualunque
+codice che le usi.
+
+Anche `Conflict` va reso costruibile: la riga 15 (fallimento del publish) lo
+usa quando la destinazione esiste già, ed è diverso da un errore di I/O.
+
+### 10.2 L'avvertenza di cleanup ha un canale proprio
+
+La riga 16 non è un errore, ma non deve nemmeno essere una stringa in un log.
+L'esito di successo porta un campo dedicato, machine-readable, che dichiara
+che cosa è rimasto e dove: chi amministra lo spazio su disco deve poterlo
+leggere senza fare *grep*.
+
+Un successo senza quel campo è un successo pulito. La sua presenza non cambia
+la categoria dell'esito — resta successo — e non deve indurre un chiamante a
+riprovare l'operazione.
+
+### 10.3 Precedenza fra eventi concorrenti
+
+Cancellazione, timeout, uscita del worker, evidenza di OOM e publish possono
+accadere quasi insieme. Senza una precedenza dichiarata, due esecuzioni
+identiche potrebbero classificarsi diversamente per una corsa.
+
+L'ordine è **totale** e va dal fatto più esterno al meno verificabile:
+
+| # | evento | vince perché |
+|---|---|---|
+| 1 | **publish completato** | è un fatto osservabile fuori dal sistema: se l'output è visibile, l'operazione è riuscita, e nessun evento successivo può renderla non riuscita |
+| 2 | **OOM attribuito** | ha evidenza specifica del dominio. Un processo con quella prova è morto per il limite, anche se stavamo cancellando |
+| 3 | **timeout scaduto** | è il nostro orologio, misurato |
+| 4 | **cancellazione richiesta** | è la nostra decisione, e precede l'auto-dichiarazione del worker |
+| 5 | **esito dichiarato dal worker** | è un'affermazione di un processo che potrebbe essere in difficoltà |
+| 6 | **terminazione ambigua** | l'ultimo, e per costruzione mai `ResourceLimit` |
+
+Il punto 4 sopra il 5 merita una parola: se abbiamo cancellato **e** il worker
+riporta successo ma non abbiamo ancora pubblicato, l'esito è `Cancelled`. Un
+successo che non è diventato visibile non è un successo per chi ha chiesto di
+annullare.
+
+Il punto 2 sopra il 4 merita l'altra: se abbiamo cancellato e c'è prova di OOM,
+l'esito è `ResourceLimit`. La prova batte l'intenzione — altrimenti una
+cancellazione tempestiva maschererebbe un difetto di dimensionamento.
 
 Le righe 5 e 6 sono la stessa terminazione vista con e senza prova, e la
 differenza fra le due è tutto il valore di `F4-2`. Un sistema che deduce l'OOM
@@ -422,25 +618,53 @@ non a chi consuma il dato.
 
 ## 11. Suddivisione in PR
 
+### 11.1 Due prototipi bloccanti, prima di tutto
+
+**Nessuna implementazione del protocollo prima dell'esito dei prototipi.**
+Erano PR-4 e PR-9 nella prima stesura, cioè dopo protocollo e supervisore:
+sbagliato. Se il meccanismo di piattaforma non regge, protocollo e supervisore
+sarebbero stati costruiti sopra un'assunzione falsa.
+
+| | prototipo | deve dimostrare |
+|---|---|---|
+| **PT-Linux** | `clone3` + `CLONE_INTO_CGROUP`, `memory.max`, `memory.events.local` | **nascita già vincolata** (nessuna finestra), **contenimento** (il processo viene fermato al tetto), **attribuzione** (l'evento è leggibile e riferito al nostro cgroup) |
+| **PT-Windows** | creazione sospesa, Job Object, resume, notifica sulla completion port | le stesse tre, **più** la misura del residuo del loader: quanta memoria è mappata prima dell'associazione |
+
+Ciascun prototipo deve dimostrare **tutte e tre** le proprietà. Se una manca:
+
+- **nessun ripiego silenzioso**. Non si sostituisce `CLONE_INTO_CGROUP` con
+  fork-e-sposta, non si accetta un'attribuzione dedotta, non si dichiara
+  supportata una piattaforma che contiene ma non attribuisce;
+- **il disegno torna in review**, con la proprietà mancante dichiarata e le
+  conseguenze sulle garanzie §1 rifatte.
+
+Un prototipo che dimostra due proprietà su tre non è un successo parziale: è
+un risultato che cambia ciò che possiamo promettere.
+
+### 11.2 Le PR, dopo i prototipi
+
 Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 
 | PR | contenuto | cambia semantica | verificabile con |
 |---|---|---|---|
-| **PR-1** | tipi dell'esito e della classificazione, senza processi: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo | no | test di tabella sulla matrice |
-| **PR-2** | protocollo: codifica, tetti, versione, fail-closed. Nessun processo, solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
-| **PR-3** | handshake: identità artefatto, resolver, ambiente, backend dinamici. Ancora in-process | no | test di disaccordo su ciascun campo |
-| **PR-4** | dominio di isolamento su **Linux**: creazione, limite, attribuzione. Nessun worker ancora | no | prova che il limite contiene e che l'evidenza è leggibile |
-| **PR-5** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
-| **PR-6** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
-| **PR-7** | sequenza di verifica 1-8 | no | rifiuto di ciascun difetto iniettato |
-| **PR-8** | publish atomico dal supervisore | no | GA-1 e GA-4 su ogni riga della matrice |
-| **PR-9** | dominio di isolamento su **Windows** | no | come PR-4 |
-| **PR-10** | **attivazione**: il profilo isolato diventa selezionabile | **sì** | l'intera matrice, su entrambe le piattaforme |
+| **PR-1** | varianti nuove di `PlenoraError` per `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration` | **sì** (tipo pubblico) | mapping variante→categoria esaustivo, exit code invariati per le esistenti |
+| **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
+| **PR-3** | tipi dell'esito e della classificazione: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo, la precedenza §10.3 | no | test di tabella sulla matrice e sulle corse |
+| **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
+| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici | no | test di disaccordo su ciascun campo |
+| **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
+| **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux | no | contenimento e attribuzione, come il prototipo |
+| **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
+| **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
+| **PR-10** | sequenza di verifica 1-9 e publish atomico dal supervisore | no | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice |
+| **PR-11** | dominio di isolamento su Windows, promosso da PT-Windows | no | come PR-7 |
+| **PR-12** | **attivazione**: il profilo isolato diventa selezionabile | **sì** | l'intera matrice, su entrambe le piattaforme |
 
-Solo **PR-10** cambia semantica. Tutte le precedenti costruiscono senza
-sostituire: il percorso in-process resta quello attivo, e ciò significa che
-ognuna può essere fermata senza lasciare il sistema a metà.
+Tre PR cambiano semantica — PR-1, PR-2, PR-12 — e nessuna delle tre è nascosta
+in mezzo alle altre. Le restanti costruiscono senza sostituire: il percorso
+in-process resta attivo, e ognuna può essere fermata senza lasciare il sistema
+a metà.
 
-Il criterio di uscita della fase 4 (`F4-5`) si verifica su PR-10: nessun
+Il criterio di uscita della fase 4 (`F4-5`) si verifica su PR-12: nessun
 percorso noto produce un'allocazione critica prima dell'autorizzazione, oppure
 il piano viene rifiutato esplicitamente.
