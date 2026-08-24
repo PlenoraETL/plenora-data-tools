@@ -188,7 +188,7 @@ impl ExecState {
                 metrics.nodes.insert(
                     kernel.node_id.clone(),
                     NodeMetrics {
-                        operation: kernel.operation.to_owned(),
+                        operation: kernel.operation.as_str().to_owned(),
                         ..NodeMetrics::default()
                     },
                 );
@@ -364,7 +364,7 @@ impl ExecState {
         if cancellation_behavior(kernel) == CancellationBehavior::NonInterruptible {
             return Ok(());
         }
-        self.check_cancellation_point(&kernel.node_id, kernel.operation)
+        self.check_cancellation_point(&kernel.node_id, kernel.operation.as_str())
     }
 
     /// Check di cancellazione a un confine di piano (output) o di batch in

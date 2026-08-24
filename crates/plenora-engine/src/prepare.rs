@@ -46,7 +46,7 @@ use std::path::PathBuf;
 use geo::{Geometry, Point};
 use serde::Deserialize;
 
-use plenora_core::catalog::{Arity, ExecutionClass, Family, OperationId};
+use plenora_core::catalog::{Arity, ExecutionClass, ExpansionConstraint, Family, OperationId};
 use plenora_core::contract::{DataContract, RuntimeStatistic};
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
@@ -605,8 +605,13 @@ impl PreparedConfig {
 pub struct PreparedKernel {
     /// Id del nodo logico del piano.
     pub node_id: String,
-    /// Id canonico dell'operazione (`table.*`/`geo.*`).
-    pub operation: &'static str,
+    /// Identita' dell'operazione, tipizzata.
+    ///
+    /// Era una `&'static str`, e ogni consumatore che voleva ragionarci
+    /// sopra doveva riconvertirla. La stringa si ottiene con `as_str()` ed
+    /// e' cio' che va in serializzazione, metriche ed errori — non nelle
+    /// decisioni.
+    pub operation: OperationId,
     /// Famiglia dell'operazione.
     pub family: Family,
     /// Ruolo geo dentro a un segmento `GeoFused` (punto di aggancio della
@@ -627,6 +632,11 @@ pub struct PreparedKernel {
     /// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md),
     /// risolta in `prepare` (hot path minimale: nessuno scan del catalogo a runtime).
     pub expansion_factor_exempt: bool,
+    /// Vincolo di espansione dichiarato dal catalogo, risolto in preparazione.
+    ///
+    /// L'executor lo rileggeva dal catalogo a ogni verifica, con una ricerca
+    /// lineare su 146 descrittori per una proprieta' che non cambia mai.
+    pub expansion_constraint: ExpansionConstraint,
     /// Fondibilita' dichiarata in catalogo (architettura.md#geometrie D12.2), risolta in
     /// `prepare` come `cancellation_behavior`.
     pub geo_fusion: plenora_core::catalog::GeoFusion,
@@ -1187,7 +1197,7 @@ fn prepare_kernel(
 
     Ok(PreparedKernel {
         node_id: node.id.clone(),
-        operation: descriptor.id,
+        operation: descrittore_tipizzato(descriptor)?,
         family: descriptor.family,
         geo_role,
         geometry_column_index,
@@ -1196,6 +1206,7 @@ fn prepare_kernel(
         output_contract,
         cancellation_behavior: descriptor.cancellation_behavior,
         expansion_factor_exempt: descriptor.expansion_factor_exempt,
+        expansion_constraint: descriptor.expansion_constraint,
         geo_fusion: descriptor.geo_fusion,
         emits_row_diagnostics: descriptor.emits_row_diagnostics(&node.config),
         fusion_group: None,

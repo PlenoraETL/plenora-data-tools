@@ -342,12 +342,15 @@ pub(super) fn check_join_expansion(
     right_rows: u64,
     output_rows: u64,
 ) -> Result<()> {
-    let descriptor = find_operation(kernel.operation);
-    if descriptor.is_some_and(|d| d.expansion_factor_exempt) {
+    // Entrambe le proprieta' sono STATICHE dell'operazione e risolte in
+    // preparazione. Prima si rileggevano dal catalogo a ogni verifica, con una
+    // ricerca lineare su 146 descrittori per una risposta che non cambia mai —
+    // e con un `map_or` che, se il descrittore fosse mancato, avrebbe
+    // silenziosamente applicato il vincolo di default invece di dirlo.
+    if kernel.expansion_factor_exempt {
         return Ok(());
     }
-    let constraint =
-        descriptor.map_or(ExpansionConstraint::SumRelative, |d| d.expansion_constraint);
+    let constraint = kernel.expansion_constraint;
     let max_expansion_factor = state.plan.limits().rows.max_expansion_factor;
     if !constraint.exceeded(output_rows, left_rows, right_rows, max_expansion_factor) {
         return Ok(());
@@ -382,7 +385,7 @@ pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> Plenor
             retry: error.retry_disposition(),
             message: error.to_string(),
             node: Some(kernel.node_id.clone()),
-            operation: Some(kernel.operation.to_owned()),
+            operation: Some(kernel.operation.as_str().to_owned()),
             execution_id: None,
             execution_reason: error.execution_reason().map(ToOwned::to_owned),
         }));
@@ -413,7 +416,7 @@ pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> Plenor
             retry: error.retry_disposition(),
             message: error.to_string(),
             node: Some(kernel.node_id.clone()),
-            operation: Some(kernel.operation.to_owned()),
+            operation: Some(kernel.operation.as_str().to_owned()),
             execution_id: None,
             execution_reason: error.execution_reason().map(ToOwned::to_owned),
         }));
@@ -424,7 +427,7 @@ pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> Plenor
     };
     PlenoraError::Execution {
         node: kernel.node_id.clone(),
-        operation: kernel.operation.to_owned(),
+        operation: kernel.operation.as_str().to_owned(),
         execution_id: String::new(),
         reason,
     }

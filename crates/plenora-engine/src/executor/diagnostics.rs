@@ -170,7 +170,7 @@ pub(super) fn scan_row_diagnostic_segment(
                                     .map(|kernel| {
                                         (
                                             kernel.node_id.clone(),
-                                            kernel.operation.to_owned(),
+                                            kernel.operation.as_str().to_owned(),
                                             state.execution_id.clone(),
                                         )
                                     })
