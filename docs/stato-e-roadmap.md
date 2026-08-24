@@ -35,34 +35,51 @@ memoria **prima** che l'errore esista. Il fallimento è un OOM, non un errore
 diagnosticabile. Il quadro completo è in
 [`errori-e-limiti.md`](errori-e-limiti.md).
 
-Due strade, entrambe accettabili, nessuna parziale:
+### La decisione normativa: isolamento, non previsione
 
-1. un **preflight conservativo per ogni operazione**, sul modello di quello
-   già esistente per `cross_join`, `concat`, `concat_by_name` e `melt`, con un
-   modello per operazione e la copertura delle allocazioni temporanee che
-   ciascuna fa;
-2. un'**autorizzazione ad allocare** al posto del lease a posteriori:
-   reservation preventiva sufficientemente conservativa in entrambi gli
-   executor.
+Questo documento presentava due strade — preflight per operazione, oppure
+reservation preventiva — ed entrambe poggiavano sulla stessa assunzione: che
+la correttezza si ottenga **prevedendo** quanta memoria servirà. La decisione
+è ora una sola, e l'assunzione è respinta.
 
-I prerequisiti sono già in piedi: il governor ha un permesso atomico —
-verifica e prenotazione in una sola operazione — e la contabilità è
-linearizzabile. Ciò che manca è spostare le allocazioni, che è il lavoro vero.
+**La garanzia è l'isolamento.** Il lavoro si esegue in un processo worker con
+un limite imposto dal sistema operativo, un supervisore che ne osserva l'esito,
+e una pubblicazione atomica verificata. Se il worker sfora, il sistema
+operativo lo termina; il supervisore lo constata e produce un errore
+diagnosticabile; nulla è stato pubblicato, perché la pubblicazione avviene solo
+alla fine e in modo atomico.
 
-Il **profilo isolato** (esecuzione in un processo worker con un limite imposto
-dal sistema operativo) è la risposta al livello 2 del contratto, e non è
-ancora iniziato: nessun meccanismo è stato prototipato, e su macOS resterà non
-supportato finché un prototipo non dimostri copertura *e* attribuzione.
+Perché questa e non la previsione: **per le operazioni che dipendono dai dati
+una stima resta una stima**. Il fattore di espansione di un join, la
+cardinalità di un raggruppamento, la dimensione di un buffer geometrico non si
+conoscono prima di leggere i dati. Un preflight conservativo abbastanza da
+essere sempre corretto rifiuterebbe piani legittimi; uno abbastanza permissivo
+da accettarli non garantisce nulla. Fondare la correttezza su una stima
+significa avere una garanzia che vale finché la stima è giusta — cioè non una
+garanzia.
+
+**La profilazione preventiva resta utile, ma cambia ruolo**: non è il
+fondamento della correttezza, è l'ottimizzazione che fa fallire *prima e
+meglio*. Un piano che si sa insostenibile può essere rifiutato in validazione
+invece che dopo dieci minuti di lavoro. È valore reale, ed è subordinato.
+
+I prerequisiti già in piedi restano validi: il governor ha un permesso atomico
+— verifica e prenotazione in una sola operazione — e la contabilità è
+linearizzabile. Servono al secondo livello, non al primo.
+
+Il costo dichiarato di questa scelta: **nessun meccanismo è stato ancora
+prototipato**, e su macOS il profilo isolato resterà non supportato finché un
+prototipo non dimostri copertura *e* attribuzione. È un lavoro più grande di un
+preflight, e la ragione per farlo comunque è che il preflight non risolverebbe
+il problema.
 
 ### Il refactor strutturale è il veicolo, non un lavoro parallelo
 
-Spostare le allocazioni davanti al lease significa, oggi, ripetere lo stesso
-ragionamento **146 volte** su altrettante configurazioni diverse, perché
-l'engine conosce i tipi di ogni singolo kernel. Il refactor esiste per dare a
-quel lavoro un posto solo dove abitare: due facciate di famiglia con un
-`memory_profile()`, e un profilo di allocazione *fail-closed* — senza una
-variante equivalente a «non lo sappiamo, proviamo» — associato a ogni kernel
-preparato.
+Qualunque cosa la fase 4 aggiunga — il confine col worker, il protocollo col
+supervisore, l'eventuale profilazione preventiva — ha bisogno di **un posto
+solo dove abitare**. Oggi l'engine conosce i tipi di configurazione di ogni
+singolo kernel: senza le facciate di famiglia lo stesso lavoro andrebbe
+ripetuto per ciascuna delle 146 operazioni.
 
 L'ordine delle fasi va letto così: le prime tre non cambiano comportamento e
 servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
@@ -87,15 +104,15 @@ Quattro oracoli sorvegliano che nulla di osservabile cambi: snapshot del
 catalogo, identità dei piani (`plan_hash` e fingerprint), superficie CLI byte
 per byte, metriche deterministiche dell'executor.
 
-### La fase 4 non è ancora decisa, ed è deliberato
+### Perché le facciate non espongono `memory_profile()`
 
-Le facciate espongono l'esecuzione e **non** un `memory_profile()`. Il metodo
-sembra preparazione neutra e non lo è: incorpora già un modello, quello in cui
-la correttezza si ottiene *prevedendo* quanta memoria servirà. Metterlo
-nell'interfaccia adesso deciderebbe la fase 4 prima di averla progettata.
+Le facciate della fase 3 espongono l'esecuzione e nient'altro. Il metodo
+`memory_profile()` sembra preparazione neutra e non lo è: incorpora il modello
+predittivo che la decisione qui sopra ha respinto. Metterlo nell'interfaccia
+lo avrebbe promosso a contratto — e ogni implementazione futura avrebbe dovuto
+onorarlo, anche dopo aver scelto l'isolamento.
 
-I quattro livelli vanno tenuti distinti, perché solo il terzo garantisce la
-correttezza:
+I quattro livelli restano distinti, e solo il terzo garantisce la correttezza:
 
 | livello | che cosa dà |
 |---|---|
@@ -103,11 +120,6 @@ correttezza:
 | profilo di allocazione | prima decisione concreta della fase 4, non un prerequisito |
 | **supervisore, isolamento, pubblicazione atomica verificata** | **la garanzia effettiva che il risultato sia valido** |
 | profilazione preventiva | ottimizzazione successiva, mai fondamento della correttezza |
-
-Per le operazioni che dipendono dai dati una stima resta una stima. Se la
-strada scelta sarà un worker isolato con un limite imposto dal sistema
-operativo e una pubblicazione atomica verificata, il profilo preventivo non
-serve a garantire nulla — serve semmai a fallire prima e meglio.
 
 **Stato della fase 0.** Working tree pulito e suite eseguita nel container
 1.98. Gli oracoli: il catalogo era già coperto da
