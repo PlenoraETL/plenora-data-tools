@@ -10,5 +10,7 @@
 //! il codice sia lo stesso, non ragionando su che cosa faccia.
 
 pub mod args;
+pub mod contract_discovery;
 pub mod error_envelope;
 pub mod process;
+pub mod rendering;
