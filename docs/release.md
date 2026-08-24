@@ -177,6 +177,20 @@ richiede la riproiezione fallisce in validazione, invece di produrre un
 risultato approssimato. `plenora-data-tools capabilities` riporta che cosa la
 build offre davvero.
 
+**I profili supportati sono due: `default` e `full-backends`.** Le
+combinazioni parziali — solo `geos-backend`, solo `proj-backend` — si
+compilano, ma non sono esercitate dal CI e non sono profili supportati.
+L'oracolo della superficie CLI ha comunque un'aspettativa esplicita per
+ciascuna delle quattro combinazioni: una build parziale non deve produrre un
+verde falso solo perché nessuno l'ha prevista.
+
+Che `capabilities` dichiari i backend ha una conseguenza sui test: la
+superficie CLI **dipende dalle feature**. Un oracolo che la fissa una volta
+sola è vero per un profilo e falso per l'altro, ed è esattamente l'errore che
+ha reso rosso il job `full-backends`
+([`stato-e-roadmap.md`](stato-e-roadmap.md)). L'oracolo è perciò un modello
+con un marcatore, non un'istantanea.
+
 Fino a quando quel job non è esistito, i rami feature-gated erano verificati
 solo in locale, e lint su di essi sono emersi mesi dopo.
 

@@ -109,9 +109,34 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 |---|---|
 | commit | `922aea30a611727daee8aaf2c5bd924b49b71207` |
 | tag | `baseline-pre-fase-4` |
-| suite | 1511 test |
-| gate | `fmt`, `clippy`, R6, i cinque gate Python — tutti verdi |
+| suite | 1511 test, **con le feature predefinite** |
+| gate | `fmt`, `clippy`, R6, i cinque gate Python nel container di riferimento |
 | toolchain | `rust:1.98` nel container di riferimento |
+| CI | **non verde a quella revisione** — vedi sotto |
+
+**Il tag è una baseline strutturale, non una baseline con CI verde.** La
+distinzione non è formale: ciò che era stato verificato è un giro nel
+container di riferimento **a feature predefinite**, e da lì è stato scritto
+«tutti verdi» come se coprisse anche il resto. Non lo copriva.
+
+Il commit `9966508`, che il tag contiene, ha introdotto l'oracolo della
+superficie CLI come istantanea unica. L'istantanea fissa `backends: []`, che è
+vero con le feature predefinite e falso con `full-backends`, dove la CLI
+dichiara `["geos", "proj"]`. Il job `test full-backends (linux)` era quindi
+rosso da `9966508` in avanti, baseline compresa, e nessun giro locale a feature
+predefinite poteva accorgersene.
+
+Il difetto è chiuso: l'oracolo è ora un **modello** con un marcatore per il
+valore dei backend, materializzato da costanti esaustive per combinazione di
+feature, e il confronto resta byte per byte. Il tag **non è stato spostato**:
+una baseline che si muove per nascondere un difetto smette di essere una
+baseline.
+
+**Profili di build supportati:** `default` e `full-backends`, come dichiara
+[`release.md`](release.md). Le combinazioni parziali — solo `geos-backend`,
+solo `proj-backend` — restano compilabili e l'oracolo ha aspettative
+esplicite anche per loro, così una build parziale non produce un verde
+falso; ma non sono coperte dal CI e non sono profili supportati.
 
 Da qui ogni passo sulla memoria appartiene alla fase 4 e non può più
 nascondersi dentro un refactor strutturale: se un commit tocca allocazioni,
