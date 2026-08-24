@@ -86,19 +86,50 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 
 | fase | contenuto | cambia semantica | stato |
 |---|---|---|---|
-| 0 | baseline e oracoli | no | ✅ |
-| 1 | alleggerire la CLI, scomporre l'executor | no | ✅ |
-| 2 | autorità unica per Arrow/CRS, errori, limiti | no | parziale |
-| 3 | `OperationId` esaustivo, facciate di famiglia | no | ✅ |
+| 0 | baseline e oracoli | no | **chiusa** |
+| 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
+| 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
+| 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
 | **4** | **il contratto di memoria — questo punto 2** | **sì** | da progettare |
 | 5 | il legacy ridotto a un confine di migrazione | sì | |
 | 6 | superficie pubblica e commenti | no | |
 
-**Che cosa hanno prodotto le fasi 0-3.** `main.rs` da 5116 a 2829 righe in
-nove moduli; `executor.rs` da 5481 a 974 in dodici; `OperationId`, enum
-esaustivo delle 146 operazioni, in bijezione verificata col catalogo; e le
-facciate `PreparedTableKernel`/`PreparedGeoKernel`, dove prima c'era un enum
-solo con quindici varianti che l'executor smistava una per una.
+### Baseline pre-fase-4 — freeze strutturale
+
+**Le modifiche strutturali sono ferme.** Lo stato registrato è:
+
+| | |
+|---|---|
+| commit | `922aea30a611727daee8aaf2c5bd924b49b71207` |
+| tag | `baseline-pre-fase-4` |
+| suite | 1511 test |
+| gate | `fmt`, `clippy`, R6, i cinque gate Python — tutti verdi |
+| toolchain | `rust:1.98` nel container di riferimento |
+
+Da qui ogni passo sulla memoria appartiene alla fase 4 e non può più
+nascondersi dentro un refactor strutturale: se un commit tocca allocazioni,
+lo dichiara.
+
+**Che cosa hanno prodotto le fasi 0-3.**
+
+| | prima | dopo |
+|---|---|---|
+| `main.rs` | 5116 righe | **2835** in nove moduli |
+| `executor.rs` | 5481 righe | **975** in dodici moduli |
+| identità delle operazioni | stringhe libere | `OperationId`, 146 varianti in bijezione verificata |
+| dispatch dei kernel | un enum con 15 varianti di due famiglie | due facciate, ciascuna esaustiva sulla propria |
+| autorità Arrow↔contratto | divisa fra CLI ed executor | unica, in `plenora-core::contract` |
+| limiti tabellari | adattatore con due default nascosti | mappatura dichiarata fra due autorità |
+
+**Cinque oracoli** sorvegliano che nulla di osservabile cambi:
+
+| oracolo | che cosa fissa |
+|---|---|
+| `catalog_snapshot.snap` | i 146 descrittori, campo per campo |
+| `oracoli_identita.snap` | `plan_hash` e fingerprint di nove piani, col JSON canonico accanto |
+| `oracolo_superficie_cli.snap` | stdout, stderr ed exit code di 29 invocazioni, byte per byte |
+| `oracolo_metriche.snap` | righe, batch e spill per nodo, esclusi i tempi |
+| `oracolo_round_trip_contratto.rs` | contratto → schema → contratto, e la convergenza in un giro |
 
 Quattro oracoli sorvegliano che nulla di osservabile cambi: snapshot del
 catalogo, identità dei piani (`plan_hash` e fingerprint), superficie CLI byte
@@ -120,6 +151,51 @@ I quattro livelli restano distinti, e solo il terzo garantisce la correttezza:
 | profilo di allocazione | prima decisione concreta della fase 4, non un prerequisito |
 | **supervisore, isolamento, pubblicazione atomica verificata** | **la garanzia effettiva che il risultato sia valido** |
 | profilazione preventiva | ottimizzazione successiva, mai fondamento della correttezza |
+
+### Requisiti della fase 4
+
+Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
+codice: worker, supervisore, protocollo fra i due e limiti di processo sono
+tutti da progettare.
+
+**R4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
+di memoria imposto dal sistema operativo, non sotto un tetto che si
+autoapplica. Un processo che decide da solo quanto può allocare non è
+vincolato: è d'accordo con se stesso.
+
+**R4-2 — Il supervisore osserva l'esito, non lo deduce.** Se il worker viene
+terminato, il supervisore deve distinguere «terminato per il limite» da
+«uscito con errore» da «uscito bene». Un esito ambiguo diventerebbe un errore
+inventato o un successo non verificato.
+
+**R4-3 — La pubblicazione è atomica e verificata.** Nulla è visibile prima
+della fine, e ciò che diventa visibile è confrontato con ciò che era atteso.
+La garanzia non è che il worker si comporti bene, è che un worker che si
+comporta male non pubblichi.
+
+**R4-4 — Il resolver CRS è lo stesso da entrambe le parti.** Supervisore e
+worker devono usare **la stessa implementazione** di `CrsResolver`. Non è un
+dettaglio di configurazione: `plenora-core::crs::resolve_crs` e
+`plenora-kernels-geo::crs::resolve_crs` danno risposte diverse — il primo
+rifiuta con `CRS_BACKEND_UNAVAILABLE` ciò che il secondo risolve con PROJ. Se
+i due lati ne usassero due diversi, il supervisore potrebbe **rifiutare come
+invalido uno schema che il worker ha prodotto correttamente**, o accettarne
+uno che il worker non avrebbe potuto scrivere.
+
+Il confine è già pronto a riceverlo: dalla chiusura della fase 2 il resolver è
+un **argomento** di `contract_from_arrow_schema`, non una proprietà della
+compilazione. Il protocollo dovrà quindi trasportare quale resolver è in uso e
+il supervisore dovrà rifiutare un worker che ne dichiari uno diverso — un
+disaccordo qui è una condizione di errore, non una differenza da tollerare.
+
+**R4-5 — Nessuna allocazione critica prima dell'autorizzazione, oppure
+rifiuto esplicito.** È il criterio di uscita del punto 2. Con l'isolamento,
+«autorizzazione» significa che il limite è già in vigore quando il worker
+inizia, non che qualcuno abbia stimato in anticipo quanto servirà.
+
+**R4-6 — macOS resta non supportato** per il profilo isolato finché un
+prototipo non dimostri copertura *e* attribuzione del limite.
+
 
 **Stato della fase 0.** Working tree pulito e suite eseguita nel container
 1.98. Gli oracoli: il catalogo era già coperto da
