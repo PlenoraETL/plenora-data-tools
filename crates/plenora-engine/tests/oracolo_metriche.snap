@@ -1,0 +1,210 @@
+[
+  {
+    "batch_prodotti": 3,
+    "metriche": {
+      "counters_saturated": false,
+      "geo_fusion_fallbacks": 0,
+      "nodes": [
+        {
+          "batches_in": 3,
+          "batches_out": 3,
+          "bytes_in": 1512,
+          "bytes_out": 1124,
+          "id": "f",
+          "operation": "table.filter",
+          "rows_in": 12,
+          "rows_out": 8
+        }
+      ],
+      "output_batches": 3,
+      "output_rows": 8,
+      "segments": [
+        {
+          "batches_in": 3,
+          "batches_out": 3,
+          "id": "seg0",
+          "mode": "LinearStreaming",
+          "rows_in": 12,
+          "rows_out": 8
+        }
+      ],
+      "spill_bytes_read": 0,
+      "spill_bytes_written": 0,
+      "spill_files": 0,
+      "total_rows_processed": 12
+    },
+    "nome": "streaming_filtro",
+    "perche": "1:1 in streaming: i batch escono come entrano, le righe no",
+    "righe_prodotte": 8
+  },
+  {
+    "batch_prodotti": 1,
+    "metriche": {
+      "counters_saturated": false,
+      "geo_fusion_fallbacks": 0,
+      "nodes": [
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "bytes_in": 1512,
+          "bytes_out": 568,
+          "id": "o",
+          "operation": "table.sort",
+          "rows_in": 12,
+          "rows_out": 12
+        }
+      ],
+      "output_batches": 1,
+      "output_rows": 12,
+      "segments": [
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "id": "seg0",
+          "mode": "Blocking",
+          "rows_in": 12,
+          "rows_out": 12
+        }
+      ],
+      "spill_bytes_read": 0,
+      "spill_bytes_written": 0,
+      "spill_files": 0,
+      "total_rows_processed": 12
+    },
+    "nome": "blocking_ordinamento",
+    "perche": "blocking: materializza tutto e pubblica un batch solo",
+    "righe_prodotte": 12
+  },
+  {
+    "batch_prodotti": 1,
+    "metriche": {
+      "counters_saturated": false,
+      "geo_fusion_fallbacks": 0,
+      "nodes": [
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "bytes_in": 1512,
+          "bytes_out": 252,
+          "id": "a",
+          "operation": "table.aggregate",
+          "rows_in": 12,
+          "rows_out": 2
+        }
+      ],
+      "output_batches": 1,
+      "output_rows": 2,
+      "segments": [
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "id": "seg0",
+          "mode": "Blocking",
+          "rows_in": 12,
+          "rows_out": 2
+        }
+      ],
+      "spill_bytes_read": 0,
+      "spill_bytes_written": 0,
+      "spill_files": 0,
+      "total_rows_processed": 12
+    },
+    "nome": "blocking_aggregazione",
+    "perche": "riduce le righe e cambia lo schema: rows_out non segue rows_in",
+    "righe_prodotte": 2
+  },
+  {
+    "batch_prodotti": 1,
+    "metriche": {
+      "counters_saturated": false,
+      "geo_fusion_fallbacks": 0,
+      "nodes": [
+        {
+          "batches_in": 3,
+          "batches_out": 3,
+          "bytes_in": 1512,
+          "bytes_out": 1172,
+          "id": "f",
+          "operation": "table.filter",
+          "rows_in": 12,
+          "rows_out": 10
+        },
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "bytes_in": 1172,
+          "bytes_out": 526,
+          "id": "o",
+          "operation": "table.sort",
+          "rows_in": 10,
+          "rows_out": 10
+        }
+      ],
+      "output_batches": 1,
+      "output_rows": 10,
+      "segments": [
+        {
+          "batches_in": 3,
+          "batches_out": 3,
+          "id": "seg0",
+          "mode": "LinearStreaming",
+          "rows_in": 12,
+          "rows_out": 10
+        },
+        {
+          "batches_in": 1,
+          "batches_out": 1,
+          "id": "seg1",
+          "mode": "Blocking",
+          "rows_in": 10,
+          "rows_out": 10
+        }
+      ],
+      "spill_bytes_read": 0,
+      "spill_bytes_written": 0,
+      "spill_files": 0,
+      "total_rows_processed": 22
+    },
+    "nome": "catena_streaming_blocking",
+    "perche": "due nodi: total_rows_processed somma gli ingressi, non le uscite",
+    "righe_prodotte": 10
+  },
+  {
+    "batch_prodotti": 1,
+    "metriche": {
+      "counters_saturated": false,
+      "geo_fusion_fallbacks": 0,
+      "nodes": [
+        {
+          "batches_in": 6,
+          "batches_out": 1,
+          "bytes_in": 3024,
+          "bytes_out": 944,
+          "id": "j",
+          "operation": "table.join",
+          "rows_in": 24,
+          "rows_out": 12
+        }
+      ],
+      "output_batches": 1,
+      "output_rows": 12,
+      "segments": [
+        {
+          "batches_in": 6,
+          "batches_out": 1,
+          "id": "seg0",
+          "mode": "BinaryBlocking",
+          "rows_in": 24,
+          "rows_out": 12
+        }
+      ],
+      "spill_bytes_read": 0,
+      "spill_bytes_written": 0,
+      "spill_files": 0,
+      "total_rows_processed": 24
+    },
+    "nome": "binaria_join",
+    "perche": "due ingressi: le righe processate contano entrambi i lati",
+    "righe_prodotte": 12
+  }
+]
