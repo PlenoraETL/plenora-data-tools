@@ -528,6 +528,55 @@ impl fmt::Display for RetryDisposition {
 }
 
 impl PlenoraError {
+    /// Antepone un contesto al messaggio, dove il messaggio e' NOSTRO.
+    ///
+    /// # Perche' esiste, e perche' il match e' esaustivo
+    ///
+    /// La stessa selezione di varianti era scritta a mano in due punti —
+    /// `planner::at_node` e la scoperta dei contratti della CLI — e le due
+    /// copie erano identiche per coincidenza, non per costruzione. Una
+    /// variante nuova sarebbe stata dimenticata da entrambe, e l'errore
+    /// avrebbe perso il contesto **senza che nulla lo segnalasse**: il
+    /// chiamante avrebbe letto «CRS non risolvibile» senza sapere di quale
+    /// nodo o quale input.
+    ///
+    /// Il `match` qui sotto non ha un ramo di default. Aggiungere una
+    /// variante a [`PlenoraError`] costringe a decidere se il contesto le si
+    /// applica, ed e' l'unica forma di questa funzione che vale la pena
+    /// scrivere.
+    ///
+    /// # Che cosa NON viene toccato
+    ///
+    /// Le varianti che non portano un messaggio nostro tornano invariate:
+    ///
+    /// - `Io` avvolge un errore del sistema operativo, che non e' nostro da
+    ///   riscrivere;
+    /// - `Execution`, `Cancelled`, `Replayed`, `RowDiagnostics` e `Tagged`
+    ///   portano gia' la propria attribuzione strutturata — nodo, operazione,
+    ///   `execution_id` — e anteporre una stringa la duplicherebbe in una
+    ///   forma peggiore, non parsabile;
+    /// - `Internal` e' un difetto nostro: il contesto utile e' il punto del
+    ///   codice, non il nodo del piano.
+    #[must_use]
+    pub fn con_contesto(self, contesto: &str) -> Self {
+        let anteponi = |messaggio: String| format!("{contesto}: {messaggio}");
+        match self {
+            Self::InvalidPlan(messaggio) => Self::InvalidPlan(anteponi(messaggio)),
+            Self::Unsupported(messaggio) => Self::Unsupported(anteponi(messaggio)),
+            Self::Schema(messaggio) => Self::Schema(anteponi(messaggio)),
+            Self::Crs(messaggio) => Self::Crs(anteponi(messaggio)),
+            altro @ (Self::DataMapping(_)
+            | Self::Execution { .. }
+            | Self::Cancelled { .. }
+            | Self::ResourceLimit(_)
+            | Self::Io(_)
+            | Self::Internal(_)
+            | Self::Replayed(_)
+            | Self::RowDiagnostics { .. }
+            | Self::Tagged { .. }) => altro,
+        }
+    }
+
     /// Categoria dell'errore (errori-e-limiti.md, errori arricchiti): mapping dichiarato per variante.
     /// Per [`PlenoraError::Tagged`] e' delegata alla sorgente: il tag
     /// raffina solo la fase.

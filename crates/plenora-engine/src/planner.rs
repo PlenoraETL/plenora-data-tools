@@ -835,14 +835,7 @@ pub fn check_input_compatibility(
 
 /// Prefisso di contesto nodo preservando la variante d'errore.
 fn at_node(node_id: &str, error: PlenoraError) -> PlenoraError {
-    let prefix = |message: &String| format!("nodo `{node_id}`: {message}");
-    match error {
-        PlenoraError::InvalidPlan(message) => PlenoraError::InvalidPlan(prefix(&message)),
-        PlenoraError::Unsupported(message) => PlenoraError::Unsupported(prefix(&message)),
-        PlenoraError::Schema(message) => PlenoraError::Schema(prefix(&message)),
-        PlenoraError::Crs(message) => PlenoraError::Crs(prefix(&message)),
-        other => other,
-    }
+    error.con_contesto(&format!("nodo `{node_id}`"))
 }
 
 /// Fingerprint del catalogo ristretto alle op date (piano-v5.md#identita-e-fingerprint): descrittori

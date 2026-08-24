@@ -380,14 +380,7 @@ pub fn authority_code(crs_id: &str) -> Option<u32> {
 
 /// Contesto "input `nome` (percorso)" sull'errore, preservando la variante.
 pub fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
-    let prefix = |message: &String| format!("input `{name}` ({}): {message}", path.display());
-    match error {
-        PlenoraError::InvalidPlan(message) => PlenoraError::InvalidPlan(prefix(&message)),
-        PlenoraError::Unsupported(message) => PlenoraError::Unsupported(prefix(&message)),
-        PlenoraError::Schema(message) => PlenoraError::Schema(prefix(&message)),
-        PlenoraError::Crs(message) => PlenoraError::Crs(prefix(&message)),
-        other => other,
-    }
+    error.con_contesto(&format!("input `{name}` ({})", path.display()))
 }
 
 /// Contratto della colonna geometria dalla lettura di contratto completata
