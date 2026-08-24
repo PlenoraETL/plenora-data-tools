@@ -1,0 +1,27 @@
+[package]
+name = "pt-windows"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+
+# Prototipo bloccante della fase 4 (docs/prototipi-isolamento.md). NON e' un
+# membro del workspace: non e' codice di produzione, non e' coperto dai gate e
+# non deve essere promosso senza una PR propria.
+[workspace]
+
+[target.'cfg(windows)'.dependencies]
+# Tutta la superficie dei Job Object e' FFI: non esiste alcuna via safe. La
+# misura di quanto `unsafe` serva e' uno degli esiti del prototipo. Versione
+# identica a quella gia' presente nel lockfile del workspace come dipendenza
+# transitiva.
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_SystemServices",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_ToolHelp",
+] }

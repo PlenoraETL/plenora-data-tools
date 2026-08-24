@@ -7,6 +7,14 @@ members = [
     "crates/plenora-engine",
     "crates/plenora-cli",
 ]
+# I prototipi bloccanti della fase 4 (docs/prototipi-isolamento.md) NON sono
+# membri: non sono codice di produzione, non sono coperti dai gate, e uno dei
+# due usa unsafe — che nel workspace e' proibito. Promuoverli richiede una PR
+# propria.
+exclude = [
+    "prototipi/pt-linux",
+    "prototipi/pt-windows",
+]
 
 [workspace.package]
 version = "1.0.3"

@@ -61,6 +61,7 @@ PUBBLICI = [
     # 2026-08-24: e' una decisione, non un effetto collaterale — il
     # disegno non stava in stato-e-roadmap.md senza soffocarlo.
     'docs/isolamento.md',
+    'docs/prototipi-isolamento.md',
 ]
 
 # Documentazione viva, eseguita dalla suite: eccezione esatta, non un glob.

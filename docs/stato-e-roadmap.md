@@ -90,7 +90,7 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | progetto in review, [`isolamento.md`](isolamento.md) |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | prototipi conclusi ([`prototipi-isolamento.md`](prototipi-isolamento.md)), progetto rivisto e di nuovo in review ([`isolamento.md`](isolamento.md)) |
 | 5 | il legacy ridotto a un confine di migrazione | sì | |
 | 6 | superficie pubblica e commenti | no | |
 
@@ -166,11 +166,31 @@ Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
 codice: worker, supervisore, protocollo fra i due e limiti di processo sono
 **progettati** in [`isolamento.md`](isolamento.md) e **non implementati**.
 
-Il progetto è in review e non è congelato: due prototipi di piattaforma —
-Linux e Windows — devono dimostrare nascita già vincolata, contenimento e
-attribuzione **prima** di qualunque PR di codice. Se uno dei due non dimostra
-tutte e tre le proprietà, non c'è ripiego silenzioso: il disegno torna in
-review.
+I due prototipi di piattaforma sono **conclusi**. Hanno dimostrato nascita già
+vincolata, contenimento e attribuzione su Linux e su Windows, e hanno smentito
+sette assunzioni del progetto: le misure e le conseguenze stanno in
+[`prototipi-isolamento.md`](prototipi-isolamento.md).
+
+Il progetto **non è comunque congelato**. Alla chiusura dei prototipi il
+disegno torna in review per obbligo, anche essendo riusciti entrambi: le
+correzioni che le misure hanno imposto sono sostanziali, e vanno approvate
+prima di diventare la base delle PR. Nessuna PR di codice prima di
+quell'approvazione.
+
+**F4-7 — Il tetto del dominio non è ampliabile dall'input.** Il limite in
+vigore è il minimo fra ciò che il piano chiede e la politica dell'host, che non
+viaggia nel piano né nel protocollo. Esiste anche un pavimento: sotto una certa
+soglia il dominio non è vitale, e i prototipi mostrano che i due sistemi lo
+comunicano male — `SIGKILL` prima di qualunque riga su Linux,
+`STATUS_STACK_OVERFLOW` su Windows. Un tetto sotto il pavimento va respinto in
+validazione.
+
+**F4-8 — L'esito si classifica dal dominio, mai dal codice d'uscita del
+capofila.** Su entrambe le piattaforme i prototipi hanno osservato un processo
+capofila **vivo, con uscita 0**, mentre il dominio aveva appena registrato un
+evento di limite. Su Linux `memory.oom.group=1` è quindi obbligatorio, non
+consigliato; su Windows, dove non esiste un equivalente, la precedenza
+dell'evidenza sul dichiarato è l'unica difesa.
 
 **F4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
 di memoria imposto dal sistema operativo, non sotto un tetto che si

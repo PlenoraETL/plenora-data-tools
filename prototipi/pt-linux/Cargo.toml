@@ -1,0 +1,17 @@
+[package]
+name = "pt-linux"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+
+# Prototipo bloccante della fase 4 (docs/prototipi-isolamento.md). NON e' un
+# membro del workspace: non e' codice di produzione, non e' coperto dai gate e
+# non deve essere promosso senza una PR propria.
+[workspace]
+
+[dependencies]
+# Solo per il probe di disponibilita' di clone3/CLONE_INTO_CGROUP, che e'
+# l'unica parte che richiede unsafe. Versione identica a quella gia' presente
+# nel lockfile del workspace come dipendenza transitiva.
+libc = "=0.2.189"

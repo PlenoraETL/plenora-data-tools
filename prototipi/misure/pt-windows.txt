@@ -1,0 +1,142 @@
+﻿PT-Windows — prototipo bloccante fase 4
+MISURA supervisore.gia_in_un_job no
+MISURA supervisore.commit 655360
+
+=== S1 — residuo del loader (CREATE_SUSPENDED + assegnazione) ===
+MISURA s1.commit_prima_dell_associazione 385024
+MISURA s1.assegnazione riuscita
+MISURA s1.in_questo_job si
+MISURA s1.job_peak_dopo_assegnazione 385024
+MISURA s1.job_peak_processo 385024
+MISURA s1.thread_ripresi 1
+MISURA s1.codice Some(0)
+MISURA s1.job_peak_finale 753664
+
+=== s2-nascita — inerte ===
+MISURA s2-nascita.porta_associata si
+    | SPAWNER commit-proprio 643072
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 643072
+    > CARICO scenario inerte
+    > CARICO inerte fine
+MISURA s2-nascita.codice Some(0)
+MISURA s2-nascita.worker_in_job si
+MISURA s2-nascita.allocazione_negata no
+MISURA s2-nascita.vivo_dopo_il_rifiuto no
+MISURA s2-nascita.job_peak 1445888
+MISURA s2-nascita.processo_peak 749568
+MISURA s2-nascita.tetto 67108864
+MISURA s2-nascita.messaggi NEW_PROCESS(28044) NEW_PROCESS(41060) EXIT_PROCESS(41060) EXIT_PROCESS(28044) ACTIVE_PROCESS_ZERO(0)
+MISURA s2-nascita.notifica_limite no
+
+=== s3-chiedi — chiedi ===
+MISURA s3-chiedi.porta_associata si
+    | SPAWNER commit-proprio 630784
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario chiedi
+    > CARICO richiesta 2^30 negata
+    > CARICO richiesta 2^34 negata
+    > CARICO richiesta 2^38 negata
+    > CARICO richiesta 2^42 negata
+    > CARICO richiesta 2^46 negata
+    > CARICO fine-richieste
+MISURA s3-chiedi.codice Some(0)
+MISURA s3-chiedi.worker_in_job si
+MISURA s3-chiedi.allocazione_negata no
+MISURA s3-chiedi.vivo_dopo_il_rifiuto no
+MISURA s3-chiedi.job_peak 70506457690112
+MISURA s3-chiedi.processo_peak 70506457006080
+MISURA s3-chiedi.tetto 67108864
+MISURA s3-chiedi.messaggi NEW_PROCESS(46652) NEW_PROCESS(30888) JOB_MEMORY_LIMIT(30888) EXIT_PROCESS(30888) EXIT_PROCESS(46652) ACTIVE_PROCESS_ZERO(0)
+MISURA s3-chiedi.notifica_limite si
+
+=== s4-tocca — tocca ===
+MISURA s4-tocca.porta_associata si
+    | SPAWNER commit-proprio 647168
+    | SPAWNER worker-codice Some(42)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario tocca
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63746048
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+MISURA s4-tocca.codice Some(42)
+MISURA s4-tocca.worker_in_job si
+MISURA s4-tocca.allocazione_negata si
+MISURA s4-tocca.vivo_dopo_il_rifiuto si
+MISURA s4-tocca.job_peak 68669440
+MISURA s4-tocca.processo_peak 67964928
+MISURA s4-tocca.tetto 67108864
+MISURA s4-tocca.messaggi NEW_PROCESS(27944) NEW_PROCESS(40444) JOB_MEMORY_LIMIT(40444) EXIT_PROCESS(40444) EXIT_PROCESS(27944) ACTIVE_PROCESS_ZERO(0)
+MISURA s4-tocca.notifica_limite si
+
+=== s5-figlio — figlio ===
+MISURA s5-figlio.porta_associata si
+    | SPAWNER commit-proprio 647168
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 643072
+    > CARICO scenario figlio
+    > CARICO figlio-pid 28384
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario tocca
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63746048
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+    > CARICO figlio-codice Some(42)
+    > CARICO padre-sopravvissuto si
+MISURA s5-figlio.codice Some(0)
+MISURA s5-figlio.worker_in_job si
+MISURA s5-figlio.allocazione_negata si
+MISURA s5-figlio.vivo_dopo_il_rifiuto si
+MISURA s5-figlio.job_peak 69402624
+MISURA s5-figlio.processo_peak 67997696
+MISURA s5-figlio.tetto 67108864
+MISURA s5-figlio.messaggi NEW_PROCESS(27352) NEW_PROCESS(5160) NEW_PROCESS(28384) JOB_MEMORY_LIMIT(28384) EXIT_PROCESS(28384) EXIT_PROCESS(5160) EXIT_PROCESS(27352) ACTIVE_PROCESS_ZERO(0)
+MISURA s5-figlio.notifica_limite si
+
+=== s6-annidato — annidato ===
+MISURA s6-annidato.porta_associata si
+    | SPAWNER commit-proprio 647168
+    | SPAWNER worker-codice Some(42)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario annidato
+    > CARICO annidato tetto-alto-impostato si
+    > CARICO annidato assegnato si
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63750144
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+MISURA s6-annidato.codice Some(42)
+MISURA s6-annidato.worker_in_job si
+MISURA s6-annidato.allocazione_negata si
+MISURA s6-annidato.vivo_dopo_il_rifiuto si
+MISURA s6-annidato.job_peak 68673536
+MISURA s6-annidato.processo_peak 67960832
+MISURA s6-annidato.tetto 67108864
+MISURA s6-annidato.messaggi NEW_PROCESS(54960) NEW_PROCESS(42704) JOB_MEMORY_LIMIT(42704) EXIT_PROCESS(42704) EXIT_PROCESS(54960) ACTIVE_PROCESS_ZERO(0)
+MISURA s6-annidato.notifica_limite si
+
+=== s7-infimo — inerte ===
+MISURA s7-infimo.porta_associata si
+    | SPAWNER commit-proprio 638976
+    | 
+    | thread 'main' (37856) has overflowed its stack
+MISURA s7-infimo.codice Some(-1073741571)
+MISURA s7-infimo.worker_in_job no
+MISURA s7-infimo.allocazione_negata no
+MISURA s7-infimo.vivo_dopo_il_rifiuto no
+MISURA s7-infimo.job_peak 663552
+MISURA s7-infimo.processo_peak 663552
+MISURA s7-infimo.tetto 262144
+MISURA s7-infimo.messaggi NEW_PROCESS(23652) JOB_MEMORY_LIMIT(23652) ABNORMAL_EXIT_PROCESS(23652) ACTIVE_PROCESS_ZERO(0)
+MISURA s7-infimo.notifica_limite si
+
+=== FINE PT-Windows ===
