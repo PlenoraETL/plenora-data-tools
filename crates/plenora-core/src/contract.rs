@@ -17,6 +17,8 @@
 //! deliberatamente rimandata: la rappresentazione v1 è la coppia semplice
 //! `ContractProperty<T> { confidence, scope }`.
 
+pub mod arrow_metadata;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
