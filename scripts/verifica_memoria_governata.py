@@ -17,6 +17,9 @@ import io
 import sys
 
 ESECUTORE = 'crates/plenora-engine/src/executor.rs'
+# La consegna dell'output vive in un modulo proprio dal 2026-08-24
+# (PR 2 del refactor strutturale): le garanzie sono le stesse, il file no.
+USCITA = 'crates/plenora-engine/src/executor/output.rs'
 GOVERNOR = 'crates/plenora-engine/src/governor.rs'
 
 # (file, frammento, che cosa dimostra la sua presenza)
@@ -72,20 +75,20 @@ ANCORE = [
     (GOVERNOR,
      'if stato.births.remove(&self.id).is_none()',
      'una nascita mancante al rilascio marca la contabilita\''),
-    (ESECUTORE,
+    (USCITA,
      'self.state.governor.verifica_salute("output")?;',
      'la consegna dell\'output passa dal controllo di salute'),
     (ESECUTORE,
      'permesso.ritaglia(bytes_at_boundary)?',
      'l\'uscita si ritaglia, e un ritaglio fallito propaga invece di ripiegare'),
-    (ESECUTORE,
+    (USCITA,
      '.or_else(|| self.state.verifica_heartbeat().err())',
      'il consumo per iteratore ha il controllo terminale: senza, una '
      'corruzione rilevata nell\'ultimo Drop sarebbe un successo silenzioso. '
      'Il terminale riporta ora anche un heartbeat fermo da oltre la '
      'tolleranza, che renderebbe la directory raccoglibile mentre lo '
      'stream si chiude dichiarando successo'),
-    (ESECUTORE,
+    (USCITA,
      'if self.esaurito {',
      'lo stato terminale impedisce di ripetere l\'errore a ogni chiamata'),
     (GOVERNOR,
