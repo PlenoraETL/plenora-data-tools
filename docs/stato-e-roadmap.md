@@ -54,6 +54,53 @@ dal sistema operativo) è la risposta al livello 2 del contratto, e non è
 ancora iniziato: nessun meccanismo è stato prototipato, e su macOS resterà non
 supportato finché un prototipo non dimostri copertura *e* attribuzione.
 
+### Il refactor strutturale è il veicolo, non un lavoro parallelo
+
+Spostare le allocazioni davanti al lease significa, oggi, ripetere lo stesso
+ragionamento **146 volte** su altrettante configurazioni diverse, perché
+l'engine conosce i tipi di ogni singolo kernel. Il refactor esiste per dare a
+quel lavoro un posto solo dove abitare: due facciate di famiglia con un
+`memory_profile()`, e un profilo di allocazione *fail-closed* — senza una
+variante equivalente a «non lo sappiamo, proviamo» — associato a ogni kernel
+preparato.
+
+L'ordine delle fasi va letto così: le prime tre non cambiano comportamento e
+servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
+
+| fase | contenuto | cambia semantica |
+|---|---|---|
+| 0 | baseline e oracoli | no |
+| 1 | alleggerire la CLI, scomporre l'executor | no |
+| 2 | autorità unica per Arrow/CRS, errori, limiti | no |
+| 3 | `OperationId` esaustivo, facciate di famiglia | no |
+| **4** | **profilo di allocazione fail-closed — questo punto 2** | **sì** |
+| 5 | il legacy ridotto a un confine di migrazione | sì |
+| 6 | superficie pubblica e commenti | no |
+
+**Stato della fase 0.** Working tree pulito e suite eseguita nel container
+1.98. Gli oracoli: il catalogo era già coperto da
+`crates/plenora-engine/tests/catalog_snapshot.snap`, l'IPC canonico e la
+fusione geo dai rispettivi test. Mancava l'identità dei piani — i test
+verificavano che `plan_hash` fosse lungo 64 caratteri, non **quale** valore
+avesse, quindi una riorganizzazione che cambiasse la forma canonica sarebbe
+passata senza far fallire nulla. Ora c'è
+`crates/plenora-engine/tests/oracoli_identita.snap`, che fissa i valori per
+nove piani rappresentativi insieme al JSON canonico da cui derivano, così un
+diff dice *cosa* è cambiato e non solo *che* qualcosa è cambiato.
+
+**Regola per i PR del refactor.** Nessun PR mescola spostamenti strutturali e
+cambiamenti semantici: un PR dichiara quale dei due è, e non è mai entrambi.
+Chi sposta codice non tocca algoritmi né visibilità pubbliche, e dimostra
+l'equivalenza attraverso gli oracoli; chi cambia semantica lo fa a struttura
+ferma, e versiona esplicitamente ciò che rompe.
+
+La regola nasce con un'eccezione già consumata, e vale la pena dirlo invece di
+lasciarla sembrare disattesa: il commit che ha chiuso la fase 0 mescola tre
+filoni — correzioni di review, migrazione a Rust 1.98, aggiornamento delle
+dipendenze. Erano intrecciati negli stessi file, e separarli avrebbe prodotto
+stati intermedi mai eseguiti. La regola vale **da lì in avanti**, dove la
+struttura è ferma e la separazione è possibile.
+
 ## 3. Campagna fuzz finale
 
 Alla chiusura del punto 2, non prima: una campagna cambia significato se il

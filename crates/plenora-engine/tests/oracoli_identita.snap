@@ -1,0 +1,542 @@
+[
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "column": "valore",
+            "operator": ">",
+            "value": 10
+          },
+          "id": "f",
+          "in": [
+            "main"
+          ],
+          "op": "table.filter"
+        }
+      ],
+      "output": "f",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "3dfca5afabcb5f9e00aef90bbf5376baf0837a915078d26cf3a6076ab59c02bb",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_filtro",
+    "perche": "streaming 1:1, il piano piu' semplice possibile",
+    "plan_format_version": 5,
+    "plan_hash": "53872ad8f5a07acef7774cca83a41e0ebd2ad6114ef3a6b9149ea6d7c0d9e117"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "ascending": true,
+            "columns": [
+              "valore"
+            ]
+          },
+          "id": "o",
+          "in": [
+            "main"
+          ],
+          "op": "table.sort"
+        }
+      ],
+      "output": "o",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "0ca51962603650cfd6be7e6408e42528a910f591fd5babed353a112825c3446d",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_ordinamento",
+    "perche": "blocking unaria: materializza prima di emettere",
+    "plan_format_version": 5,
+    "plan_hash": "dcff992498030a6eba8fb21a0238a729dc2ba9a69d87103f8fb543134b08f27e"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "aggregations": [
+              {
+                "column": "valore",
+                "function": "sum"
+              },
+              {
+                "column": "id",
+                "function": "count"
+              }
+            ],
+            "group_by": [
+              "gruppo"
+            ]
+          },
+          "id": "a",
+          "in": [
+            "main"
+          ],
+          "op": "table.aggregate"
+        }
+      ],
+      "output": "a",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "0cf7ff10b3340befc046b0a9707fcbb9ee70ee486dec86ce2549a9271ed4e48d",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_aggregazione",
+    "perche": "blocking con colonne nuove: lo schema di uscita non e' quello di ingresso",
+    "plan_format_version": 5,
+    "plan_hash": "7614962bc3a44fa35b08da6166212b4fa3c9363bccc18a8d4bd0ac81ffb5b9aa"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "sinistra",
+        "destra"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "how": "inner",
+            "left_keys": [
+              "id"
+            ],
+            "right_keys": [
+              "id"
+            ]
+          },
+          "id": "j",
+          "in": [
+            "sinistra",
+            "destra"
+          ],
+          "op": "table.join"
+        }
+      ],
+      "output": "j",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "47dec0a5e3f246aec9136740c943b24b9c845c20bfb5a5fe18379f0c69d531fc",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed",
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_join",
+    "perche": "binaria ordinata: due ingressi, e l'ordine fra loro conta",
+    "plan_format_version": 5,
+    "plan_hash": "272c351f57473a15e40058ca20a90e4bb75c9346061704670fd663a7ee98f945"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "column": "valore",
+            "operator": ">=",
+            "value": 0
+          },
+          "id": "f",
+          "in": [
+            "main"
+          ],
+          "op": "table.filter"
+        },
+        {
+          "config": {
+            "ascending": false,
+            "columns": [
+              "id"
+            ]
+          },
+          "id": "o",
+          "in": [
+            "f"
+          ],
+          "op": "table.sort"
+        }
+      ],
+      "output": "o",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "13b5b9ffeb26c79a46b923bdaeb90e3d671df1d5a3fdf6c84f2e3bb7ad8d5749",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_catena",
+    "perche": "piu' nodi: l'ordine topologico entra nella forma canonica",
+    "plan_format_version": 5,
+    "plan_hash": "11ad19f1b20f815072d25058e8c5b356f6b2683424fa5dc9718526ce389851b6"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "column": "id",
+            "operator": ">",
+            "value": 9007199254740993
+          },
+          "id": "f",
+          "in": [
+            "main"
+          ],
+          "op": "table.filter"
+        }
+      ],
+      "output": "f",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "3dfca5afabcb5f9e00aef90bbf5376baf0837a915078d26cf3a6076ab59c02bb",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_intero_oltre_2_53",
+    "perche": "gli interi oltre 2^53 non devono collassare nel canonico (regressione nota)",
+    "plan_format_version": 5,
+    "plan_hash": "38e2e9a6b46fa2d6cdc42b83c50b98c039c6f1db5aecc6b2d258c5a28648004f"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 4194304,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "column": "valore",
+            "operator": "<",
+            "value": 100
+          },
+          "id": "f",
+          "in": [
+            "main"
+          ],
+          "op": "table.filter"
+        }
+      ],
+      "output": "f",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "3dfca5afabcb5f9e00aef90bbf5376baf0837a915078d26cf3a6076ab59c02bb",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "table_limiti_dichiarati",
+    "perche": "i limiti dichiarati restano nella forma canonica e quindi nell'identita'",
+    "plan_format_version": 5,
+    "plan_hash": "303fd2208caf1d34f2873d02e4b5eaadaf23d528a42a59bbee6857d079ec2e28"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 4194304,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {
+            "column": "valore",
+            "operator": "<",
+            "value": 100
+          },
+          "id": "f",
+          "in": [
+            "main"
+          ],
+          "op": "table.filter"
+        }
+      ],
+      "output": "f",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "3dfca5afabcb5f9e00aef90bbf5376baf0837a915078d26cf3a6076ab59c02bb",
+    "input_contract_fingerprints": [
+      "555252366e8dedbb21fcc0a89c9c4e9c6190d39acd4d26dfccf61422ef8fe4ed"
+    ],
+    "nome": "migrazione_da_v4",
+    "perche": "un piano v4 migrato deve dare la STESSA identita' del suo equivalente v5",
+    "plan_format_version": 5,
+    "plan_hash": "303fd2208caf1d34f2873d02e4b5eaadaf23d528a42a59bbee6857d079ec2e28"
+  },
+  {
+    "canonical_json": {
+      "inputs": [
+        "main"
+      ],
+      "limits": {
+        "max_batches": 65536,
+        "max_expansion_factor": 100.0,
+        "max_geometry_depth": 64,
+        "max_governed_memory_bytes": 536870912,
+        "max_input_rows": 10000000,
+        "max_output_rows": 10000000,
+        "max_parallelism": 0,
+        "max_payload_bytes": 17179869184,
+        "max_regex_bytes": 65536,
+        "max_rows_per_edge": 10000000,
+        "max_string_bytes": 16777216,
+        "max_temp_bytes": 8589934592,
+        "max_wkb_cell_bytes": 67108864,
+        "plan": {
+          "max_config_bytes_per_node": 1048576,
+          "max_fan_out": 64,
+          "max_identifier_bytes": 256,
+          "max_inputs": 16,
+          "max_plan_depth": 256,
+          "max_plan_edges": 4096,
+          "max_plan_json_bytes": 16777216,
+          "max_plan_nodes": 1024
+        },
+        "spill_partitions": 64
+      },
+      "nodes": [
+        {
+          "config": {},
+          "id": "c",
+          "in": [
+            "main"
+          ],
+          "op": "geo.centroid"
+        }
+      ],
+      "output": "c",
+      "schema_version": 5
+    },
+    "catalog_fingerprint": "06b509fe8aa20f3a2bbd1141aa446e418d9ef7a2f4a53c1a99b467a8f45231ba",
+    "input_contract_fingerprints": [
+      "a20e59163badb7eccaf101ff5a47510b0912536a032dc8ebbec235a2db6fc620"
+    ],
+    "nome": "geo_centroide",
+    "perche": "famiglia geo: analyzer e contratto diversi da quelli tabellari",
+    "plan_format_version": 5,
+    "plan_hash": "f08365c84bf0aa2263b29e6a4702914b16de664cb8eabd71f089f66b62ebd020"
+  }
+]

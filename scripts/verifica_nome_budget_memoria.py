@@ -91,6 +91,10 @@ TEST_AMMESSI = {
         'formato v1 che conserva il proprio nome',
     'crates/plenora-cli/tests/matrice_cli.rs':
         'i piani lineari v1 della matrice, che scrivono il nome della v1',
+    'crates/plenora-engine/tests/oracoli_identita.rs':
+        'l\'oracolo dell\'identita\' tiene un piano v4 che scrive il nome '
+        'della v4, per fissare che la migrazione produce lo STESSO plan_hash '
+        'del suo equivalente v5: senza il nome vecchio il piano non sarebbe v4',
 }
 
 # `max_memory_bytes` NON e' sottostringa di `max_governed_memory_bytes`
