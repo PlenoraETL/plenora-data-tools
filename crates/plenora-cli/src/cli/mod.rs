@@ -9,4 +9,6 @@
 //! Chi legge un diff di questa fase deve poterlo verificare guardando che
 //! il codice sia lo stesso, non ragionando su che cosa faccia.
 
+pub mod args;
 pub mod error_envelope;
+pub mod process;
