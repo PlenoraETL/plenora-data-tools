@@ -23,6 +23,8 @@ USCITA = 'crates/plenora-engine/src/executor/output.rs'
 STAGING = 'crates/plenora-engine/src/executor/staging.rs'
 DIAGNOSTICA = 'crates/plenora-engine/src/executor/diagnostics.rs'
 GEO = 'crates/plenora-engine/src/executor/geo.rs'
+FUSIONE = 'crates/plenora-engine/src/executor/fusion.rs'
+STREAMING = 'crates/plenora-engine/src/executor/streaming.rs'
 GOVERNOR = 'crates/plenora-engine/src/governor.rs'
 
 # (file, frammento, che cosa dimostra la sua presenza)
@@ -39,16 +41,16 @@ ANCORE = [
     (GEO,
      '.reserve(output.get_array_memory_size() as u64, &kernel.node_id)',
      'uscita dei nodi blocking: il kernel ha gia\' allocato'),
-    (ESECUTORE,
+    (FUSIONE,
      'let Some(decoded_bytes) = fused_group_decoded_bytes(batch, &kernels[0])',
      'gruppo geo fuso: stima dai payload di input, PRIMA di decodificare'),
-    (ESECUTORE,
+    (FUSIONE,
      '.try_reserve(decoded_bytes, &kernels[0].node_id)',
      'gruppo geo fuso: la reservation precede l\'allocazione'),
     (DIAGNOSTICA,
      'fn permesso_di_trattenere(',
      'segmenti row-diagnostics: permesso PRIMA della passata'),
-    (ESECUTORE,
+    (STREAMING,
      'permesso.ritaglia(bytes_at_boundary)',
      'l\'uscita si ritaglia dal permesso invece di riprenotare'),
     (STAGING,
@@ -81,7 +83,7 @@ ANCORE = [
     (USCITA,
      'self.state.governor.verifica_salute("output")?;',
      'la consegna dell\'output passa dal controllo di salute'),
-    (ESECUTORE,
+    (STREAMING,
      'permesso.ritaglia(bytes_at_boundary)?',
      'l\'uscita si ritaglia, e un ritaglio fallito propaga invece di ripiegare'),
     (USCITA,
