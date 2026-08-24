@@ -3,3 +3,5 @@
 
 pub mod catalog;
 pub mod describe;
+pub mod run;
+pub mod validate;

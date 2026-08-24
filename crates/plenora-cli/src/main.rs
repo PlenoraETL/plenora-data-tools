@@ -39,7 +39,6 @@ use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::catalog::{find_operation, CrsRequirement, CATALOG};
-use plenora_core::contract::{ContractCrs, DataContract};
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::limits::PlanLimits;
 use plenora_core::{ErrorPhase, PlenoraError};
@@ -54,12 +53,9 @@ use plenora_engine::geo_transport::transport::{
     PairArrowSummary, TransformArrowSchema, TransformArrowSummary,
 };
 use plenora_engine::plan::{migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5};
-use plenora_engine::planner::{self, ValidatedGraph};
+use plenora_engine::planner::ValidatedGraph;
 use plenora_engine::table_engine::{execute_batch, execute_binary, Plan, ValidatedPlan};
-use plenora_engine::{
-    execute, explain, ipc_boundary, parallelism, CancellationToken, ExecutionMetrics,
-    ExecutionPlan, Inputs, IpcFormat, RuntimeContext,
-};
+use plenora_engine::{ipc_boundary, CancellationToken, ExecutionMetrics, ExecutionPlan, IpcFormat};
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 use rayon::prelude::*;
@@ -70,9 +66,8 @@ mod cli;
 use cli::args::{help_text, reject_unknown_flags, subcommand_help_text};
 use cli::commands::catalog::{capabilities_command, catalog_command};
 use cli::commands::describe::describe_command;
-use cli::contract_discovery::{
-    apply_crs_decisions, discover_contracts, open_input, pair_v4_inputs,
-};
+use cli::commands::run::{run_command, DagInputs};
+use cli::commands::validate::validate_command;
 use cli::error_envelope::{emit_error_envelope, error_envelope, EXIT_CANCELLED, EXIT_INTERNO};
 use cli::process::{descrivi_panico_locale, esegui_processo};
 use cli::rendering::{contract_json, hex_digest, version_json};
@@ -82,14 +77,19 @@ use cli::rendering::{contract_json, hex_digest, version_json};
 // warning permanente nella build del binario, ed e' cosi' che i warning
 // smettono di volere dire qualcosa.
 #[cfg(test)]
+use cli::commands::run::{is_named_input, reject_legacy_row_diagnostics_plan, v4_inputs};
+#[cfg(test)]
 use cli::contract_discovery::{
-    at_input, contract_crs_from_keys, crs_definition_from_metadata,
+    apply_crs_decisions, at_input, contract_crs_from_keys, crs_definition_from_metadata,
     discover_input_contract_from_schema, geometry_contract_from_field, ipc_header_schema,
+    open_input, pair_v4_inputs,
 };
 #[cfg(test)]
 use cli::error_envelope::error_exit_code;
 #[cfg(test)]
 use plenora_core::arrow::schema::{DataType, SchemaRef};
+#[cfg(test)]
+use plenora_core::contract::{ContractCrs, DataContract};
 #[cfg(test)]
 use plenora_core::contract::{
     ContractProperties, CrsResolution, FieldId, GeometryColumnContract, PropertyConfidence,
@@ -226,7 +226,7 @@ pub(crate) fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, Plen
 /// `ctrlc::set_handler` e' installabile una sola volta per processo: la CLI
 /// esegue un comando per processo, quindi un fallimento e' un errore vero
 /// (fail-closed).
-fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> {
+pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> {
     let token = token.clone();
     let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     ctrlc::set_handler(move || {
@@ -265,7 +265,7 @@ fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> 
 ///
 /// Con il profilo `Atomic` l'esito e' sempre `Published`; il ramo non
 /// confermato serve ai chiamanti che useranno `DurableAtomic`.
-const fn durabilita_confermata(outcome: PublishOutcome) -> bool {
+pub(crate) const fn durabilita_confermata(outcome: PublishOutcome) -> bool {
     !matches!(outcome, PublishOutcome::PublishedButDurabilityUnconfirmed)
 }
 
@@ -487,7 +487,7 @@ fn publish_one(output_path: &Path, output: &RecordBatch) -> Result<(), PlenoraEr
     Ok(())
 }
 
-fn run_pipeline(
+pub(crate) fn run_pipeline(
     plan_path: &Path,
     input_path: &Path,
     right_path: Option<&Path>,
@@ -967,50 +967,6 @@ fn write_self_test(path: &Path) -> Result<(), Box<dyn Error>> {
 // Catalogo unificato e validate (nuovi comandi di Fase 1)
 // ---------------------------------------------------------------------------
 
-fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
-    OutputFormat::require_json("validate")?;
-    let plan_path = value_after(args, "--plan")?;
-    // Stesso parser di `run`: le due forme — `--input nome=percorso` e
-    // `--inputs` posizionale — devono comportarsi allo stesso modo nei due
-    // comandi, altrimenti si valida un accoppiamento e se ne esegue un altro.
-    let inputs = v4_inputs(args)?;
-    let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
-        return validate_dag_v4(
-            plan_text.as_ref(),
-            &inputs,
-            !has_flag(args, "--no-geo-fusion"),
-        );
-    }
-    let inputs: Vec<PathBuf> = match inputs {
-        V4Inputs::Positional(paths) => paths,
-        // I piani legacy non hanno input nominati: il riepilogo elenca i soli
-        // percorsi, e accettare una forma che non sanno usare confonderebbe.
-        V4Inputs::Named(_) => {
-            return Err(contract(
-                "`--input nome=percorso` richiede un piano DAG; \
-                 per i piani legacy usare `--input PERCORSO`",
-            )
-            .into());
-        }
-    };
-    let plan: Plan = serde_json::from_str(&plan_text)?;
-    let plan = plan.validate()?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "status": "ok",
-            "schema_version": 1,
-            "steps": plan.steps().len(),
-            "requires_secondary": plan.requires_secondary(),
-            "requires_blocking": plan.requires_blocking(),
-            "max_rows": plan.limits().max_rows,
-            "inputs": inputs,
-        }))?
-    );
-    Ok(())
-}
-
 // Quoting Debug intenzionale nel ramo geo: produce la stringa JSON del
 // percorso (virgolette ed escape); il `.display()` suggerito da clippy
 // cambierebbe l'output del comando (contratto CLI).
@@ -1102,7 +1058,7 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
 /// di chiamare il planner: se la migrazione avvenisse solo dentro il planner,
 /// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui
 /// esiste **un** testo, deciso una volta, e da li' in poi e' v5.
-fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
+pub(crate) fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
     if plan_schema_version(plan_text)? < u32::from(PLAN_SCHEMA_VERSION_V4) {
         return Ok(None);
     }
@@ -1160,7 +1116,7 @@ fn read_control_json_text(path: &Path) -> Result<String, PlenoraError> {
 
 /// Contratto assente per un input gia' accoppiato: invariante nostra, non un
 /// errore del chiamante.
-fn contract_error_missing(name: &str) -> PlenoraError {
+pub(crate) fn contract_error_missing(name: &str) -> PlenoraError {
     PlenoraError::Internal(format!(
         "contratto di discovery assente per l'input `{name}`"
     ))
@@ -1174,7 +1130,7 @@ fn contract_error_missing(name: &str) -> PlenoraError {
 /// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
 /// sonda lo legge per prima. Per i piani DAG `PlanV5::parse` ripete la
 /// verifica: e' idempotente e copre anche chi non passa dalla CLI.
-fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
+pub(crate) fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;
     Ok(text)
@@ -1190,7 +1146,7 @@ fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
 /// [`ValidatedGraph::output_contract`]), ma il compilatore non puo'
 /// dimostrarlo — l'invariante violata diventa un errore esplicito, mai un
 /// panic (R6).
-fn graph_summary_json(
+pub(crate) fn graph_summary_json(
     graph: &ValidatedGraph,
     execution: &ExecutionPlan,
 ) -> Result<serde_json::Value, PlenoraError> {
@@ -1264,7 +1220,10 @@ fn graph_summary_json(
 /// pubblicazione, il contatore dei fallback della fusione geo (D12.7: ogni
 /// fallback governor e' osservabile, mai silenzioso), l'osservabilita' dei
 /// lease di memoria e le metriche di spill aggregate (architettura.md#memoria).
-fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_json::Value {
+pub(crate) fn metrics_json(
+    graph: &ValidatedGraph,
+    metrics: &ExecutionMetrics,
+) -> serde_json::Value {
     let nodes: serde_json::Map<String, serde_json::Value> = metrics
         .nodes
         .iter()
@@ -1330,278 +1289,8 @@ fn metrics_json(graph: &ValidatedGraph, metrics: &ExecutionMetrics) -> serde_jso
 }
 
 /// Presenza di un flag booleano negli argomenti (es. `--no-geo-fusion`).
-fn has_flag(args: &[String], flag: &str) -> bool {
+pub(crate) fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|argument| argument == flag)
-}
-
-/// `validate` di un piano DAG: planner DAG + `explain` per la strategia, con
-/// riepilogo JSON su stdout (architettura.md#planner-ed-executor: `prepare` e' interna all'engine).
-/// `geo_fusion` e' il kill switch D12.9 (flag `--no-geo-fusion`): a `false`
-/// i gruppi di fusione non si formano e `explain` mostra la strategia non
-/// fusa.
-fn validate_dag_v4(
-    plan_text: &str,
-    inputs: &V4Inputs,
-    geo_fusion: bool,
-) -> Result<(), Box<dyn Error>> {
-    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, inputs)?;
-    let mut contracts = discover_contracts(&pairs)?;
-    apply_crs_decisions(&probe, &mut contracts)?;
-    let graph = planner::validate(plan_text, &contracts)?;
-    let execution = explain(
-        &graph,
-        &RuntimeContext {
-            geo_fusion,
-            ..RuntimeContext::default()
-        },
-    )?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&graph_summary_json(&graph, &execution)?)?
-    );
-    Ok(())
-}
-
-/// `run` di un piano DAG: esecuzione DAG e pubblicazione atomica dell'output,
-/// con metriche JSON su stdout. Installa l'handler Ctrl-C: al cancel
-/// l'executor propaga `PlenoraError::Cancelled`, il publish atomico non e'
-/// mai raggiunto e `main` esce con [`EXIT_CANCELLED`]. `geo_fusion` e' il
-/// kill switch D12.9 (flag `--no-geo-fusion`).
-fn run_dag_v4(
-    plan_text: &str,
-    inputs: &V4Inputs,
-    output_path: &Path,
-    geo_fusion: bool,
-) -> Result<(), Box<dyn Error>> {
-    if output_path.exists() {
-        return Err(contract(format!(
-            "output gia' esistente, rifiuto di sovrascriverlo: {}",
-            output_path.display()
-        ))
-        .into());
-    }
-    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, inputs)?;
-    let mut contracts = discover_contracts(&pairs)?;
-    apply_crs_decisions(&probe, &mut contracts)?;
-    let graph = planner::validate(plan_text, &contracts)?;
-    // `max_parallelism` si applica QUI, prima di aprire gli input e prima di
-    // qualunque uso di Rayon: dimensiona il pool del processo, che e' l'unica
-    // leva che vincola davvero tutti i percorsi paralleli dei kernel. Senza
-    // questo passo il limite era una promessa di risorsa, non un tetto.
-    parallelism::configure(graph.effective_limits().max_parallelism)?;
-    let token = CancellationToken::new();
-    install_ctrlc_handler(&token)?;
-    let runtime = RuntimeContext {
-        cancellation: token,
-        geo_fusion,
-        max_parallelism: graph.effective_limits().max_parallelism,
-        ..RuntimeContext::default()
-    };
-    // I tetti del confine IPC derivano dai limiti EFFETTIVI del piano: il
-    // body dichiarato di ogni messaggio e' confrontato con `max_batch_bytes`
-    // prima che arrow allochi, non dopo che il batch e' stato costruito.
-    let ipc_limits = ipc_boundary::limits_from_plan(
-        graph.effective_limits(),
-        runtime.batch_target.max_batch_bytes,
-    );
-    // Gli input portano il proprio contratto: l'esecuzione verifica allora il
-    // fingerprint COMPLETO contro quello registrato nel grafo, non il solo
-    // schema Arrow. E' lo stesso contratto su cui il piano e' stato validato,
-    // quindi il confine si chiude senza rileggere nulla.
-    // Profilo STRETTO: un input senza contratto non e' un'omissione tollerata
-    // ma un errore. La CLI ha sempre i contratti della discovery, quindi il
-    // profilo permissivo non le serve — e non averlo a disposizione e' cio'
-    // che impedisce a una modifica futura di reintrodurlo per distrazione.
-    let mut inputs = Inputs::strict();
-    for (name, path) in &pairs {
-        let contract = contracts
-            .iter()
-            .find(|(declared, _)| declared == name)
-            .map(|(_, contract)| contract.clone())
-            .ok_or_else(|| contract_error_missing(name))?;
-        inputs.add_with_contract(name.clone(), open_input(path, &ipc_limits)?, contract)?;
-    }
-    let output = execute(&graph, inputs, runtime)?;
-    let (metrics, outcome) =
-        output.write_ipc_file_with_profile(output_path, PublishProfile::Atomic)?;
-    let mut documento = metrics_json(&graph, &metrics);
-    if let Some(oggetto) = documento.as_object_mut() {
-        oggetto.insert(
-            "durability_confirmed".to_owned(),
-            serde_json::Value::Bool(durabilita_confermata(outcome)),
-        );
-    }
-    println!("{}", serde_json::to_string_pretty(&documento)?);
-    Ok(())
-}
-
-/// Percorsi di input per un piano DAG: `--input` singolo e/o `--inputs`
-/// multiplo (valori fino al prossimo flag).
-/// Sorgenti degli input di un piano DAG, come dichiarate sulla riga di
-/// comando.
-///
-/// Le due forme non si mescolano: o l'accoppiamento e' esplicito, o e'
-/// posizionale. Accettarle insieme darebbe una riga di comando in cui meta'
-/// degli input e' verificabile a colpo d'occhio e meta' no.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum V4Inputs {
-    /// Forma NOMINALE `--input nome=percorso`, ripetibile: l'accoppiamento e'
-    /// scritto, non dedotto.
-    Named(Vec<(String, PathBuf)>),
-    /// Forma POSIZIONALE `--inputs a.arrow b.arrow` (deprecata): i percorsi
-    /// seguono l'ordine di dichiarazione degli input nel piano.
-    Positional(Vec<PathBuf>),
-}
-
-/// `true` se il valore di `--input` e' nella forma `nome=percorso`.
-///
-/// Il nome e' cio' che precede il PRIMO `=`: dev'essere non vuoto e non
-/// contenere separatori di percorso ne' due punti, cosi' un percorso assoluto
-/// resta un percorso anche se contenesse un `=` piu' avanti. Un file che si
-/// chiama davvero `nome=x.arrow` si passa con `--inputs`, oppure prefissato
-/// (`./nome=x.arrow`).
-fn is_named_input(value: &str) -> bool {
-    value.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty() && !name.contains(['/', '\\', ':']) && !name.starts_with('-')
-    })
-}
-
-/// Raccoglie gli input di un piano DAG dalla riga di comando.
-///
-/// # Errors
-///
-/// `PlenoraError::InvalidPlan` se le due forme sono mescolate, se un nome e'
-/// ripetuto, se il percorso di una coppia e' vuoto, o se manca il valore di
-/// un flag.
-fn v4_inputs(args: &[String]) -> Result<V4Inputs, PlenoraError> {
-    let mut named: Vec<(String, PathBuf)> = Vec::new();
-    let mut positional: Vec<PathBuf> = Vec::new();
-
-    // `--input` e' ripetibile nella forma nominale; in quella posizionale
-    // resta il singolo percorso di un piano a un solo input.
-    for (index, argument) in args.iter().enumerate() {
-        if argument != "--input" {
-            continue;
-        }
-        let value = args
-            .get(index + 1)
-            .filter(|value| !value.starts_with("--"))
-            .ok_or_else(|| contract("valore mancante per --input"))?;
-        if !is_named_input(value) {
-            positional.push(PathBuf::from(value));
-            continue;
-        }
-        let (name, path) = value
-            .split_once('=')
-            .ok_or_else(|| contract("forma --input nome=percorso non riconosciuta"))?;
-        if path.is_empty() {
-            return Err(contract(format!(
-                "input `{name}`: percorso vuoto in `--input {name}=`"
-            )));
-        }
-        if named.iter().any(|(declared, _)| declared == name) {
-            return Err(contract(format!("input `{name}` indicato due volte")));
-        }
-        named.push((name.to_owned(), PathBuf::from(path)));
-    }
-
-    if let Some(index) = args.iter().position(|argument| argument == "--inputs") {
-        positional.extend(
-            args[index + 1..]
-                .iter()
-                .take_while(|argument| !argument.starts_with("--"))
-                .map(PathBuf::from),
-        );
-    }
-
-    if !named.is_empty() && !positional.is_empty() {
-        return Err(contract(
-            "forma nominale e posizionale mescolate: usare `--input nome=percorso` per \
-             tutti gli input, oppure `--inputs` per tutti",
-        ));
-    }
-    if named.is_empty() {
-        return Ok(V4Inputs::Positional(positional));
-    }
-    Ok(V4Inputs::Named(named))
-}
-
-fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraError> {
-    // Fail-closed su TUTTI i piani legacy che contengono op row-diagnostics,
-    // anche blocking/secondary: nel percorso legacy non esiste gate
-    // provenance (quello e' solo DAG) e un nodo blocking (es. sort)
-    // renderebbe gli indici pubblicati posizioni post-riordino, non
-    // `source_row_zero_based`. Nessun indice inventato: si richiede DAG.
-    //
-    // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
-    // (catalogo plenora-core), la stessa del gate provenance del planner e
-    // del machinery di segmento dell'executor — nessuna lista locale
-    // duplicata (formula/expression erano omesse qui; hmac_sha256
-    // non emette, md5/sha256 solo con null_policy=error). La scansione
-    // precede la validazione legacy: un'op diagnostica richiede DAG
-    // anche se il resto del piano sarebbe invalido — mai eseguire per poi
-    // scoprire indici inventati.
-    let document: serde_json::Value = serde_json::from_str(plan_text)?;
-    let requires_v4 = document
-        .get("steps")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|steps| {
-            steps.iter().any(|step| {
-                let Some(operation) = step.get("operation").and_then(serde_json::Value::as_str)
-                else {
-                    return false;
-                };
-                // Risoluzione come in validazione v4: id canonico o alias
-                // legacy; i nomi sconosciuti restano al rifiuto della
-                // validazione legacy sotto (comportamento invariato).
-                let Some(descriptor) = find_operation(operation) else {
-                    return false;
-                };
-                let config = step.get("config").unwrap_or(&serde_json::Value::Null);
-                descriptor.emits_row_diagnostics(config)
-            })
-        });
-    if requires_v4 {
-        return Err(PlenoraError::Unsupported(
-            "operazione con diagnostics row-scoped richiede un piano DAG".to_owned(),
-        ));
-    }
-    let validated: Plan = serde_json::from_str(plan_text)?;
-    let _ = validated.validate()?;
-    Ok(())
-}
-
-/// Dispatch di `run`: DAG se il piano dichiara `schema_version` >= 4,
-/// pipeline tabellare legacy altrimenti (comportamento invariato).
-fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
-    OutputFormat::require_json("run")?;
-    let plan_path = value_after(args, "--plan")?;
-    let output_path = value_after(args, "--output")?;
-    let plan_text = read_control_plan_text(Path::new(&plan_path))?;
-    if let Some(plan_text) = testo_piano_dag(&plan_text)? {
-        if args.iter().any(|argument| argument == "--right") {
-            return Err(contract(
-                "--right non e' ammesso per i piani DAG: usare --inputs con i percorsi \
-                 nell'ordine di dichiarazione degli input del piano",
-            )
-            .into());
-        }
-        return run_dag_v4(
-            plan_text.as_ref(),
-            &v4_inputs(args)?,
-            &output_path,
-            !has_flag(args, "--no-geo-fusion"),
-        );
-    }
-    reject_legacy_row_diagnostics_plan(&plan_text)?;
-    Ok(run_pipeline(
-        &plan_path,
-        &value_after(args, "--input")?,
-        optional_value_after(args, "--right")?.as_deref(),
-        &output_path,
-    )?)
 }
 
 // Dispatch unico dei sottocomandi: la lunghezza e' data dalla sequenza
@@ -3561,8 +3250,8 @@ mod tests {
         let argv =
             |args: &[&str]| -> Vec<String> { args.iter().map(ToString::to_string).collect() };
         let posizionali = |args: &[&str]| match v4_inputs(&argv(args)).expect("inputs") {
-            V4Inputs::Positional(paths) => paths,
-            V4Inputs::Named(_) => panic!("attesa forma posizionale"),
+            DagInputs::Positional(paths) => paths,
+            DagInputs::Named(_) => panic!("attesa forma posizionale"),
         };
         assert_eq!(
             posizionali(&["run", "--input", "a.arrow"]),
@@ -3596,7 +3285,7 @@ mod tests {
         .expect("inputs");
         assert_eq!(
             inputs,
-            V4Inputs::Named(vec![
+            DagInputs::Named(vec![
                 ("destra".to_owned(), PathBuf::from("b.arrow")),
                 ("sinistra".to_owned(), PathBuf::from("a.arrow")),
             ])

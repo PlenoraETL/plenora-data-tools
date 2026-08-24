@@ -15,7 +15,7 @@ use plenora_engine::planner;
 
 use crate::cli::contract_discovery::discover_input_contract;
 use crate::cli::rendering::contract_json;
-use crate::{contract, value_after, OutputFormat};
+use crate::{value_after, OutputFormat};
 
 /// Descrizione completa di un input: cio' che serve per SCRIVERE un piano
 /// contro quel file, e il fingerprint con cui il piano sara' poi verificato.

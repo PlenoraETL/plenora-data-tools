@@ -33,7 +33,7 @@ use plenora_core::crs::resolve_crs;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::crs::resolve_crs;
 
-use crate::{contract, PlanInputsProbe, V4Inputs};
+use crate::{contract, DagInputs, PlanInputsProbe};
 
 /// Schema Arrow dell'header IPC di un input (file o stream format): nessuna
 /// riga di dati letta.
@@ -446,10 +446,10 @@ pub fn geometry_contract_from_field(
 /// diverso nella forma posizionale.
 pub fn pair_v4_inputs(
     probe: &PlanInputsProbe,
-    inputs: &V4Inputs,
+    inputs: &DagInputs,
 ) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
     let paths = match inputs {
-        V4Inputs::Named(named) => {
+        DagInputs::Named(named) => {
             for (name, _) in named {
                 if !probe.inputs.iter().any(|declared| declared == name) {
                     return Err(contract(format!(
@@ -478,7 +478,7 @@ pub fn pair_v4_inputs(
                 })
                 .collect();
         }
-        V4Inputs::Positional(paths) => paths,
+        DagInputs::Positional(paths) => paths,
     };
     if probe.inputs.len() > 1 {
         // Con piu' di un input la forma posizionale non e' VERIFICABILE: due
