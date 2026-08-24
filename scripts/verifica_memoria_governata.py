@@ -22,6 +22,7 @@ ESECUTORE = 'crates/plenora-engine/src/executor.rs'
 USCITA = 'crates/plenora-engine/src/executor/output.rs'
 STAGING = 'crates/plenora-engine/src/executor/staging.rs'
 DIAGNOSTICA = 'crates/plenora-engine/src/executor/diagnostics.rs'
+GEO = 'crates/plenora-engine/src/executor/geo.rs'
 GOVERNOR = 'crates/plenora-engine/src/governor.rs'
 
 # (file, frammento, che cosa dimostra la sua presenza)
@@ -29,13 +30,13 @@ ANCORE = [
     (ESECUTORE,
      '.reserve(bytes, &edge_name)',
      'arco di ingresso: il batch esiste gia\' quando lo si prenota'),
-    (ESECUTORE,
+    (GEO,
      'concat_batches(&schema, &unwrapped)',
      'blocking unario: la materializzazione precede check e reservation'),
-    (ESECUTORE,
+    (GEO,
      'concat_batches(&right_schema, &unwrapped)',
      'blocking binario: idem, sui due lati'),
-    (ESECUTORE,
+    (GEO,
      '.reserve(output.get_array_memory_size() as u64, &kernel.node_id)',
      'uscita dei nodi blocking: il kernel ha gia\' allocato'),
     (ESECUTORE,

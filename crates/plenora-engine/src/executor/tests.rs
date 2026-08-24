@@ -20,7 +20,7 @@ use plenora_core::contract::{
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
 
-use geo::{polygon, Geometry, Point};
+use ::geo::{polygon, Geometry, Point};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_kernels_geo::arrow_adapter::{
     geometry_dimensions_from_metadata, geometry_output_field,
@@ -2940,13 +2940,13 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
 // ---------------------------------------------------------------------------
 
 fn line_wkb(coords: &[(f64, f64)]) -> Vec<u8> {
-    Geometry::LineString(geo::LineString::from(coords.to_vec()))
+    Geometry::LineString(::geo::LineString::from(coords.to_vec()))
         .to_wkb(CoordDimensions::xy())
         .expect("wkb linea")
 }
 
 fn rect_wkb(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Vec<u8> {
-    Geometry::Polygon(geo::polygon![
+    Geometry::Polygon(::geo::polygon![
         (x: xmin, y: ymin), (x: xmax, y: ymin),
         (x: xmax, y: ymax), (x: xmin, y: ymax),
         (x: xmin, y: ymin),
@@ -2956,7 +2956,7 @@ fn rect_wkb(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Vec<u8> {
 }
 
 fn rect_with_hole_wkb() -> Vec<u8> {
-    Geometry::Polygon(geo::polygon!(
+    Geometry::Polygon(::geo::polygon!(
         exterior: [(x: 0.0, y: 0.0), (x: 8.0, y: 0.0), (x: 8.0, y: 8.0), (x: 0.0, y: 8.0), (x: 0.0, y: 0.0)],
         interiors: [[(x: 2.0, y: 2.0), (x: 4.0, y: 2.0), (x: 4.0, y: 4.0), (x: 2.0, y: 4.0), (x: 2.0, y: 2.0)]],
     ))
@@ -3992,7 +3992,7 @@ fn payload_bytes_limit_triggers_cumulatively_on_input() {
 fn nested_collection_wkb(depth: usize) -> Vec<u8> {
     let mut geometry = Geometry::Point(Point::new(1.0, 2.0));
     for _ in 0..depth {
-        geometry = Geometry::GeometryCollection(geo::GeometryCollection(vec![geometry]));
+        geometry = Geometry::GeometryCollection(::geo::GeometryCollection(vec![geometry]));
     }
     geometry
         .to_wkb(CoordDimensions::xy())
@@ -5316,7 +5316,7 @@ fn circle_polygon_wkb(coords: usize) -> Vec<u8> {
         })
         .collect();
     ring.push((1_000.0, 0.0)); // chiusura esatta sull'angolo 0
-    Geometry::Polygon(geo::Polygon::new(geo::LineString::from(ring), vec![]))
+    Geometry::Polygon(::geo::Polygon::new(::geo::LineString::from(ring), vec![]))
         .to_wkb(CoordDimensions::xy())
         .expect("wkb fixture")
 }
