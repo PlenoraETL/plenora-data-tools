@@ -213,11 +213,46 @@ fn un_tetto_oltre_u64_e_rifiutato() {
     // Il test la fissa per non lasciarla cambiare in silenzio; raffinarla
     // sarebbe un tagging al confine del parser, fuori dal perimetro della v6.
     assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
-    // E il valore NON e' stato saturato: un tetto silenziosamente ridotto a
-    // `u64::MAX` sarebbe peggio di un rifiuto.
-    assert!(
-        !errore.to_string().contains(&u64::MAX.to_string()),
-        "nessuna saturazione: {errore}"
+    // Che il valore non sia stato saturato lo dimostra gia' l'`expect_err`:
+    // saturare significherebbe ACCETTARE il documento con un tetto diverso da
+    // quello scritto. Cercare `u64::MAX` nel messaggio sarebbe per giunta
+    // fragile — il valore originale lo contiene come prefisso, quindi un
+    // errore che lo riportasse legittimamente farebbe cadere il test.
+}
+
+#[test]
+fn il_canonico_v6_riattraversa_il_dispatch() {
+    // E' l'invariante che il target fuzz asserisce sul dispatch DAG. Li' e'
+    // esercitata da payload casuali; qui e' fissata in modo deterministico,
+    // cosi' se si rompesse non servirebbe una campagna per accorgersene.
+    //
+    // Ripassare dal DISPATCH e non dal parser della v6 e' il punto: e' cosi'
+    // che si scopre un canonico che dichiara una versione che il dispatch non
+    // riconosce piu', o che ne sceglie un'altra.
+    let testo = piano(
+        PLAN_SCHEMA_VERSION_V6,
+        &json!({"max_domain_memory_bytes": 1_073_741_824_u64}),
+    );
+    let validato =
+        crate::plan::valida_per_versione(&testo, &PlanLimits::default()).expect("un v6 valido");
+    let canonico = validato.canonical_json().to_string();
+
+    let riletto = crate::plan::valida_per_versione(&canonico, &PlanLimits::default())
+        .expect("la forma canonica deve ri-attraversare il dispatch");
+    assert_eq!(
+        riletto.schema_version(),
+        PLAN_SCHEMA_VERSION_V6,
+        "il canonico deve dichiarare la versione da cui proviene"
+    );
+    assert_eq!(
+        riletto.canonical_json().to_string(),
+        canonico,
+        "canonicalizzazione non idempotente attraverso il dispatch"
+    );
+    assert_eq!(
+        riletto.max_domain_memory_bytes(),
+        Some(1_073_741_824),
+        "il tetto del dominio non deve perdersi nel giro canonico"
     );
 }
 
