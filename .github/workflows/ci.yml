@@ -182,6 +182,15 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_pin_workflow.py
 
+      # I target fuzz sono elencati in quattro posti e tre sono copie a mano.
+      # Il 2026-08-20 una rinomina ne ha aggiornato uno solo: la campagna
+      # locale si fermava sul target inesistente e lo smoke usciva 0
+      # comunque, quindi la copertura mancante non si vedeva da nessuna parte.
+      - name: Gate elenchi dei target fuzz
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_target_fuzz.py
+
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami erano verificati solo localmente — lint pedantic su pair.rs sono

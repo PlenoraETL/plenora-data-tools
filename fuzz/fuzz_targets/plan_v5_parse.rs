@@ -8,10 +8,23 @@
 //! parsing. Se il parse riesce, la serializzazione canonica deve ri-parsare
 //! (idempotenza, piano-v5.md#identita-e-fingerprint).
 //!
-//! Il target copre **due** ingressi, non uno: il parser canonico e il
-//! dispatcher di versione, che e' l'ingresso reale del planner. Fuzzare solo
-//! il parser lascerebbe fuori la riscrittura v4 -> v5, che e' il pezzo nuovo
-//! e quello che manipola l'albero JSON.
+//! Il target copre il **dispatch DAG completo** — v4, v5 e v6 — non il solo
+//! parser canonico. Il nome storico e' rimasto `plan_v5_parse`: rinominarlo
+//! avrebbe scollegato il corpus gia' raccolto, che e' il valore accumulato di
+//! una campagna di fuzzing.
+//!
+//! Tre ingressi, e ciascuno c'e' per un motivo suo:
+//!
+//! - `valida_per_versione`, che e' **l'ingresso reale del planner**: sceglie
+//!   il parser dalla versione dichiarata, quindi e' l'unico punto da cui un
+//!   payload puo' raggiungere il parser della v6;
+//! - `migrazione_v4::testo_canonico_v5`, che manipola l'albero JSON e le cui
+//!   prove di idempotenza sono specifiche della riscrittura v4 -> v5;
+//! - `PlanV5::parse`, il parser canonico, raggiunto anche direttamente.
+//!
+//! Senza il primo la v6 restava **fuori dalla campagna**: il suo parser
+//! ostile e il suo canonico non venivano mai esercitati, mentre la
+//! documentazione dichiarava il contrario.
 
 use libfuzzer_sys::fuzz_target;
 use plenora_core::limits::PlanLimits;
@@ -63,6 +76,38 @@ fuzz_target!(|payload: &[u8]| {
             "il testo canonico restituito supera max_plan_json_bytes"
         );
         let _ = PlanV5::parse(canonico.as_ref(), &limits);
+    }
+
+    // Il dispatch: l'unico punto da cui un payload raggiunge il parser della
+    // v6. Se riesce, la forma canonica deve **ri-attraversare lo stesso
+    // dispatch** e rendere la stessa versione canonica e lo stesso canonico.
+    //
+    // Ripassare dal dispatch e non dal parser di una versione fissata e' il
+    // punto: e' cosi' che si scopre un canonico che dichiara una versione che
+    // il dispatch non sa piu' riconoscere, o che ne sceglie un'altra.
+    if let Ok(validato) = plenora_engine::plan::valida_per_versione(&text, &limits) {
+        let versione = validato.schema_version();
+        let canonico = validato.canonical_json().to_string();
+        let riletto = plenora_engine::plan::valida_per_versione(&canonico, &PlanLimits::default())
+            .expect("la forma canonica deve ri-attraversare il dispatch");
+        assert_eq!(
+            riletto.schema_version(),
+            versione,
+            "il canonico deve dichiarare la versione da cui proviene"
+        );
+        assert_eq!(
+            riletto.canonical_json().to_string(),
+            canonico,
+            "canonicalizzazione non idempotente attraverso il dispatch"
+        );
+        // Il tetto del dominio, che solo un v6 puo' dichiarare, sopravvive al
+        // giro: se cadesse, un piano isolato tornerebbe non selezionabile
+        // senza che nulla lo dica.
+        assert_eq!(
+            riletto.max_domain_memory_bytes(),
+            validato.max_domain_memory_bytes(),
+            "il tetto del dominio non deve perdersi nel giro canonico"
+        );
     }
 
     if let Ok(plan) = PlanV5::parse(&text, &limits) {

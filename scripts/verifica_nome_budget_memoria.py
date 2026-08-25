@@ -95,6 +95,11 @@ TEST_AMMESSI = {
         'l\'oracolo dell\'identita\' tiene un piano v4 che scrive il nome '
         'della v4, per fissare che la migrazione produce lo STESSO plan_hash '
         'del suo equivalente v5: senza il nome vecchio il piano non sarebbe v4',
+    'crates/plenora-engine/src/plan/formato_v6/tests.rs':
+        "la simmetria del rifiuto nella v6: il nome della v4 non funziona "
+        "nemmeno li'. Senza scriverlo non si puo' verificare che sia "
+        "rifiutato, ed e' il verso che manca alle prove della migrazione, "
+        "che coprono v4 e v5",
 }
 
 # `max_memory_bytes` NON e' sottostringa di `max_governed_memory_bytes`

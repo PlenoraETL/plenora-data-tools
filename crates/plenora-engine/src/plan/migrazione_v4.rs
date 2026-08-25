@@ -191,7 +191,7 @@ const fn errore(messaggio: String) -> PlenoraError {
 /// `PlenoraError::DataMapping` se il testo non e' JSON valido;
 /// `PlenoraError::InvalidPlan` se il JSON non e' un oggetto, se
 /// `schema_version` manca, non e' un intero non negativo o non sta in `u16`.
-fn versione_dichiarata(json_text: &str) -> Result<u16> {
+pub(super) fn versione_dichiarata(json_text: &str) -> Result<u16> {
     let valore: Value = serde_json::from_str(json_text)?;
     let oggetto = valore
         .as_object()

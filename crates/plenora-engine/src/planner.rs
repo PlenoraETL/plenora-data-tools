@@ -1,4 +1,4 @@
-//! Planner del DAG v5 — fase 1 `validate`
+//! Planner del DAG — fase 1 `validate`
 //! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint)
 //! — Fase 2A-3.
 //!
@@ -11,8 +11,12 @@
 //!
 //! Passi (architettura.md):
 //!
-//! 1. `PlanLimits` di default durante il parsing (errori-e-limiti.md), poi validazione
-//!    strutturale e risoluzione alias — in [`PlanV5::parse`];
+//! 1. scelta del parser dalla `schema_version` dichiarata, poi `PlanLimits`
+//!    di default durante il parsing (errori-e-limiti.md), validazione
+//!    strutturale e risoluzione alias — in [`crate::plan::valida_per_versione`],
+//!    che smista a [`PlanV5::parse`] o a
+//!    [`crate::plan::formato_v6::PlanV6::parse`]. La struttura che i due
+//!    validano e' la stessa; i formati e le identita' no;
 //! 2. risoluzione del CRS di piano (campo `crs`): feature-dispatch come
 //!    `geo_transport` — con `proj-backend` la risoluzione PROJ reale, senza
 //!    fail-closed `CRS_BACKEND_UNAVAILABLE`;
@@ -93,7 +97,7 @@ use plenora_core::crs::resolve_crs;
 use plenora_kernels_geo::crs::resolve_crs;
 
 use crate::geo_transport::publish::PublishProfile;
-use crate::plan::{migrazione_v4, PlanV5, ValidatedPlanV5, PLAN_SCHEMA_VERSION_V5};
+use crate::plan::{PianoValidato, PLAN_SCHEMA_VERSION_V5, PLAN_SCHEMA_VERSION_V6};
 
 #[cfg(test)]
 mod tests;
@@ -126,6 +130,34 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// versione del formato non e' l'hash ma il confronto esplicito di
 /// `plan_format_version` in [`check_compatibility`].
 const PLAN_HASH_DOMAIN: &[u8] = b"plenora/plan_hash/v5\0";
+
+/// Separatore di dominio dei piani **v6** (`PLAN-018`).
+///
+/// Distinto da quello della v5, e per la stessa ragione per cui quello
+/// esiste: un v5 e un v6 per il resto identici devono avere identita'
+/// diverse, e «in pratica differiranno comunque perche' il canonico dichiara
+/// una versione diversa» e' una proprieta' del contenuto, non una garanzia
+/// della funzione.
+///
+/// **Non generalizzare.** Che ogni versione abbia un dominio proprio sarebbe
+/// falso: la v4 e' migrata NEL canonico v5 e ne condivide il `plan_hash`
+/// (`PLAN-019`). Il confine e' fra v5 e v6, e li' soltanto.
+const PLAN_HASH_DOMAIN_V6: &[u8] = b"plenora/plan_hash/v6\0";
+
+/// Il dominio che compete alla versione del formato canonico.
+///
+/// Esaustiva sulle sole versioni che possono arrivare qui: `PlanV5::parse`
+/// rifiuta tutto cio' che non e' 5, e il percorso v6 produce 6. Una versione
+/// diversa e' un'invariante violata, non un input, e come tale non riceve un
+/// dominio di ripiego — che significherebbe hashare un piano sconosciuto
+/// come se fosse un v5.
+const fn dominio_del_plan_hash(versione: u16) -> Option<&'static [u8]> {
+    match versione {
+        PLAN_SCHEMA_VERSION_V5 => Some(PLAN_HASH_DOMAIN),
+        PLAN_SCHEMA_VERSION_V6 => Some(PLAN_HASH_DOMAIN_V6),
+        _ => None,
+    }
+}
 
 /// Versione dei crate Arrow in questa build (piano-v5.md#identita-e-fingerprint: entra nell'identita' del
 /// grafo — un grafo validato con una versione Arrow diversa non e' riusabile).
@@ -298,7 +330,13 @@ pub struct ValidatedGraph {
     input_contract_fingerprints: Vec<ContractFingerprint>,
     plan_format_version: u16,
     // --- Decisioni semantiche stabili ---
-    plan: ValidatedPlanV5,
+    /// Il piano validato **con la propria versione di formato**.
+    ///
+    /// Era un `ValidatedPlanV5`. Non poteva restare: un grafo costruito da un
+    /// piano v6 avrebbe rappresentato come v5 un documento che v5 non e', e
+    /// chi ne avesse ricavato la forma canonica avrebbe ottenuto un
+    /// `plan_hash` del dominio sbagliato.
+    plan: PianoValidato,
     /// Contratti per arco, chiave = nome input o id nodo (namespace unico,
     /// garantito dalla validazione strutturale).
     edge_contracts: BTreeMap<String, DataContract>,
@@ -348,15 +386,20 @@ impl ValidatedGraph {
         &self.input_contract_fingerprints
     }
 
-    /// Versione del formato piano (4).
+    /// Versione del formato **canonico** di questo grafo: `5` o `6`.
+    ///
+    /// Per un piano v4 vale `5`: la v4 e' migrata nel canonico v5 e ne
+    /// condivide l'identita'. Diceva «(4)» — un numero che nessun grafo
+    /// validato porta.
     #[must_use]
     pub const fn plan_format_version(&self) -> u16 {
         self.plan_format_version
     }
 
-    /// Il piano validato strutturalmente (alias gia' risolti agli id canonici).
+    /// Il piano validato strutturalmente (alias gia' risolti agli id
+    /// canonici), con la propria versione di formato.
     #[must_use]
-    pub const fn plan(&self) -> &ValidatedPlanV5 {
+    pub const fn plan(&self) -> &PianoValidato {
         &self.plan
     }
 
@@ -394,7 +437,7 @@ impl ValidatedGraph {
     /// l'invariante violata diventa un errore esplicito, mai un panic (R6).
     pub fn output_contract(&self) -> Result<&DataContract> {
         self.edge_contracts
-            .get(&self.plan.plan().output)
+            .get(self.plan.output())
             .ok_or_else(|| PlenoraError::Internal("l'output e' un arco del grafo validato".into()))
     }
 
@@ -413,10 +456,12 @@ impl ValidatedGraph {
     }
 }
 
-/// Fase 1 `validate` del DAG v5 (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
+/// Fase 1 `validate` del DAG (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
 /// Un piano `schema_version: 4` entra da qui attraverso la migrazione
-/// esplicita (errori-e-limiti.md#memoria-governata): il resto della fase 1 conosce una sola forma.
+/// esplicita (errori-e-limiti.md#memoria-governata). Le versioni DAG restano
+/// due — la v5 e la v6 non collassano l'una nell'altra — ma la **struttura**
+/// che il resto della fase 1 attraversa e' una sola.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
 /// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
@@ -443,20 +488,28 @@ pub fn validate(
     plan_json: &str,
     input_contracts: &[(String, DataContract)],
 ) -> Result<ValidatedGraph> {
-    // Passo 0: versione. Un piano v4 viene migrato al canonico v5 qui, in
-    // un punto solo (errori-e-limiti.md#memoria-governata): il resto della fase 1 conosce una sola forma.
-    // Un piano v5 attraversa senza copia.
-    let plan_limits = PlanLimits::default();
-    let plan_json = migrazione_v4::testo_canonico_v5(plan_json, &plan_limits)?;
+    // Passo 0: versione, in un punto solo. Le versioni DAG sono due e NON
+    // collassano l'una nell'altra:
+    //
+    // - la **v4** e' migrata nel canonico v5 e ne condivide il `plan_hash`
+    //   (errori-e-limiti.md#memoria-governata, `PLAN-019`);
+    // - la **v5** attraversa senza copia;
+    // - la **v6** ha un parser proprio, perche' porta un campo che la v5
+    //   rifiuta, e resta nel proprio dominio d'identita' (`PLAN-002`,
+    //   `PLAN-018`). Non c'e' nessuna migrazione v5 -> v6: sarebbe un
+    //   cambio d'identita', e `PLAN-021` vieta di presentarlo come
+    //   equivalenza.
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
-    // risoluzione alias (PlanV5::parse, errori-e-limiti.md).
-    let plan = PlanV5::parse(plan_json.as_ref(), &plan_limits)?;
+    // risoluzione alias, scelti dal parser della versione dichiarata.
+    let plan_limits = PlanLimits::default();
+    let plan = crate::plan::valida_per_versione(plan_json, &plan_limits)?;
     // Validazione dei limiti effettivi in un punto solo, prima di qualunque
     // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
     // che non passano dal preparer tabellare dove il controllo viveva prima
     // (e dove correggeva in silenzio invece di rifiutare).
     plan.effective_limits().validate()?;
-    let plan_ref = plan.plan();
+    let plan_ref = plan.struttura_condivisa();
+    let plan_ref = plan_ref.as_ref();
 
     // Passo 2: contratti di input — corrispondenza esatta con i nomi
     // dichiarati, validita' strutturale, niente chiavi sorted_by nel
@@ -618,8 +671,14 @@ pub fn validate(
     // Passo 6: identita' piano-v5.md#identita-e-fingerprint.
     let canonical = plan.canonical_json();
     let canonical_bytes = serde_json::to_vec(&canonical)?;
+    let versione_canonica = plan.schema_version();
+    let dominio = dominio_del_plan_hash(versione_canonica).ok_or_else(|| {
+        PlenoraError::Internal(format!(
+            "nessun dominio di plan_hash per schema_version {versione_canonica}"
+        ))
+    })?;
     let mut hasher = Sha256::new();
-    hasher.update(PLAN_HASH_DOMAIN);
+    hasher.update(dominio);
     hasher.update(&canonical_bytes);
     let plan_hash = PlanHash(hasher.finalize().into());
     let used: Vec<&OperationDescriptor> = used_operations
@@ -639,7 +698,7 @@ pub fn validate(
         arrow_version: ArrowVersion(ARROW_VERSION.to_owned()),
         required_capabilities: required,
         input_contract_fingerprints: input_fingerprints,
-        plan_format_version: PLAN_SCHEMA_VERSION_V5,
+        plan_format_version: versione_canonica,
         effective_limits: plan.effective_limits(),
         plan,
         edge_contracts,
@@ -679,9 +738,11 @@ pub fn check_compatibility(
     // segue lo interpreta con regole che non sono le sue. Il campo era
     // registrato in `ValidatedGraph` ma non veniva confrontato con nulla —
     // un'identita' scritta e mai letta e' una garanzia solo apparente.
-    if graph.plan_format_version != PLAN_SCHEMA_VERSION_V5 {
+    if graph.plan_format_version != PLAN_SCHEMA_VERSION_V5
+        && graph.plan_format_version != PLAN_SCHEMA_VERSION_V6
+    {
         return Err(mismatch(format!(
-            "plan_format_version {} del grafo diversa da {PLAN_SCHEMA_VERSION_V5}",
+            "plan_format_version {} del grafo: le versioni DAG sono {PLAN_SCHEMA_VERSION_V5} e {PLAN_SCHEMA_VERSION_V6}",
             graph.plan_format_version
         )));
     }
@@ -746,8 +807,7 @@ pub fn check_declared_input_contracts(
     for (name, contract) in declared {
         let position = graph
             .plan
-            .plan()
-            .inputs
+            .inputs()
             .iter()
             .position(|declared| declared == name)
             .ok_or_else(|| mismatch(format!("input `{name}` non dichiarato dal piano")))?;
@@ -792,8 +852,7 @@ pub fn check_input_compatibility(
     }
     for (declared, fingerprint) in graph
         .plan
-        .plan()
-        .inputs
+        .inputs()
         .iter()
         .zip(&graph.input_contract_fingerprints)
     {
@@ -816,14 +875,7 @@ pub fn check_input_compatibility(
     }
     if let Some(extra) = provided
         .keys()
-        .filter(|name| {
-            !graph
-                .plan
-                .plan()
-                .inputs
-                .iter()
-                .any(|i| i.as_str() == **name)
-        })
+        .filter(|name| !graph.plan.inputs().iter().any(|i| i.as_str() == **name))
         .min()
     {
         return Err(mismatch(format!(

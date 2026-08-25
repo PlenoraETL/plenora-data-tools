@@ -2542,3 +2542,114 @@ fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
     let envelope = String::from_utf8_lossy(&result.stdout);
     assert!(envelope.contains("max_governed_memory_bytes"), "{envelope}");
 }
+
+// ---------------------------------------------------------------------------
+// Formato v6: la versione dichiarata negli output della CLI
+// ---------------------------------------------------------------------------
+
+/// Lo stesso piano tabellare, dichiarato `schema_version: 6` col tetto del
+/// dominio.
+fn table_plan_v6() -> serde_json::Value {
+    let mut piano = table_plan();
+    piano["schema_version"] = json!(6);
+    piano["limits"] = json!({"max_domain_memory_bytes": 1_073_741_824_u64});
+    piano
+}
+
+fn write_v6_fixture(directory: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let plan = directory.join("plan-v6.json");
+    let input = directory.join("input.arrow");
+    std::fs::write(&plan, serde_json::to_vec(&table_plan_v6()).expect("json")).expect("plan");
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
+    );
+    (plan, input)
+}
+
+#[test]
+fn validate_v6_dichiara_la_versione_sei() {
+    // La versione negli output era **fissata** a 5. Un piano v6 sarebbe stato
+    // descritto come un v5, con accanto un `plan_hash` di un altro dominio:
+    // la coppia che rende irriconoscibile un'identita' conservata.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = write_v6_fixture(directory.path());
+
+    let result = cli()
+        .args(["validate", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .output()
+        .expect("validate");
+    assert!(
+        result.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["schema_version"], 6, "la versione la dice il piano");
+}
+
+#[test]
+fn run_v6_dichiara_la_versione_sei() {
+    // Il gemello nell'output di `run`: stesso difetto, stesso rimedio.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan, input) = write_v6_fixture(directory.path());
+    let output_path = directory.path().join("output-v6.arrow");
+
+    let result = cli()
+        .args(["run", "--plan"])
+        .arg(&plan)
+        .arg("--inputs")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("run");
+    assert!(
+        result.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
+    assert_eq!(metrics["status"], "ok");
+    assert_eq!(metrics["schema_version"], 6, "la versione la dice il piano");
+    assert_eq!(metrics["output_rows"], 2, "il piano esegue come il v5");
+}
+
+#[test]
+fn un_v5_e_il_v6_equivalente_hanno_plan_hash_diversi() {
+    // `PLAN-018`, osservato dal confine pubblico: due documenti per il resto
+    // identici, due identita'.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (plan_v5, input) = write_table_fixture(directory.path());
+    let plan_v6 = directory.path().join("solo-versione.json");
+    let mut senza_tetto = table_plan();
+    senza_tetto["schema_version"] = json!(6);
+    std::fs::write(&plan_v6, serde_json::to_vec(&senza_tetto).expect("json")).expect("plan");
+
+    let hash_di = |percorso: &std::path::Path| -> String {
+        let result = cli()
+            .args(["validate", "--plan"])
+            .arg(percorso)
+            .arg("--inputs")
+            .arg(&input)
+            .output()
+            .expect("validate");
+        assert!(
+            result.status.success(),
+            "stdout: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
+        summary["plan_hash"].as_str().expect("plan_hash").to_owned()
+    };
+    assert_ne!(
+        hash_di(&plan_v5),
+        hash_di(&plan_v6),
+        "un v5 e un v6 per il resto identici non condividono l'identita'"
+    );
+}

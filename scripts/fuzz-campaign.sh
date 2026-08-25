@@ -12,7 +12,7 @@
 # Uso:
 #   scripts/fuzz-campaign.sh                      # tutti i target, 1h ciascuno
 #   FUZZ_HOURS_PER_TARGET=2 scripts/fuzz-campaign.sh
-#   FUZZ_TARGETS="plan_v4_parse diff_kernels" scripts/fuzz-campaign.sh
+#   FUZZ_TARGETS="plan_v5_parse diff_kernels" scripts/fuzz-campaign.sh
 #   FUZZ_JOBS=4 FUZZ_WORKERS=4 scripts/fuzz-campaign.sh   # fork paralleli
 #
 # Per una campagna 1-2 giorni: FUZZ_HOURS_PER_TARGET=1.5 circa copre 17
@@ -39,7 +39,7 @@ ALL_TARGETS=(
     # Portati da plenora-geo-tools-arrow
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
     # Nuovi (Fase 2A)
-    plan_v4_parse analyze_table analyze_geo diff_kernels executor_dag
+    plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 

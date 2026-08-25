@@ -1679,6 +1679,57 @@ fn il_plan_hash_e_separato_per_dominio_e_invalida_gli_hash_di_prima() {
 }
 
 #[test]
+fn il_plan_hash_v6_usa_esattamente_il_proprio_dominio() {
+    // Il test «un v5 e un v6 hanno hash diversi» NON sorveglia il dominio:
+    // resterebbe verde anche usando quello della v5 per entrambi, perche' i
+    // due canonici dichiarano gia' versioni diverse e differiscono comunque.
+    //
+    // Questo invece ricalcola il digest a mano e pretende il prefisso esatto,
+    // quindi cade se `dominio_del_plan_hash` rendesse il dominio della v5 per
+    // la versione 6.
+    let graph = validate(
+        &piano_di_memoria(PLAN_SCHEMA_VERSION_V6, "max_governed_memory_bytes"),
+        &input(table_contract()),
+    )
+    .expect("piano v6 valido");
+    assert_eq!(graph.plan_format_version(), PLAN_SCHEMA_VERSION_V6);
+    let canonico = serde_json::to_vec(&graph.plan().canonical_json()).expect("canonico");
+
+    let mut atteso = Sha256::new();
+    atteso.update(PLAN_HASH_DOMAIN_V6);
+    atteso.update(&canonico);
+    assert_eq!(
+        graph.plan_hash().to_hex(),
+        esadecimale(atteso.finalize().into()),
+        "il dominio della v6 deve essere esattamente il prefisso dichiarato"
+    );
+
+    // E NON quello della v5, sullo stesso canonico: e' la mutazione contro
+    // cui questo test esiste.
+    let mut col_dominio_sbagliato = Sha256::new();
+    col_dominio_sbagliato.update(PLAN_HASH_DOMAIN);
+    col_dominio_sbagliato.update(&canonico);
+    assert_ne!(
+        graph.plan_hash().to_hex(),
+        esadecimale(col_dominio_sbagliato.finalize().into()),
+        "un piano v6 non deve hashare nel dominio della v5"
+    );
+}
+
+#[test]
+fn il_dominio_della_v6_nomina_la_propria_versione() {
+    let dominio = String::from_utf8(PLAN_HASH_DOMAIN_V6.to_vec()).expect("dominio ASCII");
+    assert!(
+        dominio.contains(&format!("v{PLAN_SCHEMA_VERSION_V6}")),
+        "{dominio}"
+    );
+    assert_ne!(
+        PLAN_HASH_DOMAIN, PLAN_HASH_DOMAIN_V6,
+        "due versioni con lo stesso dominio non sono due domini"
+    );
+}
+
+#[test]
 fn il_dominio_del_plan_hash_nomina_la_versione_canonica() {
     // Se qualcuno cambia il formato canonico senza toccare il dominio,
     // l'invalidazione torna a essere una proprieta' del contenuto.

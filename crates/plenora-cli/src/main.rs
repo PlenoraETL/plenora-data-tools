@@ -12,11 +12,15 @@
 //!   (envelope v3 `PLNGEO3`), `pair-arrow` (v3), `self-test --output`;
 //! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
 //!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
-//! - Fase 2A: collegamento al DAG. Se il piano dichiara `schema_version: 5`
-//!   — o `4`, che viene migrato al canonico prima di ogni altra cosa (piano-v5.md,
-//!   migrazione) — `validate` e `run` usano il planner/executor del DAG
-//!   (`plenora_engine::planner::validate` + `plenora_engine::execute`); i piani
-//!   legacy (`schema_version` <= 3) restano sul `table_engine`, comportamento
+//! - Fase 2A: collegamento al DAG. `validate` e `run` usano il
+//!   planner/executor del DAG (`plenora_engine::planner::validate` +
+//!   `plenora_engine::execute`) per tre versioni del formato, che NON
+//!   collassano l'una nell'altra:
+//!   `schema_version: 5`; `4`, migrato al canonico v5 prima di ogni altra
+//!   cosa (piano-v5.md, migrazione), con cui condivide l'identita'; e `6`,
+//!   che ha un parser proprio, puo' dichiarare `max_domain_memory_bytes` e
+//!   sta nel **proprio** dominio di `plan_hash`. I piani legacy
+//!   (`schema_version` <= 3) restano sul `table_engine`, comportamento
 //!   invariato. Dettagli nella sezione "DAG (Fase 2A)" piu' sotto.
 //!
 //! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
@@ -39,7 +43,9 @@ use plenora_core::limits::PlanLimits;
 use plenora_core::{ErrorPhase, PlenoraError};
 use plenora_engine::geo_transport::publish::PublishOutcome;
 use plenora_engine::geo_transport::transport::ArrowOutputFormat;
-use plenora_engine::plan::{migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5};
+use plenora_engine::plan::{
+    migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5, PLAN_SCHEMA_VERSION_V6,
+};
 use plenora_engine::planner::ValidatedGraph;
 use plenora_engine::{CancellationToken, ExecutionMetrics, ExecutionPlan};
 use serde::Deserialize;
@@ -387,17 +393,35 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
     Ok(serde_json::from_str::<PlanVersionProbe>(plan_text)?.schema_version)
 }
 
-/// Porta il testo del piano al canonico v5 se il piano dichiara un formato
-/// DAG; `None` se dichiara la forma lineare legacy (`schema_version <= 3`),
-/// che prosegue sul percorso invariato.
+/// Fissa **un solo testo** per un piano DAG, e lo rende; `None` se il piano
+/// dichiara la forma lineare legacy (`schema_version <= 3`), che prosegue sul
+/// percorso invariato.
+///
+/// Che cosa succede a ciascuna versione:
+///
+/// - **v4**: migrata al canonico v5, con cui condivide l'identita';
+/// - **v5**: prestata invariata;
+/// - **v6**: prestata **invariata**. Non si migra e non si rinormalizza:
+///   riscriverla anche solo per normalizzarla cambierebbe un documento che
+///   porta la propria identita'.
 ///
 /// La CLI sonda il piano piu' volte (input dichiarati, decisioni CRS) prima
 /// di chiamare il planner: se la migrazione avvenisse solo dentro il planner,
-/// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui
-/// esiste **un** testo, deciso una volta, e da li' in poi e' v5.
+/// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui il
+/// testo e' deciso una volta, e da li' in poi tutti guardano quello.
 pub(crate) fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
-    if plan_schema_version(plan_text)? < u32::from(PLAN_SCHEMA_VERSION_V4) {
+    let versione = plan_schema_version(plan_text)?;
+    if versione < u32::from(PLAN_SCHEMA_VERSION_V4) {
         return Ok(None);
+    }
+    // La v6 non si migra e non si tocca: e' gia' il testo che il suo parser
+    // legge, e riscriverlo qui — anche solo per rinormalizzarlo — cambierebbe
+    // un documento che porta la propria identita'. Passarlo da
+    // `testo_canonico_v5` lo avrebbe fatto **rifiutare**, perche' quella
+    // funzione conosce solo la v4 e la v5: con il risultato che nessun piano
+    // v6 arrivava al planner.
+    if versione == u32::from(PLAN_SCHEMA_VERSION_V6) {
+        return Ok(Some(Cow::Borrowed(plan_text)));
     }
     migrazione_v4::testo_canonico_v5(plan_text, &PlanLimits::default()).map(Some)
 }
@@ -465,8 +489,10 @@ pub(crate) fn contract_error_missing(name: &str) -> PlenoraError {
 /// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
 /// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
 /// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
-/// sonda lo legge per prima. Per i piani DAG `PlanV5::parse` ripete la
-/// verifica: e' idempotente e copre anche chi non passa dalla CLI.
+/// sonda lo legge per prima. Per i piani DAG la ripetono i parser di formato
+/// — `PlanV5::parse` e `PlanV6::parse`, ciascuno per il proprio — e la
+/// ripete il dispatch prima di leggere la versione: e' idempotente, e copre
+/// anche chi non passa dalla CLI.
 pub(crate) fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;
@@ -487,9 +513,9 @@ pub(crate) fn graph_summary_json(
     graph: &ValidatedGraph,
     execution: &ExecutionPlan,
 ) -> Result<serde_json::Value, PlenoraError> {
-    let plan = graph.plan().plan();
+    let plan = graph.plan();
     let nodes: Vec<serde_json::Value> = plan
-        .nodes
+        .nodes()
         .iter()
         .map(|node| {
             serde_json::json!({
@@ -500,7 +526,7 @@ pub(crate) fn graph_summary_json(
         })
         .collect();
     let mut edges: Vec<serde_json::Value> = Vec::new();
-    for name in &plan.inputs {
+    for name in plan.inputs() {
         let contract = graph.edge_contract(name).ok_or_else(|| {
             PlenoraError::Internal("l'input e' un arco del grafo validato".into())
         })?;
@@ -535,10 +561,13 @@ pub(crate) fn graph_summary_json(
         .collect();
     Ok(serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V5,
+        // La versione la dice il PIANO, non questa riga. Era fissata a 5, e
+        // un piano v6 sarebbe stato descritto come un v5 — con accanto un
+        // `plan_hash` di un altro dominio.
+        "schema_version": plan.schema_version(),
         "plan_hash": graph.plan_hash().to_hex(),
         "engine_version": graph.engine_version().to_string(),
-        "inputs": plan.inputs,
+        "inputs": plan.inputs(),
         "topological_order": graph.topological_order(),
         "nodes": nodes,
         "edges": edges,
@@ -599,7 +628,11 @@ pub(crate) fn metrics_json(
         .collect();
     serde_json::json!({
         "status": "ok",
-        "schema_version": PLAN_SCHEMA_VERSION_V5,
+        // Come in `explain`: la versione la dice il piano. Era fissata a 5, e
+        // un riepilogo di `run` su un piano v6 avrebbe dichiarato 5 accanto a
+        // un `plan_hash` di un altro dominio — cioe' proprio la coppia che
+        // rende irriconoscibile un'identita' conservata.
+        "schema_version": graph.plan_format_version(),
         "plan_hash": graph.plan_hash().to_hex(),
         "output_rows": metrics.output_rows,
         "output_batches": metrics.output_batches,

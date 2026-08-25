@@ -13,9 +13,10 @@
 //!   `pair_protocol.rs` e dal livello comandi di `main.rs`).
 //!
 //! L'unificazione in un DAG unico e' in corso: Fase 2A introduce
-//! [`plan`] — il formato piano v5 (DAG dichiarativo, `PlanLimits` in parsing,
-//! migrazione dal piano lineare legacy, canonicalizzazione per il futuro
-//! `plan_hash`) — e [`planner`] — la fase 1 `validate`
+//! [`plan`] — i formati piano v5 e v6 (DAG dichiarativo, `PlanLimits` in
+//! parsing, migrazione dal piano lineare legacy e dalla v4,
+//! canonicalizzazione per il `plan_hash`, con un dominio per ciascuna delle
+//! due versioni DAG) — e [`planner`] — la fase 1 `validate`
 //! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint):
 //! inferenza dei contratti arco per arco, identita' del
 //! `ValidatedGraph` e verifica di compatibilita'. Fase 2A-4 aggiunge
