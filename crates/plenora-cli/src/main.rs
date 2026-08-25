@@ -897,7 +897,17 @@ mod tests {
 
     #[test]
     fn ogni_categoria_ha_l_exit_code_dichiarato() {
-        let atteso: [(&str, i32); 18] = [
+        // La tabella e' scritta a mano APPOSTA: e' la seconda opinione. Se
+        // fosse derivata da `exit_code_di` verificherebbe che il codice e'
+        // uguale a se stesso.
+        //
+        // Il difetto della versione precedente non era la tabella ma il
+        // giro: si iterava la tabella, quindi una categoria nuova non
+        // appariva da nessuna parte e restava semplicemente non coperta, in
+        // silenzio. Ora si itera `ErrorCategory::ALL` e si PRETENDE che la
+        // tabella la nomini — chi aggiunge una categoria deve passare di
+        // qui, come deve passare da `exit_code_di`.
+        let atteso: [(&str, i32); 20] = [
             ("invalid_plan", 2),
             ("invalid_configuration", 2),
             ("schema", 3),
@@ -913,21 +923,44 @@ mod tests {
             ("authorization", 5),
             ("timeout", 5),
             ("transient", 5),
+            ("isolation_unavailable", 5),
+            ("unattributed_memory_pressure", 5),
             ("execution", 6),
             ("internal", 70),
             ("cancelled", 130),
         ];
-        for (categoria, codice) in atteso {
-            let envelope = serde_json::json!({"error": {"category": categoria}});
+        for &categoria in plenora_core::ErrorCategory::ALL {
+            let nome = categoria.as_str();
+            let codice = atteso
+                .iter()
+                .find_map(|(atteso, codice)| (*atteso == nome).then_some(*codice))
+                .unwrap_or_else(|| {
+                    panic!("categoria `{nome}` senza exit code dichiarato in questa tabella")
+                });
+            // Il giro completo, come lo fa la CLI: envelope -> stringa ->
+            // categoria -> numero.
+            let envelope = serde_json::json!({"error": {"category": nome}});
+            assert_eq!(error_exit_code(&envelope), codice, "categoria `{nome}`");
+            // E il ramo tipizzato da solo, senza passare per il JSON: e'
+            // quello che il compilatore presidia.
             assert_eq!(
-                error_exit_code(&envelope),
+                cli::error_envelope::exit_code_di(categoria),
                 codice,
-                "categoria `{categoria}`"
+                "categoria `{nome}`"
             );
         }
-        // Una categoria sconosciuta non passa per «successo».
-        let ignota = serde_json::json!({"error": {"category": "categoria-nuova"}});
-        assert_eq!(error_exit_code(&ignota), EXIT_INTERNO);
+        // Una stringa che non e' una categoria non passa per «successo», e
+        // nemmeno per una categoria vicina di nome.
+        for ignota in ["categoria-nuova", "", "INTERNAL", "internal "] {
+            let envelope = serde_json::json!({"error": {"category": ignota}});
+            assert_eq!(
+                error_exit_code(&envelope),
+                EXIT_INTERNO,
+                "stringa non riconosciuta `{ignota}`"
+            );
+        }
+        // Un envelope senza il campo affatto: stesso ripiego, nessun panic.
+        assert_eq!(error_exit_code(&serde_json::json!({})), EXIT_INTERNO);
     }
 
     use super::*;

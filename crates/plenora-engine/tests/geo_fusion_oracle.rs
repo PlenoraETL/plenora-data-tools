@@ -209,7 +209,17 @@ fn error_signature(error: &PlenoraError) -> ErrorSignature {
         | PlenoraError::DataMapping(reason)
         | PlenoraError::Crs(reason)
         | PlenoraError::ResourceLimit(reason)
+        | PlenoraError::Protocol(reason)
+        | PlenoraError::Timeout(reason)
+        | PlenoraError::Conflict(reason)
+        | PlenoraError::InvalidConfiguration(reason)
+        | PlenoraError::IsolationUnavailable(reason)
         | PlenoraError::Internal(reason) => (variant_name(error), None, None, reason.clone()),
+        // L'evidenza non entra nella firma: la firma confronta il contesto
+        // strutturale, e i contatori sono misure, non contratto.
+        PlenoraError::UnattributedMemoryPressure { contesto, .. } => {
+            (variant_name(error), None, None, contesto.clone())
+        }
         PlenoraError::Execution {
             node,
             operation,
@@ -271,6 +281,12 @@ const fn variant_name(error: &PlenoraError) -> &'static str {
         PlenoraError::Cancelled { .. } => "Cancelled",
         PlenoraError::Io(_) => "Io",
         PlenoraError::ResourceLimit(_) => "ResourceLimit",
+        PlenoraError::Protocol(_) => "Protocol",
+        PlenoraError::Timeout(_) => "Timeout",
+        PlenoraError::Conflict(_) => "Conflict",
+        PlenoraError::InvalidConfiguration(_) => "InvalidConfiguration",
+        PlenoraError::IsolationUnavailable(_) => "IsolationUnavailable",
+        PlenoraError::UnattributedMemoryPressure { .. } => "UnattributedMemoryPressure",
         PlenoraError::Internal(_) => "Internal",
         PlenoraError::Replayed(_) => "Replayed",
         PlenoraError::Tagged { source, .. } | PlenoraError::RowDiagnostics { source, .. } => {

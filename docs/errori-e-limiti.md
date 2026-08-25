@@ -28,12 +28,64 @@ perdere diagnosi.
 
 Quattro assi **espliciti**, mai dedotti dal testo del messaggio.
 
-**Categoria** (18 valori stabili):
+**Categoria** (20 valori stabili):
 
 `invalid_plan`, `invalid_configuration`, `schema`, `data_mapping`, `crs`,
 `unsupported`, `not_found`, `conflict`, `authentication`, `authorization`,
 `timeout`, `cancelled`, `resource_limit`, `io`, `protocol`, `transient`,
-`execution`, `internal`.
+`execution`, `isolation_unavailable`, `unattributed_memory_pressure`,
+`internal`.
+
+Le ultime due nascono con l'isolamento della Fase 4 e dicono ciascuna ciò che
+**non** si è potuto stabilire:
+
+- `isolation_unavailable` — l'ambiente non offre nessuna delle forme di
+  separazione previste. Non è `invalid_plan`: lo stesso piano, su un'altra
+  macchina, gira;
+- `unattributed_memory_pressure` — c'è evidenza di pressione di memoria e
+  **non** è attribuibile al dominio. Non è `resource_limit`, che direbbe al
+  chiamante che ha superato il proprio budget quando non lo sappiamo, e non è
+  `internal`, che dichiarerebbe un difetto nostro quando spesso è l'ambiente.
+  L'errore porta con sé i cinque segnali osservati invece di concludere al
+  posto di chi legge: vedi [l'evidenza è una struttura, non un
+  booleano](isolamento.md#100-bis-levidenza-è-una-struttura-non-un-booleano).
+
+Il nome della seconda dichiara ciò che manca. `resource_pressure` sarebbe
+stato più comodo e più vago: comprenderebbe CPU, disco o descrittori, e
+soprattutto tacerebbe il punto — che l'attribuzione non c'è.
+
+### Due categorie sono estensioni locali, non canone
+
+**La regola.** Dei venti valori, **diciotto** vengono dalla fonte congelata
+(contratti trasversali v2.0-rc10, R9.5: sottoinsieme ammesso, valori propri
+vietati). **Due no**: `isolation_unavailable` e
+`unattributed_memory_pressure` sono estensioni locali introdotte
+dall'isolamento della Fase 4. Vanno chiamate così ovunque, codice compreso.
+
+**Il perimetro.** Solo l'asse **categoria**. Gli altri tre — fase, effetto
+remoto, disposizione di retry — restano sottoinsiemi stretti del canone, e le
+sei varianti nuove di `PlenoraError` non ne introducono valori propri: usano
+`prepare`, `write`, `commit`, `none` e `never`, tutti canonici.
+
+**Il pericolo che questo dichiara.** Un componente gemello che riceve un
+envelope con una di queste due categorie **non la riconosce**. Presentarle
+come canoniche direbbe a chi le legge che sono interoperabili, e non lo sono:
+chi integra deve sapere che qui c'è una divergenza, non scoprirla quando il
+suo `match` cade nel ramo predefinito. L'exit code non aiuta a distinguerle —
+entrambe proiettano su `5` insieme a diverse categorie canoniche.
+
+**Perché non si è riusato un valore canonico.** Perché nessuno dice queste
+condizioni senza affermare qualcosa di non dimostrato: `resource_limit`
+attribuirebbe al chiamante un superamento del proprio budget quando
+l'attribuzione è precisamente ciò che manca, `internal` dichiarerebbe un
+difetto nostro, `invalid_plan` un difetto del piano — che invece, su un'altra
+macchina, gira.
+
+**La condizione di rientro.** Quando sarà adottata la linea normativa nuova,
+le due andranno **tradotte** in valori canonici se ne esisteranno di
+equivalenti, oppure **ratificate** come aggiunte al canone. Fino ad allora
+restano locali e dichiarate. Adottare quella linea è un lavoro separato: non è
+anticipato da questa deviazione né sostituito da essa.
 
 **Fase** del ciclo in cui l'errore è nato (10 valori canonici): `validate`,
 `connect`, `probe`, `prepare`, `read`, `write`, `finalize`, `commit`,
@@ -581,6 +633,52 @@ danno.
 verificabile (boot id, namespace) più un heartbeat scritto da un timer
 indipendente dai batch; oppure l'imposizione esplicita di uno storage
 temporaneo node-local.
+
+### Antenati portati dall'evidenza di pressione di memoria
+
+**La regola.** L'evidenza di `unattributed_memory_pressure` porta al massimo
+**otto** antenati del dominio (`MAX_ANTENATI_OSSERVATI`). Il limite è nel
+tipo, non nel costruttore: `PressioneDegliAntenati` contiene un array di
+lunghezza fissa, quindi la profondità della gerarchia trovata sull'host non
+può decidere quanto occupa un errore.
+
+**Il perimetro.** Solo il segnale `Oa` — la pressione registrata dagli
+antenati — e solo dentro l'errore. Non limita quanti cgroup possono esistere,
+non impedisce di leggerli, e non tocca i quattro segnali del dominio (`Ol`,
+`Kl`, `Kh`, `G`), che non sono per-livello.
+
+**Il pericolo che copre, e quello che NON copre.** Sono due protezioni
+distinte e vanno tenute separate:
+
+- l'evidenza viaggia in un `Box`, e **quello** impedisce che la dimensione di
+  `EvidenzaDiLimite` allarghi `PlenoraError` e con esso ogni `Result` del
+  workspace, compresi i milioni che tornano `Ok`. Con il `Box` una gerarchia
+  profonda non fa più crescere il cammino felice, e il limite non serve a
+  quello;
+- il limite di otto impedisce che la **gerarchia dell'host governi** ciò che
+  accade sul percorso d'errore: quanto si alloca per costruire l'evidenza,
+  quanta ne viaggia, e quanto lungo diventa il messaggio formattato. Senza,
+  una profondità che non controlliamo deciderebbe quelle tre quantità.
+
+**Che cosa questo perde, e come lo dice.** Se gli antenati sono più di otto,
+l'evidenza ne porta otto e dichiara gli altri in `antenati_oltre_capacita`. La
+distinzione che conta resta leggibile: un livello **esistente e non letto** e
+un livello **inesistente** non collassano nella stessa forma, né dentro né
+oltre la capacità. Un troncamento silenzioso direbbe che la gerarchia finisce
+dove invece finisce la nostra vista, e su `Oa` sarebbe grave: il segnale serve
+proprio a dire *quale* livello ha esaurito il proprio tetto.
+
+**La condizione di rientro.** Alzare il numero non rompe chi costruisce, e
+non per convenzione ma per firma: `PressioneDegliAntenati::nuova` accetta una
+**slice** e copia nell'array privato, quindi la capacità non compare in nessun
+tipo pubblico. Una prima stesura passava l'array, e lì la promessa era falsa —
+`MAX_ANTENATI_OSSERVATI` era nella firma, e cambiarlo sarebbe stata una
+rottura.
+
+Serve una gerarchia reale più profonda di otto in cui `Oa` sia risultato
+diagnosticamente insufficiente. Otto **non** è una misura: i prototipi non
+hanno rilevato la profondità delle gerarchie ospiti, e il campo del
+troncamento esiste anche perché quella scelta resti rivedibile.
 
 ### Fuzzing su toolchain nightly
 

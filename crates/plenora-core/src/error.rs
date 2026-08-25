@@ -17,7 +17,8 @@
 //! l'effetto remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]) e
 //! la disposizione di retry ([`PlenoraError::retry_disposition`],
 //! [`RetryDisposition`]), tutti da enumerazioni canoniche condivise
-//! (R9.5/R9.6: sottoinsieme ammesso, valori propri vietati). R9.7
+//! (R9.5/R9.6: sottoinsieme ammesso, valori propri vietati — con **una
+//! deviazione dichiarata** per le categorie, vedi [`ErrorCategory`]). R9.7
 //! sostituisce il booleano `retryable()` della prima tassonomia — insufficiente e
 //! pericoloso: un timeout in lettura e' ritentabile, lo stesso timeout
 //! dopo l'invio di un commit non lo e' — con una disposizione calcolata
@@ -52,12 +53,494 @@ pub struct ReplayedError {
     pub execution_reason: Option<String>,
 }
 
+/// Quanti antenati del dominio l'evidenza puo' portare.
+///
+/// Il limite e' una proprieta' **non configurabile** del tipo, e
+/// [`PressioneDegliAntenati::nuova`] lo **applica**, rifiutando le slice
+/// oltre la capacita'. L'array ha lunghezza fissa, quindi non puo' crescere
+/// con la profondita' della gerarchia trovata sull'host: nessun input
+/// esterno decide quanto occupa un errore.
+///
+/// Otto e' una **scelta**, non una misura: i prototipi non hanno rilevato la
+/// profondita' delle gerarchie ospiti, e questo numero non va presentato
+/// come se l'avessero fatto. Regge perche' il costo di sbagliarlo e' basso
+/// in entrambe le direzioni — troppo alto spreca qualche decina di byte in
+/// un errore raro, troppo basso lo dichiara in
+/// [`PressioneDegliAntenati::antenati_oltre_capacita`] invece di fingere di
+/// aver raggiunto la radice. E' quel conteggio, non questa costante, a
+/// rendere la scelta rivedibile senza rompere il ragionamento — e i campi
+/// privati fanno il resto: cambiarla non rompe chi costruisce.
+///
+/// Il limite e' registrato in `errori-e-limiti.md` con regola, perimetro,
+/// pericolo e condizione di rientro.
+pub const MAX_ANTENATI_OSSERVATI: usize = 8;
+
+/// Che cosa si sa di un singolo livello della gerarchia sopra il dominio.
+///
+/// Esiste perche' i casi sono **quattro** e appiattirli in un `Option<u64>`
+/// ne confonde almeno due: un livello che non c'e' perche' la radice e' piu'
+/// vicina di cosi', e un livello che c'e' e non si e' riusciti a leggere.
+/// Dedurre l'uno dall'altro e' l'errore che questo tipo esiste per non
+/// commettere, un livello sopra a quello per cui esiste
+/// [`EvidenzaDiLimite`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivelloAntenato {
+    /// Non si e' stabilito quanto e' profonda la gerarchia.
+    ///
+    /// Diverso da [`Self::Inesistente`]: li' si sa che sopra non c'e'
+    /// nulla, qui non si sa nulla e basta.
+    ProfonditaNonStabilita,
+    /// Il livello non esiste: la gerarchia finisce prima.
+    Inesistente,
+    /// Il livello esiste e la lettura non e' riuscita.
+    NonOsservato,
+    /// Il livello esiste ed e' stato letto: delta di `oom` nell'intervallo.
+    Osservato(u64),
+}
+
+/// Il motivo per cui una forma degli antenati e' stata **rifiutata**.
+///
+/// Rifiutata, non normalizzata: una struttura incoerente dice che chi l'ha
+/// costruita ha letto male la gerarchia, e ripararla in silenzio
+/// trasformerebbe un difetto di lettura in un'evidenza dall'aria plausibile.
+/// E' la stessa regola che la §10.0-bis applica a `Kl > Kh`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FormaDegliAntenatiInvalida {
+    /// Piu' livelli di quanti il tipo ne possa portare.
+    #[error(
+        "livelli presenti dichiarati: {dichiarati}, capacita': {}",
+        MAX_ANTENATI_OSSERVATI
+    )]
+    TroppiLivelli {
+        /// Quanti ne erano stati dichiarati.
+        dichiarati: usize,
+    },
+    /// Una lettura in uno slot dichiarato inesistente.
+    #[error("lettura a distanza {distanza}, oltre i livelli dichiarati presenti")]
+    LetturaOltreILivelliPresenti {
+        /// Distanza dal dominio dello slot incoerente, col padre a `1` come
+        /// in [`PressioneDegliAntenati::livello`].
+        distanza: usize,
+    },
+    /// Una lettura senza aver stabilito la profondita'.
+    #[error("lettura a distanza {distanza} senza profondita' stabilita")]
+    LetturaSenzaProfonditaStabilita {
+        /// Distanza dal dominio dello slot incoerente, col padre a `1`.
+        distanza: usize,
+    },
+    /// Piu' letture di quante il tipo ne possa portare.
+    ///
+    /// Distinta da [`Self::TroppiLivelli`]: li' e' il **conteggio** dichiarato
+    /// a eccedere, qui sono le letture fornite.
+    #[error("letture fornite: {fornite}, capacita': {}", MAX_ANTENATI_OSSERVATI)]
+    TroppeLetture {
+        /// Quante ne erano state fornite.
+        fornite: usize,
+    },
+    /// Antenati oltre la capacita' senza che l'array sia pieno.
+    ///
+    /// Se ne esistono altri oltre gli otto, allora gli otto ci sono tutti.
+    #[error("dichiarati antenati oltre la capacita' con soli {livelli_presenti:?} livelli")]
+    TroncamentoSenzaSaturazione {
+        /// Quanti livelli erano stati dichiarati presenti.
+        livelli_presenti: Option<usize>,
+    },
+}
+
+/// `Oa` — la pressione registrata **dagli antenati** del dominio.
+///
+/// # Perche' non basta un numero
+///
+/// Il quinto segnale della §10.0-bis non chiede *quanta* pressione ci fosse
+/// sopra di noi, ma **quale livello** della gerarchia abbia esaurito il
+/// proprio tetto: `Ol` da solo non lo dice, perche' sopra al nostro dominio
+/// di tetti ce ne possono essere altri. Sommare gli antenati in un totale
+/// cancellerebbe proprio l'informazione per cui il segnale esiste.
+///
+/// # L'antenato e' identificato dalla distanza, non dal percorso
+///
+/// Distanza `1` e' il padre, `2` il nonno, e cosi' via. Un percorso di
+/// cgroup sarebbe piu' esplicito e avrebbe due difetti: e' di lunghezza non
+/// limitata, e porta fuori dal confine la disposizione del filesystem
+/// dell'host, che non serve a diagnosticare. La distanza e' cio' su cui la
+/// §10.0-bis ragiona.
+///
+/// # I campi sono privati
+///
+/// Non per pudore: la forma ha un'**invariante** — uno slot oltre i livelli
+/// dichiarati presenti non puo' portare una lettura — e uno `struct literal`
+/// la aggirerebbe. [`Self::nuova`] la verifica e **rifiuta** cio' che non
+/// torna, invece di normalizzarlo.
+///
+/// Ne segue anche che [`MAX_ANTENATI_OSSERVATI`] puo' cambiare senza rompere
+/// chi costruisce: nessuno scrive l'array a mano.
+///
+/// # Resta diagnostico
+///
+/// La §10.0-ter e' esplicita: `Oa` dice che un antenato ha registrato
+/// pressione, **non** che sia stata la causa di questa terminazione — e
+/// tanto meno se quell'antenato conteneva altri domini concorrenti, nel qual
+/// caso la pressione puo' venire da un vicino. Entra nell'evidenza
+/// riportata, non nella classificazione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PressioneDegliAntenati {
+    /// Delta di `oom` per antenato, per distanza: `[0]` il padre, `[1]` il
+    /// nonno. Uno slot oltre `livelli_presenti` e' `None` per invariante.
+    per_distanza: [Option<u64>; MAX_ANTENATI_OSSERVATI],
+    /// Quanti antenati **esistono**, fino alla capacita' del tipo.
+    ///
+    /// `None` significa che la profondita' non e' stata stabilita, e non e'
+    /// la stessa cosa di `Some(0)`, che dice «il dominio e' alla radice».
+    /// Senza questa distinzione una gerarchia illeggibile si dichiarerebbe
+    /// radice, cioe' affermerebbe che sopra non c'e' nessuno proprio quando
+    /// non lo si sa.
+    livelli_presenti: Option<usize>,
+    /// Antenati che esistevano **oltre** la capacita' del tipo.
+    ///
+    /// Diverso da zero significa che l'evidenza e' **troncata**: un antenato
+    /// non osservato non e' un antenato senza pressione, e senza questo
+    /// campo il troncamento sarebbe indistinguibile dall'aver raggiunto la
+    /// radice.
+    antenati_oltre_capacita: u32,
+}
+
+impl PressioneDegliAntenati {
+    /// Costruisce la forma **canonica**, o rifiuta.
+    ///
+    /// `letture` e' indicizzato per distanza a partire dal padre; una voce
+    /// `None` a distanza minore di `livelli_presenti` dice «esiste e non
+    /// l'abbiamo letto». Puo' essere piu' corta della capacita': le distanze
+    /// non fornite valgono «non osservate», ed e' `livelli_presenti` — non
+    /// la lunghezza della slice — a dire quali esistono.
+    ///
+    /// # Perche' una slice e non l'array
+    ///
+    /// Un parametro `[Option<u64>; MAX_ANTENATI_OSSERVATI]` avrebbe messo la
+    /// capacita' interna **nella firma pubblica**, e cambiarla sarebbe stata
+    /// una rottura per chiunque costruisca — cioe' esattamente la cosa che i
+    /// campi privati promettono di evitare. Con una slice la promessa e'
+    /// vera: la capacita' resta un dettaglio di questo tipo.
+    ///
+    /// # Errors
+    ///
+    /// [`FormaDegliAntenatiInvalida`] quando la forma non e' coerente: piu'
+    /// letture o piu' livelli della capacita', una lettura oltre i livelli
+    /// dichiarati (o senza profondita' stabilita), o un troncamento
+    /// dichiarato senza che l'array sia pieno.
+    pub const fn nuova(
+        letture: &[Option<u64>],
+        livelli_presenti: Option<usize>,
+        antenati_oltre_capacita: u32,
+    ) -> core::result::Result<Self, FormaDegliAntenatiInvalida> {
+        if letture.len() > MAX_ANTENATI_OSSERVATI {
+            return Err(FormaDegliAntenatiInvalida::TroppeLetture {
+                fornite: letture.len(),
+            });
+        }
+        let presenti = match livelli_presenti {
+            Some(dichiarati) if dichiarati > MAX_ANTENATI_OSSERVATI => {
+                return Err(FormaDegliAntenatiInvalida::TroppiLivelli { dichiarati });
+            }
+            Some(dichiarati) => dichiarati,
+            // Profondita' non stabilita: nessuno slot puo' portare una
+            // lettura, perche' non si sa nemmeno se quel livello esista.
+            None => 0,
+        };
+        // `while` e non `for`: questa funzione e' `const`.
+        //
+        // `posizione` indicizza le letture, la `distanza` riportata
+        // nell'errore e' quella di [`Self::livello`] e del `Display` — il
+        // padre e' `1`. Sono due conteggi diversi e chiamarli con lo stesso
+        // nome renderebbe il messaggio d'errore indicativo di uno slot
+        // sbagliato.
+        let mut per_distanza = [None; MAX_ANTENATI_OSSERVATI];
+        let mut posizione = 0;
+        while posizione < letture.len() {
+            if posizione >= presenti && letture[posizione].is_some() {
+                let distanza = posizione + 1;
+                return Err(if livelli_presenti.is_none() {
+                    FormaDegliAntenatiInvalida::LetturaSenzaProfonditaStabilita { distanza }
+                } else {
+                    FormaDegliAntenatiInvalida::LetturaOltreILivelliPresenti { distanza }
+                });
+            }
+            per_distanza[posizione] = letture[posizione];
+            posizione += 1;
+        }
+        // Se ne esistono altri oltre la capacita', allora la capacita' e'
+        // satura: il contrario descrive una gerarchia che salta dei livelli.
+        if antenati_oltre_capacita > 0 && presenti < MAX_ANTENATI_OSSERVATI {
+            return Err(FormaDegliAntenatiInvalida::TroncamentoSenzaSaturazione {
+                livelli_presenti,
+            });
+        }
+        Ok(Self {
+            per_distanza,
+            livelli_presenti,
+            antenati_oltre_capacita,
+        })
+    }
+
+    /// Il dominio e' alla radice: sopra di lui non c'e' nessun antenato.
+    ///
+    /// E' un'**affermazione**, non un ripiego: chi non ha stabilito la
+    /// profondita' usa [`Self::profondita_non_stabilita`].
+    #[must_use]
+    pub const fn alla_radice() -> Self {
+        Self {
+            per_distanza: [None; MAX_ANTENATI_OSSERVATI],
+            livelli_presenti: Some(0),
+            antenati_oltre_capacita: 0,
+        }
+    }
+
+    /// Non si e' stabilito quanto e' profonda la gerarchia.
+    #[must_use]
+    pub const fn profondita_non_stabilita() -> Self {
+        Self {
+            per_distanza: [None; MAX_ANTENATI_OSSERVATI],
+            livelli_presenti: None,
+            antenati_oltre_capacita: 0,
+        }
+    }
+
+    /// Che cosa si sa del livello a `distanza` dal dominio (`1` = il padre).
+    ///
+    /// Fuori dalla capacita' del tipo la risposta e' [`LivelloAntenato::NonOsservato`]
+    /// quando il troncamento dice che quel livello esiste, e
+    /// [`LivelloAntenato::Inesistente`] quando la gerarchia finiva prima.
+    #[must_use]
+    pub const fn livello(&self, distanza: usize) -> LivelloAntenato {
+        // La distanza 0 e' il dominio stesso: i suoi segnali sono `Ol`,
+        // `Kl`, `Kh` e `G`, non `Oa`. Non e' un antenato a **nessuna**
+        // profondita', quindi la risposta non dipende dall'averla stabilita:
+        // controllare prima la profondita' faceva rispondere
+        // `ProfonditaNonStabilita` a una domanda che non riguarda gli
+        // antenati.
+        if distanza == 0 {
+            return LivelloAntenato::Inesistente;
+        }
+        let Some(presenti) = self.livelli_presenti else {
+            return LivelloAntenato::ProfonditaNonStabilita;
+        };
+        if distanza > MAX_ANTENATI_OSSERVATI {
+            let oltre = distanza - MAX_ANTENATI_OSSERVATI;
+            return if oltre <= self.antenati_oltre_capacita as usize {
+                LivelloAntenato::NonOsservato
+            } else {
+                LivelloAntenato::Inesistente
+            };
+        }
+        if distanza > presenti {
+            return LivelloAntenato::Inesistente;
+        }
+        match self.per_distanza[distanza - 1] {
+            Some(delta) => LivelloAntenato::Osservato(delta),
+            None => LivelloAntenato::NonOsservato,
+        }
+    }
+
+    /// Quanti antenati esistono, fino alla capacita' del tipo. `None` se la
+    /// profondita' non e' stata stabilita.
+    #[must_use]
+    pub const fn livelli_presenti(&self) -> Option<usize> {
+        self.livelli_presenti
+    }
+
+    /// Antenati esistenti oltre la capacita' del tipo, quindi non portati.
+    #[must_use]
+    pub const fn antenati_oltre_capacita(&self) -> u32 {
+        self.antenati_oltre_capacita
+    }
+}
+
+/// Misure che aiutano a leggere l'evidenza e **non fondano** attribuzione.
+///
+/// Sono tenute separate dai cinque segnali di [`EvidenzaDiLimite`] perche'
+/// la §10.0-ter poggia l'attribuzione su un fatto solo — il group kill
+/// locale — e mescolare qui il tetto o il picco inviterebbe a dedurre da un
+/// confronto di numeri cio' che solo un'operazione del kernel dimostra.
+///
+/// Il picco in particolare non prova nulla in nessuna delle due direzioni:
+/// i prototipi hanno misurato picchi del figlio **superiori** a quelli letti
+/// sul padre, e un picco sotto il tetto non smentisce la pressione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticaSupplementare {
+    /// Tetto di memoria in vigore quando la misura e' stata presa, in byte.
+    ///
+    /// Non e' un `Option`: il tetto lo impone il coordinatore, quindi chi
+    /// costruisce l'evidenza lo conosce per costruzione.
+    pub tetto_byte: u64,
+    /// Picco osservato, in byte (`memory.peak`).
+    pub picco_byte: Option<u64>,
+    /// Allocazioni respinte al tetto (`memory.events.local` → `max`).
+    ///
+    /// Sta qui e non fra i segnali: dice che il tetto e' stato toccato, non
+    /// che qualcuno sia stato ucciso per averlo toccato.
+    pub respinte_al_tetto: Option<u64>,
+}
+
+/// I cinque segnali su cui la §10.0-bis classifica una terminazione, piu' la
+/// diagnostica che li accompagna.
+///
+/// Accompagna [`PlenoraError::UnattributedMemoryPressure`], dove il punto
+/// non e' quanta memoria sia stata usata ma **di chi** fosse: l'evidenza
+/// esiste, l'attribuzione no.
+///
+/// # Che cosa NON fa
+///
+/// Non classifica. La matrice della §10.0-bis — e la regola per cui solo il
+/// group kill locale autorizza l'attribuzione al dominio — appartiene a
+/// `PR-3`, che consuma questo tipo. Qui c'e' la forma dell'evidenza, perche'
+/// e' superficie pubblica e va decisa una volta sola; la decisione su cosa
+/// significhi arriva dopo, e in un posto solo.
+///
+/// # Perche' non una `String`
+///
+/// Un messaggio precompilato costringe chi legge a riestrarre i numeri con
+/// una regex, e soprattutto **non distingue** i due casi che qui contano di
+/// piu' (vedi sotto).
+///
+/// # `None` non e' zero
+///
+/// `Some(0)` dice «osservato, nessun evento». `None` dice «non osservabile»:
+/// il contatore non esiste su questa piattaforma, o non e' stato letto. Sono
+/// conclusioni opposte, ed e' la differenza che ha imposto questa variante —
+/// i prototipi hanno mostrato che `memory.events.local` **non** vede i
+/// sottogruppi, quindi uno zero letto li' non prova assenza di pressione, e
+/// un contatore mancante non prova nulla affatto. Ridurre i due casi allo
+/// stesso numero renderebbe l'evidenza piu' comoda da stampare e falsa.
+///
+/// Vale in modo particolare per [`Self::group_kill_locale`]: e' il solo
+/// segnale che autorizza l'attribuzione, quindi confondere «non letto» con
+/// «non e' scattato» significherebbe non attribuire mai, oppure — nel verso
+/// opposto — attribuire su un contatore mai visto.
+///
+/// # Nessun dato
+///
+/// Sono contatori e byte di budget: nessun valore di riga o di colonna
+/// attraversa questo tipo (regola 8 di `AGENTS.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenzaDiLimite {
+    /// `Ol` — `memory.events.local` → `oom`.
+    ///
+    /// Quante volte il limite **di questo dominio** ha invocato l'OOM. Alto
+    /// con [`Self::uccisi_nel_dominio`] a zero non significa «niente e'
+    /// successo»: significa limite raggiunto ripetutamente e nessuno da
+    /// uccidere. I prototipi ne hanno misurate 305, con il dominio fermo.
+    pub oom_locali: Option<u64>,
+    /// `Kl` — `memory.events.local` → `oom_kill`.
+    ///
+    /// Processi uccisi **appartenenti a questo dominio**, da qualunque OOM
+    /// killer: un antenato con un tetto piu' basso lo fa salire mentre
+    /// [`Self::oom_locali`] resta a zero.
+    pub uccisi_nel_dominio: Option<u64>,
+    /// `Kh` — `memory.events` → `oom_kill`.
+    ///
+    /// Processi uccisi nel dominio **o nei discendenti**. `Kl` ne e' un
+    /// sottoinsieme: se risultasse maggiore, e' un difetto di lettura e va
+    /// trattato come tale invece che normalizzato.
+    pub uccisi_nella_gerarchia: Option<u64>,
+    /// `G` — `memory.events.local` → `oom_group_kill`.
+    ///
+    /// **Il solo segnale causale.** Il kernel ha ucciso questo dominio *come
+    /// gruppo*, e lo ha fatto perche' il tetto di questo dominio e' stato
+    /// raggiunto: non e' una coincidenza di contatori, e' un'operazione.
+    /// Ovunque manchi, la §10.0-ter impone di non attribuire.
+    pub group_kill_locale: Option<u64>,
+    /// `Oa` — la pressione registrata dagli antenati, per distanza.
+    pub oom_degli_antenati: PressioneDegliAntenati,
+    /// Misure d'appoggio, esplicitamente fuori dalla prova causale.
+    pub diagnostica: DiagnosticaSupplementare,
+}
+
+/// Rende un contatore, distinguendo «non osservabile» da zero.
+fn quantita(valore: Option<u64>) -> String {
+    valore.map_or_else(|| "n/d".to_owned(), |numero| numero.to_string())
+}
+
+impl core::fmt::Display for LivelloAntenato {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            // Le tre forme non osservative restano DISTINTE anche qui: chi
+            // legge il messaggio deve poter dire «non c'era» da «non l'ho
+            // letto» da «non so quanto e' alta la gerarchia», come lo dice
+            // chi legge il tipo.
+            Self::ProfonditaNonStabilita => write!(f, "?"),
+            Self::Inesistente => write!(f, "-"),
+            Self::NonOsservato => write!(f, "n/d"),
+            Self::Osservato(delta) => write!(f, "{delta}"),
+        }
+    }
+}
+
+impl core::fmt::Display for PressioneDegliAntenati {
+    /// Rende **solo** i livelli che esistono, e dichiara a parte cio' che si
+    /// e' perso.
+    ///
+    /// La versione precedente stampava tutti e otto gli slot con `n/d` in
+    /// quelli vuoti, e diceva quindi «otto livelli, sei illeggibili» di una
+    /// gerarchia che ne aveva due.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Some(presenti) = self.livelli_presenti else {
+            return write!(f, "profondita' non stabilita");
+        };
+        if presenti == 0 {
+            return write!(f, "nessun antenato");
+        }
+        for distanza in 1..=presenti {
+            if distanza > 1 {
+                write!(f, " ")?;
+            }
+            write!(f, "d{distanza}={}", self.livello(distanza))?;
+        }
+        if self.antenati_oltre_capacita > 0 {
+            write!(f, " (+{} oltre la capacita')", self.antenati_oltre_capacita)?;
+        }
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for DiagnosticaSupplementare {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "tetto={} byte, picco={}, respinte={}",
+            self.tetto_byte,
+            quantita(self.picco_byte),
+            quantita(self.respinte_al_tetto),
+        )
+    }
+}
+
+impl core::fmt::Display for EvidenzaDiLimite {
+    /// I cinque segnali per primi e con le sigle della §10.0-bis, la
+    /// diagnostica dopo e dichiarata tale: chi legge il messaggio deve
+    /// vedere la stessa separazione che vede chi legge il tipo.
+    ///
+    /// `n/d` dove il contatore non era osservabile — mai `0`, che direbbe
+    /// un'altra cosa.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Ol={} Kl={} Kh={} G={}; Oa[{}]; diagnostica: {}",
+            quantita(self.oom_locali),
+            quantita(self.uccisi_nel_dominio),
+            quantita(self.uccisi_nella_gerarchia),
+            quantita(self.group_kill_locale),
+            self.oom_degli_antenati,
+            self.diagnostica,
+        )
+    }
+}
+
 /// Errore unico del workspace, fusione di `EngineError` (nogeo-tools) e
 /// `GeoEngineError` (geo-tools-arrow).
 ///
 /// Nomi delle varianti allineati all'enumerazione canonica §9 (Appendice C,
 /// contratti trasversali v2.0-rc10, R9.5: sottoinsieme ammesso, mai valori
-/// propri): `Contract` → `InvalidPlan`, `Step` → `Execution`,
+/// propri — con la deviazione dichiarata su [`ErrorCategory`]): `Contract` →
+/// `InvalidPlan`, `Step` → `Execution`,
 /// `UnsupportedPublishTarget` → fusa in `Unsupported`, `Json`/`Arrow` →
 /// fuse in `DataMapping`. **I testi `Display` sono invariati** ("contract
 /// violation", "step failed at node", "arrow error", ...): la rinomina e'
@@ -139,6 +622,111 @@ pub enum PlenoraError {
     /// Errore di I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Scambio malformato o fuori sequenza su un canale tra processi.
+    ///
+    /// Il messaggio atteso non e' arrivato, e' arrivato in una forma che il
+    /// contratto non ammette, o e' arrivato quando lo stato non lo
+    /// prevedeva. Riguarda la **conversazione**, non il supporto: un canale
+    /// che si chiude a meta' e' [`PlenoraError::Io`], un canale che parla
+    /// male e' questo.
+    ///
+    /// Testo strutturale (quale confine, quale attesa), mai il contenuto del
+    /// messaggio.
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    /// Una scadenza dichiarata e' passata senza che l'attesa si chiudesse.
+    ///
+    /// Non dice che l'altro capo sia morto: dice che non ha risposto entro
+    /// il tempo che gli era stato dato. Chi sceglie la scadenza deve
+    /// nominarla nel testo, altrimenti l'errore non e' diagnosticabile.
+    #[error("timeout: {0}")]
+    Timeout(String),
+
+    /// Lo stato osservato al commit non e' quello su cui la decisione era
+    /// stata presa.
+    ///
+    /// Il caso concreto e' il no-clobber del publish: la destinazione e'
+    /// comparsa tra il controllo e il rename. Distinta da
+    /// [`PlenoraError::Io`] perche' non c'e' nulla di rotto — c'e' qualcun
+    /// altro — e distinta da `InvalidPlan` perche' lo stesso piano, su una
+    /// destinazione libera, e' corretto.
+    #[error("conflict: {0}")]
+    Conflict(String),
+
+    /// La configurazione dell'ambiente, non il piano, e' incoerente.
+    ///
+    /// Divide cio' che [`PlenoraError::InvalidPlan`] teneva insieme: il
+    /// piano descrive **cosa** calcolare ed e' portabile, la configurazione
+    /// descrive **dove** e non lo e'. Chi orchestra corregge due cose
+    /// diverse, in due posti diversi, e la categoria glielo dice.
+    ///
+    /// L'exit code resta `2` per entrambe, e **non** perche' l'input sia
+    /// sbagliato in entrambi i casi: qui la correzione puo' stare nel
+    /// dispiegamento o nell'ambiente, dove chi ha invocato il comando magari
+    /// non arriva nemmeno. Il `2` e' un raggruppamento grossolano — «non
+    /// riprovare cosi' com'e', qualcosa a monte va sistemato» — e chi ha
+    /// bisogno di sapere *cosa* legge `error.category`.
+    #[error("invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
+    /// L'ambiente non offre l'isolamento richiesto.
+    ///
+    /// Nessuna delle forme di separazione previste e' disponibile: il
+    /// worker girerebbe senza confine, quindi non gira. Non e' un piano
+    /// invalido — lo stesso piano su un'altra macchina funziona — ed e'
+    /// per questo che non condivide l'exit code di `invalid_plan`.
+    ///
+    /// Il testo deve dire **quale** forma manca e **perche'** e' stata
+    /// esclusa: senza quello resta un rifiuto senza appello.
+    #[error("isolation unavailable: {0}")]
+    IsolationUnavailable(String),
+
+    /// Pressione di memoria osservata, ma NON attribuibile al dominio.
+    ///
+    /// # Perche' non `ResourceLimit`
+    ///
+    /// [`PlenoraError::ResourceLimit`] dice al chiamante che ha superato il
+    /// **proprio** budget, e con cio' gli dice cosa fare: ridurre i dati o
+    /// alzare il tetto. Qui quell'attribuzione non c'e'. Riusare
+    /// `resource_limit` significherebbe affermarla lo stesso, e mandare chi
+    /// legge a correggere un budget che potrebbe non essere il colpevole.
+    ///
+    /// # Perche' non `Internal`
+    ///
+    /// Simmetricamente: `internal` dichiara un difetto nostro, e neanche
+    /// quello e' dimostrato. La pressione puo' venire dall'host, da un
+    /// processo estraneo, o da un sottogruppo che i contatori del dominio
+    /// non vedono.
+    ///
+    /// # Il nome
+    ///
+    /// `resource_pressure` sarebbe stato piu' comodo e piu' vago:
+    /// comprenderebbe CPU, disco e descrittori, e soprattutto tacerebbe il
+    /// punto. Il nome dichiara **cio' che manca**.
+    ///
+    /// L'evidenza viaggia in [`EvidenzaDiLimite`], che distingue «osservato
+    /// zero» da «non osservabile».
+    #[error("unattributed memory pressure: {contesto} ({evidenza})")]
+    UnattributedMemoryPressure {
+        /// Dove e quando la pressione e' stata osservata. Strutturale.
+        contesto: String,
+        /// Cio' che i contatori dicevano, e cio' che non dicevano.
+        ///
+        /// # Perche' in un `Box`
+        ///
+        /// L'evidenza pesa qualche centinaio di byte — cinque segnali, otto
+        /// livelli di antenati, la diagnostica — e senza indirezione
+        /// diventerebbe la dimensione di `PlenoraError`, cioe' di **ogni**
+        /// `Result` del workspace, compresi i milioni che tornano `Ok`.
+        /// `clippy::result_large_err` lo segnala, e ha ragione: il costo
+        /// ricadrebbe sul cammino felice per un caso raro.
+        ///
+        /// E' la stessa scelta gia' fatta per [`ReplayedError`] e per la
+        /// diagnostica di riga, le altre due strutture grandi dell'enum.
+        evidenza: Box<EvidenzaDiLimite>,
+    },
 
     /// Invariante interna violata: uno stato che per costruzione non
     /// dovrebbe esistere (categoria `Internal` di par. 9, finora senza
@@ -241,7 +829,7 @@ impl From<serde_json::Error> for PlenoraError {
     }
 }
 
-/// Genera insieme l'enum delle categorie, l'elenco canonico, l'indice e il
+/// Genera insieme l'enum delle categorie, l'elenco completo, l'indice e il
 /// nome stabile: **una sola dichiarazione**, quattro derivati.
 ///
 /// Non e' zucchero sintattico. Le quattro cose erano scritte a mano e
@@ -266,8 +854,43 @@ macro_rules! categorie_errore {
             $variante:ident => $nome:literal
         ),+ $(,)?
     ) => {
-        /// Categoria stabile di un [`PlenoraError`]: enumerazione canonica §9
-        /// (R9.5 — il sottoinsieme usato dal componente, mai valori propri).
+        /// Categoria stabile di un [`PlenoraError`].
+        ///
+        /// **Non** e' l'enumerazione canonica §9 nella sua interezza:
+        /// diciotto valori sono il sottoinsieme canonico usato dal
+        /// componente (R9.5, mai valori propri), due sono estensioni locali
+        /// dichiarate qui sotto.
+        ///
+        /// # Deviazione dichiarata: due estensioni locali della Fase 4
+        ///
+        /// Diciotto valori vengono dalla **fonte congelata** (contratti
+        /// trasversali v2.0-rc10, R9.5) e sono il sottoinsieme che il
+        /// componente usa. Due no:
+        ///
+        /// - `isolation_unavailable`
+        /// - `unattributed_memory_pressure`
+        ///
+        /// Sono **estensioni locali** introdotte dall'isolamento della Fase
+        /// 4, e vanno chiamate cosi'. Il canone esterno, alla versione
+        /// congelata, non le contiene: presentarle come se ne facessero
+        /// parte direbbe a chi legge che un altro componente le
+        /// riconoscera', e non e' vero.
+        ///
+        /// Esistono perche' le condizioni che nominano non hanno un valore
+        /// canonico che le dica senza mentire — `resource_limit`
+        /// attribuirebbe un superamento che non e' dimostrato, `internal`
+        /// incolperebbe noi, `invalid_plan` incolperebbe il piano. Il
+        /// dettaglio del perche' e' sulla dichiarazione di ciascuna.
+        ///
+        /// **Che cosa dovra' succedere.** Quando sara' adottata la linea
+        /// normativa nuova, le due andranno **tradotte** in valori canonici
+        /// se ne esisteranno di equivalenti, oppure **ratificate** come
+        /// aggiunte al canone. Fino ad allora restano locali. Adottare ora
+        /// quella linea e' un lavoro separato, che questa deviazione non
+        /// anticipa e non sostituisce.
+        ///
+        /// La deviazione e' registrata in `errori-e-limiti.md` con regola,
+        /// perimetro, pericolo e condizione di rientro.
         ///
         /// L'errore primario conserva la categoria; pensata per telemetria e
         /// report machine-readable, non per il matching di controllo di flusso
@@ -285,15 +908,25 @@ macro_rules! categorie_errore {
         }
 
         impl ErrorCategory {
-            /// Elenco canonico di TUTTE le categorie, in ordine di
-            /// dichiarazione.
+            /// Elenco completo delle categorie **supportate**, in ordine
+            /// di dichiarazione.
+            ///
+            /// Non «canonico»: diciotto di queste vengono dal canone
+            /// congelato, due sono estensioni locali (vedi la deviazione
+            /// dichiarata su [`ErrorCategory`]). Chiamare canonico l'intero
+            /// elenco direbbe che un componente gemello le riconosce tutte.
             ///
             /// Generato dalla stessa lista dell'enum: non puo' restare
             /// indietro rispetto alle varianti.
             pub const ALL: &'static [Self] = &[$(Self::$variante),+];
 
-            /// Nome stabile della categoria (telemetria, report JSON):
-            /// `snake_case` canonico §9.
+            /// Nome stabile **pubblico** della categoria (telemetria,
+            /// report JSON), in `snake_case`.
+            ///
+            /// Per diciotto categorie e' anche il nome canonico §9; per le
+            /// due estensioni locali e' un nome stabile di questo
+            /// componente e basta. La stabilita' vale in entrambi i casi —
+            /// cambiarlo rompe chi legge gli envelope — l'autorita' no.
             ///
             /// Generato dalla stessa lista dell'enum: un nome nuovo non puo'
             /// mancare ne' divergere dall'elenco.
@@ -301,6 +934,25 @@ macro_rules! categorie_errore {
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variante => $nome,)+
+                }
+            }
+
+            /// Categoria dal nome stabile, l'inverso di [`Self::as_str`].
+            ///
+            /// Si chiama `from_stable_name` e non `from_canonical` perche'
+            /// accetta anche le due estensioni locali: il nome precedente
+            /// prometteva che ogni stringa riconosciuta appartenesse al
+            /// canone congelato, e non e' cosi'.
+            ///
+            /// Generata dalla stessa lista dell'enum: una variante nuova e'
+            /// riconoscibile senza che nessuno se ne ricordi. `None` per una
+            /// stringa che non e' una categoria — un envelope di un'altra
+            /// versione, o corrotto.
+            #[must_use]
+            pub fn from_stable_name(nome: &str) -> Option<Self> {
+                match nome {
+                    $($nome => Some(Self::$variante),)+
+                    _ => None,
                 }
             }
 
@@ -355,6 +1007,22 @@ categorie_errore! {
     Transient => "transient",
     /// Fallimento di un nodo durante la trasformazione.
     Execution => "execution",
+    /// L'ambiente non offre l'isolamento richiesto: nessuna delle forme di
+    /// separazione dei privilegi e' disponibile, quindi il worker potrebbe
+    /// riscrivere il proprio dominio.
+    ///
+    /// **Non** e' un piano invalido — lo stesso piano gira su un'altra
+    /// macchina — e per questo non condivide l'exit code di `invalid_plan`.
+    IsolationUnavailable => "isolation_unavailable",
+    /// Evidenza di pressione di memoria che NON e' attribuibile al dominio.
+    ///
+    /// Il nome dichiara cio' che manca. `resource_pressure` sarebbe stato
+    /// piu' comodo e piu' vago: comprenderebbe CPU, disco o descrittori, e
+    /// soprattutto tacerebbe il punto — che l'attribuzione non c'e'.
+    ///
+    /// Non e' `resource_limit`: quello dice al chiamante che ha superato il
+    /// proprio budget, e qui non lo sappiamo.
+    UnattributedMemoryPressure => "unattributed_memory_pressure",
     /// Invariante interna violata.
     Internal => "internal",
 }
@@ -570,6 +1238,12 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::ResourceLimit(_)
             | Self::Io(_)
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_)
             | Self::Replayed(_)
             | Self::RowDiagnostics { .. }
@@ -592,6 +1266,12 @@ impl PlenoraError {
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
             Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
             Self::Io(_) => ErrorCategory::Io,
+            Self::Protocol(_) => ErrorCategory::Protocol,
+            Self::Timeout(_) => ErrorCategory::Timeout,
+            Self::Conflict(_) => ErrorCategory::Conflict,
+            Self::InvalidConfiguration(_) => ErrorCategory::InvalidConfiguration,
+            Self::IsolationUnavailable(_) => ErrorCategory::IsolationUnavailable,
+            Self::UnattributedMemoryPressure { .. } => ErrorCategory::UnattributedMemoryPressure,
             Self::Internal(_) => ErrorCategory::Internal,
             Self::Replayed(error) => error.category,
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => source.category(),
@@ -648,6 +1328,25 @@ impl PlenoraError {
             | Self::Crs(_)
             | Self::Cancelled { .. }
             | Self::ResourceLimit(_)
+            // Tutte deterministiche o comunque non ritentabili in cieco.
+            //
+            // `Timeout` merita la giustificazione, perche' e' l'unica che
+            // *sembra* transitoria: il chiamante non sa se l'altro capo era
+            // lento o morto, e un ritentativo automatico su un worker che
+            // sta ancora lavorando ne avvia un secondo accanto al primo. La
+            // decisione di riprovare richiede di stabilire prima che il
+            // primo tentativo sia finito — non e' una scelta che questo
+            // asse possa prendere da solo, e `Safe` direbbe di si'.
+            //
+            // `UnattributedMemoryPressure` per la ragione simmetrica: senza
+            // attribuzione non si sa se il secondo tentativo troverebbe
+            // condizioni diverse.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => RetryDisposition::Never,
             Self::Replayed(error) => error.retry,
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
@@ -733,7 +1432,26 @@ impl PlenoraError {
             // lo produce leggendo un input lo tagga `Read` con `with_phase`,
             // e il tag del confine vince sulla derivazione (vedi sotto).
             | Self::ResourceLimit(_)
+            // `Protocol`, `Timeout` e `UnattributedMemoryPressure` derivano
+            // `Write` per la stessa ragione conservativa di `Io`: e' il lato
+            // con possibile effetto sul supporto. Per la pressione di
+            // memoria l'approssimazione e' DICHIARATA e piu' larga delle
+            // altre — la pressione puo' nascere leggendo tanto quanto
+            // scrivendo, e non sappiamo quale dei due fosse in corso. Si
+            // sceglie il lato piu' cauto invece di indovinare, coerentemente
+            // col fatto che la variante esiste proprio per non attribuire.
+            // Chi conosce il confine raffina con `with_phase`.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => ErrorPhase::Write,
+            // La configurazione e l'isolamento si decidono PRIMA che
+            // qualunque dato si muova: se fallisce, non e' stato letto ne'
+            // scritto nulla.
+            Self::InvalidConfiguration(_) | Self::IsolationUnavailable(_) => ErrorPhase::Prepare,
+            // Il conflitto e' per definizione al commit: e' li' che lo stato
+            // osservato smentisce quello su cui si era deciso.
+            Self::Conflict(_) => ErrorPhase::Commit,
             Self::Replayed(error) => error.phase,
             // Il tag del confine vince sulla derivazione per variante.
             Self::Tagged { phase, .. } => *phase,
@@ -1033,6 +1751,16 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::Io(_)
             | Self::ResourceLimit(_)
+            // Nessuna eccezione tra le nuove: `Conflict` e' l'unica che
+            // tocca una destinazione, e la tocca per RIFIUTARSI di
+            // sovrascriverla. Il rename atomico non e' avvenuto, quindi non
+            // c'e' effetto da riparare.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => RemoteEffect::None,
             Self::Replayed(error) => error.remote_effect,
             // Delegato alla sorgente (comunque `None` per costruzione):
@@ -1299,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn l_elenco_canonico_e_coerente_con_gli_indici_e_i_nomi() {
+    fn l_elenco_completo_e_coerente_con_gli_indici_e_i_nomi() {
         // Che `ALL` contenga TUTTE le varianti non e' piu' una proprieta' da
         // verificare: enum ed elenco nascono dalla stessa lista della macro
         // `categorie_errore`, quindi non possono divergere per costruzione.
@@ -1327,13 +2055,33 @@ mod tests {
             "due categorie condividono lo stesso nome stabile"
         );
         // Il conteggio e' un'informazione, non un presidio: se cambia, e'
-        // perche' qualcuno ha aggiunto una categoria, ed e' giusto che
-        // questo test glielo faccia notare insieme alla tabella degli exit
-        // code, che va aggiornata a mano.
+        // perche' qualcuno ha aggiunto una categoria.
+        //
+        // Cosa fa scattare cosa, oggi: l'exit code NON va piu' aggiornato a
+        // mano — `exit_code_di` nella CLI fa un `match` esaustivo su questo
+        // enum, quindi una categoria nuova non compila finche' non le si
+        // assegna un numero. Resta a mano la tabella di `docs/cli.md`, che e'
+        // prosa e nessun compilatore legge.
         assert_eq!(
             ErrorCategory::ALL.len(),
-            18,
-            "categorie dichiarate: aggiornare anche la tabella degli exit code"
+            20,
+            "categorie supportate: aggiornare anche la tabella di docs/cli.md"
+        );
+        // `from_stable_name` e' l'inverso di `as_str`, ed e' cio' che regge
+        // il ripiego su 70 della CLI: se il giro non chiudesse, un envelope
+        // legittimo verrebbe letto come categoria sconosciuta e degradato a
+        // errore interno.
+        for &categoria in ErrorCategory::ALL {
+            assert_eq!(
+                ErrorCategory::from_stable_name(categoria.as_str()),
+                Some(categoria),
+                "{categoria:?} non si rilegge dal proprio nome stabile"
+            );
+        }
+        assert_eq!(
+            ErrorCategory::from_stable_name("categoria_di_un_altro_binario"),
+            None,
+            "una stringa che non e' una categoria deve restare non riconosciuta"
         );
     }
 
@@ -1408,6 +2156,347 @@ mod tests {
         // `Error::source()` espone l'errore originale (catena standard).
         let source = std::error::Error::source(&tagged).expect("sorgente");
         assert_eq!(source.to_string(), "io error: io");
+    }
+
+    /// Evidenza di comodo: i quattro segnali del dominio osservati, nessun
+    /// group kill, e il dominio **alla radice** — cioe' `Oa` vuoto perche'
+    /// non ci sono antenati, non perche' non li si sia letti.
+    ///
+    /// Il commento precedente diceva «tutti e cinque i segnali osservati» e
+    /// costruiva gli antenati con un `default()` che li lasciava tutti a
+    /// `None`: descriveva come osservato cio' che era assente, che e'
+    /// precisamente la confusione contro cui questi tipi esistono.
+    fn evidenza() -> EvidenzaDiLimite {
+        EvidenzaDiLimite {
+            oom_locali: Some(1),
+            uccisi_nel_dominio: Some(0),
+            uccisi_nella_gerarchia: Some(0),
+            group_kill_locale: Some(0),
+            oom_degli_antenati: PressioneDegliAntenati::alla_radice(),
+            diagnostica: DiagnosticaSupplementare {
+                tetto_byte: 64 * 1024 * 1024,
+                picco_byte: Some(63 * 1024 * 1024),
+                respinte_al_tetto: Some(4),
+            },
+        }
+    }
+
+    #[test]
+    fn le_varianti_nuove_dichiarano_i_quattro_assi() {
+        // La tabella e' scritta a mano: e' il contratto approvato, e serve
+        // che sia leggibile accanto a cio' che verifica.
+        let casi: [(PlenoraError, ErrorCategory, ErrorPhase); 6] = [
+            (
+                PlenoraError::Protocol("attesa hello, ricevuto ready".into()),
+                ErrorCategory::Protocol,
+                ErrorPhase::Write,
+            ),
+            (
+                PlenoraError::Timeout("handshake oltre la scadenza".into()),
+                ErrorCategory::Timeout,
+                ErrorPhase::Write,
+            ),
+            (
+                PlenoraError::Conflict("destinazione comparsa prima del rename".into()),
+                ErrorCategory::Conflict,
+                ErrorPhase::Commit,
+            ),
+            (
+                PlenoraError::InvalidConfiguration("radice temporanea non scrivibile".into()),
+                ErrorCategory::InvalidConfiguration,
+                ErrorPhase::Prepare,
+            ),
+            (
+                PlenoraError::IsolationUnavailable("nessun cgroup delegato".into()),
+                ErrorCategory::IsolationUnavailable,
+                ErrorPhase::Prepare,
+            ),
+            (
+                PlenoraError::UnattributedMemoryPressure {
+                    contesto: "attesa del worker".into(),
+                    evidenza: Box::new(evidenza()),
+                },
+                ErrorCategory::UnattributedMemoryPressure,
+                ErrorPhase::Write,
+            ),
+        ];
+        for (errore, categoria, fase) in casi {
+            assert_eq!(errore.category(), categoria, "categoria di {errore:?}");
+            assert_eq!(errore.phase(), fase, "fase di {errore:?}");
+            // Gli altri due assi sono uniformi per tutte e sei, e vale la
+            // pena che il test lo dica invece di ripeterlo nella tabella.
+            assert_eq!(
+                errore.remote_effect(),
+                RemoteEffect::None,
+                "nessuna delle sei lascia effetto: {errore:?}"
+            );
+            assert_eq!(
+                errore.retry_disposition(),
+                RetryDisposition::Never,
+                "nessuna delle sei e' ritentabile in cieco: {errore:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn il_tag_di_fase_raffina_anche_le_varianti_nuove() {
+        // `Protocol` deriva `Write` ma nasce davvero dove il confine dice.
+        // Se il tag non scendesse, la fase resterebbe un'approssimazione
+        // permanente per tutta la famiglia nuova.
+        let al_confine =
+            PlenoraError::Protocol("cornice troncata".into()).with_phase(ErrorPhase::Read);
+        assert_eq!(al_confine.phase(), ErrorPhase::Read);
+        // E il raffinamento NON tocca gli altri tre assi.
+        assert_eq!(al_confine.category(), ErrorCategory::Protocol);
+        assert_eq!(al_confine.remote_effect(), RemoteEffect::None);
+        assert_eq!(al_confine.retry_disposition(), RetryDisposition::Never);
+    }
+
+    #[test]
+    fn l_evidenza_entra_nel_messaggio_senza_perdere_la_separazione() {
+        // NOME PRECEDENTE: «i messaggi delle varianti nuove non portano
+        // dati». Non lo dimostrava e non poteva: le varianti portano una
+        // `String` libera, quindi una sentinella messa nel `contesto`
+        // uscirebbe dal `Display` e il test resterebbe verde. Un test non
+        // puo' provare l'assenza di dati finche' il canale che li
+        // trasporterebbe e' aperto — servirebbero motivi chiusi, e la
+        // privacy va verificata nei punti di COSTRUZIONE, che qui non ci
+        // sono ancora.
+        //
+        // Cio' che questo test verifica davvero e' la formattazione: che i
+        // cinque segnali arrivino a chi legge il messaggio, e che la
+        // separazione fra prova causale e diagnostica sopravviva alla resa
+        // testuale invece di vivere solo nel tipo.
+        let errore = PlenoraError::UnattributedMemoryPressure {
+            contesto: "attesa del worker".into(),
+            evidenza: Box::new(evidenza()),
+        };
+        let testo = errore.to_string();
+        assert!(
+            testo.contains("attesa del worker"),
+            "il contesto resta leggibile: {testo}"
+        );
+        for sigla in ["Ol=1", "Kl=0", "Kh=0", "G=0"] {
+            assert!(
+                testo.contains(sigla),
+                "manca il segnale `{sigla}` dal messaggio: {testo}"
+            );
+        }
+        let (causale, diagnostica) = testo
+            .split_once("diagnostica:")
+            .expect("la diagnostica e' dichiarata tale nel messaggio");
+        assert!(
+            !causale.contains("tetto=") && !causale.contains("picco="),
+            "tetto e picco non devono comparire fra i segnali: {causale}"
+        );
+        assert!(
+            diagnostica.contains("tetto=") && diagnostica.contains("picco="),
+            "e devono comparire dopo l'etichetta: {diagnostica}"
+        );
+    }
+
+    #[test]
+    fn il_group_kill_e_l_unico_segnale_causale_e_resta_distinguibile() {
+        // La §10.0-ter appoggia l'attribuzione su `G` soltanto. Confondere
+        // «non letto» con «non e' scattato» romperebbe la matrice in
+        // entrambi i versi, e la matrice e' di `PR-3`: qui si garantisce che
+        // il tipo le arrivi in grado di distinguerli.
+        let non_letto = EvidenzaDiLimite {
+            group_kill_locale: None,
+            ..evidenza()
+        };
+        let non_scattato = EvidenzaDiLimite {
+            group_kill_locale: Some(0),
+            ..evidenza()
+        };
+        assert_ne!(
+            non_letto, non_scattato,
+            "un group kill non letto non e' un group kill non scattato"
+        );
+        assert!(non_letto.to_string().contains("G=n/d"));
+        assert!(non_scattato.to_string().contains("G=0"));
+    }
+
+    #[test]
+    fn il_dominio_alla_radice_non_e_una_gerarchia_illeggibile() {
+        // I due casi producevano la stessa struttura, ed e' il difetto che
+        // ha imposto `livelli_presenti`: «sopra non c'e' nessuno» e «non so
+        // quanto sia alta» sono affermazioni opposte.
+        let radice = PressioneDegliAntenati::alla_radice();
+        let ignota = PressioneDegliAntenati::profondita_non_stabilita();
+        assert_ne!(radice, ignota);
+        assert_eq!(radice.livelli_presenti(), Some(0));
+        assert_eq!(ignota.livelli_presenti(), None);
+        assert_eq!(radice.livello(1), LivelloAntenato::Inesistente);
+        assert_eq!(ignota.livello(1), LivelloAntenato::ProfonditaNonStabilita);
+        assert!(radice.to_string().contains("nessun antenato"));
+        assert!(ignota.to_string().contains("profondita' non stabilita"));
+    }
+
+    #[test]
+    fn la_distanza_zero_e_il_dominio_non_un_antenato_a_qualunque_profondita() {
+        // La distanza 0 e' il dominio stesso: i suoi segnali sono `Ol`,
+        // `Kl`, `Kh` e `G`. La risposta non puo' dipendere dall'aver
+        // stabilito la profondita' della gerarchia, perche' la domanda non
+        // riguarda gli antenati — e controllare prima la profondita' faceva
+        // rispondere `ProfonditaNonStabilita` proprio nel caso in cui la
+        // risposta e' nota con certezza.
+        for antenati in [
+            PressioneDegliAntenati::profondita_non_stabilita(),
+            PressioneDegliAntenati::alla_radice(),
+            PressioneDegliAntenati::nuova(&[Some(1)], Some(1), 0).expect("forma canonica"),
+        ] {
+            assert_eq!(
+                antenati.livello(0),
+                LivelloAntenato::Inesistente,
+                "distanza 0 su {antenati:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn una_gerarchia_piu_corta_del_limite_e_letta_tutta() {
+        // Due antenati, entrambi letti. Gli slot dal terzo in poi non sono
+        // «non osservati»: non esistono.
+        let due =
+            PressioneDegliAntenati::nuova(&[Some(0), Some(3)], Some(2), 0).expect("forma canonica");
+        assert_eq!(due.livello(1), LivelloAntenato::Osservato(0));
+        assert_eq!(due.livello(2), LivelloAntenato::Osservato(3));
+        assert_eq!(
+            due.livello(3),
+            LivelloAntenato::Inesistente,
+            "oltre la gerarchia non c'e' un livello illeggibile: non c'e' un livello"
+        );
+        let reso = due.to_string();
+        assert_eq!(reso, "d1=0 d2=3", "solo i livelli che esistono: {reso}");
+    }
+
+    #[test]
+    fn un_livello_esistente_ma_illeggibile_resta_distinto_da_uno_assente() {
+        // Il padre letto, il nonno esistente e non leggibile. Se i due casi
+        // collassassero, `Oa` direbbe che la gerarchia finisce dove invece
+        // e' solo finita la nostra vista.
+        let cieca =
+            PressioneDegliAntenati::nuova(&[Some(1), None], Some(2), 0).expect("forma canonica");
+        assert_eq!(cieca.livello(2), LivelloAntenato::NonOsservato);
+        assert_eq!(cieca.livello(3), LivelloAntenato::Inesistente);
+        assert_ne!(cieca.livello(2), cieca.livello(3));
+        let reso = cieca.to_string();
+        assert_eq!(reso, "d1=1 d2=n/d", "{reso}");
+    }
+
+    #[test]
+    fn una_gerarchia_oltre_il_limite_dichiara_cio_che_non_porta() {
+        // Otto letti, altri tre esistenti oltre la capacita' del tipo.
+        let piena = PressioneDegliAntenati::nuova(
+            &[Some(0); MAX_ANTENATI_OSSERVATI],
+            Some(MAX_ANTENATI_OSSERVATI),
+            3,
+        )
+        .expect("forma canonica");
+        assert_eq!(piena.antenati_oltre_capacita(), 3);
+        // Un livello oltre la capacita' ma dentro il troncamento esiste e
+        // non e' stato osservato; oltre il troncamento non esiste.
+        assert_eq!(
+            piena.livello(MAX_ANTENATI_OSSERVATI + 3),
+            LivelloAntenato::NonOsservato
+        );
+        assert_eq!(
+            piena.livello(MAX_ANTENATI_OSSERVATI + 4),
+            LivelloAntenato::Inesistente
+        );
+        assert!(
+            piena.to_string().contains("(+3 oltre la capacita')"),
+            "il troncamento e' dichiarato, non silenzioso: {piena}"
+        );
+    }
+
+    #[test]
+    fn una_forma_incoerente_e_rifiutata_e_non_normalizzata() {
+        // Riparare in silenzio trasformerebbe un difetto di lettura in
+        // un'evidenza dall'aria plausibile. Ogni regola risponde con il
+        // proprio motivo, cosi' chi la incontra sa che cosa ha letto male.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(&[], Some(MAX_ANTENATI_OSSERVATI + 1), 0),
+            Err(FormaDegliAntenatiInvalida::TroppiLivelli {
+                dichiarati: MAX_ANTENATI_OSSERVATI + 1
+            })
+        );
+        // Piu' letture della capacita': la slice non e' un invito a
+        // troncare in silenzio.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(&[None; MAX_ANTENATI_OSSERVATI + 1], None, 0),
+            Err(FormaDegliAntenatiInvalida::TroppeLetture {
+                fornite: MAX_ANTENATI_OSSERVATI + 1
+            })
+        );
+        // Una slice piu' CORTA e' invece legittima: le distanze non fornite
+        // restano non osservate, ed e' `livelli_presenti` a dire quali
+        // esistono.
+        let corta = PressioneDegliAntenati::nuova(&[Some(2)], Some(3), 0).expect("canonica");
+        assert_eq!(corta.livello(1), LivelloAntenato::Osservato(2));
+        assert_eq!(corta.livello(3), LivelloAntenato::NonOsservato);
+        assert_eq!(corta.livello(4), LivelloAntenato::Inesistente);
+        // Una lettura a distanza 2 con un solo livello dichiarato presente.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(&[Some(1), Some(2)], Some(1), 0),
+            Err(FormaDegliAntenatiInvalida::LetturaOltreILivelliPresenti { distanza: 2 })
+        );
+        // Una lettura senza aver stabilito la profondita'.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(&[Some(1)], None, 0),
+            Err(FormaDegliAntenatiInvalida::LetturaSenzaProfonditaStabilita { distanza: 1 })
+        );
+        // Antenati oltre la capacita' con l'array non saturo: descrive una
+        // gerarchia che salta dei livelli.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(&[Some(1)], Some(1), 2),
+            Err(FormaDegliAntenatiInvalida::TroncamentoSenzaSaturazione {
+                livelli_presenti: Some(1)
+            })
+        );
+        // E la forma canonica corrispondente passa: il rifiuto e' della
+        // forma, non della situazione.
+        assert!(
+            PressioneDegliAntenati::nuova(&[Some(1), Some(2)], Some(2), 0).is_ok(),
+            "due letture con due livelli dichiarati e' canonica"
+        );
+    }
+
+    #[test]
+    fn l_evidenza_distingue_lo_zero_osservato_dal_non_osservabile() {
+        // E' la ragione per cui il tipo non e' una `String`. Un contatore
+        // assente non deve poter essere letto come «nessun evento»: sono le
+        // due conclusioni opposte che questa variante esiste per non
+        // confondere.
+        let cieca = EvidenzaDiLimite {
+            oom_locali: None,
+            uccisi_nel_dominio: Some(0),
+            uccisi_nella_gerarchia: None,
+            group_kill_locale: None,
+            oom_degli_antenati: PressioneDegliAntenati::profondita_non_stabilita(),
+            diagnostica: DiagnosticaSupplementare {
+                tetto_byte: 1024,
+                picco_byte: None,
+                respinte_al_tetto: None,
+            },
+        };
+        let reso = cieca.to_string();
+        assert!(
+            reso.contains("Ol=n/d") && reso.contains("Kh=n/d"),
+            "i segnali non letti non diventano zero: {reso}"
+        );
+        assert!(
+            reso.contains("Kl=0"),
+            "lo zero OSSERVATO resta uno zero: {reso}"
+        );
+        assert!(
+            reso.contains("picco=n/d") && reso.contains("respinte=n/d"),
+            "vale anche per la diagnostica: {reso}"
+        );
+        // Il tetto non e' opzionale: lo impone il coordinatore, quindi chi
+        // costruisce l'evidenza lo conosce.
+        assert!(reso.contains("tetto=1024 byte"), "{reso}");
     }
 
     #[test]
@@ -1523,11 +2612,26 @@ mod tests {
     }
 
     #[test]
-    fn category_names_are_exactly_the_canonical_eighteen() {
-        // R9.5: l'enumerazione canonica delle categorie; il sottoinsieme
-        // usato dal componente e' mapping in `category()`, mai valori
-        // propri. La tabella e' esaustiva per costruzione: aggiungere una
-        // variante senza toccare questo test lo farebbe fallire.
+    fn i_nomi_stabili_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti() {
+        // I nomi stabili pubblici delle categorie. Diciotto sono anche
+        // canonici §9 (R9.5, il sottoinsieme usato dal componente); due sono
+        // estensioni locali della Fase 4, e la tabella qui sotto non fa
+        // differenza perche' verifica la STABILITA' del nome, che vale per
+        // tutti e venti — non la sua autorita', che e' dichiarata altrove.
+        //
+        // Il commento precedente diceva che «la tabella e' esaustiva per
+        // costruzione: aggiungere una variante senza toccare questo test lo
+        // farebbe fallire». Non era vero, e si e' visto: sono state aggiunte
+        // due categorie e questo test e' rimasto verde, perche' iterava la
+        // PROPRIA tabella e ne confrontava la lunghezza con un numero
+        // scritto accanto. Una categoria nuova non compariva da nessuna
+        // parte, ed e' precisamente il modo in cui una verifica non
+        // fallisce mai.
+        //
+        // La tabella resta scritta a mano — e' la seconda opinione su
+        // `as_str`, e derivarla renderebbe il test una tautologia — ma ora
+        // si itera `ErrorCategory::ALL` e le si CHIEDE di nominare ogni
+        // categoria supportata.
         let all = [
             (ErrorCategory::InvalidPlan, "invalid_plan"),
             (ErrorCategory::InvalidConfiguration, "invalid_configuration"),
@@ -1546,12 +2650,29 @@ mod tests {
             (ErrorCategory::Protocol, "protocol"),
             (ErrorCategory::Transient, "transient"),
             (ErrorCategory::Execution, "execution"),
+            (ErrorCategory::IsolationUnavailable, "isolation_unavailable"),
+            (
+                ErrorCategory::UnattributedMemoryPressure,
+                "unattributed_memory_pressure",
+            ),
             (ErrorCategory::Internal, "internal"),
         ];
-        assert_eq!(all.len(), 18, "l'enumerazione canonica ha 18 categorie");
-        for (category, name) in all {
-            assert_eq!(category.as_str(), name, "as_str canonico §9");
+        for categoria in ErrorCategory::ALL {
+            let atteso = all
+                .iter()
+                .find_map(|(dichiarata, nome)| (dichiarata == categoria).then_some(*nome))
+                .unwrap_or_else(|| {
+                    panic!("{categoria:?} non compare nella tabella dei nomi stabili")
+                });
+            assert_eq!(categoria.as_str(), atteso, "nome stabile pubblico");
         }
+        // E nessuna riga della tabella nomina una categoria che non esiste
+        // piu': senza questo, una rimozione lascerebbe una riga morta.
+        assert_eq!(
+            all.len(),
+            ErrorCategory::ALL.len(),
+            "la tabella e l'elenco delle categorie hanno lunghezze diverse"
+        );
     }
 
     // -----------------------------------------------------------------------
