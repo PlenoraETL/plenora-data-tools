@@ -349,11 +349,12 @@ salterebbe. Serve, prima che qualcuno scriva un token in un footer:
 |---|---|
 | **1** | validazione grezza di `Footer.custom_metadata` **prima** di costruire il `FileReader` |
 | **2** | chiave e valore **obbligatori**: oggi `fb_key_value` salta l'offset zero invece di rifiutarlo |
-| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **`MAX_CRS_DEFINITION_BYTES`** (64 KiB) di valore — vivono in `IpcLimits`, il registro unico dei limiti del trasporto, e sono registrati in [`errori-e-limiti.md`](errori-e-limiti.md) |
+| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **64 KiB** di valore. Costanti proprie del confine IPC — `MAX_IPC_CUSTOM_METADATA_*` — **non** derivate dal tetto sul CRS: il numero coincide, l'autorità no, e accoppiarle farebbe cambiare in silenzio ciò che il parser accetta il giorno in cui il tetto sul CRS si muove |
+| **3-ter** | sono **costanti interne non ampliabili**, non campi di `IpcLimits`: quella struttura è pubblica e riesportata, e serve ai limiti che un piano può modulare — un tetto contro l'abuso che il chiamante può alzare non è un tetto |
 | **3-bis** | UTF-8 verificato da noi; chiave vuota rifiutata; valore vuoto accettato; chiavi sconosciute accettate e ignorate — il confine valida la **forma**, non il vocabolario |
 | **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima», che per un token autoritativo sceglierebbe un vincitore arbitrario |
 | **5** | lettura autoritativa del token dal **footer validato**, non dalla `HashMap` di Arrow |
-| **6** | quattordici test, non sette: i **tre tetti superati separatamente**, chiave e valore assenti, chiave e valore vuoti, UTF-8 invalido in entrambi, duplicati uguali e divergenti, chiavi sconosciute, token assente e token canonico |
+| **6** | sedici test, non sette, e **divisi fra due PR**: dodici casi strutturali a `PR-0` — i tre tetti superati **separatamente**, chiave e valore assenti, chiave e valore vuoti, UTF-8 invalido in entrambi, duplicati uguali e divergenti, chiavi sconosciute — e quattro casi del token a `PR-5`, che è la prima in cui `CommitToken` esiste |
 
 **È una classe, non un caso.** `fb_key_value` è condiviso da tre chiamanti —
 campi, schema, messaggi — quindi la correzione vale per tutti, non solo per il
@@ -366,10 +367,14 @@ un elemento.
 **Va chiuso in una PR propria, prima della fase 4.** È l'unica correzione di
 questo blocco che sarebbe necessaria anche se la fase 4 non esistesse: il
 campo 4 è invalidato da sempre, e adottare il footer per il token non ha
-creato il difetto ma l'ha scoperto. Cambia semantica in senso fail-closed —
-input che oggi passano domani sono rifiutati — quindi va registrata in
-[`errori-e-limiti.md`](errori-e-limiti.md) con regola, perimetro, pericolo e
-condizione di rientro.
+creato il difetto ma l'ha scoperto. Cambia semantica in senso fail-closed — input che oggi passano domani sono
+rifiutati — e la registrazione in [`errori-e-limiti.md`](errori-e-limiti.md),
+con regola, perimetro, pericolo e condizione di rientro, è un **criterio
+d'uscita** della PR, non una nota a margine.
+
+Va dichiarato anche che cosa questo rifiuta: Arrow consente metadati
+arbitrari, quindi un file con una chiave sconosciuta e un valore da 100 KiB è
+un file Arrow **valido** che il confine Plenora rifiuta di proposito.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:

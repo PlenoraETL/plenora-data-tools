@@ -504,12 +504,23 @@ Direzione worker → supervisore:
 | `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch); **mai** dati |
 | `Esito` | ultimo | successo con sigillo, oppure errore tipizzato con i quattro assi |
 
-Il `commit_token` sta nel `Saluto` e **solo lì**. Non nell'`Incarico`, che
-arriva dopo l'accordo: il worker deve conoscerlo prima di scrivere il primo
-byte, e il passo 8-bis della verifica confronta l'artefatto con «quello
-negoziato nell'handshake». Una seconda collocazione renderebbe la frase
-ambigua, ed è il genere di ambiguità che si scopre quando le due copie
-divergono.
+Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
+
+La motivazione della stesura precedente era sbagliata: diceva che l'`Incarico`
+non andrebbe bene perché arriva dopo l'accordo, come se fosse troppo tardi.
+Non lo è — anche l'`Incarico` precede la scrittura del primo byte, quindi
+tecnicamente andrebbero bene entrambi. La scelta è **architetturale**: legare
+il token all'handshake gli dà **una sola autorità**, quella su cui i due lati
+si sono già accordati prima di toccare i dati, invece di due copie che possono
+divergere.
+
+E va chiamato con il nome giusto: **trasmesso e accettato**, non
+«negoziato». Negoziare implica che entrambi i lati propongano e convergano,
+mentre qui il coordinatore lo impone e il worker lo usa. Diventerebbe
+negoziazione solo se la `Risposta` ne confermasse esplicitamente
+l'accettazione — cosa che oggi non fa, e che non serve: un worker che
+scrivesse un token diverso verrebbe fermato dal passo 8-bis, che è una
+verifica sull'artefatto e non sulla buona volontà.
 
 Il `Progresso` è facoltativo e il supervisore non ne dipende: un worker che
 non ne manda nessuno è indistinguibile da uno lento, e il timeout è la sola
@@ -650,7 +661,7 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 | 6 | **schema** | `contract_from_arrow_schema` fallisce, **con il resolver negoziato** |
 | 7 | **contratto** | il contratto letto non corrisponde a quello atteso dal piano validato |
 | 8 | **completezza** | i conteggi dichiarati nell'`Esito` non corrispondono a quelli osservati |
-| 8-bis | **identità del tentativo** | il `commit_token` nei metadati non è quello negoziato nell'handshake: l'artefatto non è di questo tentativo (§7-quater) |
+| 8-bis | **identità del tentativo** | il `commit_token` nei metadati non è quello trasmesso nel `Saluto`: l'artefatto non è di questo tentativo (§7-quater) |
 | 9 | **publish atomico no-clobber** | `persist_noclobber` fallisce, o la destinazione esiste già → `Conflict`. **Mai** una sostituzione |
 
 Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
@@ -1071,23 +1082,55 @@ per tutti i chiamanti.
 
 ### I limiti, con autorità e valori
 
-I tetti nuovi vivono dove vivono gli altri — la struttura `IpcLimits`, che è
-già il registro unico dei limiti del trasporto — e vanno registrati in
-[`errori-e-limiti.md`](errori-e-limiti.md) come tutti gli altri.
-
 Il tetto esistente sul footer, 16 MiB, **non basta**: limita i byte, non il
 numero di elementi, e centomila coppie minuscole stanno comodamente dentro 16
 MiB producendo centomila allocazioni nella mappa.
 
-| limite | valore | da dove viene |
+| costante | valore | da dove viene |
 |---|---|---|
-| coppie per collezione | **256** | l'uso legittimo più denso è una colonna geometrica, con ~10 chiavi `plenora.geometry.*` più le estensioni Arrow. Le chiavi di geometria sono **per campo**, non di schema, quindi il conteggio non cresce col numero di colonne |
-| byte della chiave | **128** | la chiave più lunga che il progetto scrive è `plenora.geometry.crs_definition_format`, 38 byte. Tre volte tanto lascia spazio senza aprire la porta |
-| byte del valore | **`MAX_CRS_DEFINITION_BYTES`**, 64 KiB | è il valore legittimo più grande che il progetto dichiari: una definizione di CRS. Derivarlo invece di sceglierne uno nuovo evita che i due si separino |
+| `MAX_IPC_CUSTOM_METADATA_PAIRS` | **256** | l'uso legittimo più denso è una colonna geometrica, con ~10 chiavi `plenora.geometry.*` più le estensioni Arrow. Le chiavi di geometria sono **per campo**, non di schema, quindi il conteggio non cresce col numero di colonne |
+| `MAX_IPC_CUSTOM_METADATA_KEY_BYTES` | **128** | la chiave più lunga che il progetto scrive è `plenora.geometry.crs_definition_format`, 38 byte. Tre volte tanto lascia spazio senza aprire la porta |
+| `MAX_IPC_CUSTOM_METADATA_VALUE_BYTES` | **64 KiB** | il valore legittimo più grande che il progetto scriva è una definizione di CRS, e quel tetto oggi vale 64 KiB. Il numero coincide; l'**autorità no** — vedi sotto |
 
 I tre si applicano **prima di qualunque allocazione proporzionale al
 conteggio**, che è il punto: il conteggio si legge dal vettore flatbuffer e si
 confronta col tetto senza costruire niente.
+
+**Perché non riusare `MAX_CRS_DEFINITION_BYTES`.** Una stesura precedente lo
+derivava da lì, e sarebbe stato un accoppiamento sbagliato: quella costante
+governa **una definizione di CRS**, questa governa **un confine IPC
+generico**. Che oggi valgano entrambe 64 KiB è una coincidenza numerica, non
+un'identità di autorità: il giorno in cui il tetto sul CRS cambiasse — perché
+un formato nuovo richiede definizioni più lunghe — cambierebbe **in silenzio**
+che cosa il parser IPC accetta, e nessuno collegherebbe le due cose. Ogni
+confine ha la sua costante e la sua motivazione.
+
+**Che cosa questo rifiuta, e va detto.** Arrow consente metadati arbitrari:
+un file con una chiave sconosciuta e un valore da 100 KiB è un file Arrow
+**valido**, e questo confine lo **rifiuta di proposito**. È la stessa scelta
+che il progetto ha già fatto altrove — un confine ostile accetta meno di quanto
+lo standard permetta — e va dichiarata, non scoperta da chi vede fallire un
+file che `pyarrow` legge senza storie.
+
+### Dove vivono, e chi ne è l'autorità
+
+Due cose distinte che la stesura precedente confondeva:
+
+| | |
+|---|---|
+| **autorità normativa** | [`errori-e-limiti.md`](errori-e-limiti.md), il registro unico imposto da [`AGENTS.md`](../AGENTS.md). Ogni limite vi **andrà** registrato con regola, perimetro, pericolo e condizione di rientro. Al momento non c'è: è un criterio d'uscita di `PR-0`, non un fatto |
+| **autorità runtime** | `IpcLimits`, la struttura che il trasporto consulta a ogni lettura. È il posto da cui il codice legge, non il registro che dichiara perché |
+
+**I tre tetti non diventano campi di `IpcLimits`.** La struttura è **pubblica
+e riesportata** da `plenora-engine`, quindi aggiungere campi romperebbe ogni
+inizializzazione letterale che un consumatore abbia scritto. Ma soprattutto:
+`IpcLimits` esiste per i limiti che un piano può **modulare** — quanti batch,
+quanto grande un body — mentre questi sono **tetti duri contro l'abuso**, e
+un tetto contro l'abuso che il chiamante può alzare non è un tetto.
+
+Restano quindi costanti interne, non ampliabili e non configurabili. La
+decisione è presa qui perché altrimenti emergerebbe durante l'implementazione,
+dove «aggiungo un campo» sembra la cosa naturale da fare.
 
 | domanda | politica |
 |---|---|
@@ -1110,26 +1153,39 @@ controllo dei duplicati, che nessun singolo elemento può fare:
 I duplicati appartengono alla seconda perché sono una proprietà
 dell'insieme, non di un elemento.
 
-### I test non sono sette
+### I test non sono sette, e non sono di una PR sola
 
 I tre tetti vanno superati **separatamente** — un test che li supera insieme
-non dimostra quale dei tre abbia parato — e alle sette voci della prima
-stesura se ne aggiungono altre:
+non dimostra quale dei tre abbia parato — e i casi si dividono fra due PR,
+perché `PR-0` viene **prima** che `CommitToken` esista e non può avere come
+criterio d'uscita qualcosa che non c'è ancora.
+
+**A `PR-0`, i dodici casi strutturali:**
 
 | | caso |
 |---|---|
 | 1-3 | ciascuno dei tre tetti superato **da solo** |
 | 4 | chiave assente (offset zero) |
 | 5 | valore assente (offset zero) |
-| 6 | chiave vuota |
+| 6 | chiave vuota — rifiutata |
 | 7 | valore vuoto — **accettato** |
 | 8 | UTF-8 invalido nella chiave |
 | 9 | UTF-8 invalido nel valore |
 | 10 | duplicati con lo stesso valore |
 | 11 | duplicati con valori divergenti |
-| 12 | chiavi sconosciute — **accettate** |
-| 13 | token assente |
-| 14 | token canonico |
+| 12 | chiavi sconosciute — **accettate e ignorate** |
+
+**A `PR-5`, i casi del token**, che presuppongono il tipo:
+
+| | caso |
+|---|---|
+| 13 | token assente dal footer |
+| 14 | token presente e canonico |
+| 15 | token presente e **non** canonico |
+| 16 | oracoli del footer: stesso token stessi byte, token diverso e contratto invariato |
+
+`F4-22` descrive la copertura complessiva; la tabella delle PR attribuisce
+ogni test a chi può davvero scriverlo.
 
 Il requisito è `F4-22` ([`stato-e-roadmap.md`](stato-e-roadmap.md)), e va
 chiuso **prima** che qualcuno scriva un token in un footer — in una PR sua,
@@ -1195,8 +1251,8 @@ chiunque, `pyarrow` compreso.
 ### 3. Chi lo verifica, e quando
 
 Il supervisore lo confronta al passo 8-bis della verifica, **prima** del
-publish: se l'artefatto porta un identificativo diverso da quello negoziato
-nell'handshake, non è di questa esecuzione e non si pubblica. È l'unico modo
+publish: se l'artefatto porta un token diverso da quello trasmesso nel
+`Saluto`, non è di questo tentativo e non si pubblica. È l'unico modo
 per cui la lettura del chiamante in §7-bis significhi qualcosa — altrimenti si
 verificherebbe a valle un campo che nessuno ha verificato a monte.
 
@@ -1799,12 +1855,12 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 
 | PR | contenuto | cambia semantica | verificabile con |
 |---|---|---|---|
-| **PR-0** | **hardening dei custom metadata IPC** (`F4-22`): validazione del campo 4 del footer, presenza obbligatoria di chiave e valore, i tre tetti, rifiuto dei duplicati, UTF-8 verificato — nell'helper condiviso, quindi anche per campi, schema e messaggi | **sì**, fail-closed: cambia quali input IPC sono accettati | i quattordici casi della §7-quater, e la suite esistente che deve restare verde |
+| **PR-0** | **hardening dei custom metadata IPC** (`F4-22`): validazione del campo 4 del footer, presenza obbligatoria di chiave e valore, i tre tetti come **costanti interne non ampliabili**, rifiuto dei duplicati, UTF-8 verificato — nell'helper condiviso, quindi anche per campi, schema e messaggi | **sì**, fail-closed: cambia quali input IPC sono accettati | i **dodici casi strutturali** della §7-quater; la suite esistente verde; e i tre limiti **registrati** in [`errori-e-limiti.md`](errori-e-limiti.md) con regola, perimetro, pericolo e condizione di rientro |
 | **PR-1** | varianti nuove di `PlenoraError`: `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration`, **`IsolationUnavailable`** (§9), **pressione di memoria non attribuita** (§10.0-bis). Più il tipo reso da `risolvi_commit` | **sì** (tipo pubblico) | mapping variante→categoria esaustivo, exit code invariati per le esistenti |
 | **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
 | **PR-3** | tipi dell'esito e della classificazione: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo, la precedenza §10.3 | no | test di tabella sulla matrice e sulle corse |
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
-| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei **custom metadata del footer IPC**; e `CommitToken` come tipo chiuso | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo, le tre verifiche dell'oracolo in §7-quater, e il rifiuto di ogni token non canonico |
+| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei **custom metadata del footer IPC**; e `CommitToken` come tipo chiuso | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo; i **quattro casi del token** della §7-quater — assente, canonico, non canonico, oracoli del footer |
 | **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
