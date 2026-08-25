@@ -94,8 +94,10 @@ pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
 #[must_use]
 pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
     match categoria {
-        // Piano o configurazione: il chiamante deve cambiare cio' che ha
-        // mandato.
+        // Piano o configurazione: qualcosa a monte va sistemato prima di
+        // riprovare. NON necessariamente cio' che il chiamante ha mandato —
+        // una configurazione incoerente si corregge nel dispiegamento o
+        // nell'ambiente. Il numero raggruppa, `error.category` distingue.
         ErrorCategory::InvalidPlan | ErrorCategory::InvalidConfiguration => 2,
         // Contratto, schema, capability: i dati o le attese non combaciano.
         ErrorCategory::Schema

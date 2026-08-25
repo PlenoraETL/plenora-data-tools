@@ -25,8 +25,8 @@ pub mod limits;
 pub mod panic_policy;
 
 pub use error::{
-    ErrorCategory, ErrorPhase, EvidenzaDiLimite, PlenoraError, RemoteEffect, Result,
-    RetryDisposition,
+    DiagnosticaSupplementare, ErrorCategory, ErrorPhase, EvidenzaDiLimite, PlenoraError,
+    PressioneDegliAntenati, RemoteEffect, Result, RetryDisposition, MAX_ANTENATI_OSSERVATI,
 };
 
 /// Costruisce un `RecordBatch` DICHIARANDO il numero di righe.

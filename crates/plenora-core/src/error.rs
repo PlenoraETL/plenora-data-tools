@@ -52,30 +52,125 @@ pub struct ReplayedError {
     pub execution_reason: Option<String>,
 }
 
-/// Cio' che si e' potuto osservare di una pressione di memoria, e cio' che
-/// non si e' potuto.
+/// Quanti antenati del dominio l'evidenza puo' portare.
+///
+/// Il limite e' nel **tipo**, non nel costruttore: un array di lunghezza
+/// fissa non puo' crescere con la profondita' della gerarchia trovata
+/// sull'host, quindi nessun input esterno decide quanto occupa un errore.
+///
+/// Otto e' una **scelta**, non una misura: i prototipi non hanno rilevato la
+/// profondita' delle gerarchie ospiti, e questo numero non va presentato
+/// come se l'avessero fatto. Regge perche' il costo di sbagliarlo e' basso
+/// in entrambe le direzioni — troppo alto spreca qualche decina di byte in
+/// un errore raro, troppo basso lo dichiara in
+/// [`PressioneDegliAntenati::antenati_non_osservati`] invece di fingere di
+/// aver raggiunto la radice. E' quel campo, non questa costante, a rendere
+/// la scelta rivedibile senza rompere il ragionamento.
+pub const MAX_ANTENATI_OSSERVATI: usize = 8;
+
+/// `Oa` — la pressione registrata **dagli antenati** del dominio.
+///
+/// # Perche' non basta un numero
+///
+/// Il quinto segnale della §10.0-bis non chiede *quanta* pressione ci fosse
+/// sopra di noi, ma **quale livello** della gerarchia abbia esaurito il
+/// proprio tetto: `Ol` da solo non lo dice, perche' sopra al nostro dominio
+/// di tetti ce ne possono essere altri. Sommare gli antenati in un totale
+/// cancellerebbe proprio l'informazione per cui il segnale esiste.
+///
+/// # L'antenato e' identificato dalla distanza, non dal percorso
+///
+/// `[0]` e' il padre, `[1]` il nonno, e cosi' via. Un percorso di cgroup
+/// sarebbe piu' esplicito e avrebbe due difetti: e' di lunghezza non
+/// limitata, e porta fuori dal confine la disposizione del filesystem
+/// dell'host, che non serve a diagnosticare. La distanza e' cio' su cui la
+/// §10.0-bis ragiona.
+///
+/// # Resta diagnostico
+///
+/// La §10.0-ter e' esplicita: `Oa` dice che un antenato ha registrato
+/// pressione, **non** che sia stata la causa di questa terminazione — e
+/// tanto meno se quell'antenato conteneva altri domini concorrenti, nel qual
+/// caso la pressione puo' venire da un vicino. Entra nell'evidenza
+/// riportata, non nella classificazione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PressioneDegliAntenati {
+    /// Delta di `oom` per antenato, indicizzato per **distanza** dal
+    /// dominio: `[0]` il padre, `[1]` il nonno, ...
+    ///
+    /// `None` in una posizione significa «non osservato a quel livello»,
+    /// che non e' «quel livello non ha registrato pressione».
+    pub per_distanza: [Option<u64>; MAX_ANTENATI_OSSERVATI],
+    /// Antenati che esistevano **oltre** la capacita' dell'array.
+    ///
+    /// Diverso da zero significa che l'evidenza e' **troncata**. Serve
+    /// perche' un antenato non osservato non e' un antenato senza
+    /// pressione, e senza questo campo il troncamento sarebbe
+    /// indistinguibile dall'aver raggiunto la radice.
+    pub antenati_non_osservati: u32,
+}
+
+/// Misure che aiutano a leggere l'evidenza e **non fondano** attribuzione.
+///
+/// Sono tenute separate dai cinque segnali di [`EvidenzaDiLimite`] perche'
+/// la §10.0-ter poggia l'attribuzione su un fatto solo — il group kill
+/// locale — e mescolare qui il tetto o il picco inviterebbe a dedurre da un
+/// confronto di numeri cio' che solo un'operazione del kernel dimostra.
+///
+/// Il picco in particolare non prova nulla in nessuna delle due direzioni:
+/// i prototipi hanno misurato picchi del figlio **superiori** a quelli letti
+/// sul padre, e un picco sotto il tetto non smentisce la pressione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticaSupplementare {
+    /// Tetto di memoria in vigore quando la misura e' stata presa, in byte.
+    ///
+    /// Non e' un `Option`: il tetto lo impone il coordinatore, quindi chi
+    /// costruisce l'evidenza lo conosce per costruzione.
+    pub tetto_byte: u64,
+    /// Picco osservato, in byte (`memory.peak`).
+    pub picco_byte: Option<u64>,
+    /// Allocazioni respinte al tetto (`memory.events.local` → `max`).
+    ///
+    /// Sta qui e non fra i segnali: dice che il tetto e' stato toccato, non
+    /// che qualcuno sia stato ucciso per averlo toccato.
+    pub respinte_al_tetto: Option<u64>,
+}
+
+/// I cinque segnali su cui la §10.0-bis classifica una terminazione, piu' la
+/// diagnostica che li accompagna.
 ///
 /// Accompagna [`PlenoraError::UnattributedMemoryPressure`], dove il punto
 /// non e' quanta memoria sia stata usata ma **di chi** fosse: l'evidenza
 /// esiste, l'attribuzione no.
 ///
+/// # Che cosa NON fa
+///
+/// Non classifica. La matrice della §10.0-bis — e la regola per cui solo il
+/// group kill locale autorizza l'attribuzione al dominio — appartiene a
+/// `PR-3`, che consuma questo tipo. Qui c'e' la forma dell'evidenza, perche'
+/// e' superficie pubblica e va decisa una volta sola; la decisione su cosa
+/// significhi arriva dopo, e in un posto solo.
+///
 /// # Perche' non una `String`
 ///
 /// Un messaggio precompilato costringe chi legge a riestrarre i numeri con
 /// una regex, e soprattutto **non distingue** i due casi che qui contano di
-/// piu' (vedi sotto). Cinque campi tipizzati costano poco oggi e non vanno
-/// riscritti quando il supervisore della Fase 4 dovra' deciderci sopra.
+/// piu' (vedi sotto).
 ///
 /// # `None` non e' zero
 ///
 /// `Some(0)` dice «osservato, nessun evento». `None` dice «non osservabile»:
 /// il contatore non esiste su questa piattaforma, o non e' stato letto. Sono
-/// conclusioni opposte e la differenza e' esattamente quella che ha imposto
-/// questa variante — i prototipi hanno mostrato che `memory.events.local`
-/// **non** vede i sottogruppi, quindi uno zero letto li' non prova assenza
-/// di pressione, e un contatore mancante non prova nulla affatto. Ridurre i
-/// due casi allo stesso numero renderebbe l'evidenza piu' comoda da stampare
-/// e falsa.
+/// conclusioni opposte, ed e' la differenza che ha imposto questa variante —
+/// i prototipi hanno mostrato che `memory.events.local` **non** vede i
+/// sottogruppi, quindi uno zero letto li' non prova assenza di pressione, e
+/// un contatore mancante non prova nulla affatto. Ridurre i due casi allo
+/// stesso numero renderebbe l'evidenza piu' comoda da stampare e falsa.
+///
+/// Vale in modo particolare per [`Self::group_kill_locale`]: e' il solo
+/// segnale che autorizza l'attribuzione, quindi confondere «non letto» con
+/// «non e' scattato» significherebbe non attribuire mai, oppure — nel verso
+/// opposto — attribuire su un contatore mai visto.
 ///
 /// # Nessun dato
 ///
@@ -83,46 +178,87 @@ pub struct ReplayedError {
 /// attraversa questo tipo (regola 8 di `AGENTS.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvidenzaDiLimite {
-    /// Tetto di memoria in vigore quando la misura e' stata presa, in byte.
+    /// `Ol` — `memory.events.local` → `oom`.
     ///
-    /// Non e' un `Option`: il tetto lo impone il coordinatore, quindi e'
-    /// sempre noto a chi costruisce l'evidenza.
-    pub tetto_byte: u64,
-    /// Picco di memoria osservato, in byte (`memory.peak` su cgroup v2,
-    /// `PeakJobMemoryUsed` su Job Object).
+    /// Quante volte il limite **di questo dominio** ha invocato l'OOM. Alto
+    /// con [`Self::uccisi_nel_dominio`] a zero non significa «niente e'
+    /// successo»: significa limite raggiunto ripetutamente e nessuno da
+    /// uccidere. I prototipi ne hanno misurate 305, con il dominio fermo.
+    pub oom_locali: Option<u64>,
+    /// `Kl` — `memory.events.local` → `oom_kill`.
     ///
-    /// `None` dove non e' leggibile. Un picco **sotto** il tetto non
-    /// smentisce la pressione: i prototipi hanno misurato picchi del figlio
-    /// superiori a quelli letti sul padre.
-    pub picco_byte: Option<u64>,
-    /// Allocazioni respinte al tetto (`memory.events.local:max`).
-    pub respinte_al_tetto: Option<u64>,
-    /// Eventi OOM attribuiti al solo dominio (`memory.events.local:oom`).
-    pub oom_nel_dominio: Option<u64>,
-    /// Uccisioni per OOM contate ricorsivamente, sottogruppi inclusi
-    /// (`memory.events:oom_kill`).
+    /// Processi uccisi **appartenenti a questo dominio**, da qualunque OOM
+    /// killer: un antenato con un tetto piu' basso lo fa salire mentre
+    /// [`Self::oom_locali`] resta a zero.
+    pub uccisi_nel_dominio: Option<u64>,
+    /// `Kh` — `memory.events` → `oom_kill`.
     ///
-    /// E' il contatore che puo' essere diverso da zero mentre
-    /// [`Self::oom_nel_dominio`] resta zero — cioe' la forma tipica della
-    /// pressione NON attribuita.
-    pub oom_kill_ricorsivi: Option<u64>,
+    /// Processi uccisi nel dominio **o nei discendenti**. `Kl` ne e' un
+    /// sottoinsieme: se risultasse maggiore, e' un difetto di lettura e va
+    /// trattato come tale invece che normalizzato.
+    pub uccisi_nella_gerarchia: Option<u64>,
+    /// `G` — `memory.events.local` → `oom_group_kill`.
+    ///
+    /// **Il solo segnale causale.** Il kernel ha ucciso questo dominio *come
+    /// gruppo*, e lo ha fatto perche' il tetto di questo dominio e' stato
+    /// raggiunto: non e' una coincidenza di contatori, e' un'operazione.
+    /// Ovunque manchi, la §10.0-ter impone di non attribuire.
+    pub group_kill_locale: Option<u64>,
+    /// `Oa` — la pressione registrata dagli antenati, per distanza.
+    pub oom_degli_antenati: PressioneDegliAntenati,
+    /// Misure d'appoggio, esplicitamente fuori dalla prova causale.
+    pub diagnostica: DiagnosticaSupplementare,
 }
 
-impl core::fmt::Display for EvidenzaDiLimite {
-    /// Rende l'evidenza in una forma stabile, con `n/d` dove il contatore
-    /// non era osservabile — mai `0`, che direbbe un'altra cosa.
+/// Rende un contatore, distinguendo «non osservabile» da zero.
+fn quantita(valore: Option<u64>) -> String {
+    valore.map_or_else(|| "n/d".to_owned(), |numero| numero.to_string())
+}
+
+impl core::fmt::Display for PressioneDegliAntenati {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let quantita = |valore: Option<u64>| {
-            valore.map_or_else(|| "n/d".to_owned(), |numero| numero.to_string())
-        };
+        for (distanza, delta) in self.per_distanza.iter().enumerate() {
+            if distanza > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "d{}={}", distanza + 1, quantita(*delta))?;
+        }
+        if self.antenati_non_osservati > 0 {
+            write!(f, " (+{} non osservati)", self.antenati_non_osservati)?;
+        }
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for DiagnosticaSupplementare {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "tetto={} byte, picco={}, respinte={}, oom_dominio={}, oom_kill_ricorsivi={}",
+            "tetto={} byte, picco={}, respinte={}",
             self.tetto_byte,
             quantita(self.picco_byte),
             quantita(self.respinte_al_tetto),
-            quantita(self.oom_nel_dominio),
-            quantita(self.oom_kill_ricorsivi),
+        )
+    }
+}
+
+impl core::fmt::Display for EvidenzaDiLimite {
+    /// I cinque segnali per primi e con le sigle della §10.0-bis, la
+    /// diagnostica dopo e dichiarata tale: chi legge il messaggio deve
+    /// vedere la stessa separazione che vede chi legge il tipo.
+    ///
+    /// `n/d` dove il contatore non era osservabile — mai `0`, che direbbe
+    /// un'altra cosa.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Ol={} Kl={} Kh={} G={}; Oa[{}]; diagnostica: {}",
+            quantita(self.oom_locali),
+            quantita(self.uccisi_nel_dominio),
+            quantita(self.uccisi_nella_gerarchia),
+            quantita(self.group_kill_locale),
+            self.oom_degli_antenati,
+            self.diagnostica,
         )
     }
 }
@@ -252,9 +388,14 @@ pub enum PlenoraError {
     /// Divide cio' che [`PlenoraError::InvalidPlan`] teneva insieme: il
     /// piano descrive **cosa** calcolare ed e' portabile, la configurazione
     /// descrive **dove** e non lo e'. Chi orchestra corregge due cose
-    /// diverse, in due posti diversi, e la categoria glielo dice — l'exit
-    /// code invece resta 2 per entrambe, perche' l'azione richiesta e' la
-    /// stessa: cambiare cio' che si e' mandato.
+    /// diverse, in due posti diversi, e la categoria glielo dice.
+    ///
+    /// L'exit code resta `2` per entrambe, e **non** perche' l'input sia
+    /// sbagliato in entrambi i casi: qui la correzione puo' stare nel
+    /// dispiegamento o nell'ambiente, dove chi ha invocato il comando magari
+    /// non arriva nemmeno. Il `2` e' un raggruppamento grossolano — «non
+    /// riprovare cosi' com'e', qualcosa a monte va sistemato» — e chi ha
+    /// bisogno di sapere *cosa* legge `error.category`.
     #[error("invalid configuration: {0}")]
     InvalidConfiguration(String),
 
@@ -300,7 +441,19 @@ pub enum PlenoraError {
         /// Dove e quando la pressione e' stata osservata. Strutturale.
         contesto: String,
         /// Cio' che i contatori dicevano, e cio' che non dicevano.
-        evidenza: EvidenzaDiLimite,
+        ///
+        /// # Perche' in un `Box`
+        ///
+        /// L'evidenza pesa qualche centinaio di byte — cinque segnali, otto
+        /// livelli di antenati, la diagnostica — e senza indirezione
+        /// diventerebbe la dimensione di `PlenoraError`, cioe' di **ogni**
+        /// `Result` del workspace, compresi i milioni che tornano `Ok`.
+        /// `clippy::result_large_err` lo segnala, e ha ragione: il costo
+        /// ricadrebbe sul cammino felice per un caso raro.
+        ///
+        /// E' la stessa scelta gia' fatta per [`ReplayedError`] e per la
+        /// diagnostica di riga, le altre due strutture grandi dell'enum.
+        evidenza: Box<EvidenzaDiLimite>,
     },
 
     /// Invariante interna violata: uno stato che per costruzione non
@@ -1683,16 +1836,21 @@ mod tests {
         assert_eq!(source.to_string(), "io error: io");
     }
 
-    /// Evidenza minima di comodo per i test: tutto osservato, niente di
-    /// anomalo. Chi vuole provare la NON osservabilita' azzera un campo a
-    /// `None` esplicitamente, cosi' l'intenzione si vede.
+    /// Evidenza di comodo: tutti e cinque i segnali osservati, nessun group
+    /// kill. Chi vuole provare la NON osservabilita' azzera un campo a
+    /// `None` esplicitamente, cosi' l'intenzione si vede nel test.
     fn evidenza() -> EvidenzaDiLimite {
         EvidenzaDiLimite {
-            tetto_byte: 64 * 1024 * 1024,
-            picco_byte: Some(63 * 1024 * 1024),
-            respinte_al_tetto: Some(0),
-            oom_nel_dominio: Some(0),
-            oom_kill_ricorsivi: Some(1),
+            oom_locali: Some(1),
+            uccisi_nel_dominio: Some(0),
+            uccisi_nella_gerarchia: Some(0),
+            group_kill_locale: Some(0),
+            oom_degli_antenati: PressioneDegliAntenati::default(),
+            diagnostica: DiagnosticaSupplementare {
+                tetto_byte: 64 * 1024 * 1024,
+                picco_byte: Some(63 * 1024 * 1024),
+                respinte_al_tetto: Some(4),
+            },
         }
     }
 
@@ -1729,7 +1887,7 @@ mod tests {
             (
                 PlenoraError::UnattributedMemoryPressure {
                     contesto: "attesa del worker".into(),
-                    evidenza: evidenza(),
+                    evidenza: Box::new(evidenza()),
                 },
                 ErrorCategory::UnattributedMemoryPressure,
                 ErrorPhase::Write,
@@ -1768,24 +1926,97 @@ mod tests {
     }
 
     #[test]
-    fn i_messaggi_delle_varianti_nuove_non_portano_dati() {
-        // Regola 8: il testo dice dove e cosa ci si aspettava, mai il
-        // contenuto. Qui si verifica cio' che il tipo puo' garantire — che
-        // l'evidenza sia fatta di soli numeri di budget — e si documenta che
-        // il resto (il `contesto`) resta responsabilita' di chi costruisce.
+    fn l_evidenza_entra_nel_messaggio_senza_perdere_la_separazione() {
+        // NOME PRECEDENTE: «i messaggi delle varianti nuove non portano
+        // dati». Non lo dimostrava e non poteva: le varianti portano una
+        // `String` libera, quindi una sentinella messa nel `contesto`
+        // uscirebbe dal `Display` e il test resterebbe verde. Un test non
+        // puo' provare l'assenza di dati finche' il canale che li
+        // trasporterebbe e' aperto — servirebbero motivi chiusi, e la
+        // privacy va verificata nei punti di COSTRUZIONE, che qui non ci
+        // sono ancora.
+        //
+        // Cio' che questo test verifica davvero e' la formattazione: che i
+        // cinque segnali arrivino a chi legge il messaggio, e che la
+        // separazione fra prova causale e diagnostica sopravviva alla resa
+        // testuale invece di vivere solo nel tipo.
         let errore = PlenoraError::UnattributedMemoryPressure {
             contesto: "attesa del worker".into(),
-            evidenza: evidenza(),
+            evidenza: Box::new(evidenza()),
         };
         let testo = errore.to_string();
         assert!(
             testo.contains("attesa del worker"),
             "il contesto resta leggibile: {testo}"
         );
+        for sigla in ["Ol=1", "Kl=0", "Kh=0", "G=0"] {
+            assert!(
+                testo.contains(sigla),
+                "manca il segnale `{sigla}` dal messaggio: {testo}"
+            );
+        }
+        let (causale, diagnostica) = testo
+            .split_once("diagnostica:")
+            .expect("la diagnostica e' dichiarata tale nel messaggio");
         assert!(
-            testo.contains("oom_kill_ricorsivi=1"),
-            "l'evidenza entra nel messaggio: {testo}"
+            !causale.contains("tetto=") && !causale.contains("picco="),
+            "tetto e picco non devono comparire fra i segnali: {causale}"
         );
+        assert!(
+            diagnostica.contains("tetto=") && diagnostica.contains("picco="),
+            "e devono comparire dopo l'etichetta: {diagnostica}"
+        );
+    }
+
+    #[test]
+    fn il_group_kill_e_l_unico_segnale_causale_e_resta_distinguibile() {
+        // La §10.0-ter appoggia l'attribuzione su `G` soltanto. Confondere
+        // «non letto» con «non e' scattato» romperebbe la matrice in
+        // entrambi i versi, e la matrice e' di `PR-3`: qui si garantisce che
+        // il tipo le arrivi in grado di distinguerli.
+        let non_letto = EvidenzaDiLimite {
+            group_kill_locale: None,
+            ..evidenza()
+        };
+        let non_scattato = EvidenzaDiLimite {
+            group_kill_locale: Some(0),
+            ..evidenza()
+        };
+        assert_ne!(
+            non_letto, non_scattato,
+            "un group kill non letto non e' un group kill non scattato"
+        );
+        assert!(non_letto.to_string().contains("G=n/d"));
+        assert!(non_scattato.to_string().contains("G=0"));
+    }
+
+    #[test]
+    fn la_pressione_degli_antenati_dice_quale_antenato_ed_e_limitata() {
+        // `Oa` esiste per dire QUALE livello ha esaurito il proprio tetto:
+        // un totale sommato cancellerebbe l'unica cosa che il segnale porta.
+        let mut per_distanza = [None; MAX_ANTENATI_OSSERVATI];
+        per_distanza[0] = Some(0);
+        per_distanza[1] = Some(3);
+        let antenati = PressioneDegliAntenati {
+            per_distanza,
+            antenati_non_osservati: 2,
+        };
+        let reso = antenati.to_string();
+        assert!(
+            reso.contains("d1=0") && reso.contains("d2=3"),
+            "il padre e il nonno restano distinti: {reso}"
+        );
+        assert!(
+            reso.contains("d3=n/d"),
+            "un livello non letto non e' un livello senza pressione: {reso}"
+        );
+        assert!(
+            reso.contains("(+2 non osservati)"),
+            "il troncamento e' dichiarato, non silenzioso: {reso}"
+        );
+        // Il limite e' nel tipo: la profondita' della gerarchia trovata
+        // sull'host non puo' far crescere l'errore.
+        assert_eq!(antenati.per_distanza.len(), MAX_ANTENATI_OSSERVATI);
     }
 
     #[test]
@@ -1795,26 +2026,32 @@ mod tests {
         // due conclusioni opposte che questa variante esiste per non
         // confondere.
         let cieca = EvidenzaDiLimite {
-            tetto_byte: 1024,
-            picco_byte: None,
-            respinte_al_tetto: None,
-            oom_nel_dominio: Some(0),
-            oom_kill_ricorsivi: None,
+            oom_locali: None,
+            uccisi_nel_dominio: Some(0),
+            uccisi_nella_gerarchia: None,
+            group_kill_locale: None,
+            oom_degli_antenati: PressioneDegliAntenati::default(),
+            diagnostica: DiagnosticaSupplementare {
+                tetto_byte: 1024,
+                picco_byte: None,
+                respinte_al_tetto: None,
+            },
         };
         let reso = cieca.to_string();
         assert!(
-            reso.contains("picco=n/d"),
-            "il picco non osservabile non diventa zero: {reso}"
+            reso.contains("Ol=n/d") && reso.contains("Kh=n/d"),
+            "i segnali non letti non diventano zero: {reso}"
         );
         assert!(
-            reso.contains("oom_dominio=0"),
+            reso.contains("Kl=0"),
             "lo zero OSSERVATO resta uno zero: {reso}"
         );
         assert!(
-            reso.contains("oom_kill_ricorsivi=n/d"),
-            "e nemmeno le uccisioni ricorsive: {reso}"
+            reso.contains("picco=n/d") && reso.contains("respinte=n/d"),
+            "vale anche per la diagnostica: {reso}"
         );
-        // Il tetto non e' opzionale: e' nostro, quindi e' sempre un numero.
+        // Il tetto non e' opzionale: lo impone il coordinatore, quindi chi
+        // costruisce l'evidenza lo conosce.
         assert!(reso.contains("tetto=1024 byte"), "{reso}");
     }
 
@@ -1931,11 +2168,24 @@ mod tests {
     }
 
     #[test]
-    fn category_names_are_exactly_the_canonical_eighteen() {
+    fn i_nomi_canonici_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti() {
         // R9.5: l'enumerazione canonica delle categorie; il sottoinsieme
         // usato dal componente e' mapping in `category()`, mai valori
-        // propri. La tabella e' esaustiva per costruzione: aggiungere una
-        // variante senza toccare questo test lo farebbe fallire.
+        // propri.
+        //
+        // Il commento precedente diceva che «la tabella e' esaustiva per
+        // costruzione: aggiungere una variante senza toccare questo test lo
+        // farebbe fallire». Non era vero, e si e' visto: sono state aggiunte
+        // due categorie e questo test e' rimasto verde, perche' iterava la
+        // PROPRIA tabella e ne confrontava la lunghezza con un numero
+        // scritto accanto. Una categoria nuova non compariva da nessuna
+        // parte, ed e' precisamente il modo in cui una verifica non
+        // fallisce mai.
+        //
+        // La tabella resta scritta a mano — e' la seconda opinione su
+        // `as_str`, e derivarla renderebbe il test una tautologia — ma ora
+        // si itera `ErrorCategory::ALL` e le si CHIEDE di nominare ogni
+        // categoria dichiarata.
         let all = [
             (ErrorCategory::InvalidPlan, "invalid_plan"),
             (ErrorCategory::InvalidConfiguration, "invalid_configuration"),
@@ -1954,12 +2204,29 @@ mod tests {
             (ErrorCategory::Protocol, "protocol"),
             (ErrorCategory::Transient, "transient"),
             (ErrorCategory::Execution, "execution"),
+            (ErrorCategory::IsolationUnavailable, "isolation_unavailable"),
+            (
+                ErrorCategory::UnattributedMemoryPressure,
+                "unattributed_memory_pressure",
+            ),
             (ErrorCategory::Internal, "internal"),
         ];
-        assert_eq!(all.len(), 18, "l'enumerazione canonica ha 18 categorie");
-        for (category, name) in all {
-            assert_eq!(category.as_str(), name, "as_str canonico §9");
+        for categoria in ErrorCategory::ALL {
+            let atteso = all
+                .iter()
+                .find_map(|(dichiarata, nome)| (dichiarata == categoria).then_some(*nome))
+                .unwrap_or_else(|| {
+                    panic!("{categoria:?} non compare nella tabella dei nomi canonici")
+                });
+            assert_eq!(categoria.as_str(), atteso, "as_str canonico §9");
         }
+        // E nessuna riga della tabella nomina una categoria che non esiste
+        // piu': senza questo, una rimozione lascerebbe una riga morta.
+        assert_eq!(
+            all.len(),
+            ErrorCategory::ALL.len(),
+            "la tabella e l'enumerazione hanno lunghezze diverse"
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -28,12 +28,31 @@ perdere diagnosi.
 
 Quattro assi **espliciti**, mai dedotti dal testo del messaggio.
 
-**Categoria** (18 valori stabili):
+**Categoria** (20 valori stabili):
 
 `invalid_plan`, `invalid_configuration`, `schema`, `data_mapping`, `crs`,
 `unsupported`, `not_found`, `conflict`, `authentication`, `authorization`,
 `timeout`, `cancelled`, `resource_limit`, `io`, `protocol`, `transient`,
-`execution`, `internal`.
+`execution`, `isolation_unavailable`, `unattributed_memory_pressure`,
+`internal`.
+
+Le ultime due nascono con l'isolamento della Fase 4 e dicono ciascuna ciò che
+**non** si è potuto stabilire:
+
+- `isolation_unavailable` — l'ambiente non offre nessuna delle forme di
+  separazione previste. Non è `invalid_plan`: lo stesso piano, su un'altra
+  macchina, gira;
+- `unattributed_memory_pressure` — c'è evidenza di pressione di memoria e
+  **non** è attribuibile al dominio. Non è `resource_limit`, che direbbe al
+  chiamante che ha superato il proprio budget quando non lo sappiamo, e non è
+  `internal`, che dichiarerebbe un difetto nostro quando spesso è l'ambiente.
+  L'errore porta con sé i cinque segnali osservati invece di concludere al
+  posto di chi legge: vedi [l'evidenza è una struttura, non un
+  booleano](isolamento.md#100-bis-levidenza-è-una-struttura-non-un-booleano).
+
+Il nome della seconda dichiara ciò che manca. `resource_pressure` sarebbe
+stato più comodo e più vago: comprenderebbe CPU, disco o descrittori, e
+soprattutto tacerebbe il punto — che l'attribuzione non c'è.
 
 **Fase** del ciclo in cui l'errore è nato (10 valori canonici): `validate`,
 `connect`, `probe`, `prepare`, `read`, `write`, `finalize`, `commit`,
