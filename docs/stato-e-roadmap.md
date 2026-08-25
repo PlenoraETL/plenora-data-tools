@@ -5,9 +5,13 @@ e negli altri documenti; qui c'è ciò che manca, in ordine.
 
 ## Dove siamo
 
-Il core è una release candidate credibile: il piano v5 è il formato canonico,
-la CLI è l'eseguibile distribuito, le 146 operazioni del catalogo sono
-documentate, e la CI verifica Linux e Windows con quindici job.
+Il core è una release candidate credibile: i formati DAG sono **due** — il
+piano v5 e il piano v6, che aggiunge `max_domain_memory_bytes` e ha un dominio
+d'identità proprio — la CLI è l'eseguibile distribuito, le 146 operazioni del
+catalogo sono documentate, e la CI verifica Linux e Windows con quindici job.
+
+Il v4 continua a funzionare, migrato nel canonico v5, di cui condivide il
+`plan_hash`; il confine d'identità è fra v5 e v6, e lì soltanto.
 
 Non è ancora rilasciabile in produzione. Le ragioni sono qui sotto, in
 ordine di precedenza.

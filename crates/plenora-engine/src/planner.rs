@@ -11,8 +11,12 @@
 //!
 //! Passi (architettura.md):
 //!
-//! 1. `PlanLimits` di default durante il parsing (errori-e-limiti.md), poi validazione
-//!    strutturale e risoluzione alias — in [`PlanV5::parse`];
+//! 1. scelta del parser dalla `schema_version` dichiarata, poi `PlanLimits`
+//!    di default durante il parsing (errori-e-limiti.md), validazione
+//!    strutturale e risoluzione alias — in [`crate::plan::valida_per_versione`],
+//!    che smista a [`PlanV5::parse`] o a
+//!    [`crate::plan::formato_v6::PlanV6::parse`]. La struttura che i due
+//!    validano e' la stessa; i formati e le identita' no;
 //! 2. risoluzione del CRS di piano (campo `crs`): feature-dispatch come
 //!    `geo_transport` — con `proj-backend` la risoluzione PROJ reale, senza
 //!    fail-closed `CRS_BACKEND_UNAVAILABLE`;

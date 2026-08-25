@@ -1,10 +1,20 @@
-//! Formato piano v5: DAG dichiarativo (architettura.md, piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
+//! Formati del piano DAG dichiarativo (architettura.md, piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
+//!
+//! Le versioni DAG sono **due**, e non collassano l'una nell'altra: la **v5**
+//! qui, la **v6** in [`formato_v6`], che aggiunge `max_domain_memory_bytes` e
+//! sta nel proprio dominio d'identita'. La **v4** e' migrata nel canonico v5
+//! e ne condivide il `plan_hash`; i formati lineari sotto la `4` restano al
+//! `table_engine`.
+//!
+//! L'ingresso comune e' [`valida_per_versione`], che sceglie il parser dalla
+//! versione dichiarata e rende un [`PianoValidato`].
 //!
 //! Fondamenta della Fase 2A — codice NUOVO, non trasloco:
 //!
 //! - [`PlanV5`]/[`NodeV5`]: il formato dichiarativo (solo dipendenze e
 //!   configurazioni, nessuna annotazione di esecuzione), serde con
-//!   `deny_unknown_fields` a ogni livello;
+//!   `deny_unknown_fields` a ogni livello. `NodeV5` e' condiviso dalle due
+//!   versioni: i nodi non cambiano fra v5 e v6;
 //! - [`PlanV5::parse`]: applicazione dei [`PlanLimits`] DURANTE il parsing
 //!   (errori-e-limiti.md: il prima possibile, prima di allocazioni guidate dal contenuto),
 //!   poi validazione strutturale (id unici, riferimenti esistenti, aciclicità,

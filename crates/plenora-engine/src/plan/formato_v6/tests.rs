@@ -39,6 +39,38 @@ fn un_piano_v6_e_accettato() {
 }
 
 #[test]
+fn il_parser_della_v6_pretende_la_v6() {
+    // Il controllo di versione dentro `PlanV6::parse` non aveva una
+    // regressione DIRETTA: tutti gli altri test gli passano documenti che
+    // dichiarano 6, e chi entra dal dispatch e' gia' stato smistato. Toglierlo
+    // sarebbe rimasto invisibile.
+    //
+    // E' l'invariante che regge se qualcuno chiama il parser della v6 senza
+    // passare dal dispatch — un chiamante della libreria, un fuzzer, un test.
+    // Senza, un documento v5 verrebbe accettato dal parser sbagliato e
+    // canonicalizzato nel dominio sbagliato: stesso piano, identita' di un
+    // altro formato.
+    for versione in [
+        PLAN_SCHEMA_VERSION_V5,
+        crate::plan::PLAN_SCHEMA_VERSION_V4,
+        7,
+    ] {
+        let errore = PlanV6::parse_default(&piano(versione, &json!({})))
+            .expect_err("il parser della v6 accetta solo la v6");
+        assert!(
+            errore.to_string().contains("non e' un piano v6"),
+            "versione {versione}: {errore}"
+        );
+    }
+    // E la stessa forma, dichiarata 6, passa: il rifiuto e' della versione,
+    // non della struttura.
+    assert!(
+        PlanV6::parse_default(&piano(PLAN_SCHEMA_VERSION_V6, &json!({}))).is_ok(),
+        "la struttura e' valida: a essere rifiutata deve essere solo la versione"
+    );
+}
+
+#[test]
 fn il_tetto_e_facoltativo_e_la_sua_assenza_non_e_un_default() {
     let senza = PlanV6::parse_default(&piano(PLAN_SCHEMA_VERSION_V6, &json!({})))
         .expect("il campo e' facoltativo (PLAN-009)");
