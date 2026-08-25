@@ -79,34 +79,113 @@ pub enum IpcFormat {
 ///
 /// La fase resta `Read` per entrambi: il tag del confine vince sulla
 /// derivazione per variante, e questi errori nascono leggendo.
-fn read_error(error: &ArrowTransportError) -> PlenoraError {
-    let limite = matches!(
-        error,
-        ArrowTransportError::IpcMetadataTooLarge(_, _)
-            | ArrowTransportError::IpcBodyTooLarge { .. }
-            | ArrowTransportError::IpcTooManyMessages(_, _)
-            | ArrowTransportError::IpcTooManyRecordBatches(_, _)
-            | ArrowTransportError::IpcSchemaTooComplex(_)
-            | ArrowTransportError::StreamTooLarge
-            | ArrowTransportError::TooManyRows(_)
-            | ArrowTransportError::TooManyColumns(_)
-            | ArrowTransportError::TooManyBatches(_)
-            | ArrowTransportError::CellTooLarge(_)
-            // I tre tetti sui custom metadata (PR-0). Senza queste righe
-            // finivano in `DataMapping`, cioe' «il file e' rotto»: manderebbe
-            // il chiamante a cercare un file corrotto invece di un tetto
-            // superato. La forma non ammessa — chiave assente, duplicati —
-            // resta invece `DataMapping`, perche' li' il file lo e' davvero.
-            | ArrowTransportError::IpcTooManyMetadataPairs(_, _)
-            | ArrowTransportError::IpcMetadataKeyTooLarge(_, _)
-            | ArrowTransportError::IpcMetadataValueTooLarge(_, _)
-    );
-    let errore = if limite {
-        PlenoraError::ResourceLimit(error.to_string())
-    } else {
-        PlenoraError::DataMapping(error.to_string())
+fn read_error(error: ArrowTransportError) -> PlenoraError {
+    use ArrowTransportError as E;
+
+    let errore = match error {
+        // --- I/O: la causa si conserva, non si stampa ----------------------
+        //
+        // La versione precedente lo classificava `DataMapping`, cioe' «il file
+        // e' rotto», e ne teneva solo il testo. Un disco che non risponde
+        // durante `read_at` o `rewind` diventava cosi' un file corrotto, e
+        // mandava chi legge a cercare un difetto nei dati. Consumare l'errore
+        // invece di prenderlo a prestito e' cio' che permette di preservare
+        // lo `std::io::Error` originale.
+        E::Io(io) => PlenoraError::Io(io),
+
+        // --- Limiti: il file c'e' ed e' piu' grande di quanto ammettiamo ---
+        E::StreamTooLarge
+        | E::TooManyRows(_)
+        | E::TooManyColumns(_)
+        | E::TooManyBatches(_)
+        | E::CellTooLarge(_)
+        | E::IpcMetadataTooLarge(_, _)
+        | E::IpcBodyTooLarge { .. }
+        | E::IpcTooManyMessages(_, _)
+        | E::IpcSchemaTooComplex(_)
+        | E::IpcTooManyRecordBatches(_, _)
+        | E::IpcTooManyMetadataPairs(_, _)
+        | E::IpcMetadataKeyTooLarge(_, _)
+        | E::IpcMetadataValueTooLarge(_, _) => PlenoraError::ResourceLimit(error_testo(&error)),
+
+        // --- Difetto nostro -------------------------------------------------
+        E::Internal(motivo) => PlenoraError::Internal(motivo.to_owned()),
+
+        // --- Forma non ammessa: qui il file e' davvero rotto ---------------
+        //
+        // Framing, envelope, schema, custom metadata, contratto: tutto cio'
+        // che dice «questi byte non sono cio' che dichiarano di essere».
+        E::InvalidMagic
+        | E::InvalidTrailer
+        | E::ChecksumMismatch
+        | E::TrailingBytes
+        | E::RowCountMismatch { .. }
+        | E::PayloadLengthMismatch { .. }
+        | E::UnsupportedSchemaVersion(_)
+        | E::MissingGeometryColumn(_)
+        | E::MissingGeoArrowMetadata(_)
+        | E::GeometryColumnNotBinary { .. }
+        | E::CrsRequired
+        | E::CrsTooLarge
+        | E::IpcTruncated
+        | E::IpcTrailingAfterEos
+        | E::IpcUnsupportedFeature(_)
+        | E::IpcFooterInvalid(_)
+        | E::IpcSchemaInvalid(_)
+        | E::IpcMetadataInvalid(_)
+        | E::Arrow(_)
+        | E::ArrowPanic(_)
+        | E::Geometry(_)
+        | E::MissingColumn(_)
+        | E::ColumnNotNumeric { .. }
+        | E::IntegerCoordinateTooLarge { .. }
+        | E::OutputColumnExists(_)
+        | E::WrongGeometryType { .. } => PlenoraError::DataMapping(error_testo(&error)),
+
+        // --- Non raggiungibili leggendo un file ----------------------------
+        //
+        // Parametri di operazione, kernel, join, backend: nascono
+        // ESEGUENDO, e questa funzione traduce solo gli errori del lettore di
+        // confine. Restano `DataMapping` perche' e' la categoria che avevano
+        // prima: cambiarla sarebbe una modifica di comportamento su un
+        // percorso che non dovrebbe esistere, decisa senza poterla osservare.
+        // Se una di queste comparisse qui, sarebbe un difetto di collegamento.
+        E::MissingParameter { .. }
+        | E::UnexpectedParameter { .. }
+        | E::InvalidParameter { .. }
+        | E::BackendUnavailable { .. }
+        | E::Kernel(_)
+        | E::OutputRowsExceeded { .. }
+        | E::Topology(_)
+        | E::Construction(_)
+        | E::Advanced(_)
+        | E::PairRowCountMismatch { .. }
+        | E::SideLengthMismatch { .. }
+        | E::Extended(_)
+        | E::ExtendedAlgorithm(_)
+        | E::Predicate(_)
+        | E::Analysis(_)
+        | E::SpatialJoin(_) => PlenoraError::DataMapping(error_testo(&error)),
+
+        #[cfg(feature = "geos-backend")]
+        E::MakeValid(_) => PlenoraError::DataMapping(error_testo(&error)),
+        #[cfg(feature = "proj-backend")]
+        E::Reproject(_) => PlenoraError::DataMapping(error_testo(&error)),
+
+        // --- Diagnostica di riga: decide l'errore che avvolge --------------
+        //
+        // La categoria appartiene alla causa, non all'involucro: senza questa
+        // riga un limite avvolto in diagnostica uscirebbe come mappatura.
+        E::RowDiagnostics { source, .. } => {
+            return read_error(*source).with_phase(ErrorPhase::Read)
+        }
     };
     errore.with_phase(ErrorPhase::Read)
+}
+
+/// Testo di un errore del trasporto, gia' sanificato all'origine.
+fn error_testo(error: &ArrowTransportError) -> String {
+    error.to_string()
 }
 
 /// `true` se il file inizia con il magic dell'Arrow IPC **file format**
@@ -152,8 +231,8 @@ fn validated_handle(path: &Path, format: IpcFormat, limits: &IpcLimits) -> Resul
         IpcFormat::File => validate_ipc_file_framing(&mut source, limits),
         IpcFormat::Stream => validate_ipc_stream_framing(&mut source, limits),
     }
-    .map_err(|error| read_error(&error))?;
-    source.rewind().map_err(|error| read_error(&error))
+    .map_err(read_error)?;
+    source.rewind().map_err(read_error)
 }
 
 /// Esegue `build` dentro la barriera anti-panico, convertendo un eventuale

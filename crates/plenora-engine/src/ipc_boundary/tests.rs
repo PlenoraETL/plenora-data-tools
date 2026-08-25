@@ -536,16 +536,16 @@ fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
         ArrowTransportError::IpcMetadataValueTooLarge(70_000, 65_536),
     ];
     for errore in limiti {
-        let tradotto = read_error(&errore);
+        let tradotto = read_error(errore);
         assert_eq!(
             tradotto.category(),
             ErrorCategory::ResourceLimit,
-            "atteso ResourceLimit per {errore:?}"
+            "atteso ResourceLimit"
         );
         assert_eq!(
             tradotto.phase(),
             ErrorPhase::Read,
-            "atteso ErrorPhase::Read per {errore:?}"
+            "atteso ErrorPhase::Read"
         );
     }
 
@@ -554,12 +554,64 @@ fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
         ArrowTransportError::IpcSchemaInvalid("schema senza il campo fields"),
     ];
     for errore in forme {
-        let tradotto = read_error(&errore);
+        let tradotto = read_error(errore);
         assert_eq!(
             tradotto.category(),
             ErrorCategory::DataMapping,
-            "una forma non ammessa e' un file rotto, non un tetto: {errore:?}"
+            "una forma non ammessa e' un file rotto, non un tetto"
         );
         assert_eq!(tradotto.phase(), ErrorPhase::Read);
     }
+}
+
+/// Un errore del filesystem non e' un file corrotto.
+///
+/// La versione precedente di `read_error` classificava `Io` come
+/// `DataMapping` e ne teneva il solo testo: un disco che non risponde durante
+/// `read_at` o `rewind` diventava «il file e' rotto», e mandava chi legge a
+/// cercare un difetto nei dati che non c'era.
+#[test]
+fn un_errore_di_io_resta_io_e_conserva_la_causa() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+    use std::io::ErrorKind;
+
+    let sorgente = std::io::Error::new(ErrorKind::PermissionDenied, "permesso negato");
+    let tradotto = read_error(ArrowTransportError::Io(sorgente));
+
+    assert_eq!(
+        tradotto.category(),
+        ErrorCategory::Io,
+        "atteso ErrorCategory::Io"
+    );
+    assert_eq!(
+        tradotto.phase(),
+        ErrorPhase::Read,
+        "la fase del confine resta Read"
+    );
+    // `with_phase` AVVOLGE in `Tagged` invece di marcare in posto, quindi la
+    // causa sta un livello sotto. La prima stesura di questo test guardava
+    // l'involucro e falliva: e' il genere di assunzione sull'API che solo un
+    // test negativo scopre, perche' `category()` ricorre sulla causa e da
+    // sola sembrava confermare.
+    let dentro = match &tradotto {
+        PlenoraError::Tagged { source, .. } => source.as_ref(),
+        altro => altro,
+    };
+    // La causa e' preservata, non stampata: e' la ragione per cui la funzione
+    // consuma l'errore invece di prenderlo a prestito.
+    assert!(
+        matches!(dentro, PlenoraError::Io(io) if io.kind() == ErrorKind::PermissionDenied),
+        "lo std::io::Error originale non e' stato conservato"
+    );
+}
+
+/// La diagnostica di riga non cambia la categoria di cio' che avvolge.
+#[test]
+fn la_diagnostica_di_riga_non_maschera_un_limite() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+
+    let avvolto = ArrowTransportError::IpcTooManyMetadataPairs(300, 256);
+    let tradotto = read_error(avvolto);
+    assert_eq!(tradotto.category(), ErrorCategory::ResourceLimit);
+    assert_eq!(tradotto.phase(), ErrorPhase::Read);
 }

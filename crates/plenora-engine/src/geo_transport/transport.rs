@@ -1414,18 +1414,33 @@ mod tests {
         ));
     }
 
-    /// Regressione fuzz: `arrow-ipc` va in panico decodificando lo schema, e
-    /// `decode_ipc` deve restituire un errore invece di far abortire il
-    /// processo.
+    /// Regressione fuzz: un artefatto che **prima** faceva panicare
+    /// `arrow-ipc` viene ora rifiutato dal confine, in modo strutturato.
     ///
-    /// Questo test e' l'UNICA copertura possibile della barriera. Il fuzz
-    /// target `arrow_transform` non puo' verificarla: `libfuzzer-sys` installa
-    /// un hook di panico che chiama `std::process::abort()` prima che
-    /// l'unwinding cominci (libfuzzer-sys 0.4.10, src/lib.rs:92-95), proprio
-    /// perche' un `catch_unwind` nel codice sotto test nasconderebbe i difetti
-    /// al fuzzer. Quel target resta quindi in quarantena e restera' rosso
-    /// anche a barriera funzionante: non e' un difetto della mitigazione, e'
-    /// lo strumento progettato per non farsi ingannare da essa.
+    /// # L'esito e' cambiato
+    ///
+    /// Fino a `PR-0` questo test verificava la **barriera anti-panico**: lo
+    /// schema dell'artefatto arrivava a `fb_to_schema`, che panicava, e la
+    /// barriera convertiva il panico in `ArrowPanic`. Ora il confine pretende
+    /// il campo `fields` — che `arrow-ipc` legge con `fields().unwrap()` — e
+    /// l'artefatto non arriva piu' cosi' avanti.
+    ///
+    /// La barriera resta necessaria, perche' `convert.rs` ha una ventina di
+    /// `panic!`/`unimplemented!` sui codici di tipo che il confine non copre
+    /// ancora, ed e' verificata da
+    /// [`super::super::ipc`] nel modulo `barriera_antipanico`, con un input
+    /// costruito apposta: uno stream con una colonna `List` a cui viene tolto
+    /// il campo `children`.
+    ///
+    /// # Perche' non la verifica il fuzzing
+    ///
+    /// Il target `arrow_transform` non puo': `libfuzzer-sys` installa un hook
+    /// di panico che chiama `std::process::abort()` prima che l'unwinding
+    /// cominci (0.4.10, src/lib.rs:92-95), proprio perche' un `catch_unwind`
+    /// nel codice sotto test nasconderebbe i difetti al fuzzer. Quel target
+    /// resta quindi in quarantena e restera' rosso anche a barriera
+    /// funzionante: non e' un difetto della mitigazione, e' lo strumento
+    /// progettato per non farsi ingannare da essa.
     #[test]
     fn ipc_decode_rifiuta_lo_schema_senza_fields_prima_di_arrow() {
         /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
