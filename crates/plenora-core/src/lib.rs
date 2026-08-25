@@ -24,7 +24,10 @@ pub mod json;
 pub mod limits;
 pub mod panic_policy;
 
-pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, RetryDisposition};
+pub use error::{
+    ErrorCategory, ErrorPhase, EvidenzaDiLimite, PlenoraError, RemoteEffect, Result,
+    RetryDisposition,
+};
 
 /// Costruisce un `RecordBatch` DICHIARANDO il numero di righe.
 ///

@@ -52,6 +52,81 @@ pub struct ReplayedError {
     pub execution_reason: Option<String>,
 }
 
+/// Cio' che si e' potuto osservare di una pressione di memoria, e cio' che
+/// non si e' potuto.
+///
+/// Accompagna [`PlenoraError::UnattributedMemoryPressure`], dove il punto
+/// non e' quanta memoria sia stata usata ma **di chi** fosse: l'evidenza
+/// esiste, l'attribuzione no.
+///
+/// # Perche' non una `String`
+///
+/// Un messaggio precompilato costringe chi legge a riestrarre i numeri con
+/// una regex, e soprattutto **non distingue** i due casi che qui contano di
+/// piu' (vedi sotto). Cinque campi tipizzati costano poco oggi e non vanno
+/// riscritti quando il supervisore della Fase 4 dovra' deciderci sopra.
+///
+/// # `None` non e' zero
+///
+/// `Some(0)` dice «osservato, nessun evento». `None` dice «non osservabile»:
+/// il contatore non esiste su questa piattaforma, o non e' stato letto. Sono
+/// conclusioni opposte e la differenza e' esattamente quella che ha imposto
+/// questa variante — i prototipi hanno mostrato che `memory.events.local`
+/// **non** vede i sottogruppi, quindi uno zero letto li' non prova assenza
+/// di pressione, e un contatore mancante non prova nulla affatto. Ridurre i
+/// due casi allo stesso numero renderebbe l'evidenza piu' comoda da stampare
+/// e falsa.
+///
+/// # Nessun dato
+///
+/// Sono contatori e byte di budget: nessun valore di riga o di colonna
+/// attraversa questo tipo (regola 8 di `AGENTS.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenzaDiLimite {
+    /// Tetto di memoria in vigore quando la misura e' stata presa, in byte.
+    ///
+    /// Non e' un `Option`: il tetto lo impone il coordinatore, quindi e'
+    /// sempre noto a chi costruisce l'evidenza.
+    pub tetto_byte: u64,
+    /// Picco di memoria osservato, in byte (`memory.peak` su cgroup v2,
+    /// `PeakJobMemoryUsed` su Job Object).
+    ///
+    /// `None` dove non e' leggibile. Un picco **sotto** il tetto non
+    /// smentisce la pressione: i prototipi hanno misurato picchi del figlio
+    /// superiori a quelli letti sul padre.
+    pub picco_byte: Option<u64>,
+    /// Allocazioni respinte al tetto (`memory.events.local:max`).
+    pub respinte_al_tetto: Option<u64>,
+    /// Eventi OOM attribuiti al solo dominio (`memory.events.local:oom`).
+    pub oom_nel_dominio: Option<u64>,
+    /// Uccisioni per OOM contate ricorsivamente, sottogruppi inclusi
+    /// (`memory.events:oom_kill`).
+    ///
+    /// E' il contatore che puo' essere diverso da zero mentre
+    /// [`Self::oom_nel_dominio`] resta zero — cioe' la forma tipica della
+    /// pressione NON attribuita.
+    pub oom_kill_ricorsivi: Option<u64>,
+}
+
+impl core::fmt::Display for EvidenzaDiLimite {
+    /// Rende l'evidenza in una forma stabile, con `n/d` dove il contatore
+    /// non era osservabile — mai `0`, che direbbe un'altra cosa.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let quantita = |valore: Option<u64>| {
+            valore.map_or_else(|| "n/d".to_owned(), |numero| numero.to_string())
+        };
+        write!(
+            f,
+            "tetto={} byte, picco={}, respinte={}, oom_dominio={}, oom_kill_ricorsivi={}",
+            self.tetto_byte,
+            quantita(self.picco_byte),
+            quantita(self.respinte_al_tetto),
+            quantita(self.oom_nel_dominio),
+            quantita(self.oom_kill_ricorsivi),
+        )
+    }
+}
+
 /// Errore unico del workspace, fusione di `EngineError` (nogeo-tools) e
 /// `GeoEngineError` (geo-tools-arrow).
 ///
@@ -139,6 +214,94 @@ pub enum PlenoraError {
     /// Errore di I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Scambio malformato o fuori sequenza su un canale tra processi.
+    ///
+    /// Il messaggio atteso non e' arrivato, e' arrivato in una forma che il
+    /// contratto non ammette, o e' arrivato quando lo stato non lo
+    /// prevedeva. Riguarda la **conversazione**, non il supporto: un canale
+    /// che si chiude a meta' e' [`PlenoraError::Io`], un canale che parla
+    /// male e' questo.
+    ///
+    /// Testo strutturale (quale confine, quale attesa), mai il contenuto del
+    /// messaggio.
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    /// Una scadenza dichiarata e' passata senza che l'attesa si chiudesse.
+    ///
+    /// Non dice che l'altro capo sia morto: dice che non ha risposto entro
+    /// il tempo che gli era stato dato. Chi sceglie la scadenza deve
+    /// nominarla nel testo, altrimenti l'errore non e' diagnosticabile.
+    #[error("timeout: {0}")]
+    Timeout(String),
+
+    /// Lo stato osservato al commit non e' quello su cui la decisione era
+    /// stata presa.
+    ///
+    /// Il caso concreto e' il no-clobber del publish: la destinazione e'
+    /// comparsa tra il controllo e il rename. Distinta da
+    /// [`PlenoraError::Io`] perche' non c'e' nulla di rotto — c'e' qualcun
+    /// altro — e distinta da `InvalidPlan` perche' lo stesso piano, su una
+    /// destinazione libera, e' corretto.
+    #[error("conflict: {0}")]
+    Conflict(String),
+
+    /// La configurazione dell'ambiente, non il piano, e' incoerente.
+    ///
+    /// Divide cio' che [`PlenoraError::InvalidPlan`] teneva insieme: il
+    /// piano descrive **cosa** calcolare ed e' portabile, la configurazione
+    /// descrive **dove** e non lo e'. Chi orchestra corregge due cose
+    /// diverse, in due posti diversi, e la categoria glielo dice — l'exit
+    /// code invece resta 2 per entrambe, perche' l'azione richiesta e' la
+    /// stessa: cambiare cio' che si e' mandato.
+    #[error("invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
+    /// L'ambiente non offre l'isolamento richiesto.
+    ///
+    /// Nessuna delle forme di separazione previste e' disponibile: il
+    /// worker girerebbe senza confine, quindi non gira. Non e' un piano
+    /// invalido — lo stesso piano su un'altra macchina funziona — ed e'
+    /// per questo che non condivide l'exit code di `invalid_plan`.
+    ///
+    /// Il testo deve dire **quale** forma manca e **perche'** e' stata
+    /// esclusa: senza quello resta un rifiuto senza appello.
+    #[error("isolation unavailable: {0}")]
+    IsolationUnavailable(String),
+
+    /// Pressione di memoria osservata, ma NON attribuibile al dominio.
+    ///
+    /// # Perche' non `ResourceLimit`
+    ///
+    /// [`PlenoraError::ResourceLimit`] dice al chiamante che ha superato il
+    /// **proprio** budget, e con cio' gli dice cosa fare: ridurre i dati o
+    /// alzare il tetto. Qui quell'attribuzione non c'e'. Riusare
+    /// `resource_limit` significherebbe affermarla lo stesso, e mandare chi
+    /// legge a correggere un budget che potrebbe non essere il colpevole.
+    ///
+    /// # Perche' non `Internal`
+    ///
+    /// Simmetricamente: `internal` dichiara un difetto nostro, e neanche
+    /// quello e' dimostrato. La pressione puo' venire dall'host, da un
+    /// processo estraneo, o da un sottogruppo che i contatori del dominio
+    /// non vedono.
+    ///
+    /// # Il nome
+    ///
+    /// `resource_pressure` sarebbe stato piu' comodo e piu' vago:
+    /// comprenderebbe CPU, disco e descrittori, e soprattutto tacerebbe il
+    /// punto. Il nome dichiara **cio' che manca**.
+    ///
+    /// L'evidenza viaggia in [`EvidenzaDiLimite`], che distingue «osservato
+    /// zero» da «non osservabile».
+    #[error("unattributed memory pressure: {contesto} ({evidenza})")]
+    UnattributedMemoryPressure {
+        /// Dove e quando la pressione e' stata osservata. Strutturale.
+        contesto: String,
+        /// Cio' che i contatori dicevano, e cio' che non dicevano.
+        evidenza: EvidenzaDiLimite,
+    },
 
     /// Invariante interna violata: uno stato che per costruzione non
     /// dovrebbe esistere (categoria `Internal` di par. 9, finora senza
@@ -304,6 +467,20 @@ macro_rules! categorie_errore {
                 }
             }
 
+            /// Categoria dal nome canonico, l'inverso di [`Self::as_str`].
+            ///
+            /// Generata dalla stessa lista dell'enum: una variante nuova e'
+            /// riconoscibile senza che nessuno se ne ricordi. `None` per una
+            /// stringa che non e' una categoria — un envelope di un'altra
+            /// versione, o corrotto.
+            #[must_use]
+            pub fn from_canonical(nome: &str) -> Option<Self> {
+                match nome {
+                    $($nome => Some(Self::$variante),)+
+                    _ => None,
+                }
+            }
+
             /// Posizione della categoria in [`Self::ALL`].
             #[must_use]
             pub const fn index(self) -> usize {
@@ -355,6 +532,22 @@ categorie_errore! {
     Transient => "transient",
     /// Fallimento di un nodo durante la trasformazione.
     Execution => "execution",
+    /// L'ambiente non offre l'isolamento richiesto: nessuna delle forme di
+    /// separazione dei privilegi e' disponibile, quindi il worker potrebbe
+    /// riscrivere il proprio dominio.
+    ///
+    /// **Non** e' un piano invalido — lo stesso piano gira su un'altra
+    /// macchina — e per questo non condivide l'exit code di `invalid_plan`.
+    IsolationUnavailable => "isolation_unavailable",
+    /// Evidenza di pressione di memoria che NON e' attribuibile al dominio.
+    ///
+    /// Il nome dichiara cio' che manca. `resource_pressure` sarebbe stato
+    /// piu' comodo e piu' vago: comprenderebbe CPU, disco o descrittori, e
+    /// soprattutto tacerebbe il punto — che l'attribuzione non c'e'.
+    ///
+    /// Non e' `resource_limit`: quello dice al chiamante che ha superato il
+    /// proprio budget, e qui non lo sappiamo.
+    UnattributedMemoryPressure => "unattributed_memory_pressure",
     /// Invariante interna violata.
     Internal => "internal",
 }
@@ -570,6 +763,12 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::ResourceLimit(_)
             | Self::Io(_)
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_)
             | Self::Replayed(_)
             | Self::RowDiagnostics { .. }
@@ -592,6 +791,12 @@ impl PlenoraError {
             Self::Cancelled { .. } => ErrorCategory::Cancelled,
             Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
             Self::Io(_) => ErrorCategory::Io,
+            Self::Protocol(_) => ErrorCategory::Protocol,
+            Self::Timeout(_) => ErrorCategory::Timeout,
+            Self::Conflict(_) => ErrorCategory::Conflict,
+            Self::InvalidConfiguration(_) => ErrorCategory::InvalidConfiguration,
+            Self::IsolationUnavailable(_) => ErrorCategory::IsolationUnavailable,
+            Self::UnattributedMemoryPressure { .. } => ErrorCategory::UnattributedMemoryPressure,
             Self::Internal(_) => ErrorCategory::Internal,
             Self::Replayed(error) => error.category,
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => source.category(),
@@ -648,6 +853,25 @@ impl PlenoraError {
             | Self::Crs(_)
             | Self::Cancelled { .. }
             | Self::ResourceLimit(_)
+            // Tutte deterministiche o comunque non ritentabili in cieco.
+            //
+            // `Timeout` merita la giustificazione, perche' e' l'unica che
+            // *sembra* transitoria: il chiamante non sa se l'altro capo era
+            // lento o morto, e un ritentativo automatico su un worker che
+            // sta ancora lavorando ne avvia un secondo accanto al primo. La
+            // decisione di riprovare richiede di stabilire prima che il
+            // primo tentativo sia finito — non e' una scelta che questo
+            // asse possa prendere da solo, e `Safe` direbbe di si'.
+            //
+            // `UnattributedMemoryPressure` per la ragione simmetrica: senza
+            // attribuzione non si sa se il secondo tentativo troverebbe
+            // condizioni diverse.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => RetryDisposition::Never,
             Self::Replayed(error) => error.retry,
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
@@ -733,7 +957,26 @@ impl PlenoraError {
             // lo produce leggendo un input lo tagga `Read` con `with_phase`,
             // e il tag del confine vince sulla derivazione (vedi sotto).
             | Self::ResourceLimit(_)
+            // `Protocol`, `Timeout` e `UnattributedMemoryPressure` derivano
+            // `Write` per la stessa ragione conservativa di `Io`: e' il lato
+            // con possibile effetto sul supporto. Per la pressione di
+            // memoria l'approssimazione e' DICHIARATA e piu' larga delle
+            // altre — la pressione puo' nascere leggendo tanto quanto
+            // scrivendo, e non sappiamo quale dei due fosse in corso. Si
+            // sceglie il lato piu' cauto invece di indovinare, coerentemente
+            // col fatto che la variante esiste proprio per non attribuire.
+            // Chi conosce il confine raffina con `with_phase`.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => ErrorPhase::Write,
+            // La configurazione e l'isolamento si decidono PRIMA che
+            // qualunque dato si muova: se fallisce, non e' stato letto ne'
+            // scritto nulla.
+            Self::InvalidConfiguration(_) | Self::IsolationUnavailable(_) => ErrorPhase::Prepare,
+            // Il conflitto e' per definizione al commit: e' li' che lo stato
+            // osservato smentisce quello su cui si era deciso.
+            Self::Conflict(_) => ErrorPhase::Commit,
             Self::Replayed(error) => error.phase,
             // Il tag del confine vince sulla derivazione per variante.
             Self::Tagged { phase, .. } => *phase,
@@ -1033,6 +1276,16 @@ impl PlenoraError {
             | Self::Cancelled { .. }
             | Self::Io(_)
             | Self::ResourceLimit(_)
+            // Nessuna eccezione tra le nuove: `Conflict` e' l'unica che
+            // tocca una destinazione, e la tocca per RIFIUTARSI di
+            // sovrascriverla. Il rename atomico non e' avvenuto, quindi non
+            // c'e' effetto da riparare.
+            | Self::Protocol(_)
+            | Self::Timeout(_)
+            | Self::Conflict(_)
+            | Self::InvalidConfiguration(_)
+            | Self::IsolationUnavailable(_)
+            | Self::UnattributedMemoryPressure { .. }
             | Self::Internal(_) => RemoteEffect::None,
             Self::Replayed(error) => error.remote_effect,
             // Delegato alla sorgente (comunque `None` per costruzione):
@@ -1327,13 +1580,33 @@ mod tests {
             "due categorie condividono lo stesso nome stabile"
         );
         // Il conteggio e' un'informazione, non un presidio: se cambia, e'
-        // perche' qualcuno ha aggiunto una categoria, ed e' giusto che
-        // questo test glielo faccia notare insieme alla tabella degli exit
-        // code, che va aggiornata a mano.
+        // perche' qualcuno ha aggiunto una categoria.
+        //
+        // Cosa fa scattare cosa, oggi: l'exit code NON va piu' aggiornato a
+        // mano — `exit_code_di` nella CLI fa un `match` esaustivo su questo
+        // enum, quindi una categoria nuova non compila finche' non le si
+        // assegna un numero. Resta a mano la tabella di `docs/cli.md`, che e'
+        // prosa e nessun compilatore legge.
         assert_eq!(
             ErrorCategory::ALL.len(),
-            18,
-            "categorie dichiarate: aggiornare anche la tabella degli exit code"
+            20,
+            "categorie dichiarate: aggiornare anche la tabella di docs/cli.md"
+        );
+        // `from_canonical` e' l'inverso di `as_str`, ed e' cio' che regge il
+        // ripiego su 70 della CLI: se il giro non chiudesse, un envelope
+        // legittimo verrebbe letto come categoria sconosciuta e degradato a
+        // errore interno.
+        for &categoria in ErrorCategory::ALL {
+            assert_eq!(
+                ErrorCategory::from_canonical(categoria.as_str()),
+                Some(categoria),
+                "{categoria:?} non si rilegge dal proprio nome canonico"
+            );
+        }
+        assert_eq!(
+            ErrorCategory::from_canonical("categoria_di_un_altro_binario"),
+            None,
+            "una stringa che non e' una categoria deve restare non riconosciuta"
         );
     }
 
@@ -1408,6 +1681,141 @@ mod tests {
         // `Error::source()` espone l'errore originale (catena standard).
         let source = std::error::Error::source(&tagged).expect("sorgente");
         assert_eq!(source.to_string(), "io error: io");
+    }
+
+    /// Evidenza minima di comodo per i test: tutto osservato, niente di
+    /// anomalo. Chi vuole provare la NON osservabilita' azzera un campo a
+    /// `None` esplicitamente, cosi' l'intenzione si vede.
+    fn evidenza() -> EvidenzaDiLimite {
+        EvidenzaDiLimite {
+            tetto_byte: 64 * 1024 * 1024,
+            picco_byte: Some(63 * 1024 * 1024),
+            respinte_al_tetto: Some(0),
+            oom_nel_dominio: Some(0),
+            oom_kill_ricorsivi: Some(1),
+        }
+    }
+
+    #[test]
+    fn le_varianti_nuove_dichiarano_i_quattro_assi() {
+        // La tabella e' scritta a mano: e' il contratto approvato, e serve
+        // che sia leggibile accanto a cio' che verifica.
+        let casi: [(PlenoraError, ErrorCategory, ErrorPhase); 6] = [
+            (
+                PlenoraError::Protocol("attesa hello, ricevuto ready".into()),
+                ErrorCategory::Protocol,
+                ErrorPhase::Write,
+            ),
+            (
+                PlenoraError::Timeout("handshake oltre la scadenza".into()),
+                ErrorCategory::Timeout,
+                ErrorPhase::Write,
+            ),
+            (
+                PlenoraError::Conflict("destinazione comparsa prima del rename".into()),
+                ErrorCategory::Conflict,
+                ErrorPhase::Commit,
+            ),
+            (
+                PlenoraError::InvalidConfiguration("radice temporanea non scrivibile".into()),
+                ErrorCategory::InvalidConfiguration,
+                ErrorPhase::Prepare,
+            ),
+            (
+                PlenoraError::IsolationUnavailable("nessun cgroup delegato".into()),
+                ErrorCategory::IsolationUnavailable,
+                ErrorPhase::Prepare,
+            ),
+            (
+                PlenoraError::UnattributedMemoryPressure {
+                    contesto: "attesa del worker".into(),
+                    evidenza: evidenza(),
+                },
+                ErrorCategory::UnattributedMemoryPressure,
+                ErrorPhase::Write,
+            ),
+        ];
+        for (errore, categoria, fase) in casi {
+            assert_eq!(errore.category(), categoria, "categoria di {errore:?}");
+            assert_eq!(errore.phase(), fase, "fase di {errore:?}");
+            // Gli altri due assi sono uniformi per tutte e sei, e vale la
+            // pena che il test lo dica invece di ripeterlo nella tabella.
+            assert_eq!(
+                errore.remote_effect(),
+                RemoteEffect::None,
+                "nessuna delle sei lascia effetto: {errore:?}"
+            );
+            assert_eq!(
+                errore.retry_disposition(),
+                RetryDisposition::Never,
+                "nessuna delle sei e' ritentabile in cieco: {errore:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn il_tag_di_fase_raffina_anche_le_varianti_nuove() {
+        // `Protocol` deriva `Write` ma nasce davvero dove il confine dice.
+        // Se il tag non scendesse, la fase resterebbe un'approssimazione
+        // permanente per tutta la famiglia nuova.
+        let al_confine =
+            PlenoraError::Protocol("cornice troncata".into()).with_phase(ErrorPhase::Read);
+        assert_eq!(al_confine.phase(), ErrorPhase::Read);
+        // E il raffinamento NON tocca gli altri tre assi.
+        assert_eq!(al_confine.category(), ErrorCategory::Protocol);
+        assert_eq!(al_confine.remote_effect(), RemoteEffect::None);
+        assert_eq!(al_confine.retry_disposition(), RetryDisposition::Never);
+    }
+
+    #[test]
+    fn i_messaggi_delle_varianti_nuove_non_portano_dati() {
+        // Regola 8: il testo dice dove e cosa ci si aspettava, mai il
+        // contenuto. Qui si verifica cio' che il tipo puo' garantire — che
+        // l'evidenza sia fatta di soli numeri di budget — e si documenta che
+        // il resto (il `contesto`) resta responsabilita' di chi costruisce.
+        let errore = PlenoraError::UnattributedMemoryPressure {
+            contesto: "attesa del worker".into(),
+            evidenza: evidenza(),
+        };
+        let testo = errore.to_string();
+        assert!(
+            testo.contains("attesa del worker"),
+            "il contesto resta leggibile: {testo}"
+        );
+        assert!(
+            testo.contains("oom_kill_ricorsivi=1"),
+            "l'evidenza entra nel messaggio: {testo}"
+        );
+    }
+
+    #[test]
+    fn l_evidenza_distingue_lo_zero_osservato_dal_non_osservabile() {
+        // E' la ragione per cui il tipo non e' una `String`. Un contatore
+        // assente non deve poter essere letto come «nessun evento»: sono le
+        // due conclusioni opposte che questa variante esiste per non
+        // confondere.
+        let cieca = EvidenzaDiLimite {
+            tetto_byte: 1024,
+            picco_byte: None,
+            respinte_al_tetto: None,
+            oom_nel_dominio: Some(0),
+            oom_kill_ricorsivi: None,
+        };
+        let reso = cieca.to_string();
+        assert!(
+            reso.contains("picco=n/d"),
+            "il picco non osservabile non diventa zero: {reso}"
+        );
+        assert!(
+            reso.contains("oom_dominio=0"),
+            "lo zero OSSERVATO resta uno zero: {reso}"
+        );
+        assert!(
+            reso.contains("oom_kill_ricorsivi=n/d"),
+            "e nemmeno le uccisioni ricorsive: {reso}"
+        );
+        // Il tetto non e' opzionale: e' nostro, quindi e' sempre un numero.
+        assert!(reso.contains("tetto=1024 byte"), "{reso}");
     }
 
     #[test]

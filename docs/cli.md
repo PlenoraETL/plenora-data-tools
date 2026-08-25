@@ -93,15 +93,32 @@ Proiezione della categoria dell'errore.
 | `2` | `invalid_plan`, `invalid_configuration` |
 | `3` | `schema`, `data_mapping`, `crs`, `unsupported` |
 | `4` | `resource_limit` |
-| `5` | `io`, `not_found`, `conflict`, `authentication`, `authorization`, `timeout`, `transient` |
+| `5` | `io`, `not_found`, `conflict`, `protocol`, `authentication`, `authorization`, `timeout`, `transient`, `isolation_unavailable`, `unattributed_memory_pressure` |
 | `6` | `execution` |
 | `70` | `internal`, e ogni categoria non riconosciuta |
 | `130` | `cancelled` (128 + SIGINT) |
 
 Sono una **convenzione di questo componente**, dichiarata come divergenza
-rispetto ai componenti gemelli, non un allineamento. Un test verifica che ogni
-categoria abbia l'exit code dichiarato, così la tabella non può divergere dal
-codice.
+rispetto ai componenti gemelli, non un allineamento.
+
+Il numero è **grossolano di proposito**: distingue l'azione da intraprendere,
+non la condizione. La condizione precisa sta in `error.category`
+dell'envelope, che è machine-readable — chi ne ha bisogno legge quella. Il `5`
+raccoglie perciò casi molto diversi (un disco assente, una destinazione
+occupata, un ambiente senza isolamento) accomunati solo dal fatto che il
+piano è corretto e sono le condizioni operative a non esserlo.
+
+Cosa impedisce alla tabella di divergere dal codice, e cosa no:
+
+- una categoria nuova **non compila** finché non le si assegna un exit code:
+  la proiezione è un `match` esaustivo su `ErrorCategory`, non un confronto
+  di stringhe;
+- un test itera *tutte* le categorie dichiarate e pretende che ciascuna
+  compaia nella propria tabella, scritta a mano come seconda opinione: una
+  categoria nuova non può restare scoperta in silenzio;
+- **questa tabella no**: è prosa, nessun controllo automatico la legge. È
+  già divergita una volta — `protocol` era proiettato su `5` dal codice e
+  mancava da questa riga. Chi tocca la proiezione aggiorni anche qui.
 
 ## Cancellazione
 

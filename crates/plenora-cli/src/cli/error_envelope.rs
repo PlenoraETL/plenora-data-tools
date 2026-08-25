@@ -8,7 +8,7 @@
 use std::error::Error;
 use std::io::Write;
 
-use plenora_core::{PlenoraError, RetryDisposition};
+use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
 use plenora_engine::geo_transport::transport::ArrowTransportError;
 
 /// Cancellazione cooperativa (128 + SIGINT).
@@ -53,22 +53,80 @@ pub fn emit_error_envelope(
 /// | 2 | piano o configurazione invalidi |
 /// | 3 | contratto, schema o capability incompatibili |
 /// | 4 | limite di risorsa superato |
-/// | 5 | I/O, pubblicazione, rete o autorizzazioni |
+/// | 5 | I/O, pubblicazione, rete, autorizzazioni, protocollo, ambiente |
 /// | 6 | fallimento di esecuzione di un nodo |
 /// | 70 | difetto interno |
 /// | 130 | cancellato (128 + SIGINT) |
 pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
-    match envelope["error"]["category"].as_str() {
-        Some("cancelled") => EXIT_CANCELLED,
-        Some("invalid_plan" | "invalid_configuration") => 2,
-        Some("schema" | "data_mapping" | "crs" | "unsupported") => 3,
-        Some("resource_limit") => 4,
-        Some(
-            "io" | "not_found" | "conflict" | "protocol" | "authentication" | "authorization"
-            | "timeout" | "transient",
-        ) => 5,
-        Some("execution") => 6,
-        _ => EXIT_INTERNO,
+    envelope["error"]["category"]
+        .as_str()
+        .and_then(ErrorCategory::from_canonical)
+        .map_or(EXIT_INTERNO, exit_code_di)
+}
+
+/// Exit code di una categoria, deciso **per ciascuna**.
+///
+/// # Perche' un `match` su un tipo e non su una stringa
+///
+/// La versione precedente confrontava il nome canonico e mandava tutto il
+/// resto su `EXIT_INTERNO`. Funzionava, e nascondeva due cose:
+///
+/// - una categoria **nuova** non fermava nulla. Finiva in silenzio su 70,
+///   cioe' dichiarava un difetto interno di una condizione che non lo era, e
+///   nessun test poteva accorgersene perche' l'elenco atteso era anch'esso
+///   scritto a mano;
+/// - la tabella di [`cli.md`](../../../../docs/cli.md) poteva divergere dal
+///   codice, e lo aveva fatto: `protocol` era mappato su 5 dal 2026 e non
+///   compariva nella riga del 5.
+///
+/// Con un `match` esaustivo su [`ErrorCategory`] una categoria nuova **non
+/// compila** finche' qualcuno non ne decide l'exit code. Il ripiego su 70
+/// resta dove serve davvero: in [`error_exit_code`], per un envelope che
+/// porta una stringa che non e' una categoria — un JSON di un'altra versione,
+/// o corrotto.
+///
+/// # Gli exit code non si moltiplicano
+///
+/// Sono classi **grossolane** di proposito: la distinzione precisa vive in
+/// `error.category` dell'envelope, che e' machine-readable. Aggiungere un
+/// numero per ogni condizione nuova allargherebbe il contratto verso chi
+/// invoca l'eseguibile senza dirgli nulla che non possa gia' leggere.
+#[must_use]
+pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
+    match categoria {
+        // Piano o configurazione: il chiamante deve cambiare cio' che ha
+        // mandato.
+        ErrorCategory::InvalidPlan | ErrorCategory::InvalidConfiguration => 2,
+        // Contratto, schema, capability: i dati o le attese non combaciano.
+        ErrorCategory::Schema
+        | ErrorCategory::DataMapping
+        | ErrorCategory::Crs
+        | ErrorCategory::Unsupported => 3,
+        // Limite di risorsa DIMOSTRATO.
+        ErrorCategory::ResourceLimit => 4,
+        // Condizioni operative e d'ambiente.
+        //
+        // `IsolationUnavailable` sta qui e non su 2: il piano e' valido, ed
+        // e' l'ambiente a non offrire l'isolamento.
+        //
+        // `UnattributedMemoryPressure` sta qui e non su 4 ne' su 70: dire 4
+        // attribuirebbe il superamento al budget del dominio senza prova,
+        // dire 70 dichiarerebbe un difetto interno senza prova. Cinque dice
+        // «condizione operativa», che e' quanto sappiamo.
+        ErrorCategory::Io
+        | ErrorCategory::NotFound
+        | ErrorCategory::Conflict
+        | ErrorCategory::Protocol
+        | ErrorCategory::Authentication
+        | ErrorCategory::Authorization
+        | ErrorCategory::Timeout
+        | ErrorCategory::Transient
+        | ErrorCategory::IsolationUnavailable
+        | ErrorCategory::UnattributedMemoryPressure => 5,
+        // Fallimento di un nodo del DAG.
+        ErrorCategory::Execution => 6,
+        ErrorCategory::Internal => EXIT_INTERNO,
+        ErrorCategory::Cancelled => EXIT_CANCELLED,
     }
 }
 
@@ -88,7 +146,9 @@ pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
 /// `none`/`never`; errori I/O nudi (lettura piano/argomenti) ->
 /// `io`/`read`/`none`/`safe`; errori di parse JSON del piano ->
 /// `data_mapping`/`validate`/`none`/`never`; qualunque altro tipo ->
-/// `internal`/`validate`/`none`/`never`.
+/// `internal`/`validate`/`none`/`never`. I nomi non sono piu' scritti a mano
+/// in nessuno dei quattro rami: vengono da [`ErrorCategory`], [`ErrorPhase`] e
+/// [`RemoteEffect`], quindi seguono una rinomina invece di sopravviverle.
 pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
     let plenora_error = error.downcast_ref::<PlenoraError>();
     let public_transport_parameter_error =
@@ -102,27 +162,55 @@ pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_j
                         | ArrowTransportError::InvalidParameter { .. }
                 )
             });
+    // Gli assi restano TIPIZZATI fino all'ultimo passo, anche sul ramo di
+    // ripiego. Prima i quattro casi non-`PlenoraError` scrivevano i nomi
+    // canonici a mano — `"invalid_plan"`, `"io"`, `"data_mapping"`,
+    // `"internal"` — e una rinomina di categoria li avrebbe lasciati
+    // indietro senza che nulla se ne accorgesse: sono la stessa classe di
+    // difetto della proiezione su exit code che confrontava stringhe.
     let (category, phase, remote_effect, disposition) = plenora_error.map_or_else(
         || {
             if public_transport_parameter_error {
-                ("invalid_plan", "validate", "none", RetryDisposition::Never)
+                (
+                    ErrorCategory::InvalidPlan,
+                    ErrorPhase::Validate,
+                    RemoteEffect::None,
+                    RetryDisposition::Never,
+                )
             } else if error.downcast_ref::<std::io::Error>().is_some() {
-                ("io", "read", "none", RetryDisposition::Safe)
+                (
+                    ErrorCategory::Io,
+                    ErrorPhase::Read,
+                    RemoteEffect::None,
+                    RetryDisposition::Safe,
+                )
             } else if error.downcast_ref::<serde_json::Error>().is_some() {
-                ("data_mapping", "validate", "none", RetryDisposition::Never)
+                (
+                    ErrorCategory::DataMapping,
+                    ErrorPhase::Validate,
+                    RemoteEffect::None,
+                    RetryDisposition::Never,
+                )
             } else {
-                ("internal", "validate", "none", RetryDisposition::Never)
+                (
+                    ErrorCategory::Internal,
+                    ErrorPhase::Validate,
+                    RemoteEffect::None,
+                    RetryDisposition::Never,
+                )
             }
         },
         |plenora| {
             (
-                plenora.category().as_str(),
-                plenora.phase().as_str(),
-                plenora.remote_effect().as_str(),
+                plenora.category(),
+                plenora.phase(),
+                plenora.remote_effect(),
                 plenora.retry_disposition(),
             )
         },
     );
+    let (category, phase, remote_effect) =
+        (category.as_str(), phase.as_str(), remote_effect.as_str());
     // Forma taggata fissata in conformance/components.json
     // (required_capability_shared): {"kind": ...} e, solo per
     // `after(durata)`, "delay_ms" — altrimenti il chiamante saprebbe DI
