@@ -64,9 +64,11 @@ impl Default for Limits {
             max_string_bytes: 16 * 1024 * 1024,
             max_regex_bytes: 4_096,
             max_split_columns: limiti_interni::MAX_SPLIT_COLUMNS,
-            max_governed_memory_bytes: 512 * 1024 * 1024,
-            max_temp_bytes: 8 * 1024 * 1024 * 1024,
-            spill_partitions: 64,
+            // Stessa autorita' di `plenora_core::Limits::default()`: i due
+            // default non possono piu' divergere.
+            max_governed_memory_bytes: plenora_core::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE,
+            max_temp_bytes: plenora_core::DEFAULT_MAX_TEMP_BYTES,
+            spill_partitions: plenora_core::DEFAULT_SPILL_PARTITIONS as usize,
         }
     }
 }
@@ -1647,6 +1649,51 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn il_default_governato_e_lo_stesso_di_plenora_core() {
+        // I due default erano due letterali distinti e potevano divergere
+        // senza che nulla lo notasse: due componenti dello stesso processo
+        // avrebbero applicato budget diversi allo stesso piano. Ora c'e'
+        // un'autorita' sola, e questo test lo verifica su ENTRAMBI i lati
+        // invece di confrontare il letterale con se stesso.
+        assert_eq!(
+            Limits::default().max_governed_memory_bytes as u64,
+            plenora_core::DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
+            "il default dei kernel deve venire dall'autorita' di plenora-core"
+        );
+        assert_eq!(
+            Limits::default().max_governed_memory_bytes as u64,
+            plenora_core::limits::Limits::default().max_governed_memory_bytes,
+            "e coincidere con quello del contenitore dei limiti del piano"
+        );
+    }
+
+    #[test]
+    fn anche_gli_altri_due_default_condivisi_vengono_dall_autorita() {
+        // Stessa classe: `max_temp_bytes` e `spill_partitions` erano
+        // anch'essi due letterali distinti nei due crate. Il percorso legacy
+        // porta QUESTI valori negli override del piano, quindi una
+        // divergenza si sarebbe vista come un piano eseguito sotto limiti
+        // che nessuno ha dichiarato.
+        let nostri = Limits::default();
+        let del_piano = plenora_core::limits::Limits::default();
+        assert_eq!(nostri.max_temp_bytes, del_piano.max_temp_bytes);
+        assert_eq!(nostri.max_temp_bytes, plenora_core::DEFAULT_MAX_TEMP_BYTES);
+        // Il confronto si fa nel tipo LARGO: restringere `usize` a `u32` per
+        // confrontarli introdurrebbe qui la stessa troncatura che il codice
+        // di produzione evita.
+        let nostre_partizioni = u64::try_from(nostri.spill_partitions).expect("partizioni");
+        assert_eq!(
+            nostre_partizioni,
+            u64::from(del_piano.spill_partitions),
+            "i due crate li tengono in tipi diversi, non in valori diversi"
+        );
+        assert_eq!(
+            nostre_partizioni,
+            u64::from(plenora_core::DEFAULT_SPILL_PARTITIONS)
+        );
+    }
 
     fn batch() -> RecordBatch {
         RecordBatch::try_new(

@@ -247,6 +247,28 @@ dichiara resta al default della libreria.
 | stringhe | `max_string_bytes`, `max_regex_bytes` |
 | piano | sotto-oggetto `plan`: `max_plan_json_bytes`, `max_plan_nodes`, `max_plan_edges`, `max_plan_depth`, `max_fan_out`, `max_inputs`, `max_config_bytes_per_node`, `max_identifier_bytes` |
 
+### I default che si applicano quando il piano tace
+
+Un campo omesso non è un campo senza valore: il piano gira sotto il default, e
+chi invia deve poterlo sapere **prima** di inviare. I tre del gruppo memoria:
+
+| campo | default | costante |
+|---|---|---|
+| `max_governed_memory_bytes` | `536870912` byte (512 MiB) | `DEFAULT_MAX_GOVERNED_MEMORY_BYTES` |
+| `max_temp_bytes` | `8589934592` byte (8 GiB) | `DEFAULT_MAX_TEMP_BYTES` |
+| `spill_partitions` | `64` | `DEFAULT_SPILL_PARTITIONS` |
+
+Sono costanti pubbliche di `plenora_core`, riesportate dalla radice del crate,
+e i default di `Limits` vengono **da lì**: la tabella non può divergere dal
+codice restando entrambi in vita, perché il numero è scritto una volta sola.
+
+Pubblicare `max_governed_memory_bytes` non è una cortesia. `Plan Budget 1.0`
+lo **richiede** (`PLAN-013`): il tetto del dominio di un piano v6 deve essere
+maggiore o uguale al budget governato *effettivo*, che è quello dichiarato
+oppure — quando il piano lo omette — questo default. Senza il numero pubblico
+quel vincolo non è verificabile prima dell'invio, e si scoprirebbe solo al
+rifiuto.
+
 I due gruppi non hanno lo stesso statuto, e confonderli è stato un difetto
 reale:
 

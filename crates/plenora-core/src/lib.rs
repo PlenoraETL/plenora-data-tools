@@ -22,6 +22,11 @@ pub mod diagnostics;
 pub mod error;
 pub mod json;
 pub mod limits;
+
+pub use limits::{
+    DEFAULT_MAX_GOVERNED_MEMORY_BYTES, DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE,
+    DEFAULT_MAX_TEMP_BYTES, DEFAULT_SPILL_PARTITIONS,
+};
 pub mod panic_policy;
 
 pub use error::{
