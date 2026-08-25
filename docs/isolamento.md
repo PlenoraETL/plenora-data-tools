@@ -641,7 +641,8 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 | 6 | **schema** | `contract_from_arrow_schema` fallisce, **con il resolver negoziato** |
 | 7 | **contratto** | il contratto letto non corrisponde a quello atteso dal piano validato |
 | 8 | **completezza** | i conteggi dichiarati nell'`Esito` non corrispondono a quelli osservati |
-| 9 | **publish atomico** | il rename fallisce, o la destinazione esiste già |
+| 8-bis | **identità dell'esecuzione** | l'`execution_id` nei metadati non è quello negoziato nell'handshake: l'artefatto non è di questa esecuzione (§7-quater) |
+| 9 | **publish atomico no-clobber** | `persist_noclobber` fallisce, o la destinazione esiste già → `Conflict`. **Mai** una sostituzione |
 
 Solo dopo il passo 9 l'output è visibile. I passi 1-8 non producono alcun
 effetto osservabile all'esterno.
@@ -705,19 +706,36 @@ dice «qui c'è un output valido», che non è la domanda.
 
 ### `execution_id`: la catena che rende l'ambiguità risolvibile
 
-L'identità dell'esecuzione va scelta **prima** che qualcosa esista, e portata
-fino all'artefatto:
+**L'identificativo lo sceglie il chiamante, non noi.** La prima stesura lo
+faceva scegliere al coordinatore e restituire alla fine, il che non risolve
+nulla nel solo caso che deve risolvere: se il coordinatore muore dopo il
+rename non restituisce niente, e il chiamante non ha l'identificativo da
+confrontare. Peggio — il coordinatore **è** il processo del chiamante
+(§2-quater), quindi non può nemmeno restituire una condizione che descriva la
+propria morte.
+
+Un'API in due passi — `start()` che rende un handle, `attendi()` che rende
+l'esito — sposterebbe il problema senza risolverlo: l'handle vive nello stesso
+processo che muore. L'unica forma che sopravvive è un identificativo che il
+chiamante **possiede già prima**, e che può aver scritto dove vuole.
 
 ```
-    execution_id scelto dal coordinatore, prima dell'avvio
+    execution_id fornito dal chiamante, prima dell'invocazione
       -> trasportato nel Saluto dell'handshake
          -> scritto dal worker nei metadati dell'artefatto
             -> verificato dal supervisore PRIMA del rename
-               -> restituito al chiamante insieme al percorso
 ```
 
-Il chiamante che non riceve esito rilegge la destinazione e confronta
-l'identificativo che gli era stato dato:
+Chi deve risolvere — il chiamante che è sopravvissuto, o un processo
+successivo — usa una procedura **indipendente dall'esecuzione**:
+
+```
+    risolvi_commit(execution_id, destinazione) -> EsitoDelCommit
+```
+
+Non è un metodo dell'oggetto d'esecuzione, perché quell'oggetto potrebbe non
+esistere più. È una funzione che prende ciò che il chiamante ha conservato e
+la destinazione, e legge:
 
 | che cosa trova | che cosa significa |
 |---|---|
@@ -730,21 +748,38 @@ Il passo che conta è la **verifica prima del rename**: pubblicare un artefatto
 il cui identificativo non è quello atteso significherebbe pubblicare il lavoro
 di un altro sotto il proprio nome.
 
-L'`execution_id` non è un'identità globale né un lock: due esecuzioni possono
-ancora corrersi incontro sulla stessa destinazione, e vince l'ultima. Serve a
-rispondere a una domanda sola — *questo output è mio?* — e a quella risponde.
+L'`execution_id` non è un'identità globale né un lock. Serve a rispondere a
+una domanda sola — *questo output è mio?* — e a quella risponde.
 
-### Finché non c'è, l'esito è dichiarato ignoto
+**Due esecuzioni sulla stessa destinazione non si sovrascrivono**: la prima
+che pubblica vince, la seconda fallisce con `Conflict`. La stesura precedente
+scriveva «vince l'ultima», che contraddiceva sia il passo 9 della verifica —
+dove una destinazione già esistente è un fallimento — sia il codice che c'è
+già.
 
-Il campo va aggiunto ai metadati dell'artefatto e al protocollo, quindi non
-esiste prima della `PR-5`. Fino ad allora — e in ogni caso in cui
-l'identificativo manchi — l'esito di un coordinatore morto dopo il commit
-**non è «riuscito»**: è `CommitOutcomeUnknown`, una condizione con un nome, che
-dice al chiamante che deve guardare lui e che noi non sappiamo.
+La primitiva è `persist_noclobber` di `tempfile`, che il percorso in-process
+usa da tempo: `RENAME_NOREPLACE` dove il kernel lo offre, e la sostituzione
+non avviene mai. Nominarla conta, perché un `rename(2)` ordinario
+**sostituirebbe** la destinazione in silenzio, e il disegno poggia sul
+contrario. Nella matrice delle piattaforme la riga è quella, non «rename».
 
-Chiamarla «risolvibile» senza la catena sarebbe stato promettere una
-risoluzione che il documento stesso dichiarava impossibile poche righe più in
-basso.
+### «Esito ignoto» non è un errore che restituiamo
+
+`CommitOutcomeUnknown` non è una variante d'errore che qualcuno riceve: è il
+**nome della situazione** in cui si trova un chiamante che non ha ricevuto
+nulla. Nessuno gliela comunica, perché il processo che avrebbe dovuto
+comunicargliela è morto. Metterla fra le varianti pubbliche di `PlenoraError`
+sarebbe stato un errore di categoria.
+
+Ciò che è pubblico è invece `risolvi_commit`, e il tipo che rende.
+
+**Senza identificativo la risoluzione non è disponibile.** Un profilo isolato
+invocato senza `execution_id` esegue e pubblica normalmente, ma il chiamante
+non potrà distinguere il proprio output da quello di un'altra esecuzione dello
+stesso piano. Va dichiarato all'ingresso, non scoperto dopo: per il profilo
+isolato l'identificativo è **obbligatorio**, ed è la scelta coerente con il
+resto — nessuna garanzia che dipenda da ciò che il chiamante si è ricordato di
+fare.
 
 ---
 
@@ -777,26 +812,83 @@ non è quello che ci si aspetta da nessuna delle due parti:
     dominio memory.peak   33 787 904     <- 233 472 oltre il picco del padre
 ```
 
-Il picco del **figlio** supera quello del **padre che lo contiene**, il che
-sotto una lettura ingenua della gerarchia è impossibile. Non è quindi la prova
-di un superamento del tetto — il padre non l'ha superato — ma qualcosa di più
-fastidioso: **i due contatori non sono coerenti fra loro**, e almeno uno dei
-due non misura ciò che sembra.
+Il kernel definisce `memory.peak` come il massimo del cgroup **e dei suoi
+discendenti**. I due valori non rispettano quella relazione: il figlio supera
+il padre che lo contiene.
 
-La spiegazione plausibile, e va detto che è un'ipotesi e non una misura: il
-figlio ha un tetto molto più alto, quindi l'addebito passa al suo livello e
-viene registrato nel suo picco, per poi essere **respinto più in alto** dal
-tetto del padre. Il picco del figlio conterebbe allora un addebito *tentato* e
-mai posseduto — esattamente la classe di difetto che il prototipo Windows ha
-trovato in `PeakJobMemoryUsed`, su un'altra piattaforma e con un altro nome.
+**La conclusione onesta è che non se ne può trarre nessuna.** La stesura
+precedente usava il picco del padre per concludere «superamento zero» e nello
+stesso paragrafo dichiarava i picchi inaffidabili: non si possono fare
+entrambe le cose. Se i due contatori sono incoerenti, il valore del padre non
+prova più di quello del figlio.
 
-Ne segue una regola pratica: **i valori di picco non sono evidenza di memoria
-posseduta**, né qui né altrove, e non vanno usati per ragionare sul consumo di
-un antenato. Servono al dimensionamento, con la loro incertezza dichiarata.
+Quindi, su questo kernel e in questa configurazione: **i due `memory.peak` non
+sono confrontabili in modo coerente, e il superamento temporaneo non è né
+dimostrato né escluso.**
+
+Resta una conseguenza sola, ed è già sufficiente: **i picchi non fondano
+garanzie**. Servono al dimensionamento, con la loro incertezza dichiarata.
+
+Un'ipotesi sul perché — che l'addebito venga registrato al livello del figlio
+e respinto più in alto, quindi *tentato* e mai posseduto — sta nel registro delle misure
+([`prototipi-isolamento.md`](prototipi-isolamento.md)) e **resta un'ipotesi**:
+diventerebbe una conclusione solo con una sonda dedicata, che non è stata
+scritta.
 
 La differenza conta per chi dimensiona un host: sommare i tetti dei domini dà
 una stima, non un massimo garantito. È la stessa ragione per cui il picco
 complessivo del sistema è una guida e non una promessa (§2-quater).
+
+---
+
+## 7-quater. `execution_id` tocca l'artefatto, quindi tocca il determinismo
+
+Scrivere l'identificativo nei metadati dell'artefatto non è un dettaglio
+implementativo: cambia i **byte** del file prodotto. Tre cose vanno conciliate
+prima di scriverne una riga, e sono la ragione per cui `PR-5` cambia semantica.
+
+### 1. Il determinismo di livello 2
+
+L'oracolo dice: *stesso input, stesso IPC byte per byte*. Con
+l'identificativo dentro l'artefatto, due esecuzioni dello stesso piano sugli
+stessi dati producono byte diversi — a meno di dichiarare che
+`execution_id` **fa parte dell'input dell'esecuzione**.
+
+È la formulazione corretta, non un cavillo: l'identificativo *è* un ingresso,
+scelto dal chiamante prima dell'invocazione come il percorso di destinazione o
+il tetto di memoria. Il determinismo diventa quindi:
+
+> stesso piano, stessi dati **e stesso `execution_id`** producono lo stesso
+> IPC byte per byte.
+
+L'oracolo esistente va aggiornato di conseguenza: fissare un identificativo
+nel caso di prova, invece di generarne uno e poi normalizzarlo via. Normalizzare
+sarebbe la scorciatoia sbagliata — nasconderebbe proprio il campo che si vuole
+sorvegliare.
+
+### 2. L'autorità Arrow↔contratto
+
+`contract_from_arrow_schema` costruisce il `DataContract` dai metadati dello
+schema. Se l'identificativo finisse fra le chiavi che quella funzione legge,
+diventerebbe una **proprietà semantica del contratto** — e due output
+identici in tutto tranne l'identificativo risulterebbero contratti diversi,
+facendo fallire il passo 7 della verifica su un artefatto perfettamente
+valido.
+
+L'identificativo è **operativo, non semantico**: dice *chi ha prodotto questo
+file*, non *che cosa contiene*. Vive quindi in una chiave che il costruttore
+del contratto **ignora esplicitamente**, e la separazione va verificata da un
+test, non lasciata all'attenzione di chi legge: un artefatto con
+identificativi diversi e tutto il resto uguale deve produrre lo **stesso**
+contratto.
+
+### 3. Chi lo verifica, e quando
+
+Il supervisore lo confronta al passo 8-bis della verifica, **prima** del
+publish: se l'artefatto porta un identificativo diverso da quello negoziato
+nell'handshake, non è di questa esecuzione e non si pubblica. È l'unico modo
+per cui la lettura del chiamante in §7-bis significhi qualcosa — altrimenti si
+verificherebbe a valle un campo che nessuno ha verificato a monte.
 
 ---
 
@@ -1361,7 +1453,7 @@ entrambe le piattaforme e non solo per Linux:
 | | proprietà | forma verificabile |
 |---|---|---|
 | **1** | nascita già vincolata | il worker non esiste, in nessun istante, fuori dal dominio |
-| **2** | contenimento | la memoria **posseduta** resta sotto il tetto — *comunque* il sistema ci arrivi |
+| **2** | contenimento | il tetto è **imposto** secondo la semantica della primitiva — reclaim e, se non basta, uccisione — *comunque* il sistema ci arrivi. Non «nessun byte lo oltrepassa mai» (`NG-14`) |
 | **3** | attribuzione | l'evento è leggibile e riferito al nostro dominio, non dedotto |
 | **4** | comportamento dopo il rifiuto | se l'allocazione è **negata** invece che fatale: che cosa fa il worker, e resta classificabile? |
 | **5** | evidenza per ogni variante | terminazione forzata *e* rifiuto devono lasciare entrambi una prova |
@@ -1369,11 +1461,13 @@ entrambe le piattaforme e non solo per Linux:
 La riga 2 è stata riscritta. Diceva «il processo viene fermato al tetto», che
 descrive Linux e non Windows: il primo uccide, il secondo nega l'allocazione e
 lascia il processo vivo. Il tetto può inoltre essere superato per un istante
-prima che il sistema reagisca, quindi la proprietà è sulla memoria posseduta,
-non sull'istante.
+prima che il sistema reagisca, quindi la proprietà è sull'**imposizione** del
+tetto, non su un massimo istantaneo.
 
-**Esito.** Entrambi i prototipi hanno dimostrato tutte e cinque le voci. Le
-misure, le sette conseguenze sul disegno e — soprattutto — l'elenco di ciò che
+**Esito.** Nascita vincolata e contenimento sono dimostrati su entrambe le
+piattaforme. **L'attribuzione no**: su Linux regge solo sotto le condizioni
+verificabili del preflight, e su Windows non regge affatto — motivo per cui
+quella piattaforma è uscita dal perimetro. Le misure e l'elenco di ciò che
 **non** è stato dimostrato stanno in
 [`prototipi-isolamento.md`](prototipi-isolamento.md).
 
@@ -1395,11 +1489,11 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 
 | PR | contenuto | cambia semantica | verificabile con |
 |---|---|---|---|
-| **PR-1** | varianti nuove di `PlenoraError` per `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration` | **sì** (tipo pubblico) | mapping variante→categoria esaustivo, exit code invariati per le esistenti |
+| **PR-1** | varianti nuove di `PlenoraError`: `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration`, **`IsolationUnavailable`** (§9), **pressione di memoria non attribuita** (§10.0-bis). Più il tipo reso da `risolvi_commit` | **sì** (tipo pubblico) | mapping variante→categoria esaustivo, exit code invariati per le esistenti |
 | **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
 | **PR-3** | tipi dell'esito e della classificazione: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo, la precedenza §10.3 | no | test di tabella sulla matrice e sulle corse |
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
-| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici | no | test di disaccordo su ciascun campo |
+| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`execution_id`**; e `execution_id` nei metadati dell'artefatto | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo, più le tre condizioni della §7-quater |
 | **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
@@ -1408,8 +1502,10 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 
-Tre PR cambiano semantica — `PR-1`, `PR-2` e `PR-12` — e nessuna delle tre è
-nascosta in mezzo alle altre.
+Quattro PR cambiano semantica — `PR-1`, `PR-2`, `PR-5` e `PR-12` — e nessuna
+delle quattro è nascosta in mezzo alle altre. `PR-5` lo è diventata scrivendo
+`execution_id` nell'artefatto: la stesura precedente la marcava «nessun
+cambiamento semantico» quando cambia i byte del file prodotto.
 
 ### Perché Windows esce dal perimetro
 

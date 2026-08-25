@@ -412,16 +412,16 @@ dimostrano una causa** — sono in [`isolamento.md`](isolamento.md).
 
 ---
 
-### 5.8 I picchi non misurano la memoria posseduta
+### 5.8 I picchi non fondano garanzie
 
 La review ha ipotizzato che `L18` avesse osservato un superamento temporaneo
 del tetto: il picco del dominio (`33 787 904`) supera il tetto del padre
 (`33 554 432`) di `233 472` byte, e poiché il dominio è contenuto nel padre,
 il padre doveva averlo superato.
 
-L'inferenza è ragionevole e la misura diretta la smentisce. Letto il picco del
-padre — cosa che nessuno aveva fatto, ed è la ragione per cui l'affermazione
-«mai osservato» era senza prove:
+L'affermazione «mai osservato» che questo documento portava era senza prove:
+il picco del padre non era mai stato letto. Letto, il quadro non conferma
+l'inferenza — e non la smentisce nel modo che sembrerebbe:
 
 ```
     padre   memory.max    33 554 432
@@ -429,21 +429,32 @@ padre — cosa che nessuno aveva fatto, ed è la ragione per cui l'affermazione
     dominio memory.peak   33 787 904     233 472 oltre il picco del padre
 ```
 
-Il padre non ha superato il proprio tetto. Ma il **figlio** ha un picco
-maggiore del **padre che lo contiene**, e questo sotto una lettura ingenua
-della gerarchia non può accadere.
+Il kernel definisce `memory.peak` come il massimo del cgroup **e dei suoi
+discendenti**. I due valori non rispettano quella relazione: il figlio supera
+il padre che lo contiene. Almeno uno dei due non misura ciò che la
+documentazione dice.
 
-La spiegazione plausibile — ipotesi, non misura — è che l'addebito passi al
-livello del figlio, che ha un tetto molto più alto, venga registrato nel suo
-picco, e sia poi respinto più in alto dal tetto del padre. Il picco del figlio
-conterebbe allora un addebito **tentato e mai posseduto**: la stessa classe di
-difetto che il ciclo su Windows aveva trovato in `PeakJobMemoryUsed`, su
-un'altra piattaforma e con un altro nome.
+**E qui va fermata la conclusione.** Sarebbe comodo dire «il padre non ha
+superato il tetto, quindi superamento zero», ma userebbe come prova
+esattamente il contatore che si sta dichiarando inaffidabile. Se i due sono
+incoerenti, il valore del padre non vale più di quello del figlio.
 
-Ne segue una regola, e vale per entrambe le piattaforme: **i valori di picco
-non sono evidenza di memoria posseduta**, e non vanno usati per ragionare sul
-consumo di un antenato. Servono al dimensionamento, con l'incertezza
-dichiarata — anche i picchi riportati nella §4 di questo documento.
+La conclusione rigorosa è quindi negativa:
+
+> Su questo kernel e in questa configurazione i due `memory.peak` non sono
+> confrontabili in modo coerente. Il superamento temporaneo del tetto **non è
+> né dimostrato né escluso**.
+
+Un'ipotesi sul perché — che l'addebito passi al livello del figlio, che ha un
+tetto molto più alto, vi sia registrato, e sia poi respinto dal tetto del
+padre, restando quindi **tentato e mai posseduto** — è la stessa firma che il
+ciclo su Windows aveva trovato in `PeakJobMemoryUsed`. Resta un'ipotesi:
+diventerebbe una conclusione solo con una sonda dedicata, che non è stata
+scritta.
+
+Ne segue una regola sola, e basta: **i picchi non fondano garanzie**. Servono
+al dimensionamento con l'incertezza dichiarata — compresi quelli riportati
+nella §4 di questo documento.
 
 ---
 

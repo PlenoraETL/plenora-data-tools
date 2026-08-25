@@ -271,10 +271,21 @@ commit.
 
 Sigillo e contratto **non bastano** a risolvere: dimostrano che l'artefatto è
 valido, non che sia di quella esecuzione — due esecuzioni dello stesso piano su
-input diversi producono lo stesso contratto. Serve un `execution_id` scelto
-prima dell'avvio, trasportato nell'handshake, scritto nell'artefatto,
-verificato **prima** del rename e restituito al chiamante. Finché non c'è, o
-quando manca, l'esito è `CommitOutcomeUnknown` e non «riuscito».
+input diversi producono lo stesso contratto.
+
+Serve un `execution_id` **fornito dal chiamante prima dell'invocazione**, non
+scelto da noi e restituito alla fine: un coordinatore morto non restituisce
+nulla, e poiché è il processo del chiamante non può nemmeno comunicare la
+propria morte. La catena è handshake → metadati dell'artefatto → verifica
+prima del rename. La risoluzione è una procedura indipendente,
+`risolvi_commit(execution_id, destinazione)`, chiamabile da un processo
+successivo. Per il profilo isolato l'identificativo è obbligatorio.
+
+**F4-19 — Una sola semantica di concorrenza sulla destinazione: no-clobber.**
+La prima pubblicazione vince, la seconda fallisce con `Conflict`. Mai una
+sostituzione silenziosa. La primitiva è `persist_noclobber`, già in uso nel
+percorso in-process; un `rename(2)` ordinario sostituirebbe la destinazione e
+non è utilizzabile.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
@@ -289,12 +300,19 @@ evidenza di pressione è **non attribuita** — una categoria propria, da
 aggiungere in `PR-1`, che porta i contatori e non conclude al posto di chi
 legge. In nessun caso ambiguo si pubblica.
 
-**F4-18 — I picchi non sono evidenza di memoria posseduta.** `memory.peak` di
-un figlio ha superato quello del padre che lo contiene di 233 472 byte:
-almeno uno dei due contatori non misura ciò che sembra, e l'ipotesi è che
-registri addebiti *tentati* — la stessa classe di difetto trovata su Windows
-in `PeakJobMemoryUsed`. I picchi servono al dimensionamento, con l'incertezza
-dichiarata, e non a ragionare sul consumo di un antenato.
+**F4-18 — I picchi non fondano garanzie.** `memory.peak` di un figlio ha
+superato quello del padre che lo contiene di 233 472 byte, mentre il kernel lo
+definisce come massimo del cgroup **e dei discendenti**: i due valori non
+rispettano quella relazione. Non se ne conclude né che il tetto sia stato
+superato né che non lo sia stato — il picco del padre non è più affidabile di
+quello del figlio, e usarlo per provare «superamento zero» mentre si dichiara
+il contatore inaffidabile sarebbe incoerente.
+
+**Su questo kernel il superamento temporaneo non è né dimostrato né escluso.**
+Resta che i picchi servono al dimensionamento con l'incertezza dichiarata, non
+a fondare garanzie. L'ipotesi dell'addebito *tentato* — la stessa firma
+trovata su Windows in `PeakJobMemoryUsed` — resta un'ipotesi finché non la
+prova una sonda dedicata.
 
 **F4-11 — Il profilo isolato su Windows è non supportato** finché non esiste
 una dipendenza vettata che copra tetto ed evidenza senza `unsafe`. La deroga
