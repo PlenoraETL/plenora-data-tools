@@ -601,6 +601,40 @@ verificabile (boot id, namespace) più un heartbeat scritto da un timer
 indipendente dai batch; oppure l'imposizione esplicita di uno storage
 temporaneo node-local.
 
+### Antenati portati dall'evidenza di pressione di memoria
+
+**La regola.** L'evidenza di `unattributed_memory_pressure` porta al massimo
+**otto** antenati del dominio (`MAX_ANTENATI_OSSERVATI`). Il limite è nel
+tipo, non nel costruttore: `PressioneDegliAntenati` contiene un array di
+lunghezza fissa, quindi la profondità della gerarchia trovata sull'host non
+può decidere quanto occupa un errore.
+
+**Il perimetro.** Solo il segnale `Oa` — la pressione registrata dagli
+antenati — e solo dentro l'errore. Non limita quanti cgroup possono esistere,
+non impedisce di leggerli, e non tocca i quattro segnali del dominio (`Ol`,
+`Kl`, `Kh`, `G`), che non sono per-livello.
+
+**Il pericolo che copre.** Un errore la cui dimensione dipende dall'ambiente:
+`PlenoraError` è la parte `Err` di ogni `Result` del workspace, e una
+gerarchia profonda lo farebbe crescere per tutti, anche sul cammino felice.
+Senza il limite, la profondità del cgroup di chi esegue — che non controlliamo
+— diventerebbe un parametro di consumo di memoria del processo.
+
+**Che cosa questo perde, e come lo dice.** Se gli antenati sono più di otto,
+l'evidenza ne porta otto e dichiara gli altri in `antenati_oltre_capacita`. La
+distinzione che conta resta leggibile: un livello **esistente e non letto** e
+un livello **inesistente** non collassano nella stessa forma, né dentro né
+oltre la capacità. Un troncamento silenzioso direbbe che la gerarchia finisce
+dove invece finisce la nostra vista, e su `Oa` sarebbe grave: il segnale serve
+proprio a dire *quale* livello ha esaurito il proprio tetto.
+
+**La condizione di rientro.** Alzare il numero non rompe nessuno — i campi
+sono privati e si costruisce con `PressioneDegliAntenati::nuova`, quindi
+nessuno scrive l'array a mano. Serve una gerarchia reale più profonda di otto
+in cui `Oa` sia risultato diagnosticamente insufficiente. Otto **non** è una
+misura: i prototipi non hanno rilevato la profondità delle gerarchie ospiti, e
+il campo del troncamento esiste anche perché quella scelta resti rivedibile.
+
 ### Fuzzing su toolchain nightly
 
 Il solo step `cargo fuzz run` gira su nightly, mentre build, test, clippy e

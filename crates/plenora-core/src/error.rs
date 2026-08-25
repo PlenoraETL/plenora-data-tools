@@ -63,10 +63,77 @@ pub struct ReplayedError {
 /// come se l'avessero fatto. Regge perche' il costo di sbagliarlo e' basso
 /// in entrambe le direzioni — troppo alto spreca qualche decina di byte in
 /// un errore raro, troppo basso lo dichiara in
-/// [`PressioneDegliAntenati::antenati_non_osservati`] invece di fingere di
-/// aver raggiunto la radice. E' quel campo, non questa costante, a rendere
-/// la scelta rivedibile senza rompere il ragionamento.
+/// [`PressioneDegliAntenati::antenati_oltre_capacita`] invece di fingere di
+/// aver raggiunto la radice. E' quel conteggio, non questa costante, a
+/// rendere la scelta rivedibile senza rompere il ragionamento — e i campi
+/// privati fanno il resto: cambiarla non rompe chi costruisce.
+///
+/// Il limite e' registrato in `errori-e-limiti.md` con regola, perimetro,
+/// pericolo e condizione di rientro.
 pub const MAX_ANTENATI_OSSERVATI: usize = 8;
+
+/// Che cosa si sa di un singolo livello della gerarchia sopra il dominio.
+///
+/// Esiste perche' i casi sono **quattro** e appiattirli in un `Option<u64>`
+/// ne confonde almeno due: un livello che non c'e' perche' la radice e' piu'
+/// vicina di cosi', e un livello che c'e' e non si e' riusciti a leggere.
+/// Dedurre l'uno dall'altro e' l'errore che questo tipo esiste per non
+/// commettere, un livello sopra a quello per cui esiste
+/// [`EvidenzaDiLimite`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivelloAntenato {
+    /// Non si e' stabilito quanto e' profonda la gerarchia.
+    ///
+    /// Diverso da [`Self::Inesistente`]: li' si sa che sopra non c'e'
+    /// nulla, qui non si sa nulla e basta.
+    ProfonditaNonStabilita,
+    /// Il livello non esiste: la gerarchia finisce prima.
+    Inesistente,
+    /// Il livello esiste e la lettura non e' riuscita.
+    NonOsservato,
+    /// Il livello esiste ed e' stato letto: delta di `oom` nell'intervallo.
+    Osservato(u64),
+}
+
+/// Il motivo per cui una forma degli antenati e' stata **rifiutata**.
+///
+/// Rifiutata, non normalizzata: una struttura incoerente dice che chi l'ha
+/// costruita ha letto male la gerarchia, e ripararla in silenzio
+/// trasformerebbe un difetto di lettura in un'evidenza dall'aria plausibile.
+/// E' la stessa regola che la §10.0-bis applica a `Kl > Kh`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FormaDegliAntenatiInvalida {
+    /// Piu' livelli di quanti il tipo ne possa portare.
+    #[error(
+        "livelli presenti dichiarati: {dichiarati}, capacita': {}",
+        MAX_ANTENATI_OSSERVATI
+    )]
+    TroppiLivelli {
+        /// Quanti ne erano stati dichiarati.
+        dichiarati: usize,
+    },
+    /// Una lettura in uno slot dichiarato inesistente.
+    #[error("lettura a distanza {distanza}, oltre i livelli dichiarati presenti")]
+    LetturaOltreILivelliPresenti {
+        /// Distanza dal dominio dello slot incoerente, col padre a `1` come
+        /// in [`PressioneDegliAntenati::livello`].
+        distanza: usize,
+    },
+    /// Una lettura senza aver stabilito la profondita'.
+    #[error("lettura a distanza {distanza} senza profondita' stabilita")]
+    LetturaSenzaProfonditaStabilita {
+        /// Distanza dal dominio dello slot incoerente, col padre a `1`.
+        distanza: usize,
+    },
+    /// Antenati oltre la capacita' senza che l'array sia pieno.
+    ///
+    /// Se ne esistono altri oltre gli otto, allora gli otto ci sono tutti.
+    #[error("dichiarati antenati oltre la capacita' con soli {livelli_presenti:?} livelli")]
+    TroncamentoSenzaSaturazione {
+        /// Quanti livelli erano stati dichiarati presenti.
+        livelli_presenti: Option<usize>,
+    },
+}
 
 /// `Oa` — la pressione registrata **dagli antenati** del dominio.
 ///
@@ -80,11 +147,21 @@ pub const MAX_ANTENATI_OSSERVATI: usize = 8;
 ///
 /// # L'antenato e' identificato dalla distanza, non dal percorso
 ///
-/// `[0]` e' il padre, `[1]` il nonno, e cosi' via. Un percorso di cgroup
-/// sarebbe piu' esplicito e avrebbe due difetti: e' di lunghezza non
+/// Distanza `1` e' il padre, `2` il nonno, e cosi' via. Un percorso di
+/// cgroup sarebbe piu' esplicito e avrebbe due difetti: e' di lunghezza non
 /// limitata, e porta fuori dal confine la disposizione del filesystem
 /// dell'host, che non serve a diagnosticare. La distanza e' cio' su cui la
 /// §10.0-bis ragiona.
+///
+/// # I campi sono privati
+///
+/// Non per pudore: la forma ha un'**invariante** — uno slot oltre i livelli
+/// dichiarati presenti non puo' portare una lettura — e uno `struct literal`
+/// la aggirerebbe. [`Self::nuova`] la verifica e **rifiuta** cio' che non
+/// torna, invece di normalizzarlo.
+///
+/// Ne segue anche che [`MAX_ANTENATI_OSSERVATI`] puo' cambiare senza rompere
+/// chi costruisce: nessuno scrive l'array a mano.
 ///
 /// # Resta diagnostico
 ///
@@ -93,21 +170,154 @@ pub const MAX_ANTENATI_OSSERVATI: usize = 8;
 /// tanto meno se quell'antenato conteneva altri domini concorrenti, nel qual
 /// caso la pressione puo' venire da un vicino. Entra nell'evidenza
 /// riportata, non nella classificazione.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PressioneDegliAntenati {
-    /// Delta di `oom` per antenato, indicizzato per **distanza** dal
-    /// dominio: `[0]` il padre, `[1]` il nonno, ...
+    /// Delta di `oom` per antenato, per distanza: `[0]` il padre, `[1]` il
+    /// nonno. Uno slot oltre `livelli_presenti` e' `None` per invariante.
+    per_distanza: [Option<u64>; MAX_ANTENATI_OSSERVATI],
+    /// Quanti antenati **esistono**, fino alla capacita' del tipo.
     ///
-    /// `None` in una posizione significa «non osservato a quel livello»,
-    /// che non e' «quel livello non ha registrato pressione».
-    pub per_distanza: [Option<u64>; MAX_ANTENATI_OSSERVATI],
-    /// Antenati che esistevano **oltre** la capacita' dell'array.
+    /// `None` significa che la profondita' non e' stata stabilita, e non e'
+    /// la stessa cosa di `Some(0)`, che dice «il dominio e' alla radice».
+    /// Senza questa distinzione una gerarchia illeggibile si dichiarerebbe
+    /// radice, cioe' affermerebbe che sopra non c'e' nessuno proprio quando
+    /// non lo si sa.
+    livelli_presenti: Option<usize>,
+    /// Antenati che esistevano **oltre** la capacita' del tipo.
     ///
-    /// Diverso da zero significa che l'evidenza e' **troncata**. Serve
-    /// perche' un antenato non osservato non e' un antenato senza
-    /// pressione, e senza questo campo il troncamento sarebbe
-    /// indistinguibile dall'aver raggiunto la radice.
-    pub antenati_non_osservati: u32,
+    /// Diverso da zero significa che l'evidenza e' **troncata**: un antenato
+    /// non osservato non e' un antenato senza pressione, e senza questo
+    /// campo il troncamento sarebbe indistinguibile dall'aver raggiunto la
+    /// radice.
+    antenati_oltre_capacita: u32,
+}
+
+impl PressioneDegliAntenati {
+    /// Costruisce la forma **canonica**, o rifiuta.
+    ///
+    /// `letture` e' indicizzato per distanza a partire dal padre; una voce
+    /// `None` a distanza minore di `livelli_presenti` dice «esiste e non
+    /// l'abbiamo letto».
+    ///
+    /// # Errors
+    ///
+    /// [`FormaDegliAntenatiInvalida`] quando la forma non e' coerente: piu'
+    /// livelli della capacita', una lettura oltre i livelli dichiarati (o
+    /// senza profondita' stabilita), o un troncamento dichiarato senza che
+    /// l'array sia pieno.
+    pub const fn nuova(
+        letture: [Option<u64>; MAX_ANTENATI_OSSERVATI],
+        livelli_presenti: Option<usize>,
+        antenati_oltre_capacita: u32,
+    ) -> core::result::Result<Self, FormaDegliAntenatiInvalida> {
+        let presenti = match livelli_presenti {
+            Some(dichiarati) if dichiarati > MAX_ANTENATI_OSSERVATI => {
+                return Err(FormaDegliAntenatiInvalida::TroppiLivelli { dichiarati });
+            }
+            Some(dichiarati) => dichiarati,
+            // Profondita' non stabilita: nessuno slot puo' portare una
+            // lettura, perche' non si sa nemmeno se quel livello esista.
+            None => 0,
+        };
+        // `while` e non `for`: questa funzione e' `const`.
+        //
+        // `posizione` indicizza l'array, la `distanza` riportata nell'errore
+        // e' quella di [`Self::livello`] e del `Display` — il padre e' `1`.
+        // Sono due conteggi diversi e chiamarli con lo stesso nome renderebbe
+        // il messaggio d'errore indicativo di uno slot sbagliato.
+        let mut posizione = 0;
+        while posizione < MAX_ANTENATI_OSSERVATI {
+            if posizione >= presenti && letture[posizione].is_some() {
+                let distanza = posizione + 1;
+                return Err(if livelli_presenti.is_none() {
+                    FormaDegliAntenatiInvalida::LetturaSenzaProfonditaStabilita { distanza }
+                } else {
+                    FormaDegliAntenatiInvalida::LetturaOltreILivelliPresenti { distanza }
+                });
+            }
+            posizione += 1;
+        }
+        // Se ne esistono altri oltre la capacita', allora la capacita' e'
+        // satura: il contrario descrive una gerarchia che salta dei livelli.
+        if antenati_oltre_capacita > 0 && presenti < MAX_ANTENATI_OSSERVATI {
+            return Err(FormaDegliAntenatiInvalida::TroncamentoSenzaSaturazione {
+                livelli_presenti,
+            });
+        }
+        Ok(Self {
+            per_distanza: letture,
+            livelli_presenti,
+            antenati_oltre_capacita,
+        })
+    }
+
+    /// Il dominio e' alla radice: sopra di lui non c'e' nessun antenato.
+    ///
+    /// E' un'**affermazione**, non un ripiego: chi non ha stabilito la
+    /// profondita' usa [`Self::profondita_non_stabilita`].
+    #[must_use]
+    pub const fn alla_radice() -> Self {
+        Self {
+            per_distanza: [None; MAX_ANTENATI_OSSERVATI],
+            livelli_presenti: Some(0),
+            antenati_oltre_capacita: 0,
+        }
+    }
+
+    /// Non si e' stabilito quanto e' profonda la gerarchia.
+    #[must_use]
+    pub const fn profondita_non_stabilita() -> Self {
+        Self {
+            per_distanza: [None; MAX_ANTENATI_OSSERVATI],
+            livelli_presenti: None,
+            antenati_oltre_capacita: 0,
+        }
+    }
+
+    /// Che cosa si sa del livello a `distanza` dal dominio (`1` = il padre).
+    ///
+    /// Fuori dalla capacita' del tipo la risposta e' [`LivelloAntenato::NonOsservato`]
+    /// quando il troncamento dice che quel livello esiste, e
+    /// [`LivelloAntenato::Inesistente`] quando la gerarchia finiva prima.
+    #[must_use]
+    pub const fn livello(&self, distanza: usize) -> LivelloAntenato {
+        let Some(presenti) = self.livelli_presenti else {
+            return LivelloAntenato::ProfonditaNonStabilita;
+        };
+        if distanza == 0 {
+            // La distanza 0 e' il dominio stesso: i suoi segnali sono `Ol`,
+            // `Kl`, `Kh` e `G`, non `Oa`.
+            return LivelloAntenato::Inesistente;
+        }
+        if distanza > MAX_ANTENATI_OSSERVATI {
+            let oltre = distanza - MAX_ANTENATI_OSSERVATI;
+            return if oltre <= self.antenati_oltre_capacita as usize {
+                LivelloAntenato::NonOsservato
+            } else {
+                LivelloAntenato::Inesistente
+            };
+        }
+        if distanza > presenti {
+            return LivelloAntenato::Inesistente;
+        }
+        match self.per_distanza[distanza - 1] {
+            Some(delta) => LivelloAntenato::Osservato(delta),
+            None => LivelloAntenato::NonOsservato,
+        }
+    }
+
+    /// Quanti antenati esistono, fino alla capacita' del tipo. `None` se la
+    /// profondita' non e' stata stabilita.
+    #[must_use]
+    pub const fn livelli_presenti(&self) -> Option<usize> {
+        self.livelli_presenti
+    }
+
+    /// Antenati esistenti oltre la capacita' del tipo, quindi non portati.
+    #[must_use]
+    pub const fn antenati_oltre_capacita(&self) -> u32 {
+        self.antenati_oltre_capacita
+    }
 }
 
 /// Misure che aiutano a leggere l'evidenza e **non fondano** attribuzione.
@@ -215,16 +425,43 @@ fn quantita(valore: Option<u64>) -> String {
     valore.map_or_else(|| "n/d".to_owned(), |numero| numero.to_string())
 }
 
-impl core::fmt::Display for PressioneDegliAntenati {
+impl core::fmt::Display for LivelloAntenato {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for (distanza, delta) in self.per_distanza.iter().enumerate() {
-            if distanza > 0 {
+        match self {
+            // Le tre forme non osservative restano DISTINTE anche qui: chi
+            // legge il messaggio deve poter dire «non c'era» da «non l'ho
+            // letto» da «non so quanto e' alta la gerarchia», come lo dice
+            // chi legge il tipo.
+            Self::ProfonditaNonStabilita => write!(f, "?"),
+            Self::Inesistente => write!(f, "-"),
+            Self::NonOsservato => write!(f, "n/d"),
+            Self::Osservato(delta) => write!(f, "{delta}"),
+        }
+    }
+}
+
+impl core::fmt::Display for PressioneDegliAntenati {
+    /// Rende **solo** i livelli che esistono, e dichiara a parte cio' che si
+    /// e' perso.
+    ///
+    /// La versione precedente stampava tutti e otto gli slot con `n/d` in
+    /// quelli vuoti, e diceva quindi «otto livelli, sei illeggibili» di una
+    /// gerarchia che ne aveva due.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Some(presenti) = self.livelli_presenti else {
+            return write!(f, "profondita' non stabilita");
+        };
+        if presenti == 0 {
+            return write!(f, "nessun antenato");
+        }
+        for distanza in 1..=presenti {
+            if distanza > 1 {
                 write!(f, " ")?;
             }
-            write!(f, "d{}={}", distanza + 1, quantita(*delta))?;
+            write!(f, "d{distanza}={}", self.livello(distanza))?;
         }
-        if self.antenati_non_osservati > 0 {
-            write!(f, " (+{} non osservati)", self.antenati_non_osservati)?;
+        if self.antenati_oltre_capacita > 0 {
+            write!(f, " (+{} oltre la capacita')", self.antenati_oltre_capacita)?;
         }
         Ok(())
     }
@@ -1836,16 +2073,21 @@ mod tests {
         assert_eq!(source.to_string(), "io error: io");
     }
 
-    /// Evidenza di comodo: tutti e cinque i segnali osservati, nessun group
-    /// kill. Chi vuole provare la NON osservabilita' azzera un campo a
-    /// `None` esplicitamente, cosi' l'intenzione si vede nel test.
+    /// Evidenza di comodo: i quattro segnali del dominio osservati, nessun
+    /// group kill, e il dominio **alla radice** — cioe' `Oa` vuoto perche'
+    /// non ci sono antenati, non perche' non li si sia letti.
+    ///
+    /// Il commento precedente diceva «tutti e cinque i segnali osservati» e
+    /// costruiva gli antenati con un `default()` che li lasciava tutti a
+    /// `None`: descriveva come osservato cio' che era assente, che e'
+    /// precisamente la confusione contro cui questi tipi esistono.
     fn evidenza() -> EvidenzaDiLimite {
         EvidenzaDiLimite {
             oom_locali: Some(1),
             uccisi_nel_dominio: Some(0),
             uccisi_nella_gerarchia: Some(0),
             group_kill_locale: Some(0),
-            oom_degli_antenati: PressioneDegliAntenati::default(),
+            oom_degli_antenati: PressioneDegliAntenati::alla_radice(),
             diagnostica: DiagnosticaSupplementare {
                 tetto_byte: 64 * 1024 * 1024,
                 picco_byte: Some(63 * 1024 * 1024),
@@ -1990,33 +2232,123 @@ mod tests {
         assert!(non_scattato.to_string().contains("G=0"));
     }
 
+    /// Letture di comodo: `distanze` sono i delta a partire dal padre.
+    fn letture(distanze: &[Option<u64>]) -> [Option<u64>; MAX_ANTENATI_OSSERVATI] {
+        let mut piene = [None; MAX_ANTENATI_OSSERVATI];
+        for (posizione, delta) in distanze.iter().enumerate() {
+            piene[posizione] = *delta;
+        }
+        piene
+    }
+
     #[test]
-    fn la_pressione_degli_antenati_dice_quale_antenato_ed_e_limitata() {
-        // `Oa` esiste per dire QUALE livello ha esaurito il proprio tetto:
-        // un totale sommato cancellerebbe l'unica cosa che il segnale porta.
-        let mut per_distanza = [None; MAX_ANTENATI_OSSERVATI];
-        per_distanza[0] = Some(0);
-        per_distanza[1] = Some(3);
-        let antenati = PressioneDegliAntenati {
-            per_distanza,
-            antenati_non_osservati: 2,
-        };
-        let reso = antenati.to_string();
-        assert!(
-            reso.contains("d1=0") && reso.contains("d2=3"),
-            "il padre e il nonno restano distinti: {reso}"
+    fn il_dominio_alla_radice_non_e_una_gerarchia_illeggibile() {
+        // I due casi producevano la stessa struttura, ed e' il difetto che
+        // ha imposto `livelli_presenti`: «sopra non c'e' nessuno» e «non so
+        // quanto sia alta» sono affermazioni opposte.
+        let radice = PressioneDegliAntenati::alla_radice();
+        let ignota = PressioneDegliAntenati::profondita_non_stabilita();
+        assert_ne!(radice, ignota);
+        assert_eq!(radice.livelli_presenti(), Some(0));
+        assert_eq!(ignota.livelli_presenti(), None);
+        assert_eq!(radice.livello(1), LivelloAntenato::Inesistente);
+        assert_eq!(ignota.livello(1), LivelloAntenato::ProfonditaNonStabilita);
+        assert!(radice.to_string().contains("nessun antenato"));
+        assert!(ignota.to_string().contains("profondita' non stabilita"));
+    }
+
+    #[test]
+    fn una_gerarchia_piu_corta_del_limite_e_letta_tutta() {
+        // Due antenati, entrambi letti. Gli slot dal terzo in poi non sono
+        // «non osservati»: non esistono.
+        let due = PressioneDegliAntenati::nuova(letture(&[Some(0), Some(3)]), Some(2), 0)
+            .expect("forma canonica");
+        assert_eq!(due.livello(1), LivelloAntenato::Osservato(0));
+        assert_eq!(due.livello(2), LivelloAntenato::Osservato(3));
+        assert_eq!(
+            due.livello(3),
+            LivelloAntenato::Inesistente,
+            "oltre la gerarchia non c'e' un livello illeggibile: non c'e' un livello"
+        );
+        let reso = due.to_string();
+        assert_eq!(reso, "d1=0 d2=3", "solo i livelli che esistono: {reso}");
+    }
+
+    #[test]
+    fn un_livello_esistente_ma_illeggibile_resta_distinto_da_uno_assente() {
+        // Il padre letto, il nonno esistente e non leggibile. Se i due casi
+        // collassassero, `Oa` direbbe che la gerarchia finisce dove invece
+        // e' solo finita la nostra vista.
+        let cieca = PressioneDegliAntenati::nuova(letture(&[Some(1), None]), Some(2), 0)
+            .expect("forma canonica");
+        assert_eq!(cieca.livello(2), LivelloAntenato::NonOsservato);
+        assert_eq!(cieca.livello(3), LivelloAntenato::Inesistente);
+        assert_ne!(cieca.livello(2), cieca.livello(3));
+        let reso = cieca.to_string();
+        assert_eq!(reso, "d1=1 d2=n/d", "{reso}");
+    }
+
+    #[test]
+    fn una_gerarchia_oltre_il_limite_dichiara_cio_che_non_porta() {
+        // Otto letti, altri tre esistenti oltre la capacita' del tipo.
+        let piena = PressioneDegliAntenati::nuova(
+            letture(&[Some(0); MAX_ANTENATI_OSSERVATI]),
+            Some(MAX_ANTENATI_OSSERVATI),
+            3,
+        )
+        .expect("forma canonica");
+        assert_eq!(piena.antenati_oltre_capacita(), 3);
+        // Un livello oltre la capacita' ma dentro il troncamento esiste e
+        // non e' stato osservato; oltre il troncamento non esiste.
+        assert_eq!(
+            piena.livello(MAX_ANTENATI_OSSERVATI + 3),
+            LivelloAntenato::NonOsservato
+        );
+        assert_eq!(
+            piena.livello(MAX_ANTENATI_OSSERVATI + 4),
+            LivelloAntenato::Inesistente
         );
         assert!(
-            reso.contains("d3=n/d"),
-            "un livello non letto non e' un livello senza pressione: {reso}"
+            piena.to_string().contains("(+3 oltre la capacita')"),
+            "il troncamento e' dichiarato, non silenzioso: {piena}"
         );
+    }
+
+    #[test]
+    fn una_forma_incoerente_e_rifiutata_e_non_normalizzata() {
+        // Riparare in silenzio trasformerebbe un difetto di lettura in
+        // un'evidenza dall'aria plausibile. Ogni regola risponde con il
+        // proprio motivo, cosi' chi la incontra sa che cosa ha letto male.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(letture(&[]), Some(MAX_ANTENATI_OSSERVATI + 1), 0),
+            Err(FormaDegliAntenatiInvalida::TroppiLivelli {
+                dichiarati: MAX_ANTENATI_OSSERVATI + 1
+            })
+        );
+        // Una lettura a distanza 2 con un solo livello dichiarato presente.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(letture(&[Some(1), Some(2)]), Some(1), 0),
+            Err(FormaDegliAntenatiInvalida::LetturaOltreILivelliPresenti { distanza: 2 })
+        );
+        // Una lettura senza aver stabilito la profondita'.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(letture(&[Some(1)]), None, 0),
+            Err(FormaDegliAntenatiInvalida::LetturaSenzaProfonditaStabilita { distanza: 1 })
+        );
+        // Antenati oltre la capacita' con l'array non saturo: descrive una
+        // gerarchia che salta dei livelli.
+        assert_eq!(
+            PressioneDegliAntenati::nuova(letture(&[Some(1)]), Some(1), 2),
+            Err(FormaDegliAntenatiInvalida::TroncamentoSenzaSaturazione {
+                livelli_presenti: Some(1)
+            })
+        );
+        // E la forma canonica corrispondente passa: il rifiuto e' della
+        // forma, non della situazione.
         assert!(
-            reso.contains("(+2 non osservati)"),
-            "il troncamento e' dichiarato, non silenzioso: {reso}"
+            PressioneDegliAntenati::nuova(letture(&[Some(1), Some(2)]), Some(2), 0).is_ok(),
+            "due letture con due livelli dichiarati e' canonica"
         );
-        // Il limite e' nel tipo: la profondita' della gerarchia trovata
-        // sull'host non puo' far crescere l'errore.
-        assert_eq!(antenati.per_distanza.len(), MAX_ANTENATI_OSSERVATI);
     }
 
     #[test]
@@ -2030,7 +2362,7 @@ mod tests {
             uccisi_nel_dominio: Some(0),
             uccisi_nella_gerarchia: None,
             group_kill_locale: None,
-            oom_degli_antenati: PressioneDegliAntenati::default(),
+            oom_degli_antenati: PressioneDegliAntenati::profondita_non_stabilita(),
             diagnostica: DiagnosticaSupplementare {
                 tetto_byte: 1024,
                 picco_byte: None,
