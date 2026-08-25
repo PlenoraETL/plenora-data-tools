@@ -72,7 +72,7 @@ envelope con una di queste due categorie **non la riconosce**. Presentarle
 come canoniche direbbe a chi le legge che sono interoperabili, e non lo sono:
 chi integra deve sapere che qui c'è una divergenza, non scoprirla quando il
 suo `match` cade nel ramo predefinito. L'exit code non aiuta a distinguerle —
-entrambe proiettano su `5`, come diverse categorie canoniche.
+entrambe proiettano su `5` insieme a diverse categorie canoniche.
 
 **Perché non si è riusato un valore canonico.** Perché nessuno dice queste
 condizioni senza affermare qualcosa di non dimostrato: `resource_limit`
