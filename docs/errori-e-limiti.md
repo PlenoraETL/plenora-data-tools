@@ -267,6 +267,72 @@ I writer di questo progetto non comprimono mai, quindi nessun artefatto
 prodotto qui è interessato. Un input compresso prodotto da terzi non è
 leggibile.
 
+### Custom metadata IPC oltre i tetti del confine
+
+Il confine di lettura applica tre tetti alle collezioni di custom metadata —
+schema, campi, messaggi e footer — **prima** di qualunque allocazione
+proporzionale al conteggio:
+
+| tetto | valore |
+|---|---|
+| coppie in una collezione | 256 |
+| byte di una chiave | 128 |
+| byte di un valore | 64 KiB |
+
+`MAX_IPC_METADATA_BYTES` limita i **byte** dei metadati, non il numero di
+elementi: centomila coppie minuscole stanno dentro 16 MiB e producono
+centomila allocazioni in chi le raccoglie.
+
+I tre valori sono costanti **interne e non ampliabili**, non campi di
+`IpcLimits`: quella struttura esiste per i limiti che un piano può modulare, e
+un tetto contro l'abuso che il chiamante può alzare non è un tetto. Il tetto
+sul valore **non** è derivato da `MAX_CRS_DEFINITION_BYTES`: il numero
+coincide, l'autorità no, e accoppiarli farebbe cambiare in silenzio ciò che il
+parser accetta il giorno in cui il tetto sul CRS si muove.
+
+**Che cosa questo rifiuta.** Arrow consente metadati arbitrari: un file con una
+chiave sconosciuta e un valore da 100 KiB è un file Arrow **valido** che questo
+confine rifiuta di proposito. Il rientro sarebbe alzare i tetti, e richiede un
+caso d'uso legittimo che oggi non esiste — l'uso più denso del progetto è una
+colonna geometrica con una decina di chiavi.
+
+### Custom metadata IPC di forma non ammessa
+
+Sono rifiutati, sugli stessi quattro percorsi: chiave o valore **assenti**,
+chiave **vuota**, chiave o valore non **UTF-8**, chiave **duplicata**.
+
+La ragione non è il rigore per il rigore. `arrow-ipc` legge i custom metadata
+del footer con `key().unwrap()` e `value().unwrap()`, quindi una voce senza
+chiave o senza valore raggiunge una primitiva di panic **dentro la
+dipendenza** — mentre il percorso dello schema, che usa `if let`, la
+salterebbe. E chi raccoglie le coppie in una mappa comprime i duplicati con
+«vince l'ultima», che su una chiave autoritativa sceglie un vincitore
+arbitrario.
+
+Il **valore vuoto** è invece accettato: rifiutarlo romperebbe file legittimi
+che rappresentano un campo assente con la stringa vuota. Le **chiavi
+sconosciute** sono accettate e ignorate: questo confine valida la *forma*, non
+il vocabolario, e rifiutare le chiavi altrui romperebbe l'interoperabilità con
+qualunque produttore Arrow che aggiunga le proprie.
+
+Non è una deroga con rientro: è la forma che il confine pretende.
+
+### Campi che `arrow-ipc` dereferenzia senza controllarli
+
+Stessa classe, altri tre punti, chiusi insieme: lo **schema del footer**, il
+campo **`fields`** di uno schema, e **`indexType`** di una codifica a
+dizionario. Tutti e tre sono letti da `arrow-ipc` con `unwrap`, e tutti e tre
+erano trattati dal confine come opzionali — cioè saltati se assenti. Il writer
+li emette sempre, quindi pretenderli non rifiuta alcun file legittimo.
+
+**Che cosa resta aperto.** `convert.rs` ha una ventina di `panic!` e
+`unimplemented!` sui **codici di tipo** — un `List` senza figli, un'unità di
+durata non riconosciuta — che il confine non copre ancora. Chiuderli richiede
+una tabella tipo → arità dei figli: sbagliata, rifiuterebbe file legittimi.
+Fino ad allora la barriera anti-panico resta necessaria, e **non è più
+coperta da un artefatto di fuzz**: l'unico che la esercitava viene ora
+rifiutato prima, in modo strutturato. Serve un artefatto nuovo.
+
 ### Finestra TOCTOU sull'ingresso IPC
 
 La pre-validazione del framing è un *time-of-check*, la lettura di Arrow è il

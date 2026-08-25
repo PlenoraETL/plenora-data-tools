@@ -51,6 +51,47 @@ pub const MAX_SPLIT_WORK: u64 = 100_000_000;
 pub const MAX_CLEAN_VERTICES: u64 = 100_000_000;
 /// Metadati massimi di un singolo messaggio Arrow IPC (schema compreso).
 pub const MAX_IPC_METADATA_BYTES: usize = 16 * 1024 * 1024;
+
+// --- Custom metadata IPC: tetti duri del confine ----------------------------
+//
+// `MAX_IPC_METADATA_BYTES` limita i BYTE dei metadati, non il numero di
+// elementi: centomila coppie minuscole ci stanno comodamente dentro e
+// producono centomila allocazioni in chi le raccoglie. Questi tre tetti
+// limitano la forma, e si applicano PRIMA di qualunque allocazione
+// proporzionale al conteggio.
+//
+// Sono costanti INTERNE al confine e non ampliabili: non sono campi di
+// `IpcLimits`, che esiste per i limiti che un piano puo' modulare. Un tetto
+// contro l'abuso che il chiamante puo' alzare non e' un tetto.
+//
+// Conseguenza dichiarata: Arrow consente metadati arbitrari, quindi un file
+// con una chiave sconosciuta e un valore oltre il tetto e' un file Arrow
+// VALIDO che questo confine rifiuta di proposito
+// (errori-e-limiti.md#custom-metadata-ipc-oltre-i-tetti-del-confine).
+
+/// Coppie chiave-valore massime in UNA collezione di custom metadata.
+///
+/// L'uso legittimo piu' denso e' una colonna geometrica, con una decina di
+/// chiavi `plenora.geometry.*` piu' le estensioni Arrow. Quelle chiavi sono
+/// per CAMPO, non di schema, quindi il conteggio non cresce col numero di
+/// colonne.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_PAIRS: usize = 256;
+
+/// Byte massimi di una chiave di custom metadata.
+///
+/// La piu' lunga che il progetto scriva e'
+/// `plenora.geometry.crs_definition_format`, 38 byte.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_KEY_BYTES: usize = 128;
+
+/// Byte massimi di un valore di custom metadata.
+///
+/// Il valore legittimo piu' grande che il progetto scriva e' una definizione
+/// di CRS, il cui tetto oggi vale 64 KiB. Il numero coincide, l'AUTORITA' no:
+/// `MAX_CRS_DEFINITION_BYTES` governa una definizione di CRS, questa costante
+/// governa un confine IPC generico. Derivarla da quella farebbe cambiare in
+/// silenzio cio' che il parser accetta il giorno in cui il tetto sul CRS si
+/// muove — e nessuno collegherebbe le due cose.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_VALUE_BYTES: usize = 64 * 1024;
 pub const AREA_COLUMN: &str = "area";
 pub const WKT_COLUMN: &str = "wkt";
 pub const DEFAULT_MAX_POINTS: u64 = 100_000;
@@ -1386,7 +1427,7 @@ mod tests {
     /// anche a barriera funzionante: non e' un difetto della mitigazione, e'
     /// lo strumento progettato per non farsi ingannare da essa.
     #[test]
-    fn ipc_decode_converte_il_panico_di_arrow_in_errore() {
+    fn ipc_decode_rifiuta_lo_schema_senza_fields_prima_di_arrow() {
         /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
         /// commento sul troncamento, piu' sotto.
         const FINE_STREAM: usize = 52;
@@ -1422,9 +1463,22 @@ mod tests {
         let esito = decode_ipc(payload);
         std::panic::set_hook(precedente);
 
+        // L'esito e' CAMBIATO, ed e' migliorato: questo artefatto non arriva
+        // piu' ad `arrow-ipc`. Lo Schema che porta non ha il campo `fields`,
+        // e `fb_to_schema` lo legge con `fields().unwrap()`: il confine ora lo
+        // pretende, quindi il rifiuto e' strutturato invece di essere un
+        // panico intercettato.
+        //
+        // ATTENZIONE ALLA COPERTURA PERSA. Questo era l'unico input che
+        // esercitava la barriera anti-panico, e non la esercita piu'. La
+        // barriera resta NECESSARIA: `convert.rs` ha una ventina di
+        // `panic!`/`unimplemented!` sui codici di tipo, e il confine non li
+        // copre ancora — richiedono una tabella tipo -> arita' dei figli che
+        // sbagliata rifiuterebbe file legittimi. Serve un artefatto nuovo,
+        // ed e' un lavoro dichiarato, non fatto qui.
         assert!(
-            matches!(esito, Err(ArrowTransportError::ArrowPanic(_))),
-            "atteso ArrowPanic, ottenuto {esito:?}"
+            matches!(esito, Err(ArrowTransportError::IpcSchemaInvalid(_))),
+            "atteso IpcSchemaInvalid, ottenuto {esito:?}"
         );
     }
 

@@ -118,6 +118,34 @@ pub enum ArrowTransportError {
     /// sovrapposti o non allineati.
     #[error("footer IPC incoerente: {0}")]
     IpcFooterInvalid(&'static str),
+    /// Schema IPC di forma non ammessa: un campo che `arrow-ipc` dereferenzia
+    /// senza controllarlo — `fields` dello schema, `indexType` di una codifica
+    /// a dizionario — e che il confine pretende invece di lasciar passare.
+    ///
+    /// Distinta da [`ArrowTransportError::IpcFooterInvalid`], che riguarda il
+    /// footer del file format: uno schema di stream non ha footer.
+    #[error("schema IPC di forma non ammessa: {0}")]
+    IpcSchemaInvalid(&'static str),
+    /// Custom metadata IPC di forma non ammessa: chiave o valore assenti,
+    /// chiave vuota, UTF-8 non valido, chiave duplicata.
+    ///
+    /// Il messaggio nomina la violazione, **mai** la chiave o il valore: sono
+    /// dati di chi ha prodotto il file.
+    #[error("custom metadata IPC non validi: {0}")]
+    IpcMetadataInvalid(&'static str),
+    /// Coppie di custom metadata oltre il tetto in UNA collezione.
+    ///
+    /// Distinta dalle due che seguono di proposito: i tre tetti vanno
+    /// superabili separatamente, altrimenti un test non puo' dire quale abbia
+    /// parato.
+    #[error("custom metadata IPC: {0} coppie oltre il limite {1}")]
+    IpcTooManyMetadataPairs(usize, usize),
+    /// Chiave di custom metadata oltre il tetto in byte.
+    #[error("custom metadata IPC: chiave da {0} byte oltre il limite {1}")]
+    IpcMetadataKeyTooLarge(usize, usize),
+    /// Valore di custom metadata oltre il tetto in byte.
+    #[error("custom metadata IPC: valore da {0} byte oltre il limite {1}")]
+    IpcMetadataValueTooLarge(usize, usize),
     /// Invariante interna violata: parametro gia' validato a monte o caso
     /// gia' ristretto dal dispatch. Indica un difetto del trasporto, non
     /// dell'input; il messaggio nomina solo il parametro o il caso, mai dati.

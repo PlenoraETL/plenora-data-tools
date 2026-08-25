@@ -2,6 +2,7 @@
 //! framing e dei metadati flatbuffer, decodifica e codifica entro i limiti
 //! di risorse.
 
+use std::collections::BTreeSet;
 use std::io::{Read, Seek, SeekFrom};
 
 use plenora_core::arrow::array::RecordBatch;
@@ -11,7 +12,10 @@ use plenora_core::arrow::schema::SchemaRef;
 
 use super::error::ArrowTransportError;
 use super::protocol::{MAX_ROWS, MAX_STREAM_BYTES};
-use super::transport::{MAX_BATCHES, MAX_COLUMNS, MAX_IPC_METADATA_BYTES};
+use super::transport::{
+    MAX_BATCHES, MAX_COLUMNS, MAX_IPC_CUSTOM_METADATA_KEY_BYTES, MAX_IPC_CUSTOM_METADATA_PAIRS,
+    MAX_IPC_CUSTOM_METADATA_VALUE_BYTES, MAX_IPC_METADATA_BYTES,
+};
 
 /// Allineamento a 8 byte degli offset del framing IPC, su 64 bit: un file
 /// puo' superare `usize` su piattaforme a 32 bit e gli offset non vanno mai
@@ -215,35 +219,143 @@ fn fb_vector(buf: &[u8], pos: usize, elem_size: usize) -> Result<usize, ArrowTra
     Ok(count)
 }
 
-/// Stringa flatbuffer (vettore di byte con terminatore).
-fn fb_string(buf: &[u8], pos: usize) -> Result<(), ArrowTransportError> {
+/// Stringa flatbuffer (vettore di byte con terminatore), e i suoi byte.
+///
+/// Chi valida soltanto i confini scarta il risultato; chi deve guardare il
+/// contenuto — una chiave da confrontare, una lunghezza da misurare — lo usa.
+/// Una funzione sola, quindi un solo posto dove il controllo dei confini puo'
+/// sbagliare.
+fn fb_string(buf: &[u8], pos: usize) -> Result<&[u8], ArrowTransportError> {
     let count = fb_vector(buf, pos, 1)?;
     if pos + 4 + count >= buf.len() {
         return Err(ArrowTransportError::IpcTruncated);
     }
-    Ok(())
+    buf.get(pos + 4..pos + 4 + count)
+        .ok_or(ArrowTransportError::IpcTruncated)
 }
 
-fn fb_key_value(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
-    let (vtable, vtable_len) = fb_table(buf, table)?;
-    for index in [0, 1] {
-        let offset = fb_field(buf, vtable, vtable_len, index)?;
-        if offset != 0 {
-            fb_string(buf, fb_indirect(buf, table, offset)?)?;
-        }
+/// Valida UNA coppia di custom metadata e **restituisce** chiave e valore.
+///
+/// # Perche' restituisce invece di scartare
+///
+/// La versione precedente validava e buttava via, e non poteva fare
+/// altrimenti: i duplicati sono una proprieta' dell'INSIEME, e chi vede un
+/// elemento per volta non li vedra' mai. Restituire le due stringhe sposta il
+/// controllo dove c'e' l'informazione per farlo ([`fb_custom_metadata`]).
+///
+/// # Che cosa rifiuta, e perche' non e' pedanteria
+///
+/// La versione precedente accettava chiave o valore **assenti**: se l'offset
+/// era zero non validava e proseguiva. `arrow-ipc` legge pero' i custom
+/// metadata del FOOTER con `key().unwrap()` e `value().unwrap()`, quindi una
+/// voce senza chiave o senza valore raggiungeva una primitiva di panic dentro
+/// la dipendenza — esattamente cio' che questo confine esiste per impedire.
+/// Il percorso dello SCHEMA e' invece difensivo (`if let`), il che rendeva la
+/// lacuna invisibile finche' nessuno leggeva il footer.
+fn fb_key_value(buf: &[u8], table: usize) -> Result<(&str, &str), ArrowTransportError> {
+    /// Che cosa pretendere da uno dei due campi di una coppia.
+    ///
+    /// Chiave e valore hanno tetti, diagnosi ed esiti diversi: fonderli in un
+    /// ciclo con `if index == 0` li rendeva due validazioni travestite da una,
+    /// con due rami irraggiungibili per convincere il compilatore.
+    struct Attesa {
+        indice: usize,
+        limite: usize,
+        assente: &'static str,
+        non_utf8: &'static str,
+        troppo_lungo: fn(usize, usize) -> ArrowTransportError,
     }
-    Ok(())
+
+    const CHIAVE: Attesa = Attesa {
+        indice: 0,
+        limite: MAX_IPC_CUSTOM_METADATA_KEY_BYTES,
+        assente: "chiave assente",
+        non_utf8: "chiave non e' UTF-8 valido",
+        troppo_lungo: ArrowTransportError::IpcMetadataKeyTooLarge,
+    };
+    const VALORE: Attesa = Attesa {
+        indice: 1,
+        limite: MAX_IPC_CUSTOM_METADATA_VALUE_BYTES,
+        assente: "valore assente",
+        non_utf8: "valore non e' UTF-8 valido",
+        troppo_lungo: ArrowTransportError::IpcMetadataValueTooLarge,
+    };
+
+    fn campo<'a>(
+        buf: &'a [u8],
+        table: usize,
+        vtable: usize,
+        vtable_len: usize,
+        attesa: &Attesa,
+    ) -> Result<&'a str, ArrowTransportError> {
+        let offset = fb_field(buf, vtable, vtable_len, attesa.indice)?;
+        if offset == 0 {
+            return Err(ArrowTransportError::IpcMetadataInvalid(attesa.assente));
+        }
+        let bytes = fb_string(buf, fb_indirect(buf, table, offset)?)?;
+        // Il tetto PRIMA della validazione UTF-8: e' il controllo piu' a buon
+        // mercato, e non ha senso convalidare byte che rifiuteremo comunque.
+        if bytes.len() > attesa.limite {
+            return Err((attesa.troppo_lungo)(bytes.len(), attesa.limite));
+        }
+        // UTF-8 verificato QUI: `fb_string` guarda i confini, non il
+        // contenuto, e gli accessori flatbuffer non lo garantiscono.
+        std::str::from_utf8(bytes)
+            .map_err(|_| ArrowTransportError::IpcMetadataInvalid(attesa.non_utf8))
+    }
+
+    let (vtable, vtable_len) = fb_table(buf, table)?;
+    let chiave = campo(buf, table, vtable, vtable_len, &CHIAVE)?;
+    let valore = campo(buf, table, vtable, vtable_len, &VALORE)?;
+    // Chiave vuota rifiutata: non ha significato, e piu' chiavi vuote sono
+    // duplicati per costruzione. Il VALORE vuoto e' invece accettato —
+    // rifiutarlo romperebbe file legittimi che rappresentano un campo assente
+    // con la stringa vuota.
+    if chiave.is_empty() {
+        return Err(ArrowTransportError::IpcMetadataInvalid("chiave vuota"));
+    }
+    Ok((chiave, valore))
 }
 
+/// Valida una collezione di custom metadata: conteggio, forma di ogni coppia,
+/// unicita' delle chiavi.
+///
+/// # Chi controlla che cosa
+///
+/// [`fb_key_value`] valida **una** coppia; qui si vede l'intera collezione,
+/// quindi qui stanno il tetto sul conteggio — applicato PRIMA del ciclo, cioe'
+/// prima di qualunque allocazione proporzionale — e il rifiuto dei duplicati.
+///
+/// # Chiavi sconosciute
+///
+/// Accettate e ignorate. Questo confine valida la **forma**, non il
+/// vocabolario: rifiutare le chiavi altrui romperebbe l'interoperabilita' con
+/// qualunque produttore Arrow che aggiunga le proprie, e non renderebbe
+/// nessuno piu' sicuro.
 fn fb_custom_metadata(buf: &[u8], table: usize, offset: usize) -> Result<(), ArrowTransportError> {
     if offset == 0 {
         return Ok(());
     }
     let vector = fb_indirect(buf, table, offset)?;
     let count = fb_vector(buf, vector, 4)?;
+    // Prima di allocare: il conteggio si legge dal vettore e si confronta col
+    // tetto senza costruire niente.
+    if count > MAX_IPC_CUSTOM_METADATA_PAIRS {
+        return Err(ArrowTransportError::IpcTooManyMetadataPairs(
+            count,
+            MAX_IPC_CUSTOM_METADATA_PAIRS,
+        ));
+    }
+    let mut viste: BTreeSet<&str> = BTreeSet::new();
     for index in 0..count {
         let entry = fb_indirect(buf, vector + 4, index * 4)?;
-        fb_key_value(buf, entry)?;
+        let (chiave, _valore) = fb_key_value(buf, entry)?;
+        // Duplicati rifiutati, non risolti. Chi li raccoglie in una mappa
+        // applica «vince l'ultima», che per una chiave autoritativa sceglie
+        // un vincitore arbitrario: qui non c'e' nulla da scegliere.
+        if !viste.insert(chiave) {
+            return Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"));
+        }
     }
     Ok(())
 }
@@ -289,10 +401,17 @@ fn fb_field_table(
     if dictionary != 0 {
         let dictionary_table = fb_indirect(buf, table, dictionary)?;
         let (dict_vtable, dict_vtable_len) = fb_table(buf, dictionary_table)?;
+        // `indexType` e' obbligatorio quando `dictionary` c'e':
+        // `get_data_type` lo legge con `dictionary.indexType().unwrap()`, e
+        // una codifica a dizionario senza tipo dell'indice non significa
+        // comunque nulla.
         let index_type = fb_field(buf, dict_vtable, dict_vtable_len, 1)?;
-        if index_type != 0 {
-            fb_table(buf, fb_indirect(buf, dictionary_table, index_type)?)?;
+        if index_type == 0 {
+            return Err(ArrowTransportError::IpcSchemaInvalid(
+                "dictionary senza indexType",
+            ));
         }
+        fb_table(buf, fb_indirect(buf, dictionary_table, index_type)?)?;
     }
     // children: vettore di Field.
     let children = fb_field(buf, vtable, vtable_len, 5)?;
@@ -367,8 +486,17 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
 /// Tabella `Schema`: fields, `custom_metadata` e feature.
 fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
     let (vtable, vtable_len) = fb_table(buf, table)?;
+    // `fields` e' OBBLIGATORIO: `fb_to_schema` lo legge con
+    // `fb.fields().unwrap()`. Il writer lo emette sempre, anche per uno
+    // schema senza colonne — presente con zero elementi e assente sono cose
+    // diverse, e solo la seconda panica.
     let fields = fb_field(buf, vtable, vtable_len, 1)?;
-    if fields != 0 {
+    if fields == 0 {
+        return Err(ArrowTransportError::IpcSchemaInvalid(
+            "schema senza il campo fields",
+        ));
+    }
+    {
         let vector = fb_indirect(buf, table, fields)?;
         let count = fb_vector(buf, vector, 4)?;
         if count > MAX_COLUMNS {
@@ -995,16 +1123,29 @@ fn parse_footer(
 ) -> Result<Vec<FooterBlock>, ArrowTransportError> {
     let root = fb_u32(footer, 0)? as usize;
     let (vtable, vtable_len) = fb_table(footer, root)?;
-    // Campo 1: lo Schema del footer.
+    // Campo 1: lo Schema del footer, OBBLIGATORIO.
+    //
+    // Stessa classe dei custom metadata: `arrow-ipc` lo legge con
+    // `footer.schema().unwrap()`, quindi un footer che non lo porta panica
+    // dentro la dipendenza. Il writer lo emette sempre, quindi pretenderlo
+    // non rifiuta nessun file legittimo.
     let schema_offset = fb_field(footer, vtable, vtable_len, 1)?;
-    if schema_offset != 0 {
-        fb_schema(footer, fb_indirect(footer, root, schema_offset)?)?;
+    if schema_offset == 0 {
+        return Err(ArrowTransportError::IpcFooterInvalid("schema assente"));
     }
+    fb_schema(footer, fb_indirect(footer, root, schema_offset)?)?;
     let mut blocks: Vec<FooterBlock> = Vec::new();
     // Campo 2: dizionari. Campo 3: record batch. Arrow legge entrambi.
     for field in [2_usize, 3] {
         fb_footer_blocks(footer, root, vtable, vtable_len, field, &mut blocks, limits)?;
     }
+    // Campo 4: custom metadata del footer. Arrow li legge, e li legge con
+    // `key().unwrap()` / `value().unwrap()`: una voce senza chiave o senza
+    // valore panica dentro la dipendenza. Prima di questa riga il campo non
+    // era percorso affatto — non lo leggeva nessuno, quindi nessuno lo
+    // vedeva.
+    let custom = fb_field(footer, vtable, vtable_len, 4)?;
+    fb_custom_metadata(footer, root, custom)?;
     Ok(blocks)
 }
 
@@ -1327,4 +1468,256 @@ pub fn encode_ipc_file(
         return Err(ArrowTransportError::StreamTooLarge);
     }
     Ok(payload)
+}
+
+// ---------------------------------------------------------------------------
+// Custom metadata: i dodici casi strutturali del confine.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod custom_metadata {
+    use super::{
+        fb_custom_metadata, ArrowTransportError, MAX_IPC_CUSTOM_METADATA_KEY_BYTES,
+        MAX_IPC_CUSTOM_METADATA_PAIRS, MAX_IPC_CUSTOM_METADATA_VALUE_BYTES,
+    };
+
+    /// Che cosa mettere in una voce.
+    enum Campo<'a> {
+        /// Stringa presente, con questi byte esatti â€” anche non UTF-8.
+        Byte(&'a [u8]),
+        /// Campo assente dalla vtable: e' l'offset zero che la versione
+        /// precedente lasciava passare, e che fa panicare `arrow-ipc` quando
+        /// legge i custom metadata del footer.
+        Assente,
+    }
+
+    /// Costruisce il buffer flatbuffer minimo che `fb_custom_metadata` sa
+    /// percorrere, con la tabella padre in posizione zero.
+    ///
+    /// Non serve una vtable per la tabella padre: la funzione sotto esame non
+    /// la legge, riceve l'offset del campo gia' risolto. Serve invece una
+    /// vtable **vera** per ogni `KeyValue`, perche' quella viene percorsa.
+    ///
+    /// ```text
+    ///   0   4 byte    riempimento: l'offset del campo non puo' essere zero,
+    ///                   che per `fb_custom_metadata` significa «campo assente»
+    ///   4   u32       offset relativo al vettore
+    ///   8   u32       numero di coppie
+    ///  12   u32 * n   offset relativi alle tabelle KeyValue
+    ///   ..            per ogni coppia: vtable, tabella, chiave, valore
+    ///   ..  1 byte    coda: le stringhe flatbuffer sono NUL-terminate
+    /// ```
+    ///
+    /// Le stringhe stanno **dopo** la propria tabella perche' gli offset
+    /// indiretti dei flatbuffer vanno in avanti.
+    fn costruisci(coppie: &[(Campo<'_>, Campo<'_>)]) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        // Riempimento: il campo vive all'offset 4, perche' l'offset zero
+        // significa «campo assente» e la validazione tornerebbe Ok senza
+        // guardare niente. La prima stesura di questo banco lo passava a
+        // zero, e i dieci casi negativi lo hanno scoperto: i tre positivi da
+        // soli sarebbero passati a vuoto.
+        buf.extend_from_slice(&0_u32.to_le_bytes());
+        buf.extend_from_slice(&4_u32.to_le_bytes());
+        let n = u32::try_from(coppie.len()).expect("conteggio entro u32");
+        buf.extend_from_slice(&n.to_le_bytes());
+        let primo_slot = buf.len();
+        buf.resize(primo_slot + coppie.len() * 4, 0);
+
+        for (indice, (chiave, valore)) in coppie.iter().enumerate() {
+            let presente = |campo: &Campo<'_>| matches!(campo, Campo::Byte(_));
+
+            // vtable: [lunghezza][lunghezza tabella][slot 0][slot 1]
+            let vtable = buf.len();
+            buf.extend_from_slice(&8_u16.to_le_bytes());
+            buf.extend_from_slice(&12_u16.to_le_bytes());
+            buf.extend_from_slice(&if presente(chiave) { 4_u16 } else { 0 }.to_le_bytes());
+            buf.extend_from_slice(&if presente(valore) { 8_u16 } else { 0 }.to_le_bytes());
+
+            // tabella: [soffset alla vtable][rel chiave][rel valore]
+            let tabella = buf.len();
+            let soffset = i32::try_from(tabella - vtable).expect("soffset entro i32");
+            buf.extend_from_slice(&soffset.to_le_bytes());
+            buf.extend_from_slice(&0_u32.to_le_bytes());
+            buf.extend_from_slice(&0_u32.to_le_bytes());
+
+            // Lo slot del vettore punta a questa tabella.
+            let slot = primo_slot + indice * 4;
+            let rel = u32::try_from(tabella - slot).expect("offset entro u32");
+            buf[slot..slot + 4].copy_from_slice(&rel.to_le_bytes());
+
+            // Le due stringhe, ciascuna dopo la tabella che la nomina.
+            for (slot_campo, campo) in [(tabella + 4, chiave), (tabella + 8, valore)] {
+                if let Campo::Byte(bytes) = campo {
+                    let posizione = buf.len();
+                    let lunghezza = u32::try_from(bytes.len()).expect("stringa entro u32");
+                    buf.extend_from_slice(&lunghezza.to_le_bytes());
+                    buf.extend_from_slice(bytes);
+                    buf.push(0);
+                    let rel = u32::try_from(posizione - slot_campo).expect("offset entro u32");
+                    buf[slot_campo..slot_campo + 4].copy_from_slice(&rel.to_le_bytes());
+                }
+            }
+        }
+        // `fb_string` pretende almeno un byte dopo il contenuto.
+        buf.push(0);
+        buf
+    }
+
+    fn valida(coppie: &[(Campo<'_>, Campo<'_>)]) -> Result<(), ArrowTransportError> {
+        let buf = costruisci(coppie);
+        fb_custom_metadata(&buf, 0, 4)
+    }
+
+    fn coppia<'a>(chiave: &'a str, valore: &'a str) -> (Campo<'a>, Campo<'a>) {
+        (
+            Campo::Byte(chiave.as_bytes()),
+            Campo::Byte(valore.as_bytes()),
+        )
+    }
+
+    #[test]
+    fn una_collezione_valida_passa() {
+        assert!(valida(&[
+            coppia("plenora.geometry.srid", "4326"),
+            coppia("ARROW:extension:name", "geoarrow.wkb"),
+        ])
+        .is_ok());
+    }
+
+    // --- 1-3: i tre tetti, superati SEPARATAMENTE -------------------------
+    //
+    // Superarli insieme non direbbe quale ha parato, ed e' l'unica cosa che
+    // questi tre test devono dire.
+
+    #[test]
+    fn tetto_1_troppe_coppie() {
+        let chiavi: Vec<String> = (0..=MAX_IPC_CUSTOM_METADATA_PAIRS)
+            .map(|indice| format!("k{indice}"))
+            .collect();
+        let coppie: Vec<(Campo<'_>, Campo<'_>)> = chiavi
+            .iter()
+            .map(|chiave| (Campo::Byte(chiave.as_bytes()), Campo::Byte(b"v")))
+            .collect();
+        assert!(matches!(
+            valida(&coppie),
+            Err(ArrowTransportError::IpcTooManyMetadataPairs(_, _))
+        ));
+    }
+
+    #[test]
+    fn tetto_2_chiave_troppo_lunga() {
+        let chiave = "k".repeat(MAX_IPC_CUSTOM_METADATA_KEY_BYTES + 1);
+        assert!(matches!(
+            valida(&[coppia(&chiave, "v")]),
+            Err(ArrowTransportError::IpcMetadataKeyTooLarge(_, _))
+        ));
+        // Al tetto esatto passa: il limite e' un massimo, non un divieto.
+        let al_limite = "k".repeat(MAX_IPC_CUSTOM_METADATA_KEY_BYTES);
+        assert!(valida(&[coppia(&al_limite, "v")]).is_ok());
+    }
+
+    #[test]
+    fn tetto_3_valore_troppo_lungo() {
+        let valore = "v".repeat(MAX_IPC_CUSTOM_METADATA_VALUE_BYTES + 1);
+        assert!(matches!(
+            valida(&[coppia("k", &valore)]),
+            Err(ArrowTransportError::IpcMetadataValueTooLarge(_, _))
+        ));
+        let al_limite = "v".repeat(MAX_IPC_CUSTOM_METADATA_VALUE_BYTES);
+        assert!(valida(&[coppia("k", &al_limite)]).is_ok());
+    }
+
+    // --- 4-5: i campi assenti, che facevano panicare arrow ----------------
+
+    #[test]
+    fn caso_4_chiave_assente() {
+        assert!(matches!(
+            valida(&[(Campo::Assente, Campo::Byte(b"v"))]),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave assente"))
+        ));
+    }
+
+    #[test]
+    fn caso_5_valore_assente() {
+        assert!(matches!(
+            valida(&[(Campo::Byte(b"k"), Campo::Assente)]),
+            Err(ArrowTransportError::IpcMetadataInvalid("valore assente"))
+        ));
+    }
+
+    // --- 6-7: vuoti, con esiti OPPOSTI e voluti ---------------------------
+
+    #[test]
+    fn caso_6_chiave_vuota_rifiutata() {
+        assert!(matches!(
+            valida(&[coppia("", "v")]),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave vuota"))
+        ));
+    }
+
+    #[test]
+    fn caso_7_valore_vuoto_accettato() {
+        // Rifiutarlo romperebbe file legittimi che rappresentano un campo
+        // assente con la stringa vuota.
+        assert!(valida(&[coppia("k", "")]).is_ok());
+    }
+
+    // --- 8-9: UTF-8, verificato da noi ------------------------------------
+
+    #[test]
+    fn caso_8_chiave_non_utf8() {
+        assert!(matches!(
+            valida(&[(Campo::Byte(&[0xff, 0xfe]), Campo::Byte(b"v"))]),
+            Err(ArrowTransportError::IpcMetadataInvalid(
+                "chiave non e' UTF-8 valido"
+            ))
+        ));
+    }
+
+    #[test]
+    fn caso_9_valore_non_utf8() {
+        assert!(matches!(
+            valida(&[(Campo::Byte(b"k"), Campo::Byte(&[0xff, 0xfe]))]),
+            Err(ArrowTransportError::IpcMetadataInvalid(
+                "valore non e' UTF-8 valido"
+            ))
+        ));
+    }
+
+    // --- 10-11: duplicati, rifiutati in ENTRAMBE le forme -----------------
+    //
+    // Anche identici: chi li raccoglie in una mappa li comprime comunque, e
+    // Â«vince l'ultimaÂ» su una chiave autoritativa sceglie un vincitore
+    // arbitrario.
+
+    #[test]
+    fn caso_10_duplicati_con_lo_stesso_valore() {
+        assert!(matches!(
+            valida(&[coppia("k", "v"), coppia("k", "v")]),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"))
+        ));
+    }
+
+    #[test]
+    fn caso_11_duplicati_con_valori_divergenti() {
+        assert!(matches!(
+            valida(&[coppia("k", "uno"), coppia("k", "due")]),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"))
+        ));
+    }
+
+    // --- 12: le chiavi altrui ---------------------------------------------
+
+    #[test]
+    fn caso_12_chiavi_sconosciute_accettate() {
+        // Il confine valida la FORMA, non il vocabolario: rifiutare le chiavi
+        // altrui romperebbe l'interoperabilita' con qualunque produttore
+        // Arrow che aggiunga le proprie.
+        assert!(valida(&[
+            coppia("qualcun.altro.chiave", "valore"),
+            coppia("pandas", "{}"),
+        ])
+        .is_ok());
+    }
 }
