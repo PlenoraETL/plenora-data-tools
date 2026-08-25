@@ -318,11 +318,11 @@ prese, perché ognuna cambia che cosa il campo significa.
 
 | domanda | decisione |
 |---|---|
-| piani v5 che non hanno il campo | restano **validi e invariati**, e nella forma proposta il campo in v5 non esiste affatto: un v5 che lo dichiarasse va rifiutato. In v6 è facoltativo, e la sua assenza significa una cosa sola: il profilo isolato non è selezionabile per quel piano, mai un tetto implicito. Nessuna migrazione forzata |
+| piani v5 che non hanno il campo | restano **validi e invariati**, e il campo in v5 non esiste affatto: un v5 che lo dichiarasse va rifiutato (`PLAN-007`). In v6 è facoltativo, e la sua assenza significa una cosa sola: il profilo isolato non è selezionabile per quel piano, mai un tetto implicito. Nessuna migrazione forzata |
 | obbligatorietà | il campo è obbligatorio **solo** nel profilo isolato. Chiedere l'isolamento senza dichiarare il tetto è incoerente, e va respinto in validazione |
-| forma canonica e `plan_hash` | ogni piano **v5 esistente mantiene il proprio `plan_hash`**: la v5 non cambia, e nessun identificativo già pubblicato si muove. Un piano **v6 appartiene al dominio nuovo**, quindi un v5 e un v6 per il resto identici hanno identità diverse. Dentro la v6, il campo entra nella forma canonica **solo quando è presente**: un v6 che lo dichiara e uno che lo omette sono piani diversi. La stesura precedente diceva «un piano che non lo dichiara ha lo stesso `plan_hash`», che è vero dentro la v5 e **falso attraverso il confine di versione** — la versione partecipa all'identità. Nessuna migrazione v5→v6 può fingere equivalenza di hash |
+| forma canonica e `plan_hash` | ogni piano **v5 esistente mantiene il proprio `plan_hash`**: la v5 non cambia, e nessun identificativo già pubblicato si muove. Un piano **v6 appartiene al dominio nuovo**, quindi un v5 e un v6 per il resto identici hanno identità diverse. Dentro la v6, il campo entra nella forma canonica **solo quando è presente**: un v6 che lo dichiara e uno che lo omette sono piani diversi. La stesura precedente diceva «un piano che non lo dichiara ha lo stesso `plan_hash`», che è vero dentro la v5 e **falso attraverso questo confine di versione**. Nessuna migrazione v5→v6 può fingere equivalenza di hash (`PLAN-021`). Attenzione a non generalizzare: **v4→v5 conserva l'equivalenza**, perché un v4 è migrato NEL canonico v5, e la ratifica lo dichiara esplicitamente (`PLAN-019`) |
 | versionamento | **non è una decisione additiva**, e la prima stesura sbagliava a chiamarla tale: vedi sotto |
-| ratifica in `plenora-contracts` | la ratifica **mirata di questo campo** precede la `PR-2`. Proposta come `Plan Budget 1.0` (`plenora-plan-budget-v1`) con la decisione `0005`, **non ancora approvata**. È separata dall'adozione generale della nuova linea normativa, che resta un blocker a sé ([`stato-e-roadmap.md`](stato-e-roadmap.md)) |
+| ratifica in `plenora-contracts` | **adottata**: `Plan Budget 1.0` (`plenora-plan-budget-v1`) con la decisione `0005`, `PLAN-001…021`, mergiata in `5d15107`. È separata dall'adozione generale della nuova linea normativa, che resta un blocker a sé ([`stato-e-roadmap.md`](stato-e-roadmap.md)) |
 
 #### `deny_unknown_fields` rende il campo una rottura, non un'aggiunta
 
@@ -352,11 +352,11 @@ Il progetto propendeva per **v6**, per coerenza col precedente v4→v5 e perché
 `deny_unknown_fields` è una scelta deliberata di questo formato: convivere con
 una sua conseguenza fingendo che sia additiva la contraddirebbe.
 
-**Proposta di ratifica in attesa di approvazione** — non ancora adottata, e
-finché non lo è nessuna riga di `PR-2` va scritta. Il testo proposto a
-`plenora-contracts` è `Plan Budget 1.0` (`plenora-plan-budget-v1`) con la
-decisione `0005`: il campo esiste solo in v6, dentro `limits`, è facoltativo,
-deve essere
+**Ratificato**: `plenora-contracts` ha adottato `Plan Budget 1.0`
+(`plenora-plan-budget-v1`) con la decisione `0005`, revisione `1bb2c3d`
+mergiata in `5d15107`. Il campo — che sul filo vive accanto a
+`schema_version`, non a `plan_format_version`, che è il nome interno del grafo
+validato — esiste solo in v6, dentro `limits`, è facoltativo, deve essere
 `>= max_governed_memory_bytes` **effettivo** — default compreso, quando il
 piano lo omette — e dichiara il tetto **richiesto**, non quello concesso: il
 tetto effettivo è `min(richiesta, policy dell'host)`, e policy e meccanismo
