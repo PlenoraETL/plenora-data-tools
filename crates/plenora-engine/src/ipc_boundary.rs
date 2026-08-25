@@ -80,6 +80,26 @@ pub enum IpcFormat {
 /// La fase resta `Read` per entrambi: il tag del confine vince sulla
 /// derivazione per variante, e questi errori nascono leggendo.
 fn read_error(error: ArrowTransportError) -> PlenoraError {
+    // Il tag di fase si applica **una volta sola**, qui.
+    //
+    // La stesura precedente lo applicava dentro la traduzione, e il ramo
+    // ricorsivo della diagnostica ne produceva due annidati:
+    //
+    //     Tagged(Read) -> RowDiagnostics -> Tagged(Read) -> ResourceLimit
+    //
+    // `with_phase` evita di riavvolgere un errore gia' `Tagged`, ma dopo
+    // `with_row_diagnostics` l'esterno non e' piu' `Tagged`, quindi la
+    // difesa non scattava. Categoria, fase e payload restavano corretti —
+    // ed e' la ragione per cui i test passavano — ma la proprieta' che
+    // `with_phase` dichiara, niente tag annidati, era violata.
+    traduci_errore_di_lettura(error).with_phase(ErrorPhase::Read)
+}
+
+/// Traduce un errore del trasporto **senza** applicare la fase.
+///
+/// Separare la traduzione dal tagging e' cio' che permette al ramo ricorsivo
+/// di comporre senza annidare: la fase la mette [`read_error`], una volta.
+fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
     use ArrowTransportError as E;
 
     /// Testo di un errore che il validatore IPC non puo' produrre.
@@ -88,7 +108,7 @@ fn read_error(error: ArrowTransportError) -> PlenoraError {
     const IMPOSSIBILE_AL_CONFINE: &str =
         "errore di esecuzione riportato dal lettore di confine IPC";
 
-    let errore = match error {
+    match error {
         // --- I/O: la causa si conserva, non si stampa ----------------------
         //
         // La versione precedente lo classificava `DataMapping`, cioe' «il file
@@ -198,13 +218,8 @@ fn read_error(error: ArrowTransportError) -> PlenoraError {
         E::RowDiagnostics {
             source,
             diagnostics,
-        } => {
-            return read_error(*source)
-                .with_row_diagnostics(*diagnostics)
-                .with_phase(ErrorPhase::Read)
-        }
-    };
-    errore.with_phase(ErrorPhase::Read)
+        } => traduci_errore_di_lettura(*source).with_row_diagnostics(*diagnostics),
+    }
 }
 
 /// Testo di un errore del trasporto, gia' sanificato all'origine.

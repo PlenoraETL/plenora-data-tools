@@ -669,4 +669,55 @@ fn la_diagnostica_di_riga_sopravvive_alla_classificazione() {
         tradotto.row_diagnostics().is_some(),
         "la diagnostica e' stata scartata dalla classificazione"
     );
+
+    // La STRUTTURA, non solo gli assi. Categoria, fase e payload restavano
+    // corretti anche con due tag annidati — Tagged(Read) su RowDiagnostics su
+    // Tagged(Read) — quindi da soli non dicevano nulla sulla forma. La
+    // proprieta' che `with_phase` dichiara e' che i tag non si annidano.
+    let PlenoraError::Tagged { phase, source } = &tradotto else {
+        panic!("atteso un tag di fase esterno, trovato {tradotto:?}");
+    };
+    assert_eq!(*phase, ErrorPhase::Read);
+    let PlenoraError::RowDiagnostics { source: causa, .. } = source.as_ref() else {
+        panic!("sotto il tag e' attesa la diagnostica");
+    };
+    assert!(
+        !matches!(causa.as_ref(), PlenoraError::Tagged { .. }),
+        "tag di fase annidato: la traduzione sta taggando invece di lasciar fare al guscio"
+    );
+    assert_eq!(causa.category(), ErrorCategory::ResourceLimit);
+}
+
+/// Una variante che il validatore IPC non puo' produrre e' un difetto nostro.
+///
+/// Nasce ESEGUENDO — parametri di operazione, kernel, join, backend — e
+/// questa funzione traduce solo gli errori del lettore di confine. Prima
+/// finiva in `DataMapping`, cioe' accusava il file di una causa interna: la
+/// stessa classe del difetto su `Io`.
+#[test]
+fn una_variante_impossibile_al_confine_e_un_errore_interno() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+
+    let impossibile = ArrowTransportError::MissingParameter {
+        operation: "geo.buffer",
+        name: "distance",
+    };
+    // Il testo dell'originale, che NON deve comparire nel tradotto.
+    let originale = impossibile.to_string();
+    let tradotto = read_error(impossibile);
+
+    assert_eq!(tradotto.category(), ErrorCategory::Internal);
+    assert_eq!(tradotto.phase(), ErrorPhase::Read);
+
+    let messaggio = tradotto.to_string();
+    assert_ne!(
+        messaggio, originale,
+        "il testo dell'errore originale e' passato invariato"
+    );
+    for dettaglio in ["geo.buffer", "distance"] {
+        assert!(
+            !messaggio.contains(dettaglio),
+            "il messaggio porta un dettaglio dell'originale: {dettaglio}"
+        );
+    }
 }
