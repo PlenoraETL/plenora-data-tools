@@ -30,7 +30,7 @@ leggere il nostro codice.
 
 | | garanzia |
 |---|---|
-| **GA-1** | Dopo OOM, crash, panic, timeout, cancellazione o risultato invalido, **nessun output finale è visibile**. Il percorso di destinazione non esiste, oppure contiene ciò che c'era prima. |
+| **GA-1** | Dopo OOM, crash, panic, timeout, cancellazione o risultato invalido **avvenuti prima del commit point**, nessun output finale è visibile: il percorso di destinazione non esiste, oppure contiene ciò che c'era prima. Il commit point è il `rename` (§7-bis). Dopo di esso l'output è visibile e la garanzia non è più «nulla è visibile» ma «ciò che è visibile è completo». |
 | **GA-2** | Un esito classificato `ResourceLimit` porta **evidenza attribuibile** del dominio di isolamento. Senza prova specifica la classificazione è `Internal`. |
 | **GA-3** | **Nessun output incompleto o strutturalmente invalido viene pubblicato.** Schema, contratto, framing, conteggi e sigillo sono verificati dall'autorità unica `plenora_core::contract` prima che qualcosa diventi visibile. |
 | **GA-4** | La pubblicazione è **atomica**: il file finale c'è per intero o non c'è. Nessuno stato intermedio è osservabile. |
@@ -54,10 +54,11 @@ peggio di una che si sa di non avere.
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
 | **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
 | **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
-| **NG-10** | **Contenere non significa terminare.** Linux uccide, Windows nega l'allocazione e lascia il processo vivo. Non garantiamo un modo unico di fermarsi: garantiamo che la memoria resti sotto il tetto e che l'evento sia attribuibile. |
+| **NG-10** | **Contenere non significa terminare.** Su Linux il kernel uccide; altre piattaforme possono negare l'allocazione lasciando il processo vivo ([`prototipi-isolamento.md`](prototipi-isolamento.md)). Non garantiamo un modo unico di fermarsi: garantiamo che il tetto sia imposto e che l'evento sia leggibile. |
 | **NG-11** | Il tetto del dominio **non protegge dalle richieste**, solo dagli addebiti. Su Linux una richiesta da 64 TiB non toccata è stata accettata senza generare alcun evento. Un worker non può difendersi interrogando l'allocatore. |
 | **NG-12** | **L'attribuzione dipende dal sigillo del dominio.** Se il worker riesce a creare discendenti, l'uccisione avviene altrove e l'evidenza locale non la registra. Il sigillo è verificato nel preflight (§9-bis): senza, il profilo isolato non parte. |
-| **NG-13** | **L'esaurimento del coordinatore non produce un errore strutturato.** Il coordinatore è il processo del chiamante e non ha un tetto nostro: se muore, muore l'invocazione. `GA-1` regge lo stesso — perché la pubblicazione è atomica — ma `GA-2` no, e non c'è nessun esito da leggere. |
+| **NG-13** | **L'esaurimento del coordinatore non produce un errore strutturato.** Il coordinatore è il processo del chiamante e non ha un tetto nostro: se muore, muore l'invocazione, e non c'è nessun esito da leggere. Se muore **dopo** il commit point, l'output è pubblicato e il chiamante non lo sa: è un esito **ambiguo**, e si risolve rileggendo la destinazione (§7-bis). |
+| **NG-14** | **Il tetto non è un massimo istantaneo invalicabile.** `memory.max` è la semantica del kernel, che ammette superamenti temporanei prima che il reclaim o l'OOM intervengano. Garantiamo che il limite sia **imposto**, non che nessun byte lo oltrepassi mai (§7-ter). |
 
 ---
 
@@ -176,6 +177,20 @@ proprietà vera è più debole e più utile:
 > dati**: funzione del numero di domini vivi e della dimensione massima di un
 > messaggio del protocollo, entrambe costanti dichiarate.
 
+«Per costruzione» va però reso vero voce per voce, perché ogni canale che
+entra nel coordinatore è una cattura potenzialmente illimitata, e sono tutti
+alimentati dal worker:
+
+| voce | tetto |
+|---|---|
+| coda degli eventi | numero massimo di elementi dichiarato. Alla saturazione **non si cresce**: si registra la perdita e si classifica il dominio come non osservabile |
+| `stdout` e `stderr` del worker | tetto in byte, con troncamento dichiarato. Non trasportano il protocollo (§4.2), quindi troncarli non perde un esito — ma catturarli senza limite darebbe al worker il modo di esaurire il coordinatore scrivendo |
+| messaggi `Progresso` | tetto sul numero e sulla frequenza. Un worker che ne manda troppi viene trattato come un worker che non ne manda: il timeout è la difesa in entrambi i casi |
+| fermo dell'evidenza | dimensione fissa: contatori, non una cronologia |
+
+Nessuna di queste è una cattura illimitata, e nessuna cresce con il numero di
+righe o di batch.
+
 ### Chi osserva il coordinatore: nessuno, e va detto
 
 **Il coordinatore è il processo del chiamante**, e non gli si applica un tetto
@@ -244,10 +259,10 @@ worker e la creazione di quello del verificatore può quindi esistere una
 finestra in cui il sistema trattiene più di `max_domain_memory_bytes`. Non è
 stato misurato.
 
-La garanzia si limita perciò a ciò che è dimostrato: **ogni dominio resta
-sotto il proprio tetto** — misurato, cinque ripetizioni, picco esattamente
-pari al tetto. Il picco complessivo del sistema è una guida al
-dimensionamento, non una promessa.
+La garanzia si limita perciò a ciò che la primitiva dà: **su ogni dominio il
+tetto è imposto**, nel senso della §7-ter — non che nessun byte lo oltrepassi
+mai. Il picco osservato è una misura con le sue ripetizioni, e il picco
+complessivo del sistema è una guida al dimensionamento, non una promessa.
 
 Il coordinatore **non ha un tetto imposto da noi** — il perché è in
 §2-quater — e il suo consumo è l'unica quantità che si somma a quella dei
@@ -642,6 +657,87 @@ pubblicato e pubblicato-con-durabilità-non-confermata.
 
 ---
 
+## 7-bis. Il commit point, e l'esito che nessuno riceve
+
+`GA-4` dice che la pubblicazione è atomica. È vero, e non basta: il `rename`
+rende atomico **il file**, non la coppia *file pubblicato + esito
+restituito*. Fra i due c'è una finestra che nessuna primitiva del filesystem
+chiude:
+
+```
+    rename riuscito
+      -> il nuovo output e' visibile
+         -> il coordinatore muore
+            -> il chiamante non riceve alcun esito
+```
+
+Il chiamante si trova con un'operazione che *potrebbe* essere riuscita e
+nessun modo di saperlo dal nostro valore di ritorno. La prima stesura
+sosteneva che l'atomicità del rename coprisse anche questo. Non lo copre.
+
+### La decisione: il rename è il commit point, e l'ambiguità è dichiarata
+
+Le tre strade possibili, e perché questa:
+
+| strada | perché no, o perché sì |
+|---|---|
+| un protocollo durevole esterno — journal, lock file, record di transazione | risolverebbe davvero, ma introduce uno stato persistente che questo componente oggi non ha, con la sua bonifica, il suo formato e la sua compatibilità. È un progetto, non una riga |
+| restringere `GA-1` ai soli guasti precedenti il commit | è **ciò che facciamo**, ma da solo lascerebbe il chiamante senza rimedio |
+| **dichiarare il commit point e rendere l'esito ambiguo risolvibile** | è la scelta: non elimina la finestra, la rende una condizione con un nome e una procedura |
+
+Il **commit point è il `rename`**. Prima: nessun effetto osservabile, e
+`GA-1` vale integralmente. Dopo: l'output è visibile, e ciò che può mancare è
+solo la *notizia*.
+
+### Come il chiamante risolve l'ambiguità
+
+Perché sia risolvibile serve che l'output pubblicato sia **autodescrittivo**,
+e lo è già: porta il sigillo e il contratto che la verifica ha confrontato.
+Un chiamante che non ha ricevuto esito rilegge la destinazione e distingue tre
+casi:
+
+| che cosa trova | che cosa significa |
+|---|---|
+| il file assente, o il contenuto precedente | il commit non è avvenuto: nulla è stato pubblicato, si può riprovare |
+| il file nuovo, sigillo e contratto coerenti col piano | il commit **è** avvenuto: l'operazione è riuscita e l'esito è andato perduto, non l'operazione |
+| il file nuovo con sigillo o contratto incoerenti | non è nostro, o è di un'altra esecuzione: **non** riprovare senza decidere che farne |
+
+Il terzo caso esiste perché il rename non distingue la nostra pubblicazione da
+quella di qualcun altro sullo stesso percorso, e fingere che non possa
+succedere sarebbe la stessa scorciatoia di prima.
+
+**Che cosa questo non risolve.** Se due esecuzioni scrivono la stessa
+destinazione e una muore dopo il commit, il chiamante non può stabilire *quale*
+delle due ha pubblicato: il sigillo dice che l'output è integro, non chi l'ha
+scritto. Un identificativo d'esecuzione nell'artefatto lo risolverebbe, ed è
+lavoro successivo — dichiarato qui perché la sua assenza è una limitazione,
+non una svista.
+
+---
+
+## 7-ter. Che cosa `memory.max` garantisce davvero
+
+Il prototipo ha misurato cinque esecuzioni con il picco **esattamente** pari
+al tetto. È un risultato pulito, e sarebbe scorretto trasformarlo in una
+promessa: cinque misure su un kernel sono evidenza sperimentale, non la
+semantica della primitiva.
+
+Il kernel dichiara che l'uso **può superare temporaneamente** `memory.max`
+prima che il reclaim o l'OOM killer intervengano. La garanzia che possiamo
+fare è quindi quella del meccanismo, non quella del numero:
+
+| non promettiamo | promettiamo |
+|---|---|
+| che nessun byte oltrepassi mai il tetto | che il tetto sia **imposto**: raggiunto il limite, il kernel recupera memoria e, se non basta, uccide |
+| un massimo istantaneo verificabile byte per byte | che il superamento sia **transitorio e non produttivo**: non consente al worker di completare un lavoro che il tetto non ammette |
+| un valore di picco riproducibile | che il picco osservato sia una misura, riportata con le sue ripetizioni |
+
+La differenza conta per chi dimensiona un host: sommare i tetti dei domini dà
+una stima, non un massimo garantito. È la stessa ragione per cui il picco
+complessivo del sistema è una guida e non una promessa (§2-quater).
+
+---
+
 ## 8. Cancellazione, timeout, cleanup
 
 ### 8.1 Cancellazione
@@ -736,17 +832,39 @@ eseguito la sequenza intera: da quel momento `memory.events.local` non vede
 piu' l'uccisione, e il supervisore classificherebbe `Internal` un guasto di
 risorse.
 
-Tre strati, tutti misurati, e non sono alternative:
+**Il sigillo è una scrittura su un file, e il worker può riscriverla.** È il
+punto che la prima stesura trattava come uno strato fra tre, e che il
+prototipo ha ribaltato: con gli **stessi privilegi** del supervisore — il caso
+normale di una libreria embedded, dove coordinatore e worker girano con lo
+stesso UID — il worker ha rimesso `cgroup.max.depth` a 10, `memory.max` a
+1 GiB, `memory.oom.group` a 0, e infine **è uscito dal dominio** spostandosi
+nel cgroup del supervisore. Cinque riscritture su cinque, tutte dopo che il
+preflight aveva finito.
 
-| strato | che cosa impedisce |
+Il preflight verifica quindi uno stato che il worker può cambiare un istante
+dopo. Non è un difetto del preflight: è che mancava il meccanismo.
+
+**Il meccanismo è la separazione dei privilegi, e non è opzionale.** Con il
+worker a un UID distinto e la gerarchia di proprietà del control plane, le
+stesse cinque operazioni falliscono tutte con `EACCES` — misurato. Le forme
+accettabili, in ordine di costo:
+
+| forma | che cosa serve |
 |---|---|
-| `cgroup.max.depth = 0` sul dominio | il kernel rifiuta ogni discendente con `EAGAIN`: l'evasione si ferma al primo passo |
-| worker senza privilegi sulla gerarchia | il `mkdir` fallisce con `EACCES`, indipendentemente dal kernel |
-| lettura anche di `memory.events` gerarchico | se i primi due mancassero, l'evidenza non va perduta |
+| **UID distinto** per il worker, gerarchia di proprietà del supervisore | il supervisore deve poter cambiare identità al figlio: `uid`/`gid` prima della `exec`, che sono API sicure. Richiede però che il coordinatore abbia il privilegio di farlo |
+| **helper proprietario del control plane**, distinto dal processo che esegue | separa chi configura da chi lavora anche a parità di UID del chiamante, al prezzo di un processo in più e di un canale |
+| **mount namespace** con la gerarchia non scrivibile dal worker | il worker vede il cgroup ma non può scriverlo. Non prototipato |
+| **nessuna delle tre** | il profilo isolato **non è disponibile**: `IsolationUnavailable` in validazione, non un avvio che promette meno di quanto mantenga |
 
-Il terzo **non sostituisce** i primi due: l'evidenza gerarchica dice *che* è
-successo, non *a chi*. Serve a non perdere l'informazione, non a mantenere
-l'attribuzione. Un dominio non sigillato non è un dominio osservabile.
+L'ultima riga è la sola aggiunta importante rispetto alla stesura precedente.
+Un ambiente in cui il worker può riscrivere il proprio dominio non è un
+ambiente in cui il profilo isolato vale meno: è un ambiente in cui **non
+vale**, e va rifiutato all'ingresso.
+
+Resta il terzo elemento, che non è uno strato di difesa ma di lettura:
+`memory.events` gerarchico e degli antenati (§10.0-bis). Non sostituisce la
+separazione dei privilegi — dice *che* è successo, non *a chi* — e serve a non
+perdere l'informazione quando l'attribuzione è comunque compromessa.
 
 **`memory.oom.group` è obbligatorio, non consigliato.** Senza, il prototipo ha
 osservato un figlio ucciso per il limite e il processo capofila **vivo, con
@@ -858,12 +976,11 @@ un'osservazione.
 | 15 | fallimento del publish | verifica passata, passo 9 fallito | `Io` o `Conflict` | no | rimosso |
 | 16 | fallimento del cleanup | publish riuscito, rimozione fallita | successo **con avvertenza machine-readable** | **sì** | **residuo** |
 
-**La riga 5 non presuppone la morte del worker.** Su Windows il limite si
-manifesta come allocazione negata e il processo resta vivo (`NG-10`): può
-quindi uscire con un errore tipizzato *proprio*, mentre il dominio ha
-registrato la notifica di limite. Le due righe 2 e 5 sarebbero entrambe
-candidate, e la precedenza della §10.3 decide: **l'evidenza del dominio batte
-l'esito dichiarato**, quindi l'esito è `ResourceLimit`.
+**La riga 5 non presuppone la morte del worker.** Anche dove il limite si
+manifesta come allocazione negata (`NG-10`), il worker può uscire con un
+errore tipizzato *proprio* mentre il dominio ha registrato l'evento. Le righe
+2 e 5 sarebbero entrambe candidate, e la precedenza della §10.3 decide:
+**l'evidenza del dominio batte l'esito dichiarato**, quindi `ResourceLimit`.
 
 È la scelta giusta perché l'errore che il worker riesce a riportare in quelle
 condizioni è quasi sempre la conseguenza, non la causa: dire al chiamante
@@ -890,22 +1007,65 @@ I segnali, tutti come **delta** fra prima e dopo l'esecuzione:
 La classificazione copre ogni combinazione, e nessuna cade in un ramo
 predefinito:
 
+Serve anche un quinto segnale, e la ragione è nella §10.0-ter: `Ol` da solo
+non dice *quale* limite è stato raggiunto, perché sopra al nostro dominio ce
+ne possono essere altri.
+
+| | segnale | che cosa conta |
+|---|---|---|
+| `Oa` | `memory.events.local` → `oom` **degli antenati** del dominio | quale livello della gerarchia ha esaurito il proprio tetto |
+
+La classificazione, con ogni combinazione:
+
 | `Ol` | `Kl` | `Kh` | `G` | classificazione |
 |---|---|---|---|---|
-| ≥1 | ≥1 | ≥1 | ≥1 | `ResourceLimit` attribuito. È il caso normale con dominio sigillato |
-| ≥1 | ≥1 | ≥1 | 0 | `ResourceLimit` attribuito, **senza** group kill: qualcuno è sopravvissuto. Il preflight avrebbe dovuto impedirlo → si segnala come difetto di configurazione |
-| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione **in un discendente**: il sigillo ha fallito. `Internal` con difetto del preflight dichiarato — **non** `ResourceLimit`, perché non sappiamo più a chi attribuirlo |
-| ≥1 | 0 | 0 | 0 | limite raggiunto **e nessun task uccidibile**: la firma di `oom_score_adj = -1000` non normalizzato. `ResourceLimit` con causa «dominio non uccidibile», e richiede `cgroup.kill` |
-| 0 | 0 | ≥1 | qualunque | uccisione in un discendente **senza** che questo dominio abbia raggiunto il limite: il tetto violato è di un altro. `Internal` |
+| ≥1 | ≥1 | ≥1 | ≥1 | `ResourceLimit` attribuito al dominio. È il caso normale con dominio sigillato |
+| ≥1 | ≥1 | ≥1 | 0 | `ResourceLimit`, **senza** group kill: qualcuno è sopravvissuto. Il preflight avrebbe dovuto impedirlo → difetto di configurazione, riportato |
+| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione **in un discendente**: il sigillo ha fallito. `Internal` con difetto del preflight — **non** `ResourceLimit`, perché l'attribuzione è persa |
+| ≥1 | 0 | 0 | 0 | limite raggiunto **e nessun task uccidibile**: firma di `oom_score_adj` non normalizzato. `ResourceLimit`, causa «dominio non uccidibile», richiede `cgroup.kill` |
+| **0** | **≥1** | **≥1** | qualunque | **il worker è stato ucciso senza che il suo tetto sia stato raggiunto**: l'OOM viene da un antenato o dal sistema. Si legge `Oa`: se un antenato ha `oom` ≥ 1, l'esito è `ResourceLimit` **del dominio sbagliato** — cioè un limite dell'ambiente, non del piano, e va detto così. Se nessun antenato lo ha, è un OOM globale: `Internal` |
+| 0 | 0 | ≥1 | qualunque | uccisione in un discendente senza che questo dominio abbia raggiunto il limite: il tetto violato è di un altro. `Internal` |
 | 0 | 0 | 0 | 0 | nessuna evidenza. `Internal`, **mai** dedotto come OOM (`F4-2`) |
-| — | ≥1 | 0 | — | **impossibile**: `Kl` è un sottoinsieme di `Kh`. Se accade, è un difetto di lettura e va trattato come tale, non normalizzato |
+| — | ≥1 | 0 | — | **impossibile**: `Kl` è un sottoinsieme di `Kh`. Se accade è un difetto di lettura, e va trattato come tale invece che normalizzato |
 
-La quarta riga merita una parola, perché è quella che il primo ciclo non
-sapeva esistere. `Ol` alto con `Kl` a zero non significa «niente è successo»:
-significa che il limite è stato raggiunto ripetutamente e il kernel non ha
-trovato nessuno da uccidere. Il prototipo ha misurato **305 invocazioni** e
-**zero uccisioni**, con il dominio che non avanzava. Leggere solo `oom_kill`
-avrebbe detto «nessun problema di risorse» su un dominio bloccato.
+La quinta riga è quella che la prima stesura dichiarava esaustiva senza
+esserlo. `oom_kill` conta i processi del cgroup uccisi da **qualunque** OOM
+killer, non solo dal proprio limite: un antenato con un tetto più basso
+uccide il worker facendo salire `Kl` mentre `Ol` resta a zero. Il prototipo
+l'ha riprodotta — padre a 32 MiB, dominio a 256 MiB — ottenendo `Ol = 0`,
+`Kl = 1`, `Kh = 1`, con il picco del dominio fermo al tetto **del padre**.
+
+La quarta riga è quella che il primo ciclo non sapeva esistere: `Ol` alto con
+`Kl` a zero non significa «niente è successo», significa limite raggiunto
+ripetutamente e nessuno da uccidere. Misurate **305 invocazioni** e **zero
+uccisioni**, con il dominio fermo.
+
+### 10.0-ter I delta non dimostrano una causa
+
+Va detto perché la tabella qui sopra è più debole di quanto sembri: i delta
+sono **contatori aggregati su un intervallo**, non un registro di eventi
+ordinati. Che `Ol ≥ 1` e `Kl ≥ 1` compaiano insieme non dimostra che
+l'uccisione sia stata *causata* dal limite locale: potrebbero essere due
+eventi distinti nella stessa finestra — un limite raggiunto e recuperato, e
+più tardi un OOM di un antenato.
+
+Il prototipo ne ha misurato un caso: con il padre stretto, il padre registra
+`oom = 1` e `oom_kill = 0` mentre il dominio registra `oom = 0` e
+`oom_kill = 1`. Il *perché* e il *chi* stanno su due livelli diversi, e solo
+metterli insieme dà una storia.
+
+Ne seguono due regole, entrambe conservative:
+
+1. **la classificazione è fail-closed sulla causalità**: dove i delta
+   ammettono più di una storia, si sceglie quella che *non* pubblica e che
+   *non* attribuisce al piano una colpa dell'ambiente;
+2. **l'evidenza riportata è la struttura, non la conclusione**: l'esito porta
+   i cinque contatori con sé, così chi legge può ricostruire ciò che il
+   classificatore ha visto invece di fidarsi della sua sintesi.
+
+Un registro ordinato di eventi — con `memory.events` sorvegliato tramite
+notifica invece che campionato — renderebbe la causalità osservabile. Non è
+stato prototipato, ed è la strada per rendere queste righe più forti.
 
 ### 10.1 Tassonomia: che cosa manca davvero
 

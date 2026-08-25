@@ -4,10 +4,13 @@ I prototipi stanno in `prototipi/pt-linux` e `prototipi/pt-windows`: **non**
 sono membri del workspace, non sono coperti dai gate e non sono promuovibili
 senza una PR propria. Gli output grezzi stanno in `prototipi/misure/`.
 
-Sono **evidenza esplorativa**, prodotta in tre cicli. Il primo concluse che
-le tre proprietà erano dimostrate; il secondo mostrò che era prematuro; il
-terzo, mirato, ha chiuso le due domande rimaste su Linux. Dove questo
-documento e l'output grezzo divergono, ha ragione l'output.
+Sono **evidenza esplorativa**, prodotta in quattro cicli. Il primo concluse
+che le tre proprietà erano dimostrate; il secondo mostrò che era prematuro; il
+terzo chiuse le domande su quiescenza e uccidibilità; il quarto ha trovato una
+combinazione di evidenza che la classificazione dichiarava esaustiva senza
+esserlo, e ha mostrato che il sigillo del dominio si disfa dall'interno quando
+worker e supervisore condividono i privilegi. Dove questo documento e l'output
+grezzo divergono, ha ragione l'output.
 
 ---
 
@@ -64,7 +67,7 @@ Docker **non** ha filtrato `clone3`.
 
 | | nascita vincolata | contenimento | **attribuzione** |
 |---|---|---|---|
-| **PT-Linux** | dimostrata | dimostrata | dimostrata **sotto tre condizioni verificabili**: dominio sigillato, `oom_score_adj` normalizzato, quiescenza letta da `cgroup.events` (§5.1, §5.4, §5.5) |
+| **PT-Linux** | dimostrata | dimostrata (nel senso della semantica di `memory.max`, non come massimo istantaneo) | dimostrata **sotto quattro condizioni verificabili**: separazione dei privilegi, dominio sigillato, `oom_score_adj` normalizzato, quiescenza letta da `cgroup.events` (§5.1, §5.4, §5.5, §5.6) |
 | **PT-Windows** | dimostrata | dimostrata | **no** — e la piattaforma è non supportata (§5.2, §6) |
 
 Le prime due colonne reggono ovunque. La terza regge su Linux **solo se il
@@ -98,7 +101,7 @@ mostra che cosa succede senza. Sono diventate il preflight della §9-bis di
 | `L12` | sottogruppo, via **non** ingenua | crea, si sposta, delega: **tutti e tre riescono** |
 | `L12` | evidenza dopo l'evasione | `local.oom_kill` **0**, `gerarchico.oom_kill` **1** |
 | `L13` | la stessa evasione, dominio sigillato | fermata al primo passo, `EAGAIN` |
-| `L11` | picco d'avvio | **262 144 – 524 288** byte (`n=5`) |
+| `L11` | picco d'avvio | **524 288 – 524 288** byte (`n=5`) |
 | `L11` | picco sotto tetto, `n=5` | **67 108 864** in tutte e cinque — esattamente il tetto |
 | `L14` | quiescenza, orfano nello **stesso** cgroup | `cgroup.procs` e `populated` concordano; `populated` a 0 dopo 175 ms |
 | `L15` | quiescenza, processo vivo in un **sottogruppo** | `cgroup.procs` = **0**, `populated` = **1**: il file è cieco, il kernel no |
@@ -106,6 +109,10 @@ mostra che cosa succede senza. Sono diventate il preflight della §9-bis di
 | `L16b` | lo stesso, con normalizzazione a 0 | `oom` +1, `oom_kill` +2, `oom_group_kill` +1, nessun `cgroup.kill` |
 | `L17` | preflight: scrivi e rileggi | `memory.max`, `memory.oom.group`, `cgroup.max.depth`, `memory.swap.max` — tutti concordi |
 | `L17` | opzione `memory_localevents` | **assente** nella gerarchia provata |
+| `L18` | padre a 32 MiB, dominio a 256 MiB | il worker muore per il tetto **del padre**: `Ol` **0**, `Kl` **1**, `Kh` **1** |
+| `L18` | dove sta l'evidenza | il padre registra `oom` 1 e `oom_kill` **0**; il dominio il contrario |
+| `L19a` | worker con lo **stesso** UID del supervisore | riscrive `max.depth`, `memory.max`, `oom.group`, `swap.max` **ed esce dal dominio**: 5 su 5 |
+| `L19b` | worker a `Uid: 1000` | tutte e cinque rifiutate con `EACCES` |
 
 ### 4.2 Windows
 
@@ -121,8 +128,8 @@ mostra che cosa succede senza. Sono diventate il preflight della §9-bis di
 | `W4` | supervisore già dentro un job esterno | contenimento e prova reggono entrambi |
 | `W6` | quanto dura la prova interrogabile | **25 ms** |
 | `W7` | picco del job come prova durevole | vedi §5.2 |
-| `W5` | residuo del loader | **376 832 – 389 120** byte (`n=5`) |
-| `W5` | commit dello spawner | **634 880 – 647 168** byte (`n=5`) |
+| `W5` | residuo del loader | **376 832 – 389 120** byte (`n=5`) |
+| `W5` | commit dello spawner | **634 880 – 647 168** byte (`n=5`) |
 
 **Come sono stati ottenuti questi numeri, e perché conta.** Tre stesure di
 questo documento hanno riportato tre intervalli diversi per il residuo del
@@ -347,6 +354,62 @@ diagnostica**, non un non-evento. Leggere solo `oom_kill` avrebbe detto
 
 ---
 
+### 5.6 Il sigillo si disfa dall'interno, se i privilegi sono gli stessi
+
+Il terzo ciclo aveva presentato il worker non privilegiato come **uno di tre
+strati**, dimostrandolo con un supervisore `root` che abbassava il worker a
+`Uid: 1000`. La dimostrazione era vera e la conclusione sbagliata: non provava
+il caso normale di una libreria embedded, dove coordinatore e worker girano
+**con lo stesso UID**.
+
+`L19` prova quel caso. Dopo che il preflight ha stabilito tutto, il worker:
+
+| operazione | `Uid: 0` (stesso del supervisore) | `Uid: 1000` |
+|---|---|---|
+| `cgroup.max.depth` → 10 | **riuscita** | `EACCES` |
+| `memory.max` → 1 GiB | **riuscita** | `EACCES` |
+| `memory.oom.group` → 0 | **riuscita** | `EACCES` |
+| `memory.swap.max` → `max` | **riuscita** | `EACCES` |
+| uscire dal dominio scrivendosi altrove | **riuscita** | `EACCES` |
+
+Cinque su cinque. Alla fine dello scenario il dominio aveva
+`cgroup.max.depth = 10`, `memory.max = 1073741824`, `memory.oom.group = 0` — e
+il worker non era più dentro.
+
+Non è un worker ostile: chiama le stesse API del supervisore perché ne ha gli
+stessi diritti. `NG-7` dice che il modello di minaccia è il guasto, ma un
+guasto che riscrive `memory.max` produce l'effetto di un attacco.
+
+**Ne segue che la separazione dei privilegi non è uno strato: è il
+meccanismo.** Senza, il preflight verifica uno stato che dura fino
+all'istruzione successiva. Le forme accettabili — e il rifiuto quando nessuna
+è disponibile — sono in [`isolamento.md`](isolamento.md).
+
+### 5.7 `oom_kill` non dice quale limite è stato raggiunto
+
+`oom_kill` conta i processi del cgroup uccisi da **qualunque** OOM killer, non
+solo dal proprio limite. Un antenato con un tetto più basso uccide quindi il
+worker senza che il tetto del dominio venga mai raggiunto.
+
+`L18` lo riproduce: padre a 32 MiB, dominio a 256 MiB.
+
+```
+    dominio  Ol = 0    Kl = 1    Kh = 1     picco = 33 787 904
+    padre    oom = 1   oom_kill = 0
+```
+
+Il picco del dominio si ferma al tetto **del padre**, che è la conferma che
+il proprio non è mai entrato in gioco. E l'evidenza è **divisa fra due
+livelli**: il padre sa *perché*, il dominio sa *chi*. Nessuno dei due, da
+solo, racconta la storia.
+
+Questa combinazione — `Ol = 0` con `Kl ≥ 1` — era assente dalla tabella di
+classificazione, che si dichiarava esaustiva. La correzione, e la regola più
+generale che ne segue — i delta sono contatori su un intervallo e **non
+dimostrano una causa** — sono in [`isolamento.md`](isolamento.md).
+
+---
+
 ## 6. Fattibilità senza `unsafe`
 
 | | serve `unsafe`? | superficie |
@@ -419,6 +482,10 @@ Vale quanto la §3: ogni riga è una promessa che non possiamo fare.
 | `oom_score_adj` non normalizzabile | non misurato: il caso in cui la scrittura fallisca per mancanza di privilegi non è stato provato, solo previsto |
 | sottogruppo con un `memory.max` proprio | **non misurato**: che in quel caso anche `local.oom` resti a zero è un ragionamento sulla semantica dei contatori, non un'osservazione |
 | kernel diversi dal 6.18 | non misurati. `cgroup.max.depth`, `cgroup.kill` e `memory.events.local` hanno storie di introduzione diverse |
+| separazione dei privilegi in un caso embedded reale | **non misurata**: `L19b` mostra che un UID distinto basta, non che il coordinatore possa sempre ottenerlo. Helper del control plane e mount namespace non sono stati prototipati |
+| ordine causale degli eventi | **non osservabile** con i contatori: sono aggregati su un intervallo. Un registro ordinato via notifica non è stato prototipato |
+| superamento temporaneo di `memory.max` | non osservato in nessuna esecuzione, il che **non** dimostra che non avvenga: il kernel lo ammette e il campionamento del picco potrebbe non coglierlo |
+| finestra fra `rename` e ritorno dell'esito | non misurata: è una finestra logica, non una che si possa osservare dall'interno del processo che muore |
 | più domini concorrenti | non misurato: gli scenari sono sequenziali |
 | costo in memoria della verifica in streaming | non misurato |
 | durata sotto carico reale | non misurata: i carichi sono sintetici e brevi |

@@ -299,6 +299,7 @@ fn carico(resto: &[String]) {
         // che misura un'altra cosa.
         "inerte" => println!("CARICO inerte fine"),
         "sottogruppo_vivo" => sottogruppo_vivo(),
+        "riscrivi" => riscrivi_il_preflight(),
         _ => tocca_finche_muore(),
     }
 }
@@ -395,6 +396,55 @@ fn evasione_in_tre_passi() {
 
     // 4. E adesso sfonda, da dentro il sottogruppo.
     tocca_finche_muore();
+}
+
+/// Prova a disfare, dall'interno, tutto cio' che il preflight ha stabilito.
+///
+/// Non e' un worker ostile: e' un worker che chiama le stesse API del
+/// supervisore perche' vive nello stesso processo-famiglia e con gli stessi
+/// privilegi. `NG-7` dice che il modello di minaccia e' il guasto — ma un
+/// guasto che riscrive `memory.max` produce lo stesso effetto di un attacco.
+fn riscrivi_il_preflight() {
+    let Some(dominio) = mio_dominio() else {
+        println!("CARICO riscrivi cgroup-non-risolto");
+        return;
+    };
+    // `loginuid` non e' l'identita' effettiva — la prima stesura leggeva
+    // quello e stampava 4294967295, che non dice niente.
+    let identita = leggi(Path::new("/proc/self/status"))
+        .lines()
+        .find(|r| r.starts_with("Uid:"))
+        .unwrap_or("Uid: ignoto")
+        .to_owned();
+    println!("CARICO riscrivi identita {identita}");
+
+    for (file, valore) in [
+        ("cgroup.max.depth", "10"),
+        ("memory.max", "1073741824"),
+        ("memory.oom.group", "0"),
+        ("memory.swap.max", "max"),
+    ] {
+        match fs::write(dominio.join(file), valore) {
+            Ok(()) => {
+                let riletto = leggi(&dominio.join(file));
+                println!("CARICO riscrivi {file} RIUSCITA nuovo={riletto}");
+            }
+            Err(e) => println!("CARICO riscrivi {file} rifiutata ({e})"),
+        }
+    }
+
+    // E la fuga completa: uscire dal dominio scrivendo altrove.
+    let fuori = dominio.parent().map(|p| p.join("supervisore"));
+    if let Some(fuori) = fuori {
+        match fs::write(fuori.join("cgroup.procs"), std::process::id().to_string()) {
+            Ok(()) => println!(
+                "CARICO riscrivi fuga RIUSCITA ora-sono {}",
+                leggi(Path::new("/proc/self/cgroup"))
+            ),
+            Err(e) => println!("CARICO riscrivi fuga rifiutata ({e})"),
+        }
+    }
+    let _ = std::io::stdout().flush();
 }
 
 /// Mette un figlio in un sottogruppo e lo lascia vivo, poi esce.
@@ -1177,6 +1227,115 @@ fn l17_preflight(base: &Path) {
     }
 }
 
+
+/// L18 — un antenato con il tetto piu' basso uccide il worker.
+///
+/// Il dominio non raggiunge mai il PROPRIO limite: quello che si esaurisce e'
+/// il tetto del padre. `Ol` resta a zero, `Kl` sale.
+fn l18_oom_dell_antenato(base: &Path) {
+    titolo("L18 — OOM di un antenato: Ol=0 con Kl>=1");
+
+    let padre = base.join("l18-padre");
+    if padre.exists() {
+        let _ = fs::remove_dir_all(&padre);
+    }
+    if let Err(e) = fs::create_dir(&padre) {
+        println!("MISURA l18.errore mkdir-padre {e}");
+        return;
+    }
+    // Il padre stringe, il figlio no.
+    if let Err(e) = fs::write(padre.join("memory.max"), (32 * 1024 * 1024).to_string()) {
+        println!("MISURA l18.errore memory.max-padre {e}");
+        return;
+    }
+    let _ = fs::write(padre.join("memory.swap.max"), "0");
+    if let Err(e) = abilita_memoria(&padre) {
+        println!("MISURA l18.errore delega-padre {e}");
+        return;
+    }
+    let dominio = padre.join("dominio");
+    if let Err(e) = fs::create_dir(&dominio) {
+        println!("MISURA l18.errore mkdir-dominio {e}");
+        return;
+    }
+    // Tetto del dominio DELIBERATAMENTE piu' alto: non sara' lui a scattare.
+    let _ = fs::write(dominio.join("memory.max"), (256 * 1024 * 1024).to_string());
+    let _ = fs::write(dominio.join("memory.swap.max"), "0");
+    println!("MISURA l18.tetto_padre {}", leggi(&padre.join("memory.max")));
+    println!("MISURA l18.tetto_dominio {}", leggi(&dominio.join("memory.max")));
+
+    let locali_prima = eventi_locali(&dominio);
+    let gerarchici_prima = eventi_gerarchici(&dominio);
+    let padre_prima = eventi_locali(&padre);
+
+    let esito = esegui_nel_dominio(&dominio, &["tocca"]);
+    println!("MISURA l18.codice {:?}", esito.codice);
+    println!("MISURA l18.segnale {:?}", esito.segnale);
+
+    let locali_dopo = eventi_locali(&dominio);
+    let gerarchici_dopo = eventi_gerarchici(&dominio);
+    let padre_dopo = eventi_locali(&padre);
+
+    let delta = |prima: &BTreeMap<String, u64>, dopo: &BTreeMap<String, u64>, k: &str| {
+        dopo.get(k).copied().unwrap_or(0) - prima.get(k).copied().unwrap_or(0)
+    };
+    let ol = delta(&locali_prima, &locali_dopo, "oom");
+    let kl = delta(&locali_prima, &locali_dopo, "oom_kill");
+    let kh = delta(&gerarchici_prima, &gerarchici_dopo, "oom_kill");
+    println!("MISURA l18.dominio.Ol {ol}");
+    println!("MISURA l18.dominio.Kl {kl}");
+    println!("MISURA l18.dominio.Kh {kh}");
+    println!("MISURA l18.padre.oom {}", delta(&padre_prima, &padre_dopo, "oom"));
+    println!("MISURA l18.padre.oom_kill {}", delta(&padre_prima, &padre_dopo, "oom_kill"));
+    println!(
+        "MISURA l18.combinazione_scoperta {}",
+        if ol == 0 && kl >= 1 {
+            "SI — Ol=0 con Kl>=1: la matrice non la copriva"
+        } else {
+            "no"
+        }
+    );
+    if let Some(v) = leggi_intero(&dominio, "memory.peak") {
+        println!("MISURA l18.dominio.memory.peak {v}");
+    }
+
+    let _ = fs::remove_dir(&dominio);
+    let _ = fs::remove_dir(&padre);
+}
+
+/// L19 — il worker disfa il preflight, con gli stessi privilegi.
+fn l19_riscrittura_post_preflight(base: &Path) {
+    titolo("L19 — il worker riscrive cio' che il preflight ha stabilito");
+
+    for (nome, utente) in [("l19a-stesso-uid", 0_u32), ("l19b-uid-diverso", 1000)] {
+        let etichetta = if utente == 0 { "stesso_uid" } else { "uid_diverso" };
+        match crea_dominio(base, nome, 64 * 1024 * 1024, true, Foglia::ProfonditaZero) {
+            Ok(dominio) => {
+                let esito = esegui_come(&dominio, utente, &["riscrivi"]);
+                println!("MISURA l19.{etichetta}.codice {:?}", esito.codice);
+                for riga in esito.stdout.lines().filter(|r| r.starts_with("CARICO riscrivi ")) {
+                    println!("MISURA l19.{etichetta}.{}", riga.trim_start_matches("CARICO riscrivi "));
+                }
+                let riuscite = esito.stdout.matches("RIUSCITA").count();
+                println!("MISURA l19.{etichetta}.riscritture_riuscite {riuscite}");
+                println!(
+                    "MISURA l19.{etichetta}.preflight_resiste {}",
+                    if riuscite == 0 { "si" } else { "NO — il sigillo si disfa dall'interno" }
+                );
+                // Che cosa vale ADESSO, dopo il passaggio del worker.
+                for chiave in ["cgroup.max.depth", "memory.max", "memory.oom.group"] {
+                    println!(
+                        "MISURA l19.{etichetta}.dopo.{chiave} {}",
+                        leggi(&dominio.join(chiave))
+                    );
+                }
+                rimuovi_dominio(&dominio);
+            }
+            Err(e) => println!("MISURA l19.{etichetta}.errore {e}"),
+        }
+    }
+}
+
 fn titolo(testo: &str) {
     println!("\n=== {testo} ===");
 }
@@ -1334,6 +1493,8 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     l15_quiescenza_sottogruppo(&base);
     l16_oom_score_adj(&base);
     l17_preflight(&base);
+    l18_oom_dell_antenato(&base);
+    l19_riscrittura_post_preflight(&base);
 
     let _ = fs::remove_dir(base.join("supervisore"));
     let _ = fs::remove_dir(&base);

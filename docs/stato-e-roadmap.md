@@ -200,6 +200,8 @@ Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
   ciclo ha eseguito un'evasione in tre passi — crea un sottogruppo, ci si
   sposta, delega il controller — dopo la quale `memory.events.local` non vede
   più l'uccisione;
+- su **Linux** regge solo con la separazione dei privilegi (`F4-15`): con lo
+  stesso UID il worker disfa il preflight e esce dal dominio;
 - su **Windows** nessuna fonte è sufficiente da sola: la notifica non è
   garantita, la violazione interrogabile vive 25 millisecondi — meno di quanto
   duri la barriera di quiescenza — e l'unico indicatore durevole ha falsi
@@ -241,6 +243,29 @@ limite è raggiunto e nessuno è uccidibile.
 **F4-14 — Ogni proprietà configurata va riletta.** Tetto, group kill, sigillo,
 swap, `oom_score_adj` e leggibilità di `cgroup.events`: il preflight le scrive
 e le verifica, e il profilo isolato non parte se una sola diverge.
+
+**F4-15 — Il worker non deve poter riscrivere il proprio dominio.** Il
+preflight verifica uno stato; senza separazione dei privilegi quello stato
+dura fino all'istruzione successiva. Il prototipo ha misurato un worker con lo
+stesso UID del supervisore rimettere `cgroup.max.depth` a 10, `memory.max` a
+1 GiB, `memory.oom.group` a 0 e **uscire dal dominio**. Servono un UID
+distinto, un helper proprietario del control plane, o un mount namespace non
+scrivibile; se nessuno è disponibile il profilo isolato è **rifiutato in
+validazione**, non avviato con garanzie ridotte.
+
+**F4-16 — Il commit point è dichiarato e l'esito ambiguo è risolvibile.** Il
+`rename` rende atomico il file, non la coppia *pubblicato + riportato*: se il
+coordinatore muore dopo il commit, l'output è visibile e il chiamante non lo
+sa. `GA-1` copre i guasti **precedenti** il commit; dopo, la garanzia è che
+ciò che è visibile è completo, e l'ambiguità si risolve rileggendo la
+destinazione, che porta sigillo e contratto.
+
+**F4-17 — L'evidenza non dimostra una causa.** I delta sono contatori
+aggregati su un intervallo: la loro coesistenza non prova un nesso. La
+classificazione è fail-closed dove più storie sono compatibili, e l'esito
+porta con sé i contatori, non solo la conclusione. `oom_kill` in particolare
+conta le uccisioni da **qualunque** OOM killer: un antenato con un tetto più
+basso lo fa salire senza che il tetto del dominio venga raggiunto.
 
 **F4-11 — Il profilo isolato su Windows è non supportato** finché non esiste
 una dipendenza vettata che copra tetto ed evidenza senza `unsafe`. La deroga
