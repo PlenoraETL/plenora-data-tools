@@ -52,9 +52,12 @@ come.
 `citta` è il nome dell'input **dichiarato dal piano**, non un'etichetta
 libera: lega un percorso a quell'input, e un nome non dichiarato è un errore.
 
-La versione canonica è la **5**. Un piano `schema_version: 4` continua a
-funzionare — viene migrato prima della validazione — e il formato lineare
-`schema_version <= 3` è invariato. Il dettaglio è in
+Le versioni DAG sono **due**: la **5** e la **6**, che aggiunge
+`max_domain_memory_bytes` e **non** è la v5 con un campo in più — ha un parser
+proprio e un dominio d'identità proprio, quindi un v5 e un v6 per il resto
+identici hanno `plan_hash` diversi. Un piano `schema_version: 4` continua a
+funzionare — viene migrato al canonico v5, di cui condivide l'identità — e il
+formato lineare `schema_version <= 3` è invariato. Il dettaglio è in
 [`docs/piano-v5.md`](docs/piano-v5.md).
 
 ## Il giro completo

@@ -478,8 +478,9 @@ previsto per dimensionare una corsa.
 libreria; l'unico controllo è quello di dominio (`Limits::validate`: nessun
 limite a zero, `spill_partitions` nell'intervallo ammesso,
 `max_expansion_factor` finito e positivo).
-**Ambito:** `plenora_engine::plan::LimitsOverride`, quindi ogni ingresso di
-piano v5 e v4.
+**Ambito:** `plenora_engine::plan::LimitsOverride` e
+`plenora_engine::plan::formato_v6::LimitsOverrideV6`, quindi ogni ingresso di
+piano v4, v5 e v6.
 **Hazard:** chi incorpora l'engine ed esegue piani **non fidati** non ha modo
 di imporre un massimo: il documento sceglie il proprio budget. Per la CLI e
 per chi esegue piani propri non è un hazard — piano e policy hanno lo stesso

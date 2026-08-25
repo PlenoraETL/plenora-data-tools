@@ -48,11 +48,21 @@ L'ingresso è fail-closed, e l'ordine è parte del contratto:
    non devono poter produrre lo stesso piano canonico, e la risoluzione
    avverrebbe prima della validazione;
 3. lettura della `schema_version` — dopo il punto 2, altrimenti la scelta del
-   percorso dipenderebbe da quale duplicato ha vinto;
-4. **migrazione** se il piano dichiara la v4;
-5. **ricontrollo del tetto** sul testo migrato;
-6. parse, validazione strutturale, risoluzione degli alias verso gli id
-   canonici.
+   percorso dipenderebbe da quale duplicato ha vinto. Questa lettura decide il
+   percorso una volta sola;
+4. **da qui l'ordine dipende dalla versione**, e i tre percorsi non si
+   incrociano:
+
+   | versione | che cosa succede |
+   |---|---|
+   | **4** | migrazione al testo canonico v5, **ricontrollo del tetto** sul testo migrato, poi il parse della v5 |
+   | **5** | il parse della v5, direttamente |
+   | **6** | il parse della v6, direttamente. Nessuna migrazione: il testo non si tocca |
+
+5. parse, validazione strutturale, risoluzione degli alias verso gli id
+   canonici. La struttura è **condivisa** fra v5 e v6; il parser di ciascun
+   formato verifica di nuovo la propria versione, ed è l'invariante che
+   impedisce a un parser di accettare il documento dell'altro.
 
 I limiti del piano (`PlanLimits`) si applicano in due momenti diversi, e la
 differenza conta:

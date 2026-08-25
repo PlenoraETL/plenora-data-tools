@@ -29,10 +29,16 @@
 //!
 //! # Come si separano le identita'
 //!
-//! La v6 non collassa nel canonico v5. Il [`super::PlanV5`] che questo
-//! modulo produce porta `schema_version: 6`, la forma canonica lo
-//! materializza, e il separatore di dominio del `plan_hash` e' scelto da
-//! quella versione. Un v5 e un v6 per il resto identici hanno percio'
+//! La v6 non collassa nel canonico v5, e non lo fa **cambiando la versione a
+//! un piano v5**: quella era una stesura precedente, e produceva un `PlanV5`
+//! che dichiarava `6` senza portare il tetto — un valore che nessun parser
+//! puo' generare.
+//!
+//! Qui il documento validato e' un [`super::ValidatedPlanV6`], che conserva
+//! un [`PlanV6`] intero. La sua forma canonica dichiara `schema_version: 6`,
+//! vi materializza il tetto quando c'e', e il separatore di dominio del
+//! `plan_hash` e' scelto dalla **variante** del piano validato, non da un
+//! campo mutabile. Un v5 e un v6 per il resto identici hanno percio'
 //! identita' **diverse** (`PLAN-018`).
 //!
 //! Attenzione a non generalizzare: la v4 **conserva** l'equivalenza con la
@@ -53,8 +59,10 @@ use std::collections::BTreeMap;
 /// Override dei limiti **come li scrive la v6**: con
 /// `max_domain_memory_bytes`.
 ///
-/// Esiste solo per essere deserializzata da questo modulo. `deny_unknown_fields`
-/// e' cio' che rende impossibile, per costruzione e non per controllo:
+/// E' pubblica e va nei due versi — vedi la nota sulla simmetria piu' sotto —
+/// perche' e' il blocco `limits` di un documento pubblico.
+/// `deny_unknown_fields` e' cio' che rende impossibile, per costruzione e non
+/// per controllo:
 ///
 /// - un piano **v5 che dichiara `max_domain_memory_bytes`** — lo
 ///   deserializza [`LimitsOverride`], che non conosce quel nome (`PLAN-007`);
@@ -346,206 +354,4 @@ impl PlanV6 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{PlanV6, PLAN_SCHEMA_VERSION_V6};
-    use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V5};
-    use serde_json::json;
-
-    /// Lo stesso piano nelle due versioni, con i limiti che si vogliono.
-    fn piano(versione: u16, limiti: &serde_json::Value) -> String {
-        json!({
-            "schema_version": versione,
-            "limits": limiti,
-            "inputs": ["main"],
-            "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}],
-            "output": "a",
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn un_piano_v6_e_accettato() {
-        // La prima stesura non poteva accettarne nessuno: la validazione
-        // strutturale pretendeva `schema_version == 5`, e la suite restava
-        // verde perche' nessun test provava a costruirne uno. Verde senza
-        // copertura non e' una verifica.
-        let validato = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": 1_073_741_824}),
-        ))
-        .expect("un piano v6 valido deve essere accettato");
-        assert_eq!(validato.max_domain_memory_bytes(), Some(1_073_741_824));
-    }
-
-    #[test]
-    fn il_tetto_e_facoltativo_e_la_sua_assenza_non_e_un_default() {
-        let senza = PlanV6::parse_default(&piano(PLAN_SCHEMA_VERSION_V6, &json!({})))
-            .expect("il campo e' facoltativo (PLAN-009)");
-        assert_eq!(
-            senza.max_domain_memory_bytes(),
-            None,
-            "assente significa «profilo isolato non selezionabile», mai un tetto implicito"
-        );
-    }
-
-    #[test]
-    fn il_campo_non_esiste_nella_v5() {
-        // `PLAN-007`, e per costruzione: `LimitsOverride` ha
-        // `deny_unknown_fields` e non conosce quel nome.
-        let errore = PlanV5::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V5,
-            &json!({"max_domain_memory_bytes": 1_073_741_824}),
-        ))
-        .expect_err("un v5 che dichiara il campo va rifiutato");
-        assert!(
-            errore.to_string().contains("max_domain_memory_bytes"),
-            "l'errore deve nominare il campo estraneo: {errore}"
-        );
-    }
-
-    #[test]
-    fn lo_zero_non_e_nessun_tetto() {
-        // `PLAN-008`. Zero descrive un dominio che non puo' allocare nulla;
-        // «nessun tetto» si dichiara omettendo il campo, e i due non devono
-        // collassare.
-        let errore = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": 0}),
-        ))
-        .expect_err("zero va rifiutato");
-        assert!(errore.to_string().contains("zero"), "{errore}");
-    }
-
-    #[test]
-    fn il_tetto_sotto_il_budget_governato_effettivo_e_rifiutato() {
-        // `PLAN-011` col budget DICHIARATO.
-        let errore = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_governed_memory_bytes": 268_435_456,
-                    "max_domain_memory_bytes": 134_217_728}),
-        ))
-        .expect_err("un dominio sotto il budget dichiarato va rifiutato");
-        assert!(
-            errore.to_string().contains("budget governato effettivo"),
-            "{errore}"
-        );
-    }
-
-    #[test]
-    fn il_confronto_usa_il_default_quando_il_piano_omette_il_budget() {
-        // `PLAN-012`: e' il caso che il contratto nomina esplicitamente, ed
-        // e' quello che un confronto con l'override DICHIARATO lascerebbe
-        // fuori — li' il budget e' `None` e non ci sarebbe niente da
-        // confrontare.
-        let default = plenora_core::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
-        let sotto = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": default - 1}),
-        ));
-        assert!(
-            sotto.is_err(),
-            "sotto il default, col budget omesso, va rifiutato"
-        );
-        let pari = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": default}),
-        ));
-        assert!(pari.is_ok(), "pari al default e' accettato: {pari:?}");
-    }
-
-    #[test]
-    fn il_canonico_v6_dichiara_la_propria_versione_e_il_tetto() {
-        // `PLAN-017`: il campo entra nel canonico SOLO quando e' presente.
-        let con = PlanV6::parse_default(&piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": 1_073_741_824}),
-        ))
-        .expect("valido");
-        let canonico = con.canonical_json();
-        assert_eq!(canonico["schema_version"], json!(PLAN_SCHEMA_VERSION_V6));
-        assert_eq!(
-            canonico["limits"]["max_domain_memory_bytes"],
-            json!(1_073_741_824)
-        );
-
-        let senza =
-            PlanV6::parse_default(&piano(PLAN_SCHEMA_VERSION_V6, &json!({}))).expect("valido");
-        assert!(
-            senza.canonical_json()["limits"]
-                .get("max_domain_memory_bytes")
-                .is_none(),
-            "assente non deve comparire"
-        );
-        assert_ne!(
-            canonico,
-            senza.canonical_json(),
-            "un v6 che lo dichiara e uno che lo omette sono piani diversi"
-        );
-    }
-
-    #[test]
-    fn il_documento_v6_fa_il_giro_completo() {
-        // Il tipo e' pubblico e parallelo alla v5: si legge e si scrive. Se
-        // il giro perdesse un campo, chi costruisce un v6 a mano e lo emette
-        // otterrebbe un piano diverso da quello che ha scritto — e, passando
-        // dal parser, un `plan_hash` diverso.
-        let testo = piano(
-            PLAN_SCHEMA_VERSION_V6,
-            &json!({"max_domain_memory_bytes": 1_073_741_824,
-                    "max_governed_memory_bytes": 536_870_912}),
-        );
-        let letto: PlanV6 = serde_json::from_str(&testo).expect("v6 leggibile");
-        let riscritto = serde_json::to_string(&letto).expect("v6 scrivibile");
-        let riletto: PlanV6 = serde_json::from_str(&riscritto).expect("v6 rileggibile");
-        assert_eq!(
-            serde_json::to_value(&letto).expect("valore"),
-            serde_json::to_value(&riletto).expect("valore"),
-            "il giro non deve perdere nulla"
-        );
-        assert_eq!(
-            riletto.limits.max_domain_memory_bytes,
-            Some(1_073_741_824),
-            "il campo della v6 sopravvive al giro"
-        );
-        // Un limite assente non compare, come nella v5: altrimenti il
-        // documento riscritto dichiarerebbe `null` dove l'originale taceva.
-        let scarno: PlanV6 =
-            serde_json::from_str(&piano(PLAN_SCHEMA_VERSION_V6, &json!({}))).expect("v6");
-        let emesso = serde_json::to_value(&scarno).expect("valore");
-        assert!(
-            emesso["limits"].get("max_domain_memory_bytes").is_none(),
-            "un limite assente non deve comparire: {emesso}"
-        );
-    }
-
-    #[test]
-    fn lo_stesso_piano_in_v5_e_in_v6_ha_identita_diverse() {
-        // `PLAN-018`. Le due strutture sono identiche — stessi nodi, stessi
-        // archi, stessi limiti — e i due documenti no: il canonico dichiara
-        // la propria versione, quindi i byte che si hashano differiscono, e
-        // il separatore di dominio li tiene distinti anche se non
-        // differissero.
-        //
-        // Da NON generalizzare: la v4 condivide l'identita' con la v5
-        // (`PLAN-019`), e le regressioni della migrazione lo verificano.
-        let come_v5 = PlanV5::parse_default(&piano(PLAN_SCHEMA_VERSION_V5, &json!({})))
-            .expect("un v5 valido");
-        let come_v6 = PlanV6::parse_default(&piano(PLAN_SCHEMA_VERSION_V6, &json!({})))
-            .expect("un v6 valido");
-        let canonico_v5 = come_v5.canonical_json();
-        let canonico_v6 = come_v6.canonical_json();
-        assert_eq!(canonico_v5["schema_version"], json!(PLAN_SCHEMA_VERSION_V5));
-        assert_eq!(canonico_v6["schema_version"], json!(PLAN_SCHEMA_VERSION_V6));
-        assert_ne!(
-            canonico_v5, canonico_v6,
-            "un v5 e un v6 per il resto identici sono piani diversi"
-        );
-        // E la sola differenza e' la versione: la struttura non e' cambiata.
-        let mut senza_versione_v6 = canonico_v6;
-        senza_versione_v6["schema_version"] = json!(PLAN_SCHEMA_VERSION_V5);
-        assert_eq!(
-            canonico_v5, senza_versione_v6,
-            "la struttura condivisa deve restare identica"
-        );
-    }
-}
+mod tests;

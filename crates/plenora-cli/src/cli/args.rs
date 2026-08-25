@@ -22,7 +22,7 @@ pub fn help_text() -> String {
   plenora-data-tools catalog [--family table|geo]
   plenora-data-tools describe --input INPUT.arrow                          (alias: inspect-dataset)
   plenora-data-tools validate --plan PLAN.json --input NOME=INPUT.arrow...
-  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v5)
+  plenora-data-tools run --plan PLAN.json --input NOME=INPUT.arrow... --output OUTPUT.arrow [--no-geo-fusion]   (piani DAG v5 e v6)
   plenora-data-tools run --plan PLAN.json --input INPUT.arrow [--right RIGHT.arrow] --output OUTPUT.arrow       (piani legacy, schema_version <= 3)
   plenora-data-tools run --plan PLAN.json --inputs INPUT.arrow --output OUTPUT.arrow                            (posizionale: solo piani a UN input)
   plenora-data-tools capabilities

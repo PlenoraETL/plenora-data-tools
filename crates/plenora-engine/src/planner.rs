@@ -1,4 +1,4 @@
-//! Planner del DAG v5 — fase 1 `validate`
+//! Planner del DAG — fase 1 `validate`
 //! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint)
 //! — Fase 2A-3.
 //!
@@ -451,7 +451,9 @@ impl ValidatedGraph {
 /// Fase 1 `validate` del DAG v5 (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
 /// Un piano `schema_version: 4` entra da qui attraverso la migrazione
-/// esplicita (errori-e-limiti.md#memoria-governata): il resto della fase 1 conosce una sola forma.
+/// esplicita (errori-e-limiti.md#memoria-governata). Le versioni DAG restano
+/// due — la v5 e la v6 non collassano l'una nell'altra — ma la **struttura**
+/// che il resto della fase 1 attraversa e' una sola.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
 /// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
