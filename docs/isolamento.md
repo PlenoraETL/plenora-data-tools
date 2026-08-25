@@ -7,8 +7,8 @@ cosa dovranno fare e perché.
 La scelta architetturale è presa e non si riapre: la correttezza viene
 dall'**isolamento**, non dalla previsione. Il ragionamento è in
 [`stato-e-roadmap.md`](stato-e-roadmap.md); i requisiti vincolanti sono `F4-1`
-… `F4-21` nello stesso documento — erano sei alla prima stesura, e i
-quindici aggiunti vengono quasi tutti da ciò che i prototipi hanno
+… `F4-22` nello stesso documento — erano sei alla prima stesura, e i
+sedici aggiunti vengono quasi tutti da ciò che i prototipi hanno
 smentito o da ciò che una rilettura ha trovato contraddittorio.
 
 Baseline strutturale: commit `922aea3`, tag `baseline-pre-fase-4`.
@@ -769,13 +769,30 @@ chiave d'idempotenza, e chi ne ha già usata una sa che cosa promette.
 Arriva dall'esterno, finisce in un file pubblicato e viene confrontato: le tre
 cose che rendono una stringa libera una cattiva idea.
 
+La stesura precedente diceva «alfabeto dichiarato» e «massimo dichiarato»
+senza dichiarare né l'uno né l'altro, il che non è una specifica ma un
+promemoria. Eccoli.
+
 | | regola |
 |---|---|
-| forma | **canonica e ristretta**: un alfabeto dichiarato, senza spazi né caratteri di controllo, così che due token uguali si scrivano in un modo solo |
-| lunghezza | **massimo dichiarato**. Senza, il chiamante può far crescere il footer dell'artefatto quanto vuole |
+| valore | **32 byte** di entropia |
+| forma wire | **esattamente 64 caratteri esadecimali minuscoli**, `[0-9a-f]{64}` — nessun prefisso, nessun separatore, nessuna forma alternativa. Due token uguali si scrivono in un modo solo, e il confronto è un confronto di stringhe |
+| lunghezza | fissa, quindi non c'è un massimo da far rispettare: una lunghezza diversa **è** una forma invalida |
+| chiave nel footer | `plenora.commit.token`, nel namespace `plenora.` che il progetto già usa per i propri metadati |
 | validazione | **prima dello spawn**, insieme al resto del preflight: un token invalido è un errore di invocazione, non un guasto scoperto al momento di scrivere il file |
-| costruzione | solo attraverso un costruttore che valida. Non esiste un `CommitToken` che non sia già valido |
-| negli errori | **mai il valore grezzo**. È una regola che il progetto ha già — gli errori non trasportano dati (`AGENTS.md`) — e qui vale doppio: il token può contenere un identificativo che il chiamante considera suo |
+| costruzione | solo attraverso un costruttore che valida. Non esiste un `CommitToken` che non sia già valido, quindi nessun percorso deve ricontrollarlo |
+| negli errori | **mai il valore grezzo**. È una regola che il progetto ha già — gli errori non trasportano dati (`AGENTS.md`) — e qui vale doppio: il token è un identificativo che il chiamante considera suo |
+
+La lunghezza fissa non è un dettaglio estetico: rende il campo del footer di
+dimensione nota, quindi il limite sul footer non dipende da che cosa il
+chiamante ha passato.
+
+**Che cosa il costruttore garantisce, e che cosa no.** Garantisce la validità
+*formale*: forma canonica, lunghezza esatta, alfabeto. Non garantisce
+l'**unicità**, che resta la precondizione esterna dichiarata sopra — 32 byte
+casuali la rendono improbabile a collidere, ma il chiamante che riusa
+deliberatamente lo stesso token ottiene un token formalmente valido e una
+risoluzione che non distingue.
 
 L'ultima riga ha una conseguenza concreta sulla diagnostica: quando un
 artefatto porta un token diverso da quello atteso, l'errore dice *che* sono
@@ -797,7 +814,7 @@ esistere più. E non conclude al posto di chi chiama:
 | `OccupiedByOtherAttempt` | esiste e porta un token diverso |
 | `IdentityMissing` | esiste ma non porta alcun token |
 | `Absent` | la destinazione non esiste |
-| `InvalidOrUnreadable` | esiste ma non è leggibile, o non supera la verifica strutturale |
+| `InvalidOrUnreadable` | esiste ma non è leggibile, o non supera la verifica strutturale — **con la ragione**, vedi sotto |
 
 Tre cose che la stesura precedente sbagliava, e che questa tabella corregge.
 
@@ -815,6 +832,18 @@ può essere giusto, e la decisione è di chi conosce quel percorso — non nostr
 uguale su un file troncato direbbe «riuscito» di un output che non lo è: il
 sigillo e la struttura vanno riletti, con lo stesso verificatore in streaming
 della §2-ter.
+
+**`InvalidOrUnreadable` non cancella la causa.** Il nome dice che non si può
+concludere, non che non si sappia perché: l'osservazione porta una **ragione
+strutturata** — permesso negato, framing non valido, sigillo assente, sigillo
+non corrispondente, footer rifiutato dal confine ostile — perché le decisioni
+che ne seguono sono diverse. Un permesso negato si risolve con i permessi; un
+sigillo che non corrisponde è un file da non toccare.
+
+La ragione è **sanitizzata** come ogni altro errore del progetto: dice di che
+genere di guasto si tratta, non che cosa conteneva il file. Nessun byte dei
+dati, nessun frammento di percorso oltre quello che il chiamante ha già
+passato.
 
 Il passo che conta resta a monte: il token si verifica **prima** della
 pubblicazione (passo 8-bis), altrimenti si controllerebbe a valle un campo che
@@ -984,13 +1013,53 @@ Il footer non sottrae nulla a questo punto: i suoi byte fanno parte del file,
 quindi un token diverso dà un file diverso. Ciò che il footer risolve è
 l'**altro** problema, quello del contratto.
 
+### 4. Il footer entra nel confine ostile, e oggi non c'è
+
+Adottare il footer risolve il problema del contratto e **ne apre uno nuovo**:
+una parte del file che nessuno validava comincia a contare.
+
+Il confine ostile per Arrow IPC che il progetto ha
+([`errori-e-limiti.md`](errori-e-limiti.md)) percorre il footer e ne valida i
+campi 1, 2 e 3 — lo Schema, i blocchi dei dizionari, i blocchi dei record
+batch. **Il campo 4, i custom metadata, non è percorso affatto**: finora non
+lo leggeva nessuno.
+
+E il modo in cui `arrow-ipc` 59.2.0 lo legge rende la lacuna urgente, perché
+il percorso del footer non è difensivo come quello dello schema:
+
+| dove | come legge |
+|---|---|
+| metadati dello **schema** (`convert.rs`) | `if let (Some(k), Some(v)) = (kv.key(), kv.value())` — una voce senza chiave o senza valore viene saltata |
+| metadati del **footer** (`reader.rs`) | `kv.key().unwrap()`, `kv.value().unwrap()` — una voce senza chiave o senza valore **panica** |
+
+Un footer malformato supererebbe quindi la nostra prevalidazione e
+raggiungerebbe una primitiva di panic dentro la dipendenza. È esattamente ciò
+che il confine ostile esiste per impedire.
+
+C'è un secondo problema, indipendente dal panic: Arrow costruisce una
+`HashMap`, quindi **chiavi duplicate si comprimono con «vince l'ultima»**. Per
+un token autoritativo è inaccettabile: due voci `plenora.commit.token` con
+valori diversi darebbero un file che sembra appartenere a chi ha scritto per
+ultimo, e non c'è nessuna ragione per cui debba essere lui.
+
+**La lacuna è più larga del footer.** Il validatore che il progetto ha —
+`fb_key_value` — accetta chiave o valore **assenti**: se l'offset è zero, non
+valida e prosegue. È lo stesso helper usato in tre punti — campi, schema,
+messaggi — quindi rinforzare il solo footer lascerebbe la stessa apertura
+altrove. Per la regola secondo cui **ogni difetto è una classe**
+([`AGENTS.md`](../AGENTS.md)), la correzione è nell'helper condiviso e vale
+per tutti i chiamanti.
+
+Il requisito è `F4-22` ([`stato-e-roadmap.md`](stato-e-roadmap.md)), e va
+chiuso **prima** che qualcuno scriva un token in un footer.
+
 ### Le tre cose che l'oracolo deve verificare
 
 | | verifica |
 |---|---|
 | **1** | stesso piano, stessi dati, **stesso token** → stessi byte IPC |
 | **2** | token **diverso** → `Schema`, `DataContract` e `plan_hash` **identici** |
-| **3** | il verificatore e `risolvi_commit` leggono il token **dal footer**, non dallo schema |
+| **3** | il verificatore e `risolvi_commit` leggono il token **dal footer validato**, non dalla `HashMap` che Arrow restituisce |
 
 La seconda è quella che vale la pena scrivere per prima: è la proprietà che il
 footer regala e che con il token nello schema sarebbe stata falsa.

@@ -219,7 +219,7 @@ rete. Un dominio non sigillato non è un dominio osservabile.
 
 **F4-10 — La pubblicazione è preceduta da una barriera causale.** Quiescenza
 del dominio, poi snapshot e drain dell'evidenza, poi classificazione
-definitiva, poi il rename. Un OOM tardivo non può essere degradato ad
+definitiva, poi la pubblicazione. Un OOM tardivo non può essere degradato ad
 avvertenza: il prototipo ha misurato un capofila uscito con 0, un processo
 ancora vivo e l'evidenza arrivata duecento millisecondi dopo.
 
@@ -264,8 +264,8 @@ e lo stesso piano è eseguibile su una macchina e non su un'altra. L'esito
 negativo è `IsolationUnavailable`.
 
 **F4-16 — Il commit point è dichiarato, e l'ambiguità si risolve con
-un'identità d'esecuzione.** Il `rename` rende atomico il file, non la coppia
-*pubblicato + riportato*: se il coordinatore muore dopo il commit, l'output è
+un'identità d'esecuzione.** La creazione no-clobber della destinazione rende
+atomico il file, non la coppia *pubblicato + riportato*: se il coordinatore muore dopo il commit, l'output è
 visibile e il chiamante non lo sa. `GA-1` copre i guasti **precedenti** il
 commit.
 
@@ -277,8 +277,12 @@ Serve un **`commit_token` fornito dal chiamante prima dell'invocazione**, non
 scelto da noi e restituito alla fine: un coordinatore morto non restituisce
 nulla, e poiché è il processo del chiamante non può nemmeno comunicare la
 propria morte. La catena è handshake → metadati dell'artefatto → verifica
-prima della pubblicazione. È distinto dall'`execution_id` diagnostico, che può
-ripetersi: **il token no**.
+prima della pubblicazione.
+
+È distinto dall'`execution_id`, che **resta com'è**: generato dall'engine a
+ogni `execute`, con un test che ne verifica la diversità, e senza alcun ruolo
+nella risoluzione — il chiamante non lo conosce prima, quindi non può
+confrontarlo con nulla.
 
 **L'unicità è una precondizione esterna e non verificabile da noi**, perché il
 token deve essere noto al chiamante prima dell'esecuzione. La garanzia è
@@ -322,11 +326,33 @@ Una stesura precedente sosteneva che un contenitore IPC non avesse posto per
 byte propri fuori dallo schema, e da quella premessa falsa faceva discendere
 una proiezione semantica applicata a tre punti. Non serve.
 
-**F4-21 — `CommitToken` è un tipo chiuso.** Forma canonica e alfabeto
-ristretto, lunghezza massima dichiarata, validazione prima dello spawn,
-costruzione solo tramite un costruttore che valida, e **mai il valore grezzo
-negli errori** — coerente con la regola per cui gli errori non trasportano
-dati.
+**F4-21 — `CommitToken` è un tipo chiuso, con una forma concreta.** 32 byte
+resi da **esattamente 64 caratteri esadecimali minuscoli**, chiave
+`plenora.commit.token` nel footer, validazione prima dello spawn, costruzione
+solo tramite un costruttore che valida, e **mai il valore grezzo negli
+errori** — coerente con la regola per cui gli errori non trasportano dati. Il
+costruttore garantisce la validità formale; l'unicità resta una precondizione
+esterna.
+
+**F4-22 — I custom metadata entrano nel confine ostile.** Il validatore
+percorre oggi i campi 1, 2 e 3 del footer e **non il campo 4**, che è dove
+finirà il token; e `arrow-ipc` legge il footer con `key().unwrap()` e
+`value().unwrap()`, quindi una voce senza chiave o senza valore **panica**
+dentro la dipendenza — mentre il percorso dello schema, che usa `if let`, la
+salterebbe. Serve, prima che qualcuno scriva un token in un footer:
+
+| | |
+|---|---|
+| **1** | validazione grezza di `Footer.custom_metadata` **prima** di costruire il `FileReader` |
+| **2** | chiave e valore **obbligatori**: oggi `fb_key_value` salta l'offset zero invece di rifiutarlo |
+| **3** | tetti su numero di voci, lunghezza della chiave e lunghezza del valore, applicati **prima** delle allocazioni |
+| **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima», che per un token autoritativo sceglierebbe un vincitore arbitrario |
+| **5** | lettura autoritativa del token dal **footer validato**, non dalla `HashMap` di Arrow |
+| **6** | test per chiave assente, valore assente, duplicati uguali, duplicati divergenti, tetti superati, token assente e token canonico |
+
+**È una classe, non un caso.** `fb_key_value` è condiviso da tre chiamanti —
+campi, schema, messaggi — quindi la correzione sta nell'helper e vale per
+tutti, non solo per il footer.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
