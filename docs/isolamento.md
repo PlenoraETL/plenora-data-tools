@@ -7,7 +7,8 @@ cosa dovranno fare e perché.
 La scelta architetturale è presa e non si riapre: la correttezza viene
 dall'**isolamento**, non dalla previsione. Il ragionamento è in
 [`stato-e-roadmap.md`](stato-e-roadmap.md); i requisiti vincolanti sono `F4-1`
-… `F4-6` nello stesso documento.
+… `F4-19` nello stesso documento — erano sei alla prima stesura, e i tredici
+aggiunti vengono quasi tutti da ciò che i prototipi hanno smentito.
 
 Baseline strutturale: commit `922aea3`, tag `baseline-pre-fase-4`.
 
@@ -641,11 +642,11 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 | 6 | **schema** | `contract_from_arrow_schema` fallisce, **con il resolver negoziato** |
 | 7 | **contratto** | il contratto letto non corrisponde a quello atteso dal piano validato |
 | 8 | **completezza** | i conteggi dichiarati nell'`Esito` non corrispondono a quelli osservati |
-| 8-bis | **identità dell'esecuzione** | l'`execution_id` nei metadati non è quello negoziato nell'handshake: l'artefatto non è di questa esecuzione (§7-quater) |
+| 8-bis | **identità del tentativo** | il `commit_token` nei metadati non è quello negoziato nell'handshake: l'artefatto non è di questo tentativo (§7-quater) |
 | 9 | **publish atomico no-clobber** | `persist_noclobber` fallisce, o la destinazione esiste già → `Conflict`. **Mai** una sostituzione |
 
-Solo dopo il passo 9 l'output è visibile. I passi 1-8 non producono alcun
-effetto osservabile all'esterno.
+Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
+alcun effetto osservabile all'esterno.
 
 Il passo 6 è il punto in cui `F4-4` diventa concreto: la lettura usa **lo
 stesso resolver** che il worker ha usato per scrivere, perché l'handshake l'ha
@@ -704,7 +705,7 @@ piano, può quindi essere di chiunque abbia eseguito quel piano — inclusa
 un'esecuzione precedente andata a buon fine, o una concorrente. Rileggerlo
 dice «qui c'è un output valido», che non è la domanda.
 
-### `execution_id`: la catena che rende l'ambiguità risolvibile
+### La catena che rende l'ambiguità risolvibile
 
 **L'identificativo lo sceglie il chiamante, non noi.** La prima stesura lo
 faceva scegliere al coordinatore e restituire alla fine, il che non risolve
@@ -720,36 +721,79 @@ processo che muore. L'unica forma che sopravvive è un identificativo che il
 chiamante **possiede già prima**, e che può aver scritto dove vuole.
 
 ```
-    execution_id fornito dal chiamante, prima dell'invocazione
+    commit_token fornito dal chiamante, prima dell'invocazione
       -> trasportato nel Saluto dell'handshake
          -> scritto dal worker nei metadati dell'artefatto
-            -> verificato dal supervisore PRIMA del rename
+            -> verificato dal supervisore PRIMA della pubblicazione
 ```
 
-Chi deve risolvere — il chiamante che è sopravvissuto, o un processo
-successivo — usa una procedura **indipendente dall'esecuzione**:
+### Due identificativi, non uno
+
+Un identificativo solo non basta, e la stesura precedente ne usava uno per due
+lavori incompatibili.
+
+| | `execution_id` | `commit_token` |
+|---|---|---|
+| a che serve | correlare log, tracce, diagnostica | rispondere a *questo output è mio?* |
+| può ripetersi? | **sì**: un nome di job, una pipeline che rigira | **no**: uno per tentativo |
+| chi lo sceglie | il chiamante | il chiamante |
+
+Con un identificativo solo, riusabile, la risoluzione dà un falso positivo:
+l'esecuzione A pubblica con `X`; il chiamante riusa `X` per B; B fallisce e non
+pubblica; la risoluzione trova l'artefatto di A e dichiara B riuscita.
+
+**L'unicità è una precondizione esterna, e non possiamo verificarla.** Non c'è
+modo di aggirarlo: il token deve essere noto al chiamante *prima*
+dell'esecuzione — altrimenti muore col coordinatore — quindi lo sceglie lui,
+quindi l'unicità è sua. La garanzia va perciò dichiarata **condizionata**:
+
+> Se il `commit_token` non si ripete fra tentativi, la risoluzione distingue
+> l'output di questo tentativo da qualunque altro. Se si ripete, non lo
+> distingue, e noi non ce ne accorgiamo.
+
+Non è una garanzia più debole di quanto sembri: è la stessa forma di una
+chiave d'idempotenza, e chi ne ha già usata una sa che cosa promette.
+
+### `risolvi_commit` rende osservazioni, non decisioni
 
 ```
-    risolvi_commit(execution_id, destinazione) -> EsitoDelCommit
+    risolvi_commit(commit_token, destinazione) -> OsservazioneDelCommit
 ```
 
 Non è un metodo dell'oggetto d'esecuzione, perché quell'oggetto potrebbe non
-esistere più. È una funzione che prende ciò che il chiamante ha conservato e
-la destinazione, e legge:
+esistere più. E non conclude al posto di chi chiama:
 
-| che cosa trova | che cosa significa |
+| osservazione | che cosa è stato visto |
 |---|---|
-| il file assente, o il contenuto precedente | il commit non è avvenuto: si può riprovare |
-| il file nuovo, `execution_id` **uguale** | il commit è avvenuto: è andato perduto l'esito, non il lavoro |
-| il file nuovo, `execution_id` **diverso** | ha pubblicato qualcun altro: non riprovare senza decidere che farne |
-| il file nuovo, `execution_id` **assente** | è di una versione che non lo scriveva: nessuna conclusione |
+| `CommittedMatching` | la destinazione esiste, porta **questo** token, **e** sigillo e struttura sono validi |
+| `OccupiedByDifferentExecution` | esiste e porta un token diverso |
+| `IdentityMissing` | esiste ma non porta alcun token |
+| `Absent` | la destinazione non esiste |
+| `InvalidOrUnreadable` | esiste ma non è leggibile, o non supera la verifica strutturale |
 
-Il passo che conta è la **verifica prima del rename**: pubblicare un artefatto
-il cui identificativo non è quello atteso significherebbe pubblicare il lavoro
-di un altro sotto il proprio nome.
+Tre cose che la stesura precedente sbagliava, e che questa tabella corregge.
 
-L'`execution_id` non è un'identità globale né un lock. Serve a rispondere a
-una domanda sola — *questo output è mio?* — e a quella risponde.
+**«Il contenuto precedente» non è osservabile.** Con `(token, destinazione)`
+non c'è modo di sapere che cosa ci fosse prima: un file che esiste e non porta
+il nostro token è `IdentityMissing` o `OccupiedByDifferentExecution`, e quale
+dei due lo dice il token, non la storia.
+
+**`Absent` non significa «riprova pure».** Un file può mancare perché il
+commit non è avvenuto, ma anche perché la durabilità è andata persa, perché
+qualcuno l'ha rimosso, o perché il filesystem è tornato indietro. Riprovare
+può essere giusto, e la decisione è di chi conosce quel percorso — non nostra.
+
+**`CommittedMatching` richiede la verifica, non solo la chiave.** Una chiave
+uguale su un file troncato direbbe «riuscito» di un output che non lo è: il
+sigillo e la struttura vanno riletti, con lo stesso verificatore in streaming
+della §2-ter.
+
+Il passo che conta resta a monte: il token si verifica **prima** della
+pubblicazione (passo 8-bis), altrimenti si controllerebbe a valle un campo che
+nessuno ha controllato quando contava.
+
+Il `commit_token` non è un'identità globale né un lock, e la §7-bis dichiara
+la precondizione da cui dipende.
 
 **Due esecuzioni sulla stessa destinazione non si sovrascrivono**: la prima
 che pubblica vince, la seconda fallisce con `Conflict`. La stesura precedente
@@ -757,11 +801,44 @@ scriveva «vince l'ultima», che contraddiceva sia il passo 9 della verifica —
 dove una destinazione già esistente è un fallimento — sia il codice che c'è
 già.
 
-La primitiva è `persist_noclobber` di `tempfile`, che il percorso in-process
-usa da tempo: `RENAME_NOREPLACE` dove il kernel lo offre, e la sostituzione
-non avviene mai. Nominarla conta, perché un `rename(2)` ordinario
-**sostituirebbe** la destinazione in silenzio, e il disegno poggia sul
-contrario. Nella matrice delle piattaforme la riga è quella, non «rename».
+### Il commit point è una creazione no-clobber, non sempre un rename
+
+`persist_noclobber` di `tempfile` — che il percorso in-process usa da tempo —
+non è una primitiva sola. Legge il sorgente di `tempfile` 3.27.0:
+
+| condizione | che cosa fa davvero |
+|---|---|
+| kernel e filesystem offrono `RENAME_NOREPLACE` | `renameat_with(NOREPLACE)`: commit atomico, nessuna sostituzione |
+| `ENOSYS` o `EINVAL` | ripiega su **`hard_link` seguito da `unlink`** |
+
+Nel ripiego il commit point è il `hard_link` — che fallisce se il nome esiste,
+quindi il no-clobber regge — ma **l'`unlink` che segue ha l'errore ignorato**,
+con tanto di commento nel sorgente. Se fallisce, il file temporaneo resta
+dov'era, senza che nessuno lo dica.
+
+C'è un dettaglio in più che il sorgente rivela e che nessuno si aspetta: la
+scoperta di `ENOSYS` è registrata in uno **static globale di processo**. Il
+primo filesystem che non supporta la primitiva fa passare al ripiego *tutte*
+le pubblicazioni successive del processo, anche su filesystem che la
+supportano.
+
+**Il commit point si chiama quindi «creazione no-clobber della
+destinazione»**, e non «rename». La proprietà su cui il disegno poggia — la
+destinazione non viene mai sostituita — regge in entrambi i rami. Ciò che non
+regge è il silenzio del ripiego, e va chiuso, perché contraddice la politica
+per cui un cleanup fallito è un esito riportato (§8.3, riga 16 della matrice):
+
+| decisione | conseguenza |
+|---|---|
+| **il preflight accerta la primitiva** e rifiuta il filesystem che non la offre | il ripiego non si presenta mai, ma un percorso di destinazione su un filesystem comune diventa non utilizzabile col profilo isolato |
+| **si accetta il ripiego e si rileva il residuo**: dopo il commit si verifica che il temporaneo non ci sia più, e se c'è lo si riporta | nessun silenzio, e il profilo resta utilizzabile ovunque |
+
+**Si sceglie la seconda**, con l'accertamento del preflight come
+*informazione* e non come rifiuto: la prima renderebbe il profilo isolato
+indisponibile per una ragione che non riguarda la memoria, che è ciò che
+questa fase deve governare. La rilevazione del residuo è la stessa avvertenza
+machine-readable della §10.2 — un successo pubblicato con spazzatura da
+bonificare, non un fallimento.
 
 ### «Esito ignoto» non è un errore che restituiamo
 
@@ -773,13 +850,15 @@ sarebbe stato un errore di categoria.
 
 Ciò che è pubblico è invece `risolvi_commit`, e il tipo che rende.
 
-**Senza identificativo la risoluzione non è disponibile.** Un profilo isolato
-invocato senza `execution_id` esegue e pubblica normalmente, ma il chiamante
-non potrà distinguere il proprio output da quello di un'altra esecuzione dello
-stesso piano. Va dichiarato all'ingresso, non scoperto dopo: per il profilo
-isolato l'identificativo è **obbligatorio**, ed è la scelta coerente con il
-resto — nessuna garanzia che dipenda da ciò che il chiamante si è ricordato di
-fare.
+**Per il profilo isolato il `commit_token` è obbligatorio.** Non «esegue lo
+stesso, con una garanzia in meno»: quella formulazione, che la stesura
+precedente conteneva insieme al suo contrario, farebbe dipendere una garanzia
+da ciò che il chiamante si è ricordato di fare. Un'invocazione del profilo
+isolato senza token è **rifiutata in validazione**, come un piano che chiede
+l'isolamento senza dichiarare il tetto (§2-quinquies).
+
+L'`execution_id` diagnostico resta invece facoltativo: se manca, si perde
+correlazione nei log, non una garanzia.
 
 ---
 
@@ -841,7 +920,7 @@ complessivo del sistema è una guida e non una promessa (§2-quater).
 
 ---
 
-## 7-quater. `execution_id` tocca l'artefatto, quindi tocca il determinismo
+## 7-quater. Il token tocca l'artefatto, quindi tocca il determinismo
 
 Scrivere l'identificativo nei metadati dell'artefatto non è un dettaglio
 implementativo: cambia i **byte** del file prodotto. Tre cose vanno conciliate
@@ -852,13 +931,13 @@ prima di scriverne una riga, e sono la ragione per cui `PR-5` cambia semantica.
 L'oracolo dice: *stesso input, stesso IPC byte per byte*. Con
 l'identificativo dentro l'artefatto, due esecuzioni dello stesso piano sugli
 stessi dati producono byte diversi — a meno di dichiarare che
-`execution_id` **fa parte dell'input dell'esecuzione**.
+il `commit_token` **fa parte dell'input dell'esecuzione**.
 
 È la formulazione corretta, non un cavillo: l'identificativo *è* un ingresso,
 scelto dal chiamante prima dell'invocazione come il percorso di destinazione o
 il tetto di memoria. Il determinismo diventa quindi:
 
-> stesso piano, stessi dati **e stesso `execution_id`** producono lo stesso
+> stesso piano, stessi dati **e stesso `commit_token`** producono lo stesso
 > IPC byte per byte.
 
 L'oracolo esistente va aggiornato di conseguenza: fissare un identificativo
@@ -866,21 +945,50 @@ nel caso di prova, invece di generarne uno e poi normalizzarlo via. Normalizzare
 sarebbe la scorciatoia sbagliata — nasconderebbe proprio il campo che si vuole
 sorvegliare.
 
-### 2. L'autorità Arrow↔contratto
+### 2. L'autorità Arrow↔contratto: non basta «ignorare la chiave»
 
-`contract_from_arrow_schema` costruisce il `DataContract` dai metadati dello
-schema. Se l'identificativo finisse fra le chiavi che quella funzione legge,
-diventerebbe una **proprietà semantica del contratto** — e due output
-identici in tutto tranne l'identificativo risulterebbero contratti diversi,
-facendo fallire il passo 7 della verifica su un artefatto perfettamente
-valido.
+La stesura precedente diceva che il costruttore del contratto avrebbe
+ignorato la chiave. Non basta, e il codice attuale dice perché: la chiave non
+è letta in un punto solo, ma **portata in tre**.
 
-L'identificativo è **operativo, non semantico**: dice *chi ha prodotto questo
-file*, non *che cosa contiene*. Vive quindi in una chiave che il costruttore
-del contratto **ignora esplicitamente**, e la separazione va verificata da un
-test, non lasciata all'attenzione di chi legge: un artefatto con
-identificativi diversi e tutto il resto uguale deve produrre lo **stesso**
-contratto.
+| dove | che cosa fa oggi |
+|---|---|
+| `contract_from_arrow_schema` | non interpreta la chiave, ma passa **l'intero `Schema`** a `DataContract::new`: i metadati restano dentro il contratto |
+| identità del piano | il canonico include `sorted_metadata(contract.schema.metadata())`, cioè **tutti** i metadati: la chiave entrerebbe nel `plan_hash` |
+| confronto dei contratti | l'esecutore confronta contratti che portano quei metadati: due output uguali con token diversi risulterebbero **diversi** |
+
+Un token operativo lì dentro cambierebbe l'identità di un piano che non è
+cambiato, e farebbe fallire il passo 7 su un artefatto perfettamente valido.
+«Non leggerla» non evita nessuna delle tre cose.
+
+**Serve una proiezione semantica, e una sola.**
+
+```
+    schema_semantico(Schema) -> Schema     rimuove le chiavi del
+                                           namespace operativo
+```
+
+Applicata in tutti e tre i punti — costruzione del contratto, identità del
+piano, confronto — con un namespace riservato e dichiarato per i metadati
+operativi, distinto da quelli che il contratto già usa.
+
+L'invariante è una proprietà verificabile, non un'attenzione:
+
+> per ogni schema `S` e ogni insieme di chiavi operative `K`,
+> `schema_semantico(S ∪ K) == schema_semantico(S)`
+
+da cui seguono, senza altri controlli, contratto identico, `plan_hash`
+identico e confronto che passa. Un test che aggiunge chiavi operative
+arbitrarie e verifica che le tre grandezze non si muovano vale più di tre
+punti di attenzione sparsi.
+
+**L'alternativa scartata**, e perché: mettere il token **fuori** dallo schema
+Arrow — in un involucro esterno o nel sigillo — eviterebbe del tutto il
+problema, e anche l'impatto sul determinismo del §1. Ma il worker scrive **un
+solo artefatto** (§6), e un contenitore Arrow IPC non ha un posto per byte
+propri fuori dallo schema senza smettere di essere un contenitore Arrow IPC
+leggibile da chiunque. Fra un artefatto non standard e una proiezione
+dichiarata, la proiezione costa meno e si verifica meglio.
 
 ### 3. Chi lo verifica, e quando
 
@@ -1493,19 +1601,21 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
 | **PR-3** | tipi dell'esito e della classificazione: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo, la precedenza §10.3 | no | test di tabella sulla matrice e sulle corse |
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
-| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`execution_id`**; e `execution_id` nei metadati dell'artefatto | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo, più le tre condizioni della §7-quater |
+| **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei metadati dell'artefatto; e la **proiezione semantica** che lo esclude da contratto, `plan_hash` e confronti | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo, l'invariante della proiezione, e le tre condizioni della §7-quater |
 | **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
-| **PR-10** | sequenza di verifica 1-9 e publish atomico dal supervisore | no | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice |
+| **PR-10** | sequenza di verifica da 1 a 9 — 8-bis compreso — publish no-clobber con rilevazione del residuo, e **`risolvi_commit`** con l'enum delle osservazioni | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; e le cinque osservazioni su destinazioni costruite a mano |
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 
-Quattro PR cambiano semantica — `PR-1`, `PR-2`, `PR-5` e `PR-12` — e nessuna
-delle quattro è nascosta in mezzo alle altre. `PR-5` lo è diventata scrivendo
-`execution_id` nell'artefatto: la stesura precedente la marcava «nessun
-cambiamento semantico» quando cambia i byte del file prodotto.
+Cinque PR cambiano semantica — `PR-1`, `PR-2`, `PR-5`, `PR-10` e `PR-12` — e
+nessuna delle cinque è nascosta in mezzo alle altre. `PR-10` lo è diventata
+portando `risolvi_commit`: è una funzione pubblica nuova, non un dettaglio
+della pubblicazione. `PR-5` lo è diventata scrivendo
+il token nell'artefatto: la stesura precedente la marcava «nessun cambiamento
+semantico» quando cambia i byte del file prodotto.
 
 ### Perché Windows esce dal perimetro
 

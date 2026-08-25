@@ -273,19 +273,47 @@ Sigillo e contratto **non bastano** a risolvere: dimostrano che l'artefatto è
 valido, non che sia di quella esecuzione — due esecuzioni dello stesso piano su
 input diversi producono lo stesso contratto.
 
-Serve un `execution_id` **fornito dal chiamante prima dell'invocazione**, non
+Serve un **`commit_token` fornito dal chiamante prima dell'invocazione**, non
 scelto da noi e restituito alla fine: un coordinatore morto non restituisce
 nulla, e poiché è il processo del chiamante non può nemmeno comunicare la
 propria morte. La catena è handshake → metadati dell'artefatto → verifica
-prima del rename. La risoluzione è una procedura indipendente,
-`risolvi_commit(execution_id, destinazione)`, chiamabile da un processo
-successivo. Per il profilo isolato l'identificativo è obbligatorio.
+prima della pubblicazione. È distinto dall'`execution_id` diagnostico, che può
+ripetersi: **il token no**.
+
+**L'unicità è una precondizione esterna e non verificabile da noi**, perché il
+token deve essere noto al chiamante prima dell'esecuzione. La garanzia è
+quindi condizionata: se il token non si ripete fra tentativi la risoluzione
+distingue questo output da qualunque altro; se si ripete, non lo distingue e
+non ce ne accorgiamo. Per il profilo isolato il token è **obbligatorio** —
+un'invocazione che non lo porta è rifiutata in validazione.
+
+La risoluzione è una procedura indipendente,
+`risolvi_commit(commit_token, destinazione)`, chiamabile da un processo
+successivo, e rende **osservazioni, non decisioni**: `CommittedMatching` —
+che richiede sigillo e struttura validi, non solo la chiave —
+`OccupiedByDifferentExecution`, `IdentityMissing`, `Absent`,
+`InvalidOrUnreadable`. In particolare `Absent` **non** autorizza a riprovare:
+un file può mancare anche per perdita di durabilità o rimozione esterna.
 
 **F4-19 — Una sola semantica di concorrenza sulla destinazione: no-clobber.**
 La prima pubblicazione vince, la seconda fallisce con `Conflict`. Mai una
-sostituzione silenziosa. La primitiva è `persist_noclobber`, già in uso nel
-percorso in-process; un `rename(2)` ordinario sostituirebbe la destinazione e
-non è utilizzabile.
+sostituzione silenziosa.
+
+Il commit point è la **creazione no-clobber della destinazione**, non un
+rename: `persist_noclobber` usa `RENAME_NOREPLACE` dove kernel e filesystem lo
+offrono, e altrimenti ripiega su `hard_link` più `unlink` — con l'errore
+dell'`unlink` ignorato, quindi con un temporaneo che può restare senza che
+nessuno lo dica. Il no-clobber regge in entrambi i rami; il silenzio no. Dopo
+il commit si verifica che il temporaneo non ci sia più, e se c'è lo si riporta
+con l'avvertenza machine-readable.
+
+**F4-20 — Una proiezione semantica separa i metadati operativi.** Non basta
+non leggere una chiave: oggi `DataContract` conserva l'intero `Schema`, il
+`plan_hash` include tutti i metadati e l'esecutore li confronta. Un token
+operativo cambierebbe l'identità di un piano immutato e farebbe fallire il
+confronto dei contratti su un artefatto valido. Serve una proiezione unica,
+applicata a costruzione del contratto, identità del piano e confronto, con
+l'invariante: aggiungere chiavi operative non muove nessuna delle tre.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
