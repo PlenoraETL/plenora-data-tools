@@ -267,6 +267,87 @@ I writer di questo progetto non comprimono mai, quindi nessun artefatto
 prodotto qui è interessato. Un input compresso prodotto da terzi non è
 leggibile.
 
+### Custom metadata IPC oltre i tetti del confine
+
+Il confine di lettura applica tre tetti alle collezioni di custom metadata —
+schema, campi, messaggi e footer — **prima** di qualunque allocazione
+proporzionale al conteggio:
+
+| tetto | valore |
+|---|---|
+| coppie in una collezione | 256 |
+| byte di una chiave | 128 |
+| byte di un valore | 64 KiB |
+
+`MAX_IPC_METADATA_BYTES` limita i **byte** dei metadati, non il numero di
+elementi: centomila coppie minuscole stanno dentro 16 MiB e producono
+centomila allocazioni in chi le raccoglie.
+
+I tre valori sono costanti **interne e non ampliabili**, non campi di
+`IpcLimits`: quella struttura esiste per i limiti che un piano può modulare, e
+un tetto contro l'abuso che il chiamante può alzare non è un tetto. Il tetto
+sul valore **non** è derivato da `MAX_CRS_DEFINITION_BYTES`: il numero
+coincide, l'autorità no, e accoppiarli farebbe cambiare in silenzio ciò che il
+parser accetta il giorno in cui il tetto sul CRS si muove.
+
+**Che cosa questo rifiuta.** Arrow consente metadati arbitrari: un file con una
+chiave sconosciuta e un valore da 100 KiB è un file Arrow **valido** che questo
+confine rifiuta di proposito. Il rientro sarebbe alzare i tetti, e richiede un
+caso d'uso legittimo che oggi non esiste — l'uso più denso del progetto è una
+colonna geometrica con una decina di chiavi.
+
+### Custom metadata IPC di forma non ammessa
+
+Sono rifiutati, sugli stessi quattro percorsi: chiave o valore **assenti**,
+chiave **vuota**, chiave o valore non **UTF-8**, chiave **duplicata**.
+
+La ragione non è il rigore per il rigore. `arrow-ipc` legge i custom metadata
+del footer con `key().unwrap()` e `value().unwrap()`, quindi una voce senza
+chiave o senza valore raggiunge una primitiva di panic **dentro la
+dipendenza** — mentre il percorso dello schema, che usa `if let`, la
+salterebbe. E chi raccoglie le coppie in una mappa comprime i duplicati con
+«vince l'ultima», che su una chiave autoritativa sceglie un vincitore
+arbitrario.
+
+Il **valore vuoto** è invece accettato: rifiutarlo romperebbe file legittimi
+che rappresentano un campo assente con la stringa vuota. Le **chiavi
+sconosciute** sono accettate e ignorate: questo confine valida la *forma*, non
+il vocabolario, e rifiutare le chiavi altrui romperebbe l'interoperabilità con
+qualunque produttore Arrow che aggiunga le proprie.
+
+Non è una deroga con rientro: è la forma che il confine pretende.
+
+### Campi che `arrow-ipc` dereferenzia senza controllarli
+
+Stessa classe, altri tre punti, chiusi insieme: lo **schema del footer**, il
+campo **`fields`** di uno schema, e **`indexType`** di una codifica a
+dizionario. Tutti e tre sono letti da `arrow-ipc` con `unwrap`, e tutti e tre
+erano trattati dal confine come opzionali — cioè saltati se assenti. Il writer
+li emette sempre, quindi pretenderli non rifiuta alcun file legittimo.
+
+**Che cosa resta aperto, per intero.** Una stesura precedente lo riduceva a
+«`Field.children`», che è solo la voce più visibile. La superficie non ancora
+validata è questa:
+
+| | che cosa manca |
+|---|---|
+| coerenza discriminante/payload | il `type_type` di un `Field` dichiara un tipo, il `type` ne porta la tabella: che i due concordino non è verificato |
+| payload del tipo assente | `type_type` presente e `type` assente — o viceversa |
+| arità dei figli | `List` e `LargeList` vogliono **un** figlio, `Map` uno, `RunEndEncoded` due: `convert.rs` fa `panic!("expect a list to have one child")` |
+| domini degli enum | unità di tempo, di durata, di intervallo, ampiezze di bit: valori fuori dominio finiscono in `panic!`/`unimplemented!` |
+| combinazioni numeriche | ampiezza e segno di un intero, precisione e scala di un decimal, coppie che nessun tipo Arrow rappresenta |
+
+Chiuderla richiede una tabella tipo → forma attesa, e una tabella sbagliata
+rifiuta file legittimi: è lavoro con un rischio proprio, e va fatto sapendo
+che cosa si sta decidendo.
+
+Fino ad allora la **barriera anti-panico resta necessaria**, ed è di nuovo
+**coperta**: l'artefatto di fuzz che la esercitava viene ora rifiutato prima,
+in modo strutturato, e al suo posto c'è un caso costruito — uno stream Arrow
+vero con una colonna `List` a cui viene tolto il campo `children`. Quel test
+non sostituisce l'hook di panico del processo: accetta il rumore su stderr
+invece di mutare stato globale mentre gli altri test girano in parallelo.
+
 ### Finestra TOCTOU sull'ingresso IPC
 
 La pre-validazione del framing è un *time-of-check*, la lettura di Arrow è il

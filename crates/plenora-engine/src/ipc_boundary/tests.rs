@@ -517,3 +517,213 @@ fn il_budget_di_memoria_limita_il_confine_anche_senza_piano_v4() {
         IpcLimits::default().max_metadata_bytes
     );
 }
+
+/// I tre tetti sui custom metadata sono limiti, non file rotti.
+///
+/// La distinzione non e' accademica: `DataMapping` dice al chiamante che il
+/// file e' corrotto, e lo manda a cercare un difetto che non c'e'. La forma
+/// non ammessa resta `DataMapping`, perche' li' il file lo e' davvero.
+///
+/// Ogni caso verifica **categoria e fase** insieme: il tag del confine deve
+/// vincere sulla derivazione per variante, e questi errori nascono leggendo.
+#[test]
+fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+
+    let limiti = [
+        ArrowTransportError::IpcTooManyMetadataPairs(300, 256),
+        ArrowTransportError::IpcMetadataKeyTooLarge(200, 128),
+        ArrowTransportError::IpcMetadataValueTooLarge(70_000, 65_536),
+    ];
+    for errore in limiti {
+        let tradotto = read_error(errore);
+        assert_eq!(
+            tradotto.category(),
+            ErrorCategory::ResourceLimit,
+            "atteso ResourceLimit"
+        );
+        assert_eq!(
+            tradotto.phase(),
+            ErrorPhase::Read,
+            "atteso ErrorPhase::Read"
+        );
+    }
+
+    let forme = [
+        ArrowTransportError::IpcMetadataInvalid("chiave assente"),
+        ArrowTransportError::IpcSchemaInvalid("schema senza il campo fields"),
+    ];
+    for errore in forme {
+        let tradotto = read_error(errore);
+        assert_eq!(
+            tradotto.category(),
+            ErrorCategory::DataMapping,
+            "una forma non ammessa e' un file rotto, non un tetto"
+        );
+        assert_eq!(tradotto.phase(), ErrorPhase::Read);
+    }
+}
+
+/// Un errore del filesystem non e' un file corrotto.
+///
+/// La versione precedente di `read_error` classificava `Io` come
+/// `DataMapping` e ne teneva il solo testo: un disco che non risponde durante
+/// `read_at` o `rewind` diventava «il file e' rotto», e mandava chi legge a
+/// cercare un difetto nei dati che non c'era.
+#[test]
+fn un_errore_di_io_resta_io_e_conserva_la_causa() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+    use std::io::ErrorKind;
+
+    let sorgente = std::io::Error::new(ErrorKind::PermissionDenied, "permesso negato");
+    let tradotto = read_error(ArrowTransportError::Io(sorgente));
+
+    assert_eq!(
+        tradotto.category(),
+        ErrorCategory::Io,
+        "atteso ErrorCategory::Io"
+    );
+    assert_eq!(
+        tradotto.phase(),
+        ErrorPhase::Read,
+        "la fase del confine resta Read"
+    );
+    // `with_phase` AVVOLGE in `Tagged` invece di marcare in posto, quindi la
+    // causa sta un livello sotto. La prima stesura di questo test guardava
+    // l'involucro e falliva: e' il genere di assunzione sull'API che solo un
+    // test negativo scopre, perche' `category()` ricorre sulla causa e da
+    // sola sembrava confermare.
+    let dentro = match &tradotto {
+        PlenoraError::Tagged { source, .. } => source.as_ref(),
+        altro => altro,
+    };
+    // La causa e' preservata, non stampata: e' la ragione per cui la funzione
+    // consuma l'errore invece di prenderlo a prestito.
+    assert!(
+        matches!(dentro, PlenoraError::Io(io) if io.kind() == ErrorKind::PermissionDenied),
+        "lo std::io::Error originale non e' stato conservato"
+    );
+}
+
+/// La diagnostica di riga non cambia la categoria, e **non si perde**.
+///
+/// La prima stesura di questo test non costruiva affatto il wrapper: passava
+/// un limite semplice, quindi era verde senza attraversare il ramo che
+/// dichiarava di verificare. E' il difetto che aveva permesso alla
+/// ricorsione di scartare `diagnostics` in silenzio.
+#[test]
+fn la_diagnostica_di_riga_sopravvive_alla_classificazione() {
+    use plenora_core::diagnostics::{
+        RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+        ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+    };
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+    use std::collections::BTreeMap;
+
+    // Le regole di `validate_for_emission` sono strette e si tengono a
+    // vicenda: conteggi che sommano a `observed_total`, esempi in numero
+    // esatto quando la diagnostica e' completa, `total` non nullo. Un payload
+    // inventato viene rifiutato, e l'errore degrada a `Internal` — cioe' il
+    // test verificherebbe un'altra cosa.
+    let mut counts = BTreeMap::new();
+    counts.insert("conversion.invalid_date".to_owned(), 1_u64);
+    let payload = RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total: 1,
+        total: Some(1),
+        input_total: None,
+        counts,
+        examples_limit: 2,
+        examples_truncated: false,
+        examples: vec![RowDiagnosticExample {
+            source_index: 0,
+            cause: "conversion.invalid_date".to_owned(),
+            column: Some("value".to_owned()),
+            key: None,
+            write_state: None,
+        }],
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    let avvolto =
+        ArrowTransportError::IpcTooManyMetadataPairs(300, 256).with_row_diagnostics(payload);
+    // Se `with_row_diagnostics` avesse rifiutato il payload, l'errore sarebbe
+    // degradato a `Internal` e questo test verificherebbe un'altra cosa.
+    assert!(
+        matches!(avvolto, ArrowTransportError::RowDiagnostics { .. }),
+        "il wrapper non e' stato costruito: il payload e' stato rifiutato"
+    );
+
+    let tradotto = read_error(avvolto);
+    assert_eq!(
+        tradotto.category(),
+        ErrorCategory::ResourceLimit,
+        "la categoria appartiene alla causa, non all'involucro"
+    );
+    assert_eq!(tradotto.phase(), ErrorPhase::Read);
+    assert!(
+        tradotto.row_diagnostics().is_some(),
+        "la diagnostica e' stata scartata dalla classificazione"
+    );
+
+    // La STRUTTURA, non solo gli assi. Categoria, fase e payload sono
+    // identici con uno o due tag annidati, quindi da soli non dicono nulla
+    // sulla forma.
+    //
+    // La forma canonica e' quella che `with_phase` produce attraversando i
+    // wrapper trasparenti: il payload resta esterno, il tag scende sotto.
+    let PlenoraError::RowDiagnostics { source, .. } = &tradotto else {
+        panic!("la diagnostica deve restare il wrapper esterno, trovato {tradotto:?}");
+    };
+    let PlenoraError::Tagged {
+        phase,
+        source: causa,
+    } = source.as_ref()
+    else {
+        panic!("sotto la diagnostica e' atteso il tag di fase");
+    };
+    assert_eq!(*phase, ErrorPhase::Read);
+    assert!(
+        !matches!(causa.as_ref(), PlenoraError::Tagged { .. }),
+        "tag di fase annidato"
+    );
+    assert_eq!(causa.category(), ErrorCategory::ResourceLimit);
+}
+
+/// Una variante che il validatore IPC non puo' produrre e' un difetto nostro.
+///
+/// Nasce ESEGUENDO — parametri di operazione, kernel, join, backend — e
+/// questa funzione traduce solo gli errori del lettore di confine. Prima
+/// finiva in `DataMapping`, cioe' accusava il file di una causa interna: la
+/// stessa classe del difetto su `Io`.
+#[test]
+fn una_variante_impossibile_al_confine_e_un_errore_interno() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+
+    let impossibile = ArrowTransportError::MissingParameter {
+        operation: "geo.buffer",
+        name: "distance",
+    };
+    // Il testo dell'originale, che NON deve comparire nel tradotto.
+    let originale = impossibile.to_string();
+    let tradotto = read_error(impossibile);
+
+    assert_eq!(tradotto.category(), ErrorCategory::Internal);
+    assert_eq!(tradotto.phase(), ErrorPhase::Read);
+
+    let messaggio = tradotto.to_string();
+    assert_ne!(
+        messaggio, originale,
+        "il testo dell'errore originale e' passato invariato"
+    );
+    for dettaglio in ["geo.buffer", "distance"] {
+        assert!(
+            !messaggio.contains(dettaglio),
+            "il messaggio porta un dettaglio dell'originale: {dettaglio}"
+        );
+    }
+}

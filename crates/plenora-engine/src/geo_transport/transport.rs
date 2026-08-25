@@ -51,6 +51,47 @@ pub const MAX_SPLIT_WORK: u64 = 100_000_000;
 pub const MAX_CLEAN_VERTICES: u64 = 100_000_000;
 /// Metadati massimi di un singolo messaggio Arrow IPC (schema compreso).
 pub const MAX_IPC_METADATA_BYTES: usize = 16 * 1024 * 1024;
+
+// --- Custom metadata IPC: tetti duri del confine ----------------------------
+//
+// `MAX_IPC_METADATA_BYTES` limita i BYTE dei metadati, non il numero di
+// elementi: centomila coppie minuscole ci stanno comodamente dentro e
+// producono centomila allocazioni in chi le raccoglie. Questi tre tetti
+// limitano la forma, e si applicano PRIMA di qualunque allocazione
+// proporzionale al conteggio.
+//
+// Sono costanti INTERNE al confine e non ampliabili: non sono campi di
+// `IpcLimits`, che esiste per i limiti che un piano puo' modulare. Un tetto
+// contro l'abuso che il chiamante puo' alzare non e' un tetto.
+//
+// Conseguenza dichiarata: Arrow consente metadati arbitrari, quindi un file
+// con una chiave sconosciuta e un valore oltre il tetto e' un file Arrow
+// VALIDO che questo confine rifiuta di proposito
+// (errori-e-limiti.md#custom-metadata-ipc-oltre-i-tetti-del-confine).
+
+/// Coppie chiave-valore massime in UNA collezione di custom metadata.
+///
+/// L'uso legittimo piu' denso e' una colonna geometrica, con una decina di
+/// chiavi `plenora.geometry.*` piu' le estensioni Arrow. Quelle chiavi sono
+/// per CAMPO, non di schema, quindi il conteggio non cresce col numero di
+/// colonne.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_PAIRS: usize = 256;
+
+/// Byte massimi di una chiave di custom metadata.
+///
+/// La piu' lunga che il progetto scriva e'
+/// `plenora.geometry.crs_definition_format`, 38 byte.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_KEY_BYTES: usize = 128;
+
+/// Byte massimi di un valore di custom metadata.
+///
+/// Il valore legittimo piu' grande che il progetto scriva e' una definizione
+/// di CRS, il cui tetto oggi vale 64 KiB. Il numero coincide, l'AUTORITA' no:
+/// `MAX_CRS_DEFINITION_BYTES` governa una definizione di CRS, questa costante
+/// governa un confine IPC generico. Derivarla da quella farebbe cambiare in
+/// silenzio cio' che il parser accetta il giorno in cui il tetto sul CRS si
+/// muove — e nessuno collegherebbe le due cose.
+pub(crate) const MAX_IPC_CUSTOM_METADATA_VALUE_BYTES: usize = 64 * 1024;
 pub const AREA_COLUMN: &str = "area";
 pub const WKT_COLUMN: &str = "wkt";
 pub const DEFAULT_MAX_POINTS: u64 = 100_000;
@@ -1373,20 +1414,35 @@ mod tests {
         ));
     }
 
-    /// Regressione fuzz: `arrow-ipc` va in panico decodificando lo schema, e
-    /// `decode_ipc` deve restituire un errore invece di far abortire il
-    /// processo.
+    /// Regressione fuzz: un artefatto che **prima** faceva panicare
+    /// `arrow-ipc` viene ora rifiutato dal confine, in modo strutturato.
     ///
-    /// Questo test e' l'UNICA copertura possibile della barriera. Il fuzz
-    /// target `arrow_transform` non puo' verificarla: `libfuzzer-sys` installa
-    /// un hook di panico che chiama `std::process::abort()` prima che
-    /// l'unwinding cominci (libfuzzer-sys 0.4.10, src/lib.rs:92-95), proprio
-    /// perche' un `catch_unwind` nel codice sotto test nasconderebbe i difetti
-    /// al fuzzer. Quel target resta quindi in quarantena e restera' rosso
-    /// anche a barriera funzionante: non e' un difetto della mitigazione, e'
-    /// lo strumento progettato per non farsi ingannare da essa.
+    /// # L'esito e' cambiato
+    ///
+    /// Fino a `PR-0` questo test verificava la **barriera anti-panico**: lo
+    /// schema dell'artefatto arrivava a `fb_to_schema`, che panicava, e la
+    /// barriera convertiva il panico in `ArrowPanic`. Ora il confine pretende
+    /// il campo `fields` — che `arrow-ipc` legge con `fields().unwrap()` — e
+    /// l'artefatto non arriva piu' cosi' avanti.
+    ///
+    /// La barriera resta necessaria, perche' `convert.rs` ha una ventina di
+    /// `panic!`/`unimplemented!` sui codici di tipo che il confine non copre
+    /// ancora, ed e' verificata da
+    /// [`super::super::ipc`] nel modulo `barriera_antipanico`, con un input
+    /// costruito apposta: uno stream con una colonna `List` a cui viene tolto
+    /// il campo `children`.
+    ///
+    /// # Perche' non la verifica il fuzzing
+    ///
+    /// Il target `arrow_transform` non puo': `libfuzzer-sys` installa un hook
+    /// di panico che chiama `std::process::abort()` prima che l'unwinding
+    /// cominci (0.4.10, src/lib.rs:92-95), proprio perche' un `catch_unwind`
+    /// nel codice sotto test nasconderebbe i difetti al fuzzer. Quel target
+    /// resta quindi in quarantena e restera' rosso anche a barriera
+    /// funzionante: non e' un difetto della mitigazione, e' lo strumento
+    /// progettato per non farsi ingannare da essa.
     #[test]
-    fn ipc_decode_converte_il_panico_di_arrow_in_errore() {
+    fn ipc_decode_rifiuta_lo_schema_senza_fields_prima_di_arrow() {
         /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
         /// commento sul troncamento, piu' sotto.
         const FINE_STREAM: usize = 52;
@@ -1414,17 +1470,28 @@ mod tests {
         // resta l'oggetto del test, non il framing.
         let payload = &payload[..FINE_STREAM];
 
-        // L'hook di panico del processo stampa comunque su stderr: lo
-        // silenziamo per la durata del test, altrimenti l'output della suite
-        // sembra un fallimento. Ripristinato subito dopo.
-        let precedente = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
+        // Nessuna sostituzione dell'hook di panico: questo input non panica
+        // piu'. La versione precedente lo silenziava perche' l'artefatto
+        // arrivava ad `arrow-ipc`; ora viene rifiutato prima, quindi non c'e'
+        // nulla da silenziare — e mutare stato globale del processo mentre gli
+        // altri test girano in parallelo sarebbe stato un costo senza piu'
+        // alcun beneficio.
         let esito = decode_ipc(payload);
-        std::panic::set_hook(precedente);
 
+        // L'esito e' CAMBIATO, ed e' migliorato: lo Schema che l'artefatto
+        // porta non ha il campo `fields`, e `fb_to_schema` lo legge con
+        // `fields().unwrap()`. Il confine ora lo pretende, quindi il rifiuto e'
+        // strutturato invece di essere un panico intercettato.
+        //
+        // La barriera anti-panico resta necessaria — `convert.rs` ha una
+        // ventina di `panic!`/`unimplemented!` sui codici di tipo, non ancora
+        // coperti — ed e' esercitata da
+        // `ipc::barriera_antipanico`, che le porta un input costruito
+        // apposta: uno stream con una colonna `List` a cui viene tolto il
+        // campo `children`.
         assert!(
-            matches!(esito, Err(ArrowTransportError::ArrowPanic(_))),
-            "atteso ArrowPanic, ottenuto {esito:?}"
+            matches!(esito, Err(ArrowTransportError::IpcSchemaInvalid(_))),
+            "atteso IpcSchemaInvalid, ottenuto {esito:?}"
         );
     }
 

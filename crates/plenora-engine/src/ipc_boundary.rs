@@ -79,26 +79,152 @@ pub enum IpcFormat {
 ///
 /// La fase resta `Read` per entrambi: il tag del confine vince sulla
 /// derivazione per variante, e questi errori nascono leggendo.
-fn read_error(error: &ArrowTransportError) -> PlenoraError {
-    let limite = matches!(
-        error,
-        ArrowTransportError::IpcMetadataTooLarge(_, _)
-            | ArrowTransportError::IpcBodyTooLarge { .. }
-            | ArrowTransportError::IpcTooManyMessages(_, _)
-            | ArrowTransportError::IpcTooManyRecordBatches(_, _)
-            | ArrowTransportError::IpcSchemaTooComplex(_)
-            | ArrowTransportError::StreamTooLarge
-            | ArrowTransportError::TooManyRows(_)
-            | ArrowTransportError::TooManyColumns(_)
-            | ArrowTransportError::TooManyBatches(_)
-            | ArrowTransportError::CellTooLarge(_)
-    );
-    let errore = if limite {
-        PlenoraError::ResourceLimit(error.to_string())
-    } else {
-        PlenoraError::DataMapping(error.to_string())
-    };
-    errore.with_phase(ErrorPhase::Read)
+fn read_error(error: ArrowTransportError) -> PlenoraError {
+    // Il tag di fase si applica **una volta sola**, qui.
+    //
+    // La stesura precedente lo applicava dentro la traduzione, e il ramo
+    // ricorsivo della diagnostica ne produceva due annidati:
+    //
+    //     Tagged(Read) -> RowDiagnostics -> Tagged(Read) -> ResourceLimit
+    //
+    // `with_phase` evita di riavvolgere un errore gia' `Tagged`, ma dopo
+    // `with_row_diagnostics` l'esterno non e' piu' `Tagged`, quindi la
+    // difesa non scattava. Categoria, fase e payload restavano corretti —
+    // ed e' la ragione per cui i test passavano — ma la proprieta' che
+    // `with_phase` dichiara, niente tag annidati, era violata.
+    traduci_errore_di_lettura(error).with_phase(ErrorPhase::Read)
+}
+
+/// Traduce un errore del trasporto **senza** applicare la fase.
+///
+/// Separare la traduzione dal tagging e' cio' che permette al ramo ricorsivo
+/// di comporre senza annidare: la fase la mette [`read_error`], una volta.
+fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
+    use ArrowTransportError as E;
+
+    /// Testo di un errore che il validatore IPC non puo' produrre.
+    ///
+    /// Statico e senza dati: nomina il punto, non l'input.
+    const IMPOSSIBILE_AL_CONFINE: &str =
+        "errore di esecuzione riportato dal lettore di confine IPC";
+
+    match error {
+        // --- I/O: la causa si conserva, non si stampa ----------------------
+        //
+        // La versione precedente lo classificava `DataMapping`, cioe' «il file
+        // e' rotto», e ne teneva solo il testo. Un disco che non risponde
+        // durante `read_at` o `rewind` diventava cosi' un file corrotto, e
+        // mandava chi legge a cercare un difetto nei dati. Consumare l'errore
+        // invece di prenderlo a prestito e' cio' che permette di preservare
+        // lo `std::io::Error` originale.
+        E::Io(io) => PlenoraError::Io(io),
+
+        // --- Limiti: il file c'e' ed e' piu' grande di quanto ammettiamo ---
+        E::StreamTooLarge
+        | E::TooManyRows(_)
+        | E::TooManyColumns(_)
+        | E::TooManyBatches(_)
+        | E::CellTooLarge(_)
+        | E::IpcMetadataTooLarge(_, _)
+        | E::IpcBodyTooLarge { .. }
+        | E::IpcTooManyMessages(_, _)
+        | E::IpcSchemaTooComplex(_)
+        | E::IpcTooManyRecordBatches(_, _)
+        | E::IpcTooManyMetadataPairs(_, _)
+        | E::IpcMetadataKeyTooLarge(_, _)
+        | E::IpcMetadataValueTooLarge(_, _) => PlenoraError::ResourceLimit(error_testo(&error)),
+
+        // --- Difetto nostro -------------------------------------------------
+        E::Internal(motivo) => PlenoraError::Internal(motivo.to_owned()),
+
+        // --- Forma non ammessa: qui il file e' davvero rotto ---------------
+        //
+        // Framing, envelope, schema, custom metadata, contratto: tutto cio'
+        // che dice «questi byte non sono cio' che dichiarano di essere».
+        E::InvalidMagic
+        | E::InvalidTrailer
+        | E::ChecksumMismatch
+        | E::TrailingBytes
+        | E::RowCountMismatch { .. }
+        | E::PayloadLengthMismatch { .. }
+        | E::UnsupportedSchemaVersion(_)
+        | E::MissingGeometryColumn(_)
+        | E::MissingGeoArrowMetadata(_)
+        | E::GeometryColumnNotBinary { .. }
+        | E::CrsRequired
+        | E::CrsTooLarge
+        | E::IpcTruncated
+        | E::IpcTrailingAfterEos
+        | E::IpcUnsupportedFeature(_)
+        | E::IpcFooterInvalid(_)
+        | E::IpcSchemaInvalid(_)
+        | E::IpcMetadataInvalid(_)
+        | E::Arrow(_)
+        | E::ArrowPanic(_)
+        | E::Geometry(_)
+        | E::MissingColumn(_)
+        | E::ColumnNotNumeric { .. }
+        | E::IntegerCoordinateTooLarge { .. }
+        | E::OutputColumnExists(_)
+        | E::WrongGeometryType { .. } => PlenoraError::DataMapping(error_testo(&error)),
+
+        // --- Impossibili dal validatore IPC: difetto NOSTRO ----------------
+        //
+        // Parametri di operazione, kernel, join, backend: nascono ESEGUENDO, e
+        // questa funzione traduce solo gli errori del lettore di confine.
+        //
+        // La stesura precedente le lasciava in `DataMapping` «per non cambiare
+        // comportamento su un percorso che non dovrebbe esistere». Era la
+        // stessa classe del difetto su `Io`, appena corretto: una causa
+        // interna attribuita ai dati. Conservare il vecchio fallback non e'
+        // compatibilita' — e' conservare una diagnosi falsa proprio dove il
+        // codice dichiara che non puo' succedere.
+        //
+        // Il testo e' **statico**: non porta nulla dell'errore originale,
+        // perche' `Internal` dice «difetto nostro» e il messaggio nomina il
+        // punto, mai il dato (`errori-e-limiti.md`).
+        E::MissingParameter { .. }
+        | E::UnexpectedParameter { .. }
+        | E::InvalidParameter { .. }
+        | E::BackendUnavailable { .. }
+        | E::Kernel(_)
+        | E::OutputRowsExceeded { .. }
+        | E::Topology(_)
+        | E::Construction(_)
+        | E::Advanced(_)
+        | E::PairRowCountMismatch { .. }
+        | E::SideLengthMismatch { .. }
+        | E::Extended(_)
+        | E::ExtendedAlgorithm(_)
+        | E::Predicate(_)
+        | E::Analysis(_)
+        | E::SpatialJoin(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
+
+        #[cfg(feature = "geos-backend")]
+        E::MakeValid(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
+        #[cfg(feature = "proj-backend")]
+        E::Reproject(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
+
+        // --- Diagnostica di riga: si classifica la causa e si RIATTACCA ----
+        //
+        // La categoria appartiene alla causa, non all'involucro. Ma la
+        // stesura precedente ricorreva **scartando** `diagnostics`: la
+        // categoria sopravviveva e il payload no, cioe' si perdeva
+        // silenziosamente l'informazione piu' specifica che l'errore avesse.
+        //
+        // Riattaccarla costa una riga ed e' corretto comunque, che questo ramo
+        // sia raggiungibile o no dal confine — e non obbliga a decidere una
+        // raggiungibilita' che nessuno puo' osservare da qui.
+        E::RowDiagnostics {
+            source,
+            diagnostics,
+        } => traduci_errore_di_lettura(*source).with_row_diagnostics(*diagnostics),
+    }
+}
+
+/// Testo di un errore del trasporto, gia' sanificato all'origine.
+fn error_testo(error: &ArrowTransportError) -> String {
+    error.to_string()
 }
 
 /// `true` se il file inizia con il magic dell'Arrow IPC **file format**
@@ -144,8 +270,8 @@ fn validated_handle(path: &Path, format: IpcFormat, limits: &IpcLimits) -> Resul
         IpcFormat::File => validate_ipc_file_framing(&mut source, limits),
         IpcFormat::Stream => validate_ipc_stream_framing(&mut source, limits),
     }
-    .map_err(|error| read_error(&error))?;
-    source.rewind().map_err(|error| read_error(&error))
+    .map_err(read_error)?;
+    source.rewind().map_err(read_error)
 }
 
 /// Esegue `build` dentro la barriera anti-panico, convertendo un eventuale
@@ -227,9 +353,14 @@ impl Iterator for BoundaryBatches {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Io` se il file non si apre, `PlenoraError::DataMapping`
-/// (taggato [`ErrorPhase::Read`]) se il framing e' malformato, oltre i limiti
-/// di risorse, oppure se arrow va in panico sullo schema.
+/// Tutti taggati [`ErrorPhase::Read`], e distinti per categoria — la
+/// distinzione conta, perche' dice a chi legge dove guardare:
+///
+/// | categoria | quando |
+/// |---|---|
+/// | `PlenoraError::Io` | il file non si apre, non si legge o non si riavvolge. La causa `std::io::Error` e' conservata |
+/// | `PlenoraError::ResourceLimit` | l'ingresso supera un tetto del confine: byte, messaggi, batch, righe, colonne, complessita' dello schema, custom metadata |
+/// | `PlenoraError::DataMapping` | il framing e' malformato, lo schema o il contratto non sono quelli attesi, oppure arrow va in panico sullo schema |
 pub fn open_with_format(
     path: &Path,
     format: IpcFormat,

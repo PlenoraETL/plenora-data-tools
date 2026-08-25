@@ -23,7 +23,23 @@ use plenora_kernels_geo::topology::TopologyError;
 
 use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS};
 
+/// # Compatibilita' della superficie pubblica
+///
+/// Questo enum e' `pub` e riesportato da `plenora-engine`. `PR-0` gli aggiunge
+/// cinque varianti, il che **rompe** ogni `match` esaustivo scritto fuori dal
+/// workspace: la rottura e' accettata formalmente, ed e' il prezzo di
+/// distinguere le nuove diagnosi invece di comprimerle in una variante
+/// generica — i tre tetti sui custom metadata devono essere superabili
+/// separatamente, altrimenti un test non puo' dire quale abbia parato.
+///
+/// Da qui in avanti l'enum e' `#[non_exhaustive]`, cosi' e' l'ultima volta:
+/// un consumatore esterno deve prevedere un ramo generico, e le varianti
+/// future smettono di essere una rottura. Dentro il workspace non cambia
+/// nulla — nessun `match` era esaustivo, verificato compilando — e la
+/// disciplina dei mapping esaustivi resta dove serve, cioe' sulla
+/// corrispondenza variante -> categoria.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ArrowTransportError {
     #[error("errore I/O trasporto Arrow: {0}")]
     Io(#[from] std::io::Error),
@@ -118,6 +134,34 @@ pub enum ArrowTransportError {
     /// sovrapposti o non allineati.
     #[error("footer IPC incoerente: {0}")]
     IpcFooterInvalid(&'static str),
+    /// Schema IPC di forma non ammessa: un campo che `arrow-ipc` dereferenzia
+    /// senza controllarlo — `fields` dello schema, `indexType` di una codifica
+    /// a dizionario — e che il confine pretende invece di lasciar passare.
+    ///
+    /// Distinta da [`ArrowTransportError::IpcFooterInvalid`], che riguarda il
+    /// footer del file format: uno schema di stream non ha footer.
+    #[error("schema IPC di forma non ammessa: {0}")]
+    IpcSchemaInvalid(&'static str),
+    /// Custom metadata IPC di forma non ammessa: chiave o valore assenti,
+    /// chiave vuota, UTF-8 non valido, chiave duplicata.
+    ///
+    /// Il messaggio nomina la violazione, **mai** la chiave o il valore: sono
+    /// dati di chi ha prodotto il file.
+    #[error("custom metadata IPC non validi: {0}")]
+    IpcMetadataInvalid(&'static str),
+    /// Coppie di custom metadata oltre il tetto in UNA collezione.
+    ///
+    /// Distinta dalle due che seguono di proposito: i tre tetti vanno
+    /// superabili separatamente, altrimenti un test non puo' dire quale abbia
+    /// parato.
+    #[error("custom metadata IPC: {0} coppie oltre il limite {1}")]
+    IpcTooManyMetadataPairs(usize, usize),
+    /// Chiave di custom metadata oltre il tetto in byte.
+    #[error("custom metadata IPC: chiave da {0} byte oltre il limite {1}")]
+    IpcMetadataKeyTooLarge(usize, usize),
+    /// Valore di custom metadata oltre il tetto in byte.
+    #[error("custom metadata IPC: valore da {0} byte oltre il limite {1}")]
+    IpcMetadataValueTooLarge(usize, usize),
     /// Invariante interna violata: parametro gia' validato a monte o caso
     /// gia' ristretto dal dispatch. Indica un difetto del trasporto, non
     /// dell'input; il messaggio nomina solo il parametro o il caso, mai dati.
