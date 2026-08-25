@@ -22,6 +22,15 @@ pub mod diagnostics;
 pub mod error;
 pub mod json;
 pub mod limits;
+
+// Dalla radice esce SOLO cio' che `Plan Budget 1.0` obbliga a pubblicare
+// (`PLAN-013`). `DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE`,
+// `DEFAULT_MAX_TEMP_BYTES` e `DEFAULT_SPILL_PARTITIONS` restano in
+// [`limits`]: servono a condividere l'autorita' fra i crate, non a essere
+// facciata. Riesportarli li' promuoverebbe a superficie principale tre
+// dettagli che nessun contratto richiede, e toglierli dopo sarebbe una
+// rottura.
+pub use limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
 pub mod panic_policy;
 
 pub use error::{

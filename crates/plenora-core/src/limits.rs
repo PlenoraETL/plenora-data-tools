@@ -33,6 +33,76 @@ impl Default for RowLimits {
     }
 }
 
+/// Budget di memoria governato applicato quando il piano non lo dichiara:
+/// **536 870 912 byte**, cioe' 512 MiB.
+///
+/// # Perche' e' pubblica
+///
+/// Il contratto `Plan Budget 1.0` (`PLAN-013`) obbliga il componente a
+/// **pubblicare** il default che applica. Senza, la regola per cui il tetto
+/// del dominio deve essere `>=` al budget governato **effettivo** non e'
+/// verificabile da chi invia un piano prima di inviarlo: il vincolo si
+/// scoprirebbe solo al rifiuto.
+///
+/// # Perche' e' una costante e non un letterale ripetuto
+///
+/// Il valore era scritto due volte in codice di produzione — qui e nei
+/// default dei kernel tabellari — e le due copie potevano divergere senza che
+/// nulla lo notasse. Non e' un rischio ipotetico introdotto da una versione
+/// futura del formato: e' gia' possibile oggi, e sarebbe emerso come due
+/// componenti dello stesso processo che applicano budget diversi allo stesso
+/// piano.
+///
+/// Chi aggiunge un terzo sito deve puntare qui.
+pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE as u64;
+
+/// Lo stesso default per chi lo tiene in `usize`.
+///
+/// # Perche' il letterale sta QUI e non nella forma `u64`
+///
+/// Partire dal `u64` e convertire con `as usize` troncherebbe su un target a
+/// 32 bit, e ripiegare su [`usize::MAX`] o su qualunque altro valore sarebbe
+/// peggio del troncamento: quel target applicherebbe un budget **diverso** da
+/// quello pubblicato, cioe' proprio la divergenza che questa costante chiude.
+///
+/// # Perche' la conversione e' esatta
+///
+/// **Perche' questo valore e' rappresentabile in entrambe le forme**, non
+/// perche' `usize as u64` sia un allargamento in generale: non lo e', e su un
+/// target con `usize` piu' largo di 64 bit perderebbe. E' una proprieta' del
+/// numero, e vale finche' il numero resta questo — non una garanzia sui tipi
+/// che si possa riusare altrove senza guardare il valore.
+///
+/// Chi lo cambia deve rifare questa verifica, non ereditarla.
+///
+/// # Chi esclude i target che non lo rappresentano
+///
+/// Il compilatore, da solo. Il valore entra in un `usize` a 32 bit —
+/// 536 870 912 sta sotto 4 294 967 295 — quindi restano fuori solo i target
+/// piu' stretti, dove **il letterale stesso** va in overflow in valutazione
+/// costante, che e' un errore di compilazione.
+pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
+
+/// Quota di spill su disco applicata quando il piano non la dichiara:
+/// **8 GiB**.
+///
+/// Stessa classe di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: era scritta due
+/// volte in codice di produzione, qui e nei default dei kernel tabellari, e
+/// il percorso legacy porta la seconda copia negli override del piano. Due
+/// letterali uguali per convenzione, non per costruzione.
+pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Partizioni di spill applicate quando il piano non le dichiara: **64**.
+///
+/// Stessa classe delle due precedenti. Vive in `u32` perche' e' cosi' che il
+/// piano la dichiara; i kernel la tengono in `usize`.
+///
+/// Anche qui la conversione e' esatta **perche' 64 e' rappresentabile in
+/// entrambe le forme**, non perche' `u32 as usize` sia sicuro in generale —
+/// su un target a 16 bit non lo sarebbe. Vale per questo valore, e chi lo
+/// cambia deve riguardarlo.
+pub const DEFAULT_SPILL_PARTITIONS: u32 = 64;
+
 /// Limiti alla complessità del piano, applicati durante il parsing (errori-e-limiti.md).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -218,9 +288,9 @@ impl Default for Limits {
         Self {
             rows: RowLimits::default(),
             plan: PlanLimits::default(),
-            max_governed_memory_bytes: 512 * 1024 * 1024,
-            max_temp_bytes: 8 * 1024 * 1024 * 1024,
-            spill_partitions: 64,
+            max_governed_memory_bytes: DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
+            max_temp_bytes: DEFAULT_MAX_TEMP_BYTES,
+            spill_partitions: DEFAULT_SPILL_PARTITIONS,
             max_parallelism: 0, // 0 = numero di core logici
             max_wkb_cell_bytes: 64 * 1024 * 1024,
             max_payload_bytes: 16 * 1024 * 1024 * 1024,
@@ -326,7 +396,37 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
 
 #[cfg(test)]
 mod tests {
-    use super::{expansion_exceeded, Limits, PlanLimits};
+    use super::{
+        expansion_exceeded, Limits, PlanLimits, DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
+        DEFAULT_MAX_TEMP_BYTES, DEFAULT_SPILL_PARTITIONS,
+    };
+
+    #[test]
+    fn il_default_governato_viene_dall_autorita_ed_e_quello_pubblicato() {
+        // Il valore e' PUBBLICO: `Plan Budget 1.0` (`PLAN-013`) obbliga a
+        // pubblicarlo, perche' senza di esso chi invia un piano non puo'
+        // verificare prima di inviare che il tetto del dominio sia `>=` al
+        // budget effettivo. Cambiarlo e' una modifica osservabile, non un
+        // dettaglio, e questo test lo dice a chi ci prova.
+        assert_eq!(
+            DEFAULT_MAX_GOVERNED_MEMORY_BYTES, 536_870_912,
+            "512 MiB, ed e' il numero che la documentazione pubblica"
+        );
+        // Il default della struttura viene DA li', non da un letterale
+        // uguale per coincidenza.
+        assert_eq!(
+            Limits::default().max_governed_memory_bytes,
+            DEFAULT_MAX_GOVERNED_MEMORY_BYTES
+        );
+        // Gli altri due default del gruppo memoria sono pubblicati nella
+        // stessa tabella di `piano-v5.md`, e valgono le stesse due cose:
+        // il numero e' quello documentato, e la struttura lo prende da qui.
+        assert_eq!(DEFAULT_MAX_TEMP_BYTES, 8_589_934_592, "8 GiB");
+        assert_eq!(DEFAULT_SPILL_PARTITIONS, 64);
+        let predefiniti = Limits::default();
+        assert_eq!(predefiniti.max_temp_bytes, DEFAULT_MAX_TEMP_BYTES);
+        assert_eq!(predefiniti.spill_partitions, DEFAULT_SPILL_PARTITIONS);
+    }
 
     #[test]
     fn un_limite_di_piano_a_zero_e_rifiutato() {
