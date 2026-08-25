@@ -54,6 +54,39 @@ Il nome della seconda dichiara ciò che manca. `resource_pressure` sarebbe
 stato più comodo e più vago: comprenderebbe CPU, disco o descrittori, e
 soprattutto tacerebbe il punto — che l'attribuzione non c'è.
 
+### Due categorie sono estensioni locali, non canone
+
+**La regola.** Dei venti valori, **diciotto** vengono dalla fonte congelata
+(contratti trasversali v2.0-rc10, R9.5: sottoinsieme ammesso, valori propri
+vietati). **Due no**: `isolation_unavailable` e
+`unattributed_memory_pressure` sono estensioni locali introdotte
+dall'isolamento della Fase 4. Vanno chiamate così ovunque, codice compreso.
+
+**Il perimetro.** Solo l'asse **categoria**. Gli altri tre — fase, effetto
+remoto, disposizione di retry — restano sottoinsiemi stretti del canone, e le
+sei varianti nuove di `PlenoraError` non ne introducono valori propri: usano
+`prepare`, `write`, `commit`, `none` e `never`, tutti canonici.
+
+**Il pericolo che questo dichiara.** Un componente gemello che riceve un
+envelope con una di queste due categorie **non la riconosce**. Presentarle
+come canoniche direbbe a chi le legge che sono interoperabili, e non lo sono:
+chi integra deve sapere che qui c'è una divergenza, non scoprirla quando il
+suo `match` cade nel ramo predefinito. L'exit code non aiuta a distinguerle —
+entrambe proiettano su `5`, come diverse categorie canoniche.
+
+**Perché non si è riusato un valore canonico.** Perché nessuno dice queste
+condizioni senza affermare qualcosa di non dimostrato: `resource_limit`
+attribuirebbe al chiamante un superamento del proprio budget quando
+l'attribuzione è precisamente ciò che manca, `internal` dichiarerebbe un
+difetto nostro, `invalid_plan` un difetto del piano — che invece, su un'altra
+macchina, gira.
+
+**La condizione di rientro.** Quando sarà adottata la linea normativa nuova,
+le due andranno **tradotte** in valori canonici se ne esisteranno di
+equivalenti, oppure **ratificate** come aggiunte al canone. Fino ad allora
+restano locali e dichiarate. Adottare quella linea è un lavoro separato: non è
+anticipato da questa deviazione né sostituito da essa.
+
 **Fase** del ciclo in cui l'errore è nato (10 valori canonici): `validate`,
 `connect`, `probe`, `prepare`, `read`, `write`, `finalize`, `commit`,
 `rollback`, `cleanup`. Non esiste una fase «execute»: l'esecuzione dei nodi
@@ -614,11 +647,18 @@ antenati — e solo dentro l'errore. Non limita quanti cgroup possono esistere,
 non impedisce di leggerli, e non tocca i quattro segnali del dominio (`Ol`,
 `Kl`, `Kh`, `G`), che non sono per-livello.
 
-**Il pericolo che copre.** Un errore la cui dimensione dipende dall'ambiente:
-`PlenoraError` è la parte `Err` di ogni `Result` del workspace, e una
-gerarchia profonda lo farebbe crescere per tutti, anche sul cammino felice.
-Senza il limite, la profondità del cgroup di chi esegue — che non controlliamo
-— diventerebbe un parametro di consumo di memoria del processo.
+**Il pericolo che copre, e quello che NON copre.** Sono due protezioni
+distinte e vanno tenute separate:
+
+- l'evidenza viaggia in un `Box`, e **quello** impedisce che la dimensione di
+  `EvidenzaDiLimite` allarghi `PlenoraError` e con esso ogni `Result` del
+  workspace, compresi i milioni che tornano `Ok`. Con il `Box` una gerarchia
+  profonda non fa più crescere il cammino felice, e il limite non serve a
+  quello;
+- il limite di otto impedisce che la **gerarchia dell'host governi** ciò che
+  accade sul percorso d'errore: quanto si alloca per costruire l'evidenza,
+  quanta ne viaggia, e quanto lungo diventa il messaggio formattato. Senza,
+  una profondità che non controlliamo deciderebbe quelle tre quantità.
 
 **Che cosa questo perde, e come lo dice.** Se gli antenati sono più di otto,
 l'evidenza ne porta otto e dichiara gli altri in `antenati_oltre_capacita`. La
@@ -628,12 +668,17 @@ oltre la capacità. Un troncamento silenzioso direbbe che la gerarchia finisce
 dove invece finisce la nostra vista, e su `Oa` sarebbe grave: il segnale serve
 proprio a dire *quale* livello ha esaurito il proprio tetto.
 
-**La condizione di rientro.** Alzare il numero non rompe nessuno — i campi
-sono privati e si costruisce con `PressioneDegliAntenati::nuova`, quindi
-nessuno scrive l'array a mano. Serve una gerarchia reale più profonda di otto
-in cui `Oa` sia risultato diagnosticamente insufficiente. Otto **non** è una
-misura: i prototipi non hanno rilevato la profondità delle gerarchie ospiti, e
-il campo del troncamento esiste anche perché quella scelta resti rivedibile.
+**La condizione di rientro.** Alzare il numero non rompe chi costruisce, e
+non per convenzione ma per firma: `PressioneDegliAntenati::nuova` accetta una
+**slice** e copia nell'array privato, quindi la capacità non compare in nessun
+tipo pubblico. Una prima stesura passava l'array, e lì la promessa era falsa —
+`MAX_ANTENATI_OSSERVATI` era nella firma, e cambiarlo sarebbe stata una
+rottura.
+
+Serve una gerarchia reale più profonda di otto in cui `Oa` sia risultato
+diagnosticamente insufficiente. Otto **non** è una misura: i prototipi non
+hanno rilevato la profondità delle gerarchie ospiti, e il campo del
+troncamento esiste anche perché quella scelta resti rivedibile.
 
 ### Fuzzing su toolchain nightly
 
