@@ -489,8 +489,10 @@ pub(crate) fn contract_error_missing(name: &str) -> PlenoraError {
 /// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
 /// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
 /// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
-/// sonda lo legge per prima. Per i piani DAG `PlanV5::parse` ripete la
-/// verifica: e' idempotente e copre anche chi non passa dalla CLI.
+/// sonda lo legge per prima. Per i piani DAG la ripetono i parser di formato
+/// — `PlanV5::parse` e `PlanV6::parse`, ciascuno per il proprio — e la
+/// ripete il dispatch prima di leggere la versione: e' idempotente, e copre
+/// anche chi non passa dalla CLI.
 pub(crate) fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;

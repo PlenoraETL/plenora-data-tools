@@ -382,7 +382,11 @@ impl ValidatedGraph {
         &self.input_contract_fingerprints
     }
 
-    /// Versione del formato piano (4).
+    /// Versione del formato **canonico** di questo grafo: `5` o `6`.
+    ///
+    /// Per un piano v4 vale `5`: la v4 e' migrata nel canonico v5 e ne
+    /// condivide l'identita'. Diceva «(4)» — un numero che nessun grafo
+    /// validato porta.
     #[must_use]
     pub const fn plan_format_version(&self) -> u16 {
         self.plan_format_version
@@ -448,7 +452,7 @@ impl ValidatedGraph {
     }
 }
 
-/// Fase 1 `validate` del DAG v5 (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
+/// Fase 1 `validate` del DAG (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
 /// Un piano `schema_version: 4` entra da qui attraverso la migrazione
 /// esplicita (errori-e-limiti.md#memoria-governata). Le versioni DAG restano

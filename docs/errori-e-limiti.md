@@ -500,8 +500,9 @@ deserializzato.
 
 **Regola:** l'allocazione guidata dal contenuto è limitata dal solo tetto sui
 byte del documento, non dai tetti strutturali.
-**Ambito:** `PlanV5::parse`, ogni ingresso di piano v5 (CLI, migrazione v4,
-target fuzz `plan_v5_parse`).
+**Ambito:** `PlanV5::parse` e `PlanV6::parse`, quindi ogni ingresso di piano
+DAG — v5, v6 e v4 attraverso la migrazione — sia dalla CLI sia dal target
+fuzz `plan_v5_parse`.
 **Hazard:** un chiamante che abbassa `max_plan_nodes` a dieci ma lascia
 `max_plan_json_bytes` al default accetta comunque di allocare fino a 16 MiB di
 albero JSON prima del rifiuto. Il consumo resta limitato — il tetto sui byte

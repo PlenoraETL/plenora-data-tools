@@ -194,8 +194,31 @@ fn un_tetto_oltre_u64_e_rifiutato() {
         testo.contains(&oltre),
         "la sostituzione deve aver inserito il valore: {testo}"
     );
-    let esito = PlanV6::parse_default(&testo);
-    assert!(esito.is_err(), "un tetto oltre u64 va rifiutato: {esito:?}");
+    let errore = PlanV6::parse_default(&testo).expect_err("un tetto oltre u64 va rifiutato");
+    // `is_err()` da solo non basta: sarebbe soddisfatto da un rifiuto
+    // avvenuto altrove — il tetto sui byte, una chiave duplicata — e il
+    // commento qui sopra afferma una categoria precisa. Verificarla e' cio'
+    // che lega il test a cio' che dice.
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::DataMapping,
+        "un numero che non entra nel tipo e' un difetto di mapping, non un piano invalido: {errore}"
+    );
+    // La fase e' `Write`, non `Validate`, e non e' un difetto di questa PR:
+    // e' l'approssimazione dichiarata per un `DataMapping` NON taggato — il
+    // lato con possibile effetto, scelto conservativamente quando la variante
+    // non distingue il momento. Il parse del piano non tagga la fase ai
+    // confini, quindi qui la derivazione resta quella.
+    //
+    // Il test la fissa per non lasciarla cambiare in silenzio; raffinarla
+    // sarebbe un tagging al confine del parser, fuori dal perimetro della v6.
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
+    // E il valore NON e' stato saturato: un tetto silenziosamente ridotto a
+    // `u64::MAX` sarebbe peggio di un rifiuto.
+    assert!(
+        !errore.to_string().contains(&u64::MAX.to_string()),
+        "nessuna saturazione: {errore}"
+    );
 }
 
 #[test]

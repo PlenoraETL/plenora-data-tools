@@ -50,19 +50,21 @@ L'ingresso è fail-closed, e l'ordine è parte del contratto:
 3. lettura della `schema_version` — dopo il punto 2, altrimenti la scelta del
    percorso dipenderebbe da quale duplicato ha vinto. Questa lettura decide il
    percorso una volta sola;
-4. **da qui l'ordine dipende dalla versione**, e i tre percorsi non si
-   incrociano:
+4. **scelta del parser**, e — per la sola v4 — preparazione del testo. È qui
+   che i tre percorsi si separano, e non si incrociano più:
 
-   | versione | che cosa succede |
-   |---|---|
-   | **4** | migrazione al testo canonico v5, **ricontrollo del tetto** sul testo migrato, poi il parse della v5 |
-   | **5** | il parse della v5, direttamente |
-   | **6** | il parse della v6, direttamente. Nessuna migrazione: il testo non si tocca |
+   | versione | testo | parser scelto |
+   |---|---|---|
+   | **4** | migrato al canonico v5, con **ricontrollo del tetto** sul testo migrato | quello della v5 |
+   | **5** | invariato | quello della v5 |
+   | **6** | invariato: nessuna migrazione, il testo non si tocca | quello della v6 |
 
-5. parse, validazione strutturale, risoluzione degli alias verso gli id
-   canonici. La struttura è **condivisa** fra v5 e v6; il parser di ciascun
-   formato verifica di nuovo la propria versione, ed è l'invariante che
-   impedisce a un parser di accettare il documento dell'altro.
+5. **esecuzione del parser scelto**: deserializzazione, validazione
+   strutturale, risoluzione degli alias verso gli id canonici. La struttura è
+   **condivisa** fra v5 e v6 — una sola validazione, non due libere di
+   divergere — mentre la versione la verifica ciascun parser per conto
+   proprio, ed è l'invariante che impedisce a un parser di accettare il
+   documento dell'altro.
 
 I limiti del piano (`PlanLimits`) si applicano in due momenti diversi, e la
 differenza conta:
