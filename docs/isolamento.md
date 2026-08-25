@@ -492,7 +492,7 @@ Direzione supervisore → worker:
 
 | messaggio | quando | contenuto |
 |---|---|---|
-| `Saluto` | primo | versione del protocollo, identità dell'artefatto, identità del resolver, limiti del protocollo |
+| `Saluto` | primo | versione del protocollo, identità dell'artefatto, identità del resolver, limiti del protocollo, **`commit_token`** |
 | `Incarico` | dopo l'accordo | piano validato, descrizione degli input, percorso dell'artefatto temporaneo |
 | `Annulla` | in qualunque momento | motivo |
 
@@ -503,6 +503,13 @@ Direzione worker → supervisore:
 | `Risposta` | primo | versione, identità dell'artefatto, identità del resolver, capability del backend |
 | `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch); **mai** dati |
 | `Esito` | ultimo | successo con sigillo, oppure errore tipizzato con i quattro assi |
+
+Il `commit_token` sta nel `Saluto` e **solo lì**. Non nell'`Incarico`, che
+arriva dopo l'accordo: il worker deve conoscerlo prima di scrivere il primo
+byte, e il passo 8-bis della verifica confronta l'artefatto con «quello
+negoziato nell'handshake». Una seconda collocazione renderebbe la frase
+ambigua, ed è il genere di ambiguità che si scopre quando le due copie
+divergono.
 
 Il `Progresso` è facoltativo e il supervisore non ne dipende: un worker che
 non ne manda nessuno è indistinguibile da uno lento, e il timeout è la sola
@@ -775,7 +782,7 @@ promemoria. Eccoli.
 
 | | regola |
 |---|---|
-| valore | **32 byte** di entropia |
+| valore | un **valore opaco di 32 byte**: il tipo non lo interpreta e non gli attribuisce struttura |
 | forma wire | **esattamente 64 caratteri esadecimali minuscoli**, `[0-9a-f]{64}` — nessun prefisso, nessun separatore, nessuna forma alternativa. Due token uguali si scrivono in un modo solo, e il confronto è un confronto di stringhe |
 | lunghezza | fissa, quindi non c'è un massimo da far rispettare: una lunghezza diversa **è** una forma invalida |
 | chiave nel footer | `plenora.commit.token`, nel namespace `plenora.` che il progetto già usa per i propri metadati |
@@ -787,12 +794,24 @@ La lunghezza fissa non è un dettaglio estetico: rende il campo del footer di
 dimensione nota, quindi il limite sul footer non dipende da che cosa il
 chiamante ha passato.
 
-**Che cosa il costruttore garantisce, e che cosa no.** Garantisce la validità
-*formale*: forma canonica, lunghezza esatta, alfabeto. Non garantisce
-l'**unicità**, che resta la precondizione esterna dichiarata sopra — 32 byte
-casuali la rendono improbabile a collidere, ma il chiamante che riusa
-deliberatamente lo stesso token ottiene un token formalmente valido e una
+**Che cosa il costruttore garantisce, e che cosa no.** Vede sessantaquattro
+caratteri, quindi può garantire **forma, lunghezza e alfabeto** — e nient'altro.
+
+| | |
+|---|---|
+| garantito dal tipo | la stringa è canonica: `[0-9a-f]{64}`, una sola forma per un solo valore |
+| **non** garantito | che i 32 byte siano **casuali**. Un token di soli zeri è formalmente valido, e non c'è modo di distinguerlo guardandolo |
+| **non** garantito | l'**unicità**, che resta la precondizione esterna dichiarata sopra |
+
+La generazione con un generatore **crittograficamente sicuro** è quindi una
+**raccomandazione al chiamante**, non una proprietà del tipo: rende la
+collisione accidentale trascurabile, e non impedisce a nessuno di riusare
+deliberatamente lo stesso token — nel qual caso ottiene un token valido e una
 risoluzione che non distingue.
+
+Dire «32 byte di entropia», come faceva la stesura precedente, attribuiva al
+costruttore una garanzia che non può dare: l'entropia non è una proprietà
+osservabile di una stringa.
 
 L'ultima riga ha una conseguenza concreta sulla diagnostica: quando un
 artefatto porta un token diverso da quello atteso, l'errore dice *che* sono
@@ -1050,8 +1069,71 @@ altrove. Per la regola secondo cui **ogni difetto è una classe**
 ([`AGENTS.md`](../AGENTS.md)), la correzione è nell'helper condiviso e vale
 per tutti i chiamanti.
 
+### I limiti, con autorità e valori
+
+I tetti nuovi vivono dove vivono gli altri — la struttura `IpcLimits`, che è
+già il registro unico dei limiti del trasporto — e vanno registrati in
+[`errori-e-limiti.md`](errori-e-limiti.md) come tutti gli altri.
+
+Il tetto esistente sul footer, 16 MiB, **non basta**: limita i byte, non il
+numero di elementi, e centomila coppie minuscole stanno comodamente dentro 16
+MiB producendo centomila allocazioni nella mappa.
+
+| limite | valore | da dove viene |
+|---|---|---|
+| coppie per collezione | **256** | l'uso legittimo più denso è una colonna geometrica, con ~10 chiavi `plenora.geometry.*` più le estensioni Arrow. Le chiavi di geometria sono **per campo**, non di schema, quindi il conteggio non cresce col numero di colonne |
+| byte della chiave | **128** | la chiave più lunga che il progetto scrive è `plenora.geometry.crs_definition_format`, 38 byte. Tre volte tanto lascia spazio senza aprire la porta |
+| byte del valore | **`MAX_CRS_DEFINITION_BYTES`**, 64 KiB | è il valore legittimo più grande che il progetto dichiari: una definizione di CRS. Derivarlo invece di sceglierne uno nuovo evita che i due si separino |
+
+I tre si applicano **prima di qualunque allocazione proporzionale al
+conteggio**, che è il punto: il conteggio si legge dal vettore flatbuffer e si
+confronta col tetto senza costruire niente.
+
+| domanda | politica |
+|---|---|
+| UTF-8 | chiave e valore devono essere **UTF-8 valido**, verificato da noi. Non si delega a un accessore che potrebbe non controllarlo |
+| chiave vuota | **rifiutata**: non ha significato, e più chiavi vuote sarebbero duplicati per costruzione |
+| valore vuoto | **accettato**. Rifiutarlo romperebbe file legittimi che rappresentano un campo assente con la stringa vuota; per la chiave del token la forma canonica lo esclude comunque |
+| chiave sconosciuta | **accettata e ignorata**. Il confine ostile valida la **forma**, non il vocabolario: rifiutare le chiavi altrui romperebbe l'interoperabilità con qualunque produttore Arrow che aggiunga le proprie |
+| chiave del token duplicata | **rifiutata**, come ogni duplicato: è la ragione per cui il duplicato va rifiutato e non risolto |
+
+### Chi controlla che cosa
+
+Dire «la correzione sta nell'helper» lascerebbe senza proprietario il
+controllo dei duplicati, che nessun singolo elemento può fare:
+
+| funzione | responsabilità |
+|---|---|
+| `fb_key_value` | valida **una** coppia — presenza, UTF-8, lunghezze — e **restituisce** chiave e valore invece di scartarli |
+| `fb_custom_metadata` | vede l'**intera collezione**: applica il tetto sul conteggio prima del ciclo, raccoglie ciò che la prima le rende, e rifiuta i duplicati |
+
+I duplicati appartengono alla seconda perché sono una proprietà
+dell'insieme, non di un elemento.
+
+### I test non sono sette
+
+I tre tetti vanno superati **separatamente** — un test che li supera insieme
+non dimostra quale dei tre abbia parato — e alle sette voci della prima
+stesura se ne aggiungono altre:
+
+| | caso |
+|---|---|
+| 1-3 | ciascuno dei tre tetti superato **da solo** |
+| 4 | chiave assente (offset zero) |
+| 5 | valore assente (offset zero) |
+| 6 | chiave vuota |
+| 7 | valore vuoto — **accettato** |
+| 8 | UTF-8 invalido nella chiave |
+| 9 | UTF-8 invalido nel valore |
+| 10 | duplicati con lo stesso valore |
+| 11 | duplicati con valori divergenti |
+| 12 | chiavi sconosciute — **accettate** |
+| 13 | token assente |
+| 14 | token canonico |
+
 Il requisito è `F4-22` ([`stato-e-roadmap.md`](stato-e-roadmap.md)), e va
-chiuso **prima** che qualcuno scriva un token in un footer.
+chiuso **prima** che qualcuno scriva un token in un footer — in una PR sua,
+`PR-0`, perché non è lavoro di isolamento.
 
 ### Le tre cose che l'oracolo deve verificare
 
@@ -1717,6 +1799,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 
 | PR | contenuto | cambia semantica | verificabile con |
 |---|---|---|---|
+| **PR-0** | **hardening dei custom metadata IPC** (`F4-22`): validazione del campo 4 del footer, presenza obbligatoria di chiave e valore, i tre tetti, rifiuto dei duplicati, UTF-8 verificato — nell'helper condiviso, quindi anche per campi, schema e messaggi | **sì**, fail-closed: cambia quali input IPC sono accettati | i quattordici casi della §7-quater, e la suite esistente che deve restare verde |
 | **PR-1** | varianti nuove di `PlenoraError`: `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration`, **`IsolationUnavailable`** (§9), **pressione di memoria non attribuita** (§10.0-bis). Più il tipo reso da `risolvi_commit` | **sì** (tipo pubblico) | mapping variante→categoria esaustivo, exit code invariati per le esistenti |
 | **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
 | **PR-3** | tipi dell'esito e della classificazione: `EsitoWorker`, `EvidenzaDiLimite`, la matrice §10 come `match` esaustivo, la precedenza §10.3 | no | test di tabella sulla matrice e sulle corse |
@@ -1730,8 +1813,26 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 
-Cinque PR cambiano semantica — `PR-1`, `PR-2`, `PR-5`, `PR-10` e `PR-12` — e
-nessuna delle cinque è nascosta in mezzo alle altre. `PR-10` lo è diventata
+### `PR-0` non è lavoro di isolamento, ed è la ragione per cui viene prima
+
+È l'unica PR di questo elenco che sarebbe necessaria **anche se la fase 4 non
+esistesse**. Il campo 4 del footer è invalidato da sempre; nessuno ci passava,
+quindi nessuno lo vedeva. Adottare il footer per il token non ha creato il
+difetto: l'ha scoperto.
+
+Tenerla dentro `PR-5` — dove il token viene scritto — significherebbe due
+cose sbagliate insieme: una correzione di sicurezza che aspetta l'isolamento
+per essere fatta, e una PR che rinforza un confine *mentre* comincia a
+dipenderne. Separata, può essere revisionata, misurata e rilasciata per conto
+suo.
+
+**Cambia semantica**, e in senso fail-closed: input IPC che oggi passano
+domani vengono rifiutati. Va quindi registrata in
+[`errori-e-limiti.md`](errori-e-limiti.md) come le altre restrizioni del
+confine ostile, con regola, perimetro, pericolo e condizione di rientro.
+
+Sei PR cambiano semantica — `PR-0`, `PR-1`, `PR-2`, `PR-5`, `PR-10` e
+`PR-12` — e nessuna delle sei è nascosta in mezzo alle altre. `PR-10` lo è diventata
 portando `risolvi_commit`: è una funzione pubblica nuova, non un dettaglio
 della pubblicazione. `PR-5` lo è diventata scrivendo
 il token nell'artefatto: la stesura precedente la marcava «nessun cambiamento

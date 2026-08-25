@@ -326,13 +326,17 @@ Una stesura precedente sosteneva che un contenitore IPC non avesse posto per
 byte propri fuori dallo schema, e da quella premessa falsa faceva discendere
 una proiezione semantica applicata a tre punti. Non serve.
 
-**F4-21 — `CommitToken` è un tipo chiuso, con una forma concreta.** 32 byte
-resi da **esattamente 64 caratteri esadecimali minuscoli**, chiave
-`plenora.commit.token` nel footer, validazione prima dello spawn, costruzione
-solo tramite un costruttore che valida, e **mai il valore grezzo negli
-errori** — coerente con la regola per cui gli errori non trasportano dati. Il
-costruttore garantisce la validità formale; l'unicità resta una precondizione
-esterna.
+**F4-21 — `CommitToken` è un tipo chiuso, con una forma concreta.** Un valore
+opaco di 32 byte reso da **esattamente 64 caratteri esadecimali minuscoli**,
+chiave `plenora.commit.token` nel footer, validazione prima dello spawn,
+costruzione solo tramite un costruttore che valida, e **mai il valore grezzo
+negli errori**.
+
+Il costruttore garantisce **forma, lunghezza e alfabeto**, che è tutto ciò che
+sessantaquattro caratteri gli permettono di vedere. Non garantisce la
+**casualità** — un token di soli zeri è formalmente valido — né l'**unicità**.
+La generazione con un generatore crittograficamente sicuro è una
+raccomandazione al chiamante, non una proprietà del tipo.
 
 **F4-22 — I custom metadata entrano nel confine ostile.** Il validatore
 percorre oggi i campi 1, 2 e 3 del footer e **non il campo 4**, che è dove
@@ -345,14 +349,27 @@ salterebbe. Serve, prima che qualcuno scriva un token in un footer:
 |---|---|
 | **1** | validazione grezza di `Footer.custom_metadata` **prima** di costruire il `FileReader` |
 | **2** | chiave e valore **obbligatori**: oggi `fb_key_value` salta l'offset zero invece di rifiutarlo |
-| **3** | tetti su numero di voci, lunghezza della chiave e lunghezza del valore, applicati **prima** delle allocazioni |
+| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **`MAX_CRS_DEFINITION_BYTES`** (64 KiB) di valore — vivono in `IpcLimits`, il registro unico dei limiti del trasporto, e sono registrati in [`errori-e-limiti.md`](errori-e-limiti.md) |
+| **3-bis** | UTF-8 verificato da noi; chiave vuota rifiutata; valore vuoto accettato; chiavi sconosciute accettate e ignorate — il confine valida la **forma**, non il vocabolario |
 | **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima», che per un token autoritativo sceglierebbe un vincitore arbitrario |
 | **5** | lettura autoritativa del token dal **footer validato**, non dalla `HashMap` di Arrow |
-| **6** | test per chiave assente, valore assente, duplicati uguali, duplicati divergenti, tetti superati, token assente e token canonico |
+| **6** | quattordici test, non sette: i **tre tetti superati separatamente**, chiave e valore assenti, chiave e valore vuoti, UTF-8 invalido in entrambi, duplicati uguali e divergenti, chiavi sconosciute, token assente e token canonico |
 
 **È una classe, non un caso.** `fb_key_value` è condiviso da tre chiamanti —
-campi, schema, messaggi — quindi la correzione sta nell'helper e vale per
-tutti, non solo per il footer.
+campi, schema, messaggi — quindi la correzione vale per tutti, non solo per il
+footer. Ma «sta nell'helper» sarebbe impreciso e lascerebbe i duplicati senza
+proprietario: `fb_key_value` valida **una** coppia e la **restituisce**;
+`fb_custom_metadata`, che vede l'intera collezione, applica il tetto sul
+conteggio e rifiuta i duplicati — che sono una proprietà dell'insieme, non di
+un elemento.
+
+**Va chiuso in una PR propria, prima della fase 4.** È l'unica correzione di
+questo blocco che sarebbe necessaria anche se la fase 4 non esistesse: il
+campo 4 è invalidato da sempre, e adottare il footer per il token non ha
+creato il difetto ma l'ha scoperto. Cambia semantica in senso fail-closed —
+input che oggi passano domani sono rifiutati — quindi va registrata in
+[`errori-e-limiti.md`](errori-e-limiti.md) con regola, perimetro, pericolo e
+condizione di rientro.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
