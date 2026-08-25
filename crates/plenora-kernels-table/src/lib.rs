@@ -66,9 +66,12 @@ impl Default for Limits {
             max_split_columns: limiti_interni::MAX_SPLIT_COLUMNS,
             // Stessa autorita' di `plenora_core::Limits::default()`: i due
             // default non possono piu' divergere.
-            max_governed_memory_bytes: plenora_core::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE,
-            max_temp_bytes: plenora_core::DEFAULT_MAX_TEMP_BYTES,
-            spill_partitions: plenora_core::DEFAULT_SPILL_PARTITIONS as usize,
+            max_governed_memory_bytes:
+                plenora_core::limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE,
+            max_temp_bytes: plenora_core::limits::DEFAULT_MAX_TEMP_BYTES,
+            // 64 sta in qualunque `usize` che questo progetto supporti; la
+            // conversione e' esatta per il VALORE, non per i tipi.
+            spill_partitions: plenora_core::limits::DEFAULT_SPILL_PARTITIONS as usize,
         }
     }
 }
@@ -1679,7 +1682,10 @@ mod tests {
         let nostri = Limits::default();
         let del_piano = plenora_core::limits::Limits::default();
         assert_eq!(nostri.max_temp_bytes, del_piano.max_temp_bytes);
-        assert_eq!(nostri.max_temp_bytes, plenora_core::DEFAULT_MAX_TEMP_BYTES);
+        assert_eq!(
+            nostri.max_temp_bytes,
+            plenora_core::limits::DEFAULT_MAX_TEMP_BYTES
+        );
         // Il confronto si fa nel tipo LARGO: restringere `usize` a `u32` per
         // confrontarli introdurrebbe qui la stessa troncatura che il codice
         // di produzione evita.
@@ -1691,7 +1697,7 @@ mod tests {
         );
         assert_eq!(
             nostre_partizioni,
-            u64::from(plenora_core::DEFAULT_SPILL_PARTITIONS)
+            u64::from(plenora_core::limits::DEFAULT_SPILL_PARTITIONS)
         );
     }
 

@@ -60,31 +60,27 @@ pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_B
 ///
 /// # Perche' il letterale sta QUI e non nella forma `u64`
 ///
-/// La derivazione va nel verso che non puo' perdere nulla. Partire dal `u64`
-/// e convertire con `as usize` troncherebbe su un target a 32 bit, e un
-/// ripiego a [`usize::MAX`] o a qualunque altro valore sarebbe peggio del
-/// troncamento: quel target applicherebbe un budget **diverso** da quello
-/// pubblicato, cioe' proprio la divergenza che questa costante chiude.
+/// Partire dal `u64` e convertire con `as usize` troncherebbe su un target a
+/// 32 bit, e ripiegare su [`usize::MAX`] o su qualunque altro valore sarebbe
+/// peggio del troncamento: quel target applicherebbe un budget **diverso** da
+/// quello pubblicato, cioe' proprio la divergenza che questa costante chiude.
 ///
-/// Nel verso scelto la conversione e' un allargamento e non ha casi
-/// degeneri, quindi non serve nessun presidio: `usize as u64` puo' perdere
-/// qualcosa solo dove `usize` supera i 64 bit, e li' questo valore ci sta
-/// comunque.
+/// # Perche' la conversione e' esatta
+///
+/// **Perche' questo valore e' rappresentabile in entrambe le forme**, non
+/// perche' `usize as u64` sia un allargamento in generale: non lo e', e su un
+/// target con `usize` piu' largo di 64 bit perderebbe. E' una proprieta' del
+/// numero, e vale finche' il numero resta questo — non una garanzia sui tipi
+/// che si possa riusare altrove senza guardare il valore.
+///
+/// Chi lo cambia deve rifare questa verifica, non ereditarla.
 ///
 /// # Chi esclude i target che non lo rappresentano
 ///
 /// Il compilatore, da solo. Il valore entra in un `usize` a 32 bit —
 /// 536 870 912 sta sotto 4 294 967 295 — quindi restano fuori solo i target
 /// piu' stretti, dove **il letterale stesso** va in overflow in valutazione
-/// costante, che e' un errore di compilazione. L'esclusione e' esplicita e
-/// non ha bisogno che la scriva io.
-///
-/// Una prima stesura aggiungeva qui un controllo di compilazione che
-/// confrontava le due forme. Era una **tautologia**: la costante `u64` e'
-/// definita come la conversione di questa, quindi il confronto era vero per
-/// costruzione e non poteva fallire. La sua documentazione sosteneva il
-/// contrario, ed e' esattamente il tipo di presidio che sembra verificare e
-/// non verifica.
+/// costante, che e' un errore di compilazione.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 
 /// Quota di spill su disco applicata quando il piano non la dichiara:
@@ -99,8 +95,12 @@ pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// Partizioni di spill applicate quando il piano non le dichiara: **64**.
 ///
 /// Stessa classe delle due precedenti. Vive in `u32` perche' e' cosi' che il
-/// piano la dichiara; i kernel la tengono in `usize` e la conversione al
-/// confine e' gia' totale e verificata (`legacy_limits_override`).
+/// piano la dichiara; i kernel la tengono in `usize`.
+///
+/// Anche qui la conversione e' esatta **perche' 64 e' rappresentabile in
+/// entrambe le forme**, non perche' `u32 as usize` sia sicuro in generale —
+/// su un target a 16 bit non lo sarebbe. Vale per questo valore, e chi lo
+/// cambia deve riguardarlo.
 pub const DEFAULT_SPILL_PARTITIONS: u32 = 64;
 
 /// Limiti alla complessità del piano, applicati durante il parsing (errori-e-limiti.md).
@@ -398,7 +398,7 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
 mod tests {
     use super::{
         expansion_exceeded, Limits, PlanLimits, DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
-        DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE, DEFAULT_MAX_TEMP_BYTES, DEFAULT_SPILL_PARTITIONS,
+        DEFAULT_MAX_TEMP_BYTES, DEFAULT_SPILL_PARTITIONS,
     };
 
     #[test]
@@ -426,18 +426,6 @@ mod tests {
         let predefiniti = Limits::default();
         assert_eq!(predefiniti.max_temp_bytes, DEFAULT_MAX_TEMP_BYTES);
         assert_eq!(predefiniti.spill_partitions, DEFAULT_SPILL_PARTITIONS);
-    }
-
-    #[test]
-    fn la_conversione_a_usize_e_esatta() {
-        // Nessuna saturazione e nessun ripiego: se `usize` non
-        // rappresentasse il valore, `_CONVERSIONE_ESATTA` non compilerebbe e
-        // questo test non esisterebbe. Qui si verifica che, dove compila, le
-        // due forme dicano lo stesso numero.
-        assert_eq!(
-            DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE as u64, DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
-            "la conversione non perde nulla"
-        );
     }
 
     #[test]
