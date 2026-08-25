@@ -23,7 +23,23 @@ use plenora_kernels_geo::topology::TopologyError;
 
 use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS};
 
+/// # Compatibilita' della superficie pubblica
+///
+/// Questo enum e' `pub` e riesportato da `plenora-engine`. `PR-0` gli aggiunge
+/// cinque varianti, il che **rompe** ogni `match` esaustivo scritto fuori dal
+/// workspace: la rottura e' accettata formalmente, ed e' il prezzo di
+/// distinguere le nuove diagnosi invece di comprimerle in una variante
+/// generica — i tre tetti sui custom metadata devono essere superabili
+/// separatamente, altrimenti un test non puo' dire quale abbia parato.
+///
+/// Da qui in avanti l'enum e' `#[non_exhaustive]`, cosi' e' l'ultima volta:
+/// un consumatore esterno deve prevedere un ramo generico, e le varianti
+/// future smettono di essere una rottura. Dentro il workspace non cambia
+/// nulla — nessun `match` era esaustivo, verificato compilando — e la
+/// disciplina dei mapping esaustivi resta dove serve, cioe' sulla
+/// corrispondenza variante -> categoria.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ArrowTransportError {
     #[error("errore I/O trasporto Arrow: {0}")]
     Io(#[from] std::io::Error),

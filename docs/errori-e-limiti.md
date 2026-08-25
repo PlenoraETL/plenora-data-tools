@@ -325,13 +325,28 @@ dizionario. Tutti e tre sono letti da `arrow-ipc` con `unwrap`, e tutti e tre
 erano trattati dal confine come opzionali — cioè saltati se assenti. Il writer
 li emette sempre, quindi pretenderli non rifiuta alcun file legittimo.
 
-**Che cosa resta aperto.** `convert.rs` ha una ventina di `panic!` e
-`unimplemented!` sui **codici di tipo** — un `List` senza figli, un'unità di
-durata non riconosciuta — che il confine non copre ancora. Chiuderli richiede
-una tabella tipo → arità dei figli: sbagliata, rifiuterebbe file legittimi.
-Fino ad allora la barriera anti-panico resta necessaria, e **non è più
-coperta da un artefatto di fuzz**: l'unico che la esercitava viene ora
-rifiutato prima, in modo strutturato. Serve un artefatto nuovo.
+**Che cosa resta aperto, per intero.** Una stesura precedente lo riduceva a
+«`Field.children`», che è solo la voce più visibile. La superficie non ancora
+validata è questa:
+
+| | che cosa manca |
+|---|---|
+| coerenza discriminante/payload | il `type_type` di un `Field` dichiara un tipo, il `type` ne porta la tabella: che i due concordino non è verificato |
+| payload del tipo assente | `type_type` presente e `type` assente — o viceversa |
+| arità dei figli | `List` e `LargeList` vogliono **un** figlio, `Map` uno, `RunEndEncoded` due: `convert.rs` fa `panic!("expect a list to have one child")` |
+| domini degli enum | unità di tempo, di durata, di intervallo, ampiezze di bit: valori fuori dominio finiscono in `panic!`/`unimplemented!` |
+| combinazioni numeriche | ampiezza e segno di un intero, precisione e scala di un decimal, coppie che nessun tipo Arrow rappresenta |
+
+Chiuderla richiede una tabella tipo → forma attesa, e una tabella sbagliata
+rifiuta file legittimi: è lavoro con un rischio proprio, e va fatto sapendo
+che cosa si sta decidendo.
+
+Fino ad allora la **barriera anti-panico resta necessaria**, ed è di nuovo
+**coperta**: l'artefatto di fuzz che la esercitava viene ora rifiutato prima,
+in modo strutturato, e al suo posto c'è un caso costruito — uno stream Arrow
+vero con una colonna `List` a cui viene tolto il campo `children`. Quel test
+non sostituisce l'hook di panico del processo: accetta il rumore su stderr
+invece di mutare stato globale mentre gli altri test girano in parallelo.
 
 ### Finestra TOCTOU sull'ingresso IPC
 
