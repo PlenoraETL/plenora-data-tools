@@ -689,29 +689,62 @@ Il **commit point è il `rename`**. Prima: nessun effetto osservabile, e
 `GA-1` vale integralmente. Dopo: l'output è visibile, e ciò che può mancare è
 solo la *notizia*.
 
-### Come il chiamante risolve l'ambiguità
+### Perché sigillo e contratto non bastano
 
-Perché sia risolvibile serve che l'output pubblicato sia **autodescrittivo**,
-e lo è già: porta il sigillo e il contratto che la verifica ha confrontato.
-Un chiamante che non ha ricevuto esito rilegge la destinazione e distingue tre
-casi:
+La prima stesura diceva che il chiamante risolve l'ambiguità rileggendo la
+destinazione, perché l'artefatto porta sigillo e contratto. Non regge, e il
+documento lo ammetteva due paragrafi dopo senza accorgersi della
+contraddizione: sigillo e contratto dimostrano che l'artefatto è **valido**,
+non che sia **quello di questa esecuzione**.
+
+Due esecuzioni dello stesso piano su input diversi producono lo stesso
+contratto. Un artefatto trovato sulla destinazione, integro e coerente col
+piano, può quindi essere di chiunque abbia eseguito quel piano — inclusa
+un'esecuzione precedente andata a buon fine, o una concorrente. Rileggerlo
+dice «qui c'è un output valido», che non è la domanda.
+
+### `execution_id`: la catena che rende l'ambiguità risolvibile
+
+L'identità dell'esecuzione va scelta **prima** che qualcosa esista, e portata
+fino all'artefatto:
+
+```
+    execution_id scelto dal coordinatore, prima dell'avvio
+      -> trasportato nel Saluto dell'handshake
+         -> scritto dal worker nei metadati dell'artefatto
+            -> verificato dal supervisore PRIMA del rename
+               -> restituito al chiamante insieme al percorso
+```
+
+Il chiamante che non riceve esito rilegge la destinazione e confronta
+l'identificativo che gli era stato dato:
 
 | che cosa trova | che cosa significa |
 |---|---|
-| il file assente, o il contenuto precedente | il commit non è avvenuto: nulla è stato pubblicato, si può riprovare |
-| il file nuovo, sigillo e contratto coerenti col piano | il commit **è** avvenuto: l'operazione è riuscita e l'esito è andato perduto, non l'operazione |
-| il file nuovo con sigillo o contratto incoerenti | non è nostro, o è di un'altra esecuzione: **non** riprovare senza decidere che farne |
+| il file assente, o il contenuto precedente | il commit non è avvenuto: si può riprovare |
+| il file nuovo, `execution_id` **uguale** | il commit è avvenuto: è andato perduto l'esito, non il lavoro |
+| il file nuovo, `execution_id` **diverso** | ha pubblicato qualcun altro: non riprovare senza decidere che farne |
+| il file nuovo, `execution_id` **assente** | è di una versione che non lo scriveva: nessuna conclusione |
 
-Il terzo caso esiste perché il rename non distingue la nostra pubblicazione da
-quella di qualcun altro sullo stesso percorso, e fingere che non possa
-succedere sarebbe la stessa scorciatoia di prima.
+Il passo che conta è la **verifica prima del rename**: pubblicare un artefatto
+il cui identificativo non è quello atteso significherebbe pubblicare il lavoro
+di un altro sotto il proprio nome.
 
-**Che cosa questo non risolve.** Se due esecuzioni scrivono la stessa
-destinazione e una muore dopo il commit, il chiamante non può stabilire *quale*
-delle due ha pubblicato: il sigillo dice che l'output è integro, non chi l'ha
-scritto. Un identificativo d'esecuzione nell'artefatto lo risolverebbe, ed è
-lavoro successivo — dichiarato qui perché la sua assenza è una limitazione,
-non una svista.
+L'`execution_id` non è un'identità globale né un lock: due esecuzioni possono
+ancora corrersi incontro sulla stessa destinazione, e vince l'ultima. Serve a
+rispondere a una domanda sola — *questo output è mio?* — e a quella risponde.
+
+### Finché non c'è, l'esito è dichiarato ignoto
+
+Il campo va aggiunto ai metadati dell'artefatto e al protocollo, quindi non
+esiste prima della `PR-5`. Fino ad allora — e in ogni caso in cui
+l'identificativo manchi — l'esito di un coordinatore morto dopo il commit
+**non è «riuscito»**: è `CommitOutcomeUnknown`, una condizione con un nome, che
+dice al chiamante che deve guardare lui e che noi non sappiamo.
+
+Chiamarla «risolvibile» senza la catena sarebbe stato promettere una
+risoluzione che il documento stesso dichiarava impossibile poche righe più in
+basso.
 
 ---
 
@@ -729,8 +762,37 @@ fare è quindi quella del meccanismo, non quella del numero:
 | non promettiamo | promettiamo |
 |---|---|
 | che nessun byte oltrepassi mai il tetto | che il tetto sia **imposto**: raggiunto il limite, il kernel recupera memoria e, se non basta, uccide |
-| un massimo istantaneo verificabile byte per byte | che il superamento sia **transitorio e non produttivo**: non consente al worker di completare un lavoro che il tetto non ammette |
+| che il superamento sia innocuo | nulla: il kernel promette reclaim e OOM secondo la semantica di `memory.max`, **non** che durante un superamento temporaneo non si compia lavoro |
+| un massimo istantaneo verificabile byte per byte | che l'esito di un dominio che ha superato il tetto sia comunque **classificato**, non ignorato |
 | un valore di picco riproducibile | che il picco osservato sia una misura, riportata con le sue ripetizioni |
+
+**Sul superamento la misura dice una cosa scomoda.** La prima stesura
+affermava che non era mai stato osservato: era un'affermazione senza prove,
+perché il picco dell'antenato non era mai stato letto. Ora lo è, e il quadro
+non è quello che ci si aspetta da nessuna delle due parti:
+
+```
+    padre   memory.max    33 554 432
+    padre   memory.peak   33 554 432     <- superamento: zero
+    dominio memory.peak   33 787 904     <- 233 472 oltre il picco del padre
+```
+
+Il picco del **figlio** supera quello del **padre che lo contiene**, il che
+sotto una lettura ingenua della gerarchia è impossibile. Non è quindi la prova
+di un superamento del tetto — il padre non l'ha superato — ma qualcosa di più
+fastidioso: **i due contatori non sono coerenti fra loro**, e almeno uno dei
+due non misura ciò che sembra.
+
+La spiegazione plausibile, e va detto che è un'ipotesi e non una misura: il
+figlio ha un tetto molto più alto, quindi l'addebito passa al suo livello e
+viene registrato nel suo picco, per poi essere **respinto più in alto** dal
+tetto del padre. Il picco del figlio conterebbe allora un addebito *tentato* e
+mai posseduto — esattamente la classe di difetto che il prototipo Windows ha
+trovato in `PeakJobMemoryUsed`, su un'altra piattaforma e con un altro nome.
+
+Ne segue una regola pratica: **i valori di picco non sono evidenza di memoria
+posseduta**, né qui né altrove, e non vanno usati per ragionare sul consumo di
+un antenato. Servono al dimensionamento, con la loro incertezza dichiarata.
 
 La differenza conta per chi dimensiona un host: sommare i tetti dei domini dà
 una stima, non un massimo garantito. È la stessa ragione per cui il picco
@@ -844,22 +906,61 @@ preflight aveva finito.
 Il preflight verifica quindi uno stato che il worker può cambiare un istante
 dopo. Non è un difetto del preflight: è che mancava il meccanismo.
 
-**Il meccanismo è la separazione dei privilegi, e non è opzionale.** Con il
-worker a un UID distinto e la gerarchia di proprietà del control plane, le
-stesse cinque operazioni falliscono tutte con `EACCES` — misurato. Le forme
-accettabili, in ordine di costo:
+### La proprietà non è «UID distinto»
 
-| forma | che cosa serve |
+L'UID è il modo con cui il prototipo l'ha ottenuta, non la proprietà. Scriverla
+come «UID distinto» la renderebbe una ricetta, e una ricetta si aggira senza
+violarla. La proprietà è:
+
+> **il worker non possiede alcuna autorità capace di modificare il proprio
+> dominio o di abbandonarlo.**
+
+Il che vuol dire, per esteso, che nessuna di queste gli dà scrittura sul
+control plane:
+
+| via | perché va guardata |
 |---|---|
-| **UID distinto** per il worker, gerarchia di proprietà del supervisore | il supervisore deve poter cambiare identità al figlio: `uid`/`gid` prima della `exec`, che sono API sicure. Richiede però che il coordinatore abbia il privilegio di farlo |
-| **helper proprietario del control plane**, distinto dal processo che esegue | separa chi configura da chi lavora anche a parità di UID del chiamante, al prezzo di un processo in più e di un canale |
-| **mount namespace** con la gerarchia non scrivibile dal worker | il worker vede il cgroup ma non può scriverlo. Non prototipato |
-| **nessuna delle tre** | il profilo isolato **non è disponibile**: `IsolationUnavailable` in validazione, non un avvio che promette meno di quanto mantenga |
+| `uid` effettivo, reale e salvato | il salvato può essere riacquisito |
+| `gid` e **gruppi supplementari** | un gruppo dimenticato che possiede la gerarchia annulla l'UID distinto |
+| **capability** — `CAP_DAC_OVERRIDE`, `CAP_SYS_ADMIN`, `CAP_SETUID` | scavalcano i permessi del filesystem, quindi l'UID non basta |
+| **namespace** — utente, mount, cgroup | un namespace utente proprio può rendere il worker `root` rispetto alla gerarchia |
+| **descrittori scrivibili ereditati** | un descrittore già aperto su un file del control plane sopravvive alla `exec` e non passa dai permessi |
+| permessi sulla gerarchia | proprietario e modo delle directory e dei file del dominio |
 
-L'ultima riga è la sola aggiunta importante rispetto alla stesura precedente.
+L'ultima riga è quella che il prototipo ha misurato; le altre cinque sono
+strade che portano allo stesso posto senza toccarla.
+
+### Il provider iniziale, e perché uno solo
+
+Le tre forme non sono equivalenti, perché **una sola è stata provata**:
+
+| forma | stato |
+|---|---|
+| **UID/GID distinto** con gerarchia di proprietà del control plane | **provata**: `L19b`, cinque operazioni su cinque respinte con `EACCES`. È il **provider iniziale** |
+| helper proprietario del control plane | non prototipata. Separerebbe chi configura da chi esegue anche a parità di UID del chiamante, al prezzo di un processo e di un canale in più |
+| mount namespace con gerarchia non scrivibile | non prototipata |
+
+Il profilo isolato su Linux nasce quindi con **un** provider. Le altre due
+restano strade documentate per ambienti in cui il coordinatore non può
+cambiare identità al figlio, e ciascuna richiederà il proprio prototipo prima
+di essere offerta: metterle qui come alternative equivalenti significherebbe
+promettere due meccanismi che nessuno ha verificato.
+
+### Si verifica in `PreparaIsolamento`, non nel piano
+
+La disponibilità della separazione **non è una proprietà del piano**: dipende
+da chi esegue, con quali privilegi, in quale ambiente. Lo stesso piano è
+eseguibile su una macchina e non su un'altra, quindi respingerlo in validazione
+sarebbe respingere la cosa sbagliata.
+
+Il controllo sta in `PreparaIsolamento` (§3.1), **prima dello spawn**: il
+supervisore accerta di poter costruire un dominio che il worker non potrà
+toccare, e se non ci riesce l'esito è `IsolationUnavailable` — una condizione
+d'ambiente, con un nome proprio, distinta da un piano invalido.
+
 Un ambiente in cui il worker può riscrivere il proprio dominio non è un
 ambiente in cui il profilo isolato vale meno: è un ambiente in cui **non
-vale**, e va rifiutato all'ingresso.
+vale**.
 
 Resta il terzo elemento, che non è uno strato di difesa ma di lettura:
 `memory.events` gerarchico e degli antenati (§10.0-bis). Non sostituisce la
@@ -1015,18 +1116,52 @@ ne possono essere altri.
 |---|---|---|
 | `Oa` | `memory.events.local` → `oom` **degli antenati** del dominio | quale livello della gerarchia ha esaurito il proprio tetto |
 
-La classificazione, con ogni combinazione:
+### Una sola combinazione autorizza l'attribuzione
+
+La prima stesura di questa tabella restituiva `ResourceLimit` in quattro righe
+su otto, e nella sezione successiva spiegava che i delta non dimostrano una
+causa. Le due cose non stanno insieme: se `Ol` e `Kl` possono appartenere a
+eventi distinti, allora la loro coesistenza **non autorizza** ad attribuire.
+
+L'unico segnale che lega causa ed effetto in un solo fatto è `G`, il group
+kill **locale**: il kernel ha ucciso questo dominio *come gruppo*, e lo ha
+fatto perché il tetto di questo dominio è stato raggiunto. Non è una
+coincidenza di contatori, è un'operazione.
 
 | `Ol` | `Kl` | `Kh` | `G` | classificazione |
 |---|---|---|---|---|
-| ≥1 | ≥1 | ≥1 | ≥1 | `ResourceLimit` attribuito al dominio. È il caso normale con dominio sigillato |
-| ≥1 | ≥1 | ≥1 | 0 | `ResourceLimit`, **senza** group kill: qualcuno è sopravvissuto. Il preflight avrebbe dovuto impedirlo → difetto di configurazione, riportato |
-| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione **in un discendente**: il sigillo ha fallito. `Internal` con difetto del preflight — **non** `ResourceLimit`, perché l'attribuzione è persa |
-| ≥1 | 0 | 0 | 0 | limite raggiunto **e nessun task uccidibile**: firma di `oom_score_adj` non normalizzato. `ResourceLimit`, causa «dominio non uccidibile», richiede `cgroup.kill` |
-| **0** | **≥1** | **≥1** | qualunque | **il worker è stato ucciso senza che il suo tetto sia stato raggiunto**: l'OOM viene da un antenato o dal sistema. Si legge `Oa`: se un antenato ha `oom` ≥ 1, l'esito è `ResourceLimit` **del dominio sbagliato** — cioè un limite dell'ambiente, non del piano, e va detto così. Se nessun antenato lo ha, è un OOM globale: `Internal` |
-| 0 | 0 | ≥1 | qualunque | uccisione in un discendente senza che questo dominio abbia raggiunto il limite: il tetto violato è di un altro. `Internal` |
+| ≥1 | ≥1 | ≥1 | **≥1** | **`ResourceLimit` attribuito al dominio.** L'unica riga con attribuzione forte |
+| ≥1 | ≥1 | ≥1 | 0 | evidenza di pressione **senza** group kill locale: qualcuno è sopravvissuto, e i due delta possono essere eventi distinti. **Non attribuito** |
+| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione in un discendente: il sigillo ha fallito. **Non attribuito**, più difetto del preflight |
+| ≥1 | 0 | 0 | 0 | limite raggiunto e nessun task uccidibile: firma di `oom_score_adj` non normalizzato. **Non attribuito**, causa dichiarata, richiede `cgroup.kill` |
+| 0 | ≥1 | ≥1 | qualunque | il worker è morto senza che il suo tetto sia stato raggiunto: l'OOM viene da fuori. **Non attribuito**; `Oa` dice *dove* c'era pressione, non che sia stata la causa |
+| 0 | 0 | ≥1 | qualunque | uccisione in un discendente senza pressione locale. **Non attribuito** |
 | 0 | 0 | 0 | 0 | nessuna evidenza. `Internal`, **mai** dedotto come OOM (`F4-2`) |
 | — | ≥1 | 0 | — | **impossibile**: `Kl` è un sottoinsieme di `Kh`. Se accade è un difetto di lettura, e va trattato come tale invece che normalizzato |
+
+**Che cos'è «non attribuito».** Non è `ResourceLimit` — non possiamo dire al
+chiamante che ha superato il suo budget quando non lo sappiamo — e non è
+`Internal`, che direbbe «difetto nostro» quando spesso è l'ambiente. È una
+categoria propria: *terminazione con evidenza di pressione di memoria non
+attribuibile*, che porta con sé i cinque contatori e non conclude al posto di
+chi legge.
+
+Va aggiunta in `PR-1`, insieme alle altre varianti nuove di `PlenoraError`:
+quella PR cambia già la superficie pubblica, ed è il posto giusto. **Finché
+non c'è**, queste righe si classificano `Internal`, che è meno informativo di
+proposito e non inventa un'attribuzione.
+
+**In nessuna di queste righe si pubblica.** L'attribuzione decide che cosa si
+dice al chiamante, non se l'output diventa visibile: un esito terminale
+ambiguo non pubblica mai (`GA-1`).
+
+**Su `Oa`.** Dice che un antenato ha registrato pressione. Non dice che sia
+stata la causa di *questa* terminazione, e tanto meno se l'antenato contiene
+altri domini concorrenti — nel qual caso la pressione può venire da un
+vicino. Resta diagnostico: entra nell'evidenza riportata, non nella
+classificazione. L'unico caso in cui potrebbe diventare causale è un antenato
+**dedicato** a un solo dominio, e allora però il tetto utile è il suo, non il
+nostro.
 
 La quinta riga è quella che la prima stesura dichiarava esaustiva senza
 esserlo. `oom_kill` conta i processi del cgroup uccisi da **qualunque** OOM
@@ -1056,16 +1191,23 @@ metterli insieme dà una storia.
 
 Ne seguono due regole, entrambe conservative:
 
-1. **la classificazione è fail-closed sulla causalità**: dove i delta
-   ammettono più di una storia, si sceglie quella che *non* pubblica e che
-   *non* attribuisce al piano una colpa dell'ambiente;
+1. **la classificazione è fail-closed sulla causalità**: l'attribuzione forte
+   richiede il group kill locale, che è un'operazione del kernel e non una
+   coincidenza di contatori. Ovunque manchi, non si attribuisce;
 2. **l'evidenza riportata è la struttura, non la conclusione**: l'esito porta
    i cinque contatori con sé, così chi legge può ricostruire ciò che il
    classificatore ha visto invece di fidarsi della sua sintesi.
 
-Un registro ordinato di eventi — con `memory.events` sorvegliato tramite
-notifica invece che campionato — renderebbe la causalità osservabile. Non è
-stato prototipato, ed è la strada per rendere queste righe più forti.
+Un registro ordinato di eventi migliorerebbe la **tempestività** della
+lettura, e va detto che non basterebbe: sorvegliare `memory.events` con una
+notifica invece di campionarlo dice *quando* un contatore è cambiato, non
+*perché*, e non lega l'evento al processo che l'ha causato. Per una vera
+catena causale servirebbe una fonte diversa — tracciamento degli eventi OOM
+per processo — che non è stata prototipata e che non è detto sia disponibile
+ovunque.
+
+Finché quella fonte non c'è, `G` resta l'unico legame causa-effetto
+osservabile, ed è per questo che la tabella ci si appoggia interamente.
 
 ### 10.1 Tassonomia: che cosa manca davvero
 
@@ -1259,7 +1401,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
 | **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici | no | test di disaccordo su ciascun campo |
 | **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
-| **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, nessun `unsafe` | no | contenimento e attribuzione, come il prototipo |
+| **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
 | **PR-10** | sequenza di verifica 1-9 e publish atomico dal supervisore | no | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice |

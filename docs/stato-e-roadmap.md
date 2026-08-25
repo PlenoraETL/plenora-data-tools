@@ -244,28 +244,57 @@ limite è raggiunto e nessuno è uccidibile.
 swap, `oom_score_adj` e leggibilità di `cgroup.events`: il preflight le scrive
 e le verifica, e il profilo isolato non parte se una sola diverge.
 
-**F4-15 — Il worker non deve poter riscrivere il proprio dominio.** Il
-preflight verifica uno stato; senza separazione dei privilegi quello stato
-dura fino all'istruzione successiva. Il prototipo ha misurato un worker con lo
-stesso UID del supervisore rimettere `cgroup.max.depth` a 10, `memory.max` a
-1 GiB, `memory.oom.group` a 0 e **uscire dal dominio**. Servono un UID
-distinto, un helper proprietario del control plane, o un mount namespace non
-scrivibile; se nessuno è disponibile il profilo isolato è **rifiutato in
-validazione**, non avviato con garanzie ridotte.
+**F4-15 — Il worker non possiede alcuna autorità sul proprio dominio.** Non
+«UID distinto», che è un modo e non la proprietà: nessuna fra identità reale,
+effettiva e salvata, gruppi supplementari, capability, namespace, descrittori
+scrivibili ereditati e permessi sulla gerarchia deve dargli scrittura sul
+control plane né la possibilità di lasciare il dominio. Il prototipo ha
+misurato un worker con lo stesso UID del supervisore rimettere
+`cgroup.max.depth` a 10, `memory.max` a 1 GiB, `memory.oom.group` a 0 e
+**uscire dal dominio**.
 
-**F4-16 — Il commit point è dichiarato e l'esito ambiguo è risolvibile.** Il
-`rename` rende atomico il file, non la coppia *pubblicato + riportato*: se il
-coordinatore muore dopo il commit, l'output è visibile e il chiamante non lo
-sa. `GA-1` copre i guasti **precedenti** il commit; dopo, la garanzia è che
-ciò che è visibile è completo, e l'ambiguità si risolve rileggendo la
-destinazione, che porta sigillo e contratto.
+Il **provider iniziale è uno solo** — identità distinta con gerarchia di
+proprietà del control plane — perché è l'unico provato. Helper del control
+plane e mount namespace restano strade documentate, ciascuna col proprio
+prototipo prima di essere offerta.
 
-**F4-17 — L'evidenza non dimostra una causa.** I delta sono contatori
-aggregati su un intervallo: la loro coesistenza non prova un nesso. La
-classificazione è fail-closed dove più storie sono compatibili, e l'esito
-porta con sé i contatori, non solo la conclusione. `oom_kill` in particolare
-conta le uccisioni da **qualunque** OOM killer: un antenato con un tetto più
-basso lo fa salire senza che il tetto del dominio venga raggiunto.
+La verifica sta in **`PreparaIsolamento`, prima dello spawn**, non nella
+validazione del piano: la disponibilità dipende dall'ambiente, non dal piano,
+e lo stesso piano è eseguibile su una macchina e non su un'altra. L'esito
+negativo è `IsolationUnavailable`.
+
+**F4-16 — Il commit point è dichiarato, e l'ambiguità si risolve con
+un'identità d'esecuzione.** Il `rename` rende atomico il file, non la coppia
+*pubblicato + riportato*: se il coordinatore muore dopo il commit, l'output è
+visibile e il chiamante non lo sa. `GA-1` copre i guasti **precedenti** il
+commit.
+
+Sigillo e contratto **non bastano** a risolvere: dimostrano che l'artefatto è
+valido, non che sia di quella esecuzione — due esecuzioni dello stesso piano su
+input diversi producono lo stesso contratto. Serve un `execution_id` scelto
+prima dell'avvio, trasportato nell'handshake, scritto nell'artefatto,
+verificato **prima** del rename e restituito al chiamante. Finché non c'è, o
+quando manca, l'esito è `CommitOutcomeUnknown` e non «riuscito».
+
+**F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
+contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
+`oom_kill` conta le uccisioni da **qualunque** OOM killer, quindi un antenato
+con un tetto più basso lo fa salire senza che il tetto del dominio venga
+raggiunto. L'unico segnale che lega causa ed effetto in un solo fatto è
+`memory.events.local` → `oom_group_kill`: il kernel ha ucciso *questo* dominio
+*come gruppo*.
+
+`ResourceLimit` si attribuisce **solo** lì. Ogni altra combinazione con
+evidenza di pressione è **non attribuita** — una categoria propria, da
+aggiungere in `PR-1`, che porta i contatori e non conclude al posto di chi
+legge. In nessun caso ambiguo si pubblica.
+
+**F4-18 — I picchi non sono evidenza di memoria posseduta.** `memory.peak` di
+un figlio ha superato quello del padre che lo contiene di 233 472 byte:
+almeno uno dei due contatori non misura ciò che sembra, e l'ipotesi è che
+registri addebiti *tentati* — la stessa classe di difetto trovata su Windows
+in `PeakJobMemoryUsed`. I picchi servono al dimensionamento, con l'incertezza
+dichiarata, e non a ragionare sul consumo di un antenato.
 
 **F4-11 — Il profilo isolato su Windows è non supportato** finché non esiste
 una dipendenza vettata che copra tetto ed evidenza senza `unsafe`. La deroga

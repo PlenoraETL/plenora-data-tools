@@ -1295,8 +1295,24 @@ fn l18_oom_dell_antenato(base: &Path) {
             "no"
         }
     );
-    if let Some(v) = leggi_intero(&dominio, "memory.peak") {
-        println!("MISURA l18.dominio.memory.peak {v}");
+    // Il picco DEL PADRE e' la misura diretta del superamento temporaneo: il
+    // dominio e' contenuto in lui, quindi dedurlo dal picco del figlio
+    // sarebbe un'inferenza dove si puo' avere un'osservazione.
+    let tetto_padre = leggi_intero(&padre, "memory.max").unwrap_or(0);
+    for (chi, dove) in [("dominio", &dominio), ("padre", &padre)] {
+        if let Some(v) = leggi_intero(dove, "memory.peak") {
+            println!("MISURA l18.{chi}.memory.peak {v}");
+            if chi == "padre" && tetto_padre > 0 {
+                println!(
+                    "MISURA l18.padre.superamento_del_tetto {} byte",
+                    i128::from(v) - i128::from(tetto_padre)
+                );
+                println!(
+                    "MISURA l18.superamento_temporaneo_osservato {}",
+                    if v > tetto_padre { "SI" } else { "no" }
+                );
+            }
+        }
     }
 
     let _ = fs::remove_dir(&dominio);

@@ -101,7 +101,7 @@ mostra che cosa succede senza. Sono diventate il preflight della §9-bis di
 | `L12` | sottogruppo, via **non** ingenua | crea, si sposta, delega: **tutti e tre riescono** |
 | `L12` | evidenza dopo l'evasione | `local.oom_kill` **0**, `gerarchico.oom_kill` **1** |
 | `L13` | la stessa evasione, dominio sigillato | fermata al primo passo, `EAGAIN` |
-| `L11` | picco d'avvio | **524 288 – 524 288** byte (`n=5`) |
+| `L11` | picco d'avvio | **262 144 – 524 288** byte (`n=5`) |
 | `L11` | picco sotto tetto, `n=5` | **67 108 864** in tutte e cinque — esattamente il tetto |
 | `L14` | quiescenza, orfano nello **stesso** cgroup | `cgroup.procs` e `populated` concordano; `populated` a 0 dopo 175 ms |
 | `L15` | quiescenza, processo vivo in un **sottogruppo** | `cgroup.procs` = **0**, `populated` = **1**: il file è cieco, il kernel no |
@@ -111,6 +111,8 @@ mostra che cosa succede senza. Sono diventate il preflight della §9-bis di
 | `L17` | opzione `memory_localevents` | **assente** nella gerarchia provata |
 | `L18` | padre a 32 MiB, dominio a 256 MiB | il worker muore per il tetto **del padre**: `Ol` **0**, `Kl` **1**, `Kh` **1** |
 | `L18` | dove sta l'evidenza | il padre registra `oom` 1 e `oom_kill` **0**; il dominio il contrario |
+| `L18` | picco del padre contro il suo tetto | `33 554 432` contro `33 554 432`: **superamento zero** |
+| `L18` | picco del dominio contro il picco del padre | `33 787 904` contro `33 554 432`: il figlio supera il padre che lo contiene |
 | `L19a` | worker con lo **stesso** UID del supervisore | riscrive `max.depth`, `memory.max`, `oom.group`, `swap.max` **ed esce dal dominio**: 5 su 5 |
 | `L19b` | worker a `Uid: 1000` | tutte e cinque rifiutate con `EACCES` |
 
@@ -410,6 +412,41 @@ dimostrano una causa** — sono in [`isolamento.md`](isolamento.md).
 
 ---
 
+### 5.8 I picchi non misurano la memoria posseduta
+
+La review ha ipotizzato che `L18` avesse osservato un superamento temporaneo
+del tetto: il picco del dominio (`33 787 904`) supera il tetto del padre
+(`33 554 432`) di `233 472` byte, e poiché il dominio è contenuto nel padre,
+il padre doveva averlo superato.
+
+L'inferenza è ragionevole e la misura diretta la smentisce. Letto il picco del
+padre — cosa che nessuno aveva fatto, ed è la ragione per cui l'affermazione
+«mai osservato» era senza prove:
+
+```
+    padre   memory.max    33 554 432
+    padre   memory.peak   33 554 432     superamento: 0
+    dominio memory.peak   33 787 904     233 472 oltre il picco del padre
+```
+
+Il padre non ha superato il proprio tetto. Ma il **figlio** ha un picco
+maggiore del **padre che lo contiene**, e questo sotto una lettura ingenua
+della gerarchia non può accadere.
+
+La spiegazione plausibile — ipotesi, non misura — è che l'addebito passi al
+livello del figlio, che ha un tetto molto più alto, venga registrato nel suo
+picco, e sia poi respinto più in alto dal tetto del padre. Il picco del figlio
+conterebbe allora un addebito **tentato e mai posseduto**: la stessa classe di
+difetto che il ciclo su Windows aveva trovato in `PeakJobMemoryUsed`, su
+un'altra piattaforma e con un altro nome.
+
+Ne segue una regola, e vale per entrambe le piattaforme: **i valori di picco
+non sono evidenza di memoria posseduta**, e non vanno usati per ragionare sul
+consumo di un antenato. Servono al dimensionamento, con l'incertezza
+dichiarata — anche i picchi riportati nella §4 di questo documento.
+
+---
+
 ## 6. Fattibilità senza `unsafe`
 
 | | serve `unsafe`? | superficie |
@@ -484,7 +521,8 @@ Vale quanto la §3: ogni riga è una promessa che non possiamo fare.
 | kernel diversi dal 6.18 | non misurati. `cgroup.max.depth`, `cgroup.kill` e `memory.events.local` hanno storie di introduzione diverse |
 | separazione dei privilegi in un caso embedded reale | **non misurata**: `L19b` mostra che un UID distinto basta, non che il coordinatore possa sempre ottenerlo. Helper del control plane e mount namespace non sono stati prototipati |
 | ordine causale degli eventi | **non osservabile** con i contatori: sono aggregati su un intervallo. Un registro ordinato via notifica non è stato prototipato |
-| superamento temporaneo di `memory.max` | non osservato in nessuna esecuzione, il che **non** dimostra che non avvenga: il kernel lo ammette e il campionamento del picco potrebbe non coglierlo |
+| superamento temporaneo di `memory.max` | **non osservato** dalla misura diretta — il picco dell'antenato coincide col suo tetto — ma i contatori sono fra loro incoerenti (§5.8), quindi non è nemmeno escluso |
+| perché il picco del figlio superi quello del padre | **non spiegato**: l'ipotesi dell'addebito tentato e respinto più in alto è un ragionamento, non una misura |
 | finestra fra `rename` e ritorno dell'esito | non misurata: è una finestra logica, non una che si possa osservare dall'interno del processo che muore |
 | più domini concorrenti | non misurato: gli scenari sono sequenziali |
 | costo in memoria della verifica in streaming | non misurato |

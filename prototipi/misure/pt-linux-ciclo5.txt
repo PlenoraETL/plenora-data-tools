@@ -28,8 +28,8 @@ MISURA s1.codice Some(0)
 MISURA s1.segnale None
 MISURA s1.worker_ha_parlato si
 MISURA s1.memory.max 2097152
-MISURA s1.memory.current 438272
-MISURA s1.memory.peak 524288
+MISURA s1.memory.current 708608
+MISURA s1.memory.peak 786432
 MISURA s1.events.local.high 0
 MISURA s1.events.local.low 0
 MISURA s1.events.local.max 0
@@ -45,7 +45,7 @@ MISURA s1bis.codice None
 MISURA s1bis.segnale Some(9)
 MISURA s1bis.worker_ha_parlato no
 MISURA s1bis.memory.max 131072
-MISURA s1bis.memory.current 131072
+MISURA s1bis.memory.current 114688
 MISURA s1bis.memory.peak 131072
 MISURA s1bis.events.local.high 0
 MISURA s1bis.events.local.low 0
@@ -65,7 +65,7 @@ MISURA s1bis.events.local.oom_kill 1
 MISURA s2.nato_dentro si
 MISURA s2.puo_creare_sottogruppo si
 MISURA s2.memory.max 268435456
-MISURA s2.memory.current 475136
+MISURA s2.memory.current 454656
 MISURA s2.memory.peak 524288
 MISURA s2.events.local.high 0
 MISURA s2.events.local.low 0
@@ -95,8 +95,8 @@ MISURA s3.2^38 -> accettata
 MISURA s3.2^42 -> accettata
 MISURA s3.2^46 -> accettata
 MISURA s3.memory.max 67108864
-MISURA s3.memory.current 471040
-MISURA s3.memory.peak 524288
+MISURA s3.memory.current 466944
+MISURA s3.memory.peak 520192
 MISURA s3.events.local.high 0
 MISURA s3.events.local.low 0
 MISURA s3.events.local.max 0
@@ -121,7 +121,7 @@ MISURA s4.delta.oom 1
 MISURA s4.delta.oom_kill 1
 MISURA s4.delta.oom_group_kill 0
 MISURA s4.memory.max 67108864
-MISURA s4.memory.current 307200
+MISURA s4.memory.current 253952
 MISURA s4.memory.peak 67108864
 MISURA s4.events.local.high 0
 MISURA s4.events.local.low 0
@@ -137,7 +137,7 @@ MISURA s4.events.local.oom_kill 1
     > CARICO cgroup 0::/pt-linux/s5-discendenti
     > CARICO scenario figlio
     > CARICO oom_score_adj 0
-    > CARICO figlio-pid 209
+    > CARICO figlio-pid 208
     > CARICO cgroup 0::/pt-linux/s5-discendenti
     > CARICO scenario tocca
     > CARICO oom_score_adj 0
@@ -148,16 +148,16 @@ MISURA s5-discendenti.codice Some(0)
 MISURA s5-discendenti.segnale None
 MISURA s5-discendenti.padre_sopravvissuto si
 MISURA s5-discendenti.figlio codice=None segnale=Some(9)
-MISURA s5-discendenti.delta.max 38
+MISURA s5-discendenti.delta.max 19
 MISURA s5-discendenti.delta.oom 1
 MISURA s5-discendenti.delta.oom_kill 1
 MISURA s5-discendenti.delta.oom_group_kill 0
 MISURA s5-discendenti.memory.max 67108864
-MISURA s5-discendenti.memory.current 409600
+MISURA s5-discendenti.memory.current 393216
 MISURA s5-discendenti.memory.peak 67108864
 MISURA s5-discendenti.events.local.high 0
 MISURA s5-discendenti.events.local.low 0
-MISURA s5-discendenti.events.local.max 38
+MISURA s5-discendenti.events.local.max 19
 MISURA s5-discendenti.events.local.oom 1
 MISURA s5-discendenti.events.local.oom_group_kill 0
 MISURA s5-discendenti.events.local.oom_kill 1
@@ -169,7 +169,7 @@ MISURA s5-discendenti.events.local.oom_kill 1
     > CARICO cgroup 0::/pt-linux/s6-oom-group
     > CARICO scenario figlio
     > CARICO oom_score_adj 0
-    > CARICO figlio-pid 211
+    > CARICO figlio-pid 210
     > CARICO cgroup 0::/pt-linux/s6-oom-group
     > CARICO scenario tocca
     > CARICO oom_score_adj 0
@@ -177,16 +177,16 @@ MISURA s5-discendenti.events.local.oom_kill 1
 MISURA s6-oom-group.codice None
 MISURA s6-oom-group.segnale Some(9)
 MISURA s6-oom-group.padre_sopravvissuto no
-MISURA s6-oom-group.delta.max 25
+MISURA s6-oom-group.delta.max 21
 MISURA s6-oom-group.delta.oom 1
 MISURA s6-oom-group.delta.oom_kill 3
 MISURA s6-oom-group.delta.oom_group_kill 1
 MISURA s6-oom-group.memory.max 67108864
-MISURA s6-oom-group.memory.current 471040
+MISURA s6-oom-group.memory.current 368640
 MISURA s6-oom-group.memory.peak 67108864
 MISURA s6-oom-group.events.local.high 0
 MISURA s6-oom-group.events.local.low 0
-MISURA s6-oom-group.events.local.max 25
+MISURA s6-oom-group.events.local.max 21
 MISURA s6-oom-group.events.local.oom 1
 MISURA s6-oom-group.events.local.oom_group_kill 1
 MISURA s6-oom-group.events.local.oom_kill 3
@@ -227,8 +227,8 @@ MISURA l8.segnale None
 MISURA l8.mkdir-riuscito
 MISURA l8.controller-delegato no (Device or resource busy (os error 16))
 MISURA l8.figlio_ucciso_nel_sottogruppo si
-MISURA l8.delta.local.max 36
-MISURA l8.delta.gerarchico.max 36
+MISURA l8.delta.local.max 35
+MISURA l8.delta.gerarchico.max 35
 MISURA l8.delta.local.oom 1
 MISURA l8.delta.gerarchico.oom 1
 MISURA l8.delta.local.oom_kill 1
@@ -298,7 +298,7 @@ MISURA l13.delta.local.oom_group_kill 0
     > CARICO cgroup 0::/pt-linux/l10-orfano
     > CARICO scenario orfano
     > CARICO oom_score_adj 0
-    > CARICO orfano-pid 219
+    > CARICO orfano-pid 218
     > CARICO capofila-esce-subito con-uscita-0
 MISURA l10.capofila_codice Some(0)
 MISURA l10.processi_vivi_alla_wait 1
@@ -308,11 +308,11 @@ MISURA l10.processi_vivi_dopo 0
 MISURA l10.oom_kill_dopo_la_quiescenza 1
 MISURA l10.evidenza_arrivata_in_ritardo SI — pubblicare alla wait sarebbe stato un errore
 MISURA l10.memory.max 67108864
-MISURA l10.memory.current 405504
+MISURA l10.memory.current 360448
 MISURA l10.memory.peak 67108864
 MISURA l10.events.local.high 0
 MISURA l10.events.local.low 0
-MISURA l10.events.local.max 42
+MISURA l10.events.local.max 38
 MISURA l10.events.local.oom 1
 MISURA l10.events.local.oom_group_kill 0
 MISURA l10.events.local.oom_kill 1
@@ -388,7 +388,7 @@ MISURA l10.events.local.oom_kill 1
     > CARICO scenario tocca
     > CARICO oom_score_adj 0
     > CARICO toccati 33554432
-MISURA l11.picco_avvio n=5 min=524288 max=524288 valori=[524288, 524288, 524288, 524288, 524288]
+MISURA l11.picco_avvio n=5 min=262144 max=524288 valori=[524288, 262144, 524288, 524288, 262144]
 MISURA l11.picco_sotto_tetto n=5 min=67108864 max=67108864 valori=[67108864, 67108864, 67108864, 67108864, 67108864]
 
 === L14 — quiescenza letta da cgroup.events, orfano nello stesso cgroup ===
@@ -398,13 +398,13 @@ MISURA l11.picco_sotto_tetto n=5 min=67108864 max=67108864 valori=[67108864, 671
     > CARICO cgroup 0::/pt-linux/l14-orfano
     > CARICO scenario orfano
     > CARICO oom_score_adj 0
-    > CARICO orfano-pid 231
+    > CARICO orfano-pid 230
     > CARICO capofila-esce-subito con-uscita-0
 MISURA l14.capofila_codice Some(0)
 MISURA l14.cgroup_procs_alla_wait 1
 MISURA l14.populated_alla_wait Some(true)
 MISURA l14.concordano si
-MISURA l14.attesa_populated_zero_ms 175
+MISURA l14.attesa_populated_zero_ms 200
 MISURA l14.populated_finale Some(false)
 
 === L15 — quiescenza con un processo vivo in un sottogruppo ===
@@ -414,7 +414,7 @@ MISURA l14.populated_finale Some(false)
     > CARICO cgroup 0::/pt-linux/l15-figlio
     > CARICO scenario sottogruppo_vivo
     > CARICO oom_score_adj 0
-    > CARICO sottogruppo_vivo figlio-pid 233
+    > CARICO sottogruppo_vivo figlio-pid 232
     > CARICO sottogruppo_vivo nipote-insediato si dopo 5 ms
     > CARICO capofila-esce-subito con-uscita-0
 MISURA l15.capofila_codice Some(0)
@@ -443,7 +443,7 @@ MISURA l16.senza_normalizzazione.codice None
 MISURA l16.senza_normalizzazione.segnale Some(9)
 MISURA l16.senza_normalizzazione.worker_oom_score_adj -1000
 MISURA l16.senza_normalizzazione.verdetto il worker protetto ha resistito al group kill
-MISURA l16.senza_normalizzazione.delta.oom 191
+MISURA l16.senza_normalizzazione.delta.oom 196
 MISURA l16.senza_normalizzazione.delta.oom_kill 0
 MISURA l16.senza_normalizzazione.delta.oom_group_kill 0
 MISURA l16.senza_normalizzazione.memory.peak 67108864
@@ -493,6 +493,9 @@ MISURA l18.padre.oom 1
 MISURA l18.padre.oom_kill 0
 MISURA l18.combinazione_scoperta SI — Ol=0 con Kl>=1: la matrice non la copriva
 MISURA l18.dominio.memory.peak 33787904
+MISURA l18.padre.memory.peak 33554432
+MISURA l18.padre.superamento_del_tetto 0 byte
+MISURA l18.superamento_temporaneo_osservato no
 
 === L19 — il worker riscrive cio' che il preflight ha stabilito ===
 MISURA l19a-stesso-uid.max_depth_impostato si
