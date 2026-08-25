@@ -60,7 +60,7 @@ pub fn emit_error_envelope(
 pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
     envelope["error"]["category"]
         .as_str()
-        .and_then(ErrorCategory::from_canonical)
+        .and_then(ErrorCategory::from_stable_name)
         .map_or(EXIT_INTERNO, exit_code_di)
 }
 

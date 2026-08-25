@@ -55,9 +55,11 @@ pub struct ReplayedError {
 
 /// Quanti antenati del dominio l'evidenza puo' portare.
 ///
-/// Il limite e' nel **tipo**, non nel costruttore: un array di lunghezza
-/// fissa non puo' crescere con la profondita' della gerarchia trovata
-/// sull'host, quindi nessun input esterno decide quanto occupa un errore.
+/// Il limite e' una proprieta' **non configurabile** del tipo, e
+/// [`PressioneDegliAntenati::nuova`] lo **applica**, rifiutando le slice
+/// oltre la capacita'. L'array ha lunghezza fissa, quindi non puo' crescere
+/// con la profondita' della gerarchia trovata sull'host: nessun input
+/// esterno decide quanto occupa un errore.
 ///
 /// Otto e' una **scelta**, non una misura: i prototipi non hanno rilevato la
 /// profondita' delle gerarchie ospiti, e questo numero non va presentato
@@ -827,7 +829,7 @@ impl From<serde_json::Error> for PlenoraError {
     }
 }
 
-/// Genera insieme l'enum delle categorie, l'elenco canonico, l'indice e il
+/// Genera insieme l'enum delle categorie, l'elenco completo, l'indice e il
 /// nome stabile: **una sola dichiarazione**, quattro derivati.
 ///
 /// Non e' zucchero sintattico. Le quattro cose erano scritte a mano e
@@ -852,9 +854,12 @@ macro_rules! categorie_errore {
             $variante:ident => $nome:literal
         ),+ $(,)?
     ) => {
-        /// Categoria stabile di un [`PlenoraError`]: enumerazione canonica §9
-        /// (R9.5 — il sottoinsieme usato dal componente, mai valori propri,
-        /// **tranne due estensioni locali dichiarate qui sotto**).
+        /// Categoria stabile di un [`PlenoraError`].
+        ///
+        /// **Non** e' l'enumerazione canonica §9 nella sua interezza:
+        /// diciotto valori sono il sottoinsieme canonico usato dal
+        /// componente (R9.5, mai valori propri), due sono estensioni locali
+        /// dichiarate qui sotto.
         ///
         /// # Deviazione dichiarata: due estensioni locali della Fase 4
         ///
@@ -903,15 +908,25 @@ macro_rules! categorie_errore {
         }
 
         impl ErrorCategory {
-            /// Elenco canonico di TUTTE le categorie, in ordine di
-            /// dichiarazione.
+            /// Elenco completo delle categorie **supportate**, in ordine
+            /// di dichiarazione.
+            ///
+            /// Non «canonico»: diciotto di queste vengono dal canone
+            /// congelato, due sono estensioni locali (vedi la deviazione
+            /// dichiarata su [`ErrorCategory`]). Chiamare canonico l'intero
+            /// elenco direbbe che un componente gemello le riconosce tutte.
             ///
             /// Generato dalla stessa lista dell'enum: non puo' restare
             /// indietro rispetto alle varianti.
             pub const ALL: &'static [Self] = &[$(Self::$variante),+];
 
-            /// Nome stabile della categoria (telemetria, report JSON):
-            /// `snake_case` canonico §9.
+            /// Nome stabile **pubblico** della categoria (telemetria,
+            /// report JSON), in `snake_case`.
+            ///
+            /// Per diciotto categorie e' anche il nome canonico §9; per le
+            /// due estensioni locali e' un nome stabile di questo
+            /// componente e basta. La stabilita' vale in entrambi i casi —
+            /// cambiarlo rompe chi legge gli envelope — l'autorita' no.
             ///
             /// Generato dalla stessa lista dell'enum: un nome nuovo non puo'
             /// mancare ne' divergere dall'elenco.
@@ -922,14 +937,19 @@ macro_rules! categorie_errore {
                 }
             }
 
-            /// Categoria dal nome canonico, l'inverso di [`Self::as_str`].
+            /// Categoria dal nome stabile, l'inverso di [`Self::as_str`].
+            ///
+            /// Si chiama `from_stable_name` e non `from_canonical` perche'
+            /// accetta anche le due estensioni locali: il nome precedente
+            /// prometteva che ogni stringa riconosciuta appartenesse al
+            /// canone congelato, e non e' cosi'.
             ///
             /// Generata dalla stessa lista dell'enum: una variante nuova e'
             /// riconoscibile senza che nessuno se ne ricordi. `None` per una
             /// stringa che non e' una categoria — un envelope di un'altra
             /// versione, o corrotto.
             #[must_use]
-            pub fn from_canonical(nome: &str) -> Option<Self> {
+            pub fn from_stable_name(nome: &str) -> Option<Self> {
                 match nome {
                     $($nome => Some(Self::$variante),)+
                     _ => None,
@@ -2007,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn l_elenco_canonico_e_coerente_con_gli_indici_e_i_nomi() {
+    fn l_elenco_completo_e_coerente_con_gli_indici_e_i_nomi() {
         // Che `ALL` contenga TUTTE le varianti non e' piu' una proprieta' da
         // verificare: enum ed elenco nascono dalla stessa lista della macro
         // `categorie_errore`, quindi non possono divergere per costruzione.
@@ -2045,21 +2065,21 @@ mod tests {
         assert_eq!(
             ErrorCategory::ALL.len(),
             20,
-            "categorie dichiarate: aggiornare anche la tabella di docs/cli.md"
+            "categorie supportate: aggiornare anche la tabella di docs/cli.md"
         );
-        // `from_canonical` e' l'inverso di `as_str`, ed e' cio' che regge il
-        // ripiego su 70 della CLI: se il giro non chiudesse, un envelope
+        // `from_stable_name` e' l'inverso di `as_str`, ed e' cio' che regge
+        // il ripiego su 70 della CLI: se il giro non chiudesse, un envelope
         // legittimo verrebbe letto come categoria sconosciuta e degradato a
         // errore interno.
         for &categoria in ErrorCategory::ALL {
             assert_eq!(
-                ErrorCategory::from_canonical(categoria.as_str()),
+                ErrorCategory::from_stable_name(categoria.as_str()),
                 Some(categoria),
-                "{categoria:?} non si rilegge dal proprio nome canonico"
+                "{categoria:?} non si rilegge dal proprio nome stabile"
             );
         }
         assert_eq!(
-            ErrorCategory::from_canonical("categoria_di_un_altro_binario"),
+            ErrorCategory::from_stable_name("categoria_di_un_altro_binario"),
             None,
             "una stringa che non e' una categoria deve restare non riconosciuta"
         );
@@ -2592,10 +2612,12 @@ mod tests {
     }
 
     #[test]
-    fn i_nomi_canonici_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti() {
-        // R9.5: l'enumerazione canonica delle categorie; il sottoinsieme
-        // usato dal componente e' mapping in `category()`, mai valori
-        // propri.
+    fn i_nomi_stabili_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti() {
+        // I nomi stabili pubblici delle categorie. Diciotto sono anche
+        // canonici §9 (R9.5, il sottoinsieme usato dal componente); due sono
+        // estensioni locali della Fase 4, e la tabella qui sotto non fa
+        // differenza perche' verifica la STABILITA' del nome, che vale per
+        // tutti e venti — non la sua autorita', che e' dichiarata altrove.
         //
         // Il commento precedente diceva che «la tabella e' esaustiva per
         // costruzione: aggiungere una variante senza toccare questo test lo
@@ -2609,7 +2631,7 @@ mod tests {
         // La tabella resta scritta a mano — e' la seconda opinione su
         // `as_str`, e derivarla renderebbe il test una tautologia — ma ora
         // si itera `ErrorCategory::ALL` e le si CHIEDE di nominare ogni
-        // categoria dichiarata.
+        // categoria supportata.
         let all = [
             (ErrorCategory::InvalidPlan, "invalid_plan"),
             (ErrorCategory::InvalidConfiguration, "invalid_configuration"),
@@ -2640,16 +2662,16 @@ mod tests {
                 .iter()
                 .find_map(|(dichiarata, nome)| (dichiarata == categoria).then_some(*nome))
                 .unwrap_or_else(|| {
-                    panic!("{categoria:?} non compare nella tabella dei nomi canonici")
+                    panic!("{categoria:?} non compare nella tabella dei nomi stabili")
                 });
-            assert_eq!(categoria.as_str(), atteso, "as_str canonico §9");
+            assert_eq!(categoria.as_str(), atteso, "nome stabile pubblico");
         }
         // E nessuna riga della tabella nomina una categoria che non esiste
         // piu': senza questo, una rimozione lascerebbe una riga morta.
         assert_eq!(
             all.len(),
             ErrorCategory::ALL.len(),
-            "la tabella e l'enumerazione hanno lunghezze diverse"
+            "la tabella e l'elenco delle categorie hanno lunghezze diverse"
         );
     }
 

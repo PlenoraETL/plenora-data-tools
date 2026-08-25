@@ -54,7 +54,7 @@ mod tests {
     use plenora_core::ErrorCategory;
 
     #[test]
-    fn l_elenco_delle_categorie_viene_dalla_fonte_canonica() {
+    fn l_elenco_delle_categorie_viene_da_una_fonte_sola() {
         // Nessuna copia locale: l'elenco e' `ErrorCategory::ALL`, e la sua
         // completezza e' presidiata in `plenora-core` dalla coppia
         // `ALL` + `index` (match esaustivo). La versione precedente di
@@ -62,9 +62,13 @@ mod tests {
         // `len() == 18` sul PROPRIO array: una condizione che sarebbe
         // rimasta vera aggiungendo una diciannovesima variante all'enum.
         // Prometteva un controllo che non faceva.
+        //
+        // «Canonica» sarebbe la parola sbagliata per la fonte: diciotto
+        // categorie vengono dal canone congelato, due sono estensioni locali
+        // della Fase 4. Cio' che conta qui e' che la fonte sia UNA.
         assert!(
             !ErrorCategory::ALL.is_empty(),
-            "l'elenco canonico non e' vuoto"
+            "l'elenco delle categorie supportate non e' vuoto"
         );
     }
 
