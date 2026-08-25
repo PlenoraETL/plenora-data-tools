@@ -605,13 +605,68 @@ fn un_errore_di_io_resta_io_e_conserva_la_causa() {
     );
 }
 
-/// La diagnostica di riga non cambia la categoria di cio' che avvolge.
+/// La diagnostica di riga non cambia la categoria, e **non si perde**.
+///
+/// La prima stesura di questo test non costruiva affatto il wrapper: passava
+/// un limite semplice, quindi era verde senza attraversare il ramo che
+/// dichiarava di verificare. E' il difetto che aveva permesso alla
+/// ricorsione di scartare `diagnostics` in silenzio.
 #[test]
-fn la_diagnostica_di_riga_non_maschera_un_limite() {
+fn la_diagnostica_di_riga_sopravvive_alla_classificazione() {
+    use plenora_core::diagnostics::{
+        RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+        ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+    };
     use plenora_core::error::{ErrorCategory, ErrorPhase};
+    use std::collections::BTreeMap;
 
-    let avvolto = ArrowTransportError::IpcTooManyMetadataPairs(300, 256);
+    // Le regole di `validate_for_emission` sono strette e si tengono a
+    // vicenda: conteggi che sommano a `observed_total`, esempi in numero
+    // esatto quando la diagnostica e' completa, `total` non nullo. Un payload
+    // inventato viene rifiutato, e l'errore degrada a `Internal` — cioe' il
+    // test verificherebbe un'altra cosa.
+    let mut counts = BTreeMap::new();
+    counts.insert("conversion.invalid_date".to_owned(), 1_u64);
+    let payload = RowDiagnostics {
+        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+        scope: RowDiagnosticScope::Read,
+        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+        completeness: RowDiagnosticsCompleteness::Complete,
+        knowledge_limits: None,
+        observed_total: 1,
+        total: Some(1),
+        input_total: None,
+        counts,
+        examples_limit: 2,
+        examples_truncated: false,
+        examples: vec![RowDiagnosticExample {
+            source_index: 0,
+            cause: "conversion.invalid_date".to_owned(),
+            column: Some("value".to_owned()),
+            key: None,
+            write_state: None,
+        }],
+        diagnostic_state_counts: None,
+        write_outcome: None,
+    };
+    let avvolto =
+        ArrowTransportError::IpcTooManyMetadataPairs(300, 256).with_row_diagnostics(payload);
+    // Se `with_row_diagnostics` avesse rifiutato il payload, l'errore sarebbe
+    // degradato a `Internal` e questo test verificherebbe un'altra cosa.
+    assert!(
+        matches!(avvolto, ArrowTransportError::RowDiagnostics { .. }),
+        "il wrapper non e' stato costruito: il payload e' stato rifiutato"
+    );
+
     let tradotto = read_error(avvolto);
-    assert_eq!(tradotto.category(), ErrorCategory::ResourceLimit);
+    assert_eq!(
+        tradotto.category(),
+        ErrorCategory::ResourceLimit,
+        "la categoria appartiene alla causa, non all'involucro"
+    );
     assert_eq!(tradotto.phase(), ErrorPhase::Read);
+    assert!(
+        tradotto.row_diagnostics().is_some(),
+        "la diagnostica e' stata scartata dalla classificazione"
+    );
 }

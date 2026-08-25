@@ -82,6 +82,12 @@ pub enum IpcFormat {
 fn read_error(error: ArrowTransportError) -> PlenoraError {
     use ArrowTransportError as E;
 
+    /// Testo di un errore che il validatore IPC non puo' produrre.
+    ///
+    /// Statico e senza dati: nomina il punto, non l'input.
+    const IMPOSSIBILE_AL_CONFINE: &str =
+        "errore di esecuzione riportato dal lettore di confine IPC";
+
     let errore = match error {
         // --- I/O: la causa si conserva, non si stampa ----------------------
         //
@@ -142,14 +148,21 @@ fn read_error(error: ArrowTransportError) -> PlenoraError {
         | E::OutputColumnExists(_)
         | E::WrongGeometryType { .. } => PlenoraError::DataMapping(error_testo(&error)),
 
-        // --- Non raggiungibili leggendo un file ----------------------------
+        // --- Impossibili dal validatore IPC: difetto NOSTRO ----------------
         //
-        // Parametri di operazione, kernel, join, backend: nascono
-        // ESEGUENDO, e questa funzione traduce solo gli errori del lettore di
-        // confine. Restano `DataMapping` perche' e' la categoria che avevano
-        // prima: cambiarla sarebbe una modifica di comportamento su un
-        // percorso che non dovrebbe esistere, decisa senza poterla osservare.
-        // Se una di queste comparisse qui, sarebbe un difetto di collegamento.
+        // Parametri di operazione, kernel, join, backend: nascono ESEGUENDO, e
+        // questa funzione traduce solo gli errori del lettore di confine.
+        //
+        // La stesura precedente le lasciava in `DataMapping` «per non cambiare
+        // comportamento su un percorso che non dovrebbe esistere». Era la
+        // stessa classe del difetto su `Io`, appena corretto: una causa
+        // interna attribuita ai dati. Conservare il vecchio fallback non e'
+        // compatibilita' — e' conservare una diagnosi falsa proprio dove il
+        // codice dichiara che non puo' succedere.
+        //
+        // Il testo e' **statico**: non porta nulla dell'errore originale,
+        // perche' `Internal` dice «difetto nostro» e il messaggio nomina il
+        // punto, mai il dato (`errori-e-limiti.md`).
         E::MissingParameter { .. }
         | E::UnexpectedParameter { .. }
         | E::InvalidParameter { .. }
@@ -165,19 +178,30 @@ fn read_error(error: ArrowTransportError) -> PlenoraError {
         | E::ExtendedAlgorithm(_)
         | E::Predicate(_)
         | E::Analysis(_)
-        | E::SpatialJoin(_) => PlenoraError::DataMapping(error_testo(&error)),
+        | E::SpatialJoin(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
 
         #[cfg(feature = "geos-backend")]
-        E::MakeValid(_) => PlenoraError::DataMapping(error_testo(&error)),
+        E::MakeValid(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
         #[cfg(feature = "proj-backend")]
-        E::Reproject(_) => PlenoraError::DataMapping(error_testo(&error)),
+        E::Reproject(_) => PlenoraError::Internal(IMPOSSIBILE_AL_CONFINE.to_owned()),
 
-        // --- Diagnostica di riga: decide l'errore che avvolge --------------
+        // --- Diagnostica di riga: si classifica la causa e si RIATTACCA ----
         //
-        // La categoria appartiene alla causa, non all'involucro: senza questa
-        // riga un limite avvolto in diagnostica uscirebbe come mappatura.
-        E::RowDiagnostics { source, .. } => {
-            return read_error(*source).with_phase(ErrorPhase::Read)
+        // La categoria appartiene alla causa, non all'involucro. Ma la
+        // stesura precedente ricorreva **scartando** `diagnostics`: la
+        // categoria sopravviveva e il payload no, cioe' si perdeva
+        // silenziosamente l'informazione piu' specifica che l'errore avesse.
+        //
+        // Riattaccarla costa una riga ed e' corretto comunque, che questo ramo
+        // sia raggiungibile o no dal confine — e non obbliga a decidere una
+        // raggiungibilita' che nessuno puo' osservare da qui.
+        E::RowDiagnostics {
+            source,
+            diagnostics,
+        } => {
+            return read_error(*source)
+                .with_row_diagnostics(*diagnostics)
+                .with_phase(ErrorPhase::Read)
         }
     };
     errore.with_phase(ErrorPhase::Read)
@@ -314,9 +338,14 @@ impl Iterator for BoundaryBatches {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Io` se il file non si apre, `PlenoraError::DataMapping`
-/// (taggato [`ErrorPhase::Read`]) se il framing e' malformato, oltre i limiti
-/// di risorse, oppure se arrow va in panico sullo schema.
+/// Tutti taggati [`ErrorPhase::Read`], e distinti per categoria — la
+/// distinzione conta, perche' dice a chi legge dove guardare:
+///
+/// | categoria | quando |
+/// |---|---|
+/// | `PlenoraError::Io` | il file non si apre, non si legge o non si riavvolge. La causa `std::io::Error` e' conservata |
+/// | `PlenoraError::ResourceLimit` | l'ingresso supera un tetto del confine: byte, messaggi, batch, righe, colonne, complessita' dello schema, custom metadata |
+/// | `PlenoraError::DataMapping` | il framing e' malformato, lo schema o il contratto non sono quelli attesi, oppure arrow va in panico sullo schema |
 pub fn open_with_format(
     path: &Path,
     format: IpcFormat,
