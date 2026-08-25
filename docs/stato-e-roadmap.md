@@ -291,7 +291,7 @@ La risoluzione è una procedura indipendente,
 `risolvi_commit(commit_token, destinazione)`, chiamabile da un processo
 successivo, e rende **osservazioni, non decisioni**: `CommittedMatching` —
 che richiede sigillo e struttura validi, non solo la chiave —
-`OccupiedByDifferentExecution`, `IdentityMissing`, `Absent`,
+`OccupiedByOtherAttempt`, `IdentityMissing`, `Absent`,
 `InvalidOrUnreadable`. In particolare `Absent` **non** autorizza a riprovare:
 un file può mancare anche per perdita di durabilità o rimozione esterna.
 
@@ -307,13 +307,26 @@ nessuno lo dica. Il no-clobber regge in entrambi i rami; il silenzio no. Dopo
 il commit si verifica che il temporaneo non ci sia più, e se c'è lo si riporta
 con l'avvertenza machine-readable.
 
-**F4-20 — Una proiezione semantica separa i metadati operativi.** Non basta
-non leggere una chiave: oggi `DataContract` conserva l'intero `Schema`, il
-`plan_hash` include tutti i metadati e l'esecutore li confronta. Un token
-operativo cambierebbe l'identità di un piano immutato e farebbe fallire il
-confronto dei contratti su un artefatto valido. Serve una proiezione unica,
-applicata a costruzione del contratto, identità del piano e confronto, con
-l'invariante: aggiungere chiavi operative non muove nessuna delle tre.
+**F4-20 — I metadati operativi stanno nel footer IPC, non nello schema.** Il
+formato Arrow IPC ha i custom metadata di file, che vivono nel footer:
+`FileWriter::write_metadata` li scrive, `FileReader::custom_metadata` li
+rilegge, e il percorso d'uscita usa già `FileWriter`. Il `commit_token` va lì.
+
+`Schema`, `DataContract`, `plan_hash` e i confronti restano invariati **per
+costruzione**, senza regole da applicare in tre punti e senza il rischio che
+un namespace escluso «perché operativo» diventi un giorno semanticamente
+importante mentre nessuno lo guarda più. L'artefatto resta un singolo file
+Arrow IPC standard.
+
+Una stesura precedente sosteneva che un contenitore IPC non avesse posto per
+byte propri fuori dallo schema, e da quella premessa falsa faceva discendere
+una proiezione semantica applicata a tre punti. Non serve.
+
+**F4-21 — `CommitToken` è un tipo chiuso.** Forma canonica e alfabeto
+ristretto, lunghezza massima dichiarata, validazione prima dello spawn,
+costruzione solo tramite un costruttore che valida, e **mai il valore grezzo
+negli errori** — coerente con la regola per cui gli errori non trasportano
+dati.
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
