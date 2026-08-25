@@ -90,7 +90,7 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | prototipi conclusi ([`prototipi-isolamento.md`](prototipi-isolamento.md)), progetto rivisto e di nuovo in review ([`isolamento.md`](isolamento.md)) |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | due cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto **non approvato** per l'implementazione ([`isolamento.md`](isolamento.md)) |
 | 5 | il legacy ridotto a un confine di migrazione | sì | |
 | 6 | superficie pubblica e commenti | no | |
 
@@ -191,16 +191,60 @@ Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
 codice: worker, supervisore, protocollo fra i due e limiti di processo sono
 **progettati** in [`isolamento.md`](isolamento.md) e **non implementati**.
 
-I due prototipi di piattaforma sono **conclusi**. Hanno dimostrato nascita già
-vincolata, contenimento e attribuzione su Linux e su Windows, e hanno smentito
-sette assunzioni del progetto: le misure e le conseguenze stanno in
-[`prototipi-isolamento.md`](prototipi-isolamento.md).
+I prototipi hanno avuto **due cicli**, e sono **evidenza esplorativa**: le
+misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md).
 
-Il progetto **non è comunque congelato**. Alla chiusura dei prototipi il
-disegno torna in review per obbligo, anche essendo riusciti entrambi: le
-correzioni che le misure hanno imposto sono sostanziali, e vanno approvate
-prima di diventare la base delle PR. Nessuna PR di codice prima di
-quell'approvazione.
+Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
+
+- su **Linux** regge solo se il dominio è reso foglia dal kernel. Il secondo
+  ciclo ha eseguito un'evasione in tre passi — crea un sottogruppo, ci si
+  sposta, delega il controller — dopo la quale `memory.events.local` non vede
+  più l'uccisione;
+- su **Windows** nessuna fonte è sufficiente da sola: la notifica non è
+  garantita, la violazione interrogabile vive 25 millisecondi — meno di quanto
+  duri la barriera di quiescenza — e l'unico indicatore durevole ha falsi
+  positivi misurati, mentre l'assenza di falsi negativi non è dimostrata. La
+  piattaforma è **non supportata** (`F4-11`), e le sue misure restano solo
+  come motivazione.
+
+Il progetto **non è congelato** e non è approvato per l'implementazione.
+Nessuna PR di codice prima dell'approvazione esplicita.
+
+**F4-9 — Il dominio è una foglia dimostrata.** L'attribuzione su Linux vale
+solo se il worker non può creare discendenti: `cgroup.max.depth = 0`, worker
+senza privilegi sulla gerarchia, e lettura anche degli eventi gerarchici come
+rete. Un dominio non sigillato non è un dominio osservabile.
+
+**F4-10 — La pubblicazione è preceduta da una barriera causale.** Quiescenza
+del dominio, poi snapshot e drain dell'evidenza, poi classificazione
+definitiva, poi il rename. Un OOM tardivo non può essere degradato ad
+avvertenza: il prototipo ha misurato un capofila uscito con 0, un processo
+ancora vivo e l'evidenza arrivata duecento millisecondi dopo.
+
+La quiescenza si legge da `cgroup.events`, campo `populated`, che il kernel
+garantisce comprendere i discendenti — **non** da `cgroup.procs`, che ha
+riportato `0` mentre un processo del dominio era vivo un livello sotto, e
+nemmeno da una scansione ricorsiva, che è una corsa.
+
+**F4-12 — Il dominio deve essere uccidibile.** `memory.oom.group = 1` non
+uccide i task con `oom_score_adj = -1000`, che si eredita da un chiamante
+protetto. Il prototipo ha misurato trecentocinque invocazioni dell'OOM e zero
+uccisioni, con il dominio bloccato. Lo spawner normalizza `oom_score_adj`, lo
+**rilegge** e fallisce chiuso; il supervisore dispone di `cgroup.kill`, che
+non consulta quel valore.
+
+**F4-13 — L'evidenza è una struttura, non un booleano.** Delta locali e
+gerarchici insieme — `oom`, `oom_kill`, `oom_group_kill` — con una
+classificazione dichiarata per ogni combinazione, compresa quella in cui il
+limite è raggiunto e nessuno è uccidibile.
+
+**F4-14 — Ogni proprietà configurata va riletta.** Tetto, group kill, sigillo,
+swap, `oom_score_adj` e leggibilità di `cgroup.events`: il preflight le scrive
+e le verifica, e il profilo isolato non parte se una sola diverge.
+
+**F4-11 — Il profilo isolato su Windows è non supportato** finché non esiste
+una dipendenza vettata che copra tetto ed evidenza senza `unsafe`. La deroga
+alla regola permanente di `AGENTS.md` non è una decisione di questa fase.
 
 **F4-7 — Il tetto del dominio non è ampliabile dall'input.** Il limite in
 vigore è il minimo fra ciò che il piano chiede e la politica dell'host, che non

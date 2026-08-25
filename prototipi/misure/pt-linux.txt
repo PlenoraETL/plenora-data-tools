@@ -1,4 +1,4 @@
-﻿PT-Linux — prototipo bloccante fase 4
+PT-Linux — prototipo bloccante fase 4
 MISURA kernel 6.18.33.2-microsoft-standard-WSL2
 MISURA cgroup.controllers cpuset cpu io memory hugetlb pids rdma
 MISURA uid 0          0 4294967295

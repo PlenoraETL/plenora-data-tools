@@ -1,4 +1,4 @@
-﻿PT-Windows — prototipo bloccante fase 4
+PT-Windows — prototipo bloccante fase 4
 MISURA supervisore.gia_in_un_job no
 MISURA supervisore.commit 655360
 
@@ -127,7 +127,7 @@ MISURA s6-annidato.notifica_limite si
 === s7-infimo — inerte ===
 MISURA s7-infimo.porta_associata si
     | SPAWNER commit-proprio 638976
-    | 
+    |
     | thread 'main' (37856) has overflowed its stack
 MISURA s7-infimo.codice Some(-1073741571)
 MISURA s7-infimo.worker_in_job no

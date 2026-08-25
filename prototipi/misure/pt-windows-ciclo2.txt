@@ -1,0 +1,234 @@
+PT-Windows — prototipo bloccante fase 4
+MISURA supervisore.gia_in_un_job no
+MISURA supervisore.commit 614400
+
+=== S1 — residuo del loader (CREATE_SUSPENDED + assegnazione) ===
+MISURA s1.commit_prima_dell_associazione 385024
+MISURA s1.assegnazione riuscita
+MISURA s1.in_questo_job si
+MISURA s1.job_peak_dopo_assegnazione 385024
+MISURA s1.job_peak_processo 385024
+MISURA s1.thread_ripresi 1
+MISURA s1.codice Some(0)
+MISURA s1.job_peak_finale 724992
+
+=== s2-nascita — inerte ===
+MISURA s2-nascita.porta_associata si
+    | SPAWNER commit-proprio 643072
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario inerte
+    > CARICO inerte fine
+MISURA s2-nascita.codice Some(0)
+MISURA s2-nascita.worker_in_job si
+MISURA s2-nascita.allocazione_negata no
+MISURA s2-nascita.vivo_dopo_il_rifiuto no
+MISURA s2-nascita.job_peak 1454080
+MISURA s2-nascita.processo_peak 753664
+MISURA s2-nascita.tetto 67108864
+MISURA s2-nascita.messaggi NEW_PROCESS(48536) NEW_PROCESS(45252) EXIT_PROCESS(45252) EXIT_PROCESS(48536) ACTIVE_PROCESS_ZERO(0)
+MISURA s2-nascita.notifica_limite no
+
+=== s3-chiedi — chiedi ===
+MISURA s3-chiedi.porta_associata si
+    | SPAWNER commit-proprio 610304
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario chiedi
+    > CARICO richiesta 2^30 negata
+    > CARICO richiesta 2^34 negata
+    > CARICO richiesta 2^38 negata
+    > CARICO richiesta 2^42 negata
+    > CARICO richiesta 2^46 negata
+    > CARICO fine-richieste
+MISURA s3-chiedi.codice Some(0)
+MISURA s3-chiedi.worker_in_job si
+MISURA s3-chiedi.allocazione_negata no
+MISURA s3-chiedi.vivo_dopo_il_rifiuto no
+MISURA s3-chiedi.job_peak 70506457636864
+MISURA s3-chiedi.processo_peak 70506456969216
+MISURA s3-chiedi.tetto 67108864
+MISURA s3-chiedi.messaggi NEW_PROCESS(25156) NEW_PROCESS(43716) JOB_MEMORY_LIMIT(43716) EXIT_PROCESS(43716) EXIT_PROCESS(25156) ACTIVE_PROCESS_ZERO(0)
+MISURA s3-chiedi.notifica_limite si
+
+=== s4-tocca — tocca ===
+MISURA s4-tocca.porta_associata si
+    | SPAWNER commit-proprio 643072
+    | SPAWNER worker-codice Some(42)
+    > CARICO in-job si
+    > CARICO commit-iniziale 643072
+    > CARICO scenario tocca
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63741952
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+MISURA s4-tocca.codice Some(42)
+MISURA s4-tocca.worker_in_job si
+MISURA s4-tocca.allocazione_negata si
+MISURA s4-tocca.vivo_dopo_il_rifiuto si
+MISURA s4-tocca.job_peak 68677632
+MISURA s4-tocca.processo_peak 67977216
+MISURA s4-tocca.tetto 67108864
+MISURA s4-tocca.messaggi NEW_PROCESS(31796) NEW_PROCESS(55896) JOB_MEMORY_LIMIT(55896) EXIT_PROCESS(55896) EXIT_PROCESS(31796) ACTIVE_PROCESS_ZERO(0)
+MISURA s4-tocca.notifica_limite si
+
+=== s5-figlio — figlio ===
+MISURA s5-figlio.porta_associata si
+    | SPAWNER commit-proprio 606208
+    | SPAWNER worker-codice Some(0)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario figlio
+    > CARICO figlio-pid 57736
+    > CARICO in-job si
+    > CARICO commit-iniziale 643072
+    > CARICO scenario tocca
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63741952
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+    > CARICO figlio-codice Some(42)
+    > CARICO padre-sopravvissuto si
+MISURA s5-figlio.codice Some(0)
+MISURA s5-figlio.worker_in_job si
+MISURA s5-figlio.allocazione_negata si
+MISURA s5-figlio.vivo_dopo_il_rifiuto si
+MISURA s5-figlio.job_peak 69332992
+MISURA s5-figlio.processo_peak 67952640
+MISURA s5-figlio.tetto 67108864
+MISURA s5-figlio.messaggi NEW_PROCESS(47792) NEW_PROCESS(4388) NEW_PROCESS(57736) JOB_MEMORY_LIMIT(57736) EXIT_PROCESS(57736) EXIT_PROCESS(4388) EXIT_PROCESS(47792) ACTIVE_PROCESS_ZERO(0)
+MISURA s5-figlio.notifica_limite si
+
+=== s6-annidato — annidato ===
+MISURA s6-annidato.porta_associata si
+    | SPAWNER commit-proprio 643072
+    | SPAWNER worker-codice Some(42)
+    > CARICO in-job si
+    > CARICO commit-iniziale 647168
+    > CARICO scenario annidato
+    > CARICO annidato tetto-alto-impostato si
+    > CARICO annidato assegnato si
+    > CARICO toccati 33554432
+    > CARICO negata-a 62914560 errore TryReserveError { kind: AllocError { layout: Layout { size: 4194304, align: 1 (1 << 0) }, non_exhaustive: () } }
+    > CARICO commit-al-rifiuto 63750144
+    > CARICO vivo-dopo-il-rifiuto si (riserva-piccola=ok)
+MISURA s6-annidato.codice Some(42)
+MISURA s6-annidato.worker_in_job si
+MISURA s6-annidato.allocazione_negata si
+MISURA s6-annidato.vivo_dopo_il_rifiuto si
+MISURA s6-annidato.job_peak 68718592
+MISURA s6-annidato.processo_peak 68022272
+MISURA s6-annidato.tetto 67108864
+MISURA s6-annidato.messaggi NEW_PROCESS(27632) NEW_PROCESS(41104) JOB_MEMORY_LIMIT(41104) EXIT_PROCESS(41104) EXIT_PROCESS(27632) ACTIVE_PROCESS_ZERO(0)
+MISURA s6-annidato.notifica_limite si
+
+=== s7-infimo — inerte ===
+MISURA s7-infimo.porta_associata si
+    | SPAWNER commit-proprio 643072
+    |
+    | thread 'main' (22340) has overflowed its stack
+MISURA s7-infimo.codice Some(-1073741571)
+MISURA s7-infimo.worker_in_job no
+MISURA s7-infimo.allocazione_negata no
+MISURA s7-infimo.vivo_dopo_il_rifiuto no
+MISURA s7-infimo.job_peak 667648
+MISURA s7-infimo.processo_peak 667648
+MISURA s7-infimo.tetto 262144
+MISURA s7-infimo.messaggi NEW_PROCESS(48336) JOB_MEMORY_LIMIT(48336) ABNORMAL_EXIT_PROCESS(48336) ACTIVE_PROCESS_ZERO(0)
+MISURA s7-infimo.notifica_limite si
+
+=== W1 — capofila a 0, porta mai drenata ===
+MISURA pt-windows-w1-59444-1.notifica_impostata si
+MISURA w1.codice_capofila Some(0)
+MISURA w1.figlio_ha_sfondato si
+MISURA w1.violazione_interrogabile si
+MISURA w1.violation_limit_flags 0x200
+MISURA w1.job_memory 77824
+MISURA w1.job_memory_limit 50331648
+MISURA w1.memoria_risulta_violata si
+MISURA w1.prova_disponibile_senza_messaggi SI
+MISURA w1.messaggi_in_coda NEW_PROCESS(48864) NEW_PROCESS(632) NEW_PROCESS(16888) altro(0) JOB_MEMORY_LIMIT(16888) EXIT_PROCESS(16888) EXIT_PROCESS(632) EXIT_PROCESS(48864) ACTIVE_PROCESS_ZERO(0)
+
+=== W2 — nessuna completion port associata ===
+MISURA pt-windows-w2-59444-2.notifica_impostata si
+MISURA w2.codice Some(42)
+MISURA w2.ha_sfondato si
+MISURA w2.violazione_interrogabile si
+MISURA w2.violation_limit_flags 0x200
+MISURA w2.job_memory 0
+MISURA w2.job_memory_limit 50331648
+MISURA w2.memoria_risulta_violata si
+MISURA w2.prova_indipendente_dalla_porta SI
+
+=== W3 — quiescenza: capofila a 0 con un orfano vivo ===
+MISURA pt-windows-w3-59444-3.notifica_impostata si
+MISURA w3.codice_capofila Some(0)
+MISURA w3.processi_attivi_alla_wait 1
+MISURA w3.violazione_visibile_alla_wait si
+MISURA w3.attesa_quiescenza_ms 50
+MISURA w3.processi_attivi_dopo 0
+MISURA w3.violazione_interrogabile si
+MISURA w3.violation_limit_flags 0x0
+MISURA w3.job_memory 0
+MISURA w3.job_memory_limit 50331648
+MISURA w3.memoria_risulta_violata no
+MISURA w3.evidenza_arrivata_in_ritardo no
+
+=== W5 — ripetizioni del residuo del loader ===
+MISURA w5.residuo_loader n=5 min=376832 max=389120 valori=[385024, 389120, 380928, 376832, 380928]
+MISURA w5.commit_spawner n=5 min=634880 max=647168 valori=[647168, 647168, 643072, 643072, 634880]
+
+=== W6 — per quanto resta interrogabile la violazione ===
+MISURA pt-windows-w6-59444-6.notifica_impostata si
+MISURA w6.codice Some(42)
+MISURA w6.visibile_al_primo_campione si
+MISURA w6.campioni_con_violazione 1
+MISURA w6.sparita_dopo_ms 25
+MISURA w6.prova_durevole NO — e' un livello, non un fermo
+
+=== W7 — il picco del job sopravvive alla quiescenza? ===
+MISURA w7.sfonda.codice Some(42)
+MISURA w7.sfonda.picco_subito 68710400
+MISURA w7.sfonda.picco_dopo_500ms 68710400
+MISURA w7.sfonda.tetto 67108864
+MISURA w7.sfonda.picco_stabile si
+MISURA w7.sfonda.picco_almeno_il_tetto si
+MISURA w7.sfonda.verdetto corretto — ha sfondato ed e' rilevato
+MISURA w7.sotto_tetto.codice Some(0)
+MISURA w7.sotto_tetto.picco_subito 1441792
+MISURA w7.sotto_tetto.picco_dopo_500ms 1441792
+MISURA w7.sotto_tetto.tetto 67108864
+MISURA w7.sotto_tetto.picco_stabile si
+MISURA w7.sotto_tetto.picco_almeno_il_tetto no
+MISURA w7.sotto_tetto.verdetto corretto — non ha sfondato e non risulta
+MISURA w7.chiede_e_basta.codice Some(0)
+MISURA w7.chiede_e_basta.picco_subito 70506457665536
+MISURA w7.chiede_e_basta.picco_dopo_500ms 70506457665536
+MISURA w7.chiede_e_basta.tetto 67108864
+MISURA w7.chiede_e_basta.picco_stabile si
+MISURA w7.chiede_e_basta.picco_almeno_il_tetto si
+MISURA w7.chiede_e_basta.verdetto FALSO POSITIVO — non ha sfondato ma risulta
+MISURA w7.figlio_sfonda.codice Some(0)
+MISURA w7.figlio_sfonda.picco_subito 69341184
+MISURA w7.figlio_sfonda.picco_dopo_500ms 69341184
+MISURA w7.figlio_sfonda.tetto 67108864
+MISURA w7.figlio_sfonda.picco_stabile si
+MISURA w7.figlio_sfonda.picco_almeno_il_tetto si
+MISURA w7.figlio_sfonda.verdetto corretto — ha sfondato ed e' rilevato
+
+=== W4 — supervisore gia' dentro un job esterno ===
+MISURA w4.supervisore_nel_job_esterno si
+MISURA w4.gia_in_un_job si
+MISURA pt-windows-w4-59444-4.notifica_impostata si
+MISURA w4.codice Some(42)
+MISURA w4.contenuto_dal_job_interno si
+MISURA w4.violazione_interrogabile si
+MISURA w4.violation_limit_flags 0x200
+MISURA w4.job_memory 0
+MISURA w4.job_memory_limit 50331648
+MISURA w4.memoria_risulta_violata si
+MISURA w4.prova_regge_con_job_ereditato SI
+
+=== FINE PT-Windows ===

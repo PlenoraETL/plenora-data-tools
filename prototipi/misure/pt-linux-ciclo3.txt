@@ -1,0 +1,478 @@
+PT-Linux — prototipo bloccante fase 4
+MISURA kernel 6.18.33.2-microsoft-standard-WSL2
+MISURA cgroup.controllers cpuset cpu io memory hugetlb pids rdma
+MISURA uid 0          0 4294967295
+
+=== S0 — disponibilita' di clone3 e del flag ===
+MISURA clone3.presente si (ritorno=-1 errno=22)
+MISURA clone3.into_cgroup si (ritorno=-1 errno=9)
+
+=== S0-bis — delega della gerarchia ===
+MISURA gerarchia.processi_spostati 1
+MISURA gerarchia.delegabile si
+
+=== S1 — nascita gia' vincolata (tetto molto basso) ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s1-stretto
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s1-stretto
+    > CARICO scenario chiedi
+    > CARICO oom_score_adj 0
+    > CARICO richiesta 2^30 accettata
+    > CARICO richiesta 2^34 accettata
+    > CARICO richiesta 2^38 accettata
+    > CARICO richiesta 2^42 accettata
+    > CARICO richiesta 2^46 accettata
+    > CARICO fine-richieste
+MISURA s1.codice Some(0)
+MISURA s1.segnale None
+MISURA s1.worker_ha_parlato si
+MISURA s1.memory.max 2097152
+MISURA s1.memory.current 425984
+MISURA s1.memory.peak 524288
+MISURA s1.events.local.high 0
+MISURA s1.events.local.low 0
+MISURA s1.events.local.max 0
+MISURA s1.events.local.oom 0
+MISURA s1.events.local.oom_group_kill 0
+MISURA s1.events.local.oom_kill 0
+
+=== S1-bis — tetto sotto il costo minimo di un processo ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s1bis-infimo
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+MISURA s1bis.codice None
+MISURA s1bis.segnale Some(9)
+MISURA s1bis.worker_ha_parlato no
+MISURA s1bis.memory.max 131072
+MISURA s1bis.memory.current 131072
+MISURA s1bis.memory.peak 131072
+MISURA s1bis.events.local.high 0
+MISURA s1bis.events.local.low 0
+MISURA s1bis.events.local.max 35
+MISURA s1bis.events.local.oom 1
+MISURA s1bis.events.local.oom_group_kill 0
+MISURA s1bis.events.local.oom_kill 1
+
+=== S2 — il worker nasce dentro il dominio (tetto ampio) ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s2-nascita
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s2-nascita
+    > CARICO scenario sottogruppo
+    > CARICO oom_score_adj 0
+    > CARICO sottogruppo creato /sys/fs/cgroup/pt-linux/s2-nascita/interno
+MISURA s2.nato_dentro si
+MISURA s2.puo_creare_sottogruppo si
+MISURA s2.memory.max 268435456
+MISURA s2.memory.current 417792
+MISURA s2.memory.peak 524288
+MISURA s2.events.local.high 0
+MISURA s2.events.local.low 0
+MISURA s2.events.local.max 0
+MISURA s2.events.local.oom 0
+MISURA s2.events.local.oom_group_kill 0
+MISURA s2.events.local.oom_kill 0
+
+=== S3 — allocazione richiesta ma non toccata ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s3-chiedi
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s3-chiedi
+    > CARICO scenario chiedi
+    > CARICO oom_score_adj 0
+    > CARICO richiesta 2^30 accettata
+    > CARICO richiesta 2^34 accettata
+    > CARICO richiesta 2^38 accettata
+    > CARICO richiesta 2^42 accettata
+    > CARICO richiesta 2^46 accettata
+    > CARICO fine-richieste
+MISURA s3.codice Some(0)
+MISURA s3.segnale None
+MISURA s3.2^30 -> accettata
+MISURA s3.2^34 -> accettata
+MISURA s3.2^38 -> accettata
+MISURA s3.2^42 -> accettata
+MISURA s3.2^46 -> accettata
+MISURA s3.memory.max 67108864
+MISURA s3.memory.current 397312
+MISURA s3.memory.peak 520192
+MISURA s3.events.local.high 0
+MISURA s3.events.local.low 0
+MISURA s3.events.local.max 0
+MISURA s3.events.local.oom 0
+MISURA s3.events.local.oom_group_kill 0
+MISURA s3.events.local.oom_kill 0
+
+=== S4 — contenimento: allocazione toccata oltre il tetto ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s4-tocca
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s4-tocca
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+MISURA s4.codice None
+MISURA s4.segnale Some(9)
+MISURA s4.allocazione_negata no
+MISURA s4.terminato_da_segnale si
+MISURA s4.delta.max 35
+MISURA s4.delta.oom 1
+MISURA s4.delta.oom_kill 1
+MISURA s4.delta.oom_group_kill 0
+MISURA s4.memory.max 67108864
+MISURA s4.memory.current 401408
+MISURA s4.memory.peak 67108864
+MISURA s4.events.local.high 0
+MISURA s4.events.local.low 0
+MISURA s4.events.local.max 35
+MISURA s4.events.local.oom 1
+MISURA s4.events.local.oom_group_kill 0
+MISURA s4.events.local.oom_kill 1
+
+=== s5-discendenti — discendenti, memory.oom.group=0 ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s5-discendenti
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s5-discendenti
+    > CARICO scenario figlio
+    > CARICO oom_score_adj 0
+    > CARICO figlio-pid 208
+    > CARICO cgroup 0::/pt-linux/s5-discendenti
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    > CARICO figlio-stato codice=None segnale=Some(9)
+    > CARICO padre-sopravvissuto si
+MISURA s5-discendenti.codice Some(0)
+MISURA s5-discendenti.segnale None
+MISURA s5-discendenti.padre_sopravvissuto si
+MISURA s5-discendenti.figlio codice=None segnale=Some(9)
+MISURA s5-discendenti.delta.max 23
+MISURA s5-discendenti.delta.oom 1
+MISURA s5-discendenti.delta.oom_kill 1
+MISURA s5-discendenti.delta.oom_group_kill 0
+MISURA s5-discendenti.memory.max 67108864
+MISURA s5-discendenti.memory.current 438272
+MISURA s5-discendenti.memory.peak 67108864
+MISURA s5-discendenti.events.local.high 0
+MISURA s5-discendenti.events.local.low 0
+MISURA s5-discendenti.events.local.max 23
+MISURA s5-discendenti.events.local.oom 1
+MISURA s5-discendenti.events.local.oom_group_kill 0
+MISURA s5-discendenti.events.local.oom_kill 1
+
+=== s6-oom-group — discendenti, memory.oom.group=1 ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/s6-oom-group
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/s6-oom-group
+    > CARICO scenario figlio
+    > CARICO oom_score_adj 0
+    > CARICO figlio-pid 210
+    > CARICO cgroup 0::/pt-linux/s6-oom-group
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+MISURA s6-oom-group.codice None
+MISURA s6-oom-group.segnale Some(9)
+MISURA s6-oom-group.padre_sopravvissuto no
+MISURA s6-oom-group.delta.max 18
+MISURA s6-oom-group.delta.oom 1
+MISURA s6-oom-group.delta.oom_kill 3
+MISURA s6-oom-group.delta.oom_group_kill 1
+MISURA s6-oom-group.memory.max 67108864
+MISURA s6-oom-group.memory.current 487424
+MISURA s6-oom-group.memory.peak 67108864
+MISURA s6-oom-group.events.local.high 0
+MISURA s6-oom-group.events.local.low 0
+MISURA s6-oom-group.events.local.max 18
+MISURA s6-oom-group.events.local.oom 1
+MISURA s6-oom-group.events.local.oom_group_kill 1
+MISURA s6-oom-group.events.local.oom_kill 3
+
+=== L7 — dominio sigillato con cgroup.max.depth=0 ===
+MISURA l7-sigillato.max_depth_impostato si
+MISURA l7.max_depth 0
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l7-sigillato
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l7-sigillato
+    > CARICO scenario sottogruppo
+    > CARICO oom_score_adj 0
+    > CARICO sottogruppo rifiutato Resource temporarily unavailable (os error 11)
+MISURA l7.worker_puo_creare_sottogruppo no
+MISURA l7.rifiuto Resource temporarily unavailable (os error 11)
+
+=== L8 — OOM dentro un sottogruppo: local contro gerarchico ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l8-sottogruppo
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l8-sottogruppo/interno
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l8-sottogruppo
+    > CARICO scenario sottogruppo_oom
+    > CARICO oom_score_adj 0
+    > CARICO sottogruppo_oom mkdir-riuscito
+    > CARICO sottogruppo_oom controller-delegato no (Device or resource busy (os error 16))
+    > CARICO cgroup 0::/pt-linux/l8-sottogruppo/interno
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    > CARICO sottogruppo_oom figlio codice=None segnale=Some(9)
+    > CARICO padre-sopravvissuto si
+MISURA l8.codice Some(0)
+MISURA l8.segnale None
+MISURA l8.mkdir-riuscito
+MISURA l8.controller-delegato no (Device or resource busy (os error 16))
+MISURA l8.figlio_ucciso_nel_sottogruppo si
+MISURA l8.delta.local.max 40
+MISURA l8.delta.gerarchico.max 40
+MISURA l8.delta.local.oom 1
+MISURA l8.delta.gerarchico.oom 1
+MISURA l8.delta.local.oom_kill 1
+MISURA l8.delta.gerarchico.oom_kill 1
+MISURA l8.local_e_cieco no
+
+=== L9 — worker non privilegiato (uid 1000) ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l9-nonpriv
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l9-nonpriv
+    > CARICO scenario sottogruppo
+    > CARICO oom_score_adj 0
+    > CARICO sottogruppo rifiutato Permission denied (os error 13)
+MISURA l9.codice Some(0)
+MISURA l9.worker_e_partito si
+MISURA l9.puo_creare_sottogruppo no
+MISURA l9.rifiuto Permission denied (os error 13)
+
+=== L12 — evasione in tre passi dal cgroup osservato ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l12-evasione
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l12-evasione
+    > CARICO scenario evasione
+    > CARICO oom_score_adj 0
+    > CARICO evasione passo1-mkdir riuscito
+    > CARICO evasione passo2-spostamento riuscito
+    > CARICO evasione cgroup-ora 0::/pt-linux/l12-evasione/evaso
+    > CARICO evasione passo3-delega riuscita
+    > CARICO toccati 33554432
+MISURA l12.codice None
+MISURA l12.segnale Some(9)
+MISURA l12.passo1-mkdir riuscito
+MISURA l12.passo2-spostamento riuscito
+MISURA l12.passo3-delega riuscita
+MISURA l12.evasione_riuscita SI
+MISURA l12.delta.local.max 43
+MISURA l12.delta.gerarchico.max 43
+MISURA l12.delta.local.oom 1
+MISURA l12.delta.gerarchico.oom 1
+MISURA l12.delta.local.oom_kill 0
+MISURA l12.delta.gerarchico.oom_kill 1
+MISURA l12.local_e_cieco SI — leggere solo local perde l'evidenza
+
+=== L13 — la stessa evasione contro cgroup.max.depth=0 ===
+MISURA l13-sigillato.max_depth_impostato si
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l13-sigillato
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l13-sigillato
+    > CARICO scenario evasione
+    > CARICO oom_score_adj 0
+    > CARICO evasione passo1-mkdir rifiutato (Resource temporarily unavailable (os error 11))
+MISURA l13.codice Some(0)
+MISURA l13.segnale None
+MISURA l13.passo1-mkdir rifiutato (Resource temporarily unavailable (os error 11))
+MISURA l13.evasione_fermata_al_primo_passo si
+MISURA l13.delta.local.oom 0
+MISURA l13.delta.local.oom_kill 0
+MISURA l13.delta.local.oom_group_kill 0
+
+=== L10 — quiescenza: il capofila esce 0 e lascia un orfano vivo ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l10-orfano
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l10-orfano
+    > CARICO scenario orfano
+    > CARICO oom_score_adj 0
+    > CARICO orfano-pid 218
+    > CARICO capofila-esce-subito con-uscita-0
+MISURA l10.capofila_codice Some(0)
+MISURA l10.processi_vivi_alla_wait 1
+MISURA l10.oom_kill_visibile_alla_wait 0
+MISURA l10.attesa_quiescenza_ms 200
+MISURA l10.processi_vivi_dopo 0
+MISURA l10.oom_kill_dopo_la_quiescenza 1
+MISURA l10.evidenza_arrivata_in_ritardo SI — pubblicare alla wait sarebbe stato un errore
+MISURA l10.memory.max 67108864
+MISURA l10.memory.current 299008
+MISURA l10.memory.peak 67108864
+MISURA l10.events.local.high 0
+MISURA l10.events.local.low 0
+MISURA l10.events.local.max 18
+MISURA l10.events.local.oom 1
+MISURA l10.events.local.oom_group_kill 0
+MISURA l10.events.local.oom_kill 1
+
+=== L11 — ripetizioni del costo d'avvio e del contenimento ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-avvio-0
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-avvio-0
+    > CARICO scenario inerte
+    > CARICO oom_score_adj 0
+    > CARICO inerte fine
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-tetto-0
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-tetto-0
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-avvio-1
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-avvio-1
+    > CARICO scenario inerte
+    > CARICO oom_score_adj 0
+    > CARICO inerte fine
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-tetto-1
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-tetto-1
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-avvio-2
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-avvio-2
+    > CARICO scenario inerte
+    > CARICO oom_score_adj 0
+    > CARICO inerte fine
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-tetto-2
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-tetto-2
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-avvio-3
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-avvio-3
+    > CARICO scenario inerte
+    > CARICO oom_score_adj 0
+    > CARICO inerte fine
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-tetto-3
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-tetto-3
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-avvio-4
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-avvio-4
+    > CARICO scenario inerte
+    > CARICO oom_score_adj 0
+    > CARICO inerte fine
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l11-tetto-4
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l11-tetto-4
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+MISURA l11.picco_avvio n=5 min=262144 max=524288 valori=[262144, 524288, 524288, 524288, 262144]
+MISURA l11.picco_sotto_tetto n=5 min=67108864 max=67108864 valori=[67108864, 67108864, 67108864, 67108864, 67108864]
+
+=== L14 — quiescenza letta da cgroup.events, orfano nello stesso cgroup ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l14-orfano
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l14-orfano
+    > CARICO scenario orfano
+    > CARICO oom_score_adj 0
+    > CARICO orfano-pid 230
+    > CARICO capofila-esce-subito con-uscita-0
+MISURA l14.capofila_codice Some(0)
+MISURA l14.cgroup_procs_alla_wait 1
+MISURA l14.populated_alla_wait Some(true)
+MISURA l14.concordano si
+MISURA l14.attesa_populated_zero_ms 175
+MISURA l14.populated_finale Some(false)
+
+=== L15 — quiescenza con un processo vivo in un sottogruppo ===
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l15-figlio
+    | SPAWNER oom_score_adj-ereditato 0
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l15-figlio
+    > CARICO scenario sottogruppo_vivo
+    > CARICO oom_score_adj 0
+    > CARICO sottogruppo_vivo figlio-pid 232
+    > CARICO sottogruppo_vivo nipote-insediato si dopo 5 ms
+    > CARICO capofila-esce-subito con-uscita-0
+MISURA l15.capofila_codice Some(0)
+MISURA l15.nipote-insediato si dopo 5 ms
+MISURA l15.misura_valida si
+MISURA l15.cgroup_procs_alla_wait 0
+MISURA l15.scansione_ricorsiva_alla_wait 1
+MISURA l15.populated_alla_wait Some(true)
+MISURA l15.cgroup_procs_e_cieco SI — dominio vuoto secondo cgroup.procs, popolato secondo il kernel
+MISURA l15.attesa_populated_zero_ms 1500
+MISURA l15.populated_finale Some(false)
+
+=== L16 — eredita' di oom_score_adj contro memory.oom.group ===
+MISURA l16.supervisore_protetto si
+MISURA l16.supervisore_oom_score_adj -1000
+MISURA l16a-senza.max_depth_impostato si
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l16a-senza
+    | SPAWNER oom_score_adj-ereditato -1000
+    | SPAWNER oom_score_adj-normalizzazione DISATTIVATA (braccio di controllo)
+    > CARICO cgroup 0::/pt-linux/l16a-senza
+    > CARICO scenario tocca
+    > CARICO oom_score_adj -1000
+    > CARICO toccati 33554432
+MISURA l16.senza_normalizzazione.ha_richiesto_cgroup_kill SI — il dominio non si e' spento da solo
+MISURA l16.senza_normalizzazione.codice None
+MISURA l16.senza_normalizzazione.segnale Some(9)
+MISURA l16.senza_normalizzazione.worker_oom_score_adj -1000
+MISURA l16.senza_normalizzazione.verdetto il worker protetto ha resistito al group kill
+MISURA l16.senza_normalizzazione.delta.oom 305
+MISURA l16.senza_normalizzazione.delta.oom_kill 0
+MISURA l16.senza_normalizzazione.delta.oom_group_kill 0
+MISURA l16.senza_normalizzazione.memory.peak 67108864
+MISURA l16b-con.max_depth_impostato si
+    | SPAWNER cgroup-prima-di-exec 0::/pt-linux/l16b-con
+    | SPAWNER oom_score_adj-ereditato -1000
+    | SPAWNER oom_score_adj-riletto 0
+    > CARICO cgroup 0::/pt-linux/l16b-con
+    > CARICO scenario tocca
+    > CARICO oom_score_adj 0
+    > CARICO toccati 33554432
+MISURA l16.con_normalizzazione.ha_richiesto_cgroup_kill no
+MISURA l16.con_normalizzazione.codice None
+MISURA l16.con_normalizzazione.segnale Some(9)
+MISURA l16.con_normalizzazione.worker_oom_score_adj 0
+MISURA l16.con_normalizzazione.verdetto normalizzato e fermato dal group kill, come atteso
+MISURA l16.con_normalizzazione.delta.oom 1
+MISURA l16.con_normalizzazione.delta.oom_kill 2
+MISURA l16.con_normalizzazione.delta.oom_group_kill 1
+MISURA l16.con_normalizzazione.memory.peak 67108864
+
+=== L17 — preflight del dominio: scrivi, poi rileggi ===
+MISURA l17-preflight.max_depth_impostato si
+MISURA l17.memory.max letto=67108864 atteso=67108864 OK
+MISURA l17.memory.oom.group letto=1 atteso=1 OK
+MISURA l17.cgroup.max.depth letto=0 atteso=0 OK
+MISURA l17.memory.swap.max letto=0 atteso=0 OK
+MISURA l17.cgroup.events Some(false)
+MISURA l17.memory_localevents assente
+MISURA l17.mount cgroup /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime 0 0
+
+=== FINE PT-Linux ===

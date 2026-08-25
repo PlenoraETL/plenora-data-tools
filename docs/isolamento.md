@@ -11,12 +11,15 @@ dall'**isolamento**, non dalla previsione. Il ragionamento è in
 
 Baseline strutturale: commit `922aea3`, tag `baseline-pre-fase-4`.
 
-I due prototipi bloccanti della §11.1 sono stati **eseguiti**: le misure e le
-loro conseguenze stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md).
-Hanno dimostrato tutte e tre le proprietà richieste su entrambe le
-piattaforme, e hanno smentito sette cose che questo documento dava per
-scontate. Dove un paragrafo qui sotto riporta un numero, quel numero viene da
-lì.
+I prototipi sono stati eseguiti in **due cicli**: le misure stanno in
+[`prototipi-isolamento.md`](prototipi-isolamento.md), e dove un paragrafo qui
+sotto riporta un numero, quel numero viene da lì.
+
+Nascita vincolata e contenimento sono dimostrati su entrambe le piattaforme.
+**L'attribuzione no.** Su Linux regge solo se il dominio è reso foglia dal
+kernel; su Windows nessuna fonte singola è sufficiente, e la combinazione
+lascia un comportamento residuo dichiarato. Il primo ciclo aveva concluso
+diversamente, ed era prematuro.
 
 ---
 
@@ -50,9 +53,11 @@ peggio di una che si sa di non avere.
 | **NG-6** | Su macOS **non c'è contenimento**: il profilo isolato non è supportato finché un prototipo non dimostri contenimento *e* attribuzione. |
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
 | **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
+| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
 | **NG-10** | **Contenere non significa terminare.** Linux uccide, Windows nega l'allocazione e lascia il processo vivo. Non garantiamo un modo unico di fermarsi: garantiamo che la memoria resti sotto il tetto e che l'evento sia attribuibile. |
 | **NG-11** | Il tetto del dominio **non protegge dalle richieste**, solo dagli addebiti. Su Linux una richiesta da 64 TiB non toccata è stata accettata senza generare alcun evento. Un worker non può difendersi interrogando l'allocatore. |
-| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
+| **NG-12** | **L'attribuzione dipende dal sigillo del dominio.** Se il worker riesce a creare discendenti, l'uccisione avviene altrove e l'evidenza locale non la registra. Il sigillo è verificato nel preflight (§9-bis): senza, il profilo isolato non parte. |
+| **NG-13** | **L'esaurimento del coordinatore non produce un errore strutturato.** Il coordinatore è il processo del chiamante e non ha un tetto nostro: se muore, muore l'invocazione. `GA-1` regge lo stesso — perché la pubblicazione è atomica — ma `GA-2` no, e non c'è nessun esito da leggere. |
 
 ---
 
@@ -161,9 +166,48 @@ La topologia è quindi a tre, non a due:
 
 Il **coordinatore** non materializza mai dati: non legge l'artefatto, non
 costruisce batch, non tocca Arrow. Tiene lo stato della macchina, i timeout, i
-descrittori e i contatori. Il suo consumo è funzione del numero di domini
-vivi, non della dimensione del dato — ed è ciò che rende non circolare il fatto
-che osservi entrambi.
+descrittori, i contatori e il fermo dell'evidenza.
+
+«Non alloca affatto» sarebbe però falso, e la prima stesura lo scriveva. Un
+processo alloca: stack, allocatore, buffer dei messaggi del protocollo. La
+proprietà vera è più debole e più utile:
+
+> la memoria del coordinatore è **limitata per costruzione e indipendente dai
+> dati**: funzione del numero di domini vivi e della dimensione massima di un
+> messaggio del protocollo, entrambe costanti dichiarate.
+
+### Chi osserva il coordinatore: nessuno, e va detto
+
+**Il coordinatore è il processo del chiamante**, e non gli si applica un tetto
+imposto da noi. Metterglielo riporterebbe la ricorsione — servirebbe qualcuno
+che ne osservi la terminazione, e per quel qualcuno di nuovo lo stesso.
+
+La prima stesura se la cavava scrivendo che «il chiamante osserva già la
+propria morte». È falso: **un processo non osserva la propria morte**. Può
+osservarla solo suo padre, o l'ambiente che lo ha avviato. Se il coordinatore
+esaurisce la memoria, non c'è nessun esito da leggere e nessun errore
+strutturato da produrre: l'invocazione semplicemente termina.
+
+Va dichiarato invece che nascosto (`NG-13`):
+
+| | |
+|---|---|
+| `GA-1` — nulla di parziale è visibile | **regge**, ma non grazie a una diagnosi: grazie al fatto che la pubblicazione è atomica e che, morendo prima del rename, non c'è nulla da vedere |
+| `GA-2` — esito attribuibile | **non regge**: non c'è processo che sopravviva per classificare |
+| chi se ne accorge | il padre del chiamante, o l'ambiente. Non noi |
+
+Ciò che dobbiamo al chiamante non è un tetto, ma una **quantità dichiarata** —
+quanto questo componente aggiunge al suo consumo — e la ragione per cui non
+cresce coi dati: nessun buffer di dati, stato per dominio vivo, messaggi con
+un tetto costante.
+
+Una prova di scala — dieci volte i dati, memoria del coordinatore invariata —
+è una **regressione utile**, non una dimostrazione: mostra che non è cresciuta
+in quel caso, non che non possa crescere. La dimostrazione, se la si vuole,
+sta nel codice: nessuna struttura la cui dimensione dipenda dal numero di
+righe o di batch.
+
+### Il picco complessivo è una guida, non una garanzia
 
 ### Due domini distinti, non uno riusato
 
@@ -193,8 +237,21 @@ sarebbe la somma di due grandezze che non esistono insieme. Il chiamante
 ottiene così la promessa che può usare: *nessuna fase supera*
 `max_domain_memory_bytes`.
 
-Il coordinatore ha il proprio tetto, separato e molto più piccolo, dichiarato
-dal componente e non dal piano. È l'unica quantità che si somma alle altre.
+**L'uguaglianza vale però per fase, non per l'istante.** Il kernel conosce
+cgroup *morenti*: un cgroup rimosso può trattenere temporaneamente risorse
+già addebitate finché non sono liberate. Fra la distruzione del dominio del
+worker e la creazione di quello del verificatore può quindi esistere una
+finestra in cui il sistema trattiene più di `max_domain_memory_bytes`. Non è
+stato misurato.
+
+La garanzia si limita perciò a ciò che è dimostrato: **ogni dominio resta
+sotto il proprio tetto** — misurato, cinque ripetizioni, picco esattamente
+pari al tetto. Il picco complessivo del sistema è una guida al
+dimensionamento, non una promessa.
+
+Il coordinatore **non ha un tetto imposto da noi** — il perché è in
+§2-quater — e il suo consumo è l'unica quantità che si somma a quella dei
+domini. Va **dichiarato**, non limitato.
 
 **Invariante.** Il dominio del worker viene distrutto — non solo svuotato —
 prima della creazione di quello del verificatore. Un'esecuzione che li tenesse
@@ -247,8 +304,38 @@ prese, perché ognuna cambia che cosa il campo significa.
 | piani v5 che non hanno il campo | restano **validi e invariati**. Il campo è facoltativo, e la sua assenza significa una cosa sola: il profilo isolato non è selezionabile per quel piano. Nessuna migrazione forzata |
 | obbligatorietà | il campo è obbligatorio **solo** nel profilo isolato. Chiedere l'isolamento senza dichiarare il tetto è incoerente, e va respinto in validazione |
 | forma canonica e `plan_hash` | il campo entra nella forma canonica **solo quando è presente**. Un piano che non lo dichiara ha la stessa forma canonica di prima, quindi lo **stesso** `plan_hash`: nessun identificativo già pubblicato cambia. Un piano che lo dichiara è un piano diverso e ha un identificativo diverso, che è il comportamento giusto |
-| versionamento | nessun incremento della versione del piano: è un campo additivo e facoltativo. La cosa nuova è il **profilo**, non il formato |
+| versionamento | **non è una decisione additiva**, e la prima stesura sbagliava a chiamarla tale: vedi sotto |
 | ratifica in `plenora-contracts` | la ratifica **mirata di questo campo** precede la `PR-2`. È separata dall'adozione generale della nuova linea normativa, che resta un blocker a sé ([`stato-e-roadmap.md`](stato-e-roadmap.md)) |
+
+#### `deny_unknown_fields` rende il campo una rottura, non un'aggiunta
+
+Il piano usa `deny_unknown_fields` **a ogni livello**. Un lettore v5 di oggi,
+messo davanti a un piano che dichiara `max_domain_memory_bytes`, non lo
+ignora: lo **rifiuta**. L'aggiunta è quindi compatibile all'indietro — i piani
+vecchi restano validi — ma **non in avanti**, e la seconda è quella che rompe
+in produzione, dove i lettori vecchi esistono già.
+
+Il precedente è in casa e non lascia molto spazio.
+[`migrazione_v4.rs`](../crates/plenora-engine/src/plan/migrazione_v4.rs)
+documenta che il passaggio da `max_memory_bytes` a
+`max_governed_memory_bytes` ha richiesto **una struttura separata e una
+migrazione esplicita**, proprio perché `deny_unknown_fields` fa di ogni nome
+nuovo un rifiuto. Quel cambiamento aveva incrementato la versione dello
+schema.
+
+La decisione **non è nostra**: appartiene a `plenora-contracts`, e va presa
+prima della `PR-2`. Le due opzioni, con ciò che comportano:
+
+| opzione | conseguenza |
+|---|---|
+| **resta v5**, con incompatibilità in avanti dichiarata | nessuna migrazione, ma un lettore v5 vecchio rifiuta un piano v5 nuovo: due cose diverse portano lo stesso numero, ed è precisamente ciò che una versione dovrebbe impedire |
+| **diventa v6** | costa una migrazione e un ciclo di adozione, ma il numero torna a significare qualcosa e il rifiuto di un lettore vecchio diventa leggibile invece che misterioso |
+
+Il progetto propende per **v6**, per coerenza col precedente v4→v5 e perché
+`deny_unknown_fields` è una scelta deliberata di questo formato: convivere con
+una sua conseguenza fingendo che sia additiva la contraddirebbe. Ma la
+ratifica spetta a `plenora-contracts`, e nessuna riga di `PR-2` va scritta
+prima.
 
 ---
 
@@ -603,9 +690,9 @@ iniziato.
 | **come nasce vincolato** | processo intermedio che entra nel cgroup e poi si sostituisce con `exec`: il worker non esiste mai fuori. Nessuna finestra e **nessun `unsafe`** | processo intermedio che entra nel Job e genera il worker, che eredita l'appartenenza: dentro dalla prima istruzione | — |
 | **come si ferma** | il kernel **uccide** (`SIGKILL`) | il sistema **nega** l'allocazione, il processo resta vivo (`NG-10`) | — |
 | **serve `unsafe`?** | **no** | **sì**, inevitabilmente: i Job Object sono solo FFI | — |
-| evidenza di attribuzione | `memory.events.local` | notifica del job sulla completion port | — |
-| terminazione forzata | uccisione dell'intero cgroup | terminazione del job | — |
-| stato | **prototipato**, tutte e tre le proprietà dimostrate | **prototipato**, tutte e tre le proprietà dimostrate | **non supportato** (`F4-6`, `NG-6`) |
+| evidenza di attribuzione | i **quattro delta** della §10.0-bis, locali e gerarchici insieme | — (piattaforma non supportata) | — |
+| terminazione forzata | `cgroup.kill`, che non consulta `oom_score_adj` | — | — |
+| stato | **prototipato**: nascita, contenimento e attribuzione, quest'ultima **solo con dominio sigillato** | **prototipato**: nascita e contenimento sì, **attribuzione non infallibile**; e nessuna implementazione possibile senza `unsafe` → **non supportato** | **non supportato** (`F4-6`, `NG-6`) |
 
 **«Prima dello spawn» non basta, e il meccanismo cambia per piattaforma.**
 La macchina a stati §3.1 dice che il limite precede l'avvio; qui si dice
@@ -641,63 +728,109 @@ privilegi e namespace di cgroup privato, quindi **in un container Docker
 predefinito, con `/sys/fs/cgroup` in sola lettura, il profilo isolato non
 gira**.
 
+**Il dominio va sigillato come foglia, e non e' un dettaglio.** Il worker
+che vive nel dominio non riesce a delegargli il controller della memoria —
+glielo impedisce la regola dei processi interni — ma **se prima si sposta in
+un sottogruppo, il dominio resta vuoto e la delega passa**. Il prototipo ha
+eseguito la sequenza intera: da quel momento `memory.events.local` non vede
+piu' l'uccisione, e il supervisore classificherebbe `Internal` un guasto di
+risorse.
+
+Tre strati, tutti misurati, e non sono alternative:
+
+| strato | che cosa impedisce |
+|---|---|
+| `cgroup.max.depth = 0` sul dominio | il kernel rifiuta ogni discendente con `EAGAIN`: l'evasione si ferma al primo passo |
+| worker senza privilegi sulla gerarchia | il `mkdir` fallisce con `EACCES`, indipendentemente dal kernel |
+| lettura anche di `memory.events` gerarchico | se i primi due mancassero, l'evidenza non va perduta |
+
+Il terzo **non sostituisce** i primi due: l'evidenza gerarchica dice *che* è
+successo, non *a chi*. Serve a non perdere l'informazione, non a mantenere
+l'attribuzione. Un dominio non sigillato non è un dominio osservabile.
+
 **`memory.oom.group` è obbligatorio, non consigliato.** Senza, il prototipo ha
 osservato un figlio ucciso per il limite e il processo capofila **vivo, con
 uscita 0**: un successo apparente sopra un guasto di risorse. Con
 `memory.oom.group=1` il dominio muore intero e nessuno può dichiarare un
 successo che non c'è.
 
-**Windows — due strade, e la finestra è di una sola.** La prima crea il
-processo con `CREATE_SUSPENDED`, lo associa al Job Object e poi lo riprende. Il
-thread primario non ha eseguito un'istruzione, quindi il codice del worker non
-ha allocato nulla. **Ma la mappatura dell'immagine e le allocazioni del loader
-precedono l'associazione.**
+**Windows — non supportato, e perché.** Il prototipo ha dimostrato nascita
+vincolata e contenimento, ma **non** un'attribuzione utilizzabile, e nessuna
+implementazione è possibile senza `unsafe`. Le misure — le tre fonti di
+evidenza, la loro durata, il residuo del loader — restano in
+[`prototipi-isolamento.md`](prototipi-isolamento.md) come **motivazione**, non
+come progetto: nulla di ciò che descrivono è normativo per questa fase.
 
-Il prototipo l'ha misurato: **376 832 byte** impegnati prima
-dell'associazione, e — sorpresa utile — il job li **contabilizza** al momento
-in cui il processo vi entra. Non è quindi memoria invisibile al tetto. Le
-parole «piccolo e costante» che stavano qui sono state tolte: erano una stima
-scritta come se fosse un fatto, e una sola misura non autorizza a chiamare
-costante alcunché.
+In sintesi, e senza riaprire il merito: la notifica del job non è garantita,
+la violazione interrogabile scade in poche decine di millisecondi — prima che
+la barriera di quiescenza possa leggerla — e l'unico indicatore durevole ha
+falsi positivi misurati, mentre l'assenza di falsi negativi **non** è stata
+dimostrata. Non si può quindi nemmeno affermare che il rischio residuo sia
+solo «rifiutare output validi».
 
-La seconda strada — quella dello **spawner**, un processo intermedio che entra
-nel job e poi genera il worker, che ne eredita l'appartenenza — porta quel
-residuo a zero per il worker, al prezzo di 651 264 byte di processo intermedio
-che restano a carico del dominio. Il residuo non sparisce: passa da *non
-coperto* a *coperto e consumato*, ed è preferibile perché governabile.
-
-**Si sceglie la seconda**, e per tre ragioni che il prototipo ha reso
-concrete: non lascia finestra, è la stessa forma della strada scelta su Linux —
-una simmetria che vale, perché due meccanismi che si assomigliano si sbagliano
-meno di due che divergono — e taglia via la parte peggiore della prima, cioè la
-ripresa del processo sospeso. `std` non espone l'handle del thread primario:
-riprenderlo obbliga a enumerare tutti i thread del sistema per ritrovare i
-propri.
-
-**Perché `memory.events.local` e non `memory.events`.** Il secondo aggrega i
-discendenti; il primo riguarda il cgroup che abbiamo creato noi. Attribuire a
-un worker un evento generato altrove sarebbe una classificazione inventata.
-
-**Perché la notifica del job e non l'exit code.** Su Windows un processo
-terminato dal job non ha un codice d'uscita che lo dica in modo affidabile. La
-notifica è la prova; il codice d'uscita non lo è. Il prototipo ha rafforzato la
-ragione: un figlio del worker ha esaurito il tetto mentre il processo capofila
-usciva con **0**.
-
-**E nemmeno i contatori.** `PeakJobMemoryUsed` ha riportato circa 64 TiB per
-allocazioni che il sistema aveva **rifiutato**: misura gli addebiti tentati,
-non la memoria posseduta. Serve alla diagnostica, non come evidenza.
-
-**I job annidati non sono una via di fuga.** Il prototipo ha fatto creare al
-worker un job proprio con un tetto quattro volte più alto e ve l'ha assegnato:
-l'operazione riesce, e il tetto esterno **continua a valere**. Il contenimento
-regge anche contro un worker che provi a uscirne — il che è un margine, non
-una promessa, perché il modello di minaccia resta il guasto (`NG-7`).
+La condizione di rientro è in §11.2: una dipendenza vettata che copra tetto
+**ed** evidenza senza `unsafe`.
 
 **macOS.** Nessun meccanismo è stato prototipato. Finché un prototipo non
 dimostra **contenimento** e **attribuzione** — entrambi, non uno — il profilo
 isolato non è supportato e l'esecuzione resta in-process con le garanzie
 attuali, che sono minori e dichiarate.
+
+---
+
+## 9-bis. Preflight del dominio: scrivere non è configurare
+
+Ogni proprietà su cui poggia l'attribuzione è una **scrittura su un file**
+che può fallire in silenzio, essere ignorata da un kernel diverso, o essere
+sovrascritta da qualcun altro. Il preflight le scrive e **le rilegge**, e il
+profilo isolato non parte se una sola diverge.
+
+| | si scrive | si rilegge e deve valere | se diverge |
+|---|---|---|---|
+| tetto | `memory.max` | esattamente il valore chiesto, dopo il taglio della politica dell'host | il dominio non è limitato: **non si parte** |
+| swap | `memory.swap.max` = 0 | `0` | il tetto misurerebbe un'altra cosa: **non si parte**, o si dichiara lo swap non governabile |
+| group kill | `memory.oom.group` = 1 | `1` | un OOM parziale sarebbe indistinguibile da un successo (`F4-8`): **non si parte** |
+| sigillo | `cgroup.max.depth` = 0 | `0` | il worker potrebbe evadere l'osservazione (`F4-9`): **non si parte** |
+| quiescenza | — | `cgroup.events` leggibile, e `populated` = 0 **prima** dell'avvio | senza questo segnale la barriera non è implementabile: **non si parte** |
+| uccidibilità | `oom_score_adj` = 0 nello spawner, prima della `exec` | `0` | un worker protetto resiste al group kill: **non si parte** |
+| montaggio | — | opzioni di `cgroup2` in `/proc/self/mounts` | vedi sotto |
+
+**La rilettura non è pedanteria.** Il prototipo ha misurato tutte e quattro le
+scritture concordare con la rilettura in un kernel 6.18 — il che dimostra che
+il controllo è a costo zero quando le cose vanno bene, non che sia inutile
+quando vanno male.
+
+### `oom_score_adj` va normalizzato **e** verificato
+
+È il valore che si eredita e che nessuno guarda. A `-1000` il kernel non
+uccide il task, **nemmeno con `memory.oom.group = 1`**: un worker che lo
+eredita da un chiamante protetto — un servizio di sistema, un container con
+priorità — sopravvive al group kill e riproduce `F4-8`.
+
+Il prototipo ha misurato che il risultato è peggiore della sopravvivenza: il
+dominio ha raggiunto il limite **305 volte** senza uccidere nessuno, e non
+avanzava più. Non è un worker che continua: è un dominio bloccato, che
+richiede `cgroup.kill` dall'esterno.
+
+Lo spawner lo scrive a `0` prima della `exec`, lo **rilegge**, e se la
+rilettura non torna esce con un codice dedicato. Scrivere senza verificare non
+è normalizzare: è sperare.
+
+### `memory_localevents` va guardato, e la risposta dipende dal sigillo
+
+L'opzione di montaggio `memory_localevents` rende **non gerarchico** anche
+`memory.events`, cioè toglie la terza riga della struttura di evidenza.
+
+Con il dominio sigillato non ci sono discendenti, quindi locale e gerarchico
+coincidono e l'opzione non cambia nulla. La conclusione però **dipende dal
+sigillo**, che è a sua volta una scrittura da rileggere: se il sigillo non si
+può stabilire, il profilo non parte comunque, e il caso non si presenta.
+
+Il preflight registra perciò l'opzione senza respingerla, e la registra
+**insieme** all'esito del sigillo: sono la stessa domanda vista da due lati.
+Va detto che il caso non è stato misurato — la gerarchia provata non aveva
+`memory_localevents` — quindi la conclusione è un ragionamento, non
+un'osservazione.
 
 ---
 
@@ -711,7 +844,8 @@ attuali, che sono minori e dichiarate.
 | 2 | errore tipizzato del worker | `Esito` con i quattro assi | quella dichiarata dal worker | no | rimosso |
 | 3 | panic nel worker | `Esito` di panic, forma del payload senza contenuto | `Internal` | no | rimosso |
 | 4 | crash | il processo muore senza `Esito`, nessuna evidenza di limite | `Internal` | no | rimosso |
-| 5 | OOM attribuito | evidenza del dominio (`memory.events.local` / notifica del job) | **`ResourceLimit`** | no | rimosso |
+| 5 | OOM attribuito | la struttura di evidenza della §10.0-bis, letta dopo la quiescenza | **`ResourceLimit`** | no | rimosso |
+| 5-bis | dominio non uccidibile | limite raggiunto ripetutamente, nessun task uccidibile (`oom_score_adj` non normalizzato) | **`ResourceLimit`**, causa dichiarata | no | rimosso dopo `cgroup.kill` |
 | 6 | terminazione ambigua | il processo muore, evidenza assente o non attribuibile | `Internal` — **mai** dedotto come OOM | no | rimosso |
 | 7 | timeout | scadenza del timeout di esecuzione | `Timeout` | no | rimosso |
 | 8 | cancellazione | `Annulla` inviato, worker terminato | `Cancelled` | no | rimosso |
@@ -735,6 +869,43 @@ l'esito dichiarato**, quindi l'esito è `ResourceLimit`.
 condizioni è quasi sempre la conseguenza, non la causa: dire al chiamante
 «fallita l'allocazione di un buffer» invece di «hai superato il tetto» lo
 manderebbe a cercare un difetto dove c'è un dimensionamento.
+
+### 10.0-bis L'evidenza è una struttura, non un booleano
+
+La prima stesura leggeva un solo contatore. Il prototipo mostra che i segnali
+sono almeno tre e che le loro combinazioni **non collassano** in un sì o un
+no: `L12` ha prodotto `oom` locale a 1 con `oom_kill` locale a 0, e `L16` ha
+prodotto `oom` a 305 con `oom_kill` a 0. Sono tre situazioni diverse che un
+booleano appiattirebbe in una.
+
+I segnali, tutti come **delta** fra prima e dopo l'esecuzione:
+
+| | segnale | che cosa conta |
+|---|---|---|
+| `Ol` | `memory.events.local` → `oom` | quante volte il limite **di questo dominio** ha invocato l'OOM |
+| `Kl` | `memory.events.local` → `oom_kill` | processi uccisi **appartenenti a questo dominio** |
+| `Kh` | `memory.events` → `oom_kill` | processi uccisi nel dominio **o nei discendenti** |
+| `G` | `memory.events.local` → `oom_group_kill` | il group kill è scattato |
+
+La classificazione copre ogni combinazione, e nessuna cade in un ramo
+predefinito:
+
+| `Ol` | `Kl` | `Kh` | `G` | classificazione |
+|---|---|---|---|---|
+| ≥1 | ≥1 | ≥1 | ≥1 | `ResourceLimit` attribuito. È il caso normale con dominio sigillato |
+| ≥1 | ≥1 | ≥1 | 0 | `ResourceLimit` attribuito, **senza** group kill: qualcuno è sopravvissuto. Il preflight avrebbe dovuto impedirlo → si segnala come difetto di configurazione |
+| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione **in un discendente**: il sigillo ha fallito. `Internal` con difetto del preflight dichiarato — **non** `ResourceLimit`, perché non sappiamo più a chi attribuirlo |
+| ≥1 | 0 | 0 | 0 | limite raggiunto **e nessun task uccidibile**: la firma di `oom_score_adj = -1000` non normalizzato. `ResourceLimit` con causa «dominio non uccidibile», e richiede `cgroup.kill` |
+| 0 | 0 | ≥1 | qualunque | uccisione in un discendente **senza** che questo dominio abbia raggiunto il limite: il tetto violato è di un altro. `Internal` |
+| 0 | 0 | 0 | 0 | nessuna evidenza. `Internal`, **mai** dedotto come OOM (`F4-2`) |
+| — | ≥1 | 0 | — | **impossibile**: `Kl` è un sottoinsieme di `Kh`. Se accade, è un difetto di lettura e va trattato come tale, non normalizzato |
+
+La quarta riga merita una parola, perché è quella che il primo ciclo non
+sapeva esistere. `Ol` alto con `Kl` a zero non significa «niente è successo»:
+significa che il limite è stato raggiunto ripetutamente e il kernel non ha
+trovato nessuno da uccidere. Il prototipo ha misurato **305 invocazioni** e
+**zero uccisioni**, con il dominio che non avanzava. Leggere solo `oom_kill`
+avrebbe detto «nessun problema di risorse» su un dominio bloccato.
 
 ### 10.1 Tassonomia: che cosa manca davvero
 
@@ -782,29 +953,62 @@ eventi entrano nel confronto. Senza un istante in cui l'insieme si chiude, due
 esecuzioni identiche possono ancora divergere: basta che un evento arrivi
 mentre la classificazione è già in corso.
 
-Il **punto di linearizzazione precede il rename**, ed è così definito:
+Chiudere la coda **non basta**, e il prototipo lo ha misurato: al ritorno
+della `wait` il capofila era uscito con 0, un processo era ancora vivo nel
+dominio e l'evidenza di OOM valeva **zero**; duecento millisecondi dopo valeva
+**uno**. La chiusura degli ingressi dimostra che non accettiamo più eventi,
+non che non ne stiano arrivando. Un OOM consegnato dopo non è un OOM avvenuto
+dopo.
+
+Serve quindi una **barriera causale**, non solo un istante di chiusura. Il
+punto di linearizzazione precede il rename ed è così definito:
 
 1. tutti gli eventi — cancellazione, timeout, uscita del worker, evidenza del
    dominio — confluiscono in **una** coda, consumata da **un** solo esecutore.
    Non ci sono due strade per diventare un esito;
-2. superata la verifica e prima di tentare la pubblicazione, l'esecutore
-   **chiude gli ingressi** e congela l'esito provvisorio. Da quell'istante
-   nessun evento successivo può cambiare la classificazione: gli eventi che
-   arrivano dopo vengono registrati per la diagnostica e non votano;
-3. l'unico ingresso rimasto è **l'esito del rename stesso**. Riesce: l'esito è
+2. **quiescenza del dominio**: si attende che non vi resti alcun processo
+   vivo, **nemmeno in un discendente**. Il segnale è `cgroup.events`, campo
+   `populated`: il kernel garantisce che valga 1 finché il cgroup **o un suo
+   discendente** contiene processi vivi, e notifica il cambiamento.
+
+   **Non `cgroup.procs`**, che elenca il solo cgroup corrente: il prototipo ha
+   misurato il caso in cui dice `0` mentre `populated` dice `1` e un processo
+   del dominio è vivo un livello sotto. E nemmeno una scansione ricorsiva
+   delle directory, che è una lettura non atomica di molti file mentre i
+   processi si spostano — la corsa non è teorica: si è manifestata in una
+   prima stesura dello scenario, e nell'unico verso che non produce un
+   allarme.
+
+   Un tempo massimo d'attesa, oltre il quale si termina il dominio con
+   `cgroup.kill` e l'esito è ambiguo;
+3. **snapshot e drain dell'evidenza**: si preleva ciò che il sistema ha da
+   dire e ciò che il fermo del supervisore ha accumulato durante l'esecuzione.
+   Su Windows il fermo è l'unica fonte utilizzabile a questo punto, perché la
+   violazione interrogabile è già scaduta;
+4. **classificazione definitiva**, e solo ora si chiudono gli ingressi;
+5. l'unico ingresso rimasto è **l'esito del rename stesso**. Riesce: l'esito è
    successo, e la riga 1 della precedenza è soddisfatta da un fatto, non da una
-   regola. Fallisce: si torna all'esito congelato al punto 2, oppure alla riga
+   regola. Fallisce: si torna all'esito congelato al punto 4, oppure alla riga
    15 se il fallimento è del publish.
+
+**Un OOM tardivo non è un'avvertenza.** La prima stesura degradava a
+diagnostica gli eventi che arrivano dopo la chiusura: era possibile solo
+perché la chiusura avveniva prima della quiescenza. Con i passi 2 e 3 al posto
+giusto, un evento successivo al punto 4 riguarda per costruzione un dominio
+già morto e già letto — e se ne arrivasse uno che contraddice la
+classificazione, è un difetto della barriera, non un'avvertenza da riportare.
 
 È questo che rende la riga 1 vera invece che sperata. «Publish completato
 vince» non è una priorità che si applica *dopo*: è la constatazione che dopo la
 chiusura degli ingressi l'unico fatto ancora capace di cambiare l'esito è
 quello che stiamo per compiere noi.
 
-Un evento che arrivi **fra** il punto 2 e il ritorno del rename — un OOM del
-verificatore, una cancellazione tardiva — non annulla una pubblicazione
-avvenuta. Viene riportato come avvertenza, con lo stesso canale
-machine-readable della §10.2.
+Un evento che arrivi **fra** il punto 4 e il ritorno del rename non annulla
+una pubblicazione avvenuta: a quel punto il dominio è quiescente da prima
+dello snapshot, quindi non può trattarsi di un esaurimento del worker o del
+verificatore. Resta riportabile come avvertenza, con il canale
+machine-readable della §10.2, e **solo** per ciò che non riguarda le risorse
+dei domini.
 
 Chiuso l'insieme, l'ordine è **totale** e va dal fatto più esterno al meno
 verificabile:
@@ -899,16 +1103,46 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
 | **PR-10** | sequenza di verifica 1-9 e publish atomico dal supervisore | no | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice |
-| **PR-10-bis** | **deroga per l'`unsafe` di Windows**, oppure adozione di una dipendenza vettata che assorba la FFI dei Job Object. Nessuna riga di `PR-11` prima | **sì** (regola permanente) | la deroga dichiara regola, perimetro, pericolo e condizione di rientro |
-| **PR-11** | dominio di isolamento su Windows, promosso da PT-Windows | no | come PR-7 |
-| **PR-12** | **attivazione**: il profilo isolato diventa selezionabile | **sì** | l'intera matrice, su entrambe le piattaforme |
+| ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
+| **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 
-Quattro PR cambiano semantica — `PR-1`, `PR-2`, `PR-10-bis` e `PR-12` — e
-nessuna delle quattro è nascosta in mezzo alle altre. `PR-10-bis` è l'unica che
-non tocca il codice: tocca una **regola permanente** del progetto, ed è per
-questo che non può essere una riga dentro un'altra PR. Le restanti costruiscono senza sostituire: il percorso
-in-process resta attivo, e ognuna può essere fermata senza lasciare il sistema
-a metà.
+Tre PR cambiano semantica — `PR-1`, `PR-2` e `PR-12` — e nessuna delle tre è
+nascosta in mezzo alle altre.
+
+### Perché Windows esce dal perimetro
+
+La prima stesura offriva due strade per l'`unsafe` che i Job Object
+richiedono: una **deroga** dichiarata in
+[`errori-e-limiti.md`](errori-e-limiti.md), oppure una dipendenza vettata.
+
+La prima non è una strada disponibile. `AGENTS.md` proibisce `unsafe` nel
+workspace come **regola permanente e non opzionale**: derogarvi non è una PR
+della fase 4, è un cambiamento di governance, e spetta a chi quella regola
+l'ha scritta. Metterla in un elenco di PR la faceva sembrare una decisione
+tecnica fra le altre.
+
+La seconda è stata **verificata invece che immaginata**, e oggi non esiste.
+`win32job` — l'unico involucro sicuro dei Job Object in circolazione — non
+espone `JOB_OBJECT_LIMIT_JOB_MEMORY`, cioè **il tetto stesso**: l'unico limite
+di memoria che offre è quello sul working set, che è un'altra grandezza. Non
+espone nemmeno la completion port, i limiti di notifica o le informazioni
+sulle violazioni, cioè la fonte dell'evidenza. Il campo della struttura estesa
+è privato al crate, quindi non si aggira dall'esterno.
+
+Finché non esiste una dipendenza vettata che copra **tetto ed evidenza**, il
+profilo isolato su Windows è **non supportato**, accanto a macOS. Non è un
+ripiego silenzioso: è ciò che le regole del progetto impongono quando l'unica
+implementazione richiederebbe di violarle. Le tre vie d'uscita, tutte fuori
+dalla fase 4:
+
+| via | chi decide |
+|---|---|
+| estendere a monte un involucro sicuro esistente, e vettarlo | lavoro esterno, poi una PR di dipendenza |
+| adottare una dipendenza nuova che copra tetto ed evidenza | valutazione secondo `AGENTS.md`, motivazione documentata e pin esatto |
+| cambiare la regola sull'`unsafe` | **il maintainer**, non questa fase |
+
+Le restanti PR costruiscono senza sostituire: il percorso in-process resta
+attivo, e ognuna può essere fermata senza lasciare il sistema a metà.
 
 Il criterio di uscita della fase 4 (`F4-5`) si verifica su PR-12: nessun
 percorso noto produce un'allocazione critica prima dell'autorizzazione, oppure

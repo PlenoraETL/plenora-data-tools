@@ -61,6 +61,53 @@ fn eventi_locali(dominio: &Path) -> BTreeMap<String, u64> {
     mappa
 }
 
+/// `memory.events` aggrega i discendenti; `memory.events.local` no. La
+/// differenza fra i due e' l'oggetto dello scenario L8.
+fn eventi_gerarchici(dominio: &Path) -> BTreeMap<String, u64> {
+    let mut mappa = BTreeMap::new();
+    if let Ok(testo) = fs::read_to_string(dominio.join("memory.events")) {
+        for riga in testo.lines() {
+            let mut parti = riga.split_whitespace();
+            if let (Some(chiave), Some(valore)) = (parti.next(), parti.next()) {
+                if let Ok(n) = valore.parse() {
+                    mappa.insert(chiave.to_owned(), n);
+                }
+            }
+        }
+    }
+    mappa
+}
+
+/// `cgroup.events`: `populated` vale 1 se il cgroup **o un suo discendente**
+/// contiene processi vivi. E' il kernel a garantirlo, quindi non serve
+/// camminare la gerarchia — che e' una lettura non atomica di molti file
+/// mentre i processi si spostano.
+fn popolato(dominio: &Path) -> Option<bool> {
+    let testo = fs::read_to_string(dominio.join("cgroup.events")).ok()?;
+    for riga in testo.lines() {
+        let mut parti = riga.split_whitespace();
+        if parti.next() == Some("populated") {
+            return parti.next().map(|v| v == "1");
+        }
+    }
+    None
+}
+
+/// Quanti processi vivono adesso nel dominio, discendenti compresi.
+fn processi_vivi(dominio: &Path) -> usize {
+    let mut totale = fs::read_to_string(dominio.join("cgroup.procs"))
+        .map(|t| t.split_whitespace().count())
+        .unwrap_or(0);
+    if let Ok(voci) = fs::read_dir(dominio) {
+        for voce in voci.flatten() {
+            if voce.path().is_dir() {
+                totale += processi_vivi(&voce.path());
+            }
+        }
+    }
+    totale
+}
+
 fn abilita_memoria(cartella: &Path) -> Result<(), String> {
     let percorso = cartella.join("cgroup.subtree_control");
     let disponibili = leggi(&cartella.join("cgroup.controllers"));
@@ -109,7 +156,22 @@ fn prepara_gerarchia() -> Result<PathBuf, String> {
 
 /// Crea un dominio vuoto con il tetto richiesto. Nessun ripiego: se qualcosa
 /// non si puo' fare, il prototipo lo dice e si ferma.
-fn crea_dominio(base: &Path, nome: &str, tetto: u64, oom_group: bool) -> Result<PathBuf, String> {
+/// Come il dominio deve difendersi dai sottogruppi.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Foglia {
+    /// Nessuna difesa: il worker puo' creare sottogruppi (com'era il primo ciclo).
+    Aperta,
+    /// `cgroup.max.depth = 0`: e' il kernel a rifiutare i discendenti.
+    ProfonditaZero,
+}
+
+fn crea_dominio(
+    base: &Path,
+    nome: &str,
+    tetto: u64,
+    oom_group: bool,
+    foglia: Foglia,
+) -> Result<PathBuf, String> {
     let dominio = base.join(nome);
     if dominio.exists() {
         let _ = fs::remove_dir(&dominio);
@@ -126,7 +188,25 @@ fn crea_dominio(base: &Path, nome: &str, tetto: u64, oom_group: bool) -> Result<
         fs::write(dominio.join("memory.oom.group"), "1")
             .map_err(|e| format!("memory.oom.group: {e}"))?;
     }
+    if foglia == Foglia::ProfonditaZero {
+        // Sigilla la foglia: nessun discendente, deciso dal kernel e non dai
+        // permessi. E' l'alternativa da misurare all'evidenza gerarchica.
+        match fs::write(dominio.join("cgroup.max.depth"), "0") {
+            Ok(()) => println!("MISURA {nome}.max_depth_impostato si"),
+            Err(e) => println!("MISURA {nome}.max_depth_impostato no ({e})"),
+        }
+    }
     Ok(dominio)
+}
+
+/// Scorciatoia per gli scenari del primo ciclo, che non sigillavano nulla.
+fn crea_dominio_aperto(
+    base: &Path,
+    nome: &str,
+    tetto: u64,
+    oom_group: bool,
+) -> Result<PathBuf, String> {
+    crea_dominio(base, nome, tetto, oom_group, Foglia::Aperta)
 }
 
 fn rimuovi_dominio(dominio: &Path) {
@@ -143,6 +223,7 @@ fn rimuovi_dominio(dominio: &Path) {
 
 fn spawner(resto: &[String]) -> ! {
     let dominio = PathBuf::from(&resto[0]);
+    let utente: u32 = resto[1].parse().unwrap_or(0);
     let pid = std::process::id();
     if let Err(e) = fs::write(dominio.join("cgroup.procs"), pid.to_string()) {
         eprintln!("SPAWNER errore cgroup.procs: {e}");
@@ -152,10 +233,35 @@ fn spawner(resto: &[String]) -> ! {
     let mio = leggi(Path::new("/proc/self/cgroup"));
     eprintln!("SPAWNER cgroup-prima-di-exec {mio}");
 
-    let errore = Command::new(std::env::current_exe().expect("current_exe"))
-        .arg("carico")
-        .args(&resto[1..])
-        .exec();
+    // `oom_score_adj` si eredita. A -1000 il kernel NON uccide il task,
+    // nemmeno con `memory.oom.group=1`: un worker che lo eredita da un
+    // chiamante protetto sopravvive al group kill.
+    let ereditato = leggi(Path::new("/proc/self/oom_score_adj"));
+    eprintln!("SPAWNER oom_score_adj-ereditato {ereditato}");
+    if std::env::var_os("PT_NON_NORMALIZZARE").is_none() {
+        if let Err(e) = fs::write("/proc/self/oom_score_adj", "0") {
+            eprintln!("SPAWNER oom_score_adj-normalizzazione-fallita {e}");
+            std::process::exit(103);
+        }
+        // Rilettura: scrivere senza verificare non e' normalizzare, e' sperare.
+        let riletto = leggi(Path::new("/proc/self/oom_score_adj"));
+        eprintln!("SPAWNER oom_score_adj-riletto {riletto}");
+        if riletto != "0" {
+            eprintln!("SPAWNER oom_score_adj-readback-incoerente: fallisco chiuso");
+            std::process::exit(104);
+        }
+    } else {
+        eprintln!("SPAWNER oom_score_adj-normalizzazione DISATTIVATA (braccio di controllo)");
+    }
+
+    let mut comando = Command::new(std::env::current_exe().expect("current_exe"));
+    comando.arg("carico").args(&resto[2..]);
+    if utente != 0 {
+        // `uid`/`gid` sono API sicure e valgono anche per `exec`: il worker
+        // nasce dentro il dominio E senza i privilegi per manometterlo.
+        comando.uid(utente).gid(utente);
+    }
+    let errore = comando.exec();
     eprintln!("SPAWNER exec fallita: {errore}");
     std::process::exit(102);
 }
@@ -171,14 +277,200 @@ fn carico(resto: &[String]) {
     // proprieta' "nascita gia' vincolata" e' falsa e tutto il resto non conta.
     println!("CARICO cgroup {}", leggi(Path::new("/proc/self/cgroup")));
     println!("CARICO scenario {scenario}");
+    println!("CARICO oom_score_adj {}", leggi(Path::new("/proc/self/oom_score_adj")));
     let _ = std::io::stdout().flush();
 
     match scenario {
         "chiedi" => chiedi_senza_toccare(),
         "figlio" => genera_figlio(&resto[1..]),
         "sottogruppo" => prova_sottogruppo(),
+        "sottogruppo_oom" => sottogruppo_oom(),
+        "evasione" => evasione_in_tre_passi(),
+        "orfano" => genera_orfano(),
+        "dorme" => {
+            println!("CARICO dorme oom_score_adj={}", leggi(Path::new("/proc/self/oom_score_adj")));
+            let _ = std::io::stdout().flush();
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            println!("CARICO dorme fine");
+        }
+        // Serve a misurare il solo costo d'avvio. Senza questo ramo cadeva nel
+        // caso predefinito e allocava fino all'OOM: `l11` avrebbe riportato
+        // come «picco d'avvio» il tetto del dominio, cioe' un numero vero e
+        // che misura un'altra cosa.
+        "inerte" => println!("CARICO inerte fine"),
+        "sottogruppo_vivo" => sottogruppo_vivo(),
         _ => tocca_finche_muore(),
     }
+}
+
+/// Il cgroup del processo corrente, come percorso sotto la radice.
+fn mio_dominio() -> Option<PathBuf> {
+    let mio = leggi(Path::new("/proc/self/cgroup"));
+    let relativo = mio.rsplit("::").next()?.trim();
+    let relativo = relativo.strip_prefix('/').unwrap_or(relativo);
+    Some(PathBuf::from(RADICE).join(relativo))
+}
+
+/// Il cammino che `memory.events.local` non vede: il worker si crea un
+/// sottogruppo, gli da' il controller della memoria, ci mette dentro un figlio
+/// e lo lascia sfondare li'.
+fn sottogruppo_oom() {
+    let Some(mio_dominio) = mio_dominio() else {
+        println!("CARICO sottogruppo_oom cgroup-non-risolto");
+        return;
+    };
+    let interno = mio_dominio.join("interno");
+    if let Err(e) = fs::create_dir(&interno) {
+        println!("CARICO sottogruppo_oom mkdir-rifiutato {e}");
+        return;
+    }
+    println!("CARICO sottogruppo_oom mkdir-riuscito");
+    match fs::write(mio_dominio.join("cgroup.subtree_control"), "+memory") {
+        Ok(()) => println!("CARICO sottogruppo_oom controller-delegato si"),
+        Err(e) => println!("CARICO sottogruppo_oom controller-delegato no ({e})"),
+    }
+    let _ = std::io::stdout().flush();
+
+    // Il figlio si sposta da solo nel sottogruppo e poi sfonda.
+    let mio = std::env::current_exe().expect("current_exe");
+    let figlio = Command::new(mio)
+        .arg("spawner")
+        .arg(&interno)
+        .arg("0")
+        .arg("tocca")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn();
+    match figlio {
+        Ok(mut figlio) => {
+            let stato = figlio.wait().expect("wait");
+            println!(
+                "CARICO sottogruppo_oom figlio codice={:?} segnale={:?}",
+                stato.code(),
+                stato.signal()
+            );
+        }
+        Err(e) => println!("CARICO sottogruppo_oom spawn-fallito {e}"),
+    }
+    println!("CARICO padre-sopravvissuto si");
+    let _ = std::io::stdout().flush();
+}
+
+/// La sequenza completa: sposta se stesso, poi delega, poi sfonda.
+///
+/// Se riesce, l'evidenza dell'OOM non appare piu' in `memory.events.local`
+/// del dominio, perche' il processo ucciso non gli appartiene piu'.
+fn evasione_in_tre_passi() {
+    let Some(dominio) = mio_dominio() else {
+        println!("CARICO evasione cgroup-non-risolto");
+        return;
+    };
+    let interno = dominio.join("evaso");
+
+    // 1. Crea il sottogruppo.
+    if let Err(e) = fs::create_dir(&interno) {
+        println!("CARICO evasione passo1-mkdir rifiutato ({e})");
+        return;
+    }
+    println!("CARICO evasione passo1-mkdir riuscito");
+
+    // 2. Si sposta dentro: da qui il dominio non ha piu' processi propri.
+    let pid = std::process::id();
+    if let Err(e) = fs::write(interno.join("cgroup.procs"), pid.to_string()) {
+        println!("CARICO evasione passo2-spostamento rifiutato ({e})");
+        return;
+    }
+    println!("CARICO evasione passo2-spostamento riuscito");
+    println!("CARICO evasione cgroup-ora {}", leggi(Path::new("/proc/self/cgroup")));
+
+    // 3. Ora la delega del controller dovrebbe passare.
+    match fs::write(dominio.join("cgroup.subtree_control"), "+memory") {
+        Ok(()) => println!("CARICO evasione passo3-delega riuscita"),
+        Err(e) => {
+            println!("CARICO evasione passo3-delega rifiutata ({e})");
+            return;
+        }
+    }
+    let _ = std::io::stdout().flush();
+
+    // 4. E adesso sfonda, da dentro il sottogruppo.
+    tocca_finche_muore();
+}
+
+/// Mette un figlio in un sottogruppo e lo lascia vivo, poi esce.
+///
+/// Serve a L15: al ritorno della `wait` il `cgroup.procs` del dominio e'
+/// vuoto — il processo sta nel figlio — mentre `populated` deve valere 1.
+fn sottogruppo_vivo() {
+    let Some(dominio) = mio_dominio() else {
+        println!("CARICO sottogruppo_vivo cgroup-non-risolto");
+        return;
+    };
+    let interno = dominio.join("vivo");
+    if let Err(e) = fs::create_dir(&interno) {
+        println!("CARICO sottogruppo_vivo mkdir-rifiutato {e}");
+        return;
+    }
+    let mio = std::env::current_exe().expect("current_exe");
+    let figlio = Command::new(mio)
+        .arg("spawner")
+        .arg(&interno)
+        .arg("0")
+        .arg("dorme")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match figlio {
+        Ok(figlio) => {
+            println!("CARICO sottogruppo_vivo figlio-pid {}", figlio.id());
+            // Aspetta che il nipote sia INSEDIATO nel sottogruppo. Uscire
+            // prima lascerebbe la domanda senza risposta: `cgroup.procs` del
+            // dominio lo vedrebbe ancora, e non perche' funzioni.
+            let mut giri = 0;
+            let insediato = loop {
+                let dentro = fs::read_to_string(interno.join("cgroup.procs"))
+                    .map(|t| t.split_whitespace().count())
+                    .unwrap_or(0);
+                if dentro > 0 {
+                    break true;
+                }
+                if giri > 200 {
+                    break false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                giri += 1;
+            };
+            println!(
+                "CARICO sottogruppo_vivo nipote-insediato {} dopo {} ms",
+                if insediato { "si" } else { "NO" },
+                giri * 5
+            );
+        }
+        Err(e) => println!("CARICO sottogruppo_vivo spawn-fallito {e}"),
+    }
+    println!("CARICO capofila-esce-subito con-uscita-0");
+    let _ = std::io::stdout().flush();
+}
+
+/// Un discendente che sopravvive al capofila: serve a vedere se al ritorno
+/// della `wait` il dominio e' davvero quiescente.
+fn genera_orfano() {
+    let mio = std::env::current_exe().expect("current_exe");
+    let figlio = Command::new(mio)
+        .arg("carico")
+        .arg("tocca")
+        // Se ereditasse stdout, il supervisore resterebbe in attesa anche di
+        // lui e la domanda sulla quiescenza non si porrebbe.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match figlio {
+        Ok(figlio) => println!("CARICO orfano-pid {}", figlio.id()),
+        Err(e) => println!("CARICO orfano-spawn-fallito {e}"),
+    }
+    println!("CARICO capofila-esce-subito con-uscita-0");
+    let _ = std::io::stdout().flush();
+    // Nessuna `wait`: il capofila esce e lascia il figlio vivo.
 }
 
 /// Allocazione **richiesta e toccata**: e' il caso che il tetto deve fermare.
@@ -252,10 +544,10 @@ fn genera_figlio(_resto: &[String]) {
 
 /// Delega: il worker riesce a creare un sotto-cgroup dentro il proprio?
 fn prova_sottogruppo() {
-    let mio = leggi(Path::new("/proc/self/cgroup"));
-    let relativo = mio.rsplit("::").next().unwrap_or("").trim();
-    let relativo = relativo.strip_prefix('/').unwrap_or(relativo);
-    let mio_dominio = PathBuf::from(RADICE).join(relativo);
+    let Some(mio_dominio) = mio_dominio() else {
+        println!("CARICO sottogruppo cgroup-non-risolto");
+        return;
+    };
     let figlio = mio_dominio.join("interno");
     match fs::create_dir(&figlio) {
         Ok(()) => {
@@ -348,10 +640,63 @@ struct Esito {
     stdout: String,
 }
 
-fn esegui_nel_dominio(dominio: &Path, argomenti: &[&str]) -> Esito {
+/// Come `esegui_come`, ma con una scadenza: se il dominio non si spegne entro
+/// il tempo dato, lo si uccide con `cgroup.kill` e lo si dichiara.
+///
+/// `cgroup.kill` manda `SIGKILL` a tutti i processi del cgroup e **non**
+/// consulta `oom_score_adj`: e' la sola via d'uscita quando il worker e'
+/// protetto dall'OOM killer.
+fn esegui_con_scadenza(dominio: &Path, argomenti: &[&str], scadenza_ms: u64) -> (Esito, bool) {
     let mio = std::env::current_exe().expect("current_exe");
     let mut comando = Command::new(mio);
-    comando.arg("spawner").arg(dominio).args(argomenti);
+    comando
+        .arg("spawner")
+        .arg(dominio)
+        .arg("0")
+        .args(argomenti)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut figlio = comando.spawn().expect("spawn dello spawner");
+
+    let mut atteso = 0;
+    let mut ucciso = false;
+    loop {
+        match figlio.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if atteso >= scadenza_ms {
+            let _ = fs::write(dominio.join("cgroup.kill"), "1");
+            ucciso = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        atteso += 25;
+    }
+    let uscita = figlio.wait_with_output().expect("raccolta dell'uscita");
+    let stderr = String::from_utf8_lossy(&uscita.stderr);
+    for riga in stderr.lines() {
+        println!("    | {riga}");
+    }
+    let stdout = String::from_utf8_lossy(&uscita.stdout).into_owned();
+    for riga in stdout.lines() {
+        println!("    > {riga}");
+    }
+    (
+        Esito { codice: uscita.status.code(), segnale: uscita.status.signal(), stdout },
+        ucciso,
+    )
+}
+
+fn esegui_nel_dominio(dominio: &Path, argomenti: &[&str]) -> Esito {
+    esegui_come(dominio, 0, argomenti)
+}
+
+fn esegui_come(dominio: &Path, utente: u32, argomenti: &[&str]) -> Esito {
+    let mio = std::env::current_exe().expect("current_exe");
+    let mut comando = Command::new(mio);
+    comando.arg("spawner").arg(dominio).arg(utente.to_string()).args(argomenti);
     let uscita = comando.output().expect("esecuzione dello spawner");
     let stderr = String::from_utf8_lossy(&uscita.stderr);
     for riga in stderr.lines() {
@@ -372,6 +717,463 @@ fn stampa_stato(dominio: &Path, etichetta: &str) {
     }
     for (chiave, valore) in eventi_locali(dominio) {
         println!("MISURA {etichetta}.events.local.{chiave} {valore}");
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Secondo ciclo. Le domande della review, una funzione ciascuna.
+// ---------------------------------------------------------------------------
+
+/// L7 — il dominio puo' essere sigillato dal kernel come foglia?
+fn l7_foglia_sigillata(base: &Path) {
+    titolo("L7 — dominio sigillato con cgroup.max.depth=0");
+    match crea_dominio(base, "l7-sigillato", 256 * 1024 * 1024, false, Foglia::ProfonditaZero) {
+        Ok(dominio) => {
+            println!("MISURA l7.max_depth {}", leggi(&dominio.join("cgroup.max.depth")));
+            let esito = esegui_nel_dominio(&dominio, &["sottogruppo"]);
+            let creato = esito.stdout.contains("sottogruppo creato");
+            println!(
+                "MISURA l7.worker_puo_creare_sottogruppo {}",
+                if creato { "si — LA FOGLIA NON TIENE" } else { "no" }
+            );
+            for riga in esito.stdout.lines().filter(|r| r.contains("sottogruppo rifiutato")) {
+                println!("MISURA l7.rifiuto {}", riga.trim_start_matches("CARICO sottogruppo rifiutato "));
+            }
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l7.errore {e}"),
+    }
+}
+
+/// L8 — la domanda centrale: un OOM dentro un sottogruppo e' visibile?
+fn l8_oom_nel_sottogruppo(base: &Path) {
+    titolo("L8 — OOM dentro un sottogruppo: local contro gerarchico");
+    match crea_dominio(base, "l8-sottogruppo", 64 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let locali_prima = eventi_locali(&dominio);
+            let gerarchici_prima = eventi_gerarchici(&dominio);
+            let esito = esegui_nel_dominio(&dominio, &["sottogruppo_oom"]);
+
+            println!("MISURA l8.codice {:?}", esito.codice);
+            println!("MISURA l8.segnale {:?}", esito.segnale);
+            for chiave in ["mkdir-riuscito", "mkdir-rifiutato", "controller-delegato"] {
+                for riga in esito.stdout.lines().filter(|r| r.contains(chiave)) {
+                    println!("MISURA l8.{}", riga.trim_start_matches("CARICO sottogruppo_oom "));
+                }
+            }
+            let figlio_ucciso = esito.stdout.contains("segnale=Some(9)");
+            println!("MISURA l8.figlio_ucciso_nel_sottogruppo {}", if figlio_ucciso { "si" } else { "no" });
+
+            let locali_dopo = eventi_locali(&dominio);
+            let gerarchici_dopo = eventi_gerarchici(&dominio);
+            for chiave in ["max", "oom", "oom_kill"] {
+                let dl = locali_dopo.get(chiave).copied().unwrap_or(0)
+                    - locali_prima.get(chiave).copied().unwrap_or(0);
+                let dg = gerarchici_dopo.get(chiave).copied().unwrap_or(0)
+                    - gerarchici_prima.get(chiave).copied().unwrap_or(0);
+                println!("MISURA l8.delta.local.{chiave} {dl}");
+                println!("MISURA l8.delta.gerarchico.{chiave} {dg}");
+            }
+            let cieco = locali_dopo.get("oom_kill").copied().unwrap_or(0)
+                == locali_prima.get("oom_kill").copied().unwrap_or(0)
+                && gerarchici_dopo.get("oom_kill").copied().unwrap_or(0)
+                    > gerarchici_prima.get("oom_kill").copied().unwrap_or(0);
+            println!(
+                "MISURA l8.local_e_cieco {}",
+                if cieco { "SI — evidenza persa se si legge solo local" } else { "no" }
+            );
+
+            let _ = fs::remove_dir(dominio.join("interno"));
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l8.errore {e}"),
+    }
+}
+
+/// L12 — la via non ingenua: spostarsi prima, delegare poi.
+fn l12_evasione(base: &Path) {
+    titolo("L12 — evasione in tre passi dal cgroup osservato");
+    match crea_dominio(base, "l12-evasione", 64 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let locali_prima = eventi_locali(&dominio);
+            let gerarchici_prima = eventi_gerarchici(&dominio);
+            let esito = esegui_nel_dominio(&dominio, &["evasione"]);
+            println!("MISURA l12.codice {:?}", esito.codice);
+            println!("MISURA l12.segnale {:?}", esito.segnale);
+            for passo in ["passo1-mkdir", "passo2-spostamento", "passo3-delega"] {
+                for riga in esito.stdout.lines().filter(|r| r.contains(passo)) {
+                    println!("MISURA l12.{}", riga.trim_start_matches("CARICO evasione "));
+                }
+            }
+            let evaso = esito.stdout.contains("passo3-delega riuscita");
+            println!("MISURA l12.evasione_riuscita {}", if evaso { "SI" } else { "no" });
+
+            let locali_dopo = eventi_locali(&dominio);
+            let gerarchici_dopo = eventi_gerarchici(&dominio);
+            for chiave in ["max", "oom", "oom_kill"] {
+                let dl = locali_dopo.get(chiave).copied().unwrap_or(0)
+                    - locali_prima.get(chiave).copied().unwrap_or(0);
+                let dg = gerarchici_dopo.get(chiave).copied().unwrap_or(0)
+                    - gerarchici_prima.get(chiave).copied().unwrap_or(0);
+                println!("MISURA l12.delta.local.{chiave} {dl}");
+                println!("MISURA l12.delta.gerarchico.{chiave} {dg}");
+            }
+            let perso = locali_dopo.get("oom_kill").copied().unwrap_or(0)
+                == locali_prima.get("oom_kill").copied().unwrap_or(0)
+                && gerarchici_dopo.get("oom_kill").copied().unwrap_or(0)
+                    > gerarchici_prima.get("oom_kill").copied().unwrap_or(0);
+            println!(
+                "MISURA l12.local_e_cieco {}",
+                if perso { "SI — leggere solo local perde l'evidenza" } else { "no" }
+            );
+
+            let _ = fs::remove_dir(dominio.join("evaso"));
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l12.errore {e}"),
+    }
+}
+
+/// L13 — la stessa evasione, ma contro un dominio sigillato.
+fn l13_evasione_contro_foglia(base: &Path) {
+    titolo("L13 — la stessa evasione contro cgroup.max.depth=0");
+    match crea_dominio(base, "l13-sigillato", 64 * 1024 * 1024, true, Foglia::ProfonditaZero) {
+        Ok(dominio) => {
+            let locali_prima = eventi_locali(&dominio);
+            let esito = esegui_nel_dominio(&dominio, &["evasione"]);
+            println!("MISURA l13.codice {:?}", esito.codice);
+            println!("MISURA l13.segnale {:?}", esito.segnale);
+            for riga in esito.stdout.lines().filter(|r| r.contains("evasione passo")) {
+                println!("MISURA l13.{}", riga.trim_start_matches("CARICO evasione "));
+            }
+            let fermata = esito.stdout.contains("passo1-mkdir rifiutato");
+            println!(
+                "MISURA l13.evasione_fermata_al_primo_passo {}",
+                if fermata { "si" } else { "NO" }
+            );
+            let locali_dopo = eventi_locali(&dominio);
+            for chiave in ["oom", "oom_kill", "oom_group_kill"] {
+                let dl = locali_dopo.get(chiave).copied().unwrap_or(0)
+                    - locali_prima.get(chiave).copied().unwrap_or(0);
+                println!("MISURA l13.delta.local.{chiave} {dl}");
+            }
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l13.errore {e}"),
+    }
+}
+
+/// L9 — con i privilegi ceduti, il worker riesce ancora a toccare il dominio?
+fn l9_senza_privilegi(base: &Path) {
+    titolo("L9 — worker non privilegiato (uid 1000)");
+    match crea_dominio(base, "l9-nonpriv", 256 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let esito = esegui_come(&dominio, 1000, &["sottogruppo"]);
+            println!("MISURA l9.codice {:?}", esito.codice);
+            let nato = esito.stdout.contains("CARICO cgroup");
+            println!("MISURA l9.worker_e_partito {}", if nato { "si" } else { "no" });
+            let creato = esito.stdout.contains("sottogruppo creato");
+            println!(
+                "MISURA l9.puo_creare_sottogruppo {}",
+                if creato { "si — I PERMESSI NON BASTANO" } else { "no" }
+            );
+            for riga in esito.stdout.lines().filter(|r| r.contains("sottogruppo rifiutato")) {
+                println!("MISURA l9.rifiuto {}", riga.trim_start_matches("CARICO sottogruppo rifiutato "));
+            }
+            let _ = fs::remove_dir(dominio.join("interno"));
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l9.errore {e}"),
+    }
+}
+
+/// L10 — al ritorno della wait il dominio e' quiescente? E un OOM puo'
+/// arrivare dopo?
+fn l10_quiescenza(base: &Path) {
+    titolo("L10 — quiescenza: il capofila esce 0 e lascia un orfano vivo");
+    match crea_dominio(base, "l10-orfano", 64 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let prima = eventi_gerarchici(&dominio);
+            let esito = esegui_nel_dominio(&dominio, &["orfano"]);
+            // Subito dopo che il capofila e' uscito: che cosa vede il
+            // supervisore se pubblicasse adesso?
+            let vivi_subito = processi_vivi(&dominio);
+            let eventi_subito = eventi_gerarchici(&dominio);
+            println!("MISURA l10.capofila_codice {:?}", esito.codice);
+            println!("MISURA l10.processi_vivi_alla_wait {vivi_subito}");
+            let oom_subito = eventi_subito.get("oom_kill").copied().unwrap_or(0)
+                - prima.get("oom_kill").copied().unwrap_or(0);
+            println!("MISURA l10.oom_kill_visibile_alla_wait {oom_subito}");
+
+            // Ora si aspetta la quiescenza vera, come dovrebbe fare la
+            // barriera prima della pubblicazione.
+            let mut giri = 0;
+            while processi_vivi(&dominio) > 0 && giri < 600 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                giri += 1;
+            }
+            let dopo = eventi_gerarchici(&dominio);
+            let oom_dopo = dopo.get("oom_kill").copied().unwrap_or(0)
+                - prima.get("oom_kill").copied().unwrap_or(0);
+            println!("MISURA l10.attesa_quiescenza_ms {}", giri * 50);
+            println!("MISURA l10.processi_vivi_dopo {}", processi_vivi(&dominio));
+            println!("MISURA l10.oom_kill_dopo_la_quiescenza {oom_dopo}");
+            println!(
+                "MISURA l10.evidenza_arrivata_in_ritardo {}",
+                if oom_dopo > oom_subito { "SI — pubblicare alla wait sarebbe stato un errore" } else { "no" }
+            );
+            stampa_stato(&dominio, "l10");
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l10.errore {e}"),
+    }
+}
+
+/// L11 — ripetizioni: un campione non e' una misura.
+fn l11_ripetizioni(base: &Path, quante: u32) {
+    titolo("L11 — ripetizioni del costo d'avvio e del contenimento");
+    let mut picchi_avvio = Vec::new();
+    let mut picchi_tetto = Vec::new();
+    for giro in 0..quante {
+        if let Ok(dominio) = crea_dominio(
+            base,
+            &format!("l11-avvio-{giro}"),
+            256 * 1024 * 1024,
+            false,
+            Foglia::Aperta,
+        ) {
+            let _ = esegui_nel_dominio(&dominio, &["inerte"]);
+            if let Some(v) = leggi_intero(&dominio, "memory.peak") {
+                picchi_avvio.push(v);
+            }
+            rimuovi_dominio(&dominio);
+        }
+        if let Ok(dominio) = crea_dominio(
+            base,
+            &format!("l11-tetto-{giro}"),
+            64 * 1024 * 1024,
+            true,
+            Foglia::Aperta,
+        ) {
+            let _ = esegui_nel_dominio(&dominio, &["tocca"]);
+            if let Some(v) = leggi_intero(&dominio, "memory.peak") {
+                picchi_tetto.push(v);
+            }
+            rimuovi_dominio(&dominio);
+        }
+    }
+    riporta_intervallo("l11.picco_avvio", &picchi_avvio);
+    riporta_intervallo("l11.picco_sotto_tetto", &picchi_tetto);
+}
+
+fn riporta_intervallo(chiave: &str, valori: &[u64]) {
+    if valori.is_empty() {
+        println!("MISURA {chiave} nessuna misura");
+        return;
+    }
+    let minimo = valori.iter().copied().min().unwrap_or(0);
+    let massimo = valori.iter().copied().max().unwrap_or(0);
+    println!(
+        "MISURA {chiave} n={} min={minimo} max={massimo} valori={valori:?}",
+        valori.len()
+    );
+}
+
+
+/// L14 — quiescenza con un orfano nello **stesso** cgroup.
+///
+/// Qui `cgroup.procs` e `populated` devono concordare: e' il caso facile, e
+/// serve come controllo per L15.
+fn l14_quiescenza_stesso_cgroup(base: &Path) {
+    titolo("L14 — quiescenza letta da cgroup.events, orfano nello stesso cgroup");
+    match crea_dominio(base, "l14-orfano", 64 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let esito = esegui_nel_dominio(&dominio, &["orfano"]);
+            println!("MISURA l14.capofila_codice {:?}", esito.codice);
+
+            let procs = fs::read_to_string(dominio.join("cgroup.procs"))
+                .map(|t| t.split_whitespace().count())
+                .unwrap_or(0);
+            let pop = popolato(&dominio);
+            println!("MISURA l14.cgroup_procs_alla_wait {procs}");
+            println!("MISURA l14.populated_alla_wait {pop:?}");
+            println!(
+                "MISURA l14.concordano {}",
+                if (procs > 0) == pop.unwrap_or(false) { "si" } else { "NO" }
+            );
+
+            let mut giri = 0;
+            while popolato(&dominio) == Some(true) && giri < 600 {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                giri += 1;
+            }
+            println!("MISURA l14.attesa_populated_zero_ms {}", giri * 25);
+            println!("MISURA l14.populated_finale {:?}", popolato(&dominio));
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l14.errore {e}"),
+    }
+}
+
+/// L15 — quiescenza con un processo vivo in un **sottogruppo**.
+///
+/// E' il caso che smaschera `cgroup.procs`: il file elenca solo il cgroup
+/// corrente, quindi al ritorno della `wait` risulta vuoto mentre un processo
+/// del dominio e' vivo un livello piu' sotto.
+fn l15_quiescenza_sottogruppo(base: &Path) {
+    titolo("L15 — quiescenza con un processo vivo in un sottogruppo");
+    match crea_dominio(base, "l15-figlio", 64 * 1024 * 1024, false, Foglia::Aperta) {
+        Ok(dominio) => {
+            let esito = esegui_nel_dominio(&dominio, &["sottogruppo_vivo"]);
+            println!("MISURA l15.capofila_codice {:?}", esito.codice);
+
+            let procs = fs::read_to_string(dominio.join("cgroup.procs"))
+                .map(|t| t.split_whitespace().count())
+                .unwrap_or(0);
+            let ricorsivi = processi_vivi(&dominio);
+            let pop = popolato(&dominio);
+            for riga in esito.stdout.lines().filter(|r| r.contains("nipote-insediato")) {
+                println!(
+                    "MISURA l15.{}",
+                    riga.trim_start_matches("CARICO sottogruppo_vivo ")
+                );
+            }
+            let valida = esito.stdout.contains("nipote-insediato si");
+            println!(
+                "MISURA l15.misura_valida {}",
+                if valida { "si" } else { "NO — il nipote non si e' insediato" }
+            );
+            println!("MISURA l15.cgroup_procs_alla_wait {procs}");
+            println!("MISURA l15.scansione_ricorsiva_alla_wait {ricorsivi}");
+            println!("MISURA l15.populated_alla_wait {pop:?}");
+            println!(
+                "MISURA l15.cgroup_procs_e_cieco {}",
+                if procs == 0 && pop == Some(true) {
+                    "SI — dominio vuoto secondo cgroup.procs, popolato secondo il kernel"
+                } else {
+                    "no"
+                }
+            );
+
+            let mut giri = 0;
+            while popolato(&dominio) == Some(true) && giri < 600 {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                giri += 1;
+            }
+            println!("MISURA l15.attesa_populated_zero_ms {}", giri * 25);
+            println!("MISURA l15.populated_finale {:?}", popolato(&dominio));
+            let _ = fs::remove_dir(dominio.join("vivo"));
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l15.errore {e}"),
+    }
+}
+
+/// L16 — `oom_score_adj = -1000` ereditato batte `memory.oom.group=1`?
+///
+/// Due bracci: senza normalizzazione (controllo) e con.
+fn l16_oom_score_adj(base: &Path) {
+    titolo("L16 — eredita' di oom_score_adj contro memory.oom.group");
+
+    // Il supervisore si protegge: rappresenta un chiamante che gira sotto un
+    // servizio protetto dall'OOM killer.
+    match fs::write("/proc/self/oom_score_adj", "-1000") {
+        Ok(()) => println!("MISURA l16.supervisore_protetto si"),
+        Err(e) => {
+            println!("MISURA l16.supervisore_protetto no ({e}) — scenario non eseguibile");
+            return;
+        }
+    }
+    println!(
+        "MISURA l16.supervisore_oom_score_adj {}",
+        leggi(Path::new("/proc/self/oom_score_adj"))
+    );
+
+    for (nome, normalizza) in [("l16a-senza", false), ("l16b-con", true)] {
+        let etichetta = if normalizza { "con_normalizzazione" } else { "senza_normalizzazione" };
+        match crea_dominio(base, nome, 64 * 1024 * 1024, true, Foglia::ProfonditaZero) {
+            Ok(dominio) => {
+                if normalizza {
+                    std::env::remove_var("PT_NON_NORMALIZZARE");
+                } else {
+                    std::env::set_var("PT_NON_NORMALIZZARE", "1");
+                }
+                let prima = eventi_gerarchici(&dominio);
+                let (esito, ucciso) = esegui_con_scadenza(&dominio, &["tocca"], 4_000);
+                println!(
+                    "MISURA l16.{etichetta}.ha_richiesto_cgroup_kill {}",
+                    if ucciso { "SI — il dominio non si e' spento da solo" } else { "no" }
+                );
+                println!("MISURA l16.{etichetta}.codice {:?}", esito.codice);
+                println!("MISURA l16.{etichetta}.segnale {:?}", esito.segnale);
+                for riga in esito.stdout.lines().filter(|r| r.starts_with("CARICO oom_score_adj")) {
+                    println!(
+                        "MISURA l16.{etichetta}.worker_oom_score_adj {}",
+                        riga.trim_start_matches("CARICO oom_score_adj ")
+                    );
+                }
+                println!(
+                    "MISURA l16.{etichetta}.verdetto {}",
+                    match (normalizza, ucciso) {
+                        (false, true) => "il worker protetto ha resistito al group kill",
+                        (false, false) => "il worker protetto e' stato fermato comunque",
+                        (true, true) => "ANOMALIA: normalizzato e non fermato dal group kill",
+                        (true, false) => "normalizzato e fermato dal group kill, come atteso",
+                    }
+                );
+                let dopo = eventi_gerarchici(&dominio);
+                for chiave in ["oom", "oom_kill", "oom_group_kill"] {
+                    let d = dopo.get(chiave).copied().unwrap_or(0)
+                        - prima.get(chiave).copied().unwrap_or(0);
+                    println!("MISURA l16.{etichetta}.delta.{chiave} {d}");
+                }
+                if let Some(v) = leggi_intero(&dominio, "memory.peak") {
+                    println!("MISURA l16.{etichetta}.memory.peak {v}");
+                }
+                rimuovi_dominio(&dominio);
+            }
+            Err(e) => println!("MISURA l16.{etichetta}.errore {e}"),
+        }
+    }
+    std::env::remove_var("PT_NON_NORMALIZZARE");
+    let _ = fs::write("/proc/self/oom_score_adj", "0");
+}
+
+/// L17 — il preflight: cio' che il supervisore deve verificare prima di
+/// dichiarare utilizzabile un dominio.
+fn l17_preflight(base: &Path) {
+    titolo("L17 — preflight del dominio: scrivi, poi rileggi");
+    match crea_dominio(base, "l17-preflight", 64 * 1024 * 1024, true, Foglia::ProfonditaZero) {
+        Ok(dominio) => {
+            for (chiave, atteso) in [
+                ("memory.max", "67108864"),
+                ("memory.oom.group", "1"),
+                ("cgroup.max.depth", "0"),
+                ("memory.swap.max", "0"),
+            ] {
+                let letto = leggi(&dominio.join(chiave));
+                println!(
+                    "MISURA l17.{chiave} letto={letto} atteso={atteso} {}",
+                    if letto == atteso { "OK" } else { "DIVERGE" }
+                );
+            }
+            println!("MISURA l17.cgroup.events {:?}", popolato(&dominio));
+            let opzioni = leggi(Path::new("/proc/self/mounts"));
+            let localevents = opzioni
+                .lines()
+                .filter(|r| r.contains(" cgroup2 "))
+                .any(|r| r.contains("memory_localevents"));
+            println!(
+                "MISURA l17.memory_localevents {}",
+                if localevents { "PRESENTE — memory.events non e' gerarchico" } else { "assente" }
+            );
+            for riga in opzioni.lines().filter(|r| r.contains(" cgroup2 ")) {
+                println!("MISURA l17.mount {riga}");
+            }
+            rimuovi_dominio(&dominio);
+        }
+        Err(e) => println!("MISURA l17.errore {e}"),
     }
 }
 
@@ -406,7 +1208,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     titolo("S1 — nascita gia' vincolata (tetto molto basso)");
     // Se anche il caricamento dell'immagine e' addebitato al dominio, un tetto
     // sotto la dimensione del binario deve impedire persino l'avvio.
-    match crea_dominio(&base, "s1-stretto", 2 * 1024 * 1024, false) {
+    match crea_dominio_aperto(&base, "s1-stretto", 2 * 1024 * 1024, false) {
         Ok(dominio) => {
             let esito = esegui_nel_dominio(&dominio, &["chiedi"]);
             println!("MISURA s1.codice {:?}", esito.codice);
@@ -422,7 +1224,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     }
 
     titolo("S1-bis — tetto sotto il costo minimo di un processo");
-    match crea_dominio(&base, "s1bis-infimo", 128 * 1024, false) {
+    match crea_dominio_aperto(&base, "s1bis-infimo", 128 * 1024, false) {
         Ok(dominio) => {
             let esito = esegui_nel_dominio(&dominio, &["chiedi"]);
             println!("MISURA s1bis.codice {:?}", esito.codice);
@@ -438,7 +1240,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     }
 
     titolo("S2 — il worker nasce dentro il dominio (tetto ampio)");
-    match crea_dominio(&base, "s2-nascita", 256 * 1024 * 1024, false) {
+    match crea_dominio_aperto(&base, "s2-nascita", 256 * 1024 * 1024, false) {
         Ok(dominio) => {
             let atteso = format!("{PREFISSO}/s2-nascita");
             let esito = esegui_nel_dominio(&dominio, &["sottogruppo"]);
@@ -453,7 +1255,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     }
 
     titolo("S3 — allocazione richiesta ma non toccata");
-    match crea_dominio(&base, "s3-chiedi", 64 * 1024 * 1024, false) {
+    match crea_dominio_aperto(&base, "s3-chiedi", 64 * 1024 * 1024, false) {
         Ok(dominio) => {
             let esito = esegui_nel_dominio(&dominio, &["chiedi"]);
             println!("MISURA s3.codice {:?}", esito.codice);
@@ -468,7 +1270,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
     }
 
     titolo("S4 — contenimento: allocazione toccata oltre il tetto");
-    match crea_dominio(&base, "s4-tocca", 64 * 1024 * 1024, false) {
+    match crea_dominio_aperto(&base, "s4-tocca", 64 * 1024 * 1024, false) {
         Ok(dominio) => {
             let prima = eventi_locali(&dominio);
             let esito = esegui_nel_dominio(&dominio, &["tocca"]);
@@ -494,7 +1296,7 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
 
     for (nome, oom_group) in [("s5-discendenti", false), ("s6-oom-group", true)] {
         titolo(&format!("{nome} — discendenti, memory.oom.group={}", u8::from(oom_group)));
-        match crea_dominio(&base, nome, 64 * 1024 * 1024, oom_group) {
+        match crea_dominio_aperto(&base, nome, 64 * 1024 * 1024, oom_group) {
             Ok(dominio) => {
                 let prima = eventi_locali(&dominio);
                 let esito = esegui_nel_dominio(&dominio, &["figlio"]);
@@ -520,6 +1322,18 @@ Nessuno scenario e' eseguibile senza delega. Nessun ripiego.");
             Err(e) => println!("MISURA {nome}.errore {e}"),
         }
     }
+
+    l7_foglia_sigillata(&base);
+    l8_oom_nel_sottogruppo(&base);
+    l9_senza_privilegi(&base);
+    l12_evasione(&base);
+    l13_evasione_contro_foglia(&base);
+    l10_quiescenza(&base);
+    l11_ripetizioni(&base, 5);
+    l14_quiescenza_stesso_cgroup(&base);
+    l15_quiescenza_sottogruppo(&base);
+    l16_oom_score_adj(&base);
+    l17_preflight(&base);
 
     let _ = fs::remove_dir(base.join("supervisore"));
     let _ = fs::remove_dir(&base);

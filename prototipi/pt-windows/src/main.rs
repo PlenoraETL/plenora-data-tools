@@ -22,8 +22,11 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, OpenJobObjectW,
     QueryInformationJobObject, SetInformationJobObject, JobObjectAssociateCompletionPortInformation,
-    JobObjectExtendedLimitInformation, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    JobObjectLimitViolationInformation, JobObjectNotificationLimitInformation,
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOBOBJECT_LIMIT_VIOLATION_INFORMATION,
+    JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
 };
 use windows_sys::Win32::System::SystemServices::{
     JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS, JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
@@ -41,6 +44,70 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED};
 
 const TETTO: usize = 64 * 1024 * 1024;
+
+/// Il *notification limit* sta sotto il tetto duro: il superamento va
+/// registrato prima che il contenimento entri in gioco, altrimenti la prova
+/// arriverebbe insieme al danno invece che prima.
+const SOGLIA_NOTIFICA: u64 = 48 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// Secondo ciclo: la prova interrogabile.
+// ---------------------------------------------------------------------------
+
+/// Registra un limite di notifica sulla memoria del job.
+///
+/// E' distinto dal tetto duro: quello contiene, questo **fa registrare la
+/// violazione** in una struttura che si puo' interrogare in un momento
+/// qualunque, senza dipendere dalla consegna di un messaggio.
+fn imposta_notifica(job: HANDLE, byte: u64) -> bool {
+    let mut info: JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    info.LimitFlags = JOB_OBJECT_LIMIT_JOB_MEMORY;
+    info.JobMemoryLimit = byte;
+    // SAFETY: prototipo. Classe e dimensione dichiarate coerenti.
+    let esito = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectNotificationLimitInformation,
+            std::ptr::from_ref(&info).cast(),
+            u32::try_from(std::mem::size_of::<JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION>()).unwrap(),
+        )
+    };
+    esito != 0
+}
+
+/// La prova interrogabile: quali limiti risultano violati, adesso.
+fn violazioni(job: HANDLE) -> Option<JOBOBJECT_LIMIT_VIOLATION_INFORMATION> {
+    let mut info: JOBOBJECT_LIMIT_VIOLATION_INFORMATION = unsafe { std::mem::zeroed() };
+    let mut lunghezza: u32 = 0;
+    // SAFETY: prototipo. Classe e dimensione dichiarate coerenti.
+    let esito = unsafe {
+        QueryInformationJobObject(
+            job,
+            JobObjectLimitViolationInformation,
+            std::ptr::from_mut(&mut info).cast(),
+            u32::try_from(std::mem::size_of::<JOBOBJECT_LIMIT_VIOLATION_INFORMATION>()).unwrap(),
+            &raw mut lunghezza,
+        )
+    };
+    (esito != 0).then_some(info)
+}
+
+/// Quanti processi vivono ancora nel job: la quiescenza, interrogata.
+fn processi_attivi(job: HANDLE) -> Option<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION> {
+    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+    let mut lunghezza: u32 = 0;
+    // SAFETY: prototipo.
+    let esito = unsafe {
+        QueryInformationJobObject(
+            job,
+            JobObjectBasicAccountingInformation,
+            std::ptr::from_mut(&mut info).cast(),
+            u32::try_from(std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>()).unwrap(),
+            &raw mut lunghezza,
+        )
+    };
+    (esito != 0).then_some(info)
+}
 
 fn main() {
     let argomenti: Vec<String> = std::env::args().collect();
@@ -289,6 +356,7 @@ fn carico(resto: &[String]) {
         "figlio" => genera_figlio(),
         "annidato" => prova_job_annidato(io_stesso),
         "inerte" => println!("CARICO inerte fine"),
+        "orfano" => genera_orfano(),
         _ => tocca_finche_puoi(io_stesso),
     }
     let _ = std::io::stdout().flush();
@@ -344,6 +412,25 @@ fn chiedi_senza_toccare() {
     println!("CARICO fine-richieste");
 }
 
+/// Un discendente che sopravvive al capofila, per la domanda sulla quiescenza.
+fn genera_orfano() {
+    let mio = std::env::current_exe().expect("current_exe");
+    let figlio = Command::new(mio)
+        .arg("carico")
+        .arg("tocca")
+        // Senza questo il supervisore aspetterebbe anche lui, e la domanda
+        // sulla quiescenza non si porrebbe.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match figlio {
+        Ok(figlio) => println!("CARICO orfano-pid {}", figlio.id()),
+        Err(e) => println!("CARICO orfano-spawn-fallito {e}"),
+    }
+    println!("CARICO capofila-esce-subito con-uscita-0");
+    let _ = std::io::stdout().flush();
+}
+
 fn genera_figlio() {
     let mio = std::env::current_exe().expect("current_exe");
     let mut figlio = Command::new(mio)
@@ -387,6 +474,436 @@ fn prova_job_annidato(io_stesso: HANDLE) {
 // Supervisore.
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Secondo ciclo: gli scenari della review.
+// ---------------------------------------------------------------------------
+
+/// Prepara un job con tetto duro e limite di notifica, e facoltativamente una
+/// porta. Torna `(job, porta)`; la porta e' nulla se non richiesta.
+fn job_del_secondo_ciclo(nome: &str, con_porta: bool) -> (HANDLE, HANDLE) {
+    let job = crea_job(nome);
+    if job.is_null() {
+        return (job, std::ptr::null_mut());
+    }
+    imposta_tetto(job, TETTO);
+    let porta = if con_porta {
+        // SAFETY: prototipo. Porta nuova, nessun file associato.
+        let porta =
+            unsafe { CreateIoCompletionPort(!0_usize as HANDLE, std::ptr::null_mut(), 0, 1) };
+        associa_porta(job, porta);
+        porta
+    } else {
+        std::ptr::null_mut()
+    };
+    // Il limite di notifica va dopo la porta: e' li' che il sistema decide se
+    // ha qualcuno a cui riferire.
+    let notifica = imposta_notifica(job, SOGLIA_NOTIFICA);
+    println!(
+        "MISURA {nome}.notifica_impostata {}",
+        if notifica { "si" } else { "no" }
+    );
+    (job, porta)
+}
+
+fn stampa_violazioni(etichetta: &str, job: HANDLE) -> bool {
+    match violazioni(job) {
+        Some(v) => {
+            let memoria_violata = (v.ViolationLimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) != 0;
+            println!("MISURA {etichetta}.violazione_interrogabile si");
+            println!("MISURA {etichetta}.violation_limit_flags {:#x}", v.ViolationLimitFlags);
+            println!("MISURA {etichetta}.job_memory {}", v.JobMemory);
+            println!("MISURA {etichetta}.job_memory_limit {}", v.JobMemoryLimit);
+            println!(
+                "MISURA {etichetta}.memoria_risulta_violata {}",
+                if memoria_violata { "si" } else { "no" }
+            );
+            memoria_violata
+        }
+        None => {
+            // SAFETY: prototipo.
+            println!("MISURA {etichetta}.violazione_interrogabile no (errore {})", unsafe {
+                GetLastError()
+            });
+            false
+        }
+    }
+}
+
+/// W1 — il caso che la review teme: il capofila esce 0, il figlio sfonda, e
+/// la porta non viene MAI drenata. La prova regge lo stesso?
+fn w1_prova_senza_drenare(indice: usize) {
+    println!("\n=== W1 — capofila a 0, porta mai drenata ===");
+    let nome = format!("pt-windows-w1-{}-{indice}", std::process::id());
+    let (job, porta) = job_del_secondo_ciclo(&nome, true);
+    if job.is_null() {
+        println!("MISURA w1.errore creazione");
+        return;
+    }
+
+    let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+        .arg("spawner")
+        .arg(&nome)
+        .arg("figlio")
+        .output()
+        .expect("spawner");
+    let stdout = String::from_utf8_lossy(&uscita.stdout).into_owned();
+
+    println!("MISURA w1.codice_capofila {:?}", uscita.status.code());
+    println!(
+        "MISURA w1.figlio_ha_sfondato {}",
+        if stdout.contains("negata-a") { "si" } else { "no" }
+    );
+    let violata = stampa_violazioni("w1", job);
+    println!(
+        "MISURA w1.prova_disponibile_senza_messaggi {}",
+        if violata { "SI" } else { "NO — la prova dipende dai messaggi" }
+    );
+
+    // Solo ORA si guarda la porta, per confrontare le due fonti.
+    let messaggi = raccogli_messaggi(porta, 300);
+    let riassunto: Vec<String> = messaggi
+        .iter()
+        .map(|(c, k)| format!("{}({k})", nome_messaggio(*c)))
+        .collect();
+    println!("MISURA w1.messaggi_in_coda {}", riassunto.join(" "));
+
+    // SAFETY: prototipo.
+    unsafe {
+        CloseHandle(porta);
+        CloseHandle(job);
+    }
+}
+
+/// W2 — e senza alcuna porta associata? Se la prova sopravvive anche qui,
+/// non dipende dal meccanismo di consegna.
+fn w2_prova_senza_porta(indice: usize) {
+    println!("\n=== W2 — nessuna completion port associata ===");
+    let nome = format!("pt-windows-w2-{}-{indice}", std::process::id());
+    let (job, _) = job_del_secondo_ciclo(&nome, false);
+    if job.is_null() {
+        println!("MISURA w2.errore creazione");
+        return;
+    }
+
+    let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+        .arg("spawner")
+        .arg(&nome)
+        .arg("tocca")
+        .output()
+        .expect("spawner");
+    let stdout = String::from_utf8_lossy(&uscita.stdout).into_owned();
+    println!("MISURA w2.codice {:?}", uscita.status.code());
+    println!(
+        "MISURA w2.ha_sfondato {}",
+        if stdout.contains("negata-a") { "si" } else { "no" }
+    );
+    let violata = stampa_violazioni("w2", job);
+    println!(
+        "MISURA w2.prova_indipendente_dalla_porta {}",
+        if violata { "SI" } else { "NO" }
+    );
+    // SAFETY: prototipo.
+    unsafe { CloseHandle(job) };
+}
+
+/// W3 — quiescenza: al ritorno della `wait` il job e' vuoto?
+fn w3_quiescenza(indice: usize) {
+    println!("\n=== W3 — quiescenza: capofila a 0 con un orfano vivo ===");
+    let nome = format!("pt-windows-w3-{}-{indice}", std::process::id());
+    let (job, porta) = job_del_secondo_ciclo(&nome, true);
+    if job.is_null() {
+        println!("MISURA w3.errore creazione");
+        return;
+    }
+
+    let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+        .arg("spawner")
+        .arg(&nome)
+        .arg("orfano")
+        .output()
+        .expect("spawner");
+    println!("MISURA w3.codice_capofila {:?}", uscita.status.code());
+
+    let subito = processi_attivi(job).map_or(u32::MAX, |a| a.ActiveProcesses);
+    println!("MISURA w3.processi_attivi_alla_wait {subito}");
+    let violata_subito = violazioni(job)
+        .is_some_and(|v| (v.ViolationLimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) != 0);
+    println!(
+        "MISURA w3.violazione_visibile_alla_wait {}",
+        if violata_subito { "si" } else { "no" }
+    );
+
+    // Attesa della quiescenza, come dovrebbe fare la barriera.
+    let mut giri = 0;
+    while processi_attivi(job).map_or(0, |a| a.ActiveProcesses) > 0 && giri < 600 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        giri += 1;
+    }
+    println!("MISURA w3.attesa_quiescenza_ms {}", giri * 50);
+    println!(
+        "MISURA w3.processi_attivi_dopo {}",
+        processi_attivi(job).map_or(u32::MAX, |a| a.ActiveProcesses)
+    );
+    let violata_dopo = stampa_violazioni("w3", job);
+    println!(
+        "MISURA w3.evidenza_arrivata_in_ritardo {}",
+        if violata_dopo && !violata_subito {
+            "SI — pubblicare alla wait sarebbe stato un errore"
+        } else {
+            "no"
+        }
+    );
+    // SAFETY: prototipo.
+    unsafe {
+        CloseHandle(porta);
+        CloseHandle(job);
+    }
+}
+
+/// W4 — con il supervisore gia' dentro un job esterno.
+fn w4_job_ereditato(indice: usize) {
+    println!("\n=== W4 — supervisore gia' dentro un job esterno ===");
+    let esterno = crea_job(&format!("pt-windows-esterno-{}-{indice}", std::process::id()));
+    if esterno.is_null() {
+        println!("MISURA w4.errore job-esterno");
+        return;
+    }
+    // Tetto molto piu' alto: non deve essere lui a fermare nulla.
+    imposta_tetto(esterno, 4 * 1024 * 1024 * 1024);
+    // SAFETY: prototipo.
+    let dentro = unsafe { AssignProcessToJobObject(esterno, GetCurrentProcess()) };
+    println!(
+        "MISURA w4.supervisore_nel_job_esterno {}",
+        if dentro != 0 { "si" } else { "no" }
+    );
+    // SAFETY: prototipo.
+    println!("MISURA w4.gia_in_un_job {}", if dentro_un_job(unsafe { GetCurrentProcess() }) {
+        "si"
+    } else {
+        "no"
+    });
+
+    let nome = format!("pt-windows-w4-{}-{indice}", std::process::id());
+    let (job, porta) = job_del_secondo_ciclo(&nome, true);
+    if job.is_null() {
+        println!("MISURA w4.errore job-interno");
+        return;
+    }
+    let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+        .arg("spawner")
+        .arg(&nome)
+        .arg("tocca")
+        .output()
+        .expect("spawner");
+    let stdout = String::from_utf8_lossy(&uscita.stdout).into_owned();
+    println!("MISURA w4.codice {:?}", uscita.status.code());
+    println!(
+        "MISURA w4.contenuto_dal_job_interno {}",
+        if stdout.contains("negata-a") { "si" } else { "no" }
+    );
+    let violata = stampa_violazioni("w4", job);
+    println!(
+        "MISURA w4.prova_regge_con_job_ereditato {}",
+        if violata { "SI" } else { "NO" }
+    );
+    // SAFETY: prototipo. Il job esterno non si chiude: il supervisore ci vive
+    // dentro fino alla fine, ed e' cio' che lo scenario vuole rappresentare.
+    unsafe {
+        CloseHandle(porta);
+        CloseHandle(job);
+    }
+}
+
+/// W5 — ripetizioni: intervalli invece di campioni singoli.
+fn w5_ripetizioni(quante: usize) {
+    println!("\n=== W5 — ripetizioni del residuo del loader ===");
+    let mut residui = Vec::new();
+    let mut spawner = Vec::new();
+    for giro in 0..quante {
+        let nome = format!("pt-windows-w5-{}-{giro}", std::process::id());
+        let job = crea_job(&nome);
+        if job.is_null() || !imposta_tetto(job, TETTO) {
+            continue;
+        }
+        let figlio = Command::new(std::env::current_exe().expect("current_exe"))
+            .arg("carico")
+            .arg("inerte")
+            .creation_flags(CREATE_SUSPENDED)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        if let Ok(mut figlio) = figlio {
+            let handle = figlio.as_raw_handle() as HANDLE;
+            if let Some(r) = commit_privato(handle) {
+                residui.push(r);
+            }
+            // SAFETY: prototipo.
+            unsafe { AssignProcessToJobObject(job, handle) };
+            riprendi_processo(figlio.id());
+            let _ = figlio.wait();
+        }
+        // SAFETY: prototipo.
+        unsafe { CloseHandle(job) };
+
+        // E quanto costa lo spawner al dominio.
+        let nome2 = format!("pt-windows-w5s-{}-{giro}", std::process::id());
+        let job2 = crea_job(&nome2);
+        if !job2.is_null() && imposta_tetto(job2, TETTO) {
+            let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+                .arg("spawner")
+                .arg(&nome2)
+                .arg("inerte")
+                .output();
+            if let Ok(uscita) = uscita {
+                let testo = String::from_utf8_lossy(&uscita.stderr).into_owned();
+                for riga in testo.lines().filter(|r| r.contains("commit-proprio")) {
+                    if let Some(v) = riga.split_whitespace().last().and_then(|v| v.parse().ok()) {
+                        spawner.push(v);
+                    }
+                }
+            }
+            // SAFETY: prototipo.
+            unsafe { CloseHandle(job2) };
+        }
+    }
+    riporta_intervallo("w5.residuo_loader", &residui);
+    riporta_intervallo("w5.commit_spawner", &spawner);
+}
+
+/// W6 — la prova e' un livello o un fermo? Campionamento fitto dopo la fine.
+///
+/// Se sparisce, ogni disegno che interroghi il sistema DOPO aver atteso la
+/// quiescenza sta correndo contro un orologio che non controlla.
+fn w6_durata_della_prova(indice: usize) {
+    println!("\n=== W6 — per quanto resta interrogabile la violazione ===");
+    let nome = format!("pt-windows-w6-{}-{indice}", std::process::id());
+    let (job, porta) = job_del_secondo_ciclo(&nome, true);
+    if job.is_null() {
+        println!("MISURA w6.errore creazione");
+        return;
+    }
+
+    let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+        .arg("spawner")
+        .arg(&nome)
+        .arg("tocca")
+        .output()
+        .expect("spawner");
+    println!("MISURA w6.codice {:?}", uscita.status.code());
+
+    // Campiona subito e poi ogni 25 ms, fino a un secondo.
+    let mut visibile_a = Vec::new();
+    let mut sparita_a: Option<usize> = None;
+    for giro in 0..40_usize {
+        let attiva = violazioni(job)
+            .is_some_and(|v| (v.ViolationLimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) != 0);
+        let ms = giro * 25;
+        if attiva {
+            visibile_a.push(ms);
+        } else if sparita_a.is_none() && !visibile_a.is_empty() {
+            sparita_a = Some(ms);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    println!(
+        "MISURA w6.visibile_al_primo_campione {}",
+        if visibile_a.first() == Some(&0) { "si" } else { "no" }
+    );
+    println!("MISURA w6.campioni_con_violazione {}", visibile_a.len());
+    match sparita_a {
+        Some(ms) => {
+            println!("MISURA w6.sparita_dopo_ms {ms}");
+            println!("MISURA w6.prova_durevole NO — e' un livello, non un fermo");
+        }
+        None if visibile_a.is_empty() => {
+            println!("MISURA w6.sparita_dopo_ms mai-vista");
+            println!("MISURA w6.prova_durevole NO — non e' stata vista affatto");
+        }
+        None => {
+            println!("MISURA w6.sparita_dopo_ms non-sparita-entro-1000");
+            println!("MISURA w6.prova_durevole forse — non sparita entro un secondo");
+        }
+    }
+    // SAFETY: prototipo.
+    unsafe {
+        CloseHandle(porta);
+        CloseHandle(job);
+    }
+}
+
+/// W7 — il picco del job come prova durevole, e il suo costo in falsi
+/// positivi.
+fn w7_prova_durevole(indice: usize) {
+    println!("\n=== W7 — il picco del job sopravvive alla quiescenza? ===");
+
+    for (etichetta, scenario, sfonda) in [
+        ("sfonda", "tocca", true),
+        ("sotto_tetto", "inerte", false),
+        ("chiede_e_basta", "chiedi", false),
+        // Il caso esatto della review: sfonda un figlio, il capofila esce 0.
+        ("figlio_sfonda", "figlio", true),
+    ] {
+        let nome = format!("pt-windows-w7{etichetta}-{}-{indice}", std::process::id());
+        let job = crea_job(&nome);
+        if job.is_null() || !imposta_tetto(job, TETTO) {
+            println!("MISURA w7.{etichetta}.errore creazione");
+            continue;
+        }
+        let uscita = Command::new(std::env::current_exe().expect("current_exe"))
+            .arg("spawner")
+            .arg(&nome)
+            .arg(scenario)
+            .output()
+            .expect("spawner");
+        println!("MISURA w7.{etichetta}.codice {:?}", uscita.status.code());
+
+        // Subito, e poi dopo mezzo secondo: il picco deve essere lo stesso.
+        let subito = stato_job(job).map_or(0, |s| s.PeakJobMemoryUsed);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let dopo = stato_job(job).map_or(0, |s| s.PeakJobMemoryUsed);
+        let tetto = stato_job(job).map_or(0, |s| s.JobMemoryLimit);
+
+        println!("MISURA w7.{etichetta}.picco_subito {subito}");
+        println!("MISURA w7.{etichetta}.picco_dopo_500ms {dopo}");
+        println!("MISURA w7.{etichetta}.tetto {tetto}");
+        println!(
+            "MISURA w7.{etichetta}.picco_stabile {}",
+            if subito == dopo { "si" } else { "NO" }
+        );
+        let raggiunto = dopo >= tetto && tetto > 0;
+        println!(
+            "MISURA w7.{etichetta}.picco_almeno_il_tetto {}",
+            if raggiunto { "si" } else { "no" }
+        );
+        println!(
+            "MISURA w7.{etichetta}.verdetto {}",
+            match (sfonda, raggiunto) {
+                (true, true) => "corretto — ha sfondato ed e' rilevato",
+                (true, false) => "FALSO NEGATIVO — ha sfondato e non si vede",
+                (false, true) => "FALSO POSITIVO — non ha sfondato ma risulta",
+                (false, false) => "corretto — non ha sfondato e non risulta",
+            }
+        );
+        // SAFETY: prototipo.
+        unsafe { CloseHandle(job) };
+    }
+}
+
+fn riporta_intervallo(chiave: &str, valori: &[usize]) {
+    if valori.is_empty() {
+        println!("MISURA {chiave} nessuna misura");
+        return;
+    }
+    let minimo = valori.iter().copied().min().unwrap_or(0);
+    let massimo = valori.iter().copied().max().unwrap_or(0);
+    println!(
+        "MISURA {chiave} n={} min={minimo} max={massimo} valori={valori:?}",
+        valori.len()
+    );
+}
+
 struct Scenario {
     nome: &'static str,
     argomento: &'static str,
@@ -423,6 +940,15 @@ fn supervisore() {
         println!("\n=== {} — {} ===", scenario.nome, scenario.argomento);
         esegui_scenario(scenario, indice);
     }
+
+    w1_prova_senza_drenare(1);
+    w2_prova_senza_porta(2);
+    w3_quiescenza(3);
+    w5_ripetizioni(5);
+    w6_durata_della_prova(6);
+    w7_prova_durevole(7);
+    // W4 per ultimo: mette il supervisore dentro un job da cui non esce.
+    w4_job_ereditato(4);
 
     println!("\n=== FINE PT-Windows ===");
 }
