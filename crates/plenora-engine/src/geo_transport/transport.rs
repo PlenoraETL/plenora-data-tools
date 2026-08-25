@@ -1455,27 +1455,25 @@ mod tests {
         // resta l'oggetto del test, non il framing.
         let payload = &payload[..FINE_STREAM];
 
-        // L'hook di panico del processo stampa comunque su stderr: lo
-        // silenziamo per la durata del test, altrimenti l'output della suite
-        // sembra un fallimento. Ripristinato subito dopo.
-        let precedente = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
+        // Nessuna sostituzione dell'hook di panico: questo input non panica
+        // piu'. La versione precedente lo silenziava perche' l'artefatto
+        // arrivava ad `arrow-ipc`; ora viene rifiutato prima, quindi non c'e'
+        // nulla da silenziare — e mutare stato globale del processo mentre gli
+        // altri test girano in parallelo sarebbe stato un costo senza piu'
+        // alcun beneficio.
         let esito = decode_ipc(payload);
-        std::panic::set_hook(precedente);
 
-        // L'esito e' CAMBIATO, ed e' migliorato: questo artefatto non arriva
-        // piu' ad `arrow-ipc`. Lo Schema che porta non ha il campo `fields`,
-        // e `fb_to_schema` lo legge con `fields().unwrap()`: il confine ora lo
-        // pretende, quindi il rifiuto e' strutturato invece di essere un
-        // panico intercettato.
+        // L'esito e' CAMBIATO, ed e' migliorato: lo Schema che l'artefatto
+        // porta non ha il campo `fields`, e `fb_to_schema` lo legge con
+        // `fields().unwrap()`. Il confine ora lo pretende, quindi il rifiuto e'
+        // strutturato invece di essere un panico intercettato.
         //
-        // ATTENZIONE ALLA COPERTURA PERSA. Questo era l'unico input che
-        // esercitava la barriera anti-panico, e non la esercita piu'. La
-        // barriera resta NECESSARIA: `convert.rs` ha una ventina di
-        // `panic!`/`unimplemented!` sui codici di tipo, e il confine non li
-        // copre ancora — richiedono una tabella tipo -> arita' dei figli che
-        // sbagliata rifiuterebbe file legittimi. Serve un artefatto nuovo,
-        // ed e' un lavoro dichiarato, non fatto qui.
+        // La barriera anti-panico resta necessaria — `convert.rs` ha una
+        // ventina di `panic!`/`unimplemented!` sui codici di tipo, non ancora
+        // coperti — ed e' esercitata da
+        // `ipc::barriera_antipanico`, che le porta un input costruito
+        // apposta: uno stream con una colonna `List` a cui viene tolto il
+        // campo `children`.
         assert!(
             matches!(esito, Err(ArrowTransportError::IpcSchemaInvalid(_))),
             "atteso IpcSchemaInvalid, ottenuto {esito:?}"

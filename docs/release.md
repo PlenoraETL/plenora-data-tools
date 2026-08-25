@@ -324,6 +324,9 @@ cambiata in modo incompatibile.
 | struct di metriche `#[non_exhaustive]` | da qui in avanti un campo nuovo non sarà più una rottura |
 | i limiti dichiarati in `limits.plan` governano davvero il piano | un piano che li dichiarava più larghi della policy di chi esegue, o che li dichiarava e poi li violava, era accettato e ora è rifiutato: vedi [`piano-v5.md`](piano-v5.md) |
 | errori sanitizzati di arrow, GEOS e della trasformazione PROJ | il testo della dipendenza non attraversa più il confine: chi confrontava quei messaggi non li ritrova |
+| cinque varianti nuove in `ArrowTransportError` | `IpcSchemaInvalid`, `IpcMetadataInvalid` e i tre tetti sui custom metadata: chi faceva un `match` esaustivo su quell'enum non compila più. Comprimerle in una variante generica avrebbe reso i tre tetti indistinguibili, e un test non potrebbe dire quale ha parato |
+| `ArrowTransportError` `#[non_exhaustive]` | da qui in avanti una variante nuova non sarà più una rottura: chi vi fa `match` deve prevedere un ramo generico |
+| input Arrow IPC che oggi passano e domani no | i custom metadata entrano nel confine ostile: coppie oltre i tetti, chiave o valore assenti, chiave vuota, UTF-8 non valido, chiavi duplicate. Un file **Arrow valido** può essere rifiutato di proposito ([`errori-e-limiti.md`](errori-e-limiti.md)) |
 
 L'artefatto distribuito è il binario `plenora-data-tools`. Non esiste ancora
 un pacchetto Python: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).

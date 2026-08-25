@@ -92,6 +92,14 @@ fn read_error(error: &ArrowTransportError) -> PlenoraError {
             | ArrowTransportError::TooManyColumns(_)
             | ArrowTransportError::TooManyBatches(_)
             | ArrowTransportError::CellTooLarge(_)
+            // I tre tetti sui custom metadata (PR-0). Senza queste righe
+            // finivano in `DataMapping`, cioe' «il file e' rotto»: manderebbe
+            // il chiamante a cercare un file corrotto invece di un tetto
+            // superato. La forma non ammessa — chiave assente, duplicati —
+            // resta invece `DataMapping`, perche' li' il file lo e' davvero.
+            | ArrowTransportError::IpcTooManyMetadataPairs(_, _)
+            | ArrowTransportError::IpcMetadataKeyTooLarge(_, _)
+            | ArrowTransportError::IpcMetadataValueTooLarge(_, _)
     );
     let errore = if limite {
         PlenoraError::ResourceLimit(error.to_string())

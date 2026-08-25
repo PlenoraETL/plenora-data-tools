@@ -517,3 +517,49 @@ fn il_budget_di_memoria_limita_il_confine_anche_senza_piano_v4() {
         IpcLimits::default().max_metadata_bytes
     );
 }
+
+/// I tre tetti sui custom metadata sono limiti, non file rotti.
+///
+/// La distinzione non e' accademica: `DataMapping` dice al chiamante che il
+/// file e' corrotto, e lo manda a cercare un difetto che non c'e'. La forma
+/// non ammessa resta `DataMapping`, perche' li' il file lo e' davvero.
+///
+/// Ogni caso verifica **categoria e fase** insieme: il tag del confine deve
+/// vincere sulla derivazione per variante, e questi errori nascono leggendo.
+#[test]
+fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
+    use plenora_core::error::{ErrorCategory, ErrorPhase};
+
+    let limiti = [
+        ArrowTransportError::IpcTooManyMetadataPairs(300, 256),
+        ArrowTransportError::IpcMetadataKeyTooLarge(200, 128),
+        ArrowTransportError::IpcMetadataValueTooLarge(70_000, 65_536),
+    ];
+    for errore in limiti {
+        let tradotto = read_error(&errore);
+        assert_eq!(
+            tradotto.category(),
+            ErrorCategory::ResourceLimit,
+            "atteso ResourceLimit per {errore:?}"
+        );
+        assert_eq!(
+            tradotto.phase(),
+            ErrorPhase::Read,
+            "atteso ErrorPhase::Read per {errore:?}"
+        );
+    }
+
+    let forme = [
+        ArrowTransportError::IpcMetadataInvalid("chiave assente"),
+        ArrowTransportError::IpcSchemaInvalid("schema senza il campo fields"),
+    ];
+    for errore in forme {
+        let tradotto = read_error(&errore);
+        assert_eq!(
+            tradotto.category(),
+            ErrorCategory::DataMapping,
+            "una forma non ammessa e' un file rotto, non un tetto: {errore:?}"
+        );
+        assert_eq!(tradotto.phase(), ErrorPhase::Read);
+    }
+}
