@@ -747,10 +747,55 @@ impl PlenoraError {
     /// invariati (delegati alla sorgente). Se l'errore e' GIA' taggato il
     /// tag esistente vince — il confine piu' vicino all'origine e' il piu'
     /// preciso — e non si forma alcun annidamento.
+    ///
+    /// # Il tag va SOTTO i wrapper trasparenti
+    ///
+    /// La difesa contro l'annidamento guardava solo la variante esterna, e
+    /// bastava un wrapper in mezzo per aggirarla: un errore gia' taggato ma
+    /// avvolto in [`PlenoraError::RowDiagnostics`] veniva taggato di nuovo,
+    ///
+    /// ```text
+    ///     RowDiagnostics -> Tagged(Read) -> causa
+    ///     diventava
+    ///     Tagged(Write) -> RowDiagnostics -> Tagged(Read) -> causa
+    /// ```
+    ///
+    /// contraddicendo la riga sopra. Il caso e' raggiungibile: i kernel
+    /// producono errori con diagnostica di riga, e il confine dell'input
+    /// dell'esecutore chiama `with_phase(Read)` su cio' che arriva dalla
+    /// sorgente.
+    ///
+    /// La funzione attraversa quindi il wrapper e applica il tag **alla
+    /// sorgente**, conservando il payload. La forma canonica e' sempre
+    ///
+    /// ```text
+    ///     RowDiagnostics -> Tagged(fase) -> causa
+    /// ```
+    ///
+    /// e mai il contrario. Tutti gli assi — categoria, fase, effetto, retry,
+    /// contesto DAG — attraversano i due wrapper in modo simmetrico, quindi
+    /// l'ordine non cambia nulla di osservabile: cambia solo che un secondo
+    /// tag non si forma.
+    ///
+    /// **`RowDiagnostics` e' l'unico altro wrapper trasparente**: sono le
+    /// sole due varianti di questo enum che contengono un `Box<Self>`. Se ne
+    /// nascesse un terzo, questa funzione va estesa insieme a lui.
     #[must_use]
     pub fn with_phase(self, phase: ErrorPhase) -> Self {
         match self {
+            // Il primo tag vince: il confine piu' vicino all'origine e' il
+            // piu' preciso.
             Self::Tagged { .. } => self,
+            // Wrapper trasparente: il tag scende, il payload resta sopra. Se
+            // la sorgente e' gia' taggata, la ricorsione la restituisce
+            // invariata — e vince comunque il tag originario.
+            Self::RowDiagnostics {
+                source,
+                diagnostics,
+            } => Self::RowDiagnostics {
+                source: Box::new(source.with_phase(phase)),
+                diagnostics,
+            },
             _ => Self::Tagged {
                 phase,
                 source: Box::new(self),
@@ -1491,5 +1536,119 @@ mod tests {
         for (category, name) in all {
             assert_eq!(category.as_str(), name, "as_str canonico §9");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `with_phase` attraverso i wrapper trasparenti.
+    // -----------------------------------------------------------------------
+
+    /// Diagnostica di riga valida: `validate_for_emission` ha regole strette
+    /// che si tengono a vicenda, e un payload inventato viene rifiutato
+    /// degradando l'errore a `Internal` — cioe' i test verificherebbero
+    /// un'altra cosa.
+    fn diagnostica() -> crate::diagnostics::RowDiagnostics {
+        use crate::diagnostics::{
+            RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+            ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+        };
+        let mut counts = std::collections::BTreeMap::new();
+        counts.insert("conversion.invalid_date".to_owned(), 1_u64);
+        RowDiagnostics {
+            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: RowDiagnosticScope::Read,
+            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: RowDiagnosticsCompleteness::Complete,
+            knowledge_limits: None,
+            observed_total: 1,
+            total: Some(1),
+            input_total: None,
+            counts,
+            examples_limit: 2,
+            examples_truncated: false,
+            examples: vec![RowDiagnosticExample {
+                source_index: 0,
+                cause: "conversion.invalid_date".to_owned(),
+                column: Some("value".to_owned()),
+                key: None,
+                write_state: None,
+            }],
+            diagnostic_state_counts: None,
+            write_outcome: None,
+        }
+    }
+
+    /// Quanti `Tagged` ci sono nell'intera catena.
+    ///
+    /// E' la proprieta' che il contratto dichiara e che nessun accessore puo'
+    /// verificare: categoria, fase e payload sono identici con uno o due tag.
+    fn tag_nella_catena(errore: &PlenoraError) -> usize {
+        match errore {
+            PlenoraError::Tagged { source, .. } => 1 + tag_nella_catena(source),
+            PlenoraError::RowDiagnostics { source, .. } => tag_nella_catena(source),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn il_tag_scende_sotto_la_diagnostica_di_riga() {
+        let errore = PlenoraError::DataMapping("causa".to_owned())
+            .with_row_diagnostics(diagnostica())
+            .with_phase(ErrorPhase::Read);
+
+        // Forma canonica: RowDiagnostics -> Tagged -> causa, mai il contrario.
+        let PlenoraError::RowDiagnostics { source, .. } = &errore else {
+            panic!("il wrapper trasparente deve restare esterno, trovato {errore:?}");
+        };
+        assert!(
+            matches!(source.as_ref(), PlenoraError::Tagged { phase, .. } if *phase == ErrorPhase::Read),
+            "il tag non e' sceso sotto la diagnostica"
+        );
+        assert_eq!(tag_nella_catena(&errore), 1);
+    }
+
+    #[test]
+    fn sotto_la_diagnostica_vince_il_tag_originario() {
+        // Il confine piu' vicino all'origine e' il piu' preciso: una seconda
+        // fase, applicata piu' in alto, non deve sovrascrivere la prima.
+        let errore = PlenoraError::DataMapping("causa".to_owned())
+            .with_phase(ErrorPhase::Read)
+            .with_row_diagnostics(diagnostica())
+            .with_phase(ErrorPhase::Write);
+
+        assert_eq!(
+            errore.phase(),
+            ErrorPhase::Read,
+            "la seconda fase ha sovrascritto la prima"
+        );
+        assert_eq!(
+            tag_nella_catena(&errore),
+            1,
+            "si e' formato un tag annidato"
+        );
+    }
+
+    #[test]
+    fn la_diagnostica_sopravvive_al_tag() {
+        let errore = PlenoraError::ResourceLimit("tetto".to_owned())
+            .with_row_diagnostics(diagnostica())
+            .with_phase(ErrorPhase::Read);
+
+        assert!(
+            errore.row_diagnostics().is_some(),
+            "il payload e' andato perduto applicando la fase"
+        );
+        assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
+        assert_eq!(errore.phase(), ErrorPhase::Read);
+    }
+
+    #[test]
+    fn un_solo_tag_anche_applicando_la_fase_piu_volte() {
+        let mut errore =
+            PlenoraError::DataMapping("causa".to_owned()).with_row_diagnostics(diagnostica());
+        for _ in 0..5 {
+            errore = errore.with_phase(ErrorPhase::Read);
+        }
+        assert_eq!(tag_nella_catena(&errore), 1);
+        assert!(errore.row_diagnostics().is_some());
     }
 }

@@ -670,20 +670,26 @@ fn la_diagnostica_di_riga_sopravvive_alla_classificazione() {
         "la diagnostica e' stata scartata dalla classificazione"
     );
 
-    // La STRUTTURA, non solo gli assi. Categoria, fase e payload restavano
-    // corretti anche con due tag annidati — Tagged(Read) su RowDiagnostics su
-    // Tagged(Read) — quindi da soli non dicevano nulla sulla forma. La
-    // proprieta' che `with_phase` dichiara e' che i tag non si annidano.
-    let PlenoraError::Tagged { phase, source } = &tradotto else {
-        panic!("atteso un tag di fase esterno, trovato {tradotto:?}");
+    // La STRUTTURA, non solo gli assi. Categoria, fase e payload sono
+    // identici con uno o due tag annidati, quindi da soli non dicono nulla
+    // sulla forma.
+    //
+    // La forma canonica e' quella che `with_phase` produce attraversando i
+    // wrapper trasparenti: il payload resta esterno, il tag scende sotto.
+    let PlenoraError::RowDiagnostics { source, .. } = &tradotto else {
+        panic!("la diagnostica deve restare il wrapper esterno, trovato {tradotto:?}");
+    };
+    let PlenoraError::Tagged {
+        phase,
+        source: causa,
+    } = source.as_ref()
+    else {
+        panic!("sotto la diagnostica e' atteso il tag di fase");
     };
     assert_eq!(*phase, ErrorPhase::Read);
-    let PlenoraError::RowDiagnostics { source: causa, .. } = source.as_ref() else {
-        panic!("sotto il tag e' attesa la diagnostica");
-    };
     assert!(
         !matches!(causa.as_ref(), PlenoraError::Tagged { .. }),
-        "tag di fase annidato: la traduzione sta taggando invece di lasciar fare al guscio"
+        "tag di fase annidato"
     );
     assert_eq!(causa.category(), ErrorCategory::ResourceLimit);
 }
