@@ -772,10 +772,26 @@ impl PlenoraError {
     ///     RowDiagnostics -> Tagged(fase) -> causa
     /// ```
     ///
-    /// e mai il contrario. Tutti gli assi — categoria, fase, effetto, retry,
-    /// contesto DAG — attraversano i due wrapper in modo simmetrico, quindi
-    /// l'ordine non cambia nulla di osservabile: cambia solo che un secondo
-    /// tag non si forma.
+    /// e mai il contrario.
+    ///
+    /// ## Che cosa resta invariato, e che cosa no
+    ///
+    /// Una stesura precedente di questo commento diceva che l'ordine «non
+    /// cambia nulla di osservabile». **E' falso**: `PlenoraError` e' un enum
+    /// pubblico, quindi la sua struttura si osserva — con il pattern
+    /// matching, con `Debug`, e percorrendo la catena di
+    /// [`std::error::Error::source`].
+    ///
+    /// | | |
+    /// |---|---|
+    /// | **invariati** | testo `Display`, categoria, fase finale, effetto, disposizione di retry, contesto DAG e payload diagnostico: tutti gli assi attraversano i due wrapper in modo simmetrico |
+    /// | **cambia, ed e' voluto** | la **struttura pubblica**, che viene canonizzata nella forma sopra. Un consumatore che faceva `match` sull'ordine dei wrapper, o che percorreva `source()` contando i livelli, vede una catena diversa |
+    ///
+    /// Il cambiamento non introduce una forma nuova: **ripristina il
+    /// contratto gia' documentato** poche righe sopra — primo tag vince,
+    /// nessun annidamento — che l'implementazione precedente violava appena
+    /// c'era un wrapper di mezzo. La rottura e' registrata in
+    /// `docs/release.md`.
     ///
     /// **`RowDiagnostics` e' l'unico altro wrapper trasparente**: sono le
     /// sole due varianti di questo enum che contengono un `Box<Self>`. Se ne

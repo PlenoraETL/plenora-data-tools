@@ -326,6 +326,7 @@ cambiata in modo incompatibile.
 | errori sanitizzati di arrow, GEOS e della trasformazione PROJ | il testo della dipendenza non attraversa più il confine: chi confrontava quei messaggi non li ritrova |
 | cinque varianti nuove in `ArrowTransportError` | `IpcSchemaInvalid`, `IpcMetadataInvalid` e i tre tetti sui custom metadata: chi faceva un `match` esaustivo su quell'enum non compila più. Comprimerle in una variante generica avrebbe reso i tre tetti indistinguibili, e un test non potrebbe dire quale ha parato |
 | `ArrowTransportError` `#[non_exhaustive]` | da qui in avanti una variante nuova non sarà più una rottura: chi vi fa `match` deve prevedere un ramo generico |
+| `with_phase` su un errore con diagnostica di riga | produce ora la forma canonica `RowDiagnostics → Tagged → causa` invece di `Tagged → RowDiagnostics → …`: `Display`, categoria, fase, effetto, retry, contesto e payload sono invariati, ma **cambiano il pattern matching e la catena `Error::source()`** di chi osserva la struttura. Ripristina il contratto già documentato — primo tag vince, nessun annidamento — che l'implementazione violava appena c'era un wrapper di mezzo |
 | input Arrow IPC che oggi passano e domani no | i custom metadata entrano nel confine ostile: coppie oltre i tetti, chiave o valore assenti, chiave vuota, UTF-8 non valido, chiavi duplicate. Un file **Arrow valido** può essere rifiutato di proposito ([`errori-e-limiti.md`](errori-e-limiti.md)) |
 
 L'artefatto distribuito è il binario `plenora-data-tools`. Non esiste ancora
