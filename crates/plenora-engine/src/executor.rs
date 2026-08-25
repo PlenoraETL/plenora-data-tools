@@ -309,7 +309,7 @@ fn execute_physical(
     inputs: Inputs,
     runtime: &RuntimeContext,
 ) -> Result<Output> {
-    let declared: Vec<&String> = graph.plan().plan().inputs.iter().collect();
+    let declared: Vec<&String> = graph.plan().inputs().iter().collect();
     for name in declared.iter().map(|s| (*s).as_str()) {
         if !inputs.readers.contains_key(name) {
             return Err(PlenoraError::InvalidPlan(format!("manca l'input `{name}`")));
@@ -386,7 +386,7 @@ fn execute_physical(
         temp_store,
     );
     let mut input_contracts = BTreeMap::new();
-    for name in &graph.plan().plan().inputs {
+    for name in graph.plan().inputs() {
         input_contracts.insert(
             name.clone(),
             graph

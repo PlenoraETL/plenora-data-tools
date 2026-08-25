@@ -91,6 +91,50 @@ memoria: `max_memory_bytes` (v4) → `max_governed_memory_bytes` (v5).
 funzionare il nome vecchio ovunque, una traduzione lo fa funzionare in un
 formato solo — il suo — e lo converte all'ingresso.
 
+### La versione 6
+
+La **6** esiste, ed è un formato distinto — non la v5 con un campo in più.
+Porta una sola differenza: `limits` può dichiarare `max_domain_memory_bytes`,
+il tetto di memoria che il piano **richiede** per il proprio dominio di
+isolamento. Regole e perimetro del campo stanno in
+[`errori-e-limiti.md`](errori-e-limiti.md); qui contano le conseguenze sul
+formato.
+
+**Perché una versione e non un campo.** Lo stesso motivo della v4→v5:
+`deny_unknown_fields` a ogni livello. Un lettore v5 messo davanti al campo
+nuovo non lo ignora, **rifiuta il documento**. Aggiungerlo dentro la v5
+sarebbe stato compatibile all'indietro — i piani vecchi restano validi — e
+**non** in avanti; ed è l'incompatibilità in avanti quella che rompe i
+dispiegamenti, perché è lì che i lettori vecchi esistono già. Due forme
+mutuamente illeggibili sotto lo stesso numero sono precisamente ciò che un
+numero di versione esiste per impedire.
+
+Il rifiuto resta simmetrico, e per costruzione:
+
+| il piano dichiara | e scrive | esito |
+|---|---|---|
+| `schema_version: 6` | `max_domain_memory_bytes` | accettato |
+| `schema_version: 5` | `max_domain_memory_bytes` | **rifiutato** |
+| `schema_version: 4` | `max_domain_memory_bytes` | **rifiutato** |
+| `schema_version: 6` | `max_memory_bytes` | **rifiutato** |
+
+**Nessuna migrazione v5→v6.** Non è una dimenticanza. Una migrazione
+cambierebbe l'identità dei documenti migrati, e va progettata con chi consuma
+gli hash: come comunicare quello nuovo, come invalidare cache e grafi
+persistiti, quale tipo rappresenti la vecchia e la nuova. Finché quei
+consumatori non esistono, la v5 e la v6 sono **percorsi paralleli**: un piano
+v6 si scrive o si deserializza esplicitamente.
+
+**L'identità.** Ogni piano v5 esistente mantiene il proprio `plan_hash`. Un
+piano v6 appartiene a un dominio nuovo, quindi un v5 e un v6 per il resto
+identici hanno identità **diverse** — e dentro la v6, un piano che dichiara il
+tetto e uno che lo omette sono piani diversi, perché il campo entra nella
+forma canonica solo quando è presente.
+
+Da **non** generalizzare in «ogni versione ha il proprio dominio»: la v4 è
+migrata *nel* canonico v5 e continua a condividerne il `plan_hash`. Il confine
+d'identità è fra v5 e v6, e lì soltanto.
+
 La proprietà non è garantita da un controllo, che si può dimenticare, ma da
 **strutture separate** con `deny_unknown_fields`: quella della v5 conosce solo
 il nome nuovo, quella della v4 — privata del modulo di migrazione — solo il

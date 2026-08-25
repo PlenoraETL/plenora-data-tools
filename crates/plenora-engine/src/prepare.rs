@@ -814,7 +814,8 @@ pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<Execu
 /// risolta, arco inferito, ogni nodo in esattamente un segmento): mai su
 /// input esterno.
 pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
-    let plan = graph.plan().plan();
+    let plan = graph.plan().struttura_condivisa();
+    let plan = plan.as_ref();
     let topo = graph.topological_order();
     let limits = graph.effective_limits().clone();
 

@@ -634,6 +634,52 @@ verificabile (boot id, namespace) più un heartbeat scritto da un timer
 indipendente dai batch; oppure l'imposizione esplicita di uno storage
 temporaneo node-local.
 
+### `max_domain_memory_bytes`: un tetto richiesto, non concesso
+
+**La regola.** Un piano `schema_version: 6` può dichiarare
+`max_domain_memory_bytes` dentro `limits`: intero positivo rappresentabile in
+`u64`, **facoltativo**, e maggiore o uguale al budget governato **effettivo**
+— quello dichiarato dal piano, oppure il default pubblicato quando il piano lo
+omette. Ratificato in `plenora-contracts` come `Plan Budget 1.0`
+(`plenora-plan-budget-v1`, `PLAN-007` … `PLAN-012`).
+
+**L'ambito.** Solo la v6. Un piano v4 o v5 che lo dichiara è **rifiutato**, e
+non per un controllo aggiunto: `LimitsOverride` ha `deny_unknown_fields` e non
+conosce quel nome. Simmetricamente, un v6 con un nome che la v6 non ha è
+rifiutato da `LimitsOverrideV6`. I formati lineari sotto la `4` restano fuori
+dal perimetro e invariati.
+
+**Il pericolo che copre.** Due, distinti.
+
+Il primo è **l'assenza scambiata per un permesso**: se un campo mancante
+producesse un tetto di default, un piano che non ha mai chiesto isolamento
+girerebbe in un dominio dimensionato da qualcun altro, e chi lo ha inviato non
+potrebbe distinguere «l'ho chiesto io» da «l'ha scelto qualcuno per me». Per
+questo l'assenza significa una cosa sola: **il profilo isolato non è
+selezionabile** per quel piano.
+
+Il secondo è **una configurazione che non può riuscire**: un tetto di dominio
+sotto il budget che il piano è autorizzato a governare descrive un'esecuzione
+che esaurirebbe la memoria per costruzione. Rifiutarla in validazione è più
+leggibile che scoprirla come esaurimento a runtime.
+
+Lo zero è rifiutato per la stessa ragione dei due sopra messi insieme: non è
+«nessun tetto» — quello si dichiara omettendo il campo — ed è un dominio che
+non può allocare nulla.
+
+**Che cosa il valore NON promette.** È il tetto che il piano **richiede**, non
+quello che l'host concede. Il tetto effettivo sarà `min(richiesta, policy
+dell'host)`, e policy e meccanismo di applicazione stanno fuori dal formato
+(`PLAN-014`, `PLAN-015`). Il valore dichiarato non viene riscritto con quello
+concesso (`PLAN-016`): lo stesso documento inviato a due host resta lo stesso
+documento, con la stessa identità, e la differenza compare nell'esito.
+
+**La condizione di rientro.** Non è un limite da alzare: è un campo del
+formato. Cambierebbe se cambiasse la ratifica — per esempio se il tetto
+diventasse obbligatorio in v6, o se una v7 lo spostasse. Fino ad allora
+restringere o allargare queste regole significa disallinearsi da
+`Plan Budget 1.0`, che è la fonte.
+
 ### Antenati portati dall'evidenza di pressione di memoria
 
 **La regola.** L'evidenza di `unattributed_memory_pressure` porta al massimo
