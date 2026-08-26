@@ -54,7 +54,7 @@ fn la_lunghezza_sbagliata_e_un_errore() {
         let errore = CommitToken::da_esadecimale(testo).expect_err("lunghezza sbagliata");
         assert!(
             matches!(errore, FormaTokenNonValida::LunghezzaErrata { .. }),
-            "motivo inatteso per {} caratteri: {errore:?}",
+            "motivo inatteso per {} byte: {errore:?}",
             testo.len()
         );
     }
@@ -146,8 +146,8 @@ fn il_giro_serde_conserva_la_forma_canonica() {
 /// Sono i due modi ordinari di non poter prestare una stringa, e prima
 /// rifiutavano un token perfettamente canonico con «expected a borrowed
 /// string»: un rifiuto per la forma del trasporto travestito da rifiuto del
-/// token. La `Risposta` del worker arriva da un pipe, quindi il primo caso non
-/// e' un'ipotesi di laboratorio: e' il percorso vero.
+/// token. Il token viaggia nel `Saluto`, che il **worker** legge da un pipe,
+/// quindi il primo caso non e' un'ipotesi di laboratorio: e' il percorso vero.
 #[test]
 fn un_token_canonico_si_legge_anche_da_sorgenti_non_prestabili() {
     let atteso = CommitToken::da_esadecimale(CANONICO).expect("canonico");
@@ -190,6 +190,87 @@ fn serde_rifiuta_le_forme_non_canoniche() {
             "accettato `{json}` come token"
         );
     }
+}
+
+/// Nemmeno un valore **non testuale** finisce nell'errore.
+///
+/// `visit_str` chiude la porta delle stringhe e lascia aperte le altre: i
+/// default del `Visitor` costruiscono `Unexpected` **dal valore ricevuto**, e
+/// `Bool`, `Signed`/`Unsigned` e `Float` lo stampano. Un token scritto per
+/// sbaglio senza virgolette e' un numero, e usciva in chiaro: «invalid type:
+/// integer `8675309124816324`».
+///
+/// Le sentinelle qui sono cifre che non compaiono altrove nel file: se una si
+/// affaccia nel messaggio, e' arrivata dal valore.
+#[test]
+fn nessun_errore_porta_il_valore_nemmeno_quando_non_e_una_stringa() {
+    const RIFIUTO: &str = "non un valore di un altro tipo";
+    let casi = [
+        ("8675309124816324", "8675309124816324"),
+        ("-8675309124816324", "8675309124816324"),
+        ("8675309.124816324", "8675309"),
+        ("true", "true"),
+        ("false", "false"),
+    ];
+    for (json, sentinella) in casi {
+        let errore = serde_json::from_str::<CommitToken>(json).expect_err("non e' un token");
+        let reso = errore.to_string();
+        assert!(
+            !reso.contains(sentinella),
+            "l'errore ha copiato il valore ricevuto: {reso}"
+        );
+        // E non per caso: il messaggio e' **quello costante**, uguale per tutti.
+        assert!(
+            reso.contains(RIFIUTO),
+            "rifiuto inatteso per `{json}`: {reso}"
+        );
+    }
+
+    // Gli altri tipi non scalari non portano il valore nemmeno per default —
+    // «null», «sequence», «map» — ma passano dal rifiuto di `serde`, non dal
+    // nostro: qui si prova che restano un errore, non che siano nostri.
+    for json in ["null", "[]", "{}"] {
+        assert!(
+            serde_json::from_str::<CommitToken>(json).is_err(),
+            "accettato `{json}` come token"
+        );
+    }
+}
+
+/// I due interi a 128 bit, che dal giro JSON non si raggiungono.
+///
+/// `serde_json` non li produce — un numero diventa `i64`, `u64` o `f64` — e
+/// quindi il test qui sopra non li tocca. Il modo di esercitarli senza
+/// inventare un formato e' chiamare il visitatore, che sta in questo crate:
+/// meglio due righe di test che due metodi mai eseguiti a guardia di una
+/// proprieta' di riservatezza.
+///
+/// Oggi il default di `serde` per questi due direbbe «i128» e non il valore,
+/// quindi il rifiuto sarebbe riservato comunque. Il punto e' che sarebbe
+/// riservato **per come una dipendenza formatta un messaggio**, e non per una
+/// scelta nostra.
+#[test]
+fn anche_gli_interi_a_128_bit_rifiutano_senza_portare_il_valore() {
+    use serde::de::Visitor;
+
+    const SENTINELLA: i128 = 8_675_309_124_816_324;
+    let attesa = SENTINELLA.to_string();
+
+    let errore = super::VisitatoreToken
+        .visit_i128::<serde_json::Error>(SENTINELLA)
+        .expect_err("un intero non e' un token");
+    assert!(
+        !errore.to_string().contains(&attesa),
+        "l'errore ha copiato il valore: {errore}"
+    );
+
+    let errore = super::VisitatoreToken
+        .visit_u128::<serde_json::Error>(SENTINELLA.unsigned_abs())
+        .expect_err("un intero non e' un token");
+    assert!(
+        !errore.to_string().contains(&attesa),
+        "l'errore ha copiato il valore: {errore}"
+    );
 }
 
 // ---------------------------------------------------------------------------

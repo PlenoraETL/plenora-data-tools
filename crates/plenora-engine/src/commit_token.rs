@@ -235,15 +235,57 @@ impl Serialize for CommitToken {
 /// Il visitatore accetta il testo comunque arrivi. `visit_string` e
 /// `visit_borrowed_str` ricadono per default su `visit_str`, quindi la
 /// validazione resta in un punto solo.
+///
+/// # Perche' `deserialize_any` e non `deserialize_str`
+///
+/// Sembra il contrario di quel che si vuole — qui si accetta **solo** una
+/// stringa — e invece e' l'unico dei due che tiene il valore fuori
+/// dall'errore. Chiedendo `deserialize_str`, di fronte a un numero
+/// `serde_json` **non chiama il visitatore**: sbriga il disaccordo da se' con
+/// `peek_invalid_type`, che costruisce il messaggio dal valore letto. Il
+/// rifiuto e' giusto e dice «invalid type: integer `1234…`», cioe' il token in
+/// chiaro se qualcuno lo ha scritto senza virgolette.
+///
+/// Con `deserialize_any` il formato si limita a **dire cosa ha trovato**,
+/// chiamando il `visit_*` corrispondente, e la decisione — con il messaggio —
+/// torna qui. Il prezzo e' che questa `Deserialize` vuole un formato
+/// autodescrittivo: sul filo c'e' JSON, e il protocollo non prevede altro.
 impl<'de> Deserialize<'de> for CommitToken {
     fn deserialize<D: Deserializer<'de>>(deserializzatore: D) -> Result<Self, D::Error> {
-        deserializzatore.deserialize_str(VisitatoreToken)
+        deserializzatore.deserialize_any(VisitatoreToken)
     }
+}
+
+/// Il rifiuto di cio' che non e' testo, **senza** il valore.
+///
+/// Un `&'static str` costruito qui e nient'altro: non c'e' un parametro in cui
+/// il valore ricevuto possa entrare, quindi non e' una regola da rispettare
+/// nei sei metodi che lo usano — e' il tipo che non lo consente.
+fn non_testuale<E: de::Error>() -> E {
+    E::custom(format_args!(
+        "il commit_token deve essere una stringa di {COMMIT_TOKEN_CARATTERI} caratteri \
+         esadecimali minuscoli, non un valore di un altro tipo"
+    ))
 }
 
 /// Il visitatore che porta la validazione dove il testo arriva.
 struct VisitatoreToken;
 
+/// # Perche' ci sono sei metodi che rifiutano e basta
+///
+/// I default del `Visitor` rendono `Err(invalid_type(Unexpected::…))`, e
+/// `Unexpected` **e' costruito dal valore ricevuto**. Tre delle sue varianti lo
+/// stampano — `Bool`, `Signed`/`Unsigned`, `Float` — quindi `{"commit_token":
+/// 1234}` usciva come «invalid type: integer `1234`». Un token non e' un
+/// numero, ma un token scritto per sbaglio senza virgolette **sì**, e quello e'
+/// il valore vero in chiaro in un log.
+///
+/// Verificato una variante alla volta, non dedotto: `null`, le sequenze e le
+/// mappe rendono «null», «sequence», «map» e non portano nulla; `Bytes` rende
+/// «byte array»; `char` e le stringhe ricadono su [`VisitatoreToken::visit_str`]
+/// e finiscono nella validazione vera, che non copia il testo. Restano i sei
+/// qui sotto, e li' il valore non arriva perche' [`non_testuale`] non ha dove
+/// metterlo.
 impl de::Visitor<'_> for VisitatoreToken {
     type Value = CommitToken;
 
@@ -265,6 +307,37 @@ impl de::Visitor<'_> for VisitatoreToken {
         // riceve solo cio' che scriviamo noi, e `FormaTokenNonValida` non
         // porta il valore.
         CommitToken::da_esadecimale(testo).map_err(E::custom)
+    }
+
+    // Le larghezze minori ricadono per default su questi: `i8`/`i16`/`i32` su
+    // `visit_i64`, `u8`/`u16`/`u32` su `visit_u64`, `f32` su `visit_f64`.
+    // Coprirli qui copre l'intera famiglia.
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Err(non_testuale())
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Err(non_testuale())
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Err(non_testuale())
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Err(non_testuale())
+    }
+
+    // I due a 128 bit non ricadono sui precedenti e oggi non stampano il
+    // valore: lo dicono a parole («i128»). Sono qui perche' quel default e'
+    // di `serde`, non nostro, e la riservatezza del token non deve dipendere
+    // da come una dipendenza formatta un messaggio.
+    fn visit_i128<E: de::Error>(self, _: i128) -> Result<Self::Value, E> {
+        Err(non_testuale())
+    }
+
+    fn visit_u128<E: de::Error>(self, _: u128) -> Result<Self::Value, E> {
+        Err(non_testuale())
     }
 }
 

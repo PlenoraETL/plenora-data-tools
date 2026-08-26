@@ -232,6 +232,59 @@ solo in locale, e lint su di essi sono emersi mesi dopo.
 Workflow separato (`.github/workflows/fuzz.yml`), con un target per voce di
 matrice.
 
+### Quando gira che cosa
+
+Il fuzzing non è un gate unico: è una scala, e ogni gradino sta dove il suo
+costo è sostenibile. Metterlo tutto prima del commit lo renderebbe una tassa
+che si impara ad aggirare; metterlo tutto dopo il merge lascerebbe entrare
+difetti che una corsa breve avrebbe visto.
+
+| Momento | Che cosa è obbligatorio |
+| --- | --- |
+| **Prima del commit** | i gate deterministici, suite completa del workspace inclusa |
+| **Prima del merge** | test mirati, coverage, **compilazione** del crate `fuzz/` e **smoke dei soli target coinvolti** dalla modifica |
+| **Dopo il merge** | campagna completa, in parallelo alla PR successiva |
+| **Obbligatoria e lunga** | dopo **`PR-6`**, **`PR-10`**, **`PR-12`**, **`PR-13`**, e prima di ogni release candidate |
+
+«Target coinvolti» si legge dal codice toccato, non dal nome della PR: chi
+modifica il decoder del protocollo passa da `protocollo_frame` anche se la PR
+parla d'altro.
+
+Un difetto trovato da una campagna **apre una correzione bloccante per la
+release**, non una voce di arretrato. Se una campagna lunga trova qualcosa
+dopo il merge, la release aspetta quella fix: il momento in cui il difetto è
+emerso non cambia che cosa sarebbe successo in produzione.
+
+### Riprodurre lo smoke in locale
+
+`scripts/fuzz-smoke.sh` gira nell'immagine `plenora-rust:nightly-fuzz` e monta
+`cargo-fuzz` da una cartella dell'host. Nessuna delle due nasce da sola, e la
+loro ricetta è **quella del workflow**, non una variante locale — stessa
+nightly datata, stessa versione di `cargo-fuzz`:
+
+```sh
+# 1. L'immagine: la pinnata piu' la nightly datata di fuzz.yml. Nessun
+#    componente in piu': il workflow non ne chiede, e chiederne uno che quella
+#    nightly non ha fa fallire la build senza dire perche'.
+printf 'FROM rust:1.98\nRUN rustup toolchain install nightly-2026-08-01\n\
+ENV RUSTUP_TOOLCHAIN=nightly-2026-08-01\n' \
+  | docker build -t plenora-rust:nightly-fuzz -
+# 2. `cargo-fuzz` nella cartella che lo script monta come /fuzzbin. Il `--root`
+#    scrive in `bin/`, ed e' quel `bin/` che lo script monta: il binario deve
+#    trovarsi in `/fuzzbin/cargo-fuzz`, non in `/fuzzbin/bin/cargo-fuzz`.
+MSYS_NO_PATHCONV=1 docker run --rm \
+  -v C:/tmp/plenora-geo-tools-arrow/.fuzz-cargo:/out \
+  plenora-rust:nightly-fuzz \
+  cargo install cargo-fuzz --version 0.13.2 --locked --root /out
+# 3. Lo smoke dei soli target coinvolti.
+FUZZ_TARGETS=protocollo_frame scripts/fuzz-smoke.sh
+```
+
+Se una delle due manca, lo script fallisce con un errore di Docker che non
+nomina la causa — «pull access denied for plenora-rust» quando manca
+l'immagine, un mount vuoto quando manca il binario. È la ragione per cui la
+ricetta sta qui e non nella memoria di chi l'ha costruita la prima volta.
+
 Il solo step `cargo fuzz run` gira su toolchain **nightly**, mentre build,
 test, clippy e gate anti-panico restano sulla pinnata. È una divergenza
 dichiarata: le flag sanitizer non sono disponibili sulla stabile. Un crash
@@ -245,8 +298,11 @@ rosso a barriera funzionante, e un job perennemente rosso smette di essere
 letto. Va riattivato quando `arrow-rs` renderà fallibile la conversione dello
 schema (`apache/arrow-rs#10575`).
 
-La campagna fuzz completa è prevista alla chiusura del lavoro sulla memoria
-governata: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).
+Le campagne lunghe hanno ora una cadenza fissa — la tabella qui sopra — invece
+di un'unica scadenza legata alla chiusura del lavoro sulla memoria governata.
+Quel lavoro resta il contesto in cui la prima è maturata, ed è descritto in
+[`stato-e-roadmap.md`](stato-e-roadmap.md); non è più la sola occasione in cui
+una campagna completa viene eseguita.
 
 ## Prestazioni
 
