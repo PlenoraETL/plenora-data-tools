@@ -52,24 +52,13 @@ SECONDS_PER_TARGET=$(awk "BEGIN { printf \"%d\", $HOURS * 3600 }")
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Gli stessi due prerequisiti dello smoke, controllati prima di partire. Qui
-# conta il doppio: una campagna si lancia e si lascia andare per ore, e
-# scoprire dopo che il primo target e' morto sul mount vuoto significa aver
-# perso la notte, non un minuto.
-mancanti=0
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "ERRORE: l'immagine '$IMAGE' non esiste in locale; si costruisce," >&2
-    echo "        e la ricetta e' in docs/release.md, sezione «Fuzzing»." >&2
-    mancanti=1
-fi
-if [ ! -f "$FUZZBIN_HOST/cargo-fuzz" ]; then
-    echo "ERRORE: '$FUZZBIN_HOST/cargo-fuzz' non c'e'; stessa ricetta." >&2
-    echo "        Se lo tieni altrove: FUZZBIN_HOST=..." >&2
-    mancanti=1
-fi
-if [ "$mancanti" -ne 0 ]; then
-    exit 1
-fi
+# Gli stessi prerequisiti dello smoke, dalla stessa funzione, controllati
+# prima di partire. Qui contano il doppio: una campagna si lancia e si lascia
+# andare per ore, e scoprire dopo che il primo target e' morto sul mount vuoto
+# significa aver perso la notte, non un minuto.
+# shellcheck source=scripts/fuzz-preflight.sh
+. "$PROJECT_ROOT/scripts/fuzz-preflight.sh"
+preflight "$IMAGE" "$CARGO_FUZZ" "$FUZZBIN_HOST" || exit 1
 
 mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 

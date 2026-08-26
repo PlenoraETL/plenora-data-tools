@@ -27,28 +27,9 @@ TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# I due prerequisiti si controllano PRIMA di lanciare qualunque target, e si
-# nominano. Senza, Docker fallisce con «pull access denied for plenora-rust»
-# quando manca l'immagine — un messaggio che manda a cercare credenziali per
-# un'immagine che non e' su nessun registry — e con un mount vuoto quando
-# manca il binario, cioe' «exec /fuzzbin/cargo-fuzz: no such file». Nessuno dei
-# due dice che cosa fare, e li ha gia' fatti perdere un'ora a qualcuno.
-mancanti=0
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "ERRORE: l'immagine '$IMAGE' non esiste in locale." >&2
-    echo "        Non e' su un registry: si costruisce, e la ricetta e' in" >&2
-    echo "        docs/release.md, sezione «Fuzzing»." >&2
-    mancanti=1
-fi
-if [ ! -f "$FUZZBIN_HOST/cargo-fuzz" ]; then
-    echo "ERRORE: '$FUZZBIN_HOST/cargo-fuzz' non c'e'." >&2
-    echo "        E' il binario che lo script monta su /fuzzbin; si installa" >&2
-    echo "        con la stessa ricetta. Se lo tieni altrove: FUZZBIN_HOST=..." >&2
-    mancanti=1
-fi
-if [ "$mancanti" -ne 0 ]; then
-    exit 1
-fi
+# shellcheck source=scripts/fuzz-preflight.sh
+. "$PROJECT_ROOT/scripts/fuzz-preflight.sh"
+preflight "$IMAGE" "$CARGO_FUZZ" "$FUZZBIN_HOST" || exit 1
 
 mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 SUMMARY="$PROJECT_ROOT/fuzz/campaign-logs/smoke-summary.txt"
