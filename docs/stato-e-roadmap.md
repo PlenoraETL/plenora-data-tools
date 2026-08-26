@@ -3,6 +3,20 @@
 Solo il **lavoro ancora aperto**. Quello che è fatto sta nel codice, nei test
 e negli altri documenti; qui c'è ciò che manca, in ordine.
 
+## Vincoli noti della Fase 4
+
+**Il primo profilo isolato non accetta ingressi in memoria.** Solo file Arrow
+IPC esplicitamente trasferibili: `Input::Batches` e `Input::Stream` non sono
+raggiungibili da un altro processo, e `Input::read_ipc` oggi **scarta il
+percorso** trasformando un ingresso file-backed in uno `Stream` anonimo. Il
+rifiuto avviene prima dello spawn, e un piano con ingressi in memoria resta
+valido ed eseguibile in-process.
+
+Il rientro richiede due cose, in quest'ordine: che `Input::read_ipc` conservi
+la provenienza file-backed invece di cancellarla, e un meccanismo di staging
+isolato che materializzi batch e iteratori in file di cui il worker abbia
+proprietà e cleanup. Dettaglio in [`isolamento.md`](isolamento.md).
+
 ## Dove siamo
 
 Il core è una release candidate credibile: i formati DAG sono **due** — il

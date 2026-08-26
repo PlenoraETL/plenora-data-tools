@@ -40,6 +40,8 @@ ALL_TARGETS=(
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
     # Nuovi (Fase 2A)
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
+    # Fase 4
+    protocollo_frame
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 

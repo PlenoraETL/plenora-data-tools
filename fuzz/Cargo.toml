@@ -16,7 +16,9 @@ cargo-fuzz = true
 plenora-core = { path = "../crates/plenora-core" }
 plenora-kernels-table = { path = "../crates/plenora-kernels-table" }
 plenora-kernels-geo = { path = "../crates/plenora-kernels-geo" }
-plenora-engine = { path = "../crates/plenora-engine" }
+# `internals` espone il modulo `protocollo`, che nel crate resta privato:
+# senza, il decoder del filo non sarebbe raggiungibile da qui.
+plenora-engine = { path = "../crates/plenora-engine", features = ["internals"] }
 libfuzzer-sys = "=0.4.10"
 arrow-array = "=59.2.0"
 arrow-schema = "=59.2.0"
@@ -156,6 +158,17 @@ bench = false
 [[bin]]
 name = "executor_dag"
 path = "fuzz_targets/executor_dag.rs"
+test = false
+doc = false
+bench = false
+
+# ---------------------------------------------------------------------------
+# Fase 4: protocollo supervisore/worker.
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "protocollo_frame"
+path = "fuzz_targets/protocollo_frame.rs"
 test = false
 doc = false
 bench = false

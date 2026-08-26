@@ -106,6 +106,13 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
 
+      # `--all-targets` da solo **salta** gli esempi con `required-features`.
+      # Senza questo passo la sonda di calibrazione uscirebbe in silenzio
+      # dalla copertura di clippy: compilerebbe solo quando qualcuno la lancia
+      # a mano, cioe' dopo che si e' gia' rotta.
+      - name: Clippy (esempi con required-features)
+        run: cargo clippy -p plenora-engine --all-targets --locked --features internals
+
       # errori-e-limiti.md#memoria-governata: il budget di memoria della libreria si chiama
       # `max_governed_memory_bytes` e NON ha alias. Il nome della v4 vive
       # solo nel modulo di migrazione. Senza questo gate la decisione

@@ -474,8 +474,15 @@ inviare.
 
 ### 4.1 Proprietà
 
-**Versionato.** Il primo messaggio dichiara la versione. Una versione che il
-ricevente non conosce ferma l'esecuzione: non si degrada, non si indovina.
+**Versionato.** La versione sta **nell'involucro di ogni frame**, e solo lì.
+Una versione che il ricevente non conosce ferma l'esecuzione: non si degrada,
+non si indovina, e la si controlla **prima** di guardare il corpo — di un
+corpo di versione ignota non si sa dire nulla, e provare a leggerlo
+produrrebbe un errore che parla del campo sbagliato.
+
+Non è nel solo primo messaggio, e non è ripetuta dentro `Saluto` e `Risposta`:
+due rappresentazioni della stessa cosa sono due cose che possono divergere, e
+la domanda «quale delle due vale» non ha una risposta buona.
 
 **Limitato.** Ogni messaggio ha un tetto di byte; la sequenza ha un tetto di
 messaggi. I due tetti sono costanti del protocollo, non configurazione: un
@@ -502,7 +509,7 @@ Direzione supervisore → worker:
 
 | messaggio | quando | contenuto |
 |---|---|---|
-| `Saluto` | primo | versione del protocollo, identità dell'artefatto, identità del resolver, limiti del protocollo, **`commit_token`** |
+| `Saluto` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, limiti del protocollo, **`commit_token`** |
 | `Incarico` | dopo l'accordo | piano validato, descrizione degli input, percorso dell'artefatto temporaneo |
 | `Annulla` | in qualunque momento | motivo |
 
@@ -510,9 +517,9 @@ Direzione worker → supervisore:
 
 | messaggio | quando | contenuto |
 |---|---|---|
-| `Risposta` | primo | versione, identità dell'artefatto, identità del resolver, capability del backend |
-| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch); **mai** dati |
-| `Esito` | ultimo | successo con sigillo, oppure errore tipizzato con i quattro assi |
+| `Risposta` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, capability del backend |
+| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch, nodi completati); **mai** dati |
+| `Esito` | ultimo | successo col digest dell'artefatto, errore tipizzato con i quattro assi, oppure **forma** del panico |
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
 
@@ -537,6 +544,39 @@ non ne manda nessuno è indistinguibile da uno lento, e il timeout è la sola
 difesa contro entrambi.
 
 ---
+
+### 4.4 Forma sul filo
+
+Un frame è un prefisso di lunghezza `u32` **big-endian** seguito da JSON UTF-8
+compatto. Il prefisso conta il solo payload.
+
+Il frame porta **solo il corpo**: la versione è fissata internamente e il tipo
+è *derivato* dal corpo. Nessuno dei due è un campo che si possa impostare, e
+non è una disciplina ma una proprietà del tipo — non esiste uno stato in cui
+il tipo dichiarato e il corpo si contraddicano. Una verifica al momento di
+scrivere avrebbe *intercettato* quella contraddizione, cioè l'avrebbe spostata
+da impossibile a controllata; e un controllo si può dimenticare di scrivere.
+
+Il tetto si applica **prima di allocare**: si leggono i quattro byte, si
+confrontano col limite, e solo dopo si guarda il payload. Un frame che dichiara
+un gigabyte non ne fa allocare nemmeno uno. In scrittura vale il verso
+speculare: il writer si ferma appena supera il tetto, invece di costruire un
+buffer illimitato e misurarlo dopo — misurare dopo significa aver già allocato
+ciò che si voleva rifiutare.
+
+La forma canonica del piano viaggia dentro l'`Incarico` come JSON **grezzo**,
+non come stringa: una stringa subirebbe l'espansione degli escape e
+costringerebbe a un secondo parse, e riparsarla in un albero avrebbe potuto
+riscrivere il testo su cui il `plan_hash` è stato calcolato. Il worker la
+riparsa, rivalida e ricontrolla l'hash contro `plan_hash_atteso`.
+
+I tetti per campo valgono **in entrambi i versi**: in scrittura impediscono di
+emettere un frame che il ricevente rifiuterebbe, in lettura sono la difesa.
+Applicarli da un lato solo avrebbe reso il protocollo asimmetrico proprio dove
+i due capi devono concordare.
+
+Tutti i limiti, con regola, perimetro, pericolo e condizione di rientro, sono
+registrati in [errori-e-limiti.md](errori-e-limiti.md#protocollo-del-worker-i-tetti-sono-del-profilo-isolato).
 
 ## 5. Handshake
 
@@ -628,7 +668,53 @@ risolto — e la loro identità entra nell'accordo come le altre.
 Un disaccordo su qualunque di questi campi ferma l'esecuzione **prima dei
 dati**, con esito `resolver incompatibile`.
 
-### 5.4 Artefatto temporaneo
+### 5.4 Ingressi: solo Arrow IPC file-backed
+
+Il profilo isolato accetta **soltanto** ingressi Arrow IPC su file, e li
+rifiuta tutti gli altri **prima dello spawn**.
+
+#### Perché non è una scelta di comodo
+
+`Input` ha oggi due forme che un processo nuovo non può raggiungere:
+
+- `Input::Batches` tiene i `RecordBatch` **in memoria del chiamante**. Un
+  worker in un altro processo non ha modo di vederli;
+- `Input::Stream` porta uno schema e un **iteratore**, cioè codice. Non è
+  trasferibile per definizione.
+
+E c'è un difetto che rende il problema meno visibile di quanto sia:
+`Input::read_ipc` apre un percorso e rende `Input::Stream`, **scartando il
+percorso**. Un ingresso che nasce file-backed perde la propria provenienza
+nel tipo, quindi al momento dello spawn non c'è modo di sapere che quel
+`Stream` veniva da un file — né quale.
+
+Ne segue che l'`Incarico` non può trasportare gli ingressi «come sono»: per
+una parte dell'API pubblica non esiste nulla da trasportare.
+
+#### La regola
+
+Un piano è **isolabile** solo se ogni suo ingresso è un file Arrow IPC
+esplicitamente trasferibile: un percorso che il supervisore può passare e che
+il worker può aprire da sé. Batch e iteratori in memoria sono rifiutati, con
+un errore che dice *quale* ingresso e *perché*, prima che il processo parta.
+
+Non è un limite del protocollo: è una proprietà del profilo. Un piano con
+ingressi in memoria resta perfettamente valido, e continua a girare in-process
+come sempre — semplicemente non è isolabile.
+
+#### La condizione di rientro
+
+Serve un **meccanismo di staging isolato**: qualcosa che materializzi batch e
+iteratori in file temporanei che il worker possa leggere, con la propria
+proprietà e il proprio cleanup. Finché non esiste, la restrizione resta.
+
+Prima di allora va corretto il difetto a monte: `Input::read_ipc` deve
+**conservare la provenienza file-backed** invece di cancellarla. Finché la
+cancella, anche un ingresso che soddisfa la regola non è riconoscibile come
+tale, e il rifiuto dovrebbe basarsi su ciò che il chiamante dichiara invece
+che su ciò che il tipo dimostra.
+
+### 5.4-bis Artefatto temporaneo
 
 Il supervisore comunica **un** percorso, dentro una directory che ha creato
 lui. Il worker non ne sceglie né il nome né la posizione.
@@ -2031,7 +2117,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-1** | varianti nuove di `PlenoraError`: `Protocol`, `Timeout`, `Conflict`, `InvalidConfiguration`, **`IsolationUnavailable`** (§9), **pressione di memoria non attribuita** (§10.0-bis), con il tipo `EvidenzaDiLimite` che la accompagna — i cinque segnali della §10.0-bis, `Oa` in forma limitata dal tipo e per distanza dal dominio, e tetto/picco/`max` tenuti separati come diagnostica perché non fondano attribuzione. La **matrice** che li legge resta a `PR-3`. Il tipo reso da `risolvi_commit` **no**: appartiene a `PR-10`, che è la PR che introduce quella funzione | **sì** (varianti e tipo pubblici) | mapping variante→categoria esaustivo, exit code invariati per le esistenti e proiezione tipizzata che non compila se una categoria resta senza decisione |
 | **PR-2** | `max_domain_memory_bytes` nel formato del piano e nei contratti pubblici | **sì** (formato) | rifiuto della combinazione incoerente col budget governato |
 | **PR-3** | tipi dell'esito e della **classificazione**: `EsitoWorker`, la matrice §10 come `match` esaustivo, la precedenza §10.3. **Consuma** `EvidenzaDiLimite`, che `PR-1` ha già introdotto perché è superficie pubblica e va decisa una volta sola; qui vive la regola per cui solo `G` autorizza l'attribuzione al dominio | no | test di tabella sulla matrice e sulle corse |
-| **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | round-trip e rifiuto di ogni forma malformata |
+| **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | vettori di byte scritti a mano per ogni messaggio, round-trip come prova secondaria, rifiuto di ogni forma malformata |
 | **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei **custom metadata del footer IPC**; e `CommitToken` come tipo chiuso | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo; i **quattro casi del token** della §7-quater — assente, canonico, non canonico, oracoli del footer |
 | **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |

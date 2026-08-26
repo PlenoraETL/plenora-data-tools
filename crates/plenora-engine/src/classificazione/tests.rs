@@ -197,8 +197,6 @@ fn la_diagnostica_non_cambia_la_classificazione() {
     let base = evidenza(Some(1), Some(1), Some(1), Some(1));
     let atteso = classifica_evidenza(&base);
 
-    let mut per_distanza = [None; plenora_core::MAX_ANTENATI_OSSERVATI];
-    per_distanza[0] = Some(9);
     let variata = EvidenzaDiLimite {
         oom_degli_antenati: PressioneDegliAntenati::nuova(&[Some(9)], Some(1), 0)
             .expect("forma canonica"),

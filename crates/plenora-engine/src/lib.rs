@@ -69,11 +69,34 @@ mod error_propagation;
 pub mod executor;
 pub mod geo_transport;
 pub mod governor;
+/// Facciata **instabile e non-production** per il crate `fuzz/` e per la sonda
+/// di calibrazione, che stanno fuori dal crate. Non e' nel `default`.
+///
+/// Compilata anche sotto `test`, cosi' le invarianti che il fuzzer applica
+/// hanno **una definizione sola** e le esercita gia' la suite ordinaria,
+/// invece di aspettare la campagna notturna.
+#[cfg(any(test, feature = "internals"))]
+#[doc(hidden)]
+pub mod interni;
 pub mod ipc_boundary;
 pub mod parallelism;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
+// Il protocollo e' **sempre privato**, senza eccezioni: e' un canale interno
+// fra due processi che spediamo insieme, e renderlo pubblico — anche solo
+// sotto una feature — sarebbe la promessa di non cambiarlo. Chi sta fuori dal
+// crate passa da [`interni`], che espone un verdetto e una costante, non i
+// tipi.
+//
+// Il `cfg` dice una cosa vera e non la zittisce: il protocollo non ha ancora
+// un chiamante, perche' chi lo costruisce e' l'handshake e quello appartiene a
+// `PR-5`. Finche' non esiste, il modulo si compila dove qualcuno lo usa
+// davvero — i test e la facciata. Cosi' non serve nessun `allow(dead_code)`:
+// l'assenza di chiamante e' **dichiarata**, non nascosta. Con `PR-5` il `cfg`
+// sparisce e il modulo diventa incondizionato.
+#[cfg(any(test, feature = "internals"))]
+mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
 
