@@ -39,8 +39,13 @@ pub const BYTE_PREFISSO: usize = 4;
 
 /// Byte dell'involucro JSON, **contati** e non stimati.
 ///
-/// `{"protocol_version":65535,"tipo":"unattributed_memory_pressure","corpo":}`
-/// e' la forma piu' lunga: numero a cinque cifre e il nome di tipo piu' lungo.
+/// `{"protocol_version":65535,"tipo":"progresso","corpo":}` e' la forma piu'
+/// lunga: `u16` a cinque cifre e il nome di tipo piu' lungo.
+///
+/// «Piu' lungo» fra i **sei tipi di messaggio** — `progresso`, nove caratteri
+/// — non fra i nomi degli assi dell'errore, che sono ben piu' lunghi ma non
+/// compaiono mai qui: `tipo` non li puo' contenere.
+///
 /// Il conto e' sui caratteri letterali, quindi e' verificabile leggendolo.
 const INVOLUCRO_BYTES: usize = {
     // {"protocol_version": = 20, valore u16 = 5, , = 1
@@ -199,8 +204,8 @@ pub fn codifica(frame: &Frame) -> Result<Vec<u8>> {
 ///
 /// `PlenoraError::Protocol` se la lunghezza dichiarata supera
 /// [`MAX_PROTOCOL_FRAME_BYTES`].
-pub fn lunghezza_dichiarata(prefisso: &[u8; BYTE_PREFISSO]) -> Result<usize> {
-    let dichiarata = u32::from_be_bytes(*prefisso) as usize;
+pub fn lunghezza_dichiarata(prefisso: [u8; BYTE_PREFISSO]) -> Result<usize> {
+    let dichiarata = u32::from_be_bytes(prefisso) as usize;
     if dichiarata > MAX_PROTOCOL_FRAME_BYTES {
         return Err(errore(format!(
             "frame dichiarato oltre il tetto: {dichiarata} byte > {MAX_PROTOCOL_FRAME_BYTES}, \
@@ -230,7 +235,7 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
     // Il tetto PRIMA di guardare il payload, dalla stessa funzione che
     // usera' il lettore del pipe: una seconda copia del confronto sarebbe un
     // secondo confronto, e potrebbe divergere.
-    let dichiarata = lunghezza_dichiarata(&quattro)?;
+    let dichiarata = lunghezza_dichiarata(quattro)?;
 
     let disponibili = byte.len() - BYTE_PREFISSO;
     if disponibili < dichiarata {
@@ -416,7 +421,14 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
             )?;
             limita_elementi(&risposta.capability, MAX_CAPABILITY, "capability")?;
             for capability in &risposta.capability {
-                limita(capability, MAX_IDENTIFICATORE_BYTES, "capability")?;
+                // Il nome dice **elemento**: con la sola parola «capability»
+                // l'errore non distinguerebbe «troppe capability» da «una
+                // capability troppo lunga», e sono due difetti diversi.
+                limita(
+                    capability,
+                    MAX_IDENTIFICATORE_BYTES,
+                    "capability (elemento)",
+                )?;
             }
             verifica_ambiente(&risposta.ambiente)
         }

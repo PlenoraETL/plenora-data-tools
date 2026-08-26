@@ -475,26 +475,23 @@ fn un_frame_oltre_il_tetto_e_rifiutato_senza_leggere_il_payload() {
 fn la_lunghezza_dichiarata_decide_sui_soli_quattro_byte() {
     use super::codifica::lunghezza_dichiarata;
 
-    assert_eq!(
-        lunghezza_dichiarata(&[0x00, 0x00, 0x00, 0x00]).ok(),
-        Some(0)
-    );
+    assert_eq!(lunghezza_dichiarata([0x00, 0x00, 0x00, 0x00]).ok(), Some(0));
     let al_tetto = u32::try_from(MAX_PROTOCOL_FRAME_BYTES).expect("sta in u32");
     assert_eq!(
-        lunghezza_dichiarata(&al_tetto.to_be_bytes()).ok(),
+        lunghezza_dichiarata(al_tetto.to_be_bytes()).ok(),
         Some(MAX_PROTOCOL_FRAME_BYTES),
         "MAX deve passare: il tetto e' inclusivo"
     );
     let oltre = al_tetto + 1;
     assert!(
-        lunghezza_dichiarata(&oltre.to_be_bytes()).is_err(),
+        lunghezza_dichiarata(oltre.to_be_bytes()).is_err(),
         "MAX + 1 deve fallire"
     );
-    assert!(lunghezza_dichiarata(&[0xFF, 0xFF, 0xFF, 0xFF]).is_err());
+    assert!(lunghezza_dichiarata([0xFF, 0xFF, 0xFF, 0xFF]).is_err());
 
     // E il decoder rifiuta con **quello stesso** motivo, cioe' non ha una
     // copia propria del confronto.
-    let suo = lunghezza_dichiarata(&oltre.to_be_bytes())
+    let suo = lunghezza_dichiarata(oltre.to_be_bytes())
         .expect_err("MAX + 1")
         .to_string();
     assert_eq!(rifiuto(&oltre.to_be_bytes()), suo);
@@ -902,6 +899,426 @@ fn il_piano_oltre_il_tetto_e_rifiutato_in_entrambi_i_versi() {
     );
 }
 
+/// Un campo limitato: come portarlo a una lunghezza e quale tetto ha.
+type CasoTetto = (&'static str, usize, Box<dyn Fn(usize) -> Frame>);
+
+fn casi_saluto() -> Vec<CasoTetto> {
+    vec![
+        (
+            "artefatto.digest",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.artefatto.digest = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "artefatto.versione",
+            MAX_VERSIONE_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.artefatto.versione = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "resolver.identita",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.resolver.identita = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "resolver.versione",
+            MAX_VERSIONE_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.resolver.versione = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "commit_token",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.commit_token = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "digest_insieme",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| {
+                let mut f = saluto();
+                if let Corpo::Saluto(s) = &mut f.corpo {
+                    s.ambiente.digest_insieme = ripeti(n);
+                }
+                f
+            }),
+        ),
+    ]
+}
+
+fn casi_risposta() -> Vec<CasoTetto> {
+    vec![
+        (
+            "risorsa.nome",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| risposta_con_risorsa(ripeti(n), String::new(), String::new())),
+        ),
+        (
+            "risorsa.versione",
+            MAX_VERSIONE_BYTES,
+            Box::new(|n| risposta_con_risorsa(String::new(), ripeti(n), String::new())),
+        ),
+        (
+            "risorsa.percorso",
+            MAX_PERCORSO_BYTES,
+            Box::new(|n| risposta_con_risorsa(String::new(), String::new(), ripeti(n))),
+        ),
+        (
+            "backend.nome",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| risposta_con_backend(ripeti(n), String::new(), String::new())),
+        ),
+        (
+            "backend.versione",
+            MAX_VERSIONE_BYTES,
+            Box::new(|n| risposta_con_backend(String::new(), ripeti(n), String::new())),
+        ),
+        (
+            "backend.percorso",
+            MAX_PERCORSO_BYTES,
+            Box::new(|n| risposta_con_backend(String::new(), String::new(), ripeti(n))),
+        ),
+        (
+            "risorse",
+            MAX_RISORSE,
+            Box::new(|n| {
+                let mut f = risposta();
+                if let Corpo::Risposta(r) = &mut f.corpo {
+                    r.ambiente.risorse = vec![
+                        RisorsaRisolta {
+                            nome: "r".to_owned(),
+                            versione: "1".to_owned(),
+                            percorso: "/r".to_owned(),
+                        };
+                        n
+                    ];
+                }
+                f
+            }),
+        ),
+        (
+            "backend_dinamici",
+            MAX_BACKEND_DINAMICI,
+            Box::new(|n| {
+                let mut f = risposta();
+                if let Corpo::Risposta(r) = &mut f.corpo {
+                    r.ambiente.backend_dinamici = vec![
+                        BackendDinamico {
+                            nome: "b".to_owned(),
+                            versione: "1".to_owned(),
+                            percorso: "/b".to_owned(),
+                        };
+                        n
+                    ];
+                }
+                f
+            }),
+        ),
+        (
+            "capability",
+            MAX_CAPABILITY,
+            Box::new(|n| {
+                let mut f = risposta();
+                if let Corpo::Risposta(r) = &mut f.corpo {
+                    r.capability = vec!["c".to_owned(); n];
+                }
+                f
+            }),
+        ),
+        (
+            "capability (elemento)",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| {
+                let mut f = risposta();
+                if let Corpo::Risposta(r) = &mut f.corpo {
+                    r.capability = vec![ripeti(n)];
+                }
+                f
+            }),
+        ),
+    ]
+}
+
+fn risposta_con_risorsa(nome: String, versione: String, percorso: String) -> Frame {
+    let mut f = risposta();
+    if let Corpo::Risposta(r) = &mut f.corpo {
+        r.ambiente.risorse = vec![RisorsaRisolta {
+            nome,
+            versione,
+            percorso,
+        }];
+    }
+    f
+}
+
+fn risposta_con_backend(nome: String, versione: String, percorso: String) -> Frame {
+    let mut f = risposta();
+    if let Corpo::Risposta(r) = &mut f.corpo {
+        r.ambiente.backend_dinamici = vec![BackendDinamico {
+            nome,
+            versione,
+            percorso,
+        }];
+    }
+    f
+}
+
+fn casi_incarico() -> Vec<CasoTetto> {
+    vec![
+        (
+            "plan_hash_atteso",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| {
+                let mut f = incarico();
+                if let Corpo::Incarico(i) = &mut f.corpo {
+                    i.plan_hash_atteso = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "artefatto_temporaneo",
+            MAX_PERCORSO_BYTES,
+            Box::new(|n| {
+                let mut f = incarico();
+                if let Corpo::Incarico(i) = &mut f.corpo {
+                    i.artefatto_temporaneo = ripeti(n);
+                }
+                f
+            }),
+        ),
+        (
+            "ingresso.nome",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| ingresso_con(ripeti(n), String::new(), String::new())),
+        ),
+        (
+            "ingresso.percorso",
+            MAX_PERCORSO_BYTES,
+            Box::new(|n| ingresso_con(String::new(), ripeti(n), String::new())),
+        ),
+        (
+            "ingresso.contract_fingerprint_atteso",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| ingresso_con(String::new(), String::new(), ripeti(n))),
+        ),
+    ]
+}
+
+fn ingresso_con(nome: String, percorso: String, impronta: String) -> Frame {
+    incarico_con(
+        grezzo(r#"{"schema_version":6}"#),
+        vec![DescrittoreIngresso {
+            nome,
+            percorso,
+            formato: FormatoIngresso::File,
+            contract_fingerprint_atteso: impronta,
+        }],
+    )
+}
+
+fn casi_esito() -> Vec<CasoTetto> {
+    vec![
+        (
+            "digest_artefatto.algoritmo",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| {
+                esito(EsitoWorkerSulFilo::Successo {
+                    digest_artefatto: DigestArtefatto {
+                        algoritmo: ripeti(n),
+                        valore: "f".to_owned(),
+                    },
+                })
+            }),
+        ),
+        (
+            "digest_artefatto.valore",
+            MAX_DIGEST_BYTES,
+            Box::new(|n| {
+                esito(EsitoWorkerSulFilo::Successo {
+                    digest_artefatto: DigestArtefatto {
+                        algoritmo: "sha256".to_owned(),
+                        valore: ripeti(n),
+                    },
+                })
+            }),
+        ),
+        (
+            "messaggio",
+            MAX_MESSAGGIO_BYTES,
+            Box::new(|n| errore_con(|e| e.messaggio = ripeti(n))),
+        ),
+        (
+            "nodo",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| errore_con(|e| e.nodo = Some(ripeti(n)))),
+        ),
+        (
+            "operazione",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| errore_con(|e| e.operazione = Some(ripeti(n)))),
+        ),
+        (
+            "execution_id",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| errore_con(|e| e.execution_id = Some(ripeti(n)))),
+        ),
+        (
+            "diagnostica.contract",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| diagnostica_con(|d| d.contract = ripeti(n))),
+        ),
+        (
+            "diagnostica.scope",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| diagnostica_con(|d| d.scope = ripeti(n))),
+        ),
+        (
+            "diagnostica.completeness",
+            MAX_IDENTIFICATORE_BYTES,
+            Box::new(|n| diagnostica_con(|d| d.completeness = ripeti(n))),
+        ),
+        (
+            "diagnostica.conteggi",
+            MAX_CONTEGGI_DIAGNOSTICA,
+            Box::new(|n| diagnostica_con(|d| d.conteggi = vec![("k".to_owned(), 1); n])),
+        ),
+        (
+            "chiave di conteggio",
+            MAX_CHIAVE_CONTEGGIO_BYTES,
+            Box::new(|n| diagnostica_con(|d| d.conteggi = vec![(ripeti(n), 1)])),
+        ),
+        (
+            "diagnostica.esempi",
+            MAX_ESEMPI_DIAGNOSTICA,
+            Box::new(|n| {
+                diagnostica_con(|d| {
+                    d.esempi = vec![
+                        EsempioDiagnostica {
+                            indice: 0,
+                            codice: "E".to_owned(),
+                        };
+                        n
+                    ];
+                })
+            }),
+        ),
+        (
+            "esempio.codice",
+            MAX_ESEMPIO_BYTES,
+            Box::new(|n| {
+                diagnostica_con(|d| {
+                    d.esempi = vec![EsempioDiagnostica {
+                        indice: 0,
+                        codice: ripeti(n),
+                    }];
+                })
+            }),
+        ),
+    ]
+}
+
+fn errore_minimo() -> ErroreSulFilo {
+    ErroreSulFilo {
+        categoria: CategoriaSulFilo::Schema,
+        fase: FaseSulFilo::Read,
+        effetto: EffettoSulFilo::None,
+        retry: RetrySulFilo::Never {},
+        messaggio: "m".to_owned(),
+        nodo: None,
+        operazione: None,
+        execution_id: None,
+        diagnostica: None,
+    }
+}
+
+fn errore_con(applica: impl FnOnce(&mut ErroreSulFilo)) -> Frame {
+    let mut dentro = errore_minimo();
+    applica(&mut dentro);
+    esito(EsitoWorkerSulFilo::Errore {
+        errore: Box::new(dentro),
+    })
+}
+
+fn diagnostica_con(applica: impl FnOnce(&mut DiagnosticaSulFilo)) -> Frame {
+    let mut diagnostica = DiagnosticaSulFilo {
+        contract: "c".to_owned(),
+        scope: "s".to_owned(),
+        completeness: "exact".to_owned(),
+        observed_total: 0,
+        conteggi: Vec::new(),
+        esempi: Vec::new(),
+        esempi_troncati: false,
+    };
+    applica(&mut diagnostica);
+    errore_con(|e| e.diagnostica = Some(diagnostica))
+}
+
+/// **Ogni** campo limitato, provato sul proprio confine.
+///
+/// Senza questo, i tetti erano applicati ma quasi mai esercitati: una
+/// costante sbagliata in uno dei `limita` — il tetto del percorso su un
+/// identificatore, per dire — sarebbe passata inosservata, perché nessun test
+/// arrivava mai a quel confine.
+///
+/// Il caso a `tetto + 1` fa anche da controllo sulla tabella stessa: se un
+/// costruttore non modificasse davvero il campo che dichiara, il frame
+/// resterebbe valido e la riga fallirebbe.
+#[test]
+fn ogni_campo_limitato_e_provato_sul_proprio_confine() {
+    let tutti = casi_saluto()
+        .into_iter()
+        .chain(casi_risposta())
+        .chain(casi_incarico())
+        .chain(casi_esito());
+    let mut provati = 0_usize;
+    for (nome, tetto, costruisci) in tutti {
+        let al_tetto = costruisci(tetto);
+        let byte = codifica(&al_tetto)
+            .unwrap_or_else(|errore| panic!("«{nome}» al tetto non si codifica: {errore}"));
+        decodifica(&byte)
+            .unwrap_or_else(|errore| panic!("«{nome}» al tetto non si rilegge: {errore}"));
+
+        let messaggio = codifica(&costruisci(tetto + 1))
+            .map_or_else(|errore| errore.to_string(), |_| String::from("ACCETTATO"));
+        assert!(
+            messaggio.contains("oltre il tetto") && messaggio.contains(nome),
+            "«{nome}» a tetto+1 non e' stato respinto sul proprio nome: {messaggio}"
+        );
+        provati += 1;
+    }
+    // Se qualcuno aggiunge un `limita` senza aggiungere la riga, questo numero
+    // resta indietro ed e' il segnale che manca una prova.
+    assert_eq!(provati, 34, "la tabella dei confini non copre piu' tutto");
+}
+
 #[test]
 fn i_tetti_di_cardinalita_valgono_in_scrittura() {
     let piano = grezzo(r#"{"schema_version":6}"#);
@@ -1243,6 +1660,38 @@ fn il_contenuto_non_entra_negli_errori_del_writer() {
 // ---------------------------------------------------------------------------
 // Direzione
 // ---------------------------------------------------------------------------
+
+/// L'involucro e' derivato assumendo che il nome di tipo piu' lungo sia di
+/// nove caratteri: qui si verifica che l'assunzione regga.
+///
+/// E' il genere di premessa che marcisce in silenzio. Un settimo tipo con un
+/// nome piu' lungo non romperebbe niente di visibile — renderebbe soltanto la
+/// derivazione del tetto un po' meno vera di quanto dichiara.
+#[test]
+fn nessun_nome_di_tipo_supera_i_nove_caratteri() {
+    let tutti = [
+        TipoMessaggio::Saluto,
+        TipoMessaggio::Incarico,
+        TipoMessaggio::Annulla,
+        TipoMessaggio::Risposta,
+        TipoMessaggio::Progresso,
+        TipoMessaggio::Esito,
+    ];
+    let mut piu_lungo = 0;
+    for tipo in tutti {
+        // `to_string` di un enum serde rende il nome fra virgolette: i due
+        // apici non fanno parte del nome.
+        let reso = serde_json::to_string(&tipo).expect("serializzabile");
+        let nome = reso.trim_matches('"').len();
+        assert!(nome <= 9, "`{reso}` e' lungo {nome} caratteri, non nove");
+        piu_lungo = piu_lungo.max(nome);
+    }
+    assert_eq!(
+        piu_lungo, 9,
+        "nessun tipo arriva a nove: la derivazione dell'involucro e' \
+         piu' larga del necessario, e vale la pena saperlo"
+    );
+}
 
 /// La direzione e' una **proprieta' del tipo**, non un campo sul filo.
 ///

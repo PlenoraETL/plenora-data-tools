@@ -1,7 +1,8 @@
 #![no_main]
 
 //! Decoder del protocollo supervisore/worker contro byte ostili
-//! (`isolamento.md#protocollo`, `errori-e-limiti.md#protocollo-del-worker`).
+//! (isolamento.md#4-protocollo-interno,
+//! errori-e-limiti.md#protocollo-del-worker-i-tetti-sono-del-profilo-isolato).
 //!
 //! E' il codice che legge byte scritti da un **altro processo**: e' il punto
 //! del sistema con la superficie d'attacco piu' diretta, e l'unico in cui un
