@@ -18,7 +18,7 @@ use plenora_core::{
 
 use super::{
     classifica, classifica_evidenza, ClasseEvidenzaMemoria, EsitoClassificato, EsitoWorker,
-    FattiDopoLaQuiescenza, Segnale,
+    FattiDopoLaQuiescenza, FormaDelPayload, Segnale,
 };
 
 // ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ fn esito_worker(codice: u8) -> EsitoWorker {
         0 => EsitoWorker::Successo,
         1 => EsitoWorker::Errore(PlenoraError::Io(std::io::Error::other("io"))),
         _ => EsitoWorker::Panic {
-            forma: plenora_core::panic_policy::forma_payload(&"x"),
+            forma: FormaDelPayload::di(&"x"),
         },
     }
 }
@@ -458,10 +458,15 @@ fn livello_atteso(caso: Combinazione) -> u8 {
         4
     } else if caso.evidenza == Some(ClasseEvidenzaMemoria::NonAttribuita) {
         5
-    } else if caso.worker.is_some() {
+    } else if matches!(
+        caso.evidenza,
+        Some(ClasseEvidenzaMemoria::Incoerente | ClasseEvidenzaMemoria::Indeterminata)
+    ) {
         6
-    } else {
+    } else if caso.worker.is_some() {
         7
+    } else {
+        8
     }
 }
 
@@ -472,10 +477,11 @@ fn livello_dell_esito(esito: &EsitoClassificato) -> u8 {
         EsitoClassificato::Timeout { .. } => 3,
         EsitoClassificato::Cancellato { .. } => 4,
         EsitoClassificato::PressioneNonAttribuita(_) => 5,
+        EsitoClassificato::EvidenzaNonUtilizzabile { .. } => 6,
         EsitoClassificato::ErroreDelWorker { .. }
         | EsitoClassificato::PanicDelWorker { .. }
-        | EsitoClassificato::DaVerificare { .. } => 6,
-        EsitoClassificato::TerminazioneAmbigua { .. } => 7,
+        | EsitoClassificato::DaVerificare { .. } => 7,
+        EsitoClassificato::TerminazioneAmbigua { .. } => 8,
     }
 }
 
@@ -553,6 +559,83 @@ fn l_evidenza_sopravvive_a_ogni_classificazione() {
 }
 
 #[test]
+fn evidenza_incoerente_o_indeterminata_non_diventa_da_verificare() {
+    // Il blocker: `Incoerente` e `Indeterminata` ricadevano sull'esito del
+    // worker, e con un worker che dichiara successo producevano
+    // `DaVerificare` — cioe' «prosegui» mentre una lettura del dominio e'
+    // rotta o mancante. La §10.0-bis dice che NESSUNA delle cinque classi
+    // autorizza la pubblicazione, e proseguire alla verifica e' il primo
+    // passo verso di essa.
+    for classe in [
+        ClasseEvidenzaMemoria::Incoerente,
+        ClasseEvidenzaMemoria::Indeterminata,
+    ] {
+        for worker in [None, Some(0), Some(1), Some(2)] {
+            let esito = classifica(FattiDopoLaQuiescenza::dopo_la_quiescenza(
+                false,
+                Some(evidenza_di_classe(classe)),
+                false,
+                false,
+                worker.map(esito_worker),
+            ));
+            assert!(
+                !matches!(esito, EsitoClassificato::DaVerificare { .. }),
+                "{classe:?} con worker {worker:?} non deve proseguire: {esito:?}"
+            );
+            assert_eq!(
+                esito.categoria(),
+                Some(ErrorCategory::Internal),
+                "{classe:?} con worker {worker:?}"
+            );
+            assert!(!esito.pubblica());
+            assert!(
+                esito.evidenza().is_some(),
+                "la prova e' obbligatoria: e' cio' che va guardato"
+            );
+        }
+    }
+}
+
+#[test]
+fn evidenza_assente_non_sovrascrive_l_esito_del_worker() {
+    // La classe `Assente` NON e' un livello di precedenza: e' una lettura
+    // riuscita in cui non c'era nulla, quindi non contraddice il worker.
+    // Farne un livello direbbe «difetto interno» ogni volta che il dominio e'
+    // stato letto e stava bene.
+    let esito = classifica(FattiDopoLaQuiescenza::dopo_la_quiescenza(
+        false,
+        Some(evidenza_di_classe(ClasseEvidenzaMemoria::Assente)),
+        false,
+        false,
+        Some(EsitoWorker::Successo),
+    ));
+    assert!(
+        matches!(esito, EsitoClassificato::DaVerificare { .. }),
+        "{esito:?}"
+    );
+    assert!(
+        esito.evidenza().is_some(),
+        "l'evidenza si conserva comunque"
+    );
+}
+
+#[test]
+fn la_forma_del_payload_non_puo_portare_il_contenuto() {
+    // Il campo e' privato e l'unico costruttore delega a `panic_policy`:
+    // scrivere un letterale non compila. Qui si verifica che cio' che ESCE
+    // non porti il contenuto, e che venga dall'autorita' e non da una copia.
+    let segreto = "contenuto-che-non-deve-uscire".to_owned();
+    let forma = FormaDelPayload::di(&segreto);
+    let reso = forma.to_string();
+    assert!(!reso.contains("contenuto-che-non-deve-uscire"), "{reso}");
+    assert_eq!(
+        reso,
+        plenora_core::panic_policy::forma_payload(&segreto),
+        "la forma deve venire dall'autorita', non da una copia locale"
+    );
+}
+
+#[test]
 fn solo_il_publish_pubblica() {
     for caso in tutte_le_combinazioni() {
         let esito = classifica_caso(caso);
@@ -565,10 +648,15 @@ fn solo_il_publish_pubblica() {
 }
 
 #[test]
-fn l_ordine_di_arrivo_e_irrilevante() {
-    // I fatti non portano un ordine, e questo test lo rende una proprieta'
-    // verificata invece che una convenzione: gli stessi fatti costruiti in
-    // due momenti diversi danno lo stesso livello.
+fn la_classificazione_e_ripetibile() {
+    // NOME PRECEDENTE: «l'ordine di arrivo e' irrilevante». Non lo provava:
+    // esegue due volte gli STESSI fatti, quindi verifica la ripetibilita'.
+    //
+    // Che l'ordine sia irrilevante e' una proprieta' del TIPO, non di questo
+    // test: `FattiDopoLaQuiescenza` non porta timestamp ne' sequenza, e non
+    // c'e' modo di esprimere due ordini diversi degli stessi fatti da
+    // confrontare. Attribuire a un test una prova che la struttura fornisce
+    // gia' avrebbe fatto sembrare verificato cio' che e' costruito.
     for caso in tutte_le_combinazioni() {
         let primo = livello_dell_esito(&classifica_caso(caso));
         let secondo = livello_dell_esito(&classifica_caso(caso));
@@ -589,12 +677,17 @@ fn la_categoria_di_ogni_esito_e_quella_della_matrice() {
             3 => Some(ErrorCategory::Timeout),
             4 => Some(ErrorCategory::Cancelled),
             5 => Some(ErrorCategory::UnattributedMemoryPressure),
-            6 => match caso.worker {
+            // Il 6 e l'8 condividono la categoria e NON il significato:
+            // «lettura non utilizzabile» e «morto senza esito». La tabella li
+            // tiene distinti; la proiezione su ErrorCategory no, perche'
+            // Internal e' l'unica che non afferma nulla.
+            6 | 8 => Some(ErrorCategory::Internal),
+            7 => match caso.worker {
                 Some(0) => None,
                 Some(1) => Some(ErrorCategory::Io),
                 _ => Some(ErrorCategory::Internal),
             },
-            _ => Some(ErrorCategory::Internal),
+            altro => panic!("livello di precedenza inatteso: {altro}"),
         };
         assert_eq!(esito.categoria(), atteso, "{caso:?} -> {esito:?}");
     }
@@ -652,7 +745,7 @@ fn riga_2_errore_del_worker_conserva_i_quattro_assi() {
 #[test]
 fn riga_3_panic_porta_la_sola_forma_del_payload() {
     let segreto = "contenuto-che-non-deve-uscire";
-    let forma = plenora_core::panic_policy::forma_payload(&segreto);
+    let forma = FormaDelPayload::di(&segreto);
     let esito = classifica(FattiDopoLaQuiescenza::dopo_la_quiescenza(
         false,
         None,
@@ -664,7 +757,7 @@ fn riga_3_panic_porta_la_sola_forma_del_payload() {
     match esito {
         EsitoClassificato::PanicDelWorker { forma, .. } => {
             assert!(
-                !forma.contains(segreto),
+                !forma.to_string().contains(segreto),
                 "la forma non deve portare il contenuto: {forma}"
             );
         }

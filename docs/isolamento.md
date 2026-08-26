@@ -1532,7 +1532,7 @@ un'osservazione.
 | 3 | panic nel worker | `Esito` di panic, forma del payload senza contenuto | `Internal` | no | rimosso |
 | 4 | crash | il processo muore senza `Esito`, nessuna evidenza di limite | `Internal` | no | rimosso |
 | 5 | OOM attribuito | la struttura di evidenza della §10.0-bis, letta dopo la quiescenza | **`ResourceLimit`** | no | rimosso |
-| 5-bis | dominio non uccidibile | limite raggiunto ripetutamente, nessun task uccidibile (`oom_score_adj` non normalizzato): `Ol ≥ 1`, `Kl = 0`, `Kh = 0`, `G = 0` | **`UnattributedMemoryPressure`**, causa dichiarata | no | rimosso dopo `cgroup.kill` |
+| 5-bis | pressione locale senza uccisione osservata | `Ol ≥ 1`, `Kl = 0`, `Kh = 0`, `G = 0`: il tetto locale è stato invocato e nessuna uccisione è stata contata. Compatibile con task non uccidibili, con un limite raggiunto e **recuperato**, o con altra causa | **`UnattributedMemoryPressure`**, **nessuna causa dichiarata** | no | rimosso dopo `cgroup.kill` |
 | 6a | terminazione senza evidenza | il processo muore, **nessuna** evidenza di pressione | `Internal` — **mai** dedotto come OOM | no | rimosso |
 | 6b | terminazione con pressione non attribuibile | il processo muore, c'è evidenza di pressione ma non autorizza l'attribuzione | **`UnattributedMemoryPressure`** | no | rimosso |
 | 7 | timeout | scadenza del timeout di esecuzione | `Timeout` | no | rimosso |
@@ -1546,16 +1546,23 @@ un'osservazione.
 | 15 | fallimento del publish | verifica passata, passo 9 fallito | `Io` o `Conflict` | no | rimosso |
 | 16 | fallimento del cleanup | publish riuscito, rimozione fallita | successo **con avvertenza machine-readable** | **sì** | **residuo** |
 
-**Perché la 5-bis non è `ResourceLimit`.** Diceva «causa dichiarata», e
-suonava come un'attribuzione con una nota a margine. Non lo è: senza group
-kill locale non c'è l'operazione del kernel che lega il limite *di questo
-dominio* alla morte *di questo dominio*, e `Ol` alto con `Kl` a zero è
-compatibile con un limite raggiunto e recuperato. Dire `ResourceLimit`
-manderebbe chi legge ad alzare un budget che potrebbe non essere il colpevole.
+**Perché la 5-bis non è `ResourceLimit`, e non dichiara una causa.** Diceva
+«dominio non uccidibile» e attribuiva la firma a `oom_score_adj` non
+normalizzato. Sono due passi di troppo, e il secondo contraddiceva la riga
+successiva di questo stesso documento, che ammette la stessa firma come
+compatibile con un limite raggiunto e recuperato.
 
-La causa resta dichiarata — `oom_score_adj` non normalizzato è una firma
-riconoscibile, e va riportata — ma è **diagnostica dentro l'evidenza**, non
-una categoria.
+**Dai quattro contatori `oom_score_adj` non è deducibile.** `Ol ≥ 1` con `Kl`
+e `Kh` a zero dice che il tetto locale è stato invocato e che nessuna
+uccisione è stata contata: task non uccidibili sono *una* spiegazione, il
+recupero un'altra, e altre restano possibili. Nominarne una nel nome della
+riga la fa sembrare stabilita.
+
+Il nome è quindi cambiato in **pressione locale senza uccisione osservata**,
+che descrive ciò che si è misurato invece di ciò che lo avrebbe causato. Se il
+preflight osserva davvero `oom_score_adj`, quello è un **fatto diagnostico
+separato**, raccolto da chi lo osserva e riportato come tale — non un'inferenza
+dai contatori.
 
 **Perché la riga 6 si divide.** «Evidenza assente o non attribuibile» metteva
 sotto `Internal` due situazioni opposte. `Internal` dichiara un difetto
@@ -1700,7 +1707,7 @@ sono in coda, separate, perché un `None` non è un livello.
 | ≥1 | ≥1 | ≥1 | 0 | non attribuita | pressione **senza** group kill locale: qualcuno è sopravvissuto, e i due delta possono essere eventi distinti |
 | ≥1 | 0 | ≥1 | 0 | non attribuita | limite del dominio raggiunto, uccisione in un discendente: il sigillo ha fallito. Più difetto del preflight |
 | ≥1 | 0 | ≥1 | ≥1 | non attribuita | group kill locale con `Kl = 0`: nessun processo **del dominio** è stato ucciso, quindi la riga non è quella dell'attribuzione |
-| ≥1 | 0 | 0 | 0 | non attribuita | limite raggiunto e nessun task uccidibile: firma di `oom_score_adj` non normalizzato. Causa dichiarata, richiede `cgroup.kill` |
+| ≥1 | 0 | 0 | 0 | non attribuita | tetto locale invocato e **nessuna uccisione contata**. Compatibile con task non uccidibili, con un limite raggiunto e recuperato, o con altra causa: dai contatori non si sceglie fra queste. Nessuna causa dichiarata |
 | ≥1 | 0 | 0 | ≥1 | **incoerente** | un group kill locale che non ha ucciso nulla, né nel dominio né sotto |
 | 0 | ≥1 | ≥1 | 0 | non attribuita | il worker è morto senza che il **suo** tetto sia stato raggiunto: l'OOM viene da fuori. `Oa` dice *dove* c'era pressione, non che sia stata la causa |
 | 0 | ≥1 | ≥1 | ≥1 | **incoerente** | group kill locale con il tetto locale mai invocato: `G` senza `Ol` è una lettura che non torna |
@@ -1720,8 +1727,17 @@ attribuibile*, che porta con sé i cinque contatori e non conclude al posto di
 chi legge.
 
 `PR-1` **l'ha introdotta**, insieme alle altre varianti nuove di
-`PlenoraError`, e `PR-3` la consuma: la classificazione produce
-`UnattributedMemoryPressure` per queste righe. Il ripiego su `Internal`, che
+`PlenoraError`.
+
+`PR-3` decide **quale categoria compete** a ciascuna riga, e si ferma lì: la
+classificazione rende un esito interno che *dichiara*
+`UnattributedMemoryPressure`, e **non costruisce** la variante di
+`PlenoraError`. Non è una dimenticanza — quella variante richiede il contesto
+di dove l'errore è nato, che a questo livello non c'è.
+
+A materializzarla sarà chi possiede quel contesto: il **supervisore** (`PR-8`),
+che conosce il worker, la fase e ciò che stava accadendo, e proietta l'esito
+classificato in un `PlenoraError` con l'evidenza allegata. Il ripiego su `Internal`, che
 valeva finché la variante non esisteva, non serve più — e lasciarlo scritto
 avrebbe mandato `PR-3` a implementare un'approssimazione già superata.
 
@@ -1912,8 +1928,14 @@ verificabile:
 | 3 | **timeout scaduto** | è il nostro orologio, misurato |
 | 4 | **cancellazione richiesta** | è la nostra decisione, e precede l'auto-dichiarazione del worker |
 | 5 | **pressione non attribuita** | c'è una prova, e non basta ad attribuire. Vale meno di un timeout e di una cancellazione, che sono fatti nostri e misurati, e più dell'auto-dichiarazione del worker, che in quelle condizioni riporta quasi sempre la conseguenza invece della causa |
-| 6 | **esito dichiarato dal worker** | è un'affermazione di un processo che potrebbe essere in difficoltà |
-| 7 | **terminazione ambigua** | l'ultimo, e per costruzione mai `ResourceLimit` |
+| 6 | **evidenza incoerente o indeterminata** | una lettura che non è utilizzabile. Sta sopra l'esito del worker perché proseguire alla verifica con una lettura rotta o mancante è il primo passo verso una pubblicazione che la §10.0-bis vieta a tutte e cinque le classi |
+| 7 | **esito dichiarato dal worker** | è un'affermazione di un processo che potrebbe essere in difficoltà |
+| 8 | **terminazione ambigua** | l'ultimo, e per costruzione mai `ResourceLimit` |
+
+La classe **assente** non compare, ed è deliberato: è una lettura *riuscita* in
+cui non c'era nulla, quindi non contraddice l'esito del worker. Farne un
+livello significherebbe dire «difetto interno» ogni volta che il dominio è
+stato letto e stava bene.
 
 Il punto 4 sopra il 5 merita una parola: se abbiamo cancellato **e** il worker
 riporta successo ma non abbiamo ancora pubblicato, l'esito è `Cancelled`. Un
@@ -1941,7 +1963,7 @@ dominio è sotto pressione è quasi sempre la conseguenza, non la causa. Dire
 non sappiamo attribuire» manda a cercare un difetto dove c'è forse un
 dimensionamento — e nasconde che l'attribuzione manca.
 
-Le righe 6 e 7 sono la stessa terminazione vista con e senza prova, e la
+Le righe 7 e 8 sono la stessa terminazione vista con e senza prova, e la
 differenza fra le due è tutto il valore di `F4-2`. Un sistema che deduce l'OOM
 da un segnale dice al chiamante «hai superato il budget» anche quando il
 processo è morto per un difetto nostro — e il chiamante alza il budget invece

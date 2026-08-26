@@ -63,13 +63,42 @@ pub enum EsitoWorker {
     /// dall'errore, non lo sostituiscono.
     Errore(PlenoraError),
     /// Un panico, con la sola **forma** del payload.
+    Panic { forma: FormaDelPayload },
+}
+
+/// La forma del payload di un panico, **senza** il contenuto.
+///
+/// # Perche' un tipo e non una `&'static str`
+///
+/// Una stringa statica accetta qualunque stringa statica. Il commento
+/// prometteva l'autorita' di [`plenora_core::panic_policy::forma_payload`], e
+/// il tipo non la imponeva: bastava scrivere un letterale — o passare una
+/// stringa che qualcuno aveva costruito altrove — perche' del contenuto
+/// finisse dove il progetto dichiara che non finisce mai.
+///
+/// Qui il campo e' privato e l'unico costruttore e' [`Self::di`], che chiama
+/// quell'autorita'. Il contenuto non puo' entrare **per costruzione**, non
+/// per disciplina.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormaDelPayload(&'static str);
+
+impl FormaDelPayload {
+    /// Legge la forma di un payload di panico.
     ///
-    /// La stringa viene da [`plenora_core::panic_policy::forma_payload`], che
-    /// e' l'autorita' condivisa: distingue i tre casi che `std` puo'
-    /// produrre senza leggere il contenuto di nessuno. Ricreare qui quella
-    /// classificazione avrebbe prodotto due nozioni di «forma» libere di
-    /// divergere, e una delle due avrebbe finito per pubblicare qualcosa.
-    Panic { forma: &'static str },
+    /// Delega a [`plenora_core::panic_policy::forma_payload`], che distingue
+    /// i tre casi che `std` puo' produrre senza leggere il contenuto di
+    /// nessuno. Ricreare qui quella classificazione avrebbe prodotto due
+    /// nozioni di «forma» libere di divergere, e una delle due avrebbe finito
+    /// per pubblicare qualcosa.
+    pub fn di(payload: &(dyn std::any::Any + Send)) -> Self {
+        Self(plenora_core::panic_policy::forma_payload(payload))
+    }
+}
+
+impl std::fmt::Display for FormaDelPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
 }
 
 /// Un segnale dell'evidenza, ridotto ai tre livelli su cui la §10.0-bis
@@ -276,6 +305,22 @@ pub enum EsitoClassificato {
     /// categoria direbbe «c'era pressione» senza portare cio' che si e'
     /// visto.
     PressioneNonAttribuita(Box<EvidenzaDiLimite>),
+    /// L'evidenza c'e' e **non e' utilizzabile**: incoerente o indeterminata.
+    ///
+    /// E' terminale, e viene prima dell'esito dichiarato dal worker. Una
+    /// stesura precedente la lasciava ricadere sull'esito del worker, e con
+    /// un worker che dichiara successo produceva `DaVerificare`: cioe'
+    /// «prosegui» mentre una lettura del dominio e' rotta o mancante. La
+    /// §10.0-bis dice che **nessuna** delle cinque classi autorizza la
+    /// pubblicazione, e proseguire alla verifica e' il primo passo verso di
+    /// essa.
+    ///
+    /// La prova e' obbligatoria: e' proprio cio' che va guardato per capire
+    /// perche' la lettura non e' utilizzabile.
+    EvidenzaNonUtilizzabile {
+        classe: ClasseEvidenzaMemoria,
+        prova: Box<EvidenzaDiLimite>,
+    },
     /// Riga 2.
     ErroreDelWorker {
         errore: PlenoraError,
@@ -283,7 +328,7 @@ pub enum EsitoClassificato {
     },
     /// Riga 3.
     PanicDelWorker {
-        forma: &'static str,
+        forma: FormaDelPayload,
         evidenza: Option<Box<EvidenzaDiLimite>>,
     },
     /// Il worker dice di aver finito e il publish non c'e' stato: **prosegui
@@ -301,7 +346,9 @@ impl EsitoClassificato {
     /// L'evidenza raccolta, se c'era.
     pub fn evidenza(&self) -> Option<&EvidenzaDiLimite> {
         match self {
-            Self::LimiteAttribuito(prova) | Self::PressioneNonAttribuita(prova) => Some(prova),
+            Self::LimiteAttribuito(prova)
+            | Self::PressioneNonAttribuita(prova)
+            | Self::EvidenzaNonUtilizzabile { prova, .. } => Some(prova),
             Self::Pubblicato { evidenza }
             | Self::Timeout { evidenza }
             | Self::Cancellato { evidenza }
@@ -324,6 +371,9 @@ impl EsitoClassificato {
             Self::Timeout { .. } => Some(ErrorCategory::Timeout),
             Self::Cancellato { .. } => Some(ErrorCategory::Cancelled),
             Self::PressioneNonAttribuita(_) => Some(ErrorCategory::UnattributedMemoryPressure),
+            // `Internal`, come le tre classi che non concludono: non afferma
+            // nulla sul budget del chiamante.
+            Self::EvidenzaNonUtilizzabile { .. } => Some(ErrorCategory::Internal),
             Self::ErroreDelWorker { errore, .. } => Some(errore.category()),
             Self::PanicDelWorker { .. } | Self::TerminazioneAmbigua { .. } => {
                 Some(ErrorCategory::Internal)
@@ -350,9 +400,13 @@ impl EsitoClassificato {
 /// 3. **timeout** — e' il nostro orologio, misurato;
 /// 4. **cancellazione** — e' la nostra decisione;
 /// 5. **pressione non attribuita** — una prova che non conclude;
-/// 6. **esito dichiarato dal worker** — l'affermazione di un processo che
+/// 6. **evidenza incoerente o indeterminata** — una lettura che non e'
+///    utilizzabile. Sta qui e non piu' in basso perche' proseguire alla
+///    verifica con una lettura rotta e' il primo passo verso una
+///    pubblicazione che la §10.0-bis vieta;
+/// 7. **esito dichiarato dal worker** — l'affermazione di un processo che
 ///    potrebbe essere in difficolta';
-/// 7. **terminazione ambigua** — l'ultimo, e per costruzione mai
+/// 8. **terminazione ambigua** — l'ultimo, e per costruzione mai
 ///    `ResourceLimit`.
 ///
 /// # Perche' il livello 5 sta li'
@@ -403,7 +457,20 @@ pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
     if let Letta::Con(ClasseEvidenzaMemoria::NonAttribuita, prova) = letta {
         return EsitoClassificato::PressioneNonAttribuita(prova);
     }
-    // 6. Esito dichiarato dal worker.
+    // 6. Evidenza incoerente o indeterminata: terminale.
+    //
+    // NON `Assente`, che e' una lettura riuscita in cui non c'e' nulla: li'
+    // non c'e' niente che contraddica l'esito del worker, e sovrascriverlo
+    // significherebbe dire «difetto interno» ogni volta che il dominio e'
+    // stato letto e stava bene.
+    if let Letta::Con(
+        classe @ (ClasseEvidenzaMemoria::Incoerente | ClasseEvidenzaMemoria::Indeterminata),
+        prova,
+    ) = letta
+    {
+        return EsitoClassificato::EvidenzaNonUtilizzabile { classe, prova };
+    }
+    // 7. Esito dichiarato dal worker.
     let evidenza = letta.in_evidenza();
     match esito_worker {
         Some(EsitoWorker::Errore(errore)) => {
@@ -411,9 +478,9 @@ pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
         }
         Some(EsitoWorker::Panic { forma }) => EsitoClassificato::PanicDelWorker { forma, evidenza },
         Some(EsitoWorker::Successo) => EsitoClassificato::DaVerificare { evidenza },
-        // 7. Terminazione ambigua: morto senza esito. Le classi assente,
-        //    indeterminata e incoerente arrivano qui — nessuna delle tre
-        //    produce un livello di precedenza — e l'evidenza le accompagna.
+        // 8. Terminazione ambigua: morto senza esito. Ci arriva anche la
+        //    classe `Assente`, che non produce un livello proprio, e
+        //    l'evidenza la accompagna.
         None => EsitoClassificato::TerminazioneAmbigua { evidenza },
     }
 }
