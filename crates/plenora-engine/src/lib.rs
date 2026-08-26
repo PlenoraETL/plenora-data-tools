@@ -61,6 +61,10 @@
 //! [`executor::ExecutionMetrics`].
 
 pub mod cancellation;
+/// Classificazione deterministica dell'esito di un worker isolato (§10 di
+/// `isolamento.md`). Logica pura e **interna**: `PR-4` possiede il formato
+/// sul filo, quindi questi tipi non escono dal crate.
+mod classificazione;
 mod error_propagation;
 pub mod executor;
 pub mod geo_transport;

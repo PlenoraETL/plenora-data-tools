@@ -1532,8 +1532,9 @@ un'osservazione.
 | 3 | panic nel worker | `Esito` di panic, forma del payload senza contenuto | `Internal` | no | rimosso |
 | 4 | crash | il processo muore senza `Esito`, nessuna evidenza di limite | `Internal` | no | rimosso |
 | 5 | OOM attribuito | la struttura di evidenza della §10.0-bis, letta dopo la quiescenza | **`ResourceLimit`** | no | rimosso |
-| 5-bis | dominio non uccidibile | limite raggiunto ripetutamente, nessun task uccidibile (`oom_score_adj` non normalizzato) | **`ResourceLimit`**, causa dichiarata | no | rimosso dopo `cgroup.kill` |
-| 6 | terminazione ambigua | il processo muore, evidenza assente o non attribuibile | `Internal` — **mai** dedotto come OOM | no | rimosso |
+| 5-bis | dominio non uccidibile | limite raggiunto ripetutamente, nessun task uccidibile (`oom_score_adj` non normalizzato): `Ol ≥ 1`, `Kl = 0`, `Kh = 0`, `G = 0` | **`UnattributedMemoryPressure`**, causa dichiarata | no | rimosso dopo `cgroup.kill` |
+| 6a | terminazione senza evidenza | il processo muore, **nessuna** evidenza di pressione | `Internal` — **mai** dedotto come OOM | no | rimosso |
+| 6b | terminazione con pressione non attribuibile | il processo muore, c'è evidenza di pressione ma non autorizza l'attribuzione | **`UnattributedMemoryPressure`** | no | rimosso |
 | 7 | timeout | scadenza del timeout di esecuzione | `Timeout` | no | rimosso |
 | 8 | cancellazione | `Annulla` inviato, worker terminato | `Cancelled` | no | rimosso |
 | 9 | protocollo incompatibile | versione non riconosciuta nell'handshake | **`Protocol`** | no | nessuno creato |
@@ -1544,6 +1545,27 @@ un'osservazione.
 | 14 | fallimento della verifica | qualunque passo 1-8 non coperto sopra | secondo il passo | no | rimosso |
 | 15 | fallimento del publish | verifica passata, passo 9 fallito | `Io` o `Conflict` | no | rimosso |
 | 16 | fallimento del cleanup | publish riuscito, rimozione fallita | successo **con avvertenza machine-readable** | **sì** | **residuo** |
+
+**Perché la 5-bis non è `ResourceLimit`.** Diceva «causa dichiarata», e
+suonava come un'attribuzione con una nota a margine. Non lo è: senza group
+kill locale non c'è l'operazione del kernel che lega il limite *di questo
+dominio* alla morte *di questo dominio*, e `Ol` alto con `Kl` a zero è
+compatibile con un limite raggiunto e recuperato. Dire `ResourceLimit`
+manderebbe chi legge ad alzare un budget che potrebbe non essere il colpevole.
+
+La causa resta dichiarata — `oom_score_adj` non normalizzato è una firma
+riconoscibile, e va riportata — ma è **diagnostica dentro l'evidenza**, non
+una categoria.
+
+**Perché la riga 6 si divide.** «Evidenza assente o non attribuibile» metteva
+sotto `Internal` due situazioni opposte. `Internal` dichiara un difetto
+nostro: è giusto quando non c'è nulla da vedere (6a), ed è falso quando la
+pressione c'è ed è solo l'attribuzione a mancare (6b) — lì il difetto può
+essere dell'ambiente, di un vicino, o di nessuno.
+
+Fonderle costava esattamente ciò che `F4-2` esiste per impedire, nel verso
+opposto a quello sorvegliato: non «dedurre un OOM che non c'è», ma «dichiarare
+un difetto nostro dove c'è una pressione che non abbiamo saputo attribuire».
 
 **La riga 5 non presuppone la morte del worker.** Anche dove il limite si
 manifesta come allocazione negata (`NG-10`), il worker può uscire con un
@@ -1596,16 +1618,99 @@ kill **locale**: il kernel ha ucciso questo dominio *come gruppo*, e lo ha
 fatto perché il tetto di questo dominio è stato raggiunto. Non è una
 coincidenza di contatori, è un'operazione.
 
-| `Ol` | `Kl` | `Kh` | `G` | classificazione |
-|---|---|---|---|---|
-| ≥1 | ≥1 | ≥1 | **≥1** | **`ResourceLimit` attribuito al dominio.** L'unica riga con attribuzione forte |
-| ≥1 | ≥1 | ≥1 | 0 | evidenza di pressione **senza** group kill locale: qualcuno è sopravvissuto, e i due delta possono essere eventi distinti. **Non attribuito** |
-| ≥1 | 0 | ≥1 | qualunque | limite del dominio raggiunto, uccisione in un discendente: il sigillo ha fallito. **Non attribuito**, più difetto del preflight |
-| ≥1 | 0 | 0 | 0 | limite raggiunto e nessun task uccidibile: firma di `oom_score_adj` non normalizzato. **Non attribuito**, causa dichiarata, richiede `cgroup.kill` |
-| 0 | ≥1 | ≥1 | qualunque | il worker è morto senza che il suo tetto sia stato raggiunto: l'OOM viene da fuori. **Non attribuito**; `Oa` dice *dove* c'era pressione, non che sia stata la causa |
-| 0 | 0 | ≥1 | qualunque | uccisione in un discendente senza pressione locale. **Non attribuito** |
-| 0 | 0 | 0 | 0 | nessuna evidenza. `Internal`, **mai** dedotto come OOM (`F4-2`) |
-| — | ≥1 | 0 | — | **impossibile**: `Kl` è un sottoinsieme di `Kh`. Se accade è un difetto di lettura, e va trattato come tale invece che normalizzato |
+#### `G` è necessario, non sufficiente
+
+L'attribuzione forte richiede la **riga intera**: `Ol ≥ 1`, `Kl ≥ 1`,
+`Kh ≥ 1` **e** `G ≥ 1`. `G` da solo non basta.
+
+E un `G ≥ 1` con `Ol = 0` **osservati entrambi** non è «non attribuito»: è
+**incoerente**. Descrive un group kill scattato senza che il tetto di questo
+dominio sia mai stato invocato, cioè una lettura che non torna, e va trattato
+come il caso `Kl > Kh` — `Internal`, mai riparato in silenzio.
+
+Con `G = None` la distinzione non si può fare: non attribuito, ma non
+incoerente. Non aver letto un segnale non è una contraddizione fra segnali.
+
+#### L'incoerenza si controlla sui valori, non sui livelli
+
+`Kl > Kh` va verificato sui `u64` **originali**, prima di ridurli a
+livelli. Dopo la normalizzazione `Kl = 2` e `Kh = 1` sono entrambi «positivo»,
+la disuguaglianza sparisce, e la riga incoerente si presenta come una riga
+normale. È l'ordine dei due passi a decidere se il controllo esiste.
+
+#### `None` non autorizza mai, e non è pressione
+
+I livelli della tabella sono `0` e `≥ 1`, e presuppongono che il segnale sia
+stato **osservato**. Un `None` non è né l'uno né l'altro: significa che non lo
+abbiamo letto.
+
+Nessuna riga con un `None` autorizza l'attribuzione, e vale in particolare per
+`G`: confondere «non letto» con «non è scattato» porterebbe a non attribuire
+mai, confonderlo con «è scattato» porterebbe ad attribuire su un contatore mai
+visto. Entrambi gli errori sono peggiori del non concludere.
+
+Ma **«non attribuito» è a sua volta un'affermazione**, e una stesura
+precedente la faceva troppo larga: diceva che un `None` qualunque dà «non
+attribuito», e con
+
+    Ol = None, Kl = 0, Kh = 0, G = 0
+
+avrebbe dichiarato pressione di memoria non attribuibile dove non se n'è
+osservata nessuna. Un'osservazione incompleta non è una pressione.
+
+Servono quindi **cinque** classi, non quattro:
+
+| classe | quando | esito |
+|---|---|---|
+| **attribuita** | tutti e quattro osservati e positivi | `ResourceLimit` |
+| **assente** | tutti e quattro `Some(0)` | `Internal` |
+| **non attribuita** | almeno una pressione **osservata**, prova insufficiente | `UnattributedMemoryPressure` |
+| **indeterminata** | letture mancanti e **nessun** segnale positivo | `Internal` |
+| **incoerente** | relazioni impossibili fra i segnali | `Internal` |
+
+#### L'ordine delle cinque classi è normativo
+
+Le condizioni si sovrappongono — `Ol+`, `Kl = 2`, `Kh = 1`, `G+` soddisfa sia
+«tutti positivi» sia `Kl > Kh` — quindi l'ordine non è un dettaglio
+d'implementazione:
+
+1. **incoerente**, valutata sui **valori grezzi** e prima di tutto il resto;
+2. **attribuita**;
+3. **assente**;
+4. **non attribuita**;
+5. **indeterminata**.
+
+L'incoerenza viene per prima perché è l'unica che dice «questa misura non è
+una misura»: applicare le altre a una lettura rotta produrrebbe una
+classificazione dall'aria normale.
+
+**Indeterminata** e **assente** finiscono entrambe su `Internal` e non sono la
+stessa cosa: la prima dice «non ho letto», la seconda «ho letto e non c'era
+nulla». Tenerle distinte serve a chi legge l'evidenza — e a chi un giorno
+dovrà capire perché una piattaforma classifica sempre indeterminato.
+
+Tutte e cinque conservano l'evidenza e **nessuna pubblica**.
+
+Nella tabella `0` e `≥1` significano **osservati**. Le righe con un `None`
+sono in coda, separate, perché un `None` non è un livello.
+
+| `Ol` | `Kl` | `Kh` | `G` | classe | perché |
+|---|---|---|---|---|---|
+| ≥1 | ≥1 | ≥1 | **≥1** | **attribuita** | l'unica riga con attribuzione forte: la riga **intera**, non il solo `G` |
+| ≥1 | ≥1 | ≥1 | 0 | non attribuita | pressione **senza** group kill locale: qualcuno è sopravvissuto, e i due delta possono essere eventi distinti |
+| ≥1 | 0 | ≥1 | 0 | non attribuita | limite del dominio raggiunto, uccisione in un discendente: il sigillo ha fallito. Più difetto del preflight |
+| ≥1 | 0 | ≥1 | ≥1 | non attribuita | group kill locale con `Kl = 0`: nessun processo **del dominio** è stato ucciso, quindi la riga non è quella dell'attribuzione |
+| ≥1 | 0 | 0 | 0 | non attribuita | limite raggiunto e nessun task uccidibile: firma di `oom_score_adj` non normalizzato. Causa dichiarata, richiede `cgroup.kill` |
+| ≥1 | 0 | 0 | ≥1 | **incoerente** | un group kill locale che non ha ucciso nulla, né nel dominio né sotto |
+| 0 | ≥1 | ≥1 | 0 | non attribuita | il worker è morto senza che il **suo** tetto sia stato raggiunto: l'OOM viene da fuori. `Oa` dice *dove* c'era pressione, non che sia stata la causa |
+| 0 | ≥1 | ≥1 | ≥1 | **incoerente** | group kill locale con il tetto locale mai invocato: `G` senza `Ol` è una lettura che non torna |
+| 0 | 0 | ≥1 | 0 | non attribuita | uccisione in un discendente senza pressione locale |
+| 0 | 0 | ≥1 | ≥1 | **incoerente** | stessa ragione: `G ≥ 1` con `Ol = 0` |
+| 0 | 0 | 0 | 0 | **assente** | nessuna evidenza, e **tutti e quattro osservati**. `Internal`, mai dedotto come OOM (`F4-2`) |
+| 0 | 0 | 0 | ≥1 | **incoerente** | stessa ragione |
+| `Kl > Kh`, entrambi osservati | | | | **incoerente** | `Kl` è un sottoinsieme di `Kh`: quella disuguaglianza non può accadere. Va controllata sui **valori**, non sui livelli — dopo la normalizzazione `2` e `1` sono entrambi «positivo» e il difetto sparirebbe |
+| almeno un `None`, e **almeno un** positivo osservato | | | | non attribuita | qualcosa si è visto, e non basta |
+| almeno un `None`, e **nessun** positivo osservato | | | | **indeterminata** | non abbiamo osservato pressione: abbiamo un'osservazione incompleta. `Internal` |
 
 **Che cos'è «non attribuito».** Non è `ResourceLimit` — non possiamo dire al
 chiamante che ha superato il suo budget quando non lo sappiamo — e non è
@@ -1614,14 +1719,27 @@ categoria propria: *terminazione con evidenza di pressione di memoria non
 attribuibile*, che porta con sé i cinque contatori e non conclude al posto di
 chi legge.
 
-Va aggiunta in `PR-1`, insieme alle altre varianti nuove di `PlenoraError`:
-quella PR cambia già la superficie pubblica, ed è il posto giusto. **Finché
-non c'è**, queste righe si classificano `Internal`, che è meno informativo di
-proposito e non inventa un'attribuzione.
+`PR-1` **l'ha introdotta**, insieme alle altre varianti nuove di
+`PlenoraError`, e `PR-3` la consuma: la classificazione produce
+`UnattributedMemoryPressure` per queste righe. Il ripiego su `Internal`, che
+valeva finché la variante non esisteva, non serve più — e lasciarlo scritto
+avrebbe mandato `PR-3` a implementare un'approssimazione già superata.
 
 **In nessuna di queste righe si pubblica.** L'attribuzione decide che cosa si
 dice al chiamante, non se l'output diventa visibile: un esito terminale
 ambiguo non pubblica mai (`GA-1`).
+
+**Che cosa NON entra nella classificazione.** `Oa`, il picco, il tetto e il
+contatore `max` di `memory.events.local` sono **diagnostici**: viaggiano
+nell'evidenza, aiutano a leggerla, e **non cambiano la categoria**. La
+classificazione guarda i quattro segnali e basta.
+
+Non è una svista di completezza. Il picco non prova nulla in nessuna delle due
+direzioni — i prototipi hanno misurato picchi del figlio superiori a quelli
+letti sul padre — e `max` dice che il tetto è stato toccato, non che qualcuno
+sia stato ucciso per averlo toccato. Farli pesare sulla categoria
+significherebbe far dipendere l'attribuzione da misure che il progetto ha già
+dichiarato non causali.
 
 **Su `Oa`.** Dice che un antenato ha registrato pressione. Non dice che sia
 stata la causa di *questa* terminazione, e tanto meno se l'antenato contiene
@@ -1679,11 +1797,15 @@ osservabile, ed è per questo che la tabella ci si appoggia interamente.
 
 ### 10.1 Tassonomia: che cosa manca davvero
 
-`ErrorCategory` ha già `Protocol`, `Timeout`, `Conflict` e
-`InvalidConfiguration`. **Nessuna variante di `PlenoraError` le produce oggi**:
-esistono come categorie dichiarabili, non come errori costruibili.
+`ErrorCategory` aveva già `Protocol`, `Timeout`, `Conflict` e
+`InvalidConfiguration`, e **nessuna variante di `PlenoraError` le produceva**:
+esistevano come categorie dichiarabili, non come errori costruibili — i loro
+exit code erano irraggiungibili.
 
-Le tre righe che ne hanno bisogno:
+`PR-1` ha colmato il divario. Le varianti ci sono tutte, con i quattro assi
+cablati, e le righe qui sotto le usano invece di ripiegare.
+
+Le tre righe che ne avevano bisogno:
 
 | esito | categoria | perché non le esistenti |
 |---|---|---|
@@ -1691,13 +1813,13 @@ Le tre righe che ne hanno bisogno:
 | resolver incompatibile | `InvalidConfiguration` | **non `InvalidPlan`**: il piano può essere perfettamente valido, e lo sarebbe di nuovo con un ambiente coerente. È il componente a essere configurato male, non il piano a essere sbagliato |
 | timeout | `Timeout` | oggi non c'è modo di costruirlo |
 
-Servono quindi **varianti nuove** di `PlenoraError`. È una **modifica
-semantica di un tipo pubblico**, non un dettaglio: va in una PR propria, con
-il proprio impatto sulla superficie e sugli exit code, prima di qualunque
-codice che le usi.
+Erano **varianti nuove** di `PlenoraError`, cioè una modifica semantica di un
+tipo pubblico: sono andate in una PR propria (`PR-1`), con il proprio impatto
+sulla superficie e sugli exit code, prima di qualunque codice che le usasse.
 
-Anche `Conflict` va reso costruibile: la riga 15 (fallimento del publish) lo
-usa quando la destinazione esiste già, ed è diverso da un errore di I/O.
+`Conflict` è costruibile insieme alle altre: la riga 15 (fallimento del
+publish) lo usa quando la destinazione esiste già, ed è diverso da un errore
+di I/O.
 
 ### 10.2 L'avvertenza di cleanup ha un canale proprio
 
@@ -1789,8 +1911,9 @@ verificabile:
 | 2 | **OOM attribuito** | ha evidenza specifica del dominio. Un processo con quella prova è morto per il limite, anche se stavamo cancellando |
 | 3 | **timeout scaduto** | è il nostro orologio, misurato |
 | 4 | **cancellazione richiesta** | è la nostra decisione, e precede l'auto-dichiarazione del worker |
-| 5 | **esito dichiarato dal worker** | è un'affermazione di un processo che potrebbe essere in difficoltà |
-| 6 | **terminazione ambigua** | l'ultimo, e per costruzione mai `ResourceLimit` |
+| 5 | **pressione non attribuita** | c'è una prova, e non basta ad attribuire. Vale meno di un timeout e di una cancellazione, che sono fatti nostri e misurati, e più dell'auto-dichiarazione del worker, che in quelle condizioni riporta quasi sempre la conseguenza invece della causa |
+| 6 | **esito dichiarato dal worker** | è un'affermazione di un processo che potrebbe essere in difficoltà |
+| 7 | **terminazione ambigua** | l'ultimo, e per costruzione mai `ResourceLimit` |
 
 Il punto 4 sopra il 5 merita una parola: se abbiamo cancellato **e** il worker
 riporta successo ma non abbiamo ancora pubblicato, l'esito è `Cancelled`. Un
@@ -1801,7 +1924,24 @@ Il punto 2 sopra il 4 merita l'altra: se abbiamo cancellato e c'è prova di OOM,
 l'esito è `ResourceLimit`. La prova batte l'intenzione — altrimenti una
 cancellazione tempestiva maschererebbe un difetto di dimensionamento.
 
-Le righe 5 e 6 sono la stessa terminazione vista con e senza prova, e la
+**Il livello 5 non pubblica.** Come tutti quelli sopra il 6: una pressione di
+memoria non attribuita è un esito terminale, e un esito terminale ambiguo non
+pubblica mai (`GA-1`). Che la categoria dica «non lo sappiamo» non la rende
+meno terminale — semmai il contrario.
+
+**Perché sotto timeout e cancellazione.** Sono fatti nostri: il timeout è il
+nostro orologio misurato, la cancellazione la nostra decisione. La pressione
+non attribuita è una prova che non conclude, e una prova che non conclude non
+può scavalcare due fatti che concludono.
+
+**Perché sopra l'esito del worker.** Per la stessa ragione per cui l'OOM
+attribuito sta sopra: l'errore che un processo riesce a riportare mentre il
+dominio è sotto pressione è quasi sempre la conseguenza, non la causa. Dire
+«fallita l'allocazione di un buffer» invece di «c'era pressione di memoria che
+non sappiamo attribuire» manda a cercare un difetto dove c'è forse un
+dimensionamento — e nasconde che l'attribuzione manca.
+
+Le righe 6 e 7 sono la stessa terminazione vista con e senza prova, e la
 differenza fra le due è tutto il valore di `F4-2`. Un sistema che deduce l'OOM
 da un segnale dice al chiamante «hai superato il budget» anche quando il
 processo è morto per un difetto nostro — e il chiamante alza il budget invece
