@@ -25,7 +25,10 @@ IMAGE="${FUZZ_IMAGE:-plenora-rust:nightly-fuzz}"
 # cargo-fuzz non e' installato nell'immagine: si usa il binario precompilato
 # Linux condiviso dei progetti plenora (montato read-only su /fuzzbin).
 CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
-FUZZBIN_HOST="${FUZZBIN_HOST:-C:/tmp/plenora-geo-tools-arrow/.fuzz-cargo/bin}"
+# Default sotto la home e non `C:/tmp/...`: quel percorso era una macchina
+# sola, e su ogni altra il mount sarebbe vuoto. Ricetta in docs/release.md,
+# sezione «Fuzzing».
+FUZZBIN_HOST="${FUZZBIN_HOST:-$HOME/.plenora-fuzz/bin}"
 HOURS="${FUZZ_HOURS_PER_TARGET:-1}"
 CPUS="${FUZZ_CPUS:-4}"
 MEMORY="${FUZZ_MEMORY:-10g}"
@@ -48,6 +51,26 @@ TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 SECONDS_PER_TARGET=$(awk "BEGIN { printf \"%d\", $HOURS * 3600 }")
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Gli stessi due prerequisiti dello smoke, controllati prima di partire. Qui
+# conta il doppio: una campagna si lancia e si lascia andare per ore, e
+# scoprire dopo che il primo target e' morto sul mount vuoto significa aver
+# perso la notte, non un minuto.
+mancanti=0
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "ERRORE: l'immagine '$IMAGE' non esiste in locale; si costruisce," >&2
+    echo "        e la ricetta e' in docs/release.md, sezione «Fuzzing»." >&2
+    mancanti=1
+fi
+if [ ! -f "$FUZZBIN_HOST/cargo-fuzz" ]; then
+    echo "ERRORE: '$FUZZBIN_HOST/cargo-fuzz' non c'e'; stessa ricetta." >&2
+    echo "        Se lo tieni altrove: FUZZBIN_HOST=..." >&2
+    mancanti=1
+fi
+if [ "$mancanti" -ne 0 ]; then
+    exit 1
+fi
+
 mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 
 echo "== campagna fuzz: ${#TARGETS[@]} target x ${HOURS}h (image ${IMAGE}, cpus=${CPUS}, mem=${MEMORY})"
