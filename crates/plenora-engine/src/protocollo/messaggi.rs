@@ -101,6 +101,84 @@ macro_rules! enum_sul_filo {
     };
 }
 
+/// Come [`enum_sul_filo!`], ma per gli enum **con tag interno**, le cui
+/// varianti possono avere campi.
+///
+/// Due regole, scelte dal fatto che i campi portino o no un valore
+/// rappresentativo:
+///
+/// - **con** `= valore` genera anche `TUTTE`, cioe' un campione per variante
+///   col proprio nome sul filo;
+/// - **senza**, genera i soli `NOMI`.
+///
+/// La differenza esiste perche' non tutti i campioni sono costruibili in
+/// contesto costante: un `DigestArtefatto` porta `String`. Dove il campione
+/// c'e' la prova e' piu' forte — il valore lo costruisce il compilatore, e
+/// deve combaciare con la forma della variante; dove non c'e', `NOMI` basta
+/// comunque a rendere **impossibile** che una variante resti fuori dalle
+/// prove, perche' il test itera i nomi generati e pretende un caso per
+/// ciascuno.
+///
+/// Le graffe sono obbligatorie anche per le varianti senza campi
+/// (`Never {}`), e non e' un vezzo di sintassi: in un enum con tag interno
+/// `deny_unknown_fields` **non copre le varianti unitarie**. La macro rende
+/// quella forma non scrivibile.
+macro_rules! enum_con_tag_sul_filo {
+    (
+        $(#[$attributo:meta])*
+        $nome:ident, tag = $tag:literal {
+            $(
+                $(#[$vattributo:meta])*
+                $variante:ident { $( $campo:ident : $tipo:ty = $campione:expr, )* } => $filo:literal
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$attributo])*
+        #[serde(tag = $tag, deny_unknown_fields)]
+        pub enum $nome {
+            $(
+                $(#[$vattributo])*
+                #[serde(rename = $filo)]
+                $variante { $( $campo : $tipo ),* },
+            )+
+        }
+
+        impl $nome {
+            /// I nomi sul filo, generati con le varianti.
+            pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
+
+            /// Un campione per variante, col proprio nome sul filo.
+            pub const TUTTE: &'static [(Self, &'static str)] = &[
+                $( (Self::$variante { $( $campo : $campione ),* }, $filo), )+
+            ];
+        }
+    };
+    (
+        $(#[$attributo:meta])*
+        $nome:ident, tag = $tag:literal {
+            $(
+                $(#[$vattributo:meta])*
+                $variante:ident { $( $campo:ident : $tipo:ty, )* } => $filo:literal
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$attributo])*
+        #[serde(tag = $tag, deny_unknown_fields)]
+        pub enum $nome {
+            $(
+                $(#[$vattributo])*
+                #[serde(rename = $filo)]
+                $variante { $( $campo : $tipo ),* },
+            )+
+        }
+
+        impl $nome {
+            /// I nomi sul filo, generati con le varianti.
+            pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
+        }
+    };
+}
+
 enum_sul_filo! {
     /// Il tipo di un messaggio, enumerazione **chiusa**.
     TipoMessaggio {
@@ -380,14 +458,15 @@ enum_sul_filo! {
 /// La forma `Never {}` e' una variante di struttura con zero campi: sul filo
 /// e' identica (`{"kind":"never"}`), ma la deserializzazione passa per un
 /// visitor di struttura, e li' `deny_unknown_fields` vale davvero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RetrySulFilo {
-    Never {},
-    Safe {},
-    RequiresIdempotencyKey {},
-    RequiresRecovery {},
-    After { delay_ms: u64 },
+enum_con_tag_sul_filo! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    RetrySulFilo, tag = "kind" {
+        Never {} => "never",
+        Safe {} => "safe",
+        RequiresIdempotencyKey {} => "requires_idempotency_key",
+        RequiresRecovery {} => "requires_recovery",
+        After { delay_ms: u64 = 1, } => "after"
+    }
 }
 
 /// Un esempio della diagnostica di riga.
@@ -462,23 +541,18 @@ pub struct DigestArtefatto {
 }
 
 /// L'esito che il worker dichiara **di se'**.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "esito", rename_all = "snake_case", deny_unknown_fields)]
-pub enum EsitoWorkerSulFilo {
-    /// Il worker ha finito. **Non** e' il successo finale: la verifica e il
-    /// publish non sono affermazioni del worker.
-    Successo {
-        digest_artefatto: DigestArtefatto,
-    },
-    /// L'errore viaggia in un `Box`: e' molto piu' grande delle altre due
-    /// varianti, e senza il `Box` ogni `Esito` — compresi i successi —
-    /// occuperebbe la sua taglia. Sul filo non cambia nulla.
-    Errore {
-        errore: Box<ErroreSulFilo>,
-    },
-    Panic {
-        forma: FormaPanicSulFilo,
-    },
+enum_con_tag_sul_filo! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    EsitoWorkerSulFilo, tag = "esito" {
+        /// Il worker ha finito. **Non** e' il successo finale: la verifica e
+        /// il publish non sono affermazioni del worker.
+        Successo { digest_artefatto: DigestArtefatto, } => "successo",
+        /// L'errore viaggia in un `Box`: e' molto piu' grande delle altre due
+        /// varianti, e senza il `Box` ogni `Esito` — compresi i successi —
+        /// occuperebbe la sua taglia. Sul filo non cambia nulla.
+        Errore { errore: Box<ErroreSulFilo>, } => "errore",
+        Panic { forma: FormaPanicSulFilo, } => "panic"
+    }
 }
 
 /// Il corpo di un frame, scelto dal tipo.

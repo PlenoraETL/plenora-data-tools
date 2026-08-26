@@ -681,24 +681,6 @@ fn un_enum_fuori_dominio_e_un_errore() {
     }
 }
 
-/// La posizione di una disposizione nella tabella delle prove.
-///
-/// `RetrySulFilo` ha varianti di forma diversa, quindi non passa dalla macro
-/// del vocabolario. L'esaustivita' la garantisce comunque il compilatore:
-/// questo `match` e' esaustivo, quindi una disposizione nuova non compila
-/// finche' non le si assegna un indice — e l'indice nuovo esce dall'array
-/// `viste`, facendo fallire il test. Un `assert_eq!(disposizioni.len(), 5)`
-/// avrebbe contato la tabella del test, non l'enum.
-const fn posizione_della_disposizione(disposizione: &RetrySulFilo) -> usize {
-    match disposizione {
-        RetrySulFilo::Never {} => 0,
-        RetrySulFilo::Safe {} => 1,
-        RetrySulFilo::RequiresIdempotencyKey {} => 2,
-        RetrySulFilo::RequiresRecovery {} => 3,
-        RetrySulFilo::After { .. } => 4,
-    }
-}
-
 /// Anche gli enum **con tag interno** rifiutano i campi ignoti.
 ///
 /// Vale la pena provarlo a parte: `deny_unknown_fields` su un enum con tag
@@ -708,19 +690,33 @@ const fn posizione_della_disposizione(disposizione: &RetrySulFilo) -> usize {
 /// struttura proprio per questo, e qui si verifica che la scrittura tenga.
 #[test]
 fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
-    // Tutte e tre le varianti dell'esito, col campo estraneo **al livello
-    // della variante**: e' quello che il tag interno tratta a parte.
-    let casi = [
-        r#"{"esito":"panic","forma":"statico","extra":1}"#,
-        r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"extra":1}"#,
-        concat!(
-            r#"{"esito":"errore","errore":{"categoria":"schema","fase":"read","#,
-            r#""effetto":"none","retry":{"kind":"never"},"messaggio":"m","#,
-            r#""nodo":null,"operazione":null,"execution_id":null,"diagnostica":null},"#,
-            r#""extra":1}"#,
+    // --- `esito`: un caso per ogni nome **generato**.
+    //
+    // La tabella qui sotto e' scritta a mano, ma la sua completezza non lo
+    // e': si itera su `NOMI`, e un nome senza caso fa fallire il test. Una
+    // variante nuova non puo' quindi restare fuori dalle prove.
+    let corpi_esito = [
+        ("panic", r#"{"esito":"panic","forma":"statico","extra":1}"#),
+        (
+            "successo",
+            r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"extra":1}"#,
+        ),
+        (
+            "errore",
+            concat!(
+                r#"{"esito":"errore","errore":{"categoria":"schema","fase":"read","#,
+                r#""effetto":"none","retry":{"kind":"never"},"messaggio":"m","#,
+                r#""nodo":null,"operazione":null,"execution_id":null,"diagnostica":null},"#,
+                r#""extra":1}"#,
+            ),
         ),
     ];
-    for corpo in casi {
+    for nome in EsitoWorkerSulFilo::NOMI {
+        let corpo = corpi_esito
+            .iter()
+            .find(|(variante, _)| variante == nome)
+            .unwrap_or_else(|| panic!("nessun caso per la variante `{nome}` di `esito`"))
+            .1;
         let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
         assert!(
             messaggio.contains("unknown field"),
@@ -728,48 +724,35 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
         );
     }
 
-    // `retry`, tutte e cinque le disposizioni — `after` compresa. Va provata
-    // a parte proprio perche' e' l'unica che aveva gia' un campo suo, quindi
-    // l'unica in cui `deny_unknown_fields` funzionava anche prima della
-    // correzione: senza provarla, non lo si saprebbe.
-    let disposizioni = [
-        (RetrySulFilo::Never {}, r#"{"kind":"never","estraneo":1}"#),
-        (RetrySulFilo::Safe {}, r#"{"kind":"safe","estraneo":1}"#),
-        (
-            RetrySulFilo::RequiresIdempotencyKey {},
-            r#"{"kind":"requires_idempotency_key","estraneo":1}"#,
-        ),
-        (
-            RetrySulFilo::RequiresRecovery {},
-            r#"{"kind":"requires_recovery","estraneo":1}"#,
-        ),
-        (
-            RetrySulFilo::After { delay_ms: 1 },
-            r#"{"kind":"after","delay_ms":1,"estraneo":1}"#,
-        ),
-    ];
-    let mut viste = [false; 5];
-    for (disposizione, _) in &disposizioni {
-        viste[posizione_della_disposizione(disposizione)] = true;
-    }
-    assert!(
-        viste.iter().all(|v| *v),
-        "una disposizione non e' provata: {viste:?}"
-    );
-
-    for (_, retry) in disposizioni {
+    // --- `retry`: i casi si **derivano** dai campioni generati.
+    //
+    // Non c'e' nessuna tabella da tenere allineata: il campione lo costruisce
+    // la macro insieme alla variante, e il caso ostile e' quel campione con
+    // un campo in piu'. Una disposizione nuova entra in `TUTTE` da sola.
+    for (disposizione, nome) in RetrySulFilo::TUTTE {
+        let base = serde_json::to_string(disposizione).expect("campione serializzabile");
+        assert!(
+            base.contains(&format!(r#""kind":"{nome}""#)),
+            "`{nome}` non compare nel proprio campione: {base}"
+        );
+        let ostile = format!(
+            "{},{}",
+            base.strip_suffix('}')
+                .expect("un oggetto JSON finisce con }"),
+            r#""estraneo":1}"#
+        );
         let corpo = format!(
             concat!(
                 r#"{{"esito":"errore","errore":{{"categoria":"schema","fase":"read","#,
                 r#""effetto":"none","retry":{},"messaggio":"m","#,
                 r#""nodo":null,"operazione":null,"execution_id":null,"diagnostica":null}}}}"#,
             ),
-            retry
+            ostile
         );
         let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
         assert!(
             messaggio.contains("unknown field"),
-            "campo ignoto accettato su «{retry}»: {messaggio}"
+            "campo ignoto accettato su «{ostile}»: {messaggio}"
         );
     }
 }
@@ -1777,6 +1760,23 @@ where
     assert!(!visti.is_empty(), "{etichetta}: nessuna variante");
 }
 
+/// I nomi di un enum **con tag interno** devono essere distinti.
+///
+/// Vale lo stesso motivo degli enum unitari, con una conseguenza piu' brutta:
+/// due varianti con lo stesso valore di tag compilano, e la seconda diventa
+/// irraggiungibile in lettura senza che nulla lo dica. La macro genera i
+/// nomi ma non puo' impedirlo.
+fn nomi_distinti(nomi: &[&'static str], etichetta: &str) {
+    let mut visti: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    for nome in nomi {
+        assert!(
+            visti.insert(nome),
+            "{etichetta}: `{nome}` e' dichiarato da due varianti"
+        );
+    }
+    assert!(!visti.is_empty(), "{etichetta}: nessuna variante");
+}
+
 /// Il vocabolario sul filo delle enumerazioni chiuse.
 #[test]
 fn il_vocabolario_sul_filo_e_biunivoco() {
@@ -1786,6 +1786,28 @@ fn il_vocabolario_sul_filo_e_biunivoco() {
     vocabolario_biunivoco(EffettoSulFilo::TUTTE, "EffettoSulFilo");
     vocabolario_biunivoco(FormaPanicSulFilo::TUTTE, "FormaPanicSulFilo");
     vocabolario_biunivoco(FormatoIngresso::TUTTE, "FormatoIngresso");
+
+    // Gli enum con tag: la biunivocita' non si puo' provare allo stesso modo
+    // (le varianti hanno campi, e il nome non e' l'intero valore), ma
+    // l'unicita' si', ed e' la meta' che fa il danno.
+    nomi_distinti(RetrySulFilo::NOMI, "RetrySulFilo");
+    nomi_distinti(EsitoWorkerSulFilo::NOMI, "EsitoWorkerSulFilo");
+
+    // I due insiemi generati dalla stessa lista devono avere la stessa
+    // taglia: se divergessero, sarebbe la macro a espandere male, e i test
+    // che iterano `TUTTE` starebbero saltando varianti in silenzio.
+    assert_eq!(
+        RetrySulFilo::TUTTE.len(),
+        RetrySulFilo::NOMI.len(),
+        "`TUTTE` e `NOMI` di `RetrySulFilo` non coprono le stesse varianti"
+    );
+    for (indice, (_, nome)) in RetrySulFilo::TUTTE.iter().enumerate() {
+        assert_eq!(
+            RetrySulFilo::NOMI.get(indice),
+            Some(nome),
+            "`TUTTE` e `NOMI` di `RetrySulFilo` divergono in posizione {indice}"
+        );
+    }
 }
 
 /// I tetti della sequenza, e la relazione fra loro.
