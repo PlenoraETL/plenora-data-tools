@@ -269,12 +269,37 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
         impronta_uno, impronta_due,
         "il token ha cambiato il contract_fingerprint"
     );
-    // E le colonne sono quelle: un fingerprint uguale su due contratti vuoti
-    // sarebbe una prova vuota.
+
+    // E le **proprieta' strutturali**, una per una.
+    //
+    // Non un confronto di `Debug`: quello e' testo, cambia con la
+    // formattazione e non e' un'autorita' su niente. Questi sono i campi che
+    // il contratto dichiara, e sono anche cio' che un fingerprint uguale
+    // dovrebbe implicare — verificarli separatamente e' quello che rende il
+    // fingerprint una prova invece che una tautologia su due contratti vuoti.
     assert_eq!(
-        format!("{contratto_uno:?}"),
-        format!("{contratto_due:?}"),
-        "il token ha cambiato il DataContract"
+        contratto_uno.schema, contratto_due.schema,
+        "il token ha cambiato lo schema del contratto"
+    );
+    assert_eq!(
+        contratto_uno.geometries.len(),
+        contratto_due.geometries.len(),
+        "il token ha cambiato le colonne geometriche"
+    );
+    assert_eq!(
+        contratto_uno.active_geometry, contratto_due.active_geometry,
+        "il token ha cambiato la geometria attiva"
+    );
+    assert_eq!(
+        contratto_uno.properties, contratto_due.properties,
+        "il token ha cambiato le proprieta' del contratto"
+    );
+    // E il contratto non e' vuoto: due contratti senza colonne avrebbero lo
+    // stesso fingerprint e la prova non direbbe nulla.
+    assert_eq!(
+        contratto_uno.schema.fields().len(),
+        2,
+        "le fixture hanno due colonne"
     );
 }
 
@@ -286,18 +311,30 @@ fn risolvi_crs(
     unreachable!("nessuna colonna geometrica nelle fixture del sigillo")
 }
 
-/// Il `plan_hash` non dipende dal `commit_token`.
+/// Il `plan_hash` non dipende dal `commit_token`, e il legame e' **causale**.
 ///
-/// E' la seconda meta' della stessa promessa: il token cambia l'artefatto, non
-/// l'identita' di cio' che l'ha prodotto. Il piano non passa nemmeno vicino al
-/// token — ed e' esattamente per questo che va provato, perche' una
-/// dipendenza introdotta per sbaglio non si vedrebbe da nessuna parte finche'
-/// due esecuzioni autorizzate diversamente non smettessero di riconoscersi.
+/// La stesura precedente validava due volte lo stesso piano con lo stesso
+/// contratto, costruito da uno schema di comodo: due `plan_hash` uguali erano
+/// garantiti dal determinismo di `validate`, non dal fatto che il token non
+/// conti. Provava il determinismo e lo spacciava per indipendenza.
+///
+/// Qui la catena e' completa e ogni anello parte dall'artefatto vero:
+///
+/// 1. si producono **due artefatti** con token diversi;
+/// 2. si rilegge lo `Schema` di **ciascuno**;
+/// 3. si costruisce il `DataContract` da **ciascuno** schema;
+/// 4. si valida **lo stesso piano** con ciascun contratto;
+/// 5. si confrontano i `plan_hash`.
+///
+/// Cosi' un token che toccasse lo schema — l'unico modo in cui potrebbe
+/// arrivare al piano — farebbe divergere i due hash, e il test lo direbbe.
 #[test]
-fn il_plan_hash_non_dipende_dal_token() {
+fn il_plan_hash_non_dipende_dal_token_lungo_tutta_la_catena() {
+    use plenora_core::arrow::ipc::reader::FileReader;
+
     use crate::planner::validate;
 
-    let piano = r#"{
+    const PIANO: &str = r#"{
         "schema_version": 5,
         "inputs": ["ingresso"],
         "output": "n0",
@@ -306,31 +343,43 @@ fn il_plan_hash_non_dipende_dal_token() {
              "config": {"column": "id", "operator": ">", "value": 0}}
         ]
     }"#;
-    let (contratto, _) = {
-        let schema = schema();
-        let contratto = contract_from_arrow_schema(schema, risolvi_crs).expect("contratto");
-        let impronta = contract_fingerprint(&contratto).expect("fingerprint");
-        (contratto, impronta)
-    };
-    let ingressi = vec![("ingresso".to_owned(), contratto)];
 
-    let uno = validate(piano, &ingressi).expect("piano valido");
-    let due = validate(piano, &ingressi).expect("piano valido");
+    // 1-4: dall'artefatto al `plan_hash`, senza scorciatoie.
+    let hash_di = |token: &CommitToken| {
+        let byte = artefatto(Some(token));
+        let lettore = FileReader::try_new(std::io::Cursor::new(byte), None).expect("lettore");
+        let schema = lettore.schema();
+        let contratto =
+            contract_from_arrow_schema(schema, risolvi_crs).expect("contratto dallo schema");
+        let ingressi = vec![("ingresso".to_owned(), contratto)];
+        validate(PIANO, &ingressi)
+            .expect("piano valido")
+            .plan_hash()
+    };
+
+    // 5: due token diversi, lo stesso `plan_hash`.
     assert_eq!(
-        uno.plan_hash(),
-        due.plan_hash(),
-        "il `plan_hash` non e' deterministico"
+        hash_di(&token(UNO)),
+        hash_di(&token(DUE)),
+        "il `commit_token` e' arrivato fino al `plan_hash`"
     );
 
-    // E scrivere due artefatti con token diversi non lo tocca: il piano non
-    // ha modo di vederli.
-    let _ = artefatto(Some(&token(UNO)));
-    let _ = artefatto(Some(&token(DUE)));
-    let dopo = validate(piano, &ingressi).expect("piano valido");
+    // E l'assenza del token non cambia nulla nemmeno lei: un artefatto
+    // ordinario e uno sigillato descrivono lo stesso contratto.
+    let senza = {
+        let byte = artefatto(None);
+        let lettore = FileReader::try_new(std::io::Cursor::new(byte), None).expect("lettore");
+        let contratto = contract_from_arrow_schema(lettore.schema(), risolvi_crs)
+            .expect("contratto dallo schema");
+        let ingressi = vec![("ingresso".to_owned(), contratto)];
+        validate(PIANO, &ingressi)
+            .expect("piano valido")
+            .plan_hash()
+    };
     assert_eq!(
-        uno.plan_hash(),
-        dopo.plan_hash(),
-        "il `plan_hash` e' cambiato dopo aver sigillato un artefatto"
+        hash_di(&token(UNO)),
+        senza,
+        "la presenza del token cambia il `plan_hash`"
     );
 }
 

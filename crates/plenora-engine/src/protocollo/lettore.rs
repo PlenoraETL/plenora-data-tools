@@ -71,6 +71,13 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
     // sistema non ha memoria: su un numero che arriva dall'altro capo del
     // canale, un abort e' la risposta sbagliata — e non e' nemmeno un errore
     // che qualcuno possa classificare, perche' il processo non c'e' piu'.
+    //
+    // Questa proprieta' **non e' provata dalla suite**, e va detto invece di
+    // lasciarlo credere: la differenza fra `try_reserve_exact` e
+    // `reserve_exact` si manifesta solo a memoria esaurita, e un test non puo'
+    // esaurirla in modo portabile. Cio' che la sorregge e' la firma —
+    // `try_reserve_exact` rende un `Result`, quindi il fallimento non si puo'
+    // ignorare senza scriverlo.
     let totale = BYTE_PREFISSO.checked_add(dichiarata).ok_or_else(|| {
         PlenoraError::Protocol(format!(
             "lunghezza del frame fuori intervallo: {dichiarata} byte piu' il prefisso"

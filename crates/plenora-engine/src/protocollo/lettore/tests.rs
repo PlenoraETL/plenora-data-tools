@@ -296,20 +296,25 @@ fn una_interruzione_non_fa_fallire_la_lettura() {
     assert_eq!(letto, annulla("timeout"));
 }
 
-/// Il frame arriva in **un** buffer, non in due.
+/// Il frame riassemblato e' identico a quello scritto, anche a morsi minuscoli.
 ///
-/// La misura e' indiretta ma non ambigua: se il lettore costruisse il payload
-/// e poi lo ricopiasse in un secondo `Vec`, il picco sarebbe il doppio. Qui si
-/// verifica cio' che si puo' verificare da fuori — che il frame letto sia
-/// esattamente il frame scritto, prefisso compreso, senza passaggi intermedi
-/// che possano perderlo o duplicarlo.
+/// Il nome dice cio' che il test **osserva**, e nient'altro. La stesura
+/// precedente si chiamava «in un solo buffer» e si attribuiva la prova del
+/// numero di allocazioni: dall'esterno quel numero non e' osservabile, e un
+/// nome che promette piu' di quanto misura e' peggio di un test assente —
+/// chi legge l'elenco crede che quella proprieta' sia coperta.
 ///
-/// La prova che l'allocazione e' **fallibile** e non un `vec![0; n]` che
-/// aborta sta nella mutazione: sostituire `try_reserve_exact` con
-/// `vec![0; totale]` non cambia questo test, ma cambia cosa succede quando la
-/// memoria manca — e quello e' il punto, non la forma del buffer.
+/// Cio' che qui si prova e' il riassemblaggio: prefisso e payload tornano un
+/// frame uguale all'originale anche quando la sorgente li consegna tre byte
+/// per volta. E' la proprieta' che l'aritmetica del buffer puo' rompere, ed e'
+/// infatti quella che la mutazione «il buffer unico e' dimensionato male»
+/// fa cadere.
+///
+/// Il numero di allocazioni e la loro fallibilita' non si provano da qui: la
+/// seconda sta nella firma — `try_reserve_exact` rende un `Result`, e
+/// sostituirla con `reserve_exact` non compila.
 #[test]
-fn il_frame_si_legge_in_un_solo_buffer() {
+fn il_frame_riassemblato_e_identico_a_quello_scritto() {
     let atteso = annulla("un motivo abbastanza lungo da non essere banale");
     let byte = codifica(&atteso).expect("codifica");
     let mut spia = Spia::a_morsi(byte.clone(), 7);
