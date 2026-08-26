@@ -519,7 +519,7 @@ Direzione worker → supervisore:
 |---|---|---|
 | `Risposta` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, capability del backend |
 | `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch, nodi completati); **mai** dati |
-| `Esito` | ultimo | successo col digest dell'artefatto, errore tipizzato con i quattro assi, oppure **forma** del panico |
+| `Esito` | ultimo | successo col digest dell'artefatto **e i conteggi** (righe, batch), errore tipizzato con i quattro assi, oppure **forma** del panico |
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
 
@@ -574,6 +574,18 @@ I tetti per campo valgono **in entrambi i versi**: in scrittura impediscono di
 emettere un frame che il ricevente rifiuterebbe, in lettura sono la difesa.
 Applicarli da un lato solo avrebbe reso il protocollo asimmetrico proprio dove
 i due capi devono concordare.
+
+I conteggi del `Successo` sono **obbligatori** e sono due: righe e batch. Sono
+il termine di paragone del passo 8 (§7), e renderli facoltativi avrebbe reso
+facoltativo il passo. Non c'è `nodi_completati`, che `Progresso` invece porta:
+rileggendo un file Arrow IPC si osservano righe e batch, non quanti nodi del
+piano li hanno prodotti, e un numero che il verificatore non può confrontare
+gli chiederebbe di crederci.
+
+Un digest uguale non sostituisce i conteggi. Dice che il file è quel file, non
+che contenga ciò che il worker credeva di aver scritto: un worker che si
+fermasse a metà e finalizzasse comunque produrrebbe un artefatto **integro e
+incompleto**, e il digest non avrebbe nulla da obiettare.
 
 Tutti i limiti, con regola, perimetro, pericolo e condizione di rientro, sono
 registrati in [errori-e-limiti.md](errori-e-limiti.md#protocollo-del-worker-i-tetti-sono-del-profilo-isolato).

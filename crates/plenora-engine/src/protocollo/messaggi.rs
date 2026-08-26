@@ -527,6 +527,37 @@ enum_sul_filo! {
     }
 }
 
+/// I conteggi che il worker dichiara sull'artefatto prodotto.
+///
+/// # Perche' sono nel `Successo` e non altrove
+///
+/// Il passo 8 della verifica (§7 di `isolamento.md`) confronta «i conteggi
+/// dichiarati nell'`Esito`» con quelli osservati rileggendo l'artefatto. Senza
+/// questi campi quel passo non avrebbe un termine di paragone, e la prima
+/// stesura del protocollo li aveva dimenticati: il `Successo` portava il solo
+/// digest, e la sequenza normativa citava un dato che non viaggiava.
+///
+/// Un digest uguale non li sostituisce. Dice che il file e' quel file, non che
+/// contenga cio' che il worker credeva di aver scritto: un worker che si
+/// fermasse a meta' e finalizzasse comunque produrrebbe un artefatto integro
+/// e **incompleto**, e il digest non avrebbe nulla da obiettare.
+///
+/// # Perche' due e non tre
+///
+/// `Progresso` porta anche `nodi_completati`, e qui non c'e'. Non e' una
+/// dimenticanza: rileggendo un file Arrow IPC si osservano righe e batch, non
+/// quanti nodi del piano li hanno prodotti. Dichiarare un numero che il
+/// verificatore non puo' confrontare significherebbe chiedergli di crederci —
+/// ed e' esattamente cio' che questo passo esiste per non fare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConteggiDichiarati {
+    /// Righe scritte nell'artefatto.
+    pub righe: u64,
+    /// Record batch scritti nell'artefatto.
+    pub batch: u64,
+}
+
 /// Il digest dell'artefatto finalizzato.
 ///
 /// **Non** il marcatore del footer: quello e' un sigillo durevole scritto da
@@ -546,7 +577,13 @@ enum_con_tag_sul_filo! {
     EsitoWorkerSulFilo, tag = "esito" {
         /// Il worker ha finito. **Non** e' il successo finale: la verifica e
         /// il publish non sono affermazioni del worker.
-        Successo { digest_artefatto: DigestArtefatto, } => "successo",
+        ///
+        /// I conteggi sono **obbligatori**: sono il termine di paragone del
+        /// passo 8, e renderli facoltativi avrebbe reso facoltativo il passo.
+        Successo {
+            digest_artefatto: DigestArtefatto,
+            conteggi: ConteggiDichiarati,
+        } => "successo",
         /// L'errore viaggia in un `Box`: e' molto piu' grande delle altre due
         /// varianti, e senza il `Box` ogni `Esito` — compresi i successi —
         /// occuperebbe la sua taglia. Sul filo non cambia nulla.
