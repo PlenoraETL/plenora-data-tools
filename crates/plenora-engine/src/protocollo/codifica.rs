@@ -490,7 +490,14 @@ fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<()> {
 
 fn verifica_esito(esito: &super::messaggi::EsitoWorkerSulFilo) -> Result<()> {
     match esito {
-        super::messaggi::EsitoWorkerSulFilo::Successo { digest_artefatto } => {
+        // I `conteggi` non hanno un tetto da applicare: sono due `u64`, e il
+        // loro dominio e' il tipo. Nominarli qui serve comunque, perche' il
+        // `match` esaustivo e' cio' che ha costretto ad aggiornare questo
+        // punto quando il campo e' stato aggiunto — e continuera' a farlo.
+        super::messaggi::EsitoWorkerSulFilo::Successo {
+            digest_artefatto,
+            conteggi: _,
+        } => {
             limita(
                 &digest_artefatto.algoritmo,
                 MAX_IDENTIFICATORE_BYTES,

@@ -24,11 +24,11 @@ use super::limiti::{
     MAX_PIANO_CANONICO_BYTES, MAX_RISORSE, MAX_VERSIONE_BYTES,
 };
 use super::messaggi::{
-    Ambiente, Annulla, BackendDinamico, CategoriaSulFilo, Corpo, DescrittoreIngresso,
-    DiagnosticaSulFilo, DigestArtefatto, EffettoSulFilo, ErroreSulFilo, EsempioDiagnostica,
-    EsitoWorkerSulFilo, FaseSulFilo, FormaPanicSulFilo, FormatoIngresso, Frame, IdentitaArtefatto,
-    IdentitaResolver, Incarico, LimitiDichiarati, Progresso, RetrySulFilo, RisorsaRisolta,
-    Risposta, Saluto, TipoMessaggio, VERSIONE_PROTOCOLLO,
+    Ambiente, Annulla, BackendDinamico, CategoriaSulFilo, ConteggiDichiarati, Corpo,
+    DescrittoreIngresso, DiagnosticaSulFilo, DigestArtefatto, EffettoSulFilo, ErroreSulFilo,
+    EsempioDiagnostica, EsitoWorkerSulFilo, FaseSulFilo, FormaPanicSulFilo, FormatoIngresso, Frame,
+    IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati, Progresso, RetrySulFilo,
+    RisorsaRisolta, Risposta, Saluto, TipoMessaggio, VERSIONE_PROTOCOLLO,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,9 +72,11 @@ const PREFISSO_RISPOSTA: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0x49];
 const CORPO_PROGRESSO: &str = r#"{"righe":10,"batch":2,"nodi_completati":3}"#;
 const PREFISSO_PROGRESSO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0x5C];
 
-const CORPO_ESITO_SUCCESSO: &str =
-    r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"ff"}}"#;
-const PREFISSO_ESITO_SUCCESSO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0x7A];
+const CORPO_ESITO_SUCCESSO: &str = concat!(
+    r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"ff"},"#,
+    r#""conteggi":{"righe":10,"batch":2}}"#,
+);
+const PREFISSO_ESITO_SUCCESSO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0x9C];
 
 const CORPO_ESITO_ERRORE: &str = concat!(
     r#"{"esito":"errore","errore":{"categoria":"schema","fase":"read","effetto":"none","#,
@@ -215,6 +217,10 @@ fn esito_successo() -> Frame {
         digest_artefatto: DigestArtefatto {
             algoritmo: "sha256".to_owned(),
             valore: "ff".to_owned(),
+        },
+        conteggi: ConteggiDichiarati {
+            righe: 10,
+            batch: 2,
         },
     })
 }
@@ -587,6 +593,74 @@ fn un_campo_sconosciuto_e_un_errore_a_ogni_livello() {
     }
 }
 
+/// I conteggi del `Successo` sono **obbligatori**, e ogni loro campo lo e'.
+///
+/// E' il termine di paragone del passo 8 della verifica: senza, quel passo
+/// confronterebbe cio' che osserva con niente. Renderli facoltativi avrebbe
+/// reso facoltativo il passo, ed e' il difetto che la prima stesura del
+/// protocollo aveva — la sequenza normativa citava un dato che non viaggiava.
+#[test]
+fn i_conteggi_del_successo_sono_obbligatori() {
+    let digest = r#""digest_artefatto":{"algoritmo":"sha256","valore":"f"}"#;
+    let mancanti = [
+        // Nessun blocco `conteggi`.
+        format!(r#"{{"esito":"successo",{digest}}}"#),
+        // Blocco presente ma vuoto.
+        format!(r#"{{"esito":"successo",{digest},"conteggi":{{}}}}"#),
+        // Solo le righe.
+        format!(r#"{{"esito":"successo",{digest},"conteggi":{{"righe":1}}}}"#),
+        // Solo i batch.
+        format!(r#"{{"esito":"successo",{digest},"conteggi":{{"batch":1}}}}"#),
+    ];
+    for corpo in mancanti {
+        let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
+        assert!(
+            messaggio.contains("missing field"),
+            "conteggi incompleti accettati in «{corpo}»: {messaggio}"
+        );
+    }
+
+    // Un campo estraneo dentro i conteggi: la struttura e' chiusa anche li'.
+    let corpo =
+        format!(r#"{{"esito":"successo",{digest},"conteggi":{{"righe":1,"batch":1,"nodi":1}}}}"#);
+    let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
+    assert!(
+        messaggio.contains("unknown field"),
+        "campo estraneo accettato nei conteggi: {messaggio}"
+    );
+
+    // E i valori fuori dominio: sono `u64`.
+    for valore in ["-1", "1.5", "18446744073709551616", "null", r#""molte""#] {
+        let corpo =
+            format!(r#"{{"esito":"successo",{digest},"conteggi":{{"righe":{valore},"batch":0}}}}"#);
+        let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
+        assert!(
+            messaggio.contains("malformato"),
+            "valore `{valore}` accettato come conteggio: {messaggio}"
+        );
+    }
+}
+
+/// `nodi_completati` **non** entra nei conteggi del `Successo`.
+///
+/// `Progresso` lo porta, e la simmetria inviterebbe ad aggiungerlo anche qui.
+/// Non si puo': rileggendo un file Arrow IPC si osservano righe e batch, non
+/// quanti nodi del piano li hanno prodotti. Un numero che il verificatore non
+/// puo' confrontare gli chiederebbe di crederci, ed e' cio' che il passo 8
+/// esiste per non fare.
+#[test]
+fn i_conteggi_del_successo_non_portano_i_nodi() {
+    let corpo = concat!(
+        r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"#,
+        r#""conteggi":{"righe":1,"batch":1,"nodi_completati":1}}"#,
+    );
+    let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
+    assert!(
+        messaggio.contains("unknown field"),
+        "`nodi_completati` accettato fra i conteggi del successo: {messaggio}"
+    );
+}
+
 #[test]
 fn un_campo_mancante_e_un_errore() {
     let testo = r#"{"protocol_version":1,"tipo":"progresso","corpo":{"righe":1,"batch":2}}"#;
@@ -699,7 +773,10 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
         ("panic", r#"{"esito":"panic","forma":"statico","extra":1}"#),
         (
             "successo",
-            r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"extra":1}"#,
+            concat!(
+                r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"#,
+                r#""conteggi":{"righe":0,"batch":0},"extra":1}"#,
+            ),
         ),
         (
             "errore",
@@ -1174,6 +1251,7 @@ fn casi_esito() -> Vec<CasoTetto> {
                         algoritmo: ripeti(n),
                         valore: "f".to_owned(),
                     },
+                    conteggi: ConteggiDichiarati { righe: 0, batch: 0 },
                 })
             }),
         ),
@@ -1186,6 +1264,7 @@ fn casi_esito() -> Vec<CasoTetto> {
                         algoritmo: "sha256".to_owned(),
                         valore: ripeti(n),
                     },
+                    conteggi: ConteggiDichiarati { righe: 0, batch: 0 },
                 })
             }),
         ),
