@@ -832,6 +832,45 @@ taglia che il tetto gli concede, e l'espansione degli escape non viene mai
 esercitata. Renderli configurabili è fuori discussione finché il canale resta
 interno.
 
+### Moduli compilati solo sotto `test` e `internals`
+
+**La regola.** `plenora_engine::protocollo` e
+`plenora_engine::sigillo::leggi_commit_token` sono compilati solo con
+`#[cfg(any(test, feature = "internals"))]`. Non è un'ottimizzazione: è la
+dichiarazione che quel codice **non ha ancora un chiamante di produzione**.
+
+**Il perimetro.** Il modulo `protocollo` per intero — messaggi, codifica,
+lettore limitato, handshake — e la sola funzione di lettura del token dal
+footer. `sigillo::sigilla` è invece incondizionato, perché il writer
+in-process lo chiama davvero (con `None`).
+
+**Perché non un `allow(dead_code)`.** Sono due modi di trattare lo stesso
+fatto, e non sono equivalenti. Un `allow` **zittisce** l'avviso e lascia il
+codice nella build: il lettore vede un attributo e deve fidarsi che qualcuno
+lo tolga. Un `cfg` **dichiara** la condizione: il codice non entra nel
+binario di produzione finché la condizione non cambia, e la condizione è
+scritta. Se un giorno qualcuno aggiunge il chiamante e dimentica il `cfg`, il
+compilatore glielo dice; se dimentica un `allow`, non glielo dice nessuno.
+
+**Il pericolo che copre.** Codice non raggiungibile che entra comunque nel
+binario distribuito, e che nessuno esercita — la definizione di superficie che
+esiste senza che nessuno se ne occupi.
+
+**Che cosa questo perde, e va detto.** Il modulo non è compilato dalla build
+di produzione, quindi un errore che si manifestasse solo lì non verrebbe visto
+da `cargo build`. È coperto: `cargo test` e `cargo clippy --all-targets` lo
+compilano entrambi, e la CI li esegue tutti e due.
+
+**La condizione di rientro.** Il `cfg` su `protocollo` sparisce quando esiste
+un chiamante esterno al modulo, cioè con **`PR-8`** — il supervisore con
+worker fittizio. Non con `PR-5`: l'handshake che `PR-5` aggiunge sta *dentro*
+`protocollo`, quindi ne consuma i messaggi ma non è un chiamante del modulo, e
+toglierlo lì rimetterebbe in piedi le decine di `dead_code` che il `cfg`
+evita — verificato rimuovendolo e leggendo l'output, non dedotto.
+
+Il `cfg` su `leggi_commit_token` sparisce con **`PR-6`**, la verifica
+streaming dell'artefatto, che è il suo primo lettore reale.
+
 ### Il `commit_token`: forma canonica unica, e valore mai mostrato
 
 **La regola.** Un `commit_token` è esattamente 64 caratteri esadecimali

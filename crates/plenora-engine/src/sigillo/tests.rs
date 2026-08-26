@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{RecordBatch, StringArray, UInt64Array};
 use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
+use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+
+use crate::planner::contract_fingerprint;
 
 use super::{leggi_commit_token, sigilla};
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
@@ -233,6 +236,102 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
 
     // E lo schema e' quello di partenza, non uno arricchito dal sigillo.
     assert_eq!(schema_uno.as_ref(), schema().as_ref());
+
+    // --- E il `DataContract` col suo fingerprint.
+    //
+    // Lo schema uguale **non implica** il contratto uguale: il contratto si
+    // ricava dallo schema piu' i metadati canonici, e un sigillo che ne
+    // toccasse uno cambierebbe il fingerprint senza cambiare i campi. Sarebbe
+    // il difetto peggiore di questa PR — due esecuzioni identiche dello stesso
+    // piano diventerebbero incompatibili solo per chi le ha autorizzate.
+    //
+    // Va detto che cosa sorveglia davvero, perche' oggi **nessuna mutazione
+    // del codice di produzione lo fa fallire**: il token finisce nel footer,
+    // che non entra nello schema, quindi il fingerprint non puo' divergere
+    // per costruzione. Questa asserzione e' una guardia contro un cambiamento
+    // che oggi non esiste — scrivere il token nei metadati dello schema
+    // invece che nel footer — e quel giorno sarebbe l'unica cosa a
+    // fermarlo. E' una guardia dichiarata, non una prova verificata: chiamarla
+    // «coperta dalle mutazioni» sarebbe falso.
+    let impronta = |schema: SchemaRef| {
+        let contratto = contract_from_arrow_schema(schema, risolvi_crs)
+            .expect("il contratto si ricava dallo schema");
+        let impronta = contract_fingerprint(&contratto).expect("fingerprint");
+        (contratto, impronta)
+    };
+    let (contratto_uno, impronta_uno) = impronta(schema_uno);
+    let (contratto_due, impronta_due) = impronta(schema_due);
+    // Il confronto e' sul **fingerprint** e non sul `DataContract`: il
+    // fingerprint *e'* l'identita' canonica del contratto — l'hash della sua
+    // forma canonica — quindi confrontarlo dice piu' di un'uguaglianza
+    // struttura per struttura, che fra l'altro il tipo non offre.
+    assert_eq!(
+        impronta_uno, impronta_due,
+        "il token ha cambiato il contract_fingerprint"
+    );
+    // E le colonne sono quelle: un fingerprint uguale su due contratti vuoti
+    // sarebbe una prova vuota.
+    assert_eq!(
+        format!("{contratto_uno:?}"),
+        format!("{contratto_due:?}"),
+        "il token ha cambiato il DataContract"
+    );
+}
+
+/// Un CRS non serve a queste fixture: lo schema non ha colonne geometriche.
+fn risolvi_crs(
+    _identificatore: &str,
+    _contesto: &'static str,
+) -> Result<plenora_core::crs::ResolvedCrs, plenora_core::crs::CrsError> {
+    unreachable!("nessuna colonna geometrica nelle fixture del sigillo")
+}
+
+/// Il `plan_hash` non dipende dal `commit_token`.
+///
+/// E' la seconda meta' della stessa promessa: il token cambia l'artefatto, non
+/// l'identita' di cio' che l'ha prodotto. Il piano non passa nemmeno vicino al
+/// token — ed e' esattamente per questo che va provato, perche' una
+/// dipendenza introdotta per sbaglio non si vedrebbe da nessuna parte finche'
+/// due esecuzioni autorizzate diversamente non smettessero di riconoscersi.
+#[test]
+fn il_plan_hash_non_dipende_dal_token() {
+    use crate::planner::validate;
+
+    let piano = r#"{
+        "schema_version": 5,
+        "inputs": ["ingresso"],
+        "output": "n0",
+        "nodes": [
+            {"id": "n0", "op": "table.filter", "in": ["ingresso"],
+             "config": {"column": "id", "operator": ">", "value": 0}}
+        ]
+    }"#;
+    let (contratto, _) = {
+        let schema = schema();
+        let contratto = contract_from_arrow_schema(schema, risolvi_crs).expect("contratto");
+        let impronta = contract_fingerprint(&contratto).expect("fingerprint");
+        (contratto, impronta)
+    };
+    let ingressi = vec![("ingresso".to_owned(), contratto)];
+
+    let uno = validate(piano, &ingressi).expect("piano valido");
+    let due = validate(piano, &ingressi).expect("piano valido");
+    assert_eq!(
+        uno.plan_hash(),
+        due.plan_hash(),
+        "il `plan_hash` non e' deterministico"
+    );
+
+    // E scrivere due artefatti con token diversi non lo tocca: il piano non
+    // ha modo di vederli.
+    let _ = artefatto(Some(&token(UNO)));
+    let _ = artefatto(Some(&token(DUE)));
+    let dopo = validate(piano, &ingressi).expect("piano valido");
+    assert_eq!(
+        uno.plan_hash(),
+        dopo.plan_hash(),
+        "il `plan_hash` e' cambiato dopo aver sigillato un artefatto"
+    );
 }
 
 /// La lettura passa dalla convalida: un file rotto non rende un token.

@@ -15,7 +15,8 @@
 //! 1. si leggono esattamente [`BYTE_PREFISSO`] byte;
 //! 2. si chiama [`lunghezza_dichiarata`], l'autorita' gia' provata — non una
 //!    copia del confronto, che potrebbe divergere;
-//! 3. **solo se accetta** si alloca il payload e lo si legge.
+//! 3. **solo se accetta** si alloca — una volta sola, e in modo fallibile —
+//!    e si legge.
 //!
 //! Un prefisso che dichiara `MAX + 1` fa consumare quattro byte e nient'altro.
 //! Non e' una conseguenza da dedurre leggendo il codice: e' provata con un
@@ -59,20 +60,39 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
     // si sa che e' un numero che abbiamo accettato.
     let dichiarata = lunghezza_dichiarata(prefisso)?;
 
-    // `vec![0; n]` e non `with_capacity` + `read_to_end`: la seconda forma
-    // farebbe crescere il buffer seguendo cio' che arriva, cioe' rimetterebbe
-    // al mittente la decisione su quanto allocare.
-    let mut payload = vec![0_u8; dichiarata];
-    leggi_esatti(sorgente, &mut payload).map_err(|origine| match origine {
+    // **Un** buffer, non due.
+    //
+    // La stesura precedente allocava il payload e poi un secondo `Vec` per
+    // rimetterci davanti il prefisso: al limite sono due volte ~64 MiB, cioe'
+    // il doppio di cio' che il tetto concede. Il tetto smette di essere un
+    // tetto se chi lo rispetta alloca due volte.
+    //
+    // E l'allocazione e' **fallibile**. `vec![0; n]` aborta il processo se il
+    // sistema non ha memoria: su un numero che arriva dall'altro capo del
+    // canale, un abort e' la risposta sbagliata — e non e' nemmeno un errore
+    // che qualcuno possa classificare, perche' il processo non c'e' piu'.
+    let totale = BYTE_PREFISSO.checked_add(dichiarata).ok_or_else(|| {
+        PlenoraError::Protocol(format!(
+            "lunghezza del frame fuori intervallo: {dichiarata} byte piu' il prefisso"
+        ))
+    })?;
+    let mut frame: Vec<u8> = Vec::new();
+    frame.try_reserve_exact(totale).map_err(|_| {
+        PlenoraError::ResourceLimit(format!(
+            "memoria insufficiente per un frame di {totale} byte"
+        ))
+    })?;
+    frame.extend_from_slice(&prefisso);
+    // `resize` non rialloca: la capacita' e' gia' quella definitiva.
+    frame.resize(totale, 0);
+
+    leggi_esatti(sorgente, &mut frame[BYTE_PREFISSO..]).map_err(|origine| match origine {
         ErroreLettura::Io(errore) => PlenoraError::Io(errore),
         ErroreLettura::Troncato { letti } => PlenoraError::Protocol(format!(
             "payload troncato: dichiarati {dichiarata} byte, letti {letti}"
         )),
     })?;
 
-    let mut frame = Vec::with_capacity(BYTE_PREFISSO + payload.len());
-    frame.extend_from_slice(&prefisso);
-    frame.extend_from_slice(&payload);
     decodifica(&frame).map(Some)
 }
 

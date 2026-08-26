@@ -65,9 +65,18 @@ pub mod cancellation;
 /// `isolamento.md`). Logica pura e **interna**: `PR-4` possiede il formato
 /// sul filo, quindi questi tipi non escono dal crate.
 mod classificazione;
-/// Il `commit_token`: tipo chiuso, forma canonica unica, valore mai mostrato.
-/// Pubblico perche' e' il **chiamante** a fornirlo.
-pub mod commit_token;
+// Il `commit_token` e' **privato come modulo**: esce solo il tipo, tramite
+// un `pub use` piu' sotto.
+//
+// Un `pub mod` piu' il re-export avrebbe dato due percorsi per la stessa cosa
+// — `plenora_engine::commit_token::CommitToken` e
+// `plenora_engine::CommitToken` — e con essi tutte le costanti del modulo,
+// che a un consumatore non servono: `COMMIT_TOKEN_BYTES` e
+// `COMMIT_TOKEN_CARATTERI` sono dettagli della forma canonica, e
+// `CHIAVE_FOOTER_COMMIT_TOKEN` e' il nome di una chiave che scriviamo noi.
+// Cio' che il chiamante deve poter fare e' costruire un token e riceverne il
+// rifiuto motivato: due nomi, non sei.
+mod commit_token;
 mod error_propagation;
 pub mod executor;
 pub mod geo_transport;
@@ -104,18 +113,20 @@ pub(crate) mod sigillo;
 // `PR-5` non lo toglie, e la ragione va detta invece che scoperta: l'handshake
 // che `PR-5` aggiunge sta **dentro** `protocollo`, quindi e' un consumatore
 // dei suoi messaggi ma non un chiamante del modulo. Chi lo chiamera' da fuori
-// e' il supervisore, e quello e' `PR-9`. Toglierlo qui rimetterebbe in piedi
+// e' il supervisore col worker fittizio, cioe' `PR-8`. Toglierlo qui
+// rimetterebbe in piedi
 // le decine di `dead_code` che il `cfg` evita — cioe' l'esatta situazione per
 // cui esiste.
 //
-// Il `cfg` sparisce con `PR-9`.
+// Il `cfg` sparisce con `PR-8`. La deviazione e' registrata in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
 
 pub use cancellation::CancellationToken;
-pub use commit_token::{CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN};
+pub use commit_token::{CommitToken, FormaTokenNonValida};
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
 pub use ipc_boundary::{BoundaryBatches, IpcFormat, IpcLimits};

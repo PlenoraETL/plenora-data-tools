@@ -154,6 +154,39 @@ alle versioni di quel giorno perché è la riproduzione congelata della misura;
 il confronto con i numeri attuali è un'attività separata, che deve dichiarare
 di stare confrontando due ambienti diversi.
 
+## Superficie pubblica e formato dell'artefatto
+
+### `CommitToken`: due nomi, non sei
+
+`plenora-engine` esporta `CommitToken` e `FormaTokenNonValida`, e nient'altro
+del modulo che li definisce. Il modulo è **privato**: un `pub mod` più il
+re-export avrebbe dato due percorsi per la stessa cosa e, con essi, costanti
+che a un consumatore non servono — `COMMIT_TOKEN_BYTES` e
+`COMMIT_TOKEN_CARATTERI` sono dettagli della forma canonica,
+`CHIAVE_FOOTER_COMMIT_TOKEN` è il nome di una chiave che scriviamo noi.
+
+Ciò che il chiamante deve poter fare è costruire un token e ricevere il
+rifiuto motivato quando il testo non è canonico. Due nomi bastano, e ogni nome
+in più è una promessa in più.
+
+### Il footer dell'artefatto può portare una chiave in più
+
+Gli artefatti Arrow IPC prodotti dal percorso isolato portano nel footer la
+chiave `plenora.commit.token`. È un **cambiamento del formato**, e va detto
+anche se è additivo:
+
+- gli artefatti prodotti in-process **non** la portano, e i loro byte restano
+  identici a quelli delle versioni precedenti — con `None` non si scrive
+  nulla, nemmeno una chiave vuota, ed è provato;
+- un lettore che ignori le chiavi sconosciute non nota la differenza: il
+  confine valida la forma, non il vocabolario;
+- un lettore che *cerchi* quella chiave deve accettare che sia assente, perché
+  per un artefatto ordinario lo è.
+
+La regola completa — forma canonica, riservatezza del valore, quattro forme
+del footer — è in
+[errori-e-limiti.md](errori-e-limiti.md#il-commit-token-forma-canonica-unica-e-valore-mai-mostrato).
+
 ## Piattaforme
 
 | piattaforma | stato |

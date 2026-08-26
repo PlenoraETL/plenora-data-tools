@@ -83,7 +83,8 @@ pub fn sigilla<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitTok
 /// `PR-6`. Qui il token si sa scrivere e si sa rileggere, e le quattro forme
 /// del footer sono provate; ma chi rilegge per decidere qualcosa non esiste
 /// ancora. Il `cfg` lo dice invece di lasciare che un `dead_code` lo dica
-/// peggio, e sparisce con `PR-6`.
+/// peggio, e sparisce con `PR-6`. Registrato in
+/// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 pub fn leggi_commit_token<S: IpcSource + ?Sized>(
     sorgente: &mut S,

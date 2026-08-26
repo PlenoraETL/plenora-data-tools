@@ -35,6 +35,10 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Byte del token: 32, cioe' 64 caratteri esadecimali.
+///
+/// `pub` qui non significa pubblico: il **modulo** e' privato, e dal crate
+/// esce solo cio' che `lib.rs` ri-esporta esplicitamente — [`CommitToken`] e
+/// [`FormaTokenNonValida`]. Questa costante resta interna.
 pub const COMMIT_TOKEN_BYTES: usize = 32;
 
 /// Caratteri della forma canonica.

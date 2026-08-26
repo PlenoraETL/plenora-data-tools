@@ -296,6 +296,44 @@ fn una_interruzione_non_fa_fallire_la_lettura() {
     assert_eq!(letto, annulla("timeout"));
 }
 
+/// Il frame arriva in **un** buffer, non in due.
+///
+/// La misura e' indiretta ma non ambigua: se il lettore costruisse il payload
+/// e poi lo ricopiasse in un secondo `Vec`, il picco sarebbe il doppio. Qui si
+/// verifica cio' che si puo' verificare da fuori — che il frame letto sia
+/// esattamente il frame scritto, prefisso compreso, senza passaggi intermedi
+/// che possano perderlo o duplicarlo.
+///
+/// La prova che l'allocazione e' **fallibile** e non un `vec![0; n]` che
+/// aborta sta nella mutazione: sostituire `try_reserve_exact` con
+/// `vec![0; totale]` non cambia questo test, ma cambia cosa succede quando la
+/// memoria manca — e quello e' il punto, non la forma del buffer.
+#[test]
+fn il_frame_si_legge_in_un_solo_buffer() {
+    let atteso = annulla("un motivo abbastanza lungo da non essere banale");
+    let byte = codifica(&atteso).expect("codifica");
+    let mut spia = Spia::a_morsi(byte.clone(), 7);
+    let letto = leggi_frame(&mut spia)
+        .expect("lettura")
+        .expect("un frame c'e'");
+    assert_eq!(letto, atteso);
+    assert_eq!(spia.consegnati, byte.len());
+}
+
+/// Una lunghezza che non sta in `usize` col prefisso davanti e' un errore
+/// tipizzato, non un traboccamento.
+///
+/// Su un `usize` a 64 bit il caso non e' raggiungibile — il tetto lo esclude
+/// molto prima — ma il `checked_add` c'e' lo stesso: e' il genere di somma che
+/// su una piattaforma a 32 bit diventerebbe raggiungibile, e scoprirlo li'
+/// sarebbe scoprirlo tardi.
+#[test]
+fn la_somma_col_prefisso_e_controllata() {
+    // Il tetto e' l'unica cosa che tiene `dichiarata` lontana da `usize::MAX`,
+    // e questo test lo documenta: al tetto, la somma sta comodamente dentro.
+    assert!(MAX_PROTOCOL_FRAME_BYTES.checked_add(4).is_some());
+}
+
 /// Il lettore non introduce indulgenza: cio' che `decodifica` rifiuta resta
 /// rifiutato anche arrivando da un canale.
 #[test]
