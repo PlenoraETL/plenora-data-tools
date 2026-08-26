@@ -65,6 +65,9 @@ pub mod cancellation;
 /// `isolamento.md`). Logica pura e **interna**: `PR-4` possiede il formato
 /// sul filo, quindi questi tipi non escono dal crate.
 mod classificazione;
+/// Il `commit_token`: tipo chiuso, forma canonica unica, valore mai mostrato.
+/// Pubblico perche' e' il **chiamante** a fornirlo.
+pub mod commit_token;
 mod error_propagation;
 pub mod executor;
 pub mod geo_transport;
@@ -83,6 +86,9 @@ pub mod parallelism;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
+/// Il `commit_token` nel footer di un artefatto: scrittura prima di `finish`,
+/// lettura dalla stessa traversata rinforzata che convalida il file.
+pub(crate) mod sigillo;
 // Il protocollo e' **sempre privato**, senza eccezioni: e' un canale interno
 // fra due processi che spediamo insieme, e renderlo pubblico — anche solo
 // sotto una feature — sarebbe la promessa di non cambiarlo. Chi sta fuori dal
@@ -90,17 +96,26 @@ pub mod prepare;
 // tipi.
 //
 // Il `cfg` dice una cosa vera e non la zittisce: il protocollo non ha ancora
-// un chiamante, perche' chi lo costruisce e' l'handshake e quello appartiene a
-// `PR-5`. Finche' non esiste, il modulo si compila dove qualcuno lo usa
-// davvero — i test e la facciata. Cosi' non serve nessun `allow(dead_code)`:
-// l'assenza di chiamante e' **dichiarata**, non nascosta. Con `PR-5` il `cfg`
-// sparisce e il modulo diventa incondizionato.
+// un chiamante **fuori da se stesso**. Finche' non ce l'ha, il modulo si
+// compila dove qualcuno lo usa davvero — i test e la facciata. Cosi' non serve
+// nessun `allow(dead_code)`: l'assenza di chiamante e' dichiarata, non
+// nascosta.
+//
+// `PR-5` non lo toglie, e la ragione va detta invece che scoperta: l'handshake
+// che `PR-5` aggiunge sta **dentro** `protocollo`, quindi e' un consumatore
+// dei suoi messaggi ma non un chiamante del modulo. Chi lo chiamera' da fuori
+// e' il supervisore, e quello e' `PR-9`. Toglierlo qui rimetterebbe in piedi
+// le decine di `dead_code` che il `cfg` evita — cioe' l'esatta situazione per
+// cui esiste.
+//
+// Il `cfg` sparisce con `PR-9`.
 #[cfg(any(test, feature = "internals"))]
 mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
 
 pub use cancellation::CancellationToken;
+pub use commit_token::{CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN};
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
 pub use ipc_boundary::{BoundaryBatches, IpcFormat, IpcLimits};

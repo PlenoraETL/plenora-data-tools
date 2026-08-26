@@ -50,6 +50,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use crate::commit_token::CommitToken;
+
 /// Versione del protocollo.
 ///
 /// Sta **solo** nell'involucro di ogni frame. `Saluto` e `Risposta` non ne
@@ -270,7 +272,11 @@ pub struct Saluto {
     pub ambiente: Ambiente,
     /// Trasmesso e accettato qui, e **solo** qui: legarlo all'handshake gli
     /// da' una sola autorita' invece di due copie che possono divergere.
-    pub commit_token: String,
+    ///
+    /// E' un [`CommitToken`] e non una `String`: la forma canonica e' garantita
+    /// dal tipo, quindi non c'e' un tetto da applicare qui ne' un controllo che
+    /// il decoder possa dimenticare.
+    pub commit_token: CommitToken,
     pub limiti: LimitiDichiarati,
 }
 
@@ -653,6 +659,16 @@ impl Frame {
     #[must_use]
     pub const fn corpo(&self) -> &Corpo {
         &self.corpo
+    }
+
+    /// Il corpo, **consumando** il frame.
+    ///
+    /// Esiste perche' chi riceve un frame lo esaurisce: leggerlo per
+    /// riferimento e poi clonarne il contenuto sarebbe una copia in piu' e,
+    /// peggio, lascerebbe in giro un frame gia' consumato.
+    #[must_use]
+    pub fn in_corpo(self) -> Corpo {
+        self.corpo
     }
 
     /// Il corpo, modificabile: **solo per i test**.

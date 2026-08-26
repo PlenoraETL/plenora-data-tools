@@ -333,8 +333,24 @@ fn fb_key_value(buf: &[u8], table: usize) -> Result<(&str, &str), ArrowTransport
 /// qualunque produttore Arrow che aggiunga le proprie, e non renderebbe
 /// nessuno piu' sicuro.
 fn fb_custom_metadata(buf: &[u8], table: usize, offset: usize) -> Result<(), ArrowTransportError> {
+    fb_custom_metadata_estraendo(buf, table, offset, None).map(|_| ())
+}
+
+/// Come [`fb_custom_metadata`], ma **rende** il valore di una chiave cercata.
+///
+/// Una funzione sola e non due: l'estrazione deve passare per la stessa
+/// traversata che convalida, altrimenti esisterebbero due modi di leggere il
+/// footer e solo uno sarebbe rinforzato. E' esattamente il motivo per cui il
+/// `commit_token` **non** si legge da `FileReader::custom_metadata`: quella e'
+/// una terza strada, che di questi controlli non ne fa nessuno.
+fn fb_custom_metadata_estraendo<'a>(
+    buf: &'a [u8],
+    table: usize,
+    offset: usize,
+    cercata: Option<&str>,
+) -> Result<Option<&'a str>, ArrowTransportError> {
     if offset == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let vector = fb_indirect(buf, table, offset)?;
     let count = fb_vector(buf, vector, 4)?;
@@ -347,17 +363,21 @@ fn fb_custom_metadata(buf: &[u8], table: usize, offset: usize) -> Result<(), Arr
         ));
     }
     let mut viste: BTreeSet<&str> = BTreeSet::new();
+    let mut trovato: Option<&str> = None;
     for index in 0..count {
         let entry = fb_indirect(buf, vector + 4, index * 4)?;
-        let (chiave, _valore) = fb_key_value(buf, entry)?;
+        let (chiave, valore) = fb_key_value(buf, entry)?;
         // Duplicati rifiutati, non risolti. Chi li raccoglie in una mappa
         // applica «vince l'ultima», che per una chiave autoritativa sceglie
         // un vincitore arbitrario: qui non c'e' nulla da scegliere.
         if !viste.insert(chiave) {
             return Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"));
         }
+        if cercata == Some(chiave) {
+            trovato = Some(valore);
+        }
     }
-    Ok(())
+    Ok(trovato)
 }
 
 /// Tabella `Field` di uno Schema IPC.
@@ -1057,6 +1077,26 @@ pub fn validate_ipc_file_framing<S: IpcSource + ?Sized>(
     source: &mut S,
     limits: &IpcLimits,
 ) -> Result<(), ArrowTransportError> {
+    valida_file_ed_estrai(source, limits, None).map(|_| ())
+}
+
+/// Convalida il file **e** rende il valore di una chiave dei custom metadata
+/// del footer.
+///
+/// E' la stessa funzione di [`validate_ipc_file_framing`], non una seconda
+/// lettura: il valore esce dalla traversata rinforzata, quindi non esiste un
+/// modo di ottenerlo saltando i controlli. Era la scelta da fare — leggere il
+/// token con `FileReader::custom_metadata` avrebbe aperto una terza strada nel
+/// footer, e quella non e' rinforzata.
+///
+/// # Errors
+///
+/// Come [`validate_ipc_file_framing`].
+pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
+    source: &mut S,
+    limits: &IpcLimits,
+    chiave: Option<&str>,
+) -> Result<Option<String>, ArrowTransportError> {
     let total = source.total_len();
     if total < ARROW_FILE_HEADER_BYTES + ARROW_FILE_TRAILER_BYTES {
         return Err(ArrowTransportError::IpcTruncated);
@@ -1111,8 +1151,12 @@ pub fn validate_ipc_file_framing<S: IpcSource + ?Sized>(
         usize::try_from(footer_len).map_err(|_| ArrowTransportError::IpcTruncated)?,
         &mut footer,
     )?;
-    let blocks = parse_footer(&footer, limits)?;
-    validate_footer_blocks(source, &blocks, footer_start, limits)
+    let (blocks, trovato) = parse_footer_estraendo(&footer, limits, chiave)?;
+    // Il valore si copia **prima** di continuare: `footer` e' un buffer locale
+    // e `trovato` lo presta.
+    let trovato = trovato.map(str::to_owned);
+    validate_footer_blocks(source, &blocks, footer_start, limits)?;
+    Ok(trovato)
 }
 
 /// Percorre il footer: lo Schema (che `fb_to_schema` leggera') e i vettori di
@@ -1121,6 +1165,16 @@ fn parse_footer(
     footer: &[u8],
     limits: &IpcLimits,
 ) -> Result<Vec<FooterBlock>, ArrowTransportError> {
+    parse_footer_estraendo(footer, limits, None).map(|(blocks, _)| blocks)
+}
+
+/// Come [`parse_footer`], ma rende anche il valore della chiave cercata fra i
+/// custom metadata del footer.
+fn parse_footer_estraendo<'a>(
+    footer: &'a [u8],
+    limits: &IpcLimits,
+    cercata: Option<&str>,
+) -> Result<(Vec<FooterBlock>, Option<&'a str>), ArrowTransportError> {
     let root = fb_u32(footer, 0)? as usize;
     let (vtable, vtable_len) = fb_table(footer, root)?;
     // Campo 1: lo Schema del footer, OBBLIGATORIO.
@@ -1145,8 +1199,8 @@ fn parse_footer(
     // era percorso affatto — non lo leggeva nessuno, quindi nessuno lo
     // vedeva.
     let custom = fb_field(footer, vtable, vtable_len, 4)?;
-    fb_custom_metadata(footer, root, custom)?;
-    Ok(blocks)
+    let trovato = fb_custom_metadata_estraendo(footer, root, custom, cercata)?;
+    Ok((blocks, trovato))
 }
 
 /// Verifica i blocchi del footer: contenimento nella regione dati,
@@ -1478,8 +1532,9 @@ pub fn encode_ipc_file(
 #[cfg(test)]
 mod custom_metadata {
     use super::{
-        fb_custom_metadata, ArrowTransportError, MAX_IPC_CUSTOM_METADATA_KEY_BYTES,
-        MAX_IPC_CUSTOM_METADATA_PAIRS, MAX_IPC_CUSTOM_METADATA_VALUE_BYTES,
+        fb_custom_metadata, fb_custom_metadata_estraendo, ArrowTransportError,
+        MAX_IPC_CUSTOM_METADATA_KEY_BYTES, MAX_IPC_CUSTOM_METADATA_PAIRS,
+        MAX_IPC_CUSTOM_METADATA_VALUE_BYTES,
     };
 
     /// Che cosa mettere in una voce.
@@ -1568,6 +1623,62 @@ mod custom_metadata {
     fn valida(coppie: &[(Campo<'_>, Campo<'_>)]) -> Result<(), ArrowTransportError> {
         let buf = costruisci(coppie);
         fb_custom_metadata(&buf, 0, 4)
+    }
+
+    /// Come [`valida`], ma passando dalla variante che **estrae**.
+    ///
+    /// La duplicazione di superficie e' voluta: la variante estraente e' una
+    /// seconda porta sullo stesso corridoio, e i controlli vanno provati
+    /// attraverso entrambe. Un'estrazione che li saltasse renderebbe
+    /// raggiungibile senza convalida esattamente il valore piu' autoritativo
+    /// del footer.
+    fn estrai(
+        coppie: &[(Campo<'_>, Campo<'_>)],
+        cercata: &str,
+    ) -> Result<Option<String>, ArrowTransportError> {
+        let buf = costruisci(coppie);
+        fb_custom_metadata_estraendo(&buf, 0, 4, Some(cercata))
+            .map(|trovato| trovato.map(str::to_owned))
+    }
+
+    #[test]
+    fn caso_13_l_estrazione_rende_il_valore_della_chiave_cercata() {
+        assert_eq!(
+            estrai(&[coppia("a", "uno"), coppia("k", "due")], "k").expect("valido"),
+            Some("due".to_owned())
+        );
+        // Chiave assente: nessun valore, e non e' un errore.
+        assert_eq!(estrai(&[coppia("a", "uno")], "k").expect("valido"), None);
+    }
+
+    #[test]
+    fn caso_14_l_estrazione_rifiuta_comunque_i_duplicati() {
+        // Sulla chiave cercata...
+        assert!(matches!(
+            estrai(&[coppia("k", "uno"), coppia("k", "due")], "k"),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"))
+        ));
+        // ...e su un'altra qualsiasi: il difetto e' dell'insieme, non della
+        // voce che interessa a chi legge.
+        assert!(matches!(
+            estrai(
+                &[coppia("a", "uno"), coppia("a", "due"), coppia("k", "v")],
+                "k"
+            ),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave duplicata"))
+        ));
+    }
+
+    #[test]
+    fn caso_15_l_estrazione_rifiuta_comunque_le_voci_malformate() {
+        assert!(matches!(
+            estrai(&[(Campo::Assente, Campo::Byte(b"v"))], "k"),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave assente"))
+        ));
+        assert!(matches!(
+            estrai(&[coppia("", "v")], "k"),
+            Err(ArrowTransportError::IpcMetadataInvalid("chiave vuota"))
+        ));
     }
 
     fn coppia<'a>(chiave: &'a str, valore: &'a str) -> (Campo<'a>, Campo<'a>) {

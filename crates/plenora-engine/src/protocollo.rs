@@ -20,6 +20,8 @@
 //! una costante e **non** i tipi di questo modulo.
 
 pub mod codifica;
+pub mod handshake;
+pub mod lettore;
 pub mod limiti;
 pub mod messaggi;
 

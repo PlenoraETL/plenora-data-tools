@@ -600,6 +600,41 @@ Versione esatta. Nessuna compatibilità all'indietro fra versioni: il worker è
 lo stesso artefatto del supervisore, quindi una differenza di versione è già
 un sintomo — significa che stanno girando due binari diversi.
 
+### 5.1-bis La macchina a stati, e cosa rende impossibile
+
+L'handshake è una macchina a stati **pura**: nessun processo, nessun canale,
+nessuna scoperta dell'ambiente della macchina. La descrizione locale arriva
+già tipizzata, così la verifica si può provare senza una macchina vera sotto.
+
+Due garanzie di forza diversa, e vanno tenute distinte.
+
+**Impossibili**, cioè non compilano:
+
+- riusare uno stato concluso — ogni transizione *consuma* lo stato, quindi un
+  supervisore che ha già ricevuto la `Risposta` non esiste più;
+- chiedere un `Incarico` prima dell'accordo — il metodo esiste solo sullo
+  stato che nasce da una verifica riuscita.
+
+**Rifiutati esplicitamente**, perché arrivano dal filo e nessun tipo può
+impedirli: una `Risposta` al posto del `Saluto`, un messaggio nella direzione
+sbagliata, un `Incarico` prima dell'accordo, qualunque tipo fuori sequenza.
+
+La versione del protocollo **non** è fra i confronti dell'handshake, e non per
+dimenticanza: il frame non ha un campo che si possa impostare e il decoder
+rifiuta qualunque versione diversa dalla propria. Un confronto qui sarebbe una
+guardia che non può fallire, cioè una guardia che sembra proteggere.
+
+Risorse, backend e capability sono **insiemi**: l'ordine non conta e i
+duplicati si rifiutano. Due risorse con lo stesso nome sono un'ambiguità su
+quale verrà aperta, e ridurle a una sceglierebbe al posto di chi ha costruito
+l'ambiente. Le capability sono l'unico confronto **non** simmetrico: al worker
+è concesso offrirne di più, non di meno.
+
+La classificazione degli errori segue la natura del disaccordo: identità
+dell'artefatto, ordine dei messaggi e limiti sono `Protocol` — i due lati non
+stanno parlando la stessa lingua; resolver, ambiente e capability sono
+`InvalidConfiguration` — parlano la stessa lingua e sono configurati male.
+
 ### 5.2 Identità dell'artefatto
 
 Se supervisore e worker sono **modalità dello stesso eseguibile**, l'identità

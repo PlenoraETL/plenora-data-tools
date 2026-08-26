@@ -1,0 +1,234 @@
+//! Prove del `commit_token`.
+//!
+//! Due gruppi che non si coprono a vicenda: la **forma** (cosa si accetta e
+//! cosa no) e la **riservatezza** (dove il valore non deve comparire). Il
+//! secondo non discende dal primo: un tipo puo' validare benissimo e poi
+//! stampare il valore in ogni messaggio.
+
+use super::{
+    CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN, COMMIT_TOKEN_BYTES,
+    COMMIT_TOKEN_CARATTERI,
+};
+
+/// Un token valido, scritto a mano.
+const CANONICO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// Un secondo token valido, diverso dal primo in un solo carattere.
+const ALTRO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0";
+
+/// La sentinella: se compare da qualche parte, il valore e' trapelato.
+const SENTINELLA: &str = "deadbeefcafebabe1234567890abcdef00112233445566778899aabbccddeeff";
+
+#[test]
+fn la_forma_canonica_si_accetta_e_torna_identica() {
+    let token = CommitToken::da_esadecimale(CANONICO).expect("canonico");
+    assert_eq!(token.in_esadecimale(), CANONICO);
+}
+
+/// La forma canonica si ricostruisce dai byte, non si conserva dal testo.
+///
+/// Sono due cose diverse: conservando il testo, un token costruito da una
+/// grafia qualsiasi la renderebbe tale e quale, e il footer riceverebbe
+/// qualcosa che non e' canonico.
+#[test]
+fn due_token_uguali_rendono_lo_stesso_testo() {
+    let uno = CommitToken::da_esadecimale(CANONICO).expect("canonico");
+    let due = CommitToken::da_esadecimale(CANONICO).expect("canonico");
+    assert_eq!(uno, due);
+    assert_eq!(uno.in_esadecimale(), due.in_esadecimale());
+
+    let diverso = CommitToken::da_esadecimale(ALTRO).expect("canonico");
+    assert_ne!(uno, diverso);
+    assert_ne!(uno.in_esadecimale(), diverso.in_esadecimale());
+}
+
+#[test]
+fn la_lunghezza_sbagliata_e_un_errore() {
+    for testo in [
+        "",
+        "0",
+        &CANONICO[..COMMIT_TOKEN_CARATTERI - 1],
+        &format!("{CANONICO}0"),
+        &CANONICO.repeat(2),
+    ] {
+        let errore = CommitToken::da_esadecimale(testo).expect_err("lunghezza sbagliata");
+        assert!(
+            matches!(errore, FormaTokenNonValida::LunghezzaErrata { .. }),
+            "motivo inatteso per {} caratteri: {errore:?}",
+            testo.len()
+        );
+    }
+}
+
+/// La lunghezza si conta in **caratteri** nel messaggio, anche quando il testo
+/// non e' ASCII.
+///
+/// Contarla in byte darebbe un numero che chi legge non riconosce: «ne servono
+/// 64, ne hai 66» su un testo di 64 caratteri sarebbe un rifiuto giusto con
+/// una spiegazione sbagliata.
+#[test]
+fn la_lunghezza_riportata_e_in_caratteri() {
+    let accentato = format!("{}èè", &CANONICO[..62]);
+    assert_eq!(accentato.len(), COMMIT_TOKEN_CARATTERI + 2);
+    let errore = CommitToken::da_esadecimale(&accentato).expect_err("non esadecimale");
+    assert_eq!(
+        errore,
+        FormaTokenNonValida::LunghezzaErrata {
+            attesi: COMMIT_TOKEN_CARATTERI,
+            trovati: 64,
+        }
+    );
+}
+
+#[test]
+fn un_carattere_non_esadecimale_e_un_errore() {
+    let mut testo: Vec<u8> = CANONICO.as_bytes().to_vec();
+    testo[7] = b'g';
+    let testo = String::from_utf8(testo).expect("ASCII");
+    assert_eq!(
+        CommitToken::da_esadecimale(&testo).expect_err("non esadecimale"),
+        FormaTokenNonValida::NonEsadecimale { posizione: 7 }
+    );
+}
+
+/// La maiuscola e' un errore **suo**, non spazzatura.
+///
+/// `A` non e' un carattere qualsiasi: e' la grafia sbagliata di un valore che
+/// potrebbe essere giusto, e dirlo cambia cosa fa chi legge il rifiuto.
+#[test]
+fn una_maiuscola_e_un_errore_distinto_e_non_si_normalizza() {
+    let maiuscolo = CANONICO.to_uppercase();
+    assert_eq!(maiuscolo.len(), COMMIT_TOKEN_CARATTERI);
+    let errore = CommitToken::da_esadecimale(&maiuscolo).expect_err("maiuscolo");
+    assert_eq!(
+        errore,
+        FormaTokenNonValida::MaiuscoloNonAmmesso { posizione: 10 },
+        "la prima maiuscola di «{maiuscolo}» e' in posizione 10"
+    );
+
+    // E non si normalizza: nessuna forma maiuscola produce un token.
+    for posizione in 0..COMMIT_TOKEN_CARATTERI {
+        let mut byte = CANONICO.as_bytes().to_vec();
+        byte[posizione] = byte[posizione].to_ascii_uppercase();
+        let testo = String::from_utf8(byte).expect("ASCII");
+        if testo == CANONICO {
+            continue;
+        }
+        assert!(
+            CommitToken::da_esadecimale(&testo).is_err(),
+            "accettata una maiuscola in posizione {posizione}"
+        );
+    }
+}
+
+#[test]
+fn il_giro_serde_conserva_la_forma_canonica() {
+    let token = CommitToken::da_esadecimale(CANONICO).expect("canonico");
+    let reso = serde_json::to_string(&token).expect("serializzabile");
+    assert_eq!(reso, format!("\"{CANONICO}\""));
+    let riletto: CommitToken = serde_json::from_str(&reso).expect("rileggibile");
+    assert_eq!(riletto, token);
+}
+
+/// Anche in lettura la forma non canonica si **rifiuta**, non si aggiusta.
+#[test]
+fn serde_rifiuta_le_forme_non_canoniche() {
+    for testo in [
+        CANONICO.to_uppercase(),
+        CANONICO[..63].to_owned(),
+        format!("{CANONICO}0"),
+        "non un token".to_owned(),
+        String::new(),
+    ] {
+        let json = serde_json::to_string(&testo).expect("stringa serializzabile");
+        assert!(
+            serde_json::from_str::<CommitToken>(&json).is_err(),
+            "accettata la forma non canonica «{testo}»"
+        );
+    }
+
+    // E i tipi sbagliati: un numero non e' un token.
+    for json in ["1234", "null", "[]", "{}", "true"] {
+        assert!(
+            serde_json::from_str::<CommitToken>(json).is_err(),
+            "accettato `{json}` come token"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Riservatezza: dove il valore NON deve comparire
+// ---------------------------------------------------------------------------
+
+/// `Debug` e' cio' che finisce in un log per sbaglio.
+#[test]
+fn debug_e_display_non_mostrano_il_valore() {
+    let token = CommitToken::da_esadecimale(SENTINELLA).expect("canonico");
+
+    let reso = format!("{token:?}");
+    assert!(!reso.contains(SENTINELLA), "`Debug` ha mostrato il valore");
+    assert!(
+        !reso.contains(&SENTINELLA[..8]),
+        "`Debug` ha mostrato un frammento"
+    );
+
+    let mostrato = format!("{token}");
+    assert!(
+        !mostrato.contains(SENTINELLA),
+        "`Display` ha mostrato il valore"
+    );
+    assert!(
+        !mostrato.contains(&SENTINELLA[..8]),
+        "`Display` ha mostrato un frammento"
+    );
+
+    // E dentro una struttura piu' grande, che e' il caso reale.
+    let dentro = format!("{:?}", (1_u8, token, "coda"));
+    assert!(!dentro.contains(SENTINELLA));
+}
+
+/// Nessun errore di questo modulo porta il valore.
+///
+/// Il rifiuto e' proprio il momento in cui il token e' sospetto e qualcuno
+/// vorrebbe vederlo per capire: e' anche il momento in cui, se lo mostri,
+/// finisce in un log insieme al motivo per cui qualcuno lo stava guardando.
+#[test]
+fn nessun_errore_porta_il_valore() {
+    let sospetti = [
+        SENTINELLA.to_uppercase(),
+        SENTINELLA[..63].to_owned(),
+        format!("{SENTINELLA}0"),
+        format!("{}g{}", &SENTINELLA[..10], &SENTINELLA[11..]),
+    ];
+    for testo in sospetti {
+        let errore = CommitToken::da_esadecimale(&testo).expect_err("non canonico");
+        for reso in [format!("{errore}"), format!("{errore:?}")] {
+            assert!(
+                !reso.contains(SENTINELLA) && !reso.contains(&SENTINELLA[..8]),
+                "l'errore ha copiato il valore: {reso}"
+            );
+            assert!(
+                !reso.to_lowercase().contains(&SENTINELLA[..8]),
+                "l'errore ha copiato il valore in altra grafia: {reso}"
+            );
+        }
+
+        // E l'errore di `serde`, che nasce da `custom` e non dal testo.
+        let json = serde_json::to_string(&testo).expect("stringa");
+        let errore = serde_json::from_str::<CommitToken>(&json).expect_err("non canonico");
+        let reso = errore.to_string();
+        assert!(
+            !reso.to_lowercase().contains(&SENTINELLA[..8]),
+            "l'errore di serde ha copiato il valore: {reso}"
+        );
+    }
+}
+
+#[test]
+fn la_chiave_del_footer_e_una_sola_e_dichiarata() {
+    assert_eq!(CHIAVE_FOOTER_COMMIT_TOKEN, "plenora.commit.token");
+    // I byte del token e i caratteri della forma canonica stanno in relazione
+    // fissa: due caratteri per byte.
+    assert_eq!(COMMIT_TOKEN_CARATTERI, COMMIT_TOKEN_BYTES * 2);
+    assert_eq!(CANONICO.len(), COMMIT_TOKEN_CARATTERI);
+}

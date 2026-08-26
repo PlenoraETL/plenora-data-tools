@@ -832,6 +832,75 @@ taglia che il tetto gli concede, e l'espansione degli escape non viene mai
 esercitata. Renderli configurabili è fuori discussione finché il canale resta
 interno.
 
+### Il `commit_token`: forma canonica unica, e valore mai mostrato
+
+**La regola.** Un `commit_token` è esattamente 64 caratteri esadecimali
+**minuscoli**. Non esiste un `CommitToken` non valido: il controllo sta in un
+punto solo, il costruttore, e chi ne ha uno in mano non deve validarlo. La
+rappresentazione interna è opaca e la forma testuale si **ricostruisce** dai
+byte, così non può esistere un token che rende una grafia diversa da quella
+che finirà nel footer.
+
+Nel footer di un artefatto vive sotto una chiave sola: `plenora.commit.token`.
+
+**Il perimetro.** Il token attraversa quattro confini — il chiamante che lo
+fornisce, l'handshake che lo trasmette, il writer che lo sigilla, il
+verificatore che lo rilegge. La regola vale su tutti e quattro perché è nel
+tipo, non nei quattro punti.
+
+**Il pericolo che copre.** Due, distinti:
+
+- **due grafie dello stesso valore.** Il footer si confronta byte per byte:
+  accettare `ABC…` accanto a `abc…` darebbe due artefatti diversi per lo
+  stesso commit. Per questo la forma non canonica si **rifiuta** e non si
+  normalizza — normalizzare significherebbe accettare due grafie e poi
+  scoprire che il footer le distingue comunque;
+- **il valore in un log.** `Debug` e `Display` non lo mostrano, e nessun
+  errore lo contiene. `Debug` in particolare è ciò che finisce in un log per
+  sbaglio, dentro il `{:?}` di una struttura più grande. Il rifiuto è proprio
+  il momento in cui qualcuno vorrebbe vedere il token per capire, ed è anche
+  il momento in cui mostrarlo lo consegna a chi legge quel log. L'errore del
+  footer non canonico è un `&'static str`: non è una disciplina da ricordare,
+  è il tipo che non consente di portarci dentro il valore.
+
+La serializzazione invece lo emette, e l'asimmetria è voluta: sul filo serve,
+in un log no.
+
+**Le quattro forme del footer.**
+
+| forma | esito |
+|---|---|
+| assente | **legittimo** — un artefatto ordinario non ha un token |
+| canonico | accettato |
+| presente ma non canonico | **rifiutato sempre**, in ogni percorso |
+| chiave duplicata | rifiutato dalla traversata rinforzata |
+
+Il duplicato non può nascere da questo lato: `FileWriter::write_metadata`
+tiene le coppie in una mappa e due scritture della stessa chiave collassano.
+Può arrivare solo da un produttore estraneo, e lì lo rifiuta il parser.
+
+Che il token sia **obbligatorio** è una proprietà del percorso isolato, non
+della lettura: `leggi_commit_token` dice cosa c'è, non se doveva esserci.
+
+**Come si legge, e come non si legge.** Il token si estrae dalla **stessa
+traversata** che convalida il footer, non da `FileReader::custom_metadata`.
+Quella sarebbe una terza strada nel footer, e di tutti i controlli che il
+parser rinforzato applica non ne farebbe nessuno — allocazione limitata,
+chiavi e valori presenti, duplicati rifiutati. Un valore autoritativo
+raggiungibile senza convalida è peggio di un valore assente.
+
+**Senza token i byte non cambiano.** Con `None` non si scrive nulla, nemmeno
+una chiave vuota: è ciò che rende innocuo aggiungere il sigillo al percorso
+in-process, che passa sempre `None`. Un writer che scrivesse una chiave vuota
+supererebbe ogni prova sul contenuto e cambierebbe ogni artefatto già
+prodotto.
+
+**La condizione di rientro.** Cambiare la forma canonica — lunghezza,
+alfabeto, grafia — significa cambiare la chiave del footer insieme a essa: due
+grafie sotto lo stesso nome non sono distinguibili da chi rilegge. Mostrare il
+valore in `Debug` non ha condizione di rientro: se serve, esiste già
+`in_esadecimale`, che è una riga che si legge in review.
+
 ### `deny_unknown_fields` non copre le varianti unitarie degli enum con tag
 
 **La regola.** In un enum serde con tag interno (`#[serde(tag = "...")]`),

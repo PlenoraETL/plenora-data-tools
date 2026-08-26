@@ -390,7 +390,9 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
                 MAX_VERSIONE_BYTES,
                 "resolver.versione",
             )?;
-            limita(&saluto.commit_token, MAX_DIGEST_BYTES, "commit_token")?;
+            // Nessun tetto sul `commit_token`: `CommitToken` non ammette
+            // forme diverse da quella canonica, quindi non c'e' lunghezza da
+            // limitare.
             verifica_ambiente(&saluto.ambiente)
         }
         Corpo::Incarico(incarico) => {

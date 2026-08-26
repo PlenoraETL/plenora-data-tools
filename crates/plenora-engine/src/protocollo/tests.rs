@@ -14,6 +14,8 @@
 
 use serde_json::value::RawValue;
 
+use crate::commit_token::CommitToken;
+
 use super::codifica::{
     codifica, decodifica, ScrittoreLimitato, BYTE_PREFISSO, MAX_PROTOCOL_FRAME_BYTES,
 };
@@ -41,11 +43,11 @@ const CORPO_SALUTO: &str = concat!(
     r#""ambiente":{"digest_insieme":"bb","acquisizione_dinamica":false,"#,
     r#""risorse":[{"nome":"grid","versione":"1","percorso":"/r/g"}],"#,
     r#""backend_dinamici":[]},"#,
-    r#""commit_token":"cc","#,
+    r#""commit_token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
     r#""limiti":{"max_frame_bytes":1,"max_piano_canonico_bytes":2,"#,
     r#""max_messaggi_verso_worker":3,"max_messaggi_verso_supervisore":4}}"#,
 );
-const PREFISSO_SALUTO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0xB2];
+const PREFISSO_SALUTO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0xF0];
 
 const CORPO_INCARICO: &str = concat!(
     r#"{"piano_canonico":{"schema_version":6},"#,
@@ -113,6 +115,12 @@ fn grezzo(testo: &str) -> Box<RawValue> {
     RawValue::from_string(testo.to_owned()).expect("JSON di prova valido")
 }
 
+/// Il `commit_token` dei vettori: 64 esadecimali minuscoli, scritti a mano.
+fn token_di_prova() -> CommitToken {
+    CommitToken::da_esadecimale("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        .expect("canonico")
+}
+
 fn artefatto() -> IdentitaArtefatto {
     IdentitaArtefatto {
         digest: "aa".to_owned(),
@@ -141,7 +149,7 @@ fn saluto() -> Frame {
             }],
             backend_dinamici: Vec::new(),
         },
-        commit_token: "cc".to_owned(),
+        commit_token: token_di_prova(),
         limiti: LimitiDichiarati {
             max_frame_bytes: 1,
             max_piano_canonico_bytes: 2,
@@ -1045,17 +1053,6 @@ fn casi_saluto() -> Vec<CasoTetto> {
             }),
         ),
         (
-            "commit_token",
-            MAX_DIGEST_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.commit_token = ripeti(n);
-                }
-                f
-            }),
-        ),
-        (
             "digest_insieme",
             MAX_DIGEST_BYTES,
             Box::new(|n| {
@@ -1414,7 +1411,7 @@ fn ogni_campo_limitato_e_provato_sul_proprio_confine() {
     }
     // Se qualcuno aggiunge un `limita` senza aggiungere la riga, questo numero
     // resta indietro ed e' il segnale che manca una prova.
-    assert_eq!(provati, 34, "la tabella dei confini non copre piu' tutto");
+    assert_eq!(provati, 33, "la tabella dei confini non copre piu' tutto");
 }
 
 #[test]
@@ -1478,7 +1475,7 @@ fn massimi() -> Vec<(&'static str, Frame)> {
                 artefatto: artefatto.clone(),
                 resolver: resolver.clone(),
                 ambiente: ambiente_massimo(),
-                commit_token: ripeti_espandendo(MAX_DIGEST_BYTES),
+                commit_token: token_di_prova(),
                 limiti: LimitiDichiarati {
                     max_frame_bytes: u64::MAX,
                     max_piano_canonico_bytes: u64::MAX,
