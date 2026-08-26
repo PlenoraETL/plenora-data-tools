@@ -494,12 +494,12 @@ fn incarico() -> Frame {
             r#"{"schema_version":6}"#.to_owned(),
         )
         .expect("JSON valido"),
-        plan_hash_atteso: "dd".to_owned(),
+        plan_hash_atteso: "d".repeat(64),
         ingressi: vec![DescrittoreIngresso {
             nome: "in".to_owned(),
             percorso: "/d/a.arrow".to_owned(),
             formato: FormatoIngresso::File,
-            contract_fingerprint_atteso: "ee".to_owned(),
+            contract_fingerprint_atteso: "e".repeat(64),
         }],
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -528,7 +528,7 @@ fn dopo_l_accordo_l_incarico_si_riceve_col_token_concordato() {
     let (ricevuto, token_concordato) = accordato
         .ricevi_incarico(incarico())
         .expect("l'incarico si riceve");
-    assert_eq!(ricevuto.plan_hash_atteso, "dd");
+    assert_eq!(ricevuto.plan_hash_atteso, "d".repeat(64));
     assert_eq!(token_concordato.in_esadecimale(), TOKEN);
 }
 
@@ -801,5 +801,57 @@ fn un_digest_non_canonico_e_rifiutato_su_entrambi_i_lati() {
             errore.to_string().contains("digest_insieme"),
             "rifiuto che non nomina il campo: {errore}"
         );
+    }
+}
+
+/// Attese che **nessuna** risposta valida potrebbe soddisfare.
+///
+/// Le capability richieste passavano solo dalla riduzione a forma canonica —
+/// ordine e duplicati — non dalla verifica che vale per quelle offerte. Il
+/// supervisore poteva percio' chiedere un nome vuoto, che nessuna `Risposta`
+/// valida puo' portare, o piu' capability di quante una `Risposta` ne ammetta:
+/// in entrambi i casi l'accordo era impossibile per costruzione, e lo si
+/// scopriva al confronto invece che alla costruzione.
+#[test]
+fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
+    use crate::protocollo::limiti::MAX_CAPABILITY;
+
+    let mut sue = attese();
+    sue.capability_richieste = vec![String::new()];
+    let errore = SupervisoreInAttesa::nuovo(sue).expect_err("nome vuoto");
+    assert!(errore.to_string().contains("capability"), "{errore}");
+
+    let mut sue = attese();
+    sue.capability_richieste = (0..=MAX_CAPABILITY).map(|i| format!("c{i}")).collect();
+    let errore = SupervisoreInAttesa::nuovo(sue).expect_err("cardinalita' eccessiva");
+    assert!(
+        errore.to_string().contains("capability") && errore.to_string().contains("oltre il tetto"),
+        "{errore}"
+    );
+}
+
+/// Un `Incarico` malformato non passa perche' arriva da un `Frame` diretto.
+///
+/// Il frame consegnato all'accordato puo' non essere passato dal decoder: nel
+/// crate si costruisce con `Frame::nuovo`. Senza una verifica qui, un incarico
+/// con un `plan_hash_atteso` che non e' un digest usciva intatto, e a
+/// rifiutarlo sarebbe stato chi lo esegue — cioe' piu' tardi, e altrove.
+#[test]
+fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
+    for guasto in [
+        |i: &mut Incarico| i.plan_hash_atteso = "dd".to_owned(),
+        |i: &mut Incarico| i.artefatto_temporaneo = String::new(),
+        |i: &mut Incarico| i.ingressi[0].contract_fingerprint_atteso = "ee".to_owned(),
+        |i: &mut Incarico| i.ingressi[0].nome = String::new(),
+    ] {
+        let mut frame = incarico();
+        if let Corpo::Incarico(dentro) = frame.corpo_mutabile() {
+            guasto(dentro);
+        }
+        let (_, accordato) = giro_nominale();
+        let errore = accordato
+            .ricevi_incarico(frame)
+            .expect_err("incarico malformato accettato da un frame diretto");
+        assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
     }
 }

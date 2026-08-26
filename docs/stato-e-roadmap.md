@@ -85,11 +85,12 @@ I prerequisiti già in piedi restano validi: il governor ha un permesso atomico
 — verifica e prenotazione in una sola operazione — e la contabilità è
 linearizzabile. Servono al secondo livello, non al primo.
 
-Il costo dichiarato di questa scelta: **nessun meccanismo è stato ancora
-prototipato**, e su macOS il profilo isolato resterà non supportato finché un
-prototipo non dimostri copertura *e* attribuzione. È un lavoro più grande di un
-preflight, e la ragione per farlo comunque è che il preflight non risolverebbe
-il problema.
+Il costo dichiarato di questa scelta: è un lavoro più grande di un preflight,
+e la ragione per farlo comunque è che il preflight non risolverebbe il
+problema. I meccanismi sono stati **prototipati in due cicli** — nascita
+vincolata e contenimento sono dimostrati, l'attribuzione solo sotto le
+condizioni dette più sotto — e su **macOS** il profilo isolato resta non
+supportato finché un prototipo non dimostri copertura *e* attribuzione.
 
 ### Il refactor strutturale è il veicolo, non un lavoro parallelo
 
@@ -108,7 +109,7 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | due cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto **non approvato** per l'implementazione ([`isolamento.md`](isolamento.md)) |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | due cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
 | 5 | il legacy ridotto a un confine di migrazione | sì | |
 | 6 | superficie pubblica e commenti | no | |
 
@@ -657,15 +658,16 @@ diagnosticarlo sposta il problema, non lo risolve.
 perché non venga confusa con `PR-12`: sono due PR distinte, con contenuti
 distinti, e `PR-13` **segue**.
 
-`memory-lab` **non è implementato** e nulla in questo repository ne dipende:
-non c'è codice, non c'è documento normativo, e non ci sarà finché il suo
-contenuto non sarà scritto. Nessuna PR di questa fase lo anticipa, e in
-particolare nessuna delle correzioni in corso lo presuppone.
+`memory-lab` **esiste**, fuori da questo repository. Ciò che non esiste è la
+sua **integrazione qui**: nessun codice, nessun documento normativo, nessuna
+dipendenza — e la distinzione conta, perché «non implementato» direbbe una cosa
+falsa su un lavoro che è stato fatto altrove.
 
-Questa voce dice quindi due cose sole, che sono quelle che servono adesso: che
-il numero è occupato, e che il lavoro non è cominciato. Il contenuto va scritto
-in [`isolamento.md`](isolamento.md) insieme alle altre PR della sequenza, prima
-che qualcuno lo implementi.
+Nessuna PR di questa fase lo anticipa, e nessuna delle correzioni in corso lo
+presuppone. Questa voce dice quindi due cose: che il numero è occupato, e che
+l'integrazione non è cominciata. Che cosa esattamente `PR-13` porti dentro va
+scritto in [`isolamento.md`](isolamento.md) insieme alle altre PR della
+sequenza, prima che qualcuno lo implementi.
 
 ## Debito dichiarato, senza data
 

@@ -1,4 +1,4 @@
-//! Prove del sigillo.
+//! Prove della scrittura e della rilettura del `commit_token` nel footer.
 //!
 //! Le quattro forme del footer — assente, canonico, non canonico, duplicato —
 //! e la proprieta' che le rende utili: **senza token i byte non cambiano**.
@@ -178,26 +178,26 @@ fn le_chiavi_di_altri_produttori_non_disturbano() {
 
 /// **Senza token i byte restano identici.**
 ///
-/// E' la promessa che rende innocuo aggiungere il sigillo al percorso
+/// E' la promessa che rende innocuo aggiungere il token al percorso
 /// in-process, che passa sempre `None`. Un writer che scrivesse una chiave
 /// vuota supererebbe ogni test sul contenuto e cambierebbe ogni artefatto gia'
 /// prodotto.
 #[test]
 fn senza_token_i_byte_non_cambiano() {
-    let mut senza_sigillo = Vec::new();
-    let mut scrittore = FileWriter::try_new(&mut senza_sigillo, &schema()).expect("writer");
+    let mut senza_token = Vec::new();
+    let mut scrittore = FileWriter::try_new(&mut senza_token, &schema()).expect("writer");
     scrittore.write(&batch()).expect("batch");
     scrittore.finish().expect("finish");
     drop(scrittore);
 
     assert_eq!(
         artefatto(None),
-        senza_sigillo,
+        senza_token,
         "`scrivi_commit_token(None)` ha cambiato i byte dell'artefatto"
     );
 }
 
-/// Stesso token, stessi byte: il sigillo non introduce non determinismo.
+/// Stesso token, stessi byte: scrivere il token non introduce non determinismo.
 #[test]
 fn lo_stesso_token_rende_gli_stessi_byte() {
     assert_eq!(artefatto(Some(&token(UNO))), artefatto(Some(&token(UNO))));
@@ -234,13 +234,13 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
     assert_eq!(schema_uno, schema_due, "il token ha toccato lo schema");
     assert_eq!(batch_uno, batch_due, "il token ha toccato i dati");
 
-    // E lo schema e' quello di partenza, non uno arricchito dal sigillo.
+    // E lo schema e' quello di partenza, non uno arricchito dal token.
     assert_eq!(schema_uno.as_ref(), schema().as_ref());
 
     // --- E il `DataContract` col suo fingerprint.
     //
     // Lo schema uguale **non implica** il contratto uguale: il contratto si
-    // ricava dallo schema piu' i metadati canonici, e un sigillo che ne
+    // ricava dallo schema piu' i metadati canonici, e un token che ne
     // toccasse uno cambierebbe il fingerprint senza cambiare i campi. Sarebbe
     // il difetto peggiore di questa PR — due esecuzioni identiche dello stesso
     // piano diventerebbero incompatibili solo per il tentativo che le ha
@@ -309,7 +309,7 @@ fn risolvi_crs(
     _identificatore: &str,
     _contesto: &'static str,
 ) -> Result<plenora_core::crs::ResolvedCrs, plenora_core::crs::CrsError> {
-    unreachable!("nessuna colonna geometrica nelle fixture del sigillo")
+    unreachable!("nessuna colonna geometrica nelle fixture del commit_footer")
 }
 
 /// Il `plan_hash` non dipende dal `commit_token`, e il legame e' **causale**.
@@ -366,7 +366,7 @@ fn il_plan_hash_non_dipende_dal_token_lungo_tutta_la_catena() {
     );
 
     // E l'assenza del token non cambia nulla nemmeno lei: un artefatto
-    // ordinario e uno sigillato descrivono lo stesso contratto.
+    // ordinario e uno col token descrivono lo stesso contratto.
     let senza = {
         let byte = artefatto(None);
         let lettore = FileReader::try_new(std::io::Cursor::new(byte), None).expect("lettore");

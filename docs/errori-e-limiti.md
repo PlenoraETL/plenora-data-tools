@@ -850,7 +850,7 @@ chiama davvero (con `None`).
 
 **Perché due `cfg` diversi e non uno.** `protocollo` porta anche l'arm
 `internals` perché la facciata `interni` è il modo in cui il fuzzer lo
-raggiunge. `sigillo` e `ipc` sono `pub(crate)`: la feature non porterebbe loro
+raggiunge. `commit_footer` e `ipc` sono `pub(crate)`: la feature non porterebbe loro
 nessun chiamante in più, porterebbe un `dead_code` nella build che la abilita.
 Un `cfg` più largo del necessario dichiara una condizione falsa, ed è il modo
 educato di riaprire l'avviso che il `cfg` esisteva per chiudere.
@@ -898,7 +898,7 @@ che finirà nel footer.
 Nel footer di un artefatto vive sotto una chiave sola: `plenora.commit.token`.
 
 **Il perimetro.** Il token attraversa quattro confini — il chiamante che lo
-fornisce, l'handshake che lo trasmette, il writer che lo sigilla, il
+fornisce, l'handshake che lo trasmette, il writer che lo scrive nel footer, il
 verificatore che lo rilegge. La regola vale su tutti e quattro perché è nel
 tipo, non nei quattro punti.
 
@@ -944,7 +944,7 @@ chiavi e valori presenti, duplicati rifiutati. Un valore autoritativo
 raggiungibile senza convalida è peggio di un valore assente.
 
 **Senza token i byte non cambiano.** Con `None` non si scrive nulla, nemmeno
-una chiave vuota: è ciò che rende innocuo aggiungere il sigillo al percorso
+una chiave vuota: è ciò che rende innocuo aggiungere il token al percorso
 in-process, che passa sempre `None`. Un writer che scrivesse una chiave vuota
 supererebbe ogni prova sul contenuto e cambierebbe ogni artefatto già
 prodotto.

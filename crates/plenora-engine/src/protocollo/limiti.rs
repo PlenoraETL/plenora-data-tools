@@ -39,7 +39,17 @@ pub const MAX_IDENTIFICATORE_BYTES: usize = 256;
 /// Byte **decodificati** di un percorso.
 pub const MAX_PERCORSO_BYTES: usize = 4_096;
 
-/// Byte **decodificati** di un digest in esadecimale (SHA-256).
+/// Caratteri di un digest nella forma sul filo: **64**, cioe' l'esadecimale
+/// minuscolo di 32 byte (SHA-256).
+///
+/// Non e' un tetto come gli altri, ed e' la sola autorita' su questa
+/// lunghezza: la forma canonica pretende **esattamente** 64 caratteri, non «al
+/// piu' 64», e il controllo di forma in `codifica` legge questa costante. Due
+/// costanti con lo stesso valore sarebbero due autorita' che possono
+/// divergere, e la prima a cambiare deciderebbe da sola.
+///
+/// Essendo ASCII, caratteri e byte coincidono: il nome dice `BYTES` perche' e'
+/// nella famiglia dei tetti per campo, che si applicano ai byte decodificati.
 pub const MAX_DIGEST_BYTES: usize = 64;
 
 /// Byte **decodificati** di una versione dichiarata.

@@ -684,6 +684,32 @@ fn un_campo_mancante_e_un_errore() {
     );
 }
 
+/// La versione ricevuta non finisce nel messaggio.
+///
+/// E' un `u16` che sceglie chi scrive il frame: un numero arbitrario nel
+/// rifiuto e' un numero arbitrario nel log di chi indaga. Cio' che il rifiuto
+/// puo' dire e' **la nostra** versione, che e' una costante di questo binario.
+///
+/// La sentinella e' valida come `u16` e sconosciuta come versione: sta nel
+/// dominio del tipo, quindi arriva fino al confronto invece di essere respinta
+/// prima come numero malformato.
+#[test]
+fn la_versione_ricevuta_non_compare_nel_rifiuto() {
+    const SENTINELLA: u16 = 51_423;
+
+    let testo =
+        format!(r#"{{"protocol_version":{SENTINELLA},"tipo":"annulla","corpo":{{"motivo":"x"}}}}"#);
+    let messaggio = rifiuto(&incornicia(&testo));
+    assert!(
+        !messaggio.contains(&SENTINELLA.to_string()),
+        "il rifiuto ha copiato la versione ricevuta: {messaggio}"
+    );
+    assert!(
+        messaggio.contains("non riconosciuta"),
+        "rifiuto inatteso: {messaggio}"
+    );
+}
+
 #[test]
 fn una_versione_sconosciuta_e_un_errore() {
     for versione in [0_u16, 2, u16::MAX] {

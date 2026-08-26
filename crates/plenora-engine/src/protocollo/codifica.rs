@@ -322,9 +322,12 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
     // una forma di cui possiamo dire nulla, e provare a leggerlo produrrebbe
     // un errore che parla del campo sbagliato.
     if involucro.protocol_version != VERSIONE_PROTOCOLLO {
+        // La versione ricevuta **non** compare: e' un `u16` che sceglie chi
+        // scrive il frame, e un numero arbitrario nel messaggio e' un numero
+        // arbitrario nel log. Quella che si puo' dire e' la nostra, che e' una
+        // costante di questo binario.
         return Err(errore(format!(
-            "versione del protocollo {} non riconosciuta; questa e' {VERSIONE_PROTOCOLLO}",
-            involucro.protocol_version
+            "versione del protocollo non riconosciuta; questa e' {VERSIONE_PROTOCOLLO}"
         )));
     }
 
@@ -380,9 +383,6 @@ fn limita(valore: &str, tetto: usize, campo: &str) -> Result<()> {
     Ok(())
 }
 
-/// Byte di un digest nella forma sul filo: 64 esadecimali minuscoli.
-pub(super) const DIGEST_CARATTERI: usize = 64;
-
 /// Un campo che **identifica** qualcosa non puo' essere vuoto.
 ///
 /// Il tetto dice quanto puo' essere grande e non dice nulla su quanto debba
@@ -414,13 +414,13 @@ fn identificatore(valore: &str, tetto: usize, campo: &str) -> Result<()> {
 ///
 /// Il valore non compare nell'errore: arriva dal filo.
 pub(super) fn digest_canonico(valore: &str, campo: &str) -> Result<()> {
-    if valore.len() != DIGEST_CARATTERI
+    if valore.len() != MAX_DIGEST_BYTES
         || !valore
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(errore(format!(
-            "`{campo}` non e' un digest canonico: servono {DIGEST_CARATTERI} \
+            "`{campo}` non e' un digest canonico: servono {MAX_DIGEST_BYTES} \
              caratteri esadecimali minuscoli"
         )));
     }
@@ -452,34 +452,7 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
             // limitare.
             verifica_ambiente(&saluto.ambiente)
         }
-        Corpo::Incarico(incarico) => {
-            digest_canonico(&incarico.plan_hash_atteso, "plan_hash_atteso")?;
-            identificatore(
-                &incarico.artefatto_temporaneo,
-                MAX_PERCORSO_BYTES,
-                "artefatto_temporaneo",
-            )?;
-            limita_elementi(&incarico.ingressi, MAX_INGRESSI, "ingressi")?;
-            for ingresso in &incarico.ingressi {
-                identificatore(&ingresso.nome, MAX_IDENTIFICATORE_BYTES, "ingresso.nome")?;
-                identificatore(&ingresso.percorso, MAX_PERCORSO_BYTES, "ingresso.percorso")?;
-                digest_canonico(
-                    &ingresso.contract_fingerprint_atteso,
-                    "ingresso.contract_fingerprint_atteso",
-                )?;
-            }
-            // Il piano e' JSON grezzo: i byte che si misurano qui sono
-            // esattamente quelli che il writer emettera'. Con un `Value` si
-            // sarebbe misurata una serializzazione e spedita un'altra.
-            let byte_piano = incarico.piano_canonico.get().len();
-            if byte_piano > MAX_PIANO_CANONICO_BYTES {
-                return Err(errore(format!(
-                    "`piano_canonico` oltre il tetto: {byte_piano} byte > \
-                     {MAX_PIANO_CANONICO_BYTES}"
-                )));
-            }
-            Ok(())
-        }
+        Corpo::Incarico(incarico) => verifica_incarico(incarico),
         Corpo::Annulla(annulla) => limita(&annulla.motivo, MAX_MOTIVO_BYTES, "motivo"),
         Corpo::Risposta(risposta) => {
             verifica_identita(&risposta.artefatto, &risposta.resolver)?;
@@ -490,6 +463,40 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
         Corpo::Progresso(_) => Ok(()),
         Corpo::Esito(esito) => verifica_esito(esito),
     }
+}
+
+/// La forma di un `Incarico`.
+///
+/// `pub(super)` come le altre: la applica il decoder a cio' che arriva **e**
+/// l'handshake al frame che gli viene consegnato, che puo' non essere passato
+/// dal decoder.
+pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<()> {
+    digest_canonico(&incarico.plan_hash_atteso, "plan_hash_atteso")?;
+    identificatore(
+        &incarico.artefatto_temporaneo,
+        MAX_PERCORSO_BYTES,
+        "artefatto_temporaneo",
+    )?;
+    limita_elementi(&incarico.ingressi, MAX_INGRESSI, "ingressi")?;
+    for ingresso in &incarico.ingressi {
+        identificatore(&ingresso.nome, MAX_IDENTIFICATORE_BYTES, "ingresso.nome")?;
+        identificatore(&ingresso.percorso, MAX_PERCORSO_BYTES, "ingresso.percorso")?;
+        digest_canonico(
+            &ingresso.contract_fingerprint_atteso,
+            "ingresso.contract_fingerprint_atteso",
+        )?;
+    }
+    // Il piano e' JSON grezzo: i byte che si misurano qui sono
+    // esattamente quelli che il writer emettera'. Con un `Value` si
+    // sarebbe misurata una serializzazione e spedita un'altra.
+    let byte_piano = incarico.piano_canonico.get().len();
+    if byte_piano > MAX_PIANO_CANONICO_BYTES {
+        return Err(errore(format!(
+            "`piano_canonico` oltre il tetto: {byte_piano} byte > \
+                 {MAX_PIANO_CANONICO_BYTES}"
+        )));
+    }
+    Ok(())
 }
 
 /// Le due identita' che i due lati confrontano.

@@ -442,6 +442,12 @@ impl SupervisoreInAttesa {
             &attese.da_rispecchiare.resolver,
         )?;
         super::codifica::verifica_ambiente(&attese.da_rispecchiare.ambiente)?;
+        // Le richieste passano dalla **stessa** verifica delle offerte, e
+        // prima di essere ordinate. Senza, il supervisore poteva chiedere un
+        // nome vuoto o piu' capability di quante una `Risposta` valida ne
+        // possa portare: attese che nessun worker conforme puo' soddisfare,
+        // scoperte al confronto invece che alla costruzione.
+        super::codifica::verifica_capability(&attese.capability_richieste)?;
         let _ = ambiente_canonico(&attese.da_rispecchiare.ambiente, "supervisore")?;
         let _ = capability_canoniche(&attese.capability_richieste, "supervisore")?;
         if attese.da_rispecchiare.ambiente.acquisizione_dinamica {
@@ -644,6 +650,11 @@ impl WorkerAccordato {
         let Corpo::Incarico(incarico) = frame.in_corpo() else {
             return Err(fuori_sequenza(TipoMessaggio::Incarico, tipo));
         };
+        // La forma, per la stessa ragione del `Saluto` e della `Risposta`: il
+        // frame puo' non essere passato dal decoder. Senza, un incarico con un
+        // `plan_hash_atteso` che non e' un digest usciva di qui intatto, e a
+        // rifiutarlo sarebbe stato chi lo esegue — cioe' dopo.
+        super::codifica::verifica_incarico(&incarico)?;
         Ok((*incarico, self.commit_token))
     }
 }
