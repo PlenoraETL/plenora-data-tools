@@ -955,6 +955,42 @@ grafie sotto lo stesso nome non sono distinguibili da chi rilegge. Mostrare il
 valore in `Debug` non ha condizione di rientro: se serve, esiste già
 `in_esadecimale`, che è una riga che si legge in review.
 
+### Il `commit_token` si deserializza solo da formati autodescrittivi
+
+**La regola.** `<CommitToken as Deserialize>::deserialize` chiede
+`deserialize_any`, non `deserialize_str`. Un formato che non descrive da sé il
+tipo di ciò che porta — `bincode` e simili, dove il tipo lo deve dichiarare il
+chiamante — **non** può deserializzare un `CommitToken`.
+
+**Il perimetro.** La sola `impl Deserialize`. La serializzazione non è toccata:
+emette una stringa e funziona ovunque. `da_esadecimale` nemmeno: chi ha un
+testo lo valida senza passare da serde.
+
+**Perché la scelta è questa, e non è una comodità.** Chiedendo
+`deserialize_str`, un `serde_json` che trova un numero **non chiama il
+visitatore**: sbriga il disaccordo di tipo da sé con `peek_invalid_type`, che
+costruisce il messaggio dal valore letto. Il rifiuto sarebbe giusto e direbbe
+«invalid type: integer `1234…`» — cioè il token in chiaro, se qualcuno lo ha
+scritto senza virgolette. Con `deserialize_any` il formato si limita a dire
+*che cosa* ha trovato, e la decisione, col messaggio, torna al nostro
+visitatore, dove il valore non ha un parametro in cui entrare.
+
+**Il pericolo che copre, e quello che apre.** Copre il valore del token in un
+messaggio d'errore, cioè in un log — lo stesso pericolo del resto di questa
+sezione, per la sola via che restava aperta. Apre un vincolo sul trasporto: se
+un domani il protocollo passasse a un formato non autodescrittivo, questa
+`impl` smetterebbe di funzionare — **rumorosamente**, con un errore del
+formato, non in silenzio. Oggi sul filo c'è JSON e il protocollo non prevede
+altro: lo dice [`isolamento.md`](isolamento.md#4-protocollo-interno).
+
+**La condizione di rientro.** Cade il giorno che il protocollo adotti un
+formato non autodescrittivo. Quel giorno la strada non è tornare a
+`deserialize_str` — riaprirebbe esattamente la fuga — ma dare al tipo una
+`impl` che il nuovo formato sappia guidare, verificando **sul messaggio
+prodotto** che il valore non compaia. La verifica va rifatta, non dedotta: che
+varianti di `Unexpected` un formato costruisca è una scelta di quel formato,
+non una garanzia di serde.
+
 ### `deny_unknown_fields` non copre le varianti unitarie degli enum con tag
 
 **La regola.** In un enum serde con tag interno (`#[serde(tag = "...")]`),

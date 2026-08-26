@@ -248,7 +248,10 @@ impl Serialize for CommitToken {
 ///
 /// Con `deserialize_any` il formato si limita a **dire cosa ha trovato**,
 /// chiamando il `visit_*` corrispondente, e la decisione — con il messaggio —
-/// torna qui. Il prezzo e' che questa `Deserialize` vuole un formato
+/// torna qui. Il vincolo che ne segue e' registrato in
+/// errori-e-limiti.md#il-commit-token-si-deserializza-solo-da-formati-autodescrittivi,
+/// con ambito e condizione di rientro. Il prezzo e' che questa
+/// `Deserialize` vuole un formato
 /// autodescrittivo: sul filo c'e' JSON, e il protocollo non prevede altro.
 impl<'de> Deserialize<'de> for CommitToken {
     fn deserialize<D: Deserializer<'de>>(deserializzatore: D) -> Result<Self, D::Error> {

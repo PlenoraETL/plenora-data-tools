@@ -243,8 +243,14 @@ difetti che una corsa breve avrebbe visto.
 | --- | --- |
 | **Prima del commit** | i gate deterministici, suite completa del workspace inclusa |
 | **Prima del merge** | test mirati, coverage, **compilazione** del crate `fuzz/` e **smoke dei soli target coinvolti** dalla modifica |
-| **Dopo il merge** | campagna completa, in parallelo alla PR successiva |
-| **Obbligatoria e lunga** | dopo **`PR-6`**, **`PR-10`**, **`PR-12`**, **`PR-13`**, e prima di ogni release candidate |
+| **Dopo il merge** | campagna completa — **30 minuti per target**, il default di `fuzz.yml` — in parallelo alla PR successiva |
+| **Obbligatoria e lunga** | **almeno 1 ora per target**, il default di `fuzz-campaign.sh`: dopo **`PR-6`**, **`PR-10`**, **`PR-12`**, **`PR-13`**, e prima di ogni release candidate |
+
+Le due durate non sono scelte qui: sono i default degli strumenti che le
+eseguono (`minutes_per_target: 30` in `.github/workflows/fuzz.yml`,
+`FUZZ_HOURS_PER_TARGET=1` in `scripts/fuzz-campaign.sh`). Scriverne altre
+significherebbe avere due numeri per la stessa cosa, e uno dei due sarebbe
+falso.
 
 «Target coinvolti» si legge dal codice toccato, non dal nome della PR: chi
 modifica il decoder del protocollo passa da `protocollo_frame` anche se la PR
@@ -255,35 +261,14 @@ release**, non una voce di arretrato. Se una campagna lunga trova qualcosa
 dopo il merge, la release aspetta quella fix: il momento in cui il difetto è
 emerso non cambia che cosa sarebbe successo in produzione.
 
-### Riprodurre lo smoke in locale
-
-`scripts/fuzz-smoke.sh` gira nell'immagine `plenora-rust:nightly-fuzz` e monta
-`cargo-fuzz` da una cartella dell'host. Nessuna delle due nasce da sola, e la
-loro ricetta è **quella del workflow**, non una variante locale — stessa
-nightly datata, stessa versione di `cargo-fuzz`:
-
-```sh
-# 1. L'immagine: la pinnata piu' la nightly datata di fuzz.yml. Nessun
-#    componente in piu': il workflow non ne chiede, e chiederne uno che quella
-#    nightly non ha fa fallire la build senza dire perche'.
-printf 'FROM rust:1.98\nRUN rustup toolchain install nightly-2026-08-01\n\
-ENV RUSTUP_TOOLCHAIN=nightly-2026-08-01\n' \
-  | docker build -t plenora-rust:nightly-fuzz -
-# 2. `cargo-fuzz` nella cartella che lo script monta come /fuzzbin. Il `--root`
-#    scrive in `bin/`, ed e' quel `bin/` che lo script monta: il binario deve
-#    trovarsi in `/fuzzbin/cargo-fuzz`, non in `/fuzzbin/bin/cargo-fuzz`.
-MSYS_NO_PATHCONV=1 docker run --rm \
-  -v C:/tmp/plenora-geo-tools-arrow/.fuzz-cargo:/out \
-  plenora-rust:nightly-fuzz \
-  cargo install cargo-fuzz --version 0.13.2 --locked --root /out
-# 3. Lo smoke dei soli target coinvolti.
-FUZZ_TARGETS=protocollo_frame scripts/fuzz-smoke.sh
-```
-
-Se una delle due manca, lo script fallisce con un errore di Docker che non
-nomina la causa — «pull access denied for plenora-rust» quando manca
-l'immagine, un mount vuoto quando manca il binario. È la ragione per cui la
-ricetta sta qui e non nella memoria di chi l'ha costruita la prima volta.
+Lo smoke locale ha un prerequisito che **oggi non è riproducibile**:
+`scripts/fuzz-smoke.sh` gira in un'immagine (`plenora-rust:nightly-fuzz`) e
+monta `cargo-fuzz` da un percorso fisso dell'host. Nessuno dei due nasce da
+solo, e se manca lo script fallisce con un errore di Docker che non nomina la
+causa. La procedura riproducibile è lavoro suo — parametrizzare il percorso,
+dargli un default neutro, diagnosticare esplicitamente ciò che manca — e non
+sta qui: fino ad allora lo smoke prima del merge richiede un ambiente
+preparato a mano, ed è un costo dichiarato, non una svista.
 
 Il solo step `cargo fuzz run` gira su toolchain **nightly**, mentre build,
 test, clippy e gate anti-panico restano sulla pinnata. È una divergenza
