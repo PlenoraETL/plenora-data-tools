@@ -35,39 +35,18 @@
 //! iniziali, e il parser vero resterebbe di fatto fuori dalla campagna.
 
 use libfuzzer_sys::fuzz_target;
-use plenora_engine::protocollo::codifica::{
-    codifica, decodifica, BYTE_PREFISSO, MAX_PROTOCOL_FRAME_BYTES,
-};
+use plenora_engine::interni::verifica_giro_del_frame;
 
-/// Le invarianti del giro, applicate a ogni frame accettato.
+/// Le invarianti stanno **dentro** il crate, in `interni`: qui si applicano e
+/// si abortisce, ma non si decide che cosa significhino.
+///
+/// Scritte qui sarebbero compilate solo dalla toolchain nightly. Scritte li'
+/// le compila e le controlla ogni build normale, e la suite ordinaria le
+/// esercita senza aspettare la campagna.
 fn controlla(byte: &[u8]) {
-    let Ok(frame) = decodifica(byte) else {
-        // Un rifiuto e' un esito legittimo: la maggior parte degli ingressi
-        // di un fuzzer non e' un frame.
-        return;
-    };
-
-    let canonico = codifica(&frame).expect("un frame decodificato si ricodifica sempre");
-    let payload = canonico
-        .len()
-        .checked_sub(BYTE_PREFISSO)
-        .expect("il frame codificato contiene il prefisso");
-    assert!(
-        payload <= MAX_PROTOCOL_FRAME_BYTES,
-        "la forma canonica supera il tetto: {payload} byte"
-    );
-
-    let dichiarata = u32::from_be_bytes([canonico[0], canonico[1], canonico[2], canonico[3]]);
-    assert_eq!(
-        dichiarata as usize, payload,
-        "il prefisso non dichiara i byte del payload"
-    );
-
-    let riletto = decodifica(&canonico).expect("la forma canonica si rilegge");
-    assert!(riletto == frame, "il giro non rende la stessa struttura");
-
-    let di_nuovo = codifica(&riletto).expect("ricodifica");
-    assert_eq!(canonico, di_nuovo, "codifica non deterministica");
+    if let Err(motivo) = verifica_giro_del_frame(byte) {
+        panic!("invariante del protocollo rotta: {motivo}");
+    }
 }
 
 fuzz_target!(|payload: &[u8]| {
@@ -76,7 +55,7 @@ fuzz_target!(|payload: &[u8]| {
 
     // 2. Gli stessi byte con la cornice giusta: e' tutto il resto.
     if let Ok(lunghezza) = u32::try_from(payload.len()) {
-        let mut inquadrato = Vec::with_capacity(BYTE_PREFISSO + payload.len());
+        let mut inquadrato = Vec::with_capacity(4 + payload.len());
         inquadrato.extend_from_slice(&lunghezza.to_be_bytes());
         inquadrato.extend_from_slice(payload);
         controlla(&inquadrato);

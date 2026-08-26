@@ -9,19 +9,15 @@
 //!
 //! Niente qui apre un pipe, avvia un processo o parla con un worker.
 //!
-//! # Perche' e' privato
+//! # Perche' e' privato, e come lo raggiunge chi sta fuori
 //!
 //! Il protocollo e' interno. Renderlo pubblico significherebbe promettere di
 //! non cambiarlo, e non c'e' ragione di promettere a nessuno la forma di un
 //! canale fra due processi che spediamo insieme.
-
-// I sei messaggi esistono come **forma** e non hanno ancora un chiamante: chi
-// li costruisce e' l'handshake, che per perimetro esplicito appartiene alla PR
-// successiva. L'alternativa sarebbe stata portare qui un pezzo di supervisore
-// solo per far usare i tipi, cioe' allargare il perimetro per zittire un
-// avviso. Questo `allow` **scade con PR-5**: quando l'handshake esiste, i tipi
-// hanno un chiamante vero e va tolto.
-#![allow(dead_code)]
+//!
+//! Il crate `fuzz/` e la sonda di calibrazione stanno fuori dal crate e non
+//! possono entrare qui: passano da `crate::interni`, che rende un verdetto e
+//! una costante e **non** i tipi di questo modulo.
 
 pub mod codifica;
 pub mod limiti;

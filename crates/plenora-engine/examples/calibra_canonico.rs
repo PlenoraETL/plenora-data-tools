@@ -33,8 +33,8 @@
 //! ```
 
 use plenora_core::limits::PlanLimits;
+use plenora_engine::interni::MAX_PIANO_CANONICO_BYTES;
 use plenora_engine::plan::{valida_per_versione, PLAN_SCHEMA_VERSION_V6};
-use plenora_engine::protocollo::limiti::MAX_PIANO_CANONICO_BYTES;
 
 struct Caso {
     nome: &'static str,
@@ -195,7 +195,7 @@ fn casi(alias: &str, alias_perche: &'static str) -> Vec<Caso> {
 }
 
 // Il limite non e' piu' definito qui. La sonda **misura** e confronta con
-// l'unica autorita', `protocollo::limiti::MAX_PIANO_CANONICO_BYTES`: se
+// l'unica autorita', `interni::MAX_PIANO_CANONICO_BYTES`: se
 // qualcuno abbassasse quel numero sotto la proiezione, questa sonda uscirebbe
 // non-zero invece di continuare a dichiarare un margine che non esiste piu'.
 

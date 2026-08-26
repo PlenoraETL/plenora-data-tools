@@ -37,7 +37,26 @@ pub const BYTE_PREFISSO: usize = 4;
 // La derivazione del tetto del frame
 // ---------------------------------------------------------------------------
 
-/// Byte dell'involucro JSON, **contati** e non stimati.
+/// Byte di una chiave JSON col suo `:`, **dal nome stesso**.
+///
+/// `chiave("percorso")` e' `"percorso":`, cioe' il nome piu' due virgolette e
+/// i due punti.
+///
+/// Il conto lo fa il compilatore sul nome vero. La stesura precedente lo
+/// scriveva a mano accanto al nome in un commento, e cinque cifre su nove
+/// erano sbagliate di uno — il maggiorante restava conservativo, ma la
+/// derivazione non era quella dichiarata. Un numero scritto vicino a una
+/// stringa e' un numero che se ne separa.
+const fn chiave(nome: &str) -> usize {
+    nome.len() + 3
+}
+
+/// Byte di un valore stringa letterale, virgolette comprese.
+const fn letterale(valore: &str) -> usize {
+    valore.len() + 2
+}
+
+/// Byte dell'involucro JSON.
 ///
 /// `{"protocol_version":65535,"tipo":"progresso","corpo":}` e' la forma piu'
 /// lunga: `u16` a cinque cifre e il nome di tipo piu' lungo.
@@ -45,16 +64,17 @@ pub const BYTE_PREFISSO: usize = 4;
 /// «Piu' lungo» fra i **sei tipi di messaggio** — `progresso`, nove caratteri
 /// — non fra i nomi degli assi dell'errore, che sono ben piu' lunghi ma non
 /// compaiono mai qui: `tipo` non li puo' contenere.
-///
-/// Il conto e' sui caratteri letterali, quindi e' verificabile leggendolo.
 const INVOLUCRO_BYTES: usize = {
-    // {"protocol_version": = 20, valore u16 = 5, , = 1
-    let versione = 20 + 5 + 1;
-    // "tipo":"" = 9, nome del tipo piu' lungo ("progresso" = 9), , = 1
-    let tipo = 9 + 9 + 1;
-    // "corpo": = 8, } di chiusura = 1
-    let corpo = 8 + 1;
-    versione + tipo + corpo
+    // { } piu' le due virgole fra i tre campi.
+    let struttura = 2 + 2;
+    // `u16` al massimo: 65535, cinque cifre.
+    let valore_versione = 5;
+    struttura
+        + chiave("protocol_version")
+        + valore_versione
+        + chiave("tipo")
+        + letterale("progresso")
+        + chiave("corpo")
 };
 
 /// Byte di un campo stringa **codificato**, dal suo tetto decodificato.
@@ -65,27 +85,36 @@ const fn stringa_codificata(tetto_decodificato: usize) -> usize {
     tetto_decodificato * ESPANSIONE_ESCAPE + 2
 }
 
-/// Byte massimi di un descrittore d'ingresso, **contando le chiavi**.
+/// Byte massimi di un descrittore d'ingresso.
 const DESCRITTORE_BYTES: usize = {
-    // {"nome": = 8, "percorso": = 12, "formato": = 11, "stream" = 8,
-    // "contract_fingerprint_atteso": = 30, tre virgole = 3, } = 1
-    let chiavi = 8 + 12 + 11 + 8 + 30 + 3 + 1;
-    chiavi
+    // { } piu' le tre virgole fra i quattro campi.
+    let struttura = 2 + 3;
+    struttura
+        + chiave("nome")
         + stringa_codificata(MAX_IDENTIFICATORE_BYTES)
+        + chiave("percorso")
         + stringa_codificata(MAX_PERCORSO_BYTES)
+        + chiave("formato")
+        + letterale("stream")
+        + chiave("contract_fingerprint_atteso")
         + stringa_codificata(MAX_DIGEST_BYTES)
 };
 
 /// Byte massimi del corpo di un `Incarico`, il messaggio piu' grande.
 const INCARICO_BYTES: usize = {
-    // {"piano_canonico": = 18, "plan_hash_atteso": = 20, "ingressi": = 12,
-    // "artefatto_temporaneo": = 24, virgole = 3, [] = 2, } = 1,
-    // separatori fra i descrittori = MAX_INGRESSI - 1
-    let chiavi = 18 + 20 + 12 + 24 + 3 + 2 + 1 + (MAX_INGRESSI - 1);
-    chiavi
+    // { } piu' le tre virgole fra i quattro campi.
+    let struttura = 2 + 3;
+    // [ ] piu' i separatori fra i descrittori.
+    let lista = 2 + (MAX_INGRESSI - 1);
+    struttura
+        + chiave("piano_canonico")
         + MAX_PIANO_CANONICO_BYTES
+        + chiave("plan_hash_atteso")
         + stringa_codificata(MAX_DIGEST_BYTES)
+        + chiave("ingressi")
+        + lista
         + DESCRITTORE_BYTES * MAX_INGRESSI
+        + chiave("artefatto_temporaneo")
         + stringa_codificata(MAX_PERCORSO_BYTES)
 };
 
@@ -280,11 +309,11 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
         TipoMessaggio::Esito => Corpo::Esito(Box::new(corpo_di(grezzo, "esito")?)),
     };
 
-    let frame = Frame {
-        protocol_version: involucro.protocol_version,
-        tipo: involucro.tipo,
-        corpo,
-    };
+    // `Frame::nuovo` prende il solo corpo: il tipo dichiarato sul filo e'
+    // servito a **scegliere** come leggerlo e finisce li'. Ricostruirlo dal
+    // corpo e' l'unico modo in cui esista, quindi non c'e' un tipo
+    // «dichiarato» che possa sopravvivere accanto a uno «vero».
+    let frame = Frame::nuovo(corpo);
     verifica_forma(&frame)?;
     Ok(frame)
 }
@@ -339,7 +368,7 @@ fn limita_elementi<T>(elementi: &[T], tetto: usize, campo: &str) -> Result<()> {
 /// avrebbe reso il protocollo asimmetrico proprio dove i due lati devono
 /// concordare.
 fn verifica_forma(frame: &Frame) -> Result<()> {
-    match &frame.corpo {
+    match frame.corpo() {
         Corpo::Saluto(saluto) => {
             limita(
                 &saluto.artefatto.digest,

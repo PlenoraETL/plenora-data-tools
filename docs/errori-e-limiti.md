@@ -803,11 +803,22 @@ serializzazione, che direbbe «il messaggio non si scrive» al posto di «questo
 piano non si può isolare». La selezione del profilo appartiene a `PR-12`: fino
 ad allora la condizione esiste e non ha ancora il suo messaggio.
 
+**Il modulo non è pubblico, e non lo diventa sotto feature.** Il crate `fuzz/`
+e la sonda di calibrazione stanno fuori dal crate e non possono raggiungere un
+modulo privato; passano da `plenora_engine::interni`, una facciata
+**instabile e non-production** che espone un verdetto e una costante, non i
+tipi del protocollo. Una prima stesura esponeva `pub mod protocollo` sotto la
+stessa feature: era API pubblica a tutti gli effetti quando la feature era
+attiva, e il crate `fuzz/` è precisamente un consumatore che la attiva.
+«Privato tranne che per chi lo usa» non è privato.
+
 **La condizione di rientro.** Alzare un tetto richiede: la misura che mostra il
 caso reale che lo supera, il ricalcolo di `MAX_PROTOCOL_FRAME_BYTES` (che è
 derivato, quindi si aggiorna da sé), e la verifica che i sei massimi
 serializzati continuino a starci sotto — che è un test, non un controllo a
-mano. Renderli configurabili è fuori discussione finché il canale resta
+mano. Quei massimi vanno costruiti con caratteri che JSON **espande** in `\uXXXX`: con stringhe ASCII il frame massimo resta a un sesto della
+taglia che il tetto gli concede, e l'espansione degli escape non viene mai
+esercitata. Renderli configurabili è fuori discussione finché il canale resta
 interno.
 
 ### `deny_unknown_fields` non copre le varianti unitarie degli enum con tag

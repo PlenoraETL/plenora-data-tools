@@ -466,12 +466,81 @@ pub enum Corpo {
 
 /// L'involucro di ogni frame.
 ///
-/// Solo `Serialize`: si legge con `codifica::decodifica`, non con un derive.
-/// La direzione filo → struttura e' una funzione che controlla, non una
-/// conversione che riesce.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// # Una sola autorita', e non per disciplina
+///
+/// Il frame porta **solo il corpo**. La versione e' fissata internamente e il
+/// tipo e' [derivato](Self::tipo) dal corpo: nessuno dei due e' un campo che
+/// si possa impostare.
+///
+/// La stesura precedente li teneva come campi pubblici indipendenti, e il
+/// codificatore poteva quindi emettere un frame che il decoder rifiuta — una
+/// versione `2`, o un `tipo: "saluto"` con dentro un `Annulla`. Erano difetti
+/// veri, e nessuna verifica in `codifica` li avrebbe *eliminati*: li avrebbe
+/// solo intercettati, cioe' spostati da «impossibile» a «controllato».
+///
+/// # Solo `Serialize`
+///
+/// Si legge con `codifica::decodifica`, non con un derive: la direzione
+/// filo → struttura e' una funzione che controlla, non una conversione che
+/// riesce.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
-    pub protocol_version: u16,
-    pub tipo: TipoMessaggio,
-    pub corpo: Corpo,
+    corpo: Corpo,
+}
+
+impl Frame {
+    /// L'unico modo di costruire un frame.
+    #[must_use]
+    pub const fn nuovo(corpo: Corpo) -> Self {
+        Self { corpo }
+    }
+
+    /// Il corpo.
+    #[must_use]
+    pub const fn corpo(&self) -> &Corpo {
+        &self.corpo
+    }
+
+    /// Il corpo, modificabile: **solo per i test**.
+    ///
+    /// Non riapre il difetto che i campi privati chiudono: il tipo resta una
+    /// funzione del corpo, quindi cambiare il corpo cambia anche il tipo. Cio'
+    /// che non esiste piu' e' la possibilita' di cambiarne *uno solo*.
+    #[cfg(test)]
+    pub(super) const fn corpo_mutabile(&mut self) -> &mut Corpo {
+        &mut self.corpo
+    }
+
+    /// Il tipo, **dedotto** dal corpo.
+    ///
+    /// Non e' un campo da tenere allineato: e' una funzione del corpo, quindi
+    /// non esiste uno stato in cui i due si contraddicono.
+    #[must_use]
+    pub const fn tipo(&self) -> TipoMessaggio {
+        match &self.corpo {
+            Corpo::Saluto(_) => TipoMessaggio::Saluto,
+            Corpo::Incarico(_) => TipoMessaggio::Incarico,
+            Corpo::Annulla(_) => TipoMessaggio::Annulla,
+            Corpo::Risposta(_) => TipoMessaggio::Risposta,
+            Corpo::Progresso(_) => TipoMessaggio::Progresso,
+            Corpo::Esito(_) => TipoMessaggio::Esito,
+        }
+    }
+}
+
+/// Emette i tre campi dell'involucro: la versione dalla costante, il tipo dal
+/// corpo, e il corpo nudo.
+///
+/// Scritta a mano e non derivata perche' due dei tre campi **non sono campi**:
+/// se lo fossero, tornerebbe la possibilita' di impostarli male.
+impl Serialize for Frame {
+    fn serialize<S: serde::Serializer>(&self, serializzatore: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+
+        let mut involucro = serializzatore.serialize_struct("Frame", 3)?;
+        involucro.serialize_field("protocol_version", &VERSIONE_PROTOCOLLO)?;
+        involucro.serialize_field("tipo", &self.tipo())?;
+        involucro.serialize_field("corpo", &self.corpo)?;
+        involucro.end()
+    }
 }

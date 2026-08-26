@@ -550,6 +550,13 @@ difesa contro entrambi.
 Un frame è un prefisso di lunghezza `u32` **big-endian** seguito da JSON UTF-8
 compatto. Il prefisso conta il solo payload.
 
+Il frame porta **solo il corpo**: la versione è fissata internamente e il tipo
+è *derivato* dal corpo. Nessuno dei due è un campo che si possa impostare, e
+non è una disciplina ma una proprietà del tipo — non esiste uno stato in cui
+il tipo dichiarato e il corpo si contraddicano. Una verifica al momento di
+scrivere avrebbe *intercettato* quella contraddizione, cioè l'avrebbe spostata
+da impossibile a controllata; e un controllo si può dimenticare di scrivere.
+
 Il tetto si applica **prima di allocare**: si leggono i quattro byte, si
 confrontano col limite, e solo dopo si guarda il payload. Un frame che dichiara
 un gigabyte non ne fa allocare nemmeno uno. In scrittura vale il verso

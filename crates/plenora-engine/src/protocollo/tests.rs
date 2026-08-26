@@ -126,57 +126,45 @@ fn resolver() -> IdentitaResolver {
 }
 
 fn saluto() -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Saluto,
-        corpo: Corpo::Saluto(Box::new(Saluto {
-            artefatto: artefatto(),
-            resolver: resolver(),
-            ambiente: Ambiente {
-                digest_insieme: "bb".to_owned(),
-                acquisizione_dinamica: false,
-                risorse: vec![RisorsaRisolta {
-                    nome: "grid".to_owned(),
-                    versione: "1".to_owned(),
-                    percorso: "/r/g".to_owned(),
-                }],
-                backend_dinamici: Vec::new(),
-            },
-            commit_token: "cc".to_owned(),
-            limiti: LimitiDichiarati {
-                max_frame_bytes: 1,
-                max_piano_canonico_bytes: 2,
-                max_messaggi_verso_worker: 3,
-                max_messaggi_verso_supervisore: 4,
-            },
-        })),
-    }
+    Frame::nuovo(Corpo::Saluto(Box::new(Saluto {
+        artefatto: artefatto(),
+        resolver: resolver(),
+        ambiente: Ambiente {
+            digest_insieme: "bb".to_owned(),
+            acquisizione_dinamica: false,
+            risorse: vec![RisorsaRisolta {
+                nome: "grid".to_owned(),
+                versione: "1".to_owned(),
+                percorso: "/r/g".to_owned(),
+            }],
+            backend_dinamici: Vec::new(),
+        },
+        commit_token: "cc".to_owned(),
+        limiti: LimitiDichiarati {
+            max_frame_bytes: 1,
+            max_piano_canonico_bytes: 2,
+            max_messaggi_verso_worker: 3,
+            max_messaggi_verso_supervisore: 4,
+        },
+    })))
 }
 
 fn incarico() -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Incarico,
-        corpo: Corpo::Incarico(Box::new(Incarico {
-            piano_canonico: grezzo(r#"{"schema_version":6}"#),
-            plan_hash_atteso: "dd".to_owned(),
-            ingressi: vec![DescrittoreIngresso {
-                nome: "in".to_owned(),
-                percorso: "/d/a.arrow".to_owned(),
-                formato: FormatoIngresso::File,
-                contract_fingerprint_atteso: "ee".to_owned(),
-            }],
-            artefatto_temporaneo: "/t/out.arrow".to_owned(),
-        })),
-    }
+    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
+        piano_canonico: grezzo(r#"{"schema_version":6}"#),
+        plan_hash_atteso: "dd".to_owned(),
+        ingressi: vec![DescrittoreIngresso {
+            nome: "in".to_owned(),
+            percorso: "/d/a.arrow".to_owned(),
+            formato: FormatoIngresso::File,
+            contract_fingerprint_atteso: "ee".to_owned(),
+        }],
+        artefatto_temporaneo: "/t/out.arrow".to_owned(),
+    })))
 }
 
 fn annulla_con(motivo: String) -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Annulla,
-        corpo: Corpo::Annulla(Annulla { motivo }),
-    }
+    Frame::nuovo(Corpo::Annulla(Annulla { motivo }))
 }
 
 fn annulla() -> Frame {
@@ -184,58 +172,42 @@ fn annulla() -> Frame {
 }
 
 fn incarico_con(piano: Box<RawValue>, ingressi: Vec<DescrittoreIngresso>) -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Incarico,
-        corpo: Corpo::Incarico(Box::new(Incarico {
-            piano_canonico: piano,
-            plan_hash_atteso: "dd".to_owned(),
-            ingressi,
-            artefatto_temporaneo: "/t/out.arrow".to_owned(),
-        })),
-    }
+    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
+        piano_canonico: piano,
+        plan_hash_atteso: "dd".to_owned(),
+        ingressi,
+        artefatto_temporaneo: "/t/out.arrow".to_owned(),
+    })))
 }
 
 fn risposta() -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Risposta,
-        corpo: Corpo::Risposta(Box::new(Risposta {
-            artefatto: artefatto(),
-            resolver: resolver(),
-            ambiente: Ambiente {
-                digest_insieme: "bb".to_owned(),
-                acquisizione_dinamica: false,
-                risorse: Vec::new(),
-                backend_dinamici: vec![BackendDinamico {
-                    nome: "gdal".to_owned(),
-                    versione: "3.8".to_owned(),
-                    percorso: "/l/libgdal.so".to_owned(),
-                }],
-            },
-            capability: vec!["arrow_ipc".to_owned()],
-        })),
-    }
+    Frame::nuovo(Corpo::Risposta(Box::new(Risposta {
+        artefatto: artefatto(),
+        resolver: resolver(),
+        ambiente: Ambiente {
+            digest_insieme: "bb".to_owned(),
+            acquisizione_dinamica: false,
+            risorse: Vec::new(),
+            backend_dinamici: vec![BackendDinamico {
+                nome: "gdal".to_owned(),
+                versione: "3.8".to_owned(),
+                percorso: "/l/libgdal.so".to_owned(),
+            }],
+        },
+        capability: vec!["arrow_ipc".to_owned()],
+    })))
 }
 
 fn progresso() -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Progresso,
-        corpo: Corpo::Progresso(Progresso {
-            righe: 10,
-            batch: 2,
-            nodi_completati: 3,
-        }),
-    }
+    Frame::nuovo(Corpo::Progresso(Progresso {
+        righe: 10,
+        batch: 2,
+        nodi_completati: 3,
+    }))
 }
 
 fn esito(dentro: EsitoWorkerSulFilo) -> Frame {
-    Frame {
-        protocol_version: VERSIONE_PROTOCOLLO,
-        tipo: TipoMessaggio::Esito,
-        corpo: Corpo::Esito(Box::new(dentro)),
-    }
+    Frame::nuovo(Corpo::Esito(Box::new(dentro)))
 }
 
 fn esito_successo() -> Frame {
@@ -718,10 +690,17 @@ fn un_enum_fuori_dominio_e_un_errore() {
 /// struttura proprio per questo, e qui si verifica che la scrittura tenga.
 #[test]
 fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
+    // Tutte e tre le varianti dell'esito, col campo estraneo **al livello
+    // della variante**: e' quello che il tag interno tratta a parte.
     let casi = [
-        // `esito`, variante con campi
         r#"{"esito":"panic","forma":"statico","extra":1}"#,
         r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"extra":1}"#,
+        concat!(
+            r#"{"esito":"errore","errore":{"categoria":"schema","fase":"read","#,
+            r#""effetto":"none","retry":{"kind":"never"},"messaggio":"m","#,
+            r#""nodo":null,"operazione":null,"execution_id":null,"diagnostica":null},"#,
+            r#""extra":1}"#,
+        ),
     ];
     for corpo in casi {
         let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
@@ -731,25 +710,31 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
         );
     }
 
-    // `retry`, tutte e cinque le disposizioni.
-    for disposizione in [
-        "never",
-        "safe",
-        "requires_idempotency_key",
-        "requires_recovery",
-    ] {
+    // `retry`, tutte e cinque le disposizioni — `after` compresa. Va provata
+    // a parte proprio perche' e' l'unica che aveva gia' un campo suo, quindi
+    // l'unica in cui `deny_unknown_fields` funzionava anche prima della
+    // correzione: senza provarla, non lo si saprebbe.
+    let disposizioni = [
+        r#"{"kind":"never","estraneo":1}"#,
+        r#"{"kind":"safe","estraneo":1}"#,
+        r#"{"kind":"requires_idempotency_key","estraneo":1}"#,
+        r#"{"kind":"requires_recovery","estraneo":1}"#,
+        r#"{"kind":"after","delay_ms":1,"estraneo":1}"#,
+    ];
+    assert_eq!(disposizioni.len(), 5, "le disposizioni sono cinque");
+    for retry in disposizioni {
         let corpo = format!(
             concat!(
                 r#"{{"esito":"errore","errore":{{"categoria":"schema","fase":"read","#,
-                r#""effetto":"none","retry":{{"kind":"{}","estraneo":1}},"messaggio":"m","#,
+                r#""effetto":"none","retry":{},"messaggio":"m","#,
                 r#""nodo":null,"operazione":null,"execution_id":null,"diagnostica":null}}}}"#,
             ),
-            disposizione
+            retry
         );
         let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
         assert!(
             messaggio.contains("unknown field"),
-            "campo ignoto accettato su `{disposizione}`: {messaggio}"
+            "campo ignoto accettato su «{retry}»: {messaggio}"
         );
     }
 }
@@ -832,6 +817,22 @@ fn ripeti(n: usize) -> String {
     "a".repeat(n)
 }
 
+/// Il carattere che JSON **deve** espandere: `U+0001`, un byte decodificato,
+/// sei byte codificati.
+///
+/// Serve alle fixture massime. Con `"a"` il frame massimo restava a un sesto
+/// della taglia che il tetto gli concede, quindi la prova dei massimi non
+/// toccava mai `ESPANSIONE_ESCAPE`: una mutazione a `1` l'avrebbe lasciata
+/// verde pur rendendo non codificabile un frame **strutturalmente ammesso**
+/// che portasse caratteri di controllo. E in `PR-4` quei campi ammettono
+/// qualunque stringa.
+const ESPANDIBILE: &str = "\u{1}";
+
+/// `n` byte decodificati che ne diventano `n * ESPANSIONE_ESCAPE` codificati.
+fn ripeti_espandendo(n: usize) -> String {
+    ESPANDIBILE.repeat(n)
+}
+
 /// Un ingresso minimo, per i casi in cui a essere sotto esame e' un altro
 /// campo.
 fn ingresso_minimo() -> DescrittoreIngresso {
@@ -909,7 +910,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_DIGEST_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.artefatto.digest = ripeti(n);
                 }
                 f
@@ -920,7 +921,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_VERSIONE_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.artefatto.versione = ripeti(n);
                 }
                 f
@@ -931,7 +932,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_IDENTIFICATORE_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.resolver.identita = ripeti(n);
                 }
                 f
@@ -942,7 +943,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_VERSIONE_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.resolver.versione = ripeti(n);
                 }
                 f
@@ -953,7 +954,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_DIGEST_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.commit_token = ripeti(n);
                 }
                 f
@@ -964,7 +965,7 @@ fn casi_saluto() -> Vec<CasoTetto> {
             MAX_DIGEST_BYTES,
             Box::new(|n| {
                 let mut f = saluto();
-                if let Corpo::Saluto(s) = &mut f.corpo {
+                if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.ambiente.digest_insieme = ripeti(n);
                 }
                 f
@@ -1010,7 +1011,7 @@ fn casi_risposta() -> Vec<CasoTetto> {
             MAX_RISORSE,
             Box::new(|n| {
                 let mut f = risposta();
-                if let Corpo::Risposta(r) = &mut f.corpo {
+                if let Corpo::Risposta(r) = f.corpo_mutabile() {
                     r.ambiente.risorse = vec![
                         RisorsaRisolta {
                             nome: "r".to_owned(),
@@ -1028,7 +1029,7 @@ fn casi_risposta() -> Vec<CasoTetto> {
             MAX_BACKEND_DINAMICI,
             Box::new(|n| {
                 let mut f = risposta();
-                if let Corpo::Risposta(r) = &mut f.corpo {
+                if let Corpo::Risposta(r) = f.corpo_mutabile() {
                     r.ambiente.backend_dinamici = vec![
                         BackendDinamico {
                             nome: "b".to_owned(),
@@ -1046,7 +1047,7 @@ fn casi_risposta() -> Vec<CasoTetto> {
             MAX_CAPABILITY,
             Box::new(|n| {
                 let mut f = risposta();
-                if let Corpo::Risposta(r) = &mut f.corpo {
+                if let Corpo::Risposta(r) = f.corpo_mutabile() {
                     r.capability = vec!["c".to_owned(); n];
                 }
                 f
@@ -1057,7 +1058,7 @@ fn casi_risposta() -> Vec<CasoTetto> {
             MAX_IDENTIFICATORE_BYTES,
             Box::new(|n| {
                 let mut f = risposta();
-                if let Corpo::Risposta(r) = &mut f.corpo {
+                if let Corpo::Risposta(r) = f.corpo_mutabile() {
                     r.capability = vec![ripeti(n)];
                 }
                 f
@@ -1068,7 +1069,7 @@ fn casi_risposta() -> Vec<CasoTetto> {
 
 fn risposta_con_risorsa(nome: String, versione: String, percorso: String) -> Frame {
     let mut f = risposta();
-    if let Corpo::Risposta(r) = &mut f.corpo {
+    if let Corpo::Risposta(r) = f.corpo_mutabile() {
         r.ambiente.risorse = vec![RisorsaRisolta {
             nome,
             versione,
@@ -1080,7 +1081,7 @@ fn risposta_con_risorsa(nome: String, versione: String, percorso: String) -> Fra
 
 fn risposta_con_backend(nome: String, versione: String, percorso: String) -> Frame {
     let mut f = risposta();
-    if let Corpo::Risposta(r) = &mut f.corpo {
+    if let Corpo::Risposta(r) = f.corpo_mutabile() {
         r.ambiente.backend_dinamici = vec![BackendDinamico {
             nome,
             versione,
@@ -1097,7 +1098,7 @@ fn casi_incarico() -> Vec<CasoTetto> {
             MAX_DIGEST_BYTES,
             Box::new(|n| {
                 let mut f = incarico();
-                if let Corpo::Incarico(i) = &mut f.corpo {
+                if let Corpo::Incarico(i) = f.corpo_mutabile() {
                     i.plan_hash_atteso = ripeti(n);
                 }
                 f
@@ -1108,7 +1109,7 @@ fn casi_incarico() -> Vec<CasoTetto> {
             MAX_PERCORSO_BYTES,
             Box::new(|n| {
                 let mut f = incarico();
-                if let Corpo::Incarico(i) = &mut f.corpo {
+                if let Corpo::Incarico(i) = f.corpo_mutabile() {
                     i.artefatto_temporaneo = ripeti(n);
                 }
                 f
@@ -1338,21 +1339,21 @@ fn i_tetti_di_cardinalita_valgono_in_scrittura() {
 
 fn ambiente_massimo() -> Ambiente {
     Ambiente {
-        digest_insieme: ripeti(MAX_DIGEST_BYTES),
+        digest_insieme: ripeti_espandendo(MAX_DIGEST_BYTES),
         acquisizione_dinamica: true,
         risorse: vec![
             RisorsaRisolta {
-                nome: ripeti(MAX_IDENTIFICATORE_BYTES),
-                versione: ripeti(MAX_VERSIONE_BYTES),
-                percorso: ripeti(MAX_PERCORSO_BYTES),
+                nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
+                percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
             };
             MAX_RISORSE
         ],
         backend_dinamici: vec![
             BackendDinamico {
-                nome: ripeti(MAX_IDENTIFICATORE_BYTES),
-                versione: ripeti(MAX_VERSIONE_BYTES),
-                percorso: ripeti(MAX_PERCORSO_BYTES),
+                nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
+                percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
             };
             MAX_BACKEND_DINAMICI
         ],
@@ -1366,88 +1367,68 @@ fn piano_al_tetto() -> Box<RawValue> {
 /// I sei massimi **veri**, prodotti dal codificatore.
 fn massimi() -> Vec<(&'static str, Frame)> {
     let artefatto = IdentitaArtefatto {
-        digest: ripeti(MAX_DIGEST_BYTES),
-        versione: ripeti(MAX_VERSIONE_BYTES),
+        digest: ripeti_espandendo(MAX_DIGEST_BYTES),
+        versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
     };
     let resolver = IdentitaResolver {
-        identita: ripeti(MAX_IDENTIFICATORE_BYTES),
-        versione: ripeti(MAX_VERSIONE_BYTES),
+        identita: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+        versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
     };
     vec![
         (
             "saluto",
-            Frame {
-                protocol_version: VERSIONE_PROTOCOLLO,
-                tipo: TipoMessaggio::Saluto,
-                corpo: Corpo::Saluto(Box::new(Saluto {
-                    artefatto: artefatto.clone(),
-                    resolver: resolver.clone(),
-                    ambiente: ambiente_massimo(),
-                    commit_token: ripeti(MAX_DIGEST_BYTES),
-                    limiti: LimitiDichiarati {
-                        max_frame_bytes: u64::MAX,
-                        max_piano_canonico_bytes: u64::MAX,
-                        max_messaggi_verso_worker: u64::MAX,
-                        max_messaggi_verso_supervisore: u64::MAX,
-                    },
-                })),
-            },
+            Frame::nuovo(Corpo::Saluto(Box::new(Saluto {
+                artefatto: artefatto.clone(),
+                resolver: resolver.clone(),
+                ambiente: ambiente_massimo(),
+                commit_token: ripeti_espandendo(MAX_DIGEST_BYTES),
+                limiti: LimitiDichiarati {
+                    max_frame_bytes: u64::MAX,
+                    max_piano_canonico_bytes: u64::MAX,
+                    max_messaggi_verso_worker: u64::MAX,
+                    max_messaggi_verso_supervisore: u64::MAX,
+                },
+            }))),
         ),
         (
             "incarico",
-            Frame {
-                protocol_version: VERSIONE_PROTOCOLLO,
-                tipo: TipoMessaggio::Incarico,
-                corpo: Corpo::Incarico(Box::new(Incarico {
-                    piano_canonico: piano_al_tetto(),
-                    plan_hash_atteso: ripeti(MAX_DIGEST_BYTES),
-                    ingressi: vec![
-                        DescrittoreIngresso {
-                            nome: ripeti(MAX_IDENTIFICATORE_BYTES),
-                            percorso: ripeti(MAX_PERCORSO_BYTES),
-                            formato: FormatoIngresso::Stream,
-                            contract_fingerprint_atteso: ripeti(MAX_DIGEST_BYTES),
-                        };
-                        MAX_INGRESSI
-                    ],
-                    artefatto_temporaneo: ripeti(MAX_PERCORSO_BYTES),
-                })),
-            },
+            Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
+                piano_canonico: piano_al_tetto(),
+                plan_hash_atteso: ripeti_espandendo(MAX_DIGEST_BYTES),
+                ingressi: vec![
+                    DescrittoreIngresso {
+                        nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                        percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
+                        formato: FormatoIngresso::Stream,
+                        contract_fingerprint_atteso: ripeti_espandendo(MAX_DIGEST_BYTES),
+                    };
+                    MAX_INGRESSI
+                ],
+                artefatto_temporaneo: ripeti_espandendo(MAX_PERCORSO_BYTES),
+            }))),
         ),
         (
             "annulla",
-            Frame {
-                protocol_version: VERSIONE_PROTOCOLLO,
-                tipo: TipoMessaggio::Annulla,
-                corpo: Corpo::Annulla(Annulla {
-                    motivo: ripeti(MAX_MOTIVO_BYTES),
-                }),
-            },
+            Frame::nuovo(Corpo::Annulla(Annulla {
+                motivo: ripeti_espandendo(MAX_MOTIVO_BYTES),
+            })),
         ),
         (
             "risposta",
-            Frame {
-                protocol_version: VERSIONE_PROTOCOLLO,
-                tipo: TipoMessaggio::Risposta,
-                corpo: Corpo::Risposta(Box::new(Risposta {
-                    artefatto,
-                    resolver,
-                    ambiente: ambiente_massimo(),
-                    capability: vec![ripeti(MAX_IDENTIFICATORE_BYTES); MAX_CAPABILITY],
-                })),
-            },
+            Frame::nuovo(Corpo::Risposta(Box::new(Risposta {
+                artefatto,
+                resolver,
+                ambiente: ambiente_massimo(),
+                capability: vec![ripeti_espandendo(MAX_IDENTIFICATORE_BYTES); MAX_CAPABILITY],
+            }))),
         ),
         (
             "progresso",
-            Frame {
-                protocol_version: VERSIONE_PROTOCOLLO,
-                tipo: TipoMessaggio::Progresso,
-                corpo: Corpo::Progresso(Progresso {
-                    righe: u64::MAX,
-                    batch: u64::MAX,
-                    nodi_completati: u64::MAX,
-                }),
-            },
+            Frame::nuovo(Corpo::Progresso(Progresso {
+                righe: u64::MAX,
+                batch: u64::MAX,
+                nodi_completati: u64::MAX,
+            })),
         ),
         ("esito", esito_massimo()),
     ]
@@ -1461,23 +1442,23 @@ fn esito_massimo() -> Frame {
             fase: FaseSulFilo::Finalize,
             effetto: EffettoSulFilo::Unknown,
             retry: RetrySulFilo::After { delay_ms: u64::MAX },
-            messaggio: ripeti(MAX_MESSAGGIO_BYTES),
-            nodo: Some(ripeti(MAX_IDENTIFICATORE_BYTES)),
-            operazione: Some(ripeti(MAX_IDENTIFICATORE_BYTES)),
-            execution_id: Some(ripeti(MAX_IDENTIFICATORE_BYTES)),
+            messaggio: ripeti_espandendo(MAX_MESSAGGIO_BYTES),
+            nodo: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
+            operazione: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
+            execution_id: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
             diagnostica: Some(DiagnosticaSulFilo {
-                contract: ripeti(MAX_IDENTIFICATORE_BYTES),
-                scope: ripeti(MAX_IDENTIFICATORE_BYTES),
-                completeness: ripeti(MAX_IDENTIFICATORE_BYTES),
+                contract: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                scope: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                completeness: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
                 observed_total: u64::MAX,
                 conteggi: vec![
-                    (ripeti(MAX_CHIAVE_CONTEGGIO_BYTES), u64::MAX);
+                    (ripeti_espandendo(MAX_CHIAVE_CONTEGGIO_BYTES), u64::MAX);
                     MAX_CONTEGGI_DIAGNOSTICA
                 ],
                 esempi: vec![
                     EsempioDiagnostica {
                         indice: u64::MAX,
-                        codice: ripeti(MAX_ESEMPIO_BYTES),
+                        codice: ripeti_espandendo(MAX_ESEMPIO_BYTES),
                     };
                     MAX_ESEMPI_DIAGNOSTICA
                 ],
@@ -1521,17 +1502,17 @@ fn i_sei_massimi_stanno_sotto_il_tetto_e_l_incarico_e_il_maggiore() {
     );
 }
 
-/// Le invarianti che il target fuzz pretende, verificate qui sulla suite
-/// normale.
+/// Le invarianti che il target fuzz pretende, applicate qui dalla suite
+/// ordinaria.
 ///
-/// Il target `protocollo_frame` gira solo su nightly, e un'invariante
-/// sbagliata li' non si manifesterebbe come un difetto del protocollo ma come
-/// una campagna che fallisce alle 3 del mattino. Provarle qui costa poco e
-/// dice **subito** se sono vere.
+/// Non sono riscritte: chiamano `interni::verifica_giro_del_frame`, la stessa
+/// funzione che invoca il target. Riscriverle avrebbe creato due definizioni
+/// della stessa promessa, e la copia nei test sarebbe rimasta verde mentre
+/// quella del fuzzer sbagliava.
 ///
-/// I casi sono scelti **non canonici** di proposito: chiavi in ordine
-/// diverso, spazi, `Esito` per cui il decoder accetta piu' forme dello stesso
-/// messaggio. E' li' che un'invariante di idempotenza si rompe.
+/// I casi sono **non canonici** di proposito — chiavi in ordine diverso,
+/// spazi, un piano grezzo con la sua formattazione — perche' e' li' che
+/// un'invariante di idempotenza si rompe.
 #[test]
 fn le_invarianti_del_target_fuzz_reggono() {
     let non_canonici = [
@@ -1553,24 +1534,25 @@ fn le_invarianti_del_target_fuzz_reggono() {
     ];
     for testo in non_canonici {
         let byte = incornicia(&testo);
-        let frame = decodifica(&byte).unwrap_or_else(|errore| {
-            panic!("il caso non canonico «{testo}» va accettato: {errore}")
-        });
+        // Prima che valga come prova, il caso deve essere accettato: se fosse
+        // rifiutato, il verdetto sarebbe `Ok` per il motivo sbagliato.
+        decodifica(&byte)
+            .unwrap_or_else(|errore| panic!("il caso «{testo}» va accettato: {errore}"));
+        crate::interni::verifica_giro_del_frame(&byte)
+            .unwrap_or_else(|motivo| panic!("invariante rotta su «{testo}»: {motivo}"));
+    }
 
-        let canonico = codifica(&frame).expect("un frame decodificato si ricodifica sempre");
-        let corpo = canonico.len() - BYTE_PREFISSO;
-        assert!(corpo <= MAX_PROTOCOL_FRAME_BYTES);
-        let dichiarata =
-            u32::from_be_bytes([canonico[0], canonico[1], canonico[2], canonico[3]]) as usize;
-        assert_eq!(dichiarata, corpo, "prefisso incoerente per «{testo}»");
-
-        let riletto = decodifica(&canonico).expect("la forma canonica si rilegge");
-        assert_eq!(riletto, frame, "il giro non e' idempotente per «{testo}»");
-        assert_eq!(
-            codifica(&riletto).expect("ricodifica"),
-            canonico,
-            "codifica non deterministica per «{testo}»"
-        );
+    // E su byte che non sono un frame il verdetto e' `Ok`: non essere un
+    // frame non e' un guasto, ed e' la gran parte di cio' che produce un
+    // fuzzer.
+    for spazzatura in [
+        b"".as_slice(),
+        &[0x00],
+        &[0xFF, 0xFF, 0xFF, 0xFF],
+        b"non un frame",
+    ] {
+        crate::interni::verifica_giro_del_frame(spazzatura)
+            .expect("byte che non sono un frame non sono un guasto");
     }
 }
 
@@ -1644,7 +1626,7 @@ fn il_contenuto_di_un_panico_non_ha_dove_entrare() {
 #[test]
 fn il_contenuto_non_entra_negli_errori_del_writer() {
     let mut frame = annulla();
-    let Corpo::Annulla(dentro) = &mut frame.corpo else {
+    let Corpo::Annulla(dentro) = frame.corpo_mutabile() else {
         panic!("costruito il caso sbagliato");
     };
     dentro.motivo = SENTINELLA.repeat(MAX_MOTIVO_BYTES);
@@ -1691,6 +1673,149 @@ fn nessun_nome_di_tipo_supera_i_nove_caratteri() {
         "nessun tipo arriva a nove: la derivazione dell'involucro e' \
          piu' larga del necessario, e vale la pena saperlo"
     );
+}
+
+/// Il tipo non puo' contraddire il corpo, perche' non e' un campo.
+///
+/// Prima lo era, e il codificatore poteva emettere `tipo: "saluto"` con dentro
+/// un `Annulla` — un frame che il decoder rifiuta. Non c'e' piu' uno stato in
+/// cui i due divergano: il tipo e' una funzione del corpo.
+#[test]
+fn il_tipo_e_sempre_quello_del_corpo() {
+    for (nome, frame, _) in casi() {
+        let atteso = match frame.corpo() {
+            Corpo::Saluto(_) => TipoMessaggio::Saluto,
+            Corpo::Incarico(_) => TipoMessaggio::Incarico,
+            Corpo::Annulla(_) => TipoMessaggio::Annulla,
+            Corpo::Risposta(_) => TipoMessaggio::Risposta,
+            Corpo::Progresso(_) => TipoMessaggio::Progresso,
+            Corpo::Esito(_) => TipoMessaggio::Esito,
+        };
+        assert_eq!(frame.tipo(), atteso, "tipo dedotto male per «{nome}»");
+
+        // E il filo porta sempre la versione corrente, che nessuno imposta.
+        let byte = codifica(&frame).expect("codifica");
+        let testo = String::from_utf8(byte[BYTE_PREFISSO..].to_vec()).expect("UTF-8");
+        assert!(
+            testo.starts_with(&format!(r#"{{"protocol_version":{VERSIONE_PROTOCOLLO},"#)),
+            "versione assente o diversa per «{nome}»: {testo:.60}"
+        );
+    }
+}
+
+fn nome_sul_filo<T: serde::Serialize>(valore: &T) -> String {
+    serde_json::to_string(valore)
+        .expect("serializzabile")
+        .trim_matches('"')
+        .to_owned()
+}
+
+/// I nomi sul filo delle enumerazioni chiuse, **scritti a mano**.
+///
+/// Sono vocabolario di protocollo: rinominare una variante Rust li cambierebbe
+/// in silenzio, e i due capi smetterebbero di capirsi senza che nulla in Rust
+/// segnali un problema.
+#[test]
+fn il_vocabolario_sul_filo_e_quello_dichiarato() {
+    let categorie = [
+        (CategoriaSulFilo::InvalidPlan, "invalid_plan"),
+        (
+            CategoriaSulFilo::InvalidConfiguration,
+            "invalid_configuration",
+        ),
+        (CategoriaSulFilo::Schema, "schema"),
+        (CategoriaSulFilo::DataMapping, "data_mapping"),
+        (CategoriaSulFilo::Crs, "crs"),
+        (CategoriaSulFilo::Unsupported, "unsupported"),
+        (CategoriaSulFilo::NotFound, "not_found"),
+        (CategoriaSulFilo::Conflict, "conflict"),
+        (CategoriaSulFilo::Authentication, "authentication"),
+        (CategoriaSulFilo::Authorization, "authorization"),
+        (CategoriaSulFilo::Timeout, "timeout"),
+        (CategoriaSulFilo::Cancelled, "cancelled"),
+        (CategoriaSulFilo::ResourceLimit, "resource_limit"),
+        (CategoriaSulFilo::Io, "io"),
+        (CategoriaSulFilo::Protocol, "protocol"),
+        (CategoriaSulFilo::Transient, "transient"),
+        (CategoriaSulFilo::Execution, "execution"),
+        (
+            CategoriaSulFilo::IsolationUnavailable,
+            "isolation_unavailable",
+        ),
+        (
+            CategoriaSulFilo::UnattributedMemoryPressure,
+            "unattributed_memory_pressure",
+        ),
+        (CategoriaSulFilo::Internal, "internal"),
+    ];
+    assert_eq!(categorie.len(), 20, "le categorie sul filo sono venti");
+    for (valore, nome) in categorie {
+        assert_eq!(nome_sul_filo(&valore), nome);
+    }
+
+    let fasi = [
+        (FaseSulFilo::Validate, "validate"),
+        (FaseSulFilo::Connect, "connect"),
+        (FaseSulFilo::Probe, "probe"),
+        (FaseSulFilo::Prepare, "prepare"),
+        (FaseSulFilo::Read, "read"),
+        (FaseSulFilo::Write, "write"),
+        (FaseSulFilo::Finalize, "finalize"),
+        (FaseSulFilo::Commit, "commit"),
+        (FaseSulFilo::Rollback, "rollback"),
+        (FaseSulFilo::Cleanup, "cleanup"),
+    ];
+    assert_eq!(fasi.len(), 10, "le fasi sul filo sono dieci");
+    for (valore, nome) in fasi {
+        assert_eq!(nome_sul_filo(&valore), nome);
+    }
+
+    let effetti = [
+        (EffettoSulFilo::None, "none"),
+        (EffettoSulFilo::RolledBack, "rolled_back"),
+        (EffettoSulFilo::Partial, "partial"),
+        (EffettoSulFilo::Committed, "committed"),
+        (EffettoSulFilo::Unknown, "unknown"),
+    ];
+    assert_eq!(effetti.len(), 5, "gli effetti sul filo sono cinque");
+    for (valore, nome) in effetti {
+        assert_eq!(nome_sul_filo(&valore), nome);
+    }
+
+    let forme = [
+        (FormaPanicSulFilo::Statico, "statico"),
+        (FormaPanicSulFilo::Dinamico, "dinamico"),
+        (FormaPanicSulFilo::NonTestuale, "non_testuale"),
+    ];
+    assert_eq!(forme.len(), 3, "le forme di panico sono tre");
+    for (valore, nome) in forme {
+        assert_eq!(nome_sul_filo(&valore), nome);
+    }
+
+    for (valore, nome) in [
+        (FormatoIngresso::File, "file"),
+        (FormatoIngresso::Stream, "stream"),
+    ] {
+        assert_eq!(nome_sul_filo(&valore), nome);
+    }
+}
+
+/// I tetti della sequenza, e la relazione fra loro.
+///
+/// `PR-4` non li usa — il contatore e' del supervisore, che e' di `PR-5` — ma
+/// il budget e' dichiarato qui, e la relazione fra i due numeri e' cio' che si
+/// puo' sbagliare senza accorgersene.
+#[test]
+fn i_tetti_della_sequenza_sono_coerenti() {
+    use super::limiti::{MAX_MESSAGGI_VERSO_SUPERVISORE, MAX_MESSAGGI_VERSO_WORKER, MAX_PROGRESSO};
+
+    // `Saluto`, `Incarico`, e al piu' un `Annulla`.
+    assert_eq!(MAX_MESSAGGI_VERSO_WORKER, 3);
+    // `Risposta` + `Esito` + la quota di progresso. E' l'unica delle due che
+    // dice qualcosa: un `assert!(MAX_PROGRESSO > 0)` sarebbe stato un
+    // confronto fra due costanti note al compilatore, cioe' una guardia
+    // tautologica travestita da prova.
+    assert_eq!(MAX_MESSAGGI_VERSO_SUPERVISORE, 2 + MAX_PROGRESSO);
 }
 
 /// La direzione e' una **proprieta' del tipo**, non un campo sul filo.
