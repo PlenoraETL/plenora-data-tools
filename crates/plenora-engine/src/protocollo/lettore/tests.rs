@@ -334,9 +334,24 @@ fn il_frame_riassemblato_e_identico_a_quello_scritto() {
 /// sarebbe scoprirlo tardi.
 #[test]
 fn la_somma_col_prefisso_e_controllata() {
-    // Il tetto e' l'unica cosa che tiene `dichiarata` lontana da `usize::MAX`,
-    // e questo test lo documenta: al tetto, la somma sta comodamente dentro.
-    assert!(MAX_PROTOCOL_FRAME_BYTES.checked_add(4).is_some());
+    // La funzione di produzione, chiamata. La stesura precedente asseriva
+    // `MAX_PROTOCOL_FRAME_BYTES.checked_add(4).is_some()`: rifaceva il calcolo
+    // dentro il test, quindi provava il proprio `checked_add` e sarebbe
+    // rimasta verde anche cancellando quello del lettore.
+    let al_tetto = super::totale_frame(MAX_PROTOCOL_FRAME_BYTES).expect("il tetto sta dentro");
+    assert_eq!(
+        al_tetto,
+        MAX_PROTOCOL_FRAME_BYTES + crate::protocollo::codifica::BYTE_PREFISSO
+    );
+
+    // E il ramo che il tetto rende irraggiungibile dal chiamante vero: qui si
+    // raggiunge chiamando la funzione, che e' l'unico modo di provare che il
+    // traboccamento renda un errore invece di avvolgersi.
+    let errore = super::totale_frame(usize::MAX).expect_err("traboccamento");
+    assert!(
+        errore.to_string().contains("fuori intervallo"),
+        "motivo inatteso: {errore}"
+    );
 }
 
 /// Il lettore non introduce indulgenza: cio' che `decodifica` rifiuta resta
@@ -354,7 +369,7 @@ fn il_lettore_non_e_piu_permissivo_del_decoder() {
         .expect_err("campo ignoto")
         .to_string();
     assert!(
-        messaggio.contains("unknown field"),
+        messaggio.contains("forma o tipo non conformi"),
         "motivo inatteso: {messaggio}"
     );
 }

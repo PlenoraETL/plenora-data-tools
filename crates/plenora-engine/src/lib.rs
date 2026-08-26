@@ -76,6 +76,9 @@ mod classificazione;
 // `CHIAVE_FOOTER_COMMIT_TOKEN` e' il nome di una chiave che scriviamo noi.
 // Cio' che il chiamante deve poter fare e' costruire un token e riceverne il
 // rifiuto motivato: due nomi, non sei.
+/// Il `commit_token` nel footer di un artefatto: scrittura prima di `finish`,
+/// lettura dalla stessa traversata rinforzata che convalida il file.
+pub(crate) mod commit_footer;
 mod commit_token;
 mod error_propagation;
 pub mod executor;
@@ -95,9 +98,6 @@ pub mod parallelism;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
-/// Il `commit_token` nel footer di un artefatto: scrittura prima di `finish`,
-/// lettura dalla stessa traversata rinforzata che convalida il file.
-pub(crate) mod sigillo;
 // Il protocollo e' **sempre privato**, senza eccezioni: e' un canale interno
 // fra due processi che spediamo insieme, e renderlo pubblico — anche solo
 // sotto una feature — sarebbe la promessa di non cambiarlo. Chi sta fuori dal
@@ -110,15 +110,12 @@ pub(crate) mod sigillo;
 // nessun `allow(dead_code)`: l'assenza di chiamante e' dichiarata, non
 // nascosta.
 //
-// `PR-5` non lo toglie, e la ragione va detta invece che scoperta: l'handshake
-// che `PR-5` aggiunge sta **dentro** `protocollo`, quindi e' un consumatore
-// dei suoi messaggi ma non un chiamante del modulo. Chi lo chiamera' da fuori
-// e' il supervisore col worker fittizio, cioe' `PR-8`. Toglierlo qui
-// rimetterebbe in piedi
-// le decine di `dead_code` che il `cfg` evita — cioe' l'esatta situazione per
-// cui esiste.
+// L'handshake sta **dentro** `protocollo`: consuma i suoi messaggi ma non e'
+// un chiamante del modulo, quindi non soddisfa la condizione. Toglierlo prima
+// che un chiamante esterno esista rimetterebbe in piedi le decine di
+// `dead_code` che il `cfg` evita — cioe' l'esatta situazione per cui esiste.
 //
-// Il `cfg` sparisce con `PR-8`. La deviazione e' registrata in
+// Regola, perimetro e condizione di rientro sono registrati in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 mod protocollo;

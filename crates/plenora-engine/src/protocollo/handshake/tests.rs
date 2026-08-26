@@ -46,7 +46,8 @@ fn backend(nome: &str) -> BackendDinamico {
 
 fn ambiente() -> Ambiente {
     Ambiente {
-        digest_insieme: "bb".to_owned(),
+        digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            .to_owned(),
         acquisizione_dinamica: false,
         risorse: vec![risorsa("grid"), risorsa("tin")],
         backend_dinamici: vec![backend("gdal"), backend("proj")],
@@ -56,7 +57,7 @@ fn ambiente() -> Ambiente {
 fn locale() -> DescrizioneLocale {
     DescrizioneLocale {
         artefatto: IdentitaArtefatto {
-            digest: "aa".to_owned(),
+            digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             versione: "1.0".to_owned(),
         },
         resolver: IdentitaResolver {
@@ -190,8 +191,12 @@ fn risposta_nominale() -> Risposta {
 /// binario, e non e' una questione di configurazione.
 #[test]
 fn un_artefatto_diverso_e_protocol_su_entrambi_i_lati() {
+    // Digest **canonici** e diversi: con una forma non canonica il rifiuto
+    // arriverebbe dalla verifica di forma, che e' anch'essa `Protocol`, e il
+    // test passerebbe senza aver mai raggiunto il confronto che dichiara di
+    // provare.
     let mut saluto = saluto_nominale();
-    saluto.artefatto.digest = "ff".to_owned();
+    saluto.artefatto.digest = "f".repeat(64);
     let errore = worker_riceve(saluto).expect_err("digest diverso");
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 
@@ -201,7 +206,7 @@ fn un_artefatto_diverso_e_protocol_su_entrambi_i_lati() {
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 
     let mut risposta = risposta_nominale();
-    risposta.artefatto.digest = "ff".to_owned();
+    risposta.artefatto.digest = "f".repeat(64);
     let errore = supervisore_riceve(risposta).expect_err("digest diverso");
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 }
@@ -231,8 +236,11 @@ fn un_resolver_diverso_e_configurazione() {
 
 #[test]
 fn un_digest_dell_insieme_diverso_e_configurazione() {
+    // Un digest **canonico** e diverso: con una forma non canonica il rifiuto
+    // arriverebbe prima, dalla verifica di forma, e questo test proverebbe
+    // quella invece del confronto che dichiara di provare.
     let mut saluto = saluto_nominale();
-    saluto.ambiente.digest_insieme = "cc".to_owned();
+    saluto.ambiente.digest_insieme = "c".repeat(64);
     let errore = worker_riceve(saluto).expect_err("insieme diverso");
     assert_eq!(
         errore.category(),
@@ -323,7 +331,12 @@ fn una_capability_mancante_e_configurazione_ma_una_in_piu_va_bene() {
         ErrorCategory::InvalidConfiguration,
         "{errore}"
     );
-    assert!(errore.to_string().contains("arrow_ipc"));
+    // Il conteggio, non il nome: la capability mancante si deduce per
+    // differenza da quelle offerte, che arrivano dal filo.
+    assert!(
+        errore.to_string().contains("1 delle 1 capability"),
+        "{errore}"
+    );
 
     let mut risposta = risposta_nominale();
     risposta.capability.push("extra".to_owned());
@@ -407,7 +420,10 @@ fn i_duplicati_sono_rifiutati_ovunque() {
     let mut sue = attese();
     sue.da_rispecchiare.ambiente.risorse.push(risorsa("grid"));
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("risorsa duplicata");
-    assert!(errore.to_string().contains("grid"), "{errore}");
+    assert!(
+        errore.to_string().contains("3 voci, 2 nomi distinti"),
+        "{errore}"
+    );
     assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
 
     let mut sue = attese();
@@ -462,7 +478,10 @@ fn due_risorse_con_lo_stesso_nome_e_versioni_diverse_sono_un_duplicato() {
     gemella.versione = "2".to_owned();
     sue.da_rispecchiare.ambiente.risorse.push(gemella);
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("nome ripetuto");
-    assert!(errore.to_string().contains("grid"), "{errore}");
+    assert!(
+        errore.to_string().contains("3 voci, 2 nomi distinti"),
+        "{errore}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -621,4 +640,166 @@ fn un_frame_di_versione_diversa_non_arriva_all_handshake() {
 
     let errore = decodifica(&byte).expect_err("versione ignota");
     assert!(errore.to_string().contains("non riconosciuta"), "{errore}");
+}
+
+// ---------------------------------------------------------------------------
+// Riservatezza: nessun errore riporta cio' che e' arrivato dal filo
+// ---------------------------------------------------------------------------
+
+/// La sentinella: se compare in un messaggio d'errore, e' arrivata dal filo.
+const SENTINELLA: &str = "SEGRETO-8675309124816324";
+
+/// Un errore che cita il valore ricevuto e' quel valore in un log.
+///
+/// Il rifiuto e' il momento in cui qualcuno guarda, ed e' anche il momento in
+/// cui cio' che si mostra viene copiato nel log insieme al motivo per cui lo
+/// si stava guardando. Chi indaga ha il frame in mano: il messaggio deve dirgli
+/// **quale campo** non torna, non che cosa c'era scritto.
+///
+/// Ogni caso passa da un asse diverso del confronto, perche' la riservatezza
+/// non e' una proprieta' del modulo ma di ciascun percorso d'errore: basta uno
+/// che copi il valore.
+#[test]
+fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
+    /// La sentinella numerica, per i campi che non sono testo.
+    const SENTINELLA_NUMERICA: u64 = 8_675_309_124_816_324;
+
+    let mut casi: Vec<(&str, PlenoraError)> = Vec::new();
+
+    // Versione dell'artefatto.
+    let mut risposta = risposta_nominale();
+    risposta.artefatto.versione = SENTINELLA.to_owned();
+    casi.push((
+        "versione artefatto",
+        supervisore_riceve(risposta).expect_err("versione diversa"),
+    ));
+
+    // Identita' e versione del resolver.
+    let mut risposta = risposta_nominale();
+    risposta.resolver.identita = SENTINELLA.to_owned();
+    casi.push((
+        "identita' resolver",
+        supervisore_riceve(risposta).expect_err("resolver diverso"),
+    ));
+    let mut risposta = risposta_nominale();
+    risposta.resolver.versione = SENTINELLA.to_owned();
+    casi.push((
+        "versione resolver",
+        supervisore_riceve(risposta).expect_err("versione diversa"),
+    ));
+
+    // Nome ripetuto fra le risorse: il nome lo sceglie chi ha scritto il frame.
+    let mut risposta = risposta_nominale();
+    let mut gemella = risorsa(SENTINELLA);
+    gemella.versione = "9".to_owned();
+    risposta.ambiente.risorse.push(risorsa(SENTINELLA));
+    risposta.ambiente.risorse.push(gemella);
+    casi.push((
+        "risorsa duplicata",
+        supervisore_riceve(risposta).expect_err("nome ripetuto"),
+    ));
+
+    // Capability offerta.
+    let mut risposta = risposta_nominale();
+    risposta.capability = vec![SENTINELLA.to_owned()];
+    casi.push((
+        "capability",
+        supervisore_riceve(risposta).expect_err("capability mancante"),
+    ));
+
+    // Limiti dichiarati: qui la sentinella e' un numero.
+    let mut saluto = saluto_nominale();
+    saluto.limiti.max_frame_bytes = SENTINELLA_NUMERICA;
+    casi.push(("limiti", worker_riceve(saluto).expect_err("limiti diversi")));
+
+    let numerica = SENTINELLA_NUMERICA.to_string();
+    for (asse, errore) in casi {
+        for reso in [format!("{errore}"), format!("{errore:?}")] {
+            assert!(
+                !reso.contains(SENTINELLA) && !reso.contains(&numerica),
+                "l'errore su «{asse}» ha copiato il valore ricevuto: {reso}"
+            );
+        }
+    }
+}
+
+/// Due descrizioni **vuote** si accorderebbero, e non e' un accordo.
+///
+/// L'handshake confronta per uguaglianza, e la stringa vuota e' uguale alla
+/// stringa vuota: due lati che non dichiarano nulla concludono l'accordo
+/// avendo confrontato il nulla col nulla. Il tetto non lo impediva — una
+/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che dica
+/// non solo «quanto grande», ma «che ci sia».
+///
+/// Si prova su **entrambi i lati**: il rifiuto della propria descrizione
+/// arriva alla costruzione, quello della descrizione ricevuta alla verifica.
+#[test]
+fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
+    // Il proprio lato, prima di spedire.
+    let mut sue = attese();
+    sue.da_rispecchiare.resolver.identita = String::new();
+    let errore = SupervisoreInAttesa::nuovo(sue).expect_err("identita' vuota");
+    assert!(errore.to_string().contains("resolver.identita"), "{errore}");
+
+    let mut sua = locale();
+    sua.artefatto.versione = String::new();
+    let errore = WorkerInAttesa::nuovo(sua).expect_err("versione vuota");
+    assert!(
+        errore.to_string().contains("artefatto.versione"),
+        "{errore}"
+    );
+
+    // Il lato ricevuto, alla verifica.
+    let mut risposta = risposta_nominale();
+    risposta.resolver.versione = String::new();
+    let errore = supervisore_riceve(risposta).expect_err("versione vuota");
+    assert!(errore.to_string().contains("resolver.versione"), "{errore}");
+
+    // E il caso che il difetto rendeva possibile: due lati che dichiarano il
+    // vuoto sullo stesso asse **coinciderebbero**.
+    let mut sue = attese();
+    sue.da_rispecchiare.resolver.identita = String::new();
+    let mut sua = locale();
+    sua.resolver.identita = String::new();
+    assert!(
+        SupervisoreInAttesa::nuovo(sue).is_err() && WorkerInAttesa::nuovo(sua).is_err(),
+        "due descrizioni vuote sono arrivate al confronto, dove si sarebbero accordate"
+    );
+}
+
+/// Un digest e' una forma, non una stringa qualunque.
+///
+/// Il confronto fra i due lati e' un confronto di stringhe: `AA…` e `aa…`
+/// sarebbero due digest diversi dello stesso valore, e `zz` non e' un digest
+/// affatto. Accettare qualunque testo avrebbe reso «digest» un nome di campo
+/// invece di un contratto.
+#[test]
+fn un_digest_non_canonico_e_rifiutato_su_entrambi_i_lati() {
+    let non_canonici = [
+        String::new(),
+        "aa".to_owned(),
+        "z".repeat(64),
+        "A".repeat(64),
+        "a".repeat(63),
+        "a".repeat(65),
+    ];
+    for forma in non_canonici {
+        let mut sue = attese();
+        sue.da_rispecchiare.artefatto.digest.clone_from(&forma);
+        let errore = SupervisoreInAttesa::nuovo(sue)
+            .expect_err("digest non canonico accettato alla costruzione");
+        assert!(
+            errore.to_string().contains("artefatto.digest"),
+            "rifiuto che non nomina il campo: {errore}"
+        );
+
+        let mut risposta = risposta_nominale();
+        risposta.ambiente.digest_insieme.clone_from(&forma);
+        let errore =
+            supervisore_riceve(risposta).expect_err("digest non canonico accettato alla verifica");
+        assert!(
+            errore.to_string().contains("digest_insieme"),
+            "rifiuto che non nomina il campo: {errore}"
+        );
+    }
 }

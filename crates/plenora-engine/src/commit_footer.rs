@@ -1,14 +1,28 @@
 //! Il `commit_token` nel footer di un artefatto Arrow IPC.
 //!
-//! # Due sigilli distinti, e non vanno confusi
+//! # Che cosa e', e soprattutto che cosa non e'
+//!
+//! Il token e' l'**identita' del tentativo**: dice di quale esecuzione questo
+//! file e' il prodotto, e serve a correlare artefatto, `Saluto` e verifica
+//! (`isolamento.md`, passo 8-bis). E' un ingresso dell'esecuzione, scelto dal
+//! chiamante prima dell'invocazione come il percorso di destinazione.
+//!
+//! **Non e' una credenziale e non prova nulla sull'autenticita' del file.**
+//! Non c'e' firma, non c'e' MAC, non c'e' chiave: chiunque sappia scrivere un
+//! file Arrow IPC puo' metterci dentro il token che vuole. Chi legge il token
+//! impara **quale tentativo dichiara** di aver prodotto il file, non che quel
+//! tentativo lo abbia prodotto davvero, e nemmeno chi fosse autorizzato a
+//! farlo. Trattarlo come una prova sarebbe il difetto peggiore che possa
+//! nascere qui: una guardia che sembra proteggere e non protegge.
+//!
+//! # Tre cose diverse nello stesso file, da non confondere
 //!
 //! - il **marcatore durevole** del footer, scritto da `FileWriter::finish`, e'
 //!   cio' che il framing rinforzato verifica: dice che il file e' finito;
-//! - il `commit_token` dice **chi** ha autorizzato quel file, e viaggia qui.
-//!
-//! Il digest dell'artefatto e' una terza cosa ancora, calcolata sull'intero
-//! file finalizzato e trasmessa nell'`Esito`: scriverla dentro il file che
-//! copre sarebbe autoreferenziale.
+//! - il `commit_token`, che dice di quale tentativo il file e' il prodotto;
+//! - il **digest dell'artefatto**, calcolato sull'intero file finalizzato e
+//!   trasmesso nell'`Esito`: scriverlo dentro il file che copre sarebbe
+//!   autoreferenziale. E' l'unico dei tre che dica qualcosa sul **contenuto**.
 //!
 //! # Scrittura: prima di `finish`, e solo se c'e' un token
 //!
@@ -19,9 +33,9 @@
 //!
 //! # Lettura: dalla traversata rinforzata, mai da `FileReader`
 //!
-//! `FileReader::custom_metadata` sarebbe una terza strada nel footer, e di
-//! tutti i controlli che `PR-0` ha messo in quella traversata non ne farebbe
-//! nessuno. Qui si passa da
+//! `FileReader::custom_metadata` sarebbe una terza strada nel footer, e dei
+//! controlli della traversata rinforzata — allocazione limitata, chiavi e
+//! valori presenti, duplicati rifiutati — non ne farebbe nessuno. Qui si passa da
 //! [`valida_file_ed_estrai`](crate::geo_transport::ipc::valida_file_ed_estrai),
 //! che convalida **e** estrae nello stesso passaggio.
 //!
@@ -32,7 +46,8 @@
 //! - **canonico**: accettato;
 //! - **presente ma non canonico**: rifiutato sempre, in ogni percorso. Non si
 //!   normalizza e non si ignora — un token che non e' quello che diciamo di
-//!   scrivere e' un artefatto di cui non sappiamo dire chi l'ha autorizzato.
+//!   scrivere e' un artefatto di cui non sappiamo dire a quale tentativo
+//!   appartenga — e un token che non e' canonico non e' un token.
 //!
 //! Che il token sia **obbligatorio** e' una proprieta' del percorso isolato,
 //! non di questa funzione: qui si dice cosa c'e', non se doveva esserci.
@@ -60,7 +75,7 @@ use crate::geo_transport::ipc::{valida_file_ed_estrai, IpcLimits, IpcSource};
 /// mappa e non puo' fallire. Un `Result` che non porta mai un errore invita a
 /// scrivere una gestione che non serve, e a credere che il fallimento sia
 /// stato considerato.
-pub fn sigilla<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitToken>) {
+pub fn scrivi_commit_token<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitToken>) {
     let Some(token) = token else {
         // Nessuna chiave, nessun valore, nessun byte: e' cio' che rende gli
         // artefatti senza token identici a quelli di prima.
@@ -84,17 +99,17 @@ pub fn sigilla<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitTok
 ///
 /// # Perche' e' dietro un `cfg`
 ///
-/// Il suo primo chiamante reale e' la **verifica dell'artefatto**, che e'
-/// `PR-6`. Qui il token si sa scrivere e si sa rileggere, e le quattro forme
-/// del footer sono provate; ma chi rilegge per decidere qualcosa non esiste
-/// ancora. Il `cfg` lo dice invece di lasciare che un `dead_code` lo dica
-/// peggio, e sparisce con `PR-6`. Registrato in
+/// Non ha ancora un chiamante di produzione: il token si sa scrivere e si sa
+/// rileggere, e le quattro forme del footer sono provate, ma chi rilegge per
+/// **decidere** qualcosa non esiste. Il `cfg` dichiara quella condizione
+/// invece di lasciare che un `dead_code` la dica peggio. Regola, perimetro e
+/// condizione di rientro stanno in
 /// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 ///
-/// **`test` e non `any(test, internals)`**, a differenza di `protocollo`: questo
-/// modulo e' `pub(crate)`, quindi la facciata `interni` non lo raggiunge e la
-/// feature non gli porterebbe nessun chiamante. Le porterebbe un `dead_code`
-/// nella build che la abilita — cioe' quella del fuzzer.
+/// **`test` e non `any(test, internals)`**, a differenza di `protocollo`:
+/// questo modulo e' `pub(crate)`, quindi la facciata `interni` non lo
+/// raggiunge e la feature non gli porterebbe nessun chiamante. Le porterebbe
+/// un `dead_code` nella build che la abilita, cioe' quella del fuzzer.
 #[cfg(test)]
 pub fn leggi_commit_token<S: IpcSource + ?Sized>(
     sorgente: &mut S,

@@ -15,7 +15,7 @@ use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 
 use crate::planner::contract_fingerprint;
 
-use super::{leggi_commit_token, sigilla};
+use super::{leggi_commit_token, scrivi_commit_token};
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
 use crate::geo_transport::ipc::IpcLimits;
 
@@ -49,7 +49,7 @@ fn artefatto(token: Option<&CommitToken>) -> Vec<u8> {
     let mut byte = Vec::new();
     let mut scrittore = FileWriter::try_new(&mut byte, &schema()).expect("writer");
     scrittore.write(&batch()).expect("batch scritto");
-    sigilla(&mut scrittore, token);
+    scrivi_commit_token(&mut scrittore, token);
     scrittore.finish().expect("finish");
     drop(scrittore);
     byte
@@ -99,7 +99,7 @@ fn un_token_canonico_si_rilegge() {
 /// **Non canonico**: rifiutato, sempre, e senza citare il valore.
 ///
 /// Non si normalizza: un token che non e' quello che diciamo di scrivere e' un
-/// artefatto di cui non sappiamo dire chi l'ha autorizzato.
+/// artefatto di cui non sappiamo dire a quale tentativo appartenga.
 #[test]
 fn un_token_non_canonico_e_rifiutato_e_non_compare_nel_messaggio() {
     let sospetti = [
@@ -193,7 +193,7 @@ fn senza_token_i_byte_non_cambiano() {
     assert_eq!(
         artefatto(None),
         senza_sigillo,
-        "`sigilla(None)` ha cambiato i byte dell'artefatto"
+        "`scrivi_commit_token(None)` ha cambiato i byte dell'artefatto"
     );
 }
 
@@ -208,7 +208,7 @@ fn lo_stesso_token_rende_gli_stessi_byte() {
 /// E' la distinzione che conta: il token cambia l'artefatto, non i dati.
 /// Se cambiasse anche lo schema, cambierebbe il `DataContract` e con esso il
 /// fingerprint, e due esecuzioni identiche del medesimo piano risulterebbero
-/// incompatibili solo per chi le ha autorizzate.
+/// incompatibili solo per il tentativo che le ha prodotte.
 #[test]
 fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
     use plenora_core::arrow::ipc::reader::FileReader;
@@ -243,7 +243,8 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
     // ricava dallo schema piu' i metadati canonici, e un sigillo che ne
     // toccasse uno cambierebbe il fingerprint senza cambiare i campi. Sarebbe
     // il difetto peggiore di questa PR — due esecuzioni identiche dello stesso
-    // piano diventerebbero incompatibili solo per chi le ha autorizzate.
+    // piano diventerebbero incompatibili solo per il tentativo che le ha
+    // prodotte.
     //
     // Va detto che cosa sorveglia davvero, perche' oggi **nessuna mutazione
     // del codice di produzione lo fa fallire**: il token finisce nel footer,

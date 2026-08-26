@@ -3,7 +3,7 @@
 //! # Perche' e' un tipo e non un `String`
 //!
 //! Il token attraversa quattro confini — il chiamante che lo fornisce,
-//! l'handshake che lo trasmette, il writer che lo sigilla nel footer, il
+//! l'handshake che lo trasmette, il writer che lo scrive nel footer, il
 //! verificatore che lo rilegge — e a ognuno di quei confini una `String`
 //! avrebbe richiesto lo **stesso** controllo, scritto da capo. Quattro copie
 //! di un controllo sono quattro occasioni di scriverne una sbagliata, o di
@@ -61,12 +61,12 @@ pub const CHIAVE_FOOTER_COMMIT_TOKEN: &str = "plenora.commit.token";
 pub enum FormaTokenNonValida {
     /// La lunghezza non e' quella richiesta.
     ///
-    /// **In byte**, come la misura che decide il rifiuto. Contarli in
-    /// caratteri per il messaggio sembrava piu' gentile e produceva un
-    /// assurdo: su 64 caratteri di cui alcuni multibyte usciva «attesi 64,
-    /// trovati 64», cioe' un rifiuto che si smentisce da solo. Sulla forma
-    /// canonica, che e' ASCII, byte e caratteri coincidono e la gentilezza non
-    /// serviva a nessuno.
+    /// **In byte**, cioe' nella stessa misura che decide il rifiuto. Contarli
+    /// in caratteri per il solo messaggio produce un assurdo: su 64 caratteri
+    /// di cui alcuni multibyte uscirebbe «attesi 64, trovati 64», un rifiuto
+    /// che si smentisce da solo e manda a cercare il difetto altrove. Sulla
+    /// forma canonica, che e' ASCII, le due misure coincidono; divergono
+    /// esattamente nel caso in cui il messaggio serve.
     LunghezzaErrata {
         /// Byte attesi.
         attesi: usize,
@@ -127,8 +127,14 @@ impl CommitToken {
     ///
     /// # Errors
     ///
-    /// [`FormaTokenNonValida`] se il testo non e' esattamente
-    /// [`COMMIT_TOKEN_CARATTERI`] caratteri esadecimali minuscoli.
+    /// [`FormaTokenNonValida`] se il testo non e' esattamente **64** caratteri
+    /// esadecimali minuscoli.
+    ///
+    /// Il numero e' scritto e non collegato: `COMMIT_TOKEN_CARATTERI` e' una
+    /// costante di un modulo privato, e un link da una doc pubblica a un
+    /// simbolo privato non si risolve — rustdoc lo segnala, e chi legge la
+    /// documentazione pubblica troverebbe un riferimento che non porta da
+    /// nessuna parte.
     pub fn da_esadecimale(testo: &str) -> Result<Self, FormaTokenNonValida> {
         // Sui **byte** e non sui caratteri: un testo UTF-8 multibyte non e'
         // esadecimale, quindi contare i byte non e' un'approssimazione — e
@@ -137,7 +143,7 @@ impl CommitToken {
         //
         // Il numero riportato e' la **stessa** misura che ha deciso, non una
         // seconda presa in caratteri: due misure diverse nello stesso errore
-        // possono contraddirsi, e lo facevano.
+        // si contraddicono proprio nei casi in cui l'errore serve.
         if testo.len() != COMMIT_TOKEN_CARATTERI {
             return Err(FormaTokenNonValida::LunghezzaErrata {
                 attesi: COMMIT_TOKEN_CARATTERI,
@@ -228,9 +234,9 @@ impl Serialize for CommitToken {
 /// ci sono due modi ordinari di non poterla dare: una sorgente che scorre
 /// (`from_reader` non ha un buffer da cui prestare) e una stringa JSON con
 /// escape (`"a..."` va disfatta, e il risultato e' posseduto). In
-/// entrambi i casi un token **perfettamente canonico** veniva rifiutato con
-/// «expected a borrowed string»: un rifiuto per la forma del trasporto,
-/// spacciato per un rifiuto del token.
+/// entrambi i casi un token **perfettamente canonico** verrebbe rifiutato con
+/// «expected a borrowed string»: un rifiuto per la forma del **trasporto**,
+/// indistinguibile da un rifiuto del token.
 ///
 /// Il visitatore accetta il testo comunque arrivi. `visit_string` e
 /// `visit_borrowed_str` ricadono per default su `visit_str`, quindi la
@@ -243,8 +249,8 @@ impl Serialize for CommitToken {
 /// dall'errore. Chiedendo `deserialize_str`, di fronte a un numero
 /// `serde_json` **non chiama il visitatore**: sbriga il disaccordo da se' con
 /// `peek_invalid_type`, che costruisce il messaggio dal valore letto. Il
-/// rifiuto e' giusto e dice «invalid type: integer `1234…`», cioe' il token in
-/// chiaro se qualcuno lo ha scritto senza virgolette.
+/// rifiuto sarebbe giusto e direbbe «invalid type: integer `1234…`», cioe' il
+/// token in chiaro se qualcuno lo ha scritto senza virgolette.
 ///
 /// Con `deserialize_any` il formato si limita a **dire cosa ha trovato**,
 /// chiamando il `visit_*` corrispondente, e la decisione — con il messaggio —
@@ -331,10 +337,10 @@ impl de::Visitor<'_> for VisitatoreToken {
         Err(non_testuale())
     }
 
-    // I due a 128 bit non ricadono sui precedenti e oggi non stampano il
-    // valore: lo dicono a parole («i128»). Sono qui perche' quel default e'
-    // di `serde`, non nostro, e la riservatezza del token non deve dipendere
-    // da come una dipendenza formatta un messaggio.
+    // I due a 128 bit non ricadono sui precedenti, e il loro default di
+    // `serde` nomina il tipo invece del valore. Sono coperti lo stesso perche'
+    // quel default appartiene a una dipendenza: la riservatezza del token non
+    // puo' dipendere da come una libreria formatta un messaggio.
     fn visit_i128<E: de::Error>(self, _: i128) -> Result<Self::Value, E> {
         Err(non_testuale())
     }

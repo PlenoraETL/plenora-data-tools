@@ -35,6 +35,25 @@ use plenora_core::{PlenoraError, Result};
 use super::codifica::{decodifica, lunghezza_dichiarata, BYTE_PREFISSO};
 use super::messaggi::Frame;
 
+/// I byte totali del frame: prefisso piu' payload dichiarato.
+///
+/// Sta in una funzione sua per poterla **chiamare** in un test invece di
+/// riscrivere `checked_add` accanto all'asserzione: un test che rifa' il
+/// calcolo prova il calcolo del test, e resterebbe verde anche se la somma di
+/// produzione sparisse.
+///
+/// Il ramo di traboccamento e' irraggiungibile per il chiamante vero —
+/// `lunghezza_dichiarata` ha gia' respinto tutto cio' che supera il tetto —
+/// ma esiste perche' la garanzia sta nel tetto, non qui, e un giorno il tetto
+/// potrebbe cambiare senza che nessuno ripassi da questa riga.
+fn totale_frame(dichiarata: usize) -> Result<usize> {
+    BYTE_PREFISSO.checked_add(dichiarata).ok_or_else(|| {
+        PlenoraError::Protocol(format!(
+            "lunghezza del frame fuori intervallo: {dichiarata} byte piu' il prefisso"
+        ))
+    })
+}
+
 /// Legge un frame da una sorgente qualsiasi.
 ///
 /// Rende `Ok(None)` **solo** se la sorgente e' finita in modo pulito prima del
@@ -62,10 +81,10 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
 
     // **Un** buffer, non due.
     //
-    // La stesura precedente allocava il payload e poi un secondo `Vec` per
-    // rimetterci davanti il prefisso: al limite sono due volte ~64 MiB, cioe'
-    // il doppio di cio' che il tetto concede. Il tetto smette di essere un
-    // tetto se chi lo rispetta alloca due volte.
+    // Allocare il payload e poi un secondo `Vec` per rimetterci davanti il
+    // prefisso costerebbe, al limite, due volte ~64 MiB: il doppio di cio' che
+    // il tetto concede. Un tetto smette di essere un tetto se chi lo rispetta
+    // alloca due volte.
     //
     // E l'allocazione e' **fallibile**. `vec![0; n]` aborta il processo se il
     // sistema non ha memoria: su un numero che arriva dall'altro capo del
@@ -78,11 +97,7 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
     // esaurirla in modo portabile. Cio' che la sorregge e' la firma —
     // `try_reserve_exact` rende un `Result`, quindi il fallimento non si puo'
     // ignorare senza scriverlo.
-    let totale = BYTE_PREFISSO.checked_add(dichiarata).ok_or_else(|| {
-        PlenoraError::Protocol(format!(
-            "lunghezza del frame fuori intervallo: {dichiarata} byte piu' il prefisso"
-        ))
-    })?;
+    let totale = totale_frame(dichiarata)?;
     let mut frame: Vec<u8> = Vec::new();
     frame.try_reserve_exact(totale).map_err(|_| {
         PlenoraError::ResourceLimit(format!(

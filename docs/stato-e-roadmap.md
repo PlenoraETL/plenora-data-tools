@@ -205,9 +205,27 @@ Il progetto tecnico che li attua e' in
 [`isolamento.md`](isolamento.md): garanzie e non-garanzie, macchine a stati,
 protocollo, handshake, verifica, matrici e suddivisione in PR.
 
-Da soddisfare, non ancora da implementare. Nessuno di questi esiste oggi nel
-codice: worker, supervisore, protocollo fra i due e limiti di processo sono
-**progettati** in [`isolamento.md`](isolamento.md) e **non implementati**.
+L'implementazione è **iniziata**, per PR e in ordine. Quanto segue è ciò che
+resta aperto; ciò che è entrato sta nel codice e nei test, non qui.
+
+**Entrato**: le varianti d'errore della Fase 4 e `EvidenzaDiLimite` (`PR-1`);
+il formato piano v6 con `max_domain_memory_bytes` (`PR-2`); la classificazione
+deterministica degli esiti e la matrice §10 (`PR-3`); la forma sul filo del
+protocollo (`PR-4`) con i conteggi obbligatori dell'`Esito` (`PR-4b`); il
+`commit_token` tipizzato, il lettore limitato di frame, l'handshake come
+macchina a stati e la scrittura del token nel footer (`PR-5`). Più il
+rafforzamento dei custom metadata IPC nel confine ostile (`PR-0`).
+
+**Non esiste ancora nel codice** ciò che richiede due processi: worker,
+supervisore, spawn, pipe e limiti di processo restano **progettati** in
+[`isolamento.md`](isolamento.md) e non implementati. Anche la verifica
+dell'artefatto (`PR-6`) e la sequenza di publish (`PR-10`) sono progetto.
+
+Una conseguenza pratica, dichiarata perché non si deduca il contrario: il
+protocollo si compila solo sotto `test` e sotto la feature `internals`, perché
+non ha ancora un chiamante fuori da sé. Il perimetro e la condizione di
+rientro stanno in
+[`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
 I prototipi hanno avuto **due cicli**, e sono **evidenza esplorativa**: le
 misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md).
@@ -227,8 +245,15 @@ Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
   piattaforma è **non supportata** (`F4-11`), e le sue misure restano solo
   come motivazione.
 
-Il progetto **non è congelato** e non è approvato per l'implementazione.
-Nessuna PR di codice prima dell'approvazione esplicita.
+Il progetto è **approvato per l'implementazione** e la sequenza di PR di
+[`isolamento.md`](isolamento.md) è in corso. Non è congelato: le PR che
+cambiano semantica — `PR-0`, `PR-1`, `PR-2`, `PR-5`, `PR-10`, `PR-12` — restano
+quelle dichiarate lì, e una revisione del progetto è ancora possibile davanti a
+un'evidenza nuova.
+
+Quello che **non** è approvato è saltare l'ordine: ogni PR presuppone le
+precedenti, e il criterio di uscita della fase (`F4-5`) si verifica su
+`PR-12`.
 
 **F4-9 — Il dominio è una foglia dimostrata.** L'attribuzione su Linux vale
 solo se il worker non può creare discendenti: `cgroup.max.depth = 0`, worker
@@ -530,6 +555,11 @@ diversi che non si distinguono con una sostituzione meccanica.
 Alla chiusura del punto 2, non prima: una campagna cambia significato se il
 codice sotto è ancora in movimento.
 
+Non è l'unica campagna: la cadenza ordinaria — smoke dei target coinvolti
+prima di ogni merge, campagna completa dopo, campagne lunghe alle scadenze
+fissate — sta in [`release.md`](release.md). Questa è quella **finale**, che
+precede il rilascio e non sostituisce le altre.
+
 Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
 ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target
 resterebbe rosso a barriera funzionante. Due esiti ammessi, e nessuno dei due
@@ -620,6 +650,22 @@ Aggiungere operazioni a un motore che può ancora andare in OOM senza
 diagnosticarlo sposta il problema, non lo risolve.
 
 ---
+
+## `PR-13` — le implementazioni nuove che vengono da `memory-lab`
+
+**Esiste come voce di piano, e non come lavoro iniziato.** È dichiarata qui
+perché non venga confusa con `PR-12`: sono due PR distinte, con contenuti
+distinti, e `PR-13` **segue**.
+
+`memory-lab` **non è implementato** e nulla in questo repository ne dipende:
+non c'è codice, non c'è documento normativo, e non ci sarà finché il suo
+contenuto non sarà scritto. Nessuna PR di questa fase lo anticipa, e in
+particolare nessuna delle correzioni in corso lo presuppone.
+
+Questa voce dice quindi due cose sole, che sono quelle che servono adesso: che
+il numero è occupato, e che il lavoro non è cominciato. Il contenuto va scritto
+in [`isolamento.md`](isolamento.md) insieme alle altre PR della sequenza, prima
+che qualcuno lo implementi.
 
 ## Debito dichiarato, senza data
 

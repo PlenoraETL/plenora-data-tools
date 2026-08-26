@@ -38,38 +38,38 @@ use super::messaggi::{
 // ---------------------------------------------------------------------------
 
 const CORPO_SALUTO: &str = concat!(
-    r#"{"artefatto":{"digest":"aa","versione":"1.0"},"#,
+    r#"{"artefatto":{"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","versione":"1.0"},"#,
     r#""resolver":{"identita":"proj","versione":"9.4"},"#,
-    r#""ambiente":{"digest_insieme":"bb","acquisizione_dinamica":false,"#,
+    r#""ambiente":{"digest_insieme":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","acquisizione_dinamica":false,"#,
     r#""risorse":[{"nome":"grid","versione":"1","percorso":"/r/g"}],"#,
     r#""backend_dinamici":[]},"#,
     r#""commit_token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
     r#""limiti":{"max_frame_bytes":1,"max_piano_canonico_bytes":2,"#,
     r#""max_messaggi_verso_worker":3,"max_messaggi_verso_supervisore":4}}"#,
 );
-const PREFISSO_SALUTO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0xF0];
+const PREFISSO_SALUTO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x02, 0x6C];
 
 const CORPO_INCARICO: &str = concat!(
     r#"{"piano_canonico":{"schema_version":6},"#,
-    r#""plan_hash_atteso":"dd","#,
+    r#""plan_hash_atteso":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","#,
     r#""ingressi":[{"nome":"in","percorso":"/d/a.arrow","formato":"file","#,
-    r#""contract_fingerprint_atteso":"ee"}],"#,
+    r#""contract_fingerprint_atteso":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],"#,
     r#""artefatto_temporaneo":"/t/out.arrow"}"#,
 );
-const PREFISSO_INCARICO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0xFD];
+const PREFISSO_INCARICO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0x79];
 
 const CORPO_ANNULLA: &str = r#"{"motivo":"timeout"}"#;
 const PREFISSO_ANNULLA: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0x44];
 
 const CORPO_RISPOSTA: &str = concat!(
-    r#"{"artefatto":{"digest":"aa","versione":"1.0"},"#,
+    r#"{"artefatto":{"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","versione":"1.0"},"#,
     r#""resolver":{"identita":"proj","versione":"9.4"},"#,
-    r#""ambiente":{"digest_insieme":"bb","acquisizione_dinamica":false,"#,
+    r#""ambiente":{"digest_insieme":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","acquisizione_dinamica":false,"#,
     r#""risorse":[],"#,
     r#""backend_dinamici":[{"nome":"gdal","versione":"3.8","percorso":"/l/libgdal.so"}]},"#,
     r#""capability":["arrow_ipc"]}"#,
 );
-const PREFISSO_RISPOSTA: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0x49];
+const PREFISSO_RISPOSTA: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x01, 0xC5];
 
 const CORPO_PROGRESSO: &str = r#"{"righe":10,"batch":2,"nodi_completati":3}"#;
 const PREFISSO_PROGRESSO: [u8; BYTE_PREFISSO] = [0x00, 0x00, 0x00, 0x5C];
@@ -123,7 +123,7 @@ fn token_di_prova() -> CommitToken {
 
 fn artefatto() -> IdentitaArtefatto {
     IdentitaArtefatto {
-        digest: "aa".to_owned(),
+        digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         versione: "1.0".to_owned(),
     }
 }
@@ -140,7 +140,8 @@ fn saluto() -> Frame {
         artefatto: artefatto(),
         resolver: resolver(),
         ambiente: Ambiente {
-            digest_insieme: "bb".to_owned(),
+            digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_owned(),
             acquisizione_dinamica: false,
             risorse: vec![RisorsaRisolta {
                 nome: "grid".to_owned(),
@@ -162,12 +163,14 @@ fn saluto() -> Frame {
 fn incarico() -> Frame {
     Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
         piano_canonico: grezzo(r#"{"schema_version":6}"#),
-        plan_hash_atteso: "dd".to_owned(),
+        plan_hash_atteso: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            .to_owned(),
         ingressi: vec![DescrittoreIngresso {
             nome: "in".to_owned(),
             percorso: "/d/a.arrow".to_owned(),
             formato: FormatoIngresso::File,
-            contract_fingerprint_atteso: "ee".to_owned(),
+            contract_fingerprint_atteso:
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_owned(),
         }],
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -184,7 +187,8 @@ fn annulla() -> Frame {
 fn incarico_con(piano: Box<RawValue>, ingressi: Vec<DescrittoreIngresso>) -> Frame {
     Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
         piano_canonico: piano,
-        plan_hash_atteso: "dd".to_owned(),
+        plan_hash_atteso: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            .to_owned(),
         ingressi,
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -195,7 +199,8 @@ fn risposta() -> Frame {
         artefatto: artefatto(),
         resolver: resolver(),
         ambiente: Ambiente {
-            digest_insieme: "bb".to_owned(),
+            digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_owned(),
             acquisizione_dinamica: false,
             risorse: Vec::new(),
             backend_dinamici: vec![BackendDinamico {
@@ -560,20 +565,20 @@ fn le_chiavi_duplicate_sono_un_errore() {
     // lo stesso messaggio, e nessuno dei due capi saprebbe quale.
     let involucro =
         r#"{"protocol_version":1,"protocol_version":1,"tipo":"annulla","corpo":{"motivo":"x"}}"#;
-    assert!(rifiuto(&incornicia(involucro)).contains("duplicate"));
+    assert!(rifiuto(&incornicia(involucro)).contains("chiave JSON duplicata"));
 
     // Anche in fondo, dentro il corpo.
     let corpo = r#"{"protocol_version":1,"tipo":"annulla","corpo":{"motivo":"x","motivo":"y"}}"#;
-    assert!(rifiuto(&incornicia(corpo)).contains("duplicate"));
+    assert!(rifiuto(&incornicia(corpo)).contains("chiave JSON duplicata"));
 
     // E dentro il piano, che il protocollo non interpreta ma non per questo
     // lascia ambiguo.
     let piano = concat!(
         r#"{"protocol_version":1,"tipo":"incarico","corpo":{"#,
-        r#""piano_canonico":{"a":1,"a":2},"plan_hash_atteso":"dd","#,
+        r#""piano_canonico":{"a":1,"a":2},"plan_hash_atteso":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","#,
         r#""ingressi":[],"artefatto_temporaneo":"/t/o"}}"#,
     );
-    assert!(rifiuto(&incornicia(piano)).contains("duplicate"));
+    assert!(rifiuto(&incornicia(piano)).contains("chiave JSON duplicata"));
 }
 
 #[test]
@@ -586,16 +591,16 @@ fn un_campo_sconosciuto_e_un_errore_a_ogni_livello() {
         // annidato
         concat!(
             r#"{"protocol_version":1,"tipo":"incarico","corpo":{"#,
-            r#""piano_canonico":{},"plan_hash_atteso":"dd","#,
+            r#""piano_canonico":{},"plan_hash_atteso":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","#,
             r#""ingressi":[{"nome":"i","percorso":"/p","formato":"file","#,
-            r#""contract_fingerprint_atteso":"e","extra":1}],"#,
+            r#""contract_fingerprint_atteso":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","extra":1}],"#,
             r#""artefatto_temporaneo":"/t/o"}}"#,
         ),
     ];
     for testo in casi {
         let messaggio = rifiuto(&incornicia(testo));
         assert!(
-            messaggio.contains("unknown field"),
+            messaggio.contains("forma o tipo non conformi"),
             "campo ignoto accettato in «{testo}»: {messaggio}"
         );
     }
@@ -623,7 +628,7 @@ fn i_conteggi_del_successo_sono_obbligatori() {
     for corpo in mancanti {
         let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
         assert!(
-            messaggio.contains("missing field"),
+            messaggio.contains("forma o tipo non conformi"),
             "conteggi incompleti accettati in «{corpo}»: {messaggio}"
         );
     }
@@ -633,7 +638,7 @@ fn i_conteggi_del_successo_sono_obbligatori() {
         format!(r#"{{"esito":"successo",{digest},"conteggi":{{"righe":1,"batch":1,"nodi":1}}}}"#);
     let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
     assert!(
-        messaggio.contains("unknown field"),
+        messaggio.contains("forma o tipo non conformi"),
         "campo estraneo accettato nei conteggi: {messaggio}"
     );
 
@@ -664,7 +669,7 @@ fn i_conteggi_del_successo_non_portano_i_nodi() {
     );
     let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
     assert!(
-        messaggio.contains("unknown field"),
+        messaggio.contains("forma o tipo non conformi"),
         "`nodi_completati` accettato fra i conteggi del successo: {messaggio}"
     );
 }
@@ -674,7 +679,7 @@ fn un_campo_mancante_e_un_errore() {
     let testo = r#"{"protocol_version":1,"tipo":"progresso","corpo":{"righe":1,"batch":2}}"#;
     let messaggio = rifiuto(&incornicia(testo));
     assert!(
-        messaggio.contains("missing field"),
+        messaggio.contains("forma o tipo non conformi"),
         "campo mancante accettato: {messaggio}"
     );
 }
@@ -698,7 +703,7 @@ fn un_tipo_sconosciuto_e_un_errore() {
     let testo = r#"{"protocol_version":1,"tipo":"saluta","corpo":{"motivo":"x"}}"#;
     let messaggio = rifiuto(&incornicia(testo));
     assert!(
-        messaggio.contains("unknown variant"),
+        messaggio.contains("forma o tipo non conformi"),
         "tipo ignoto accettato: {messaggio}"
     );
 }
@@ -744,9 +749,9 @@ fn un_enum_fuori_dominio_e_un_errore() {
         (
             "incarico",
             concat!(
-                r#"{"piano_canonico":{},"plan_hash_atteso":"d","#,
+                r#"{"piano_canonico":{},"plan_hash_atteso":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","#,
                 r#""ingressi":[{"nome":"i","percorso":"/p","formato":"socket","#,
-                r#""contract_fingerprint_atteso":"e"}],"artefatto_temporaneo":"/t"}"#,
+                r#""contract_fingerprint_atteso":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],"artefatto_temporaneo":"/t"}"#,
             ),
         ),
         // forma di panico inesistente
@@ -757,7 +762,7 @@ fn un_enum_fuori_dominio_e_un_errore() {
     for (tipo, corpo) in casi {
         let messaggio = rifiuto(&incornicia(&payload(tipo, corpo)));
         assert!(
-            messaggio.contains("unknown variant"),
+            messaggio.contains("forma o tipo non conformi"),
             "valore fuori dominio accettato in «{corpo}»: {messaggio}"
         );
     }
@@ -804,7 +809,7 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
             .1;
         let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
         assert!(
-            messaggio.contains("unknown field"),
+            messaggio.contains("forma o tipo non conformi"),
             "campo ignoto accettato in «{corpo}»: {messaggio}"
         );
     }
@@ -836,7 +841,7 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
         );
         let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
         assert!(
-            messaggio.contains("unknown field"),
+            messaggio.contains("forma o tipo non conformi"),
             "campo ignoto accettato su «{ostile}»: {messaggio}"
         );
     }
@@ -884,7 +889,7 @@ fn un_ritardo_su_una_disposizione_che_non_lo_prevede_e_un_errore() {
     );
     let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
     assert!(
-        messaggio.contains("unknown field"),
+        messaggio.contains("forma o tipo non conformi"),
         "ritardo accettato su `never`: {messaggio}"
     );
 }
@@ -932,6 +937,17 @@ fn ripeti(n: usize) -> String {
 const ESPANDIBILE: &str = "\u{1}";
 
 /// `n` byte decodificati che ne diventano `n * ESPANSIONE_ESCAPE` codificati.
+/// Un digest nella forma sul filo, per i casi «massimi».
+///
+/// **Non** puo' essere fatto di caratteri che JSON espande: un digest canonico
+/// e' ASCII esadecimale, e sei byte per carattere qui non sono raggiungibili.
+/// Il tetto del frame resta percio' un maggiorante conservativo su questi
+/// campi, ed e' giusto che lo sia: un maggiorante che si stringe quando una
+/// regola si stringe e' un maggiorante da ricalcolare a ogni regola.
+fn digest_massimo() -> String {
+    "f".repeat(MAX_DIGEST_BYTES)
+}
+
 fn ripeti_espandendo(n: usize) -> String {
     ESPANDIBILE.repeat(n)
 }
@@ -943,7 +959,7 @@ fn ingresso_minimo() -> DescrittoreIngresso {
         nome: "i".to_owned(),
         percorso: "/p".to_owned(),
         formato: FormatoIngresso::File,
-        contract_fingerprint_atteso: "e".to_owned(),
+        contract_fingerprint_atteso: "e".repeat(MAX_DIGEST_BYTES),
     }
 }
 
@@ -1071,32 +1087,32 @@ fn casi_risposta() -> Vec<CasoTetto> {
         (
             "risorsa.nome",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| risposta_con_risorsa(ripeti(n), String::new(), String::new())),
+            Box::new(|n| risposta_con_risorsa(ripeti(n), "x".to_owned(), "x".to_owned())),
         ),
         (
             "risorsa.versione",
             MAX_VERSIONE_BYTES,
-            Box::new(|n| risposta_con_risorsa(String::new(), ripeti(n), String::new())),
+            Box::new(|n| risposta_con_risorsa("x".to_owned(), ripeti(n), "x".to_owned())),
         ),
         (
             "risorsa.percorso",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| risposta_con_risorsa(String::new(), String::new(), ripeti(n))),
+            Box::new(|n| risposta_con_risorsa("x".to_owned(), "x".to_owned(), ripeti(n))),
         ),
         (
             "backend.nome",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| risposta_con_backend(ripeti(n), String::new(), String::new())),
+            Box::new(|n| risposta_con_backend(ripeti(n), "x".to_owned(), "x".to_owned())),
         ),
         (
             "backend.versione",
             MAX_VERSIONE_BYTES,
-            Box::new(|n| risposta_con_backend(String::new(), ripeti(n), String::new())),
+            Box::new(|n| risposta_con_backend("x".to_owned(), ripeti(n), "x".to_owned())),
         ),
         (
             "backend.percorso",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| risposta_con_backend(String::new(), String::new(), ripeti(n))),
+            Box::new(|n| risposta_con_backend("x".to_owned(), "x".to_owned(), ripeti(n))),
         ),
         (
             "risorse",
@@ -1210,17 +1226,17 @@ fn casi_incarico() -> Vec<CasoTetto> {
         (
             "ingresso.nome",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| ingresso_con(ripeti(n), String::new(), String::new())),
+            Box::new(|n| ingresso_con(ripeti(n), "/x".to_owned(), digest_massimo())),
         ),
         (
             "ingresso.percorso",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| ingresso_con(String::new(), ripeti(n), String::new())),
+            Box::new(|n| ingresso_con("x".to_owned(), ripeti(n), digest_massimo())),
         ),
         (
             "ingresso.contract_fingerprint_atteso",
             MAX_DIGEST_BYTES,
-            Box::new(|n| ingresso_con(String::new(), String::new(), ripeti(n))),
+            Box::new(|n| ingresso_con("x".to_owned(), "/x".to_owned(), ripeti(n))),
         ),
     ]
 }
@@ -1403,8 +1419,14 @@ fn ogni_campo_limitato_e_provato_sul_proprio_confine() {
 
         let messaggio = codifica(&costruisci(tetto + 1))
             .map_or_else(|errore| errore.to_string(), |_| String::from("ACCETTATO"));
+        // Due forme di rifiuto, non una: sui campi ordinari decide il tetto,
+        // sui digest decide la **forma canonica**, che e' piu' stretta — 64
+        // caratteri esatti, non «al piu' 64». Cio' che il test pretende in
+        // entrambi i casi e' che il rifiuto nomini il campo: un tetto
+        // applicato al campo sbagliato passerebbe altrimenti inosservato.
         assert!(
-            messaggio.contains("oltre il tetto") && messaggio.contains(nome),
+            (messaggio.contains("oltre il tetto") || messaggio.contains("digest canonico"))
+                && messaggio.contains(nome),
             "«{nome}» a tetto+1 non e' stato respinto sul proprio nome: {messaggio}"
         );
         provati += 1;
@@ -1433,7 +1455,7 @@ fn i_tetti_di_cardinalita_valgono_in_scrittura() {
 
 fn ambiente_massimo() -> Ambiente {
     Ambiente {
-        digest_insieme: ripeti_espandendo(MAX_DIGEST_BYTES),
+        digest_insieme: digest_massimo(),
         acquisizione_dinamica: true,
         risorse: vec![
             RisorsaRisolta {
@@ -1461,7 +1483,7 @@ fn piano_al_tetto() -> Box<RawValue> {
 /// I sei massimi **veri**, prodotti dal codificatore.
 fn massimi() -> Vec<(&'static str, Frame)> {
     let artefatto = IdentitaArtefatto {
-        digest: ripeti_espandendo(MAX_DIGEST_BYTES),
+        digest: digest_massimo(),
         versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
     };
     let resolver = IdentitaResolver {
@@ -1488,13 +1510,13 @@ fn massimi() -> Vec<(&'static str, Frame)> {
             "incarico",
             Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
                 piano_canonico: piano_al_tetto(),
-                plan_hash_atteso: ripeti_espandendo(MAX_DIGEST_BYTES),
+                plan_hash_atteso: digest_massimo(),
                 ingressi: vec![
                     DescrittoreIngresso {
                         nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
                         percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
                         formato: FormatoIngresso::Stream,
-                        contract_fingerprint_atteso: ripeti_espandendo(MAX_DIGEST_BYTES),
+                        contract_fingerprint_atteso: digest_massimo(),
                     };
                     MAX_INGRESSI
                 ],
@@ -1621,7 +1643,7 @@ fn le_invarianti_del_target_fuzz_reggono() {
         payload(
             "incarico",
             concat!(
-                r#"{"piano_canonico":{ "a" : [ 1 , 2 ] },"plan_hash_atteso":"d","#,
+                r#"{"piano_canonico":{ "a" : [ 1 , 2 ] },"plan_hash_atteso":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","#,
                 r#""ingressi":[],"artefatto_temporaneo":"/t"}"#,
             ),
         ),
@@ -1710,7 +1732,7 @@ fn il_contenuto_di_un_panico_non_ha_dove_entrare() {
         );
         let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
         assert!(
-            messaggio.contains("unknown variant"),
+            messaggio.contains("forma o tipo non conformi"),
             "forma di panico «{candidato}» accettata: {messaggio}"
         );
     }
@@ -1925,5 +1947,61 @@ fn ogni_tipo_ha_una_sola_direzione() {
             }
         };
         assert_eq!(tipo.direzione(), atteso, "direzione sbagliata per `{nome}`");
+    }
+}
+
+/// Nessun errore del decoder riporta cio' che ha letto.
+///
+/// E' l'asse che il rifiuto per forma lasciava aperto: `serde` costruisce i
+/// propri messaggi **dal valore incontrato** — «invalid type: string "…"»,
+/// «unknown field `…`» — e su questo canale quel valore lo sceglie l'altro
+/// capo. Un frame malformato ad arte diventava un modo di far scrivere testo
+/// arbitrario nel log di chi indaga; e poiche' il `Saluto` porta il
+/// `commit_token`, il testo arbitrario poteva essere il token.
+///
+/// Cio' che resta e' dove, non che cosa: categoria, riga e colonna. Chi indaga
+/// ha il frame in mano.
+#[test]
+fn nessun_errore_del_decoder_riporta_cio_che_ha_letto() {
+    const SENTINELLA: &str = "SEGRETO-8675309124816324";
+    const NUMERICA: &str = "8675309124816324";
+
+    let casi = [
+        // Valore di tipo sbagliato: il valore finiva in `Unexpected::Str`.
+        format!(
+            r#"{{"protocol_version":"{SENTINELLA}","tipo":"annulla","corpo":{{"motivo":"x"}}}}"#
+        ),
+        // Campo ignoto: il **nome** lo sceglie chi scrive il frame.
+        format!(
+            r#"{{"protocol_version":1,"tipo":"annulla","corpo":{{"motivo":"x"}},"{SENTINELLA}":1}}"#
+        ),
+        // Valore numerico di tipo sbagliato, dentro il corpo.
+        format!(r#"{{"protocol_version":1,"tipo":"annulla","corpo":{{"motivo":{NUMERICA}}}}}"#),
+        // Chiave duplicata: anche il nome della chiave arriva dal filo.
+        format!(
+            r#"{{"protocol_version":1,"tipo":"annulla","corpo":{{"motivo":"x"}},"{SENTINELLA}":1,"{SENTINELLA}":2}}"#
+        ),
+        // Il caso che conta di piu': un `Saluto` col token accanto a un campo
+        // malformato. Il token e' canonico, quindi non e' lui a far fallire.
+        format!(
+            r#"{{"protocol_version":1,"tipo":"saluto","corpo":{{"commit_token":"{}","limiti":"{SENTINELLA}"}}}}"#,
+            "a".repeat(64)
+        ),
+    ];
+
+    for testo in casi {
+        let messaggio = rifiuto(&incornicia(&testo));
+        assert!(
+            !messaggio.contains(SENTINELLA) && !messaggio.contains(NUMERICA),
+            "l'errore ha copiato cio' che ha letto: {messaggio}"
+        );
+        // E non per caso: il rifiuto dice dove, con la categoria e la
+        // posizione. Se un giorno tornasse a dire «che cosa», questa riga
+        // resterebbe vera mentre quella sopra cadrebbe — sono due asserzioni,
+        // non una.
+        assert!(
+            messaggio.contains("riga ") || messaggio.contains("chiave JSON duplicata"),
+            "rifiuto senza posizione ne' causa strutturale: {messaggio}"
+        );
     }
 }

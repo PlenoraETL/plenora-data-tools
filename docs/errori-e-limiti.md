@@ -836,7 +836,7 @@ interno.
 
 **La regola.** `plenora_engine::protocollo` è compilato solo con
 `#[cfg(any(test, feature = "internals"))]`;
-`plenora_engine::sigillo::leggi_commit_token` e
+`plenora_engine::commit_footer::leggi_commit_token` e
 `geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
 un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
 chiamante di produzione**.
@@ -845,7 +845,7 @@ chiamante di produzione**.
 lettore limitato, handshake — la sola funzione di lettura del token dal
 footer, e la forma breve di `parse_footer` (da quando la convalida estrae anche
 un custom metadata, la produzione passa tutta per `parse_footer_estraendo`).
-`sigillo::sigilla` è invece incondizionato, perché il writer in-process lo
+`commit_footer::scrivi_commit_token` è invece incondizionato, perché il writer in-process lo
 chiama davvero (con `None`).
 
 **Perché due `cfg` diversi e non uno.** `protocollo` porta anche l'arm

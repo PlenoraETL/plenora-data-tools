@@ -128,7 +128,7 @@ pub struct AtteseSupervisore {
     /// Confronto **asimmetrico**: il worker puo' offrirne di piu', non di
     /// meno. E' l'unico asse su cui i due lati non devono coincidere.
     pub capability_richieste: Vec<String>,
-    /// Il token che sigillera' l'artefatto.
+    /// Il token che identifichera' il tentativo nel footer dell'artefatto.
     pub commit_token: CommitToken,
 }
 
@@ -192,14 +192,23 @@ fn rifiuta_nomi_ripetuti<'a>(
     lato: &str,
     genere: &str,
 ) -> Result<()> {
+    // Si scorrono tutti invece di fermarsi al primo ripetuto: il nome non si
+    // puo' nominare — arriva dal filo — quindi cio' che resta da dire e' un
+    // conteggio, e un conteggio interrotto al primo duplicato non direbbe
+    // quanti sono.
     let mut visti: BTreeSet<&str> = BTreeSet::new();
+    let mut totale: usize = 0;
     for nome in nomi {
-        if !visti.insert(nome) {
-            return Err(PlenoraError::InvalidConfiguration(format!(
-                "{lato}: {genere} `{nome}` dichiarato due volte; \
-                 quale delle due si apra non ha una risposta"
-            )));
-        }
+        totale += 1;
+        visti.insert(nome);
+    }
+    if visti.len() != totale {
+        return Err(PlenoraError::InvalidConfiguration(format!(
+            "{lato}: {genere} dichiarata piu' volte con lo stesso nome \
+             ({totale} voci, {} nomi distinti); quale si apra non ha una \
+             risposta",
+            visti.len()
+        )));
     }
     Ok(())
 }
@@ -227,10 +236,11 @@ fn confronta_artefatto(atteso: &IdentitaArtefatto, ricevuto: &IdentitaArtefatto)
         ));
     }
     if atteso.versione != ricevuto.versione {
-        return Err(PlenoraError::Protocol(format!(
-            "la versione dell'artefatto non coincide: attesa `{}`, ricevuta `{}`",
-            atteso.versione, ricevuto.versione
-        )));
+        return Err(PlenoraError::Protocol(
+            "la versione dell'artefatto non coincide: i due lati non sono la \
+             stessa build"
+                .to_owned(),
+        ));
     }
     Ok(())
 }
@@ -240,16 +250,14 @@ fn confronta_artefatto(atteso: &IdentitaArtefatto, ricevuto: &IdentitaArtefatto)
 /// protocollo violato.
 fn confronta_resolver(atteso: &IdentitaResolver, ricevuto: &IdentitaResolver) -> Result<()> {
     if atteso.identita != ricevuto.identita {
-        return Err(PlenoraError::InvalidConfiguration(format!(
-            "il resolver CRS non coincide: atteso `{}`, ricevuto `{}`",
-            atteso.identita, ricevuto.identita
-        )));
+        return Err(PlenoraError::InvalidConfiguration(
+            "il resolver CRS non coincide sull'identita'".to_owned(),
+        ));
     }
     if atteso.versione != ricevuto.versione {
-        return Err(PlenoraError::InvalidConfiguration(format!(
-            "la versione del resolver non coincide: attesa `{}`, ricevuta `{}`",
-            atteso.versione, ricevuto.versione
-        )));
+        return Err(PlenoraError::InvalidConfiguration(
+            "il resolver CRS non coincide sulla versione".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -310,10 +318,13 @@ fn confronta_capability(richieste: &[String], offerte: &[String]) -> Result<()> 
         .filter(|nome| !disponibili.contains(nome))
         .collect();
     if !mancanti.is_empty() {
+        // Il conteggio e non i nomi: le richieste sono configurazione nostra,
+        // ma le offerte arrivano dal filo, e un elenco di «mancanti» dice per
+        // differenza che cosa l'altro capo ha dichiarato.
         return Err(PlenoraError::InvalidConfiguration(format!(
-            "il worker non offre {} capability richieste: {}",
+            "il worker non offre {} delle {} capability richieste",
             mancanti.len(),
-            mancanti.join(", ")
+            richieste.len()
         )));
     }
     Ok(())
@@ -350,12 +361,15 @@ fn confronta_limiti(dichiarati: &LimitiDichiarati) -> Result<()> {
         ),
     ] {
         if mio != suo {
-            divergenti.push(format!("`{nome}`: applico {mio}, dichiarato {suo}"));
+            // Il **nome** del limite, non i due valori: quello dichiarato
+            // arriva dal filo. Chi indaga ha i propri limiti a portata di
+            // costante, e il frame ricevuto in mano.
+            divergenti.push(format!("`{nome}`"));
         }
     }
     Err(PlenoraError::Protocol(format!(
-        "i limiti del protocollo non coincidono ({})",
-        divergenti.join("; ")
+        "i limiti del protocollo non coincidono su: {}",
+        divergenti.join(", ")
     )))
 }
 
@@ -419,6 +433,15 @@ impl SupervisoreInAttesa {
         // La propria descrizione si valida **prima** di spedirla: dichiarare
         // un ambiente ambiguo e scoprirlo dalla risposta dell'altro sarebbe
         // scoprire dall'esterno un difetto proprio.
+        //
+        // Le stesse funzioni che applica il decoder a cio' che arriva. Due
+        // controlli scritti separatamente per i due versi divergerebbero, e il
+        // verso piu' debole deciderebbe che cosa passa.
+        super::codifica::verifica_identita(
+            &attese.da_rispecchiare.artefatto,
+            &attese.da_rispecchiare.resolver,
+        )?;
+        super::codifica::verifica_ambiente(&attese.da_rispecchiare.ambiente)?;
         let _ = ambiente_canonico(&attese.da_rispecchiare.ambiente, "supervisore")?;
         let _ = capability_canoniche(&attese.capability_richieste, "supervisore")?;
         if attese.da_rispecchiare.ambiente.acquisizione_dinamica {
@@ -464,6 +487,15 @@ impl SupervisoreInAttesa {
         let Corpo::Risposta(risposta) = frame.in_corpo() else {
             return Err(fuori_sequenza(TipoMessaggio::Risposta, tipo));
         };
+
+        // La **forma** prima del confronto, e non perche' il decoder l'abbia
+        // gia' applicata: un `Frame` si costruisce anche in processo, senza
+        // passare da `decodifica`. Un campo malformato confrontato per primo
+        // esce come «non coincide», che manda a cercare un disaccordo dove
+        // c'e' un valore che non e' un valore.
+        super::codifica::verifica_identita(&risposta.artefatto, &risposta.resolver)?;
+        super::codifica::verifica_ambiente(&risposta.ambiente)?;
+        super::codifica::verifica_capability(&risposta.capability)?;
 
         confronta_artefatto(&self.attese.da_rispecchiare.artefatto, &risposta.artefatto)?;
         confronta_resolver(&self.attese.da_rispecchiare.resolver, &risposta.resolver)?;
@@ -512,6 +544,11 @@ impl WorkerInAttesa {
     /// [`PlenoraError::InvalidConfiguration`] se la propria descrizione e'
     /// ambigua.
     pub fn nuovo(locale: DescrizioneLocale) -> Result<Self> {
+        // Le stesse funzioni del decoder, per la stessa ragione del
+        // supervisore: la propria descrizione si valida prima di spedirla.
+        super::codifica::verifica_identita(&locale.artefatto, &locale.resolver)?;
+        super::codifica::verifica_ambiente(&locale.ambiente)?;
+        super::codifica::verifica_capability(&locale.capability)?;
         let _ = ambiente_canonico(&locale.ambiente, "worker")?;
         let _ = capability_canoniche(&locale.capability, "worker")?;
         Ok(Self { locale })
@@ -547,6 +584,11 @@ impl WorkerInAttesa {
         // canale, il resto del confronto avviene su un canale su cui non si e'
         // d'accordo.
         confronta_limiti(&saluto.limiti)?;
+        // Poi la forma di cio' che e' arrivato, e solo dopo il confronto: la
+        // ragione e' la stessa del lato supervisore, e vale anche qui perche'
+        // un `Frame` puo' non essere passato dal decoder.
+        super::codifica::verifica_identita(&saluto.artefatto, &saluto.resolver)?;
+        super::codifica::verifica_ambiente(&saluto.ambiente)?;
         confronta_artefatto(&self.locale.artefatto, &saluto.artefatto)?;
         confronta_resolver(&self.locale.resolver, &saluto.resolver)?;
         confronta_ambiente(&saluto.ambiente, &self.locale.ambiente)?;
@@ -592,8 +634,10 @@ impl WorkerAccordato {
     /// # Errors
     ///
     /// [`PlenoraError::Protocol`] per direzione sbagliata o tipo fuori
-    /// sequenza. `PR-5` non verifica il contenuto dell'incarico: il piano, il
-    /// suo hash e i contratti d'ingresso appartengono all'esecuzione.
+    /// sequenza. L'handshake **non** verifica il contenuto dell'incarico: il
+    /// piano, il suo hash e i contratti d'ingresso li verifica chi lo esegue,
+    /// perche' verificarli qui vorrebbe dire farlo due volte e in due modi che
+    /// possono divergere.
     pub fn ricevi_incarico(self, frame: Frame) -> Result<(Incarico, CommitToken)> {
         verifica_direzione(&frame, super::messaggi::Direzione::VersoWorker)?;
         let tipo = frame.tipo();

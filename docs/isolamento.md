@@ -575,6 +575,38 @@ emettere un frame che il ricevente rifiuterebbe, in lettura sono la difesa.
 Applicarli da un lato solo avrebbe reso il protocollo asimmetrico proprio dove
 i due capi devono concordare.
 
+Un tetto però dice quanto un campo **può** essere grande, non che dica
+qualcosa: la stringa vuota li rispetta tutti. Due descrizioni fatte di campi
+vuoti sono uguali fra loro, quindi si accordano, e l'handshake concluderebbe
+avendo confrontato il nulla con il nulla — un confronto che non può fallire
+non protegge. Perciò due regole in più, applicate nei due versi come i tetti:
+
+- **i campi che identificano non sono vuoti**: versione dell'artefatto,
+  identità e versione del resolver, nome/versione/percorso di ogni risorsa e
+  di ogni backend dinamico, nome e percorso di ogni ingresso, percorso
+  dell'artefatto temporaneo, ogni capability offerta;
+- **i digest hanno una forma**, la stessa del `commit_token`: esattamente 64
+  caratteri esadecimali **minuscoli**. Vale per il digest dell'artefatto, per
+  il digest dell'insieme delle risorse, per `plan_hash_atteso` e per
+  `contract_fingerprint_atteso` — che sono tutti l'uscita testuale di un
+  SHA-256 a 32 byte. Il confronto fra i due lati è un confronto di stringhe:
+  `AA…` e `aa…` sarebbero due digest diversi dello stesso valore, e accettare
+  qualunque testo avrebbe reso «digest» un nome di campo invece di un
+  contratto.
+
+Le stesse funzioni le applicano **il decoder su ciò che arriva e l'handshake
+sulla propria descrizione prima di spedirla**. Non è ridondanza: un `Frame` si
+costruisce anche in processo senza passare dal decoder, e un lato che si
+validasse con regole più deboli dell'altro scoprirebbe i propri difetti dalla
+risposta dell'interlocutore.
+
+Resta **fuori** da queste regole, deliberatamente, il `digest_artefatto`
+dell'`Esito`: porta un campo `algoritmo` accanto al valore, quindi la sua
+forma canonica dipende da ciò che quel campo dichiara, e chi deve pretenderne
+la coerenza è il verificatore dell'artefatto — `PR-6`. Applicargli qui la
+regola dei 64 esadecimali significherebbe fissare l'algoritmo in un punto che
+non lo verifica.
+
 I conteggi del `Successo` sono **obbligatori** e sono due: righe e batch. Sono
 il termine di paragone del passo 8 (§7), e renderli facoltativi avrebbe reso
 facoltativo il passo. Non c'è `nodi_completati`, che `Progresso` invece porta:
