@@ -60,23 +60,33 @@ fn la_lunghezza_sbagliata_e_un_errore() {
     }
 }
 
-/// La lunghezza si conta in **caratteri** nel messaggio, anche quando il testo
-/// non e' ASCII.
+/// La lunghezza riportata e' quella **che ha deciso**: byte, non caratteri.
 ///
-/// Contarla in byte darebbe un numero che chi legge non riconosce: «ne servono
-/// 64, ne hai 66» su un testo di 64 caratteri sarebbe un rifiuto giusto con
-/// una spiegazione sbagliata.
+/// Il numero nel messaggio veniva da una seconda misura, presa in caratteri
+/// perche' sembrava piu' leggibile. Su un testo di 64 caratteri con due
+/// accentate il rifiuto era giusto e la spiegazione diceva «attesi 64, trovati
+/// 64»: un errore che si smentisce da solo, e che manda chi legge a cercare il
+/// difetto altrove. Sulla forma canonica, che e' ASCII, le due misure
+/// coincidono; divergono esattamente nel caso in cui il messaggio serve.
 #[test]
-fn la_lunghezza_riportata_e_in_caratteri() {
+fn la_lunghezza_riportata_e_quella_che_ha_deciso() {
     let accentato = format!("{}èè", &CANONICO[..62]);
+    assert_eq!(accentato.chars().count(), COMMIT_TOKEN_CARATTERI);
     assert_eq!(accentato.len(), COMMIT_TOKEN_CARATTERI + 2);
-    let errore = CommitToken::da_esadecimale(&accentato).expect_err("non esadecimale");
+    let errore = CommitToken::da_esadecimale(&accentato).expect_err("lunghezza sbagliata");
     assert_eq!(
         errore,
         FormaTokenNonValida::LunghezzaErrata {
             attesi: COMMIT_TOKEN_CARATTERI,
-            trovati: 64,
+            trovati: COMMIT_TOKEN_CARATTERI + 2,
         }
+    );
+    // Cio' che il difetto produceva: un rifiuto che nomina due volte lo stesso
+    // numero. Che non accada e' la proprieta', non un dettaglio del testo.
+    let detto = errore.to_string();
+    assert!(
+        !detto.contains("64 byte, ne servono esattamente 64"),
+        "il rifiuto si smentisce da solo: {detto}"
     );
 }
 
@@ -128,6 +138,32 @@ fn il_giro_serde_conserva_la_forma_canonica() {
     assert_eq!(reso, format!("\"{CANONICO}\""));
     let riletto: CommitToken = serde_json::from_str(&reso).expect("rileggibile");
     assert_eq!(riletto, token);
+}
+
+/// Un token canonico si legge **comunque arrivi**, non solo da un buffer in
+/// memoria.
+///
+/// Sono i due modi ordinari di non poter prestare una stringa, e prima
+/// rifiutavano un token perfettamente canonico con «expected a borrowed
+/// string»: un rifiuto per la forma del trasporto travestito da rifiuto del
+/// token. La `Risposta` del worker arriva da un pipe, quindi il primo caso non
+/// e' un'ipotesi di laboratorio: e' il percorso vero.
+#[test]
+fn un_token_canonico_si_legge_anche_da_sorgenti_non_prestabili() {
+    let atteso = CommitToken::da_esadecimale(CANONICO).expect("canonico");
+
+    // 1. Una sorgente che scorre: non c'e' un buffer da cui prestare.
+    let json = format!("\"{CANONICO}\"");
+    let letto: CommitToken =
+        serde_json::from_reader(std::io::Cursor::new(json.as_bytes())).expect("da un lettore");
+    assert_eq!(letto, atteso);
+
+    // 2. Una stringa JSON con escape: disfarli produce un testo posseduto.
+    //    `\u0030` e' `0`, cioe' il primo carattere di CANONICO — la stringa
+    //    descrive lo **stesso** token, in una grafia JSON diversa.
+    let con_escape = format!("\"\\u0030{}\"", &CANONICO[1..]);
+    let letto: CommitToken = serde_json::from_str(&con_escape).expect("con escape");
+    assert_eq!(letto, atteso);
 }
 
 /// Anche in lettura la forma non canonica si **rifiuta**, non si aggiusta.

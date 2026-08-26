@@ -75,12 +75,15 @@ pub const fn limiti_correnti() -> LimitiDichiarati {
 // Le descrizioni che i due lati portano
 // ---------------------------------------------------------------------------
 
-/// Cio' che un lato sa di se stesso.
+/// Cio' che il **worker** sa di se stesso.
 ///
 /// **Non** viene scoperto qui: e' uno snapshot tipizzato che arriva da fuori.
 /// La scoperta dell'ambiente della macchina e' un'altra cosa e un'altra PR;
 /// mescolarla con la verifica avrebbe reso impossibile provare la verifica
 /// senza una macchina vera sotto.
+///
+/// Il supervisore **non** la usa: le sue attese hanno un tipo proprio,
+/// [`DaRispecchiare`], e il perche' e' scritto li'.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescrizioneLocale {
     /// Identita' dell'eseguibile.
@@ -93,12 +96,37 @@ pub struct DescrizioneLocale {
     pub capability: Vec<String>,
 }
 
+/// Cio' che il worker deve rispecchiare **identico**.
+///
+/// Non e' una [`DescrizioneLocale`], e la differenza e' il difetto che questo
+/// tipo chiude. Quella porta anche le `capability` **offerte**: il supervisore
+/// non ne offre, quindi il campo si poteva riempire e nessuno lo guardava — ne'
+/// la validazione della propria descrizione, ne' il confronto con la
+/// `Risposta`. Configurazione autorevole in apparenza, ignorata in silenzio, e
+/// non c'e' modo di accorgersene leggendo l'esito: l'handshake riesce.
+///
+/// Cio' che il supervisore ha da dire sulle capability sta in
+/// [`AtteseSupervisore::capability_richieste`], che e' un'altra cosa — non
+/// quelle che offre, quelle senza le quali l'incarico non si puo' dare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaRispecchiare {
+    /// Identita' dell'eseguibile.
+    pub artefatto: IdentitaArtefatto,
+    /// Identita' del resolver CRS.
+    pub resolver: IdentitaResolver,
+    /// Ambiente risolto.
+    pub ambiente: Ambiente,
+}
+
 /// Cio' che il supervisore pretende dall'altro lato.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtteseSupervisore {
-    /// La propria descrizione, che il worker deve rispecchiare.
-    pub locale: DescrizioneLocale,
+    /// Le tre identita' che il worker deve rispecchiare identiche.
+    pub da_rispecchiare: DaRispecchiare,
     /// Le capability senza le quali l'incarico non si puo' dare.
+    ///
+    /// Confronto **asimmetrico**: il worker puo' offrirne di piu', non di
+    /// meno. E' l'unico asse su cui i due lati non devono coincidere.
     pub capability_richieste: Vec<String>,
     /// Il token che sigillera' l'artefatto.
     pub commit_token: CommitToken,
@@ -380,16 +408,20 @@ impl SupervisoreInAttesa {
     ///
     /// # Errors
     ///
-    /// [`PlenoraError::InvalidConfiguration`] se la propria descrizione non e'
-    /// coerente — duplicati fra risorse, backend o capability, oppure
-    /// acquisizione dinamica dichiarata.
+    /// [`PlenoraError::InvalidConfiguration`] se cio' che il supervisore
+    /// dichiara non e' coerente — duplicati fra risorse, backend o capability
+    /// **richieste**, oppure acquisizione dinamica dichiarata.
+    ///
+    /// Le capability offerte non compaiono, e non per omissione: il
+    /// supervisore non ne offre, e [`DaRispecchiare`] non gliele fa
+    /// dichiarare.
     pub fn nuovo(attese: AtteseSupervisore) -> Result<Self> {
         // La propria descrizione si valida **prima** di spedirla: dichiarare
         // un ambiente ambiguo e scoprirlo dalla risposta dell'altro sarebbe
         // scoprire dall'esterno un difetto proprio.
-        let _ = ambiente_canonico(&attese.locale.ambiente, "supervisore")?;
+        let _ = ambiente_canonico(&attese.da_rispecchiare.ambiente, "supervisore")?;
         let _ = capability_canoniche(&attese.capability_richieste, "supervisore")?;
-        if attese.locale.ambiente.acquisizione_dinamica {
+        if attese.da_rispecchiare.ambiente.acquisizione_dinamica {
             return Err(PlenoraError::InvalidConfiguration(
                 "supervisore: `acquisizione_dinamica` e' vera; l'insieme delle \
                  risorse non sarebbe immutabile"
@@ -397,9 +429,9 @@ impl SupervisoreInAttesa {
             ));
         }
         let saluto = Saluto {
-            artefatto: attese.locale.artefatto.clone(),
-            resolver: attese.locale.resolver.clone(),
-            ambiente: attese.locale.ambiente.clone(),
+            artefatto: attese.da_rispecchiare.artefatto.clone(),
+            resolver: attese.da_rispecchiare.resolver.clone(),
+            ambiente: attese.da_rispecchiare.ambiente.clone(),
             commit_token: attese.commit_token,
             limiti: limiti_correnti(),
         };
@@ -433,9 +465,9 @@ impl SupervisoreInAttesa {
             return Err(fuori_sequenza(TipoMessaggio::Risposta, tipo));
         };
 
-        confronta_artefatto(&self.attese.locale.artefatto, &risposta.artefatto)?;
-        confronta_resolver(&self.attese.locale.resolver, &risposta.resolver)?;
-        confronta_ambiente(&self.attese.locale.ambiente, &risposta.ambiente)?;
+        confronta_artefatto(&self.attese.da_rispecchiare.artefatto, &risposta.artefatto)?;
+        confronta_resolver(&self.attese.da_rispecchiare.resolver, &risposta.resolver)?;
+        confronta_ambiente(&self.attese.da_rispecchiare.ambiente, &risposta.ambiente)?;
         confronta_capability(&self.attese.capability_richieste, &risposta.capability)?;
 
         Ok(HandshakeAccettato {

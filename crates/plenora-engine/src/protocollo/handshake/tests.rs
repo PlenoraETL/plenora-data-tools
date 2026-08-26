@@ -12,7 +12,8 @@
 use plenora_core::{ErrorCategory, PlenoraError};
 
 use super::{
-    limiti_correnti, AtteseSupervisore, DescrizioneLocale, SupervisoreInAttesa, WorkerInAttesa,
+    limiti_correnti, AtteseSupervisore, DaRispecchiare, DescrizioneLocale, SupervisoreInAttesa,
+    WorkerInAttesa,
 };
 use crate::commit_token::CommitToken;
 use crate::protocollo::messaggi::{
@@ -67,9 +68,28 @@ fn locale() -> DescrizioneLocale {
     }
 }
 
+/// Le attese del supervisore, coerenti con [`locale`].
+///
+/// Le tre identita' si prendono da `locale()` **campo per campo** e non
+/// clonando una descrizione: il supervisore non ha una descrizione da
+/// rispecchiare che includa le capability, e il tipo lo dice.
+fn da_rispecchiare() -> DaRispecchiare {
+    let DescrizioneLocale {
+        artefatto,
+        resolver,
+        ambiente,
+        capability: _,
+    } = locale();
+    DaRispecchiare {
+        artefatto,
+        resolver,
+        ambiente,
+    }
+}
+
 fn attese() -> AtteseSupervisore {
     AtteseSupervisore {
-        locale: locale(),
+        da_rispecchiare: da_rispecchiare(),
         capability_richieste: vec!["arrow_ipc".to_owned()],
         commit_token: token(),
     }
@@ -250,7 +270,7 @@ fn l_acquisizione_dinamica_e_rifiutata_da_entrambi_i_lati() {
     // E il supervisore non riesce nemmeno a costruirsi con quella dichiarata:
     // scoprire un difetto proprio dalla risposta altrui sarebbe tardi.
     let mut sue = attese();
-    sue.locale.ambiente.acquisizione_dinamica = true;
+    sue.da_rispecchiare.ambiente.acquisizione_dinamica = true;
     assert!(SupervisoreInAttesa::nuovo(sue).is_err());
 }
 
@@ -366,7 +386,7 @@ fn l_ordine_di_risorse_backend_e_capability_non_conta() {
     // E anche dal lato di chi le dichiara: un supervisore che le elenca al
     // contrario produce un `Saluto` che il worker accetta lo stesso.
     let mut sue = attese();
-    sue.locale.ambiente.risorse.reverse();
+    sue.da_rispecchiare.ambiente.risorse.reverse();
     sue.capability_richieste.reverse();
     let supervisore = SupervisoreInAttesa::nuovo(sue).expect("coerenti");
     let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
@@ -385,13 +405,16 @@ fn l_ordine_di_risorse_backend_e_capability_non_conta() {
 fn i_duplicati_sono_rifiutati_ovunque() {
     // Nella descrizione propria, prima ancora di spedire.
     let mut sue = attese();
-    sue.locale.ambiente.risorse.push(risorsa("grid"));
+    sue.da_rispecchiare.ambiente.risorse.push(risorsa("grid"));
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("risorsa duplicata");
     assert!(errore.to_string().contains("grid"), "{errore}");
     assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
 
     let mut sue = attese();
-    sue.locale.ambiente.backend_dinamici.push(backend("gdal"));
+    sue.da_rispecchiare
+        .ambiente
+        .backend_dinamici
+        .push(backend("gdal"));
     assert!(
         SupervisoreInAttesa::nuovo(sue).is_err(),
         "backend duplicato"
@@ -437,7 +460,7 @@ fn due_risorse_con_lo_stesso_nome_e_versioni_diverse_sono_un_duplicato() {
     let mut sue = attese();
     let mut gemella = risorsa("grid");
     gemella.versione = "2".to_owned();
-    sue.locale.ambiente.risorse.push(gemella);
+    sue.da_rispecchiare.ambiente.risorse.push(gemella);
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("nome ripetuto");
     assert!(errore.to_string().contains("grid"), "{errore}");
 }
@@ -545,20 +568,30 @@ fn un_tipo_fuori_sequenza_e_rifiutato() {
     assert!(errore.to_string().contains("atteso"), "{errore}");
 }
 
-/// Il riuso di uno stato concluso **non compila**, e questo test lo documenta.
+/// Il riuso di uno stato concluso **non compila**, e qui non c'e' un oracolo
+/// che lo provi.
 ///
 /// Ogni transizione consuma `self`, quindi un secondo `ricevi` sullo stesso
 /// supervisore non e' un errore da gestire: e' codice che il compilatore
-/// rifiuta. Il test qui sotto e' la forma compilabile piu' vicina — due
-/// handshake distinti — e serve a dire che quella e' l'unica strada.
+/// rifiuta. La garanzia sta nella firma — `fn ricevi(self, ..)` su un tipo
+/// senza `Clone` — e il compilatore la fa rispettare a ogni chiamata del
+/// crate.
 ///
-/// ```compile_fail
-/// # use plenora_engine::protocollo::handshake::*;
-/// # fn prova(supervisore: SupervisoreInAttesa, uno: Frame, due: Frame) {
-/// let _ = supervisore.ricevi(uno);
-/// let _ = supervisore.ricevi(due); // `supervisore` e' stato mosso
-/// # }
-/// ```
+/// **Quello che c'era prima era peggio di niente.** Un blocco
+/// ```` ```compile_fail ```` su questa doc non veniva **mai eseguito**:
+/// `rustdoc` non raccoglie i doctest dai moduli `#[cfg(test)]`, e
+/// `cargo test --doc` lo confermava con «0 tests». Se fosse stato raccolto
+/// sarebbe stato peggio ancora: `protocollo` e' un modulo privato, quindi
+/// quel codice sarebbe fallito per **privacy**, non per il valore mosso — un
+/// `compile_fail` che passa per la ragione sbagliata e' un oracolo che
+/// dichiara una proprieta' senza sorvegliarla.
+///
+/// Provarla davvero richiede `trybuild` o `compiletest`, cioe' una dipendenza
+/// nuova, e una superficie da cui il tipo sia raggiungibile. Fino ad allora e'
+/// dichiarata e non provata, ed e' scritto qui.
+///
+/// Il test qui sotto prova un'altra cosa, vera e verificabile: due handshake
+/// distinti non condividono stato.
 #[test]
 fn due_handshake_distinti_non_si_influenzano() {
     let (primo, _) = giro_nominale();

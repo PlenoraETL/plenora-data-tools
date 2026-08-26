@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Byte del token: 32, cioe' 64 caratteri esadecimali.
 ///
@@ -59,16 +59,23 @@ pub const CHIAVE_FOOTER_COMMIT_TOKEN: &str = "plenora.commit.token";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FormaTokenNonValida {
-    /// Il numero di caratteri non e' quello richiesto.
+    /// La lunghezza non e' quella richiesta.
+    ///
+    /// **In byte**, come la misura che decide il rifiuto. Contarli in
+    /// caratteri per il messaggio sembrava piu' gentile e produceva un
+    /// assurdo: su 64 caratteri di cui alcuni multibyte usciva «attesi 64,
+    /// trovati 64», cioe' un rifiuto che si smentisce da solo. Sulla forma
+    /// canonica, che e' ASCII, byte e caratteri coincidono e la gentilezza non
+    /// serviva a nessuno.
     LunghezzaErrata {
-        /// Caratteri attesi.
+        /// Byte attesi.
         attesi: usize,
-        /// Caratteri trovati.
+        /// Byte trovati.
         trovati: usize,
     },
     /// Un carattere non e' esadecimale.
     NonEsadecimale {
-        /// Posizione, in caratteri dall'inizio.
+        /// Posizione, in byte dall'inizio.
         posizione: usize,
     },
     /// Un carattere esadecimale e' maiuscolo.
@@ -77,7 +84,7 @@ pub enum FormaTokenNonValida {
     /// dirlo cambia cosa fa chi lo legge: `A` non e' spazzatura, e' la grafia
     /// sbagliata di un valore che potrebbe essere giusto.
     MaiuscoloNonAmmesso {
-        /// Posizione, in caratteri dall'inizio.
+        /// Posizione, in byte dall'inizio.
         posizione: usize,
     },
 }
@@ -87,7 +94,7 @@ impl fmt::Display for FormaTokenNonValida {
         match self {
             Self::LunghezzaErrata { attesi, trovati } => write!(
                 formattatore,
-                "il commit_token ha {trovati} caratteri, ne servono esattamente {attesi}"
+                "il commit_token e' lungo {trovati} byte, ne servono esattamente {attesi}"
             ),
             Self::NonEsadecimale { posizione } => write!(
                 formattatore,
@@ -127,10 +134,14 @@ impl CommitToken {
         // esadecimale, quindi contare i byte non e' un'approssimazione — e
         // contare i caratteri costerebbe una scansione in piu' per rifiutare
         // le stesse cose.
+        //
+        // Il numero riportato e' la **stessa** misura che ha deciso, non una
+        // seconda presa in caratteri: due misure diverse nello stesso errore
+        // possono contraddirsi, e lo facevano.
         if testo.len() != COMMIT_TOKEN_CARATTERI {
             return Err(FormaTokenNonValida::LunghezzaErrata {
                 attesi: COMMIT_TOKEN_CARATTERI,
-                trovati: testo.chars().count(),
+                trovati: testo.len(),
             });
         }
         // `as_chunks` e non `chunks_exact`: la lunghezza e' gia' stata
@@ -210,13 +221,50 @@ impl Serialize for CommitToken {
 /// Un token maiuscolo o di lunghezza sbagliata non viene normalizzato: viene
 /// rifiutato. Normalizzarlo significherebbe accettare due grafie per lo stesso
 /// valore, e il footer le distinguerebbe comunque.
+///
+/// # Perche' un visitatore e non `<&str>::deserialize`
+///
+/// Quello pretende una stringa **presa in prestito** dal buffer d'ingresso, e
+/// ci sono due modi ordinari di non poterla dare: una sorgente che scorre
+/// (`from_reader` non ha un buffer da cui prestare) e una stringa JSON con
+/// escape (`"a..."` va disfatta, e il risultato e' posseduto). In
+/// entrambi i casi un token **perfettamente canonico** veniva rifiutato con
+/// «expected a borrowed string»: un rifiuto per la forma del trasporto,
+/// spacciato per un rifiuto del token.
+///
+/// Il visitatore accetta il testo comunque arrivi. `visit_string` e
+/// `visit_borrowed_str` ricadono per default su `visit_str`, quindi la
+/// validazione resta in un punto solo.
 impl<'de> Deserialize<'de> for CommitToken {
     fn deserialize<D: Deserializer<'de>>(deserializzatore: D) -> Result<Self, D::Error> {
-        let testo = <&str>::deserialize(deserializzatore)?;
+        deserializzatore.deserialize_str(VisitatoreToken)
+    }
+}
+
+/// Il visitatore che porta la validazione dove il testo arriva.
+struct VisitatoreToken;
+
+impl de::Visitor<'_> for VisitatoreToken {
+    type Value = CommitToken;
+
+    /// Descrive la **forma attesa**, non quella ricevuta.
+    ///
+    /// E' l'unico messaggio che `serde` compone da solo, e questa e' la
+    /// ragione per cui `visit_str` c'e' anche se il default lo genererebbe:
+    /// senza, un token arriverebbe a `invalid_type` e finirebbe stampato
+    /// dentro `Unexpected::Str`.
+    fn expecting(&self, formattatore: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formattatore,
+            "una stringa di {COMMIT_TOKEN_CARATTERI} caratteri esadecimali minuscoli"
+        )
+    }
+
+    fn visit_str<E: de::Error>(self, testo: &str) -> Result<Self::Value, E> {
         // Il messaggio d'errore di `serde` **non** cita il testo: `custom`
         // riceve solo cio' che scriviamo noi, e `FormaTokenNonValida` non
         // porta il valore.
-        Self::da_esadecimale(testo).map_err(serde::de::Error::custom)
+        CommitToken::da_esadecimale(testo).map_err(E::custom)
     }
 }
 
