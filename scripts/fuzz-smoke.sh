@@ -29,7 +29,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # shellcheck source=scripts/fuzz-preflight.sh
 . "$PROJECT_ROOT/scripts/fuzz-preflight.sh"
-preflight "$IMAGE" "$CARGO_FUZZ" "$FUZZBIN_HOST" || exit 1
+fuzz_preflight "$IMAGE" "$CARGO_FUZZ" "$FUZZBIN_HOST" || exit 1
 
 mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 SUMMARY="$PROJECT_ROOT/fuzz/campaign-logs/smoke-summary.txt"

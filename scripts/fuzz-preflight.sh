@@ -12,10 +12,17 @@
 # fare.
 
 # Verifica daemon, immagine e binario. Rende 0 se si puo' partire.
-preflight() {
-    immagine="$1"
-    binario="$2"
-    fuzzbin_host="$3"
+#
+# Nome col prefisso e variabili `local`: questo file viene **sourced**, quindi
+# tutto cio' che definisce entra nello spazio dei nomi del chiamante. Un nome
+# generico come `preflight`, o una variabile `immagine` senza `local`,
+# sovrascriverebbero in silenzio qualcosa dello script che lo include — e in
+# silenzio e' il modo peggiore.
+fuzz_preflight() {
+    local immagine="$1"
+    local binario="$2"
+    local fuzzbin_host="$3"
+    local diagnosi
 
     # 1. Il daemon, e per primo. `docker image inspect` fallisce allo stesso
     #    modo se l'immagine non c'e' e se il daemon non risponde: senza questo
