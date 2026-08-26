@@ -731,11 +731,22 @@ troncamento esiste anche perché quella scelta resti rivedibile.
 ### Protocollo del worker: i tetti sono del profilo isolato
 
 **La regola.** Ogni frame del protocollo supervisore/worker è un prefisso di
-lunghezza `u32` big-endian seguito da JSON UTF-8 compatto. Tutti i tetti sono
-costanti interne di `plenora_engine::protocollo::limiti`, non sono
-configurabili e non viaggiano come valori modificabili. Un protocollo interno
-con limiti negoziabili è un protocollo con una superficie d'attacco
+lunghezza `u32` big-endian seguito da JSON UTF-8 compatto. Nessun tetto è
+configurabile e nessuno viaggia come valore modificabile: un protocollo
+interno con limiti negoziabili è un protocollo con una superficie d'attacco
 negoziabile.
+
+I tetti sono di due specie, e vivono in posti diversi perché sono cose
+diverse:
+
+- i **limiti elementari** — quanto è lungo un percorso, quanti ingressi,
+  quanti esempi — sono costanti scelte, e stanno in
+  `plenora_engine::protocollo::limiti`;
+- `MAX_PROTOCOL_FRAME_BYTES` è invece **derivato** da quelli con aritmetica
+  `checked`, e sta accanto al codice che lo applica, in
+  `plenora_engine::protocollo::codifica`. Non è una scelta: è una
+  conseguenza, e metterlo fra le scelte inviterebbe a modificarlo
+  direttamente.
 
 | Costante | Valore | Che cosa limita |
 |---|---|---|

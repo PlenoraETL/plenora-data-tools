@@ -681,6 +681,24 @@ fn un_enum_fuori_dominio_e_un_errore() {
     }
 }
 
+/// La posizione di una disposizione nella tabella delle prove.
+///
+/// `RetrySulFilo` ha varianti di forma diversa, quindi non passa dalla macro
+/// del vocabolario. L'esaustivita' la garantisce comunque il compilatore:
+/// questo `match` e' esaustivo, quindi una disposizione nuova non compila
+/// finche' non le si assegna un indice — e l'indice nuovo esce dall'array
+/// `viste`, facendo fallire il test. Un `assert_eq!(disposizioni.len(), 5)`
+/// avrebbe contato la tabella del test, non l'enum.
+const fn posizione_della_disposizione(disposizione: &RetrySulFilo) -> usize {
+    match disposizione {
+        RetrySulFilo::Never {} => 0,
+        RetrySulFilo::Safe {} => 1,
+        RetrySulFilo::RequiresIdempotencyKey {} => 2,
+        RetrySulFilo::RequiresRecovery {} => 3,
+        RetrySulFilo::After { .. } => 4,
+    }
+}
+
 /// Anche gli enum **con tag interno** rifiutano i campi ignoti.
 ///
 /// Vale la pena provarlo a parte: `deny_unknown_fields` su un enum con tag
@@ -715,14 +733,31 @@ fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
     // l'unica in cui `deny_unknown_fields` funzionava anche prima della
     // correzione: senza provarla, non lo si saprebbe.
     let disposizioni = [
-        r#"{"kind":"never","estraneo":1}"#,
-        r#"{"kind":"safe","estraneo":1}"#,
-        r#"{"kind":"requires_idempotency_key","estraneo":1}"#,
-        r#"{"kind":"requires_recovery","estraneo":1}"#,
-        r#"{"kind":"after","delay_ms":1,"estraneo":1}"#,
+        (RetrySulFilo::Never {}, r#"{"kind":"never","estraneo":1}"#),
+        (RetrySulFilo::Safe {}, r#"{"kind":"safe","estraneo":1}"#),
+        (
+            RetrySulFilo::RequiresIdempotencyKey {},
+            r#"{"kind":"requires_idempotency_key","estraneo":1}"#,
+        ),
+        (
+            RetrySulFilo::RequiresRecovery {},
+            r#"{"kind":"requires_recovery","estraneo":1}"#,
+        ),
+        (
+            RetrySulFilo::After { delay_ms: 1 },
+            r#"{"kind":"after","delay_ms":1,"estraneo":1}"#,
+        ),
     ];
-    assert_eq!(disposizioni.len(), 5, "le disposizioni sono cinque");
-    for retry in disposizioni {
+    let mut viste = [false; 5];
+    for (disposizione, _) in &disposizioni {
+        viste[posizione_della_disposizione(disposizione)] = true;
+    }
+    assert!(
+        viste.iter().all(|v| *v),
+        "una disposizione non e' provata: {viste:?}"
+    );
+
+    for (_, retry) in disposizioni {
         let corpo = format!(
             concat!(
                 r#"{{"esito":"errore","errore":{{"categoria":"schema","fase":"read","#,
@@ -1651,22 +1686,14 @@ fn il_contenuto_non_entra_negli_errori_del_writer() {
 /// derivazione del tetto un po' meno vera di quanto dichiara.
 #[test]
 fn nessun_nome_di_tipo_supera_i_nove_caratteri() {
-    let tutti = [
-        TipoMessaggio::Saluto,
-        TipoMessaggio::Incarico,
-        TipoMessaggio::Annulla,
-        TipoMessaggio::Risposta,
-        TipoMessaggio::Progresso,
-        TipoMessaggio::Esito,
-    ];
     let mut piu_lungo = 0;
-    for tipo in tutti {
-        // `to_string` di un enum serde rende il nome fra virgolette: i due
-        // apici non fanno parte del nome.
-        let reso = serde_json::to_string(&tipo).expect("serializzabile");
-        let nome = reso.trim_matches('"').len();
-        assert!(nome <= 9, "`{reso}` e' lungo {nome} caratteri, non nove");
-        piu_lungo = piu_lungo.max(nome);
+    for (_, nome) in TipoMessaggio::TUTTE {
+        assert!(
+            nome.len() <= 9,
+            "`{nome}` e' lungo {} caratteri, non nove",
+            nome.len()
+        );
+        piu_lungo = piu_lungo.max(nome.len());
     }
     assert_eq!(
         piu_lungo, 9,
@@ -1710,94 +1737,55 @@ fn nome_sul_filo<T: serde::Serialize>(valore: &T) -> String {
         .to_owned()
 }
 
-/// I nomi sul filo delle enumerazioni chiuse, **scritti a mano**.
+/// Le due proprieta' del vocabolario che la macro **non** garantisce.
 ///
-/// Sono vocabolario di protocollo: rinominare una variante Rust li cambierebbe
-/// in silenzio, e i due capi smetterebbero di capirsi senza che nulla in Rust
-/// segnali un problema.
+/// L'esaustivita' non si prova piu' qui, ed e' il punto: `TUTTE` nasce dalla
+/// stessa lista che genera le varianti, quindi una variante nuova ci entra da
+/// sola. La versione precedente teneva una tabella a mano nel test —
+/// enumerava se stessa, e una variante aggiunta all'enum la lasciava
+/// invariata e il test verde.
+///
+/// Restano due cose che la macro non puo' garantire, ed entrambe sono difetti
+/// veri:
+///
+/// - due varianti col **medesimo** nome sul filo. La macro le accetta e
+///   `serde` pure: la seconda diventa irraggiungibile in lettura;
+/// - un nome che rilegge la variante **di un'altra**, che e' come il caso
+///   precedente si manifesta dal lato del decoder.
+fn vocabolario_biunivoco<T>(tutte: &[(T, &'static str)], etichetta: &str)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug + Copy,
+{
+    let mut visti: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    for (valore, nome) in tutte {
+        assert_eq!(
+            &nome_sul_filo(valore),
+            nome,
+            "{etichetta}: {valore:?} non si serializza come `{nome}`"
+        );
+        let indietro: T = serde_json::from_str(&format!("\"{nome}\""))
+            .unwrap_or_else(|errore| panic!("{etichetta}: `{nome}` non si rilegge: {errore}"));
+        assert_eq!(
+            &indietro, valore,
+            "{etichetta}: `{nome}` rilegge una variante diversa da quella che lo dichiara"
+        );
+        assert!(
+            visti.insert(nome),
+            "{etichetta}: `{nome}` e' dichiarato da due varianti"
+        );
+    }
+    assert!(!visti.is_empty(), "{etichetta}: nessuna variante");
+}
+
+/// Il vocabolario sul filo delle enumerazioni chiuse.
 #[test]
-fn il_vocabolario_sul_filo_e_quello_dichiarato() {
-    let categorie = [
-        (CategoriaSulFilo::InvalidPlan, "invalid_plan"),
-        (
-            CategoriaSulFilo::InvalidConfiguration,
-            "invalid_configuration",
-        ),
-        (CategoriaSulFilo::Schema, "schema"),
-        (CategoriaSulFilo::DataMapping, "data_mapping"),
-        (CategoriaSulFilo::Crs, "crs"),
-        (CategoriaSulFilo::Unsupported, "unsupported"),
-        (CategoriaSulFilo::NotFound, "not_found"),
-        (CategoriaSulFilo::Conflict, "conflict"),
-        (CategoriaSulFilo::Authentication, "authentication"),
-        (CategoriaSulFilo::Authorization, "authorization"),
-        (CategoriaSulFilo::Timeout, "timeout"),
-        (CategoriaSulFilo::Cancelled, "cancelled"),
-        (CategoriaSulFilo::ResourceLimit, "resource_limit"),
-        (CategoriaSulFilo::Io, "io"),
-        (CategoriaSulFilo::Protocol, "protocol"),
-        (CategoriaSulFilo::Transient, "transient"),
-        (CategoriaSulFilo::Execution, "execution"),
-        (
-            CategoriaSulFilo::IsolationUnavailable,
-            "isolation_unavailable",
-        ),
-        (
-            CategoriaSulFilo::UnattributedMemoryPressure,
-            "unattributed_memory_pressure",
-        ),
-        (CategoriaSulFilo::Internal, "internal"),
-    ];
-    assert_eq!(categorie.len(), 20, "le categorie sul filo sono venti");
-    for (valore, nome) in categorie {
-        assert_eq!(nome_sul_filo(&valore), nome);
-    }
-
-    let fasi = [
-        (FaseSulFilo::Validate, "validate"),
-        (FaseSulFilo::Connect, "connect"),
-        (FaseSulFilo::Probe, "probe"),
-        (FaseSulFilo::Prepare, "prepare"),
-        (FaseSulFilo::Read, "read"),
-        (FaseSulFilo::Write, "write"),
-        (FaseSulFilo::Finalize, "finalize"),
-        (FaseSulFilo::Commit, "commit"),
-        (FaseSulFilo::Rollback, "rollback"),
-        (FaseSulFilo::Cleanup, "cleanup"),
-    ];
-    assert_eq!(fasi.len(), 10, "le fasi sul filo sono dieci");
-    for (valore, nome) in fasi {
-        assert_eq!(nome_sul_filo(&valore), nome);
-    }
-
-    let effetti = [
-        (EffettoSulFilo::None, "none"),
-        (EffettoSulFilo::RolledBack, "rolled_back"),
-        (EffettoSulFilo::Partial, "partial"),
-        (EffettoSulFilo::Committed, "committed"),
-        (EffettoSulFilo::Unknown, "unknown"),
-    ];
-    assert_eq!(effetti.len(), 5, "gli effetti sul filo sono cinque");
-    for (valore, nome) in effetti {
-        assert_eq!(nome_sul_filo(&valore), nome);
-    }
-
-    let forme = [
-        (FormaPanicSulFilo::Statico, "statico"),
-        (FormaPanicSulFilo::Dinamico, "dinamico"),
-        (FormaPanicSulFilo::NonTestuale, "non_testuale"),
-    ];
-    assert_eq!(forme.len(), 3, "le forme di panico sono tre");
-    for (valore, nome) in forme {
-        assert_eq!(nome_sul_filo(&valore), nome);
-    }
-
-    for (valore, nome) in [
-        (FormatoIngresso::File, "file"),
-        (FormatoIngresso::Stream, "stream"),
-    ] {
-        assert_eq!(nome_sul_filo(&valore), nome);
-    }
+fn il_vocabolario_sul_filo_e_biunivoco() {
+    vocabolario_biunivoco(TipoMessaggio::TUTTE, "TipoMessaggio");
+    vocabolario_biunivoco(CategoriaSulFilo::TUTTE, "CategoriaSulFilo");
+    vocabolario_biunivoco(FaseSulFilo::TUTTE, "FaseSulFilo");
+    vocabolario_biunivoco(EffettoSulFilo::TUTTE, "EffettoSulFilo");
+    vocabolario_biunivoco(FormaPanicSulFilo::TUTTE, "FormaPanicSulFilo");
+    vocabolario_biunivoco(FormatoIngresso::TUTTE, "FormatoIngresso");
 }
 
 /// I tetti della sequenza, e la relazione fra loro.
@@ -1826,23 +1814,18 @@ fn i_tetti_della_sequenza_sono_coerenti() {
 fn ogni_tipo_ha_una_sola_direzione() {
     use super::messaggi::Direzione;
 
-    let verso_worker = [
-        TipoMessaggio::Saluto,
-        TipoMessaggio::Incarico,
-        TipoMessaggio::Annulla,
-    ];
-    let verso_supervisore = [
-        TipoMessaggio::Risposta,
-        TipoMessaggio::Progresso,
-        TipoMessaggio::Esito,
-    ];
-    for tipo in verso_worker {
-        assert_eq!(tipo.direzione(), Direzione::VersoWorker, "{tipo:?}");
+    // L'oracolo e' un `match` **esaustivo** su `TUTTE`: un tipo nuovo non
+    // compila finche' non gli si assegna una direzione qui, e non puo'
+    // sfuggire all'iterazione perche' `TUTTE` lo contiene per costruzione.
+    for (tipo, nome) in TipoMessaggio::TUTTE {
+        let atteso = match tipo {
+            TipoMessaggio::Saluto | TipoMessaggio::Incarico | TipoMessaggio::Annulla => {
+                Direzione::VersoWorker
+            }
+            TipoMessaggio::Risposta | TipoMessaggio::Progresso | TipoMessaggio::Esito => {
+                Direzione::VersoSupervisore
+            }
+        };
+        assert_eq!(tipo.direzione(), atteso, "direzione sbagliata per `{nome}`");
     }
-    for tipo in verso_supervisore {
-        assert_eq!(tipo.direzione(), Direzione::VersoSupervisore, "{tipo:?}");
-    }
-    // I sei tipi sono coperti: se ne comparisse un settimo, questa somma
-    // smetterebbe di tornare.
-    assert_eq!(verso_worker.len() + verso_supervisore.len(), 6);
 }

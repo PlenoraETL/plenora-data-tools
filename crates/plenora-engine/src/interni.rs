@@ -3,9 +3,11 @@
 //! # Superficie pubblica instabile e non-production
 //!
 //! Questo modulo esiste solo con la feature `internals`, che non e' nel
-//! `default` e che nessun consumatore abilita. Non ha garanzie di stabilita' e
-//! non e' pensato per essere usato in produzione: puo' cambiare o sparire
-//! senza preavviso.
+//! `default` e che **nessun consumatore di produzione** abilita: gli unici a
+//! farlo sono il crate `fuzz/` e la sonda di calibrazione, che sono strumenti
+//! di verifica di questo repository. Non ha garanzie di stabilita' e non e'
+//! pensato per essere usato in produzione: puo' cambiare o sparire senza
+//! preavviso.
 //!
 //! # Perche' una facciata e non il modulo
 //!

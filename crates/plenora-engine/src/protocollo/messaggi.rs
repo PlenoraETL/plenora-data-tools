@@ -58,16 +58,59 @@ use serde_json::value::RawValue;
 /// risposta buona.
 pub const VERSIONE_PROTOCOLLO: u16 = 1;
 
-/// Il tipo di un messaggio, enumerazione **chiusa**.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TipoMessaggio {
-    Saluto,
-    Incarico,
-    Annulla,
-    Risposta,
-    Progresso,
-    Esito,
+/// Genera **insieme** l'enum, il suo nome sul filo e l'insieme di tutte le sue
+/// varianti.
+///
+/// Serve a togliere di mezzo una classe di difetto, non a scrivere meno: una
+/// tabella di prova scritta a mano accanto all'enum **enumera se stessa**.
+/// Aggiungere una variante la lascia invariata, e il test resta verde
+/// affermando che tutte le varianti hanno il nome giusto — su un insieme che
+/// non le contiene tutte.
+///
+/// Qui la lista e' una sola. Una variante non puo' esistere senza un nome sul
+/// filo (la macro lo pretende) e senza comparire in [`TUTTE`](Self::TUTTE).
+///
+/// Cio' che la macro **non** garantisce, e che i test devono ancora provare:
+/// che i nomi siano distinti, e che ciascuno rilegga la propria variante e non
+/// quella di un altro.
+macro_rules! enum_sul_filo {
+    (
+        $(#[$attributo:meta])*
+        $nome:ident {
+            $( $variante:ident => $filo:literal ),+ $(,)?
+        }
+    ) => {
+        $(#[$attributo])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        pub enum $nome {
+            $(
+                #[serde(rename = $filo)]
+                $variante,
+            )+
+        }
+
+        impl $nome {
+            /// Ogni variante col proprio nome sul filo.
+            ///
+            /// Generata dalla stessa lista che genera le varianti: le due non
+            /// possono divergere.
+            pub const TUTTE: &'static [(Self, &'static str)] = &[
+                $( (Self::$variante, $filo), )+
+            ];
+        }
+    };
+}
+
+enum_sul_filo! {
+    /// Il tipo di un messaggio, enumerazione **chiusa**.
+    TipoMessaggio {
+        Saluto => "saluto",
+        Incarico => "incarico",
+        Annulla => "annulla",
+        Risposta => "risposta",
+        Progresso => "progresso",
+        Esito => "esito",
+    }
 }
 
 impl TipoMessaggio {
@@ -172,12 +215,12 @@ pub struct LimitiDichiarati {
     pub max_messaggi_verso_supervisore: u64,
 }
 
-/// Formato del contenitore Arrow IPC di un ingresso.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FormatoIngresso {
-    File,
-    Stream,
+enum_sul_filo! {
+    /// Formato del contenitore Arrow IPC di un ingresso.
+    FormatoIngresso {
+        File => "file",
+        Stream => "stream",
+    }
 }
 
 /// Un ingresso, **descritto** e non trasportato.
@@ -263,61 +306,61 @@ pub struct Progresso {
     pub nodi_completati: u64,
 }
 
-/// Asse «categoria» dell'errore sul filo.
-///
-/// Enumerazione chiusa: il nome canonico non viaggia come stringa libera,
-/// altrimenti un valore sconosciuto passerebbe come testo e si fermerebbe
-/// piu' tardi, o mai.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CategoriaSulFilo {
-    InvalidPlan,
-    InvalidConfiguration,
-    Schema,
-    DataMapping,
-    Crs,
-    Unsupported,
-    NotFound,
-    Conflict,
-    Authentication,
-    Authorization,
-    Timeout,
-    Cancelled,
-    ResourceLimit,
-    Io,
-    Protocol,
-    Transient,
-    Execution,
-    IsolationUnavailable,
-    UnattributedMemoryPressure,
-    Internal,
+enum_sul_filo! {
+    /// Asse «categoria» dell'errore sul filo.
+    ///
+    /// Enumerazione chiusa: il nome canonico non viaggia come stringa libera,
+    /// altrimenti un valore sconosciuto passerebbe come testo e si fermerebbe
+    /// piu' tardi, o mai.
+    CategoriaSulFilo {
+        InvalidPlan => "invalid_plan",
+        InvalidConfiguration => "invalid_configuration",
+        Schema => "schema",
+        DataMapping => "data_mapping",
+        Crs => "crs",
+        Unsupported => "unsupported",
+        NotFound => "not_found",
+        Conflict => "conflict",
+        Authentication => "authentication",
+        Authorization => "authorization",
+        Timeout => "timeout",
+        Cancelled => "cancelled",
+        ResourceLimit => "resource_limit",
+        Io => "io",
+        Protocol => "protocol",
+        Transient => "transient",
+        Execution => "execution",
+        IsolationUnavailable => "isolation_unavailable",
+        UnattributedMemoryPressure => "unattributed_memory_pressure",
+        Internal => "internal",
+    }
 }
 
-/// Asse «fase».
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FaseSulFilo {
-    Validate,
-    Connect,
-    Probe,
-    Prepare,
-    Read,
-    Write,
-    Finalize,
-    Commit,
-    Rollback,
-    Cleanup,
+enum_sul_filo! {
+    /// Asse «fase».
+    FaseSulFilo {
+        Validate => "validate",
+        Connect => "connect",
+        Probe => "probe",
+        Prepare => "prepare",
+        Read => "read",
+        Write => "write",
+        Finalize => "finalize",
+        Commit => "commit",
+        Rollback => "rollback",
+        Cleanup => "cleanup",
+    }
 }
 
-/// Asse «effetto remoto».
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EffettoSulFilo {
-    None,
-    RolledBack,
-    Partial,
-    Committed,
-    Unknown,
+enum_sul_filo! {
+    /// Asse «effetto remoto».
+    EffettoSulFilo {
+        None => "none",
+        RolledBack => "rolled_back",
+        Partial => "partial",
+        Committed => "committed",
+        Unknown => "unknown",
+    }
 }
 
 /// Asse «ritentativo».
@@ -391,18 +434,18 @@ pub struct ErroreSulFilo {
     pub diagnostica: Option<DiagnosticaSulFilo>,
 }
 
-/// La forma del payload di un panico, enumerazione **chiusa**.
-///
-/// Non una stringa: una stringa accetta qualunque stringa, e il contenuto del
-/// panico finirebbe dove il progetto dichiara che non finisce mai. I tre
-/// valori sono quelli che `std` puo' produrre, e li distingue
-/// `plenora_core::panic_policy` senza leggerne nessuno.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FormaPanicSulFilo {
-    Statico,
-    Dinamico,
-    NonTestuale,
+enum_sul_filo! {
+    /// La forma del payload di un panico, enumerazione **chiusa**.
+    ///
+    /// Non una stringa: una stringa accetta qualunque stringa, e il contenuto del
+    /// panico finirebbe dove il progetto dichiara che non finisce mai. I tre
+    /// valori sono quelli che `std` puo' produrre, e li distingue
+    /// `plenora_core::panic_policy` senza leggerne nessuno.
+    FormaPanicSulFilo {
+        Statico => "statico",
+        Dinamico => "dinamico",
+        NonTestuale => "non_testuale",
+    }
 }
 
 /// Il digest dell'artefatto finalizzato.
