@@ -42,7 +42,12 @@ use std::io::Write;
 use plenora_core::arrow::ipc::writer::FileWriter;
 
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
+// Servono soltanto a `leggi_commit_token`, che e' dietro un `cfg`: portano lo
+// stesso, o la build ordinaria della lib segnala tre import inutilizzati — e un
+// warning tollerato e' un warning che smette di essere letto.
+#[cfg(test)]
 use crate::geo_transport::error::ArrowTransportError;
+#[cfg(test)]
 use crate::geo_transport::ipc::{valida_file_ed_estrai, IpcLimits, IpcSource};
 
 /// Scrive il `commit_token` nel footer, se c'e'.
@@ -85,7 +90,12 @@ pub fn sigilla<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitTok
 /// ancora. Il `cfg` lo dice invece di lasciare che un `dead_code` lo dica
 /// peggio, e sparisce con `PR-6`. Registrato in
 /// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+///
+/// **`test` e non `any(test, internals)`**, a differenza di `protocollo`: questo
+/// modulo e' `pub(crate)`, quindi la facciata `interni` non lo raggiunge e la
+/// feature non gli porterebbe nessun chiamante. Le porterebbe un `dead_code`
+/// nella build che la abilita — cioe' quella del fuzzer.
+#[cfg(test)]
 pub fn leggi_commit_token<S: IpcSource + ?Sized>(
     sorgente: &mut S,
     limiti: &IpcLimits,

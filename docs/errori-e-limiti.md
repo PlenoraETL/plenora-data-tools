@@ -834,15 +834,26 @@ interno.
 
 ### Moduli compilati solo sotto `test` e `internals`
 
-**La regola.** `plenora_engine::protocollo` e
-`plenora_engine::sigillo::leggi_commit_token` sono compilati solo con
-`#[cfg(any(test, feature = "internals"))]`. Non è un'ottimizzazione: è la
-dichiarazione che quel codice **non ha ancora un chiamante di produzione**.
+**La regola.** `plenora_engine::protocollo` è compilato solo con
+`#[cfg(any(test, feature = "internals"))]`;
+`plenora_engine::sigillo::leggi_commit_token` e
+`geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
+un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
+chiamante di produzione**.
 
 **Il perimetro.** Il modulo `protocollo` per intero — messaggi, codifica,
-lettore limitato, handshake — e la sola funzione di lettura del token dal
-footer. `sigillo::sigilla` è invece incondizionato, perché il writer
-in-process lo chiama davvero (con `None`).
+lettore limitato, handshake — la sola funzione di lettura del token dal
+footer, e la forma breve di `parse_footer` (da quando la convalida estrae anche
+un custom metadata, la produzione passa tutta per `parse_footer_estraendo`).
+`sigillo::sigilla` è invece incondizionato, perché il writer in-process lo
+chiama davvero (con `None`).
+
+**Perché due `cfg` diversi e non uno.** `protocollo` porta anche l'arm
+`internals` perché la facciata `interni` è il modo in cui il fuzzer lo
+raggiunge. `sigillo` e `ipc` sono `pub(crate)`: la feature non porterebbe loro
+nessun chiamante in più, porterebbe un `dead_code` nella build che la abilita.
+Un `cfg` più largo del necessario dichiara una condizione falsa, ed è il modo
+educato di riaprire l'avviso che il `cfg` esisteva per chiudere.
 
 **Perché non un `allow(dead_code)`.** Sono due modi di trattare lo stesso
 fatto, e non sono equivalenti. Un `allow` **zittisce** l'avviso e lascia il
@@ -870,6 +881,10 @@ evita — verificato rimuovendolo e leggendo l'output, non dedotto.
 
 Il `cfg` su `leggi_commit_token` sparisce con **`PR-6`**, la verifica
 streaming dell'artefatto, che è il suo primo lettore reale.
+
+Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
+torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
+test e sta scritto che lo è.
 
 ### Il `commit_token`: forma canonica unica, e valore mai mostrato
 

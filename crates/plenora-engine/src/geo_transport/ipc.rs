@@ -1161,6 +1161,12 @@ pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
 
 /// Percorre il footer: lo Schema (che `fb_to_schema` leggera') e i vettori di
 /// `Block` dei dizionari e dei record batch.
+///
+/// **Solo sotto test.** Da quando la convalida estrae anche un custom metadata,
+/// il percorso di produzione passa tutto per [`parse_footer_estraendo`] e questa
+/// resta la forma breve per i test che dei soli blocchi hanno bisogno. Il `cfg`
+/// lo dichiara invece di lasciare che un `dead_code` lo dica peggio.
+#[cfg(test)]
 fn parse_footer(
     footer: &[u8],
     limits: &IpcLimits,
@@ -1168,8 +1174,8 @@ fn parse_footer(
     parse_footer_estraendo(footer, limits, None).map(|(blocks, _)| blocks)
 }
 
-/// Come [`parse_footer`], ma rende anche il valore della chiave cercata fra i
-/// custom metadata del footer.
+/// Percorre il footer — lo Schema e i vettori di `Block` — e rende anche il
+/// valore della chiave cercata fra i custom metadata del footer.
 fn parse_footer_estraendo<'a>(
     footer: &'a [u8],
     limits: &IpcLimits,
