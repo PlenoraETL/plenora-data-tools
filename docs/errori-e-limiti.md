@@ -728,6 +728,116 @@ diagnosticamente insufficiente. Otto **non** è una misura: i prototipi non
 hanno rilevato la profondità delle gerarchie ospiti, e il campo del
 troncamento esiste anche perché quella scelta resti rivedibile.
 
+### Protocollo del worker: i tetti sono del profilo isolato
+
+**La regola.** Ogni frame del protocollo supervisore/worker è un prefisso di
+lunghezza `u32` big-endian seguito da JSON UTF-8 compatto. Tutti i tetti sono
+costanti interne di `plenora_engine::protocollo::limiti`, non sono
+configurabili e non viaggiano come valori modificabili. Un protocollo interno
+con limiti negoziabili è un protocollo con una superficie d'attacco
+negoziabile.
+
+| Costante | Valore | Che cosa limita |
+|---|---|---|
+| `MAX_PROTOCOL_FRAME_BYTES` | derivato | byte del payload di un frame, prefisso escluso |
+| `MAX_PIANO_CANONICO_BYTES` | 64 MiB | forma canonica del piano dentro l'`Incarico` |
+| `MAX_INGRESSI` | 16 | descrittori d'ingresso per `Incarico` |
+| `MAX_IDENTIFICATORE_BYTES` | 256 | byte decodificati di un identificatore |
+| `MAX_PERCORSO_BYTES` | 4096 | byte decodificati di un percorso |
+| `MAX_DIGEST_BYTES` | 64 | byte decodificati di un digest esadecimale |
+| `MAX_VERSIONE_BYTES` | 64 | byte decodificati di una versione dichiarata |
+| `MAX_CAPABILITY` | 32 | capability dichiarate in `Risposta` |
+| `MAX_RISORSE` | 64 | risorse risolte elencate nell'handshake |
+| `MAX_BACKEND_DINAMICI` | 16 | backend collegati dinamicamente |
+| `MAX_MOTIVO_BYTES` | 1024 | byte decodificati del motivo di un `Annulla` |
+| `MAX_MESSAGGIO_BYTES` | 4096 | byte decodificati del messaggio sanificato |
+| `MAX_CONTEGGI_DIAGNOSTICA` | 64 | voci di conteggio nella diagnostica di riga |
+| `MAX_CHIAVE_CONTEGGIO_BYTES` | 128 | byte decodificati di una chiave di conteggio |
+| `MAX_ESEMPI_DIAGNOSTICA` | 32 | esempi portati dalla diagnostica |
+| `MAX_ESEMPIO_BYTES` | 512 | byte decodificati di un esempio |
+| `MAX_PROGRESSO` | 1024 | quota totale di emissione dei messaggi di progresso |
+| `MAX_MESSAGGI_VERSO_WORKER` | 3 | messaggi ammessi verso il worker |
+| `MAX_MESSAGGI_VERSO_SUPERVISORE` | 2 + `MAX_PROGRESSO` | messaggi ammessi verso il supervisore |
+
+`MAX_PROTOCOL_FRAME_BYTES` non è un numero scelto: è derivato con aritmetica
+`checked` dai tetti qui sopra e da un involucro JSON **contato carattere per
+carattere**. È un **maggiorante**, non una misura — nessun frame
+strutturalmente valido lo raggiunge, e questo è il verso giusto.
+
+**Il perimetro.** Solo il canale fra supervisore e worker isolato. Questi tetti
+non toccano `PlanLimits`, non toccano il confine IPC dei dati, e non
+descrivono ciò che il motore accetta in-process.
+
+**Il pericolo che copre.** Il decoder legge byte scritti da un altro processo:
+è la superficie d'attacco più diretta del sistema. Due presidi, e sono
+distinti:
+
+- il tetto sulla lunghezza si applica **prima di allocare**. Un frame che
+  dichiara un gigabyte viene rifiutato con quattro byte in mano, non dopo aver
+  riservato lo spazio che si voleva negare. Va detto fin dove arriva questa
+  garanzia: `decodifica` riceve una slice, quindi quando viene chiamata i byte
+  del payload *qualcuno li ha già letti*. Il presidio utilizzabile contro un
+  pipe è `lunghezza_dichiarata`, che decide sui soli quattro byte del prefisso
+  e che `decodifica` usa a sua volta — un solo confronto, non due che possono
+  divergere. Il lettore che se ne serve è di `PR-5`; fino ad allora la
+  garanzia esiste come predicato provato, non come lettura limitata;
+- in scrittura il writer **si ferma** appena supera il tetto, invece di
+  costruire un buffer illimitato e misurarlo dopo. Misurare dopo significa aver
+  già allocato ciò che si voleva rifiutare.
+
+**Che cosa questo NON garantisce, e va detto.** `MAX_PIANO_CANONICO_BYTES` è un
+limite di **policy**, non un massimo dimostrato.
+`examples/calibra_canonico.rs` misura il rapporto fra testo e forma canonica su
+piani costruiti per massimizzarlo e proietta il caso peggiore osservato sul
+tetto di `PlanLimits::default()`; il margine risultante è dichiarato dalla
+sonda stessa, che esce non-zero se la proiezione supera il limite. Nessun
+insieme finito di piani fissa quel rapporto per **tutti** i documenti validi:
+il presidio è il writer limitato, non il numero.
+
+**La conseguenza che va detta e non scoperta.** Questi sono tetti del **profilo
+isolato**, mentre `max_plan_json_bytes`, `max_inputs` e `max_identifier_bytes`
+di `PlanLimits` sono **default ampliabili** dalla policy di chi esegue. Ne
+segue che un piano valido sotto una policy più larga può essere **non
+isolabile**. Deve ricevere un rifiuto esplicito che lo dica — non un errore di
+serializzazione, che direbbe «il messaggio non si scrive» al posto di «questo
+piano non si può isolare». La selezione del profilo appartiene a `PR-12`: fino
+ad allora la condizione esiste e non ha ancora il suo messaggio.
+
+**La condizione di rientro.** Alzare un tetto richiede: la misura che mostra il
+caso reale che lo supera, il ricalcolo di `MAX_PROTOCOL_FRAME_BYTES` (che è
+derivato, quindi si aggiorna da sé), e la verifica che i sei massimi
+serializzati continuino a starci sotto — che è un test, non un controllo a
+mano. Renderli configurabili è fuori discussione finché il canale resta
+interno.
+
+### `deny_unknown_fields` non copre le varianti unitarie degli enum con tag
+
+**La regola.** In un enum serde con tag interno (`#[serde(tag = "...")]`),
+`deny_unknown_fields` **non ha effetto sulle varianti unitarie**: serde le
+riconosce dal tag e ignora silenziosamente il resto dell'oggetto. Ogni variante
+senza campi di un enum con tag che dichiara `deny_unknown_fields` va quindi
+scritta come variante di struttura vuota — `Never {}` e non `Never`. Sul filo
+la forma è identica; a cambiare è che la deserializzazione passa da un visitor
+di struttura, dove il controllo vale davvero.
+
+**Il perimetro.** Gli enum con tag interno che **dichiarano**
+`deny_unknown_fields`. Nel protocollo sono `RetrySulFilo` ed
+`EsitoWorkerSulFilo`. `KnownOrUnknownCount` (`plenora-core`) ed `Expression`
+(`plenora-kernels-table`) hanno un tag interno ma **non** dichiarano
+`deny_unknown_fields`: non promettono il controllo, quindi non lo tradiscono.
+
+**Il pericolo che copre.** Scritto `Never`, `RetrySulFilo` accettava
+`{"kind":"never","delay_ms":10}` e buttava via `delay_ms` in silenzio — cioè
+esattamente ciò che quel campo esiste per impedire: una disposizione che non
+concede il ritentativo che porta con sé un ritardo. L'attributo era presente e
+sembrava proteggere; è il caso peggiore, perché la difesa era dichiarata e
+assente insieme.
+
+**La condizione di rientro.** Nessuna: serve finché serde si comporta così.
+Se un giorno `deny_unknown_fields` coprisse anche le varianti unitarie, le
+graffe vuote diventerebbero rumore e si potrebbero togliere — ma solo con un
+test che mostri il rifiuto senza di esse.
+
 ### Fuzzing su toolchain nightly
 
 Il solo step `cargo fuzz run` gira su nightly, mentre build, test, clippy e

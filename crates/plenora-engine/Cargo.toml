@@ -10,6 +10,11 @@ publish.workspace = true
 # (make_valid richiede geos, reproject richiede proj).
 [features]
 default = []
+# Espone i moduli interni ai due consumatori che stanno **fuori** dal crate e
+# non possono raggiungerli altrimenti: il crate `fuzz/` e la sonda di
+# calibrazione. Non e' nel `default` e nessun consumatore la abilita, quindi
+# la superficie pubblica del crate non cambia.
+internals = []
 geos-backend = ["plenora-kernels-geo/geos-backend"]
 proj-backend = ["plenora-kernels-geo/proj-backend"]
 full-backends = ["geos-backend", "proj-backend"]
@@ -38,6 +43,13 @@ geozero.workspace = true
 # (errori-e-limiti.md#publish-e-cleanup, geo_transport::publish); solo Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+
+# La sonda importa `MAX_PIANO_CANONICO_BYTES` dal protocollo invece di
+# tenerne una copia: due copie dello stesso numero sono due numeri che
+# possono divergere.
+[[example]]
+name = "calibra_canonico"
+required-features = ["internals"]
 
 [dev-dependencies]
 proptest.workspace = true

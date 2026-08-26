@@ -74,6 +74,20 @@ pub mod parallelism;
 pub mod plan;
 pub mod planner;
 pub mod prepare;
+// Il protocollo resta **privato**: e' un canale interno fra due processi che
+// spediamo insieme, e renderlo pubblico sarebbe la promessa di non cambiarlo.
+//
+// La sola eccezione e' la feature `internals`, che non e' nel `default` e che
+// nessun consumatore abilita. Serve ai due soli consumatori che stanno fuori
+// dal crate: il crate `fuzz/`, che non puo' raggiungere un modulo privato, e
+// la sonda `examples/calibra_canonico.rs`, che deve leggere `il` tetto invece
+// di tenerne una copia. L'alternativa era non fuzzare il decoder — cioe'
+// lasciare senza campagna proprio il codice che legge byte ostili.
+#[cfg(feature = "internals")]
+#[doc(hidden)]
+pub mod protocollo;
+#[cfg(not(feature = "internals"))]
+mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
 

@@ -12,6 +12,7 @@ ALL_TARGETS=(
     reshape_policies extended_ops advanced_ops
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
+    protocollo_frame
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 

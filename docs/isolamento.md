@@ -474,8 +474,15 @@ inviare.
 
 ### 4.1 Proprietà
 
-**Versionato.** Il primo messaggio dichiara la versione. Una versione che il
-ricevente non conosce ferma l'esecuzione: non si degrada, non si indovina.
+**Versionato.** La versione sta **nell'involucro di ogni frame**, e solo lì.
+Una versione che il ricevente non conosce ferma l'esecuzione: non si degrada,
+non si indovina, e la si controlla **prima** di guardare il corpo — di un
+corpo di versione ignota non si sa dire nulla, e provare a leggerlo
+produrrebbe un errore che parla del campo sbagliato.
+
+Non è nel solo primo messaggio, e non è ripetuta dentro `Saluto` e `Risposta`:
+due rappresentazioni della stessa cosa sono due cose che possono divergere, e
+la domanda «quale delle due vale» non ha una risposta buona.
 
 **Limitato.** Ogni messaggio ha un tetto di byte; la sequenza ha un tetto di
 messaggi. I due tetti sono costanti del protocollo, non configurazione: un
@@ -502,7 +509,7 @@ Direzione supervisore → worker:
 
 | messaggio | quando | contenuto |
 |---|---|---|
-| `Saluto` | primo | versione del protocollo, identità dell'artefatto, identità del resolver, limiti del protocollo, **`commit_token`** |
+| `Saluto` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, limiti del protocollo, **`commit_token`** |
 | `Incarico` | dopo l'accordo | piano validato, descrizione degli input, percorso dell'artefatto temporaneo |
 | `Annulla` | in qualunque momento | motivo |
 
@@ -510,9 +517,9 @@ Direzione worker → supervisore:
 
 | messaggio | quando | contenuto |
 |---|---|---|
-| `Risposta` | primo | versione, identità dell'artefatto, identità del resolver, capability del backend |
-| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch); **mai** dati |
-| `Esito` | ultimo | successo con sigillo, oppure errore tipizzato con i quattro assi |
+| `Risposta` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, capability del backend |
+| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch, nodi completati); **mai** dati |
+| `Esito` | ultimo | successo col digest dell'artefatto, errore tipizzato con i quattro assi, oppure **forma** del panico |
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
 
@@ -537,6 +544,32 @@ non ne manda nessuno è indistinguibile da uno lento, e il timeout è la sola
 difesa contro entrambi.
 
 ---
+
+### 4.4 Forma sul filo
+
+Un frame è un prefisso di lunghezza `u32` **big-endian** seguito da JSON UTF-8
+compatto. Il prefisso conta il solo payload.
+
+Il tetto si applica **prima di allocare**: si leggono i quattro byte, si
+confrontano col limite, e solo dopo si guarda il payload. Un frame che dichiara
+un gigabyte non ne fa allocare nemmeno uno. In scrittura vale il verso
+speculare: il writer si ferma appena supera il tetto, invece di costruire un
+buffer illimitato e misurarlo dopo — misurare dopo significa aver già allocato
+ciò che si voleva rifiutare.
+
+La forma canonica del piano viaggia dentro l'`Incarico` come JSON **grezzo**,
+non come stringa: una stringa subirebbe l'espansione degli escape e
+costringerebbe a un secondo parse, e riparsarla in un albero avrebbe potuto
+riscrivere il testo su cui il `plan_hash` è stato calcolato. Il worker la
+riparsa, rivalida e ricontrolla l'hash contro `plan_hash_atteso`.
+
+I tetti per campo valgono **in entrambi i versi**: in scrittura impediscono di
+emettere un frame che il ricevente rifiuterebbe, in lettura sono la difesa.
+Applicarli da un lato solo avrebbe reso il protocollo asimmetrico proprio dove
+i due capi devono concordare.
+
+Tutti i limiti, con regola, perimetro, pericolo e condizione di rientro, sono
+registrati in [errori-e-limiti.md](errori-e-limiti.md#protocollo-del-worker-i-tetti-sono-del-profilo-isolato).
 
 ## 5. Handshake
 
