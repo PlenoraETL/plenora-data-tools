@@ -755,7 +755,7 @@ diverse:
 | `MAX_INGRESSI` | 16 | descrittori d'ingresso per `Incarico` |
 | `MAX_IDENTIFICATORE_BYTES` | 256 | byte decodificati di un identificatore |
 | `MAX_PERCORSO_BYTES` | 4096 | byte decodificati di un percorso |
-| `MAX_DIGEST_BYTES` | 64 | byte decodificati di un digest esadecimale |
+| `MAX_DIGEST_BYTES` | 64, **derivato** | i caratteri della forma esadecimale di uno SHA-256, cioè `DIGEST_BYTES * 2`. Non è un tetto: la forma pretende esattamente questa lunghezza, e a garantirla è il **tipo** `DigestSha256`, non un controllo |
 | `MAX_VERSIONE_BYTES` | 64 | byte decodificati di una versione dichiarata |
 | `MAX_CAPABILITY` | 32 | capability dichiarate in `Risposta` |
 | `MAX_RISORSE` | 64 | risorse risolte elencate nell'handshake |
@@ -831,6 +831,165 @@ mano. Quei massimi vanno costruiti con caratteri che JSON **espande** in `\uXXXX
 taglia che il tetto gli concede, e l'espansione degli escape non viene mai
 esercitata. Renderli configurabili è fuori discussione finché il canale resta
 interno.
+
+### Moduli compilati solo sotto `test` e `internals`
+
+**La regola.** `plenora_engine::protocollo` è compilato solo con
+`#[cfg(any(test, feature = "internals"))]`;
+`plenora_engine::commit_footer::leggi_commit_token` e
+`geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
+un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
+chiamante di produzione**.
+
+**Il perimetro.** Il modulo `protocollo` per intero — messaggi, codifica,
+lettore limitato, handshake — la sola funzione di lettura del token dal
+footer, e la forma breve di `parse_footer` (da quando la convalida estrae anche
+un custom metadata, la produzione passa tutta per `parse_footer_estraendo`).
+`commit_footer::scrivi_commit_token` è invece incondizionato, perché il writer in-process lo
+chiama davvero (con `None`).
+
+**Perché due `cfg` diversi e non uno.** `protocollo` porta anche l'arm
+`internals` perché la facciata `interni` è il modo in cui il fuzzer lo
+raggiunge. `commit_footer` e `ipc` sono `pub(crate)`: la feature non porterebbe loro
+nessun chiamante in più, porterebbe un `dead_code` nella build che la abilita.
+Un `cfg` più largo del necessario dichiara una condizione falsa, ed è il modo
+educato di riaprire l'avviso che il `cfg` esisteva per chiudere.
+
+**Perché non un `allow(dead_code)`.** Sono due modi di trattare lo stesso
+fatto, e non sono equivalenti. Un `allow` **zittisce** l'avviso e lascia il
+codice nella build: il lettore vede un attributo e deve fidarsi che qualcuno
+lo tolga. Un `cfg` **dichiara** la condizione: il codice non entra nel
+binario di produzione finché la condizione non cambia, e la condizione è
+scritta. Se un giorno qualcuno aggiunge il chiamante e dimentica il `cfg`, il
+compilatore glielo dice; se dimentica un `allow`, non glielo dice nessuno.
+
+**Il pericolo che copre.** Codice non raggiungibile che entra comunque nel
+binario distribuito, e che nessuno esercita — la definizione di superficie che
+esiste senza che nessuno se ne occupi.
+
+**Che cosa questo perde, e va detto.** Il modulo non è compilato dalla build
+di produzione, quindi un errore che si manifestasse solo lì non verrebbe visto
+da `cargo build`. È coperto: `cargo test` e `cargo clippy --all-targets` lo
+compilano entrambi, e la CI li esegue tutti e due.
+
+**La condizione di rientro.** Il `cfg` su `protocollo` sparisce quando esiste
+un chiamante esterno al modulo, cioè con **`PR-8`** — il supervisore con
+worker fittizio. Non con `PR-5`: l'handshake che `PR-5` aggiunge sta *dentro*
+`protocollo`, quindi ne consuma i messaggi ma non è un chiamante del modulo, e
+toglierlo lì rimetterebbe in piedi le decine di `dead_code` che il `cfg`
+evita — verificato rimuovendolo e leggendo l'output, non dedotto.
+
+Il `cfg` su `leggi_commit_token` sparisce con **`PR-6`**, la verifica
+streaming dell'artefatto, che è il suo primo lettore reale.
+
+Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
+torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
+test e sta scritto che lo è.
+
+### Il `commit_token`: forma canonica unica, e valore mai mostrato
+
+**La regola.** Un `commit_token` è esattamente 64 caratteri esadecimali
+**minuscoli**. Non esiste un `CommitToken` non valido: il controllo sta in un
+punto solo, il costruttore, e chi ne ha uno in mano non deve validarlo. La
+rappresentazione interna è opaca e la forma testuale si **ricostruisce** dai
+byte, così non può esistere un token che rende una grafia diversa da quella
+che finirà nel footer.
+
+Nel footer di un artefatto vive sotto una chiave sola: `plenora.commit.token`.
+
+**Il perimetro.** Il token attraversa quattro confini — il chiamante che lo
+fornisce, l'handshake che lo trasmette, il writer che lo scrive nel footer, il
+verificatore che lo rilegge. La regola vale su tutti e quattro perché è nel
+tipo, non nei quattro punti.
+
+**Il pericolo che copre.** Due, distinti:
+
+- **due grafie dello stesso valore.** Il footer si confronta byte per byte:
+  accettare `ABC…` accanto a `abc…` darebbe due artefatti diversi per lo
+  stesso commit. Per questo la forma non canonica si **rifiuta** e non si
+  normalizza — normalizzare significherebbe accettare due grafie e poi
+  scoprire che il footer le distingue comunque;
+- **il valore in un log.** `Debug` e `Display` non lo mostrano, e nessun
+  errore lo contiene. `Debug` in particolare è ciò che finisce in un log per
+  sbaglio, dentro il `{:?}` di una struttura più grande. Il rifiuto è proprio
+  il momento in cui qualcuno vorrebbe vedere il token per capire, ed è anche
+  il momento in cui mostrarlo lo consegna a chi legge quel log. L'errore del
+  footer non canonico è un `&'static str`: non è una disciplina da ricordare,
+  è il tipo che non consente di portarci dentro il valore.
+
+La serializzazione invece lo emette, e l'asimmetria è voluta: sul filo serve,
+in un log no.
+
+**Le quattro forme del footer.**
+
+| forma | esito |
+|---|---|
+| assente | **legittimo** — un artefatto ordinario non ha un token |
+| canonico | accettato |
+| presente ma non canonico | **rifiutato sempre**, in ogni percorso |
+| chiave duplicata | rifiutato dalla traversata rinforzata |
+
+Il duplicato non può nascere da questo lato: `FileWriter::write_metadata`
+tiene le coppie in una mappa e due scritture della stessa chiave collassano.
+Può arrivare solo da un produttore estraneo, e lì lo rifiuta il parser.
+
+Che il token sia **obbligatorio** è una proprietà del percorso isolato, non
+della lettura: `leggi_commit_token` dice cosa c'è, non se doveva esserci.
+
+**Come si legge, e come non si legge.** Il token si estrae dalla **stessa
+traversata** che convalida il footer, non da `FileReader::custom_metadata`.
+Quella sarebbe una terza strada nel footer, e di tutti i controlli che il
+parser rinforzato applica non ne farebbe nessuno — allocazione limitata,
+chiavi e valori presenti, duplicati rifiutati. Un valore autoritativo
+raggiungibile senza convalida è peggio di un valore assente.
+
+**Senza token i byte non cambiano.** Con `None` non si scrive nulla, nemmeno
+una chiave vuota: è ciò che rende innocuo aggiungere il token al percorso
+in-process, che passa sempre `None`. Un writer che scrivesse una chiave vuota
+supererebbe ogni prova sul contenuto e cambierebbe ogni artefatto già
+prodotto.
+
+**La condizione di rientro.** Cambiare la forma canonica — lunghezza,
+alfabeto, grafia — significa cambiare la chiave del footer insieme a essa: due
+grafie sotto lo stesso nome non sono distinguibili da chi rilegge. Mostrare il
+valore in `Debug` non ha condizione di rientro: se serve, esiste già
+`in_esadecimale`, che è una riga che si legge in review.
+
+### Il `commit_token` si deserializza solo da formati autodescrittivi
+
+**La regola.** `<CommitToken as Deserialize>::deserialize` chiede
+`deserialize_any`, non `deserialize_str`. Un formato che non descrive da sé il
+tipo di ciò che porta — `bincode` e simili, dove il tipo lo deve dichiarare il
+chiamante — **non** può deserializzare un `CommitToken`.
+
+**Il perimetro.** La sola `impl Deserialize`. La serializzazione non è toccata:
+emette una stringa e funziona ovunque. `da_esadecimale` nemmeno: chi ha un
+testo lo valida senza passare da serde.
+
+**Perché la scelta è questa, e non è una comodità.** Chiedendo
+`deserialize_str`, un `serde_json` che trova un numero **non chiama il
+visitatore**: sbriga il disaccordo di tipo da sé con `peek_invalid_type`, che
+costruisce il messaggio dal valore letto. Il rifiuto sarebbe giusto e direbbe
+«invalid type: integer `1234…`» — cioè il token in chiaro, se qualcuno lo ha
+scritto senza virgolette. Con `deserialize_any` il formato si limita a dire
+*che cosa* ha trovato, e la decisione, col messaggio, torna al nostro
+visitatore, dove il valore non ha un parametro in cui entrare.
+
+**Il pericolo che copre, e quello che apre.** Copre il valore del token in un
+messaggio d'errore, cioè in un log — lo stesso pericolo del resto di questa
+sezione, per la sola via che restava aperta. Apre un vincolo sul trasporto: se
+un domani il protocollo passasse a un formato non autodescrittivo, questa
+`impl` smetterebbe di funzionare — **rumorosamente**, con un errore del
+formato, non in silenzio. Oggi sul filo c'è JSON e il protocollo non prevede
+altro: lo dice [`isolamento.md`](isolamento.md#4-protocollo-interno).
+
+**La condizione di rientro.** Cade il giorno che il protocollo adotti un
+formato non autodescrittivo. Quel giorno la strada non è tornare a
+`deserialize_str` — riaprirebbe esattamente la fuga — ma dare al tipo una
+`impl` che il nuovo formato sappia guidare, verificando **sul messaggio
+prodotto** che il valore non compaia. La verifica va rifatta, non dedotta: che
+varianti di `Unexpected` un formato costruisca è una scelta di quel formato,
+non una garanzia di serde.
 
 ### `deny_unknown_fields` non copre le varianti unitarie degli enum con tag
 

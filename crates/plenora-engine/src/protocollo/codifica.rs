@@ -42,11 +42,10 @@ pub const BYTE_PREFISSO: usize = 4;
 /// `chiave("percorso")` e' `"percorso":`, cioe' il nome piu' due virgolette e
 /// i due punti.
 ///
-/// Il conto lo fa il compilatore sul nome vero. La stesura precedente lo
-/// scriveva a mano accanto al nome in un commento, e cinque cifre su nove
-/// erano sbagliate di uno — il maggiorante restava conservativo, ma la
-/// derivazione non era quella dichiarata. Un numero scritto vicino a una
-/// stringa e' un numero che se ne separa.
+/// Il conto lo fa il compilatore sul nome vero, e non un numero scritto a
+/// mano accanto al nome: un numero vicino a una stringa e' un numero che se ne
+/// separa, e il maggiorante resterebbe conservativo mentre la derivazione
+/// dichiarata smetterebbe di essere quella applicata.
 const fn chiave(nome: &str) -> usize {
     nome.len() + 3
 }
@@ -191,6 +190,28 @@ const fn errore(messaggio: String) -> PlenoraError {
     PlenoraError::Protocol(messaggio)
 }
 
+/// L'errore di `serde_json` ridotto a **posizione e categoria**.
+///
+/// Il suo `Display` incorpora il valore che ha incontrato: «invalid type:
+/// string "…"», «unknown field `…`». Su un canale ostile quel valore e' testo
+/// scelto dall'altro capo, e finirebbe nel log di chi indaga insieme al motivo
+/// per cui lo stava guardando. La riga e la colonna dicono **dove** senza dire
+/// **che cosa**: bastano a trovare il campo nel frame che si ha in mano, e non
+/// portano nulla.
+fn da_serde(contesto: &str, origine: &serde_json::Error) -> PlenoraError {
+    let categoria = match origine.classify() {
+        serde_json::error::Category::Io => "lettura interrotta",
+        serde_json::error::Category::Syntax => "JSON malformato",
+        serde_json::error::Category::Data => "forma o tipo non conformi",
+        serde_json::error::Category::Eof => "documento troncato",
+    };
+    errore(format!(
+        "{contesto}: {categoria} (riga {}, colonna {})",
+        origine.line(),
+        origine.column()
+    ))
+}
+
 /// Serializza un frame nella forma con prefisso di lunghezza.
 ///
 /// # Errors
@@ -201,7 +222,7 @@ pub fn codifica(frame: &Frame) -> Result<Vec<u8>> {
     verifica_forma(frame)?;
     let mut scrittore = ScrittoreLimitato::nuovo(MAX_PROTOCOL_FRAME_BYTES);
     serde_json::to_writer(&mut scrittore, frame)
-        .map_err(|origine| errore(format!("serializzazione del frame fallita: {origine}")))?;
+        .map_err(|origine| da_serde("serializzazione del frame fallita", &origine))?;
     let payload = scrittore.in_byte();
     let lunghezza = u32::try_from(payload.len())
         .map_err(|_| errore("lunghezza del frame fuori da u32".to_owned()))?;
@@ -225,9 +246,9 @@ pub fn codifica(frame: &Frame) -> Result<Vec<u8>> {
 ///
 /// Quella difesa appartiene al lettore, ed e' questa funzione che gliela da':
 /// prende i quattro byte, decide, e solo se dice `Ok` il lettore ne legge
-/// altri. Il lettore vero e' di `PR-5`; qui c'e' il predicato su cui si
-/// appoggera', gia' provato e gia' unico — `decodifica` usa **questo**
-/// confronto, non una copia.
+/// altri. Qui c'e' il predicato su cui il lettore si appoggia, unico per
+/// costruzione: `decodifica` usa **questo** confronto, non una copia che
+/// potrebbe divergere.
 ///
 /// # Errors
 ///
@@ -279,23 +300,34 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
         )));
     }
     let payload = &byte[BYTE_PREFISSO..];
-    let testo = std::str::from_utf8(payload)
-        .map_err(|origine| errore(format!("payload non UTF-8: {origine}")))?;
+    let testo = std::str::from_utf8(payload).map_err(|origine| {
+        errore(format!(
+            "payload non UTF-8: sequenza invalida a partire dal byte {}",
+            origine.valid_up_to()
+        ))
+    })?;
     // Le chiavi duplicate si rifiutano PRIMA della deserializzazione:
     // `serde_json` le risolverebbe con «vince l'ultima», e due frame diversi
     // diventerebbero lo stesso messaggio.
-    plenora_core::json::ensure_no_duplicate_keys(testo)
-        .map_err(|origine| errore(format!("chiavi duplicate nel frame: {origine}")))?;
+    // L'errore d'origine **non** viene incorporato: nomina la chiave duplicata,
+    // e la chiave la sceglie chi ha scritto il frame. Che ce ne sia una basta a
+    // rifiutare, e il frame ce l'ha in mano chi indaga.
+    plenora_core::json::ensure_no_duplicate_keys(testo).map_err(|_| {
+        errore("chiave JSON duplicata nel frame: il documento e' ambiguo".to_owned())
+    })?;
     let involucro: Involucro = serde_json::from_str(testo)
-        .map_err(|origine| errore(format!("involucro malformato: {origine}")))?;
+        .map_err(|origine| da_serde("involucro malformato", &origine))?;
 
     // La versione **prima** del corpo: se non e' la nostra, il corpo non ha
     // una forma di cui possiamo dire nulla, e provare a leggerlo produrrebbe
     // un errore che parla del campo sbagliato.
     if involucro.protocol_version != VERSIONE_PROTOCOLLO {
+        // La versione ricevuta **non** compare: e' un `u16` che sceglie chi
+        // scrive il frame, e un numero arbitrario nel messaggio e' un numero
+        // arbitrario nel log. Quella che si puo' dire e' la nostra, che e' una
+        // costante di questo binario.
         return Err(errore(format!(
-            "versione del protocollo {} non riconosciuta; questa e' {VERSIONE_PROTOCOLLO}",
-            involucro.protocol_version
+            "versione del protocollo non riconosciuta; questa e' {VERSIONE_PROTOCOLLO}"
         )));
     }
 
@@ -334,7 +366,7 @@ struct Involucro<'a> {
 
 fn corpo_di<T: serde::de::DeserializeOwned>(grezzo: &str, tipo: &str) -> Result<T> {
     serde_json::from_str(grezzo)
-        .map_err(|origine| errore(format!("corpo di `{tipo}` malformato: {origine}")))
+        .map_err(|origine| da_serde(&format!("corpo di `{tipo}` malformato"), &origine))
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +381,28 @@ fn limita(valore: &str, tetto: usize, campo: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Un campo che **identifica** qualcosa non puo' essere vuoto.
+///
+/// Il tetto dice quanto puo' essere grande e non dice nulla su quanto debba
+/// essere: una stringa vuota li rispetta tutti. Due descrizioni fatte di campi
+/// vuoti sono uguali fra loro, quindi si accordano — e l'handshake conclude
+/// avendo confrontato il nulla con il nulla. Un confronto che non puo' fallire
+/// e' un confronto che non protegge.
+pub(super) fn non_vuoto(valore: &str, campo: &str) -> Result<()> {
+    if valore.is_empty() {
+        return Err(errore(format!(
+            "`{campo}` e' vuoto: un campo che identifica qualcosa deve dire quale"
+        )));
+    }
+    Ok(())
+}
+
+/// Un identificatore: non vuoto e sotto il proprio tetto.
+fn identificatore(valore: &str, tetto: usize, campo: &str) -> Result<()> {
+    non_vuoto(valore, campo)?;
+    limita(valore, tetto, campo)
 }
 
 fn limita_elementi<T>(elementi: &[T], tetto: usize, campo: &str) -> Result<()> {
@@ -370,95 +424,17 @@ fn limita_elementi<T>(elementi: &[T], tetto: usize, campo: &str) -> Result<()> {
 fn verifica_forma(frame: &Frame) -> Result<()> {
     match frame.corpo() {
         Corpo::Saluto(saluto) => {
-            limita(
-                &saluto.artefatto.digest,
-                MAX_DIGEST_BYTES,
-                "artefatto.digest",
-            )?;
-            limita(
-                &saluto.artefatto.versione,
-                MAX_VERSIONE_BYTES,
-                "artefatto.versione",
-            )?;
-            limita(
-                &saluto.resolver.identita,
-                MAX_IDENTIFICATORE_BYTES,
-                "resolver.identita",
-            )?;
-            limita(
-                &saluto.resolver.versione,
-                MAX_VERSIONE_BYTES,
-                "resolver.versione",
-            )?;
-            limita(&saluto.commit_token, MAX_DIGEST_BYTES, "commit_token")?;
+            verifica_identita(&saluto.artefatto, &saluto.resolver)?;
+            // Nessun tetto sul `commit_token`: `CommitToken` non ammette
+            // forme diverse da quella canonica, quindi non c'e' lunghezza da
+            // limitare.
             verifica_ambiente(&saluto.ambiente)
         }
-        Corpo::Incarico(incarico) => {
-            limita(
-                &incarico.plan_hash_atteso,
-                MAX_DIGEST_BYTES,
-                "plan_hash_atteso",
-            )?;
-            limita(
-                &incarico.artefatto_temporaneo,
-                MAX_PERCORSO_BYTES,
-                "artefatto_temporaneo",
-            )?;
-            limita_elementi(&incarico.ingressi, MAX_INGRESSI, "ingressi")?;
-            for ingresso in &incarico.ingressi {
-                limita(&ingresso.nome, MAX_IDENTIFICATORE_BYTES, "ingresso.nome")?;
-                limita(&ingresso.percorso, MAX_PERCORSO_BYTES, "ingresso.percorso")?;
-                limita(
-                    &ingresso.contract_fingerprint_atteso,
-                    MAX_DIGEST_BYTES,
-                    "ingresso.contract_fingerprint_atteso",
-                )?;
-            }
-            // Il piano e' JSON grezzo: i byte che si misurano qui sono
-            // esattamente quelli che il writer emettera'. Con un `Value` si
-            // sarebbe misurata una serializzazione e spedita un'altra.
-            let byte_piano = incarico.piano_canonico.get().len();
-            if byte_piano > MAX_PIANO_CANONICO_BYTES {
-                return Err(errore(format!(
-                    "`piano_canonico` oltre il tetto: {byte_piano} byte > \
-                     {MAX_PIANO_CANONICO_BYTES}"
-                )));
-            }
-            Ok(())
-        }
+        Corpo::Incarico(incarico) => verifica_incarico(incarico),
         Corpo::Annulla(annulla) => limita(&annulla.motivo, MAX_MOTIVO_BYTES, "motivo"),
         Corpo::Risposta(risposta) => {
-            limita(
-                &risposta.artefatto.digest,
-                MAX_DIGEST_BYTES,
-                "artefatto.digest",
-            )?;
-            limita(
-                &risposta.artefatto.versione,
-                MAX_VERSIONE_BYTES,
-                "artefatto.versione",
-            )?;
-            limita(
-                &risposta.resolver.identita,
-                MAX_IDENTIFICATORE_BYTES,
-                "resolver.identita",
-            )?;
-            limita(
-                &risposta.resolver.versione,
-                MAX_VERSIONE_BYTES,
-                "resolver.versione",
-            )?;
-            limita_elementi(&risposta.capability, MAX_CAPABILITY, "capability")?;
-            for capability in &risposta.capability {
-                // Il nome dice **elemento**: con la sola parola «capability»
-                // l'errore non distinguerebbe «troppe capability» da «una
-                // capability troppo lunga», e sono due difetti diversi.
-                limita(
-                    capability,
-                    MAX_IDENTIFICATORE_BYTES,
-                    "capability (elemento)",
-                )?;
-            }
+            verifica_identita(&risposta.artefatto, &risposta.resolver)?;
+            verifica_capability(&risposta.capability)?;
             verifica_ambiente(&risposta.ambiente)
         }
         // Contatori: nessun tetto oltre al tipo.
@@ -467,13 +443,77 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
     }
 }
 
-fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<()> {
-    limita(&ambiente.digest_insieme, MAX_DIGEST_BYTES, "digest_insieme")?;
+/// La forma di un `Incarico`.
+///
+/// `pub(super)` come le altre: la applica il decoder a cio' che arriva **e**
+/// l'handshake al frame che gli viene consegnato, che puo' non essere passato
+/// dal decoder.
+pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<()> {
+    identificatore(
+        &incarico.artefatto_temporaneo,
+        MAX_PERCORSO_BYTES,
+        "artefatto_temporaneo",
+    )?;
+    limita_elementi(&incarico.ingressi, MAX_INGRESSI, "ingressi")?;
+    for ingresso in &incarico.ingressi {
+        identificatore(&ingresso.nome, MAX_IDENTIFICATORE_BYTES, "ingresso.nome")?;
+        identificatore(&ingresso.percorso, MAX_PERCORSO_BYTES, "ingresso.percorso")?;
+    }
+    // Il piano e' JSON grezzo: i byte che si misurano qui sono
+    // esattamente quelli che il writer emettera'. Con un `Value` si
+    // sarebbe misurata una serializzazione e spedita un'altra.
+    let byte_piano = incarico.piano_canonico.get().len();
+    if byte_piano > MAX_PIANO_CANONICO_BYTES {
+        return Err(errore(format!(
+            "`piano_canonico` oltre il tetto: {byte_piano} byte > \
+                 {MAX_PIANO_CANONICO_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+/// Le due identita' che i due lati confrontano.
+///
+/// `pub(super)` e chiamata da entrambe le parti: l'handshake la usa sulla
+/// **propria** descrizione prima di spedirla, `verifica_forma` su quella
+/// ricevuta. Un lato che si validasse con regole diverse dall'altro
+/// scoprirebbe i propri difetti dalla risposta dell'interlocutore, che e' il
+/// posto peggiore per scoprirli.
+pub(super) fn verifica_identita(
+    artefatto: &super::messaggi::IdentitaArtefatto,
+    resolver: &super::messaggi::IdentitaResolver,
+) -> Result<()> {
+    identificatore(
+        &artefatto.versione,
+        MAX_VERSIONE_BYTES,
+        "artefatto.versione",
+    )?;
+    identificatore(
+        &resolver.identita,
+        MAX_IDENTIFICATORE_BYTES,
+        "resolver.identita",
+    )?;
+    identificatore(&resolver.versione, MAX_VERSIONE_BYTES, "resolver.versione")
+}
+
+/// Le capability offerte: quante ce ne stanno, e che ciascuna dica un nome.
+pub(super) fn verifica_capability(capability: &[String]) -> Result<()> {
+    limita_elementi(capability, MAX_CAPABILITY, "capability")?;
+    for nome in capability {
+        // Il nome dice **elemento**: con la sola parola «capability» l'errore
+        // non distinguerebbe «troppe capability» da «una capability troppo
+        // lunga», e sono due difetti diversi.
+        identificatore(nome, MAX_IDENTIFICATORE_BYTES, "capability (elemento)")?;
+    }
+    Ok(())
+}
+
+pub(super) fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<()> {
     limita_elementi(&ambiente.risorse, MAX_RISORSE, "risorse")?;
     for risorsa in &ambiente.risorse {
-        limita(&risorsa.nome, MAX_IDENTIFICATORE_BYTES, "risorsa.nome")?;
-        limita(&risorsa.versione, MAX_VERSIONE_BYTES, "risorsa.versione")?;
-        limita(&risorsa.percorso, MAX_PERCORSO_BYTES, "risorsa.percorso")?;
+        identificatore(&risorsa.nome, MAX_IDENTIFICATORE_BYTES, "risorsa.nome")?;
+        identificatore(&risorsa.versione, MAX_VERSIONE_BYTES, "risorsa.versione")?;
+        identificatore(&risorsa.percorso, MAX_PERCORSO_BYTES, "risorsa.percorso")?;
     }
     limita_elementi(
         &ambiente.backend_dinamici,
@@ -481,9 +521,9 @@ fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<()> {
         "backend_dinamici",
     )?;
     for backend in &ambiente.backend_dinamici {
-        limita(&backend.nome, MAX_IDENTIFICATORE_BYTES, "backend.nome")?;
-        limita(&backend.versione, MAX_VERSIONE_BYTES, "backend.versione")?;
-        limita(&backend.percorso, MAX_PERCORSO_BYTES, "backend.percorso")?;
+        identificatore(&backend.nome, MAX_IDENTIFICATORE_BYTES, "backend.nome")?;
+        identificatore(&backend.versione, MAX_VERSIONE_BYTES, "backend.versione")?;
+        identificatore(&backend.percorso, MAX_PERCORSO_BYTES, "backend.percorso")?;
     }
     Ok(())
 }

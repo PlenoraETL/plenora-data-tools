@@ -50,6 +50,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use super::digest::DigestSha256;
+use crate::commit_token::CommitToken;
+
 /// Versione del protocollo.
 ///
 /// Sta **solo** nell'involucro di ogni frame. `Saluto` e `Risposta` non ne
@@ -213,7 +216,9 @@ pub enum Direzione {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentitaArtefatto {
-    pub digest: String,
+    /// Digest dell'eseguibile. E' un tipo e non una `String`: la forma
+    /// canonica non e' un controllo da ricordare in `codifica`.
+    pub digest: DigestSha256,
     pub versione: String,
 }
 
@@ -252,7 +257,7 @@ pub struct BackendDinamico {
 pub struct Ambiente {
     /// Digest dell'insieme immutabile e content-addressed delle risorse
     /// **disponibili**, non di quelle usate.
-    pub digest_insieme: String,
+    pub digest_insieme: DigestSha256,
     /// Deve essere `false`. E' dichiarato invece che assunto perche' un
     /// backend che scarica una griglia a meta' esecuzione renderebbe il
     /// digest una fotografia scaduta.
@@ -270,7 +275,11 @@ pub struct Saluto {
     pub ambiente: Ambiente,
     /// Trasmesso e accettato qui, e **solo** qui: legarlo all'handshake gli
     /// da' una sola autorita' invece di due copie che possono divergere.
-    pub commit_token: String,
+    ///
+    /// E' un [`CommitToken`] e non una `String`: la forma canonica e' garantita
+    /// dal tipo, quindi non c'e' un tetto da applicare qui ne' un controllo che
+    /// il decoder possa dimenticare.
+    pub commit_token: CommitToken,
     pub limiti: LimitiDichiarati,
 }
 
@@ -316,7 +325,7 @@ pub struct DescrittoreIngresso {
     pub formato: FormatoIngresso,
     /// Verifica **schema e contratto**, non l'identita' dei dati: due file
     /// con righe diverse e lo stesso schema hanno lo stesso fingerprint.
-    pub contract_fingerprint_atteso: String,
+    pub contract_fingerprint_atteso: DigestSha256,
 }
 
 /// L'incarico: il piano e da dove leggere.
@@ -334,7 +343,7 @@ pub struct Incarico {
     pub piano_canonico: Box<RawValue>,
     /// Senza questo il worker puo' ricalcolare un hash e non ha nulla con cui
     /// confrontarlo.
-    pub plan_hash_atteso: String,
+    pub plan_hash_atteso: DigestSha256,
     pub ingressi: Vec<DescrittoreIngresso>,
     /// Un solo percorso, dentro una directory che il supervisore ha creato.
     /// Il worker non ne sceglie ne' il nome ne' la posizione.
@@ -653,6 +662,16 @@ impl Frame {
     #[must_use]
     pub const fn corpo(&self) -> &Corpo {
         &self.corpo
+    }
+
+    /// Il corpo, **consumando** il frame.
+    ///
+    /// Esiste perche' chi riceve un frame lo esaurisce: leggerlo per
+    /// riferimento e poi clonarne il contenuto sarebbe una copia in piu' e,
+    /// peggio, lascerebbe in giro un frame gia' consumato.
+    #[must_use]
+    pub fn in_corpo(self) -> Corpo {
+        self.corpo
     }
 
     /// Il corpo, modificabile: **solo per i test**.

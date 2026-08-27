@@ -575,6 +575,56 @@ emettere un frame che il ricevente rifiuterebbe, in lettura sono la difesa.
 Applicarli da un lato solo avrebbe reso il protocollo asimmetrico proprio dove
 i due capi devono concordare.
 
+Un tetto però dice quanto un campo **può** essere grande, non che dica
+qualcosa: la stringa vuota li rispetta tutti. Due descrizioni fatte di campi
+vuoti sono uguali fra loro, quindi si accordano, e l'handshake concluderebbe
+avendo confrontato il nulla con il nulla — un confronto che non può fallire
+non protegge. Perciò due regole in più, applicate nei due versi come i tetti:
+
+- **i campi che identificano non sono vuoti**: versione dell'artefatto,
+  identità e versione del resolver, nome/versione/percorso di ogni risorsa e
+  di ogni backend dinamico, nome e percorso di ogni ingresso, percorso
+  dell'artefatto temporaneo, ogni capability offerta;
+- **i digest hanno una forma**, la stessa del `commit_token`: esattamente 64
+  caratteri esadecimali **minuscoli**. Vale per il digest dell'artefatto, per
+  il digest dell'insieme delle risorse, per `plan_hash_atteso` e per
+  `contract_fingerprint_atteso` — che sono tutti l'uscita testuale di un
+  SHA-256 a 32 byte. Il confronto fra i due lati è un confronto di stringhe:
+  `AA…` e `aa…` sarebbero due digest diversi dello stesso valore, e accettare
+  qualunque testo avrebbe reso «digest» un nome di campo invece di un
+  contratto.
+
+  La forma è di un **tipo**, non di un controllo: i quattro campi non sono
+  stringhe, e un digest non canonico non è uno stato che si possa costruire.
+  Un controllo scritto accanto ai quattro campi sarebbe stato quattro
+  occasioni di dimenticarlo al quinto. Il tipo resta **distinto** da quello
+  del `commit_token` pur avendo la stessa rappresentazione: un digest si
+  mostra — vedere due digest diversi affiancati è come si diagnostica un
+  disaccordo — un token no, mai. Un tipo solo avrebbe dovuto scegliere una
+  politica sola per entrambi.
+
+Le stesse funzioni le applicano **il decoder su ciò che arriva e l'handshake
+sulla propria descrizione prima di spedirla**. Non è ridondanza: un `Frame` si
+costruisce anche in processo senza passare dal decoder, e un lato che si
+validasse con regole più deboli dell'altro scoprirebbe i propri difetti dalla
+risposta dell'interlocutore.
+
+**La forma canonica è anche quella che viaggia.** La riduzione a insiemi
+ordinati e senza ripetizioni avviene una volta sola, quando lo stato nasce, e
+il `Saluto` e la `Risposta` portano quella: due descrizioni logicamente
+uguali, con gli insiemi elencati in ordine diverso, producono percio' frame
+**identici byte per byte**. Ridurre dentro ogni confronto e spedire la forma
+d'origine avrebbe reso il frame dipendente dall'ordine in cui qualcuno ha
+riempito un `Vec`, e avrebbe pagato due ordinamenti e due copie per handshake
+per poi buttarli via.
+
+Resta **fuori** da queste regole, deliberatamente, il `digest_artefatto`
+dell'`Esito`: porta un campo `algoritmo` accanto al valore, quindi la sua
+forma canonica dipende da ciò che quel campo dichiara, e chi deve pretenderne
+la coerenza è il verificatore dell'artefatto — `PR-6`. Applicargli qui la
+regola dei 64 esadecimali significherebbe fissare l'algoritmo in un punto che
+non lo verifica.
+
 I conteggi del `Successo` sono **obbligatori** e sono due: righe e batch. Sono
 il termine di paragone del passo 8 (§7), e renderli facoltativi avrebbe reso
 facoltativo il passo. Non c'è `nodi_completati`, che `Progresso` invece porta:
@@ -599,6 +649,41 @@ Un accordo su quattro cose, tutte prima dei dati.
 Versione esatta. Nessuna compatibilità all'indietro fra versioni: il worker è
 lo stesso artefatto del supervisore, quindi una differenza di versione è già
 un sintomo — significa che stanno girando due binari diversi.
+
+### 5.1-bis La macchina a stati, e cosa rende impossibile
+
+L'handshake è una macchina a stati **pura**: nessun processo, nessun canale,
+nessuna scoperta dell'ambiente della macchina. La descrizione locale arriva
+già tipizzata, così la verifica si può provare senza una macchina vera sotto.
+
+Due garanzie di forza diversa, e vanno tenute distinte.
+
+**Impossibili**, cioè non compilano:
+
+- riusare uno stato concluso — ogni transizione *consuma* lo stato, quindi un
+  supervisore che ha già ricevuto la `Risposta` non esiste più;
+- chiedere un `Incarico` prima dell'accordo — il metodo esiste solo sullo
+  stato che nasce da una verifica riuscita.
+
+**Rifiutati esplicitamente**, perché arrivano dal filo e nessun tipo può
+impedirli: una `Risposta` al posto del `Saluto`, un messaggio nella direzione
+sbagliata, un `Incarico` prima dell'accordo, qualunque tipo fuori sequenza.
+
+La versione del protocollo **non** è fra i confronti dell'handshake, e non per
+dimenticanza: il frame non ha un campo che si possa impostare e il decoder
+rifiuta qualunque versione diversa dalla propria. Un confronto qui sarebbe una
+guardia che non può fallire, cioè una guardia che sembra proteggere.
+
+Risorse, backend e capability sono **insiemi**: l'ordine non conta e i
+duplicati si rifiutano. Due risorse con lo stesso nome sono un'ambiguità su
+quale verrà aperta, e ridurle a una sceglierebbe al posto di chi ha costruito
+l'ambiente. Le capability sono l'unico confronto **non** simmetrico: al worker
+è concesso offrirne di più, non di meno.
+
+La classificazione degli errori segue la natura del disaccordo: identità
+dell'artefatto, ordine dei messaggi e limiti sono `Protocol` — i due lati non
+stanno parlando la stessa lingua; resolver, ambiente e capability sono
+`InvalidConfiguration` — parlano la stessa lingua e sono configurati male.
 
 ### 5.2 Identità dell'artefatto
 

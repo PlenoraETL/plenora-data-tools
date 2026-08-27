@@ -215,6 +215,12 @@ impl Output {
                 };
                 ipc.write(&batch)?;
             }
+            // Il `commit_token` va scritto **prima** di `finish`: dopo, il
+            // footer e' gia' stato emesso e la chiamata non avrebbe effetto,
+            // in silenzio. Qui e' sempre `None` — il percorso in-process non
+            // ha un token da scrivere — e con `None` non si scrive nulla,
+            // quindi i byte restano identici a quelli di prima.
+            crate::commit_footer::scrivi_commit_token(&mut ipc, None);
             ipc.finish()?;
             // Controllo di salute PRIMA del publish atomico: una corruzione
             // della contabilita' rilevata dentro un `Drop` non puo' propagare

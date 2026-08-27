@@ -20,6 +20,17 @@
 //! una costante e **non** i tipi di questo modulo.
 
 pub mod codifica;
+/// Il digest SHA-256 sul filo.
+///
+/// `pub` come gli altri moduli del protocollo, e non privato al protocollo: i
+/// messaggi lo espongono in campi `pub`, e un tipo meno visibile del campo che
+/// lo porta e' un tipo che chi riceve quel campo non puo' nominare — quindi non
+/// puo' costruire il messaggio. Fuori dal crate non esce comunque, perche'
+/// `protocollo` e' privato: la forma di un digest sul filo e' una regola del
+/// protocollo, non della superficie pubblica.
+pub mod digest;
+pub mod handshake;
+pub mod lettore;
 pub mod limiti;
 pub mod messaggi;
 

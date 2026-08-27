@@ -65,7 +65,26 @@ pub mod cancellation;
 /// `isolamento.md`). Logica pura e **interna**: `PR-4` possiede il formato
 /// sul filo, quindi questi tipi non escono dal crate.
 mod classificazione;
+// Il `commit_token` e' **privato come modulo**: esce solo il tipo, tramite
+// un `pub use` piu' sotto.
+//
+// Un `pub mod` piu' il re-export avrebbe dato due percorsi per la stessa cosa
+// — `plenora_engine::commit_token::CommitToken` e
+// `plenora_engine::CommitToken` — e con essi le costanti del modulo, che a un
+// consumatore non servono: `CHIAVE_FOOTER_COMMIT_TOKEN` e' il nome di una
+// chiave che scriviamo noi.
+// Cio' che il chiamante deve poter fare e' costruire un token e riceverne il
+// rifiuto motivato: due nomi, non sei.
+/// Il `commit_token` nel footer di un artefatto: scrittura prima di `finish`,
+/// lettura dalla stessa traversata rinforzata che convalida il file.
+pub(crate) mod commit_footer;
+mod commit_token;
 mod error_propagation;
+// La rappresentazione condivisa dal `commit_token` e dal digest del
+// protocollo: 32 byte in esadecimale minuscolo. Privata alla radice e **mai**
+// ri-esportata — cio' che esce dal crate sono i due tipi che la usano, non la
+// forma che hanno in comune.
+mod esadecimale32;
 pub mod executor;
 pub mod geo_transport;
 pub mod governor;
@@ -90,17 +109,25 @@ pub mod prepare;
 // tipi.
 //
 // Il `cfg` dice una cosa vera e non la zittisce: il protocollo non ha ancora
-// un chiamante, perche' chi lo costruisce e' l'handshake e quello appartiene a
-// `PR-5`. Finche' non esiste, il modulo si compila dove qualcuno lo usa
-// davvero — i test e la facciata. Cosi' non serve nessun `allow(dead_code)`:
-// l'assenza di chiamante e' **dichiarata**, non nascosta. Con `PR-5` il `cfg`
-// sparisce e il modulo diventa incondizionato.
+// un chiamante **fuori da se stesso**. Finche' non ce l'ha, il modulo si
+// compila dove qualcuno lo usa davvero — i test e la facciata. Cosi' non serve
+// nessun `allow(dead_code)`: l'assenza di chiamante e' dichiarata, non
+// nascosta.
+//
+// L'handshake sta **dentro** `protocollo`: consuma i suoi messaggi ma non e'
+// un chiamante del modulo, quindi non soddisfa la condizione. Toglierlo prima
+// che un chiamante esterno esista rimetterebbe in piedi le decine di
+// `dead_code` che il `cfg` evita — cioe' l'esatta situazione per cui esiste.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
 
 pub use cancellation::CancellationToken;
+pub use commit_token::{CommitToken, FormaTokenNonValida};
 pub use executor::{execute, ExecutionMetrics, Input, Inputs, NodeMetrics, Output, SegmentMetrics};
 pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, ReservationResult};
 pub use ipc_boundary::{BoundaryBatches, IpcFormat, IpcLimits};

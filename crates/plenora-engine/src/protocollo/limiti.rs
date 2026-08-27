@@ -39,8 +39,22 @@ pub const MAX_IDENTIFICATORE_BYTES: usize = 256;
 /// Byte **decodificati** di un percorso.
 pub const MAX_PERCORSO_BYTES: usize = 4_096;
 
-/// Byte **decodificati** di un digest in esadecimale (SHA-256).
-pub const MAX_DIGEST_BYTES: usize = 64;
+/// Caratteri di un digest nella forma sul filo: l'esadecimale minuscolo dei
+/// 32 byte di uno SHA-256.
+///
+/// **Derivata, non scelta**: l'autorita' e' `digest::DIGEST_BYTES`, che e' il
+/// numero che non puo' cambiare senza cambiare algoritmo. Scriverne uno qui e
+/// uno la' sarebbero due autorita' che possono divergere.
+///
+/// Non e' un tetto come gli altri: la forma canonica pretende **esattamente**
+/// questa lunghezza, non «al piu'». E non c'e' un controllo che la applichi —
+/// c'e' un **tipo**, `digest::DigestSha256`, di cui non esiste un valore non
+/// canonico. Questa costante resta perche' la derivazione del tetto del frame
+/// ha bisogno di un numero.
+///
+/// Essendo ASCII, caratteri e byte coincidono: il nome dice `BYTES` perche' e'
+/// nella famiglia dei tetti per campo, che si applicano ai byte decodificati.
+pub const MAX_DIGEST_BYTES: usize = super::digest::DIGEST_BYTES * 2;
 
 /// Byte **decodificati** di una versione dichiarata.
 pub const MAX_VERSIONE_BYTES: usize = 64;

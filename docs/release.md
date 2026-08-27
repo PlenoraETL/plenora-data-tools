@@ -154,6 +154,39 @@ alle versioni di quel giorno perché è la riproduzione congelata della misura;
 il confronto con i numeri attuali è un'attività separata, che deve dichiarare
 di stare confrontando due ambienti diversi.
 
+## Superficie pubblica e formato dell'artefatto
+
+### `CommitToken`: due nomi, non sei
+
+`plenora-engine` esporta `CommitToken` e `FormaTokenNonValida`, e nient'altro
+del modulo che li definisce. Il modulo è **privato**: un `pub mod` più il
+re-export avrebbe dato due percorsi per la stessa cosa e, con essi, costanti
+che a un consumatore non servono: `CHIAVE_FOOTER_COMMIT_TOKEN` è il nome di
+una chiave che scriviamo noi, e la lunghezza della forma canonica è un
+dettaglio della rappresentazione interna.
+
+Ciò che il chiamante deve poter fare è costruire un token e ricevere il
+rifiuto motivato quando il testo non è canonico. Due nomi bastano, e ogni nome
+in più è una promessa in più.
+
+### Il footer dell'artefatto può portare una chiave in più
+
+Gli artefatti Arrow IPC prodotti dal percorso isolato portano nel footer la
+chiave `plenora.commit.token`. È un **cambiamento del formato**, e va detto
+anche se è additivo:
+
+- gli artefatti prodotti in-process **non** la portano, e i loro byte restano
+  identici a quelli delle versioni precedenti — con `None` non si scrive
+  nulla, nemmeno una chiave vuota, ed è provato;
+- un lettore che ignori le chiavi sconosciute non nota la differenza: il
+  confine valida la forma, non il vocabolario;
+- un lettore che *cerchi* quella chiave deve accettare che sia assente, perché
+  per un artefatto ordinario lo è.
+
+La regola completa — forma canonica, riservatezza del valore, quattro forme
+del footer — è in
+[errori-e-limiti.md](errori-e-limiti.md#il-commit-token-forma-canonica-unica-e-valore-mai-mostrato).
+
 ## Piattaforme
 
 | piattaforma | stato |
@@ -199,6 +232,44 @@ solo in locale, e lint su di essi sono emersi mesi dopo.
 Workflow separato (`.github/workflows/fuzz.yml`), con un target per voce di
 matrice.
 
+### Quando gira che cosa
+
+Il fuzzing non è un gate unico: è una scala, e ogni gradino sta dove il suo
+costo è sostenibile. Metterlo tutto prima del commit lo renderebbe una tassa
+che si impara ad aggirare; metterlo tutto dopo il merge lascerebbe entrare
+difetti che una corsa breve avrebbe visto.
+
+| Momento | Che cosa è obbligatorio |
+| --- | --- |
+| **Prima del commit** | i gate deterministici, suite completa del workspace inclusa |
+| **Prima del merge** | test mirati, coverage, **compilazione** del crate `fuzz/` e **smoke dei soli target coinvolti** dalla modifica |
+| **Dopo il merge** | campagna completa — **30 minuti per target**, il default di `fuzz.yml` — in parallelo alla PR successiva |
+| **Obbligatoria e lunga** | **almeno 1 ora per target**, il default di `fuzz-campaign.sh`: dopo **`PR-6`**, **`PR-10`**, **`PR-12`**, **`PR-13`**, e prima di ogni release candidate |
+
+Le due durate non sono scelte qui: sono i default degli strumenti che le
+eseguono (`minutes_per_target: 30` in `.github/workflows/fuzz.yml`,
+`FUZZ_HOURS_PER_TARGET=1` in `scripts/fuzz-campaign.sh`). Scriverne altre
+significherebbe avere due numeri per la stessa cosa, e uno dei due sarebbe
+falso.
+
+«Target coinvolti» si legge dal codice toccato, non dal nome della PR: chi
+modifica il decoder del protocollo passa da `protocollo_frame` anche se la PR
+parla d'altro.
+
+Un difetto trovato da una campagna **apre una correzione bloccante per la
+release**, non una voce di arretrato. Se una campagna lunga trova qualcosa
+dopo il merge, la release aspetta quella fix: il momento in cui il difetto è
+emerso non cambia che cosa sarebbe successo in produzione.
+
+Lo smoke locale ha un prerequisito che **oggi non è riproducibile**:
+`scripts/fuzz-smoke.sh` gira in un'immagine (`plenora-rust:nightly-fuzz`) e
+monta `cargo-fuzz` da un percorso fisso dell'host. Nessuno dei due nasce da
+solo, e se manca lo script fallisce con un errore di Docker che non nomina la
+causa. La procedura riproducibile è lavoro suo — parametrizzare il percorso,
+dargli un default neutro, diagnosticare esplicitamente ciò che manca — e non
+sta qui: fino ad allora lo smoke prima del merge richiede un ambiente
+preparato a mano, ed è un costo dichiarato, non una svista.
+
 Il solo step `cargo fuzz run` gira su toolchain **nightly**, mentre build,
 test, clippy e gate anti-panico restano sulla pinnata. È una divergenza
 dichiarata: le flag sanitizer non sono disponibili sulla stabile. Un crash
@@ -212,8 +283,11 @@ rosso a barriera funzionante, e un job perennemente rosso smette di essere
 letto. Va riattivato quando `arrow-rs` renderà fallibile la conversione dello
 schema (`apache/arrow-rs#10575`).
 
-La campagna fuzz completa è prevista alla chiusura del lavoro sulla memoria
-governata: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).
+Le campagne lunghe hanno ora una cadenza fissa — la tabella qui sopra — invece
+di un'unica scadenza legata alla chiusura del lavoro sulla memoria governata.
+Quel lavoro resta il contesto in cui la prima è maturata, ed è descritto in
+[`stato-e-roadmap.md`](stato-e-roadmap.md); non è più la sola occasione in cui
+una campagna completa viene eseguita.
 
 ## Prestazioni
 
