@@ -29,10 +29,6 @@ use plenora_kernels_table::aggregation::{
 const M1: usize = 1_000_000;
 const M10: usize = 10_000_000;
 
-/// RNG deterministico (xorshift64*, identico a `bench_sweep`).
-/// Fixture base dello sweep, copiata verbatim: `id` int64, `num` float64,
-/// `grp` utf8 (1024 gruppi), `text` utf8 (40 char), `key` int64 (~1M
-/// distinti), `path` utf8.
 static BASE_1M: OnceLock<RecordBatch> = OnceLock::new();
 static BASE_10M: OnceLock<RecordBatch> = OnceLock::new();
 

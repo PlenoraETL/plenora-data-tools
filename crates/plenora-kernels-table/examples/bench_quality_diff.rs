@@ -3,7 +3,7 @@
 //! (filone ottimizzazioni kernel, batch 4: quality/governance/diff/security).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep` (seed logico 42,
-//! xorshift64*, stesse colonne e stesse configurazioni), cosi' le misure
+//! xorshift64, stesse colonne e stesse configurazioni), cosi' le misure
 //! sono confrontabili con le baseline di `benchmarks/sweep/sweep.json`:
 //! - fixture base: `id` int64, `num` float64, `grp` utf8 (1024 gruppi),
 //!   `text` utf8 (40 char esadecimali), `key` int64 (1M valori distinti
@@ -32,7 +32,6 @@ use plenora_kernels_table::reshape::{table_diff, TableDiff};
 use plenora_kernels_table::security::{mask_data, MaskData, MaskType, Masking};
 use plenora_kernels_table::Limits;
 
-/// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
 /// Fixture base condivisa: identica a `bench_sweep::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
@@ -89,7 +88,6 @@ fn base_fixture(rows: usize) -> RecordBatch {
     .expect("fixture base")
 }
 
-/// Fixture destra per diff/FK: identica a `bench_sweep::right_fixture`.
 /// Limiti allargati per le scale di benchmark (come `bench_sweep`).
 fn bench_limits() -> Limits {
     Limits {

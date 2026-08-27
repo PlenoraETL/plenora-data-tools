@@ -88,7 +88,6 @@ fn bench_limits() -> Limits {
     }
 }
 
-/// RNG deterministico (xorshift64*, stesso schema dello shuffle di `sample`).
 /// Fixture base condivisa: identica a `bench_sweep.rs` (seed 42, 9 draw per
 /// riga) per confrontabilita' con lo sweep precedente.
 fn base_fixture(rows: usize) -> RecordBatch {
@@ -219,8 +218,6 @@ fn align_config() -> AlignSchema {
     }
 }
 
-/// Fixture destra per `cross_join`: stessa chiave `id` 0..rows, colonna extra
-/// `rval` (identica a `bench_sweep.rs`).
 /// Fixture asof: timestamp int64 fitti; la destra e' sfasata di +1.
 fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     let ids = (0..rows)
@@ -274,7 +271,6 @@ fn list_fixture(rows: usize) -> RecordBatch {
     .expect("fixture list")
 }
 
-/// Fixture con colonna Struct{a int64, b float64, c utf8}.
 /// Fixture transpose: 8 colonne Float64 x 4000 righe (il contratto limita
 /// l'output a `max_columns` colonne = righe input + 1).
 fn transpose_fixture(rows: usize) -> RecordBatch {

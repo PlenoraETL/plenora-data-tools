@@ -30,13 +30,6 @@ fn bench_limits() -> Limits {
     }
 }
 
-/// RNG deterministico (xorshift64, stesso schema di `bench_sweep`).
-/// Fixture base condivisa: `id` int64, `num` float64, `grp` utf8 (1024
-/// gruppi), `text` utf8 (40 char esadecimali), `key` int64 (1M valori
-/// distinti possibili), `path` utf8.
-/// Fixture destra per set operation con overlap 50% sulle righe intere:
-/// righe identiche alla base nell'intervallo [rows/2, rows). Lo stream
-/// xorshift della fixture base (9 draw per riga) e' precalcolato in O(n).
 fn main() {
     let rows: usize = std::env::args()
         .nth(1)

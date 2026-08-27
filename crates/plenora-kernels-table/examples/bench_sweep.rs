@@ -85,15 +85,6 @@ fn bench_limits() -> Limits {
     }
 }
 
-/// RNG deterministico (xorshift64*, stesso schema dello shuffle di `sample`).
-/// Fixture base condivisa: `id` int64, `num` float64, `grp` utf8 (1024
-/// gruppi), `text` utf8 (40 char esadecimali), `key` int64 (1M valori
-/// distinti possibili), `path` utf8 ("pNNN/qNNN/rNNN" per `split_column`).
-/// Fixture destra per set operation con overlap 50% sulle righe intere:
-/// righe identiche alla base nell'intervallo [rows/2, rows). Lo stream
-/// xorshift della fixture base (9 draw per riga) e' precalcolato in O(n).
-/// Fixture destra per join/diff/FK: stessa chiave `id` 0..rows, `num`
-/// perturbato sul 10% delle righe (per `table_diff`), colonna extra `rval`.
 /// Fixture asof: timestamp int64 fitti; la destra e' sfasata di +1.
 fn asof_fixture(rows: usize, offset: i64) -> RecordBatch {
     let ids = (0..rows)
@@ -147,8 +138,6 @@ fn list_fixture(rows: usize) -> RecordBatch {
     .expect("fixture list")
 }
 
-/// Fixture con colonna Struct{a int64, b float64, c utf8}.
-/// Fixture JSON annidati (3 livelli) per `flatten_json`.
 /// Fixture transpose: 8 colonne Float64 x 4000 righe (il contratto limita
 /// l'output a `max_columns` colonne = righe input + 1).
 fn transpose_fixture(rows: usize) -> RecordBatch {

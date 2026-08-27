@@ -2,7 +2,7 @@
 //! kernel: quality).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep2` (seed logico 42,
-//! xorshift64*, stesse colonne), cosi' lo scenario `unique_id` e'
+//! xorshift64, stesse colonne), cosi' lo scenario `unique_id` e'
 //! confrontabile con la baseline di `benchmarks/sweep/sweep2.json`
 //! (`table.assert_unique`, "chiave id unica", 5.03M righe/s).
 //!
@@ -32,7 +32,6 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::quality::{assert_unique, AssertUnique};
 use serde_json::json;
 
-/// RNG deterministico (xorshift64*, stesso schema di `bench_sweep2`).
 /// Fixture base condivisa: identica a `bench_sweep2::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();

@@ -6,7 +6,7 @@
 //! ci sarebbe niente a dirlo.
 //!
 //! Cio' che resta nei singoli file: le fixture che esistono in una copia
-//! sola, le quattro varianti di `base_fixture` che non coincidono, e
+//! sola, le tre varianti di `base_fixture` che non coincidono, e
 //! `list_fixture`, che dipende da una costante dichiarata nel suo file.
 
 use plenora_core::arrow::array::{

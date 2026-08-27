@@ -30,7 +30,6 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::analysis::{flatten_json, statistics, FlattenJson, Stat, Statistics};
 use plenora_kernels_table::Limits;
 
-/// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
 /// Fixture base di `bench_sweep` (stesso stream xorshift: 9 draw per riga
 /// nello stesso ordine); servono solo `num` e `grp`, ma i draw extra
 /// mantengono lo stream allineato allo sweep.
@@ -60,7 +59,6 @@ fn stats_fixture(rows: usize) -> RecordBatch {
     .expect("fixture statistics")
 }
 
-/// Fixture JSON annidati (3 livelli), identica a `bench_sweep::json_fixture`.
 fn main() {
     let rows = std::env::args()
         .nth(1)

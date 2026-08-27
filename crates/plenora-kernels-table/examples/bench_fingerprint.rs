@@ -2,7 +2,7 @@
 //! `table.hmac_sha256` (filone ottimizzazioni kernel, sweep2 candidati 1-2).
 //!
 //! Fixture deterministica: IDENTICA a `base_fixture` di `bench_sweep.rs` /
-//! `bench_sweep2.rs` (seed logico 42 via xorshift64*, 9 draw per riga, 6
+//! `bench_sweep2.rs` (seed logico 42 via xorshift64, 9 draw per riga, 6
 //! colonne id/num/grp/text/key/path) per confrontabilita' diretta con le
 //! misure dello sweep (1.5M righe/s baseline su entrambe le op).
 //!
@@ -28,7 +28,6 @@ use plenora_kernels_table::security::{
 /// Variabile d'ambiente con la chiave HMAC del benchmark (impostata in main).
 const HMAC_KEY_ENV: &str = "PLENORA_BENCH_HMAC_KEY";
 
-/// RNG deterministico (xorshift64*, identico a `bench_sweep`/`bench_sweep2`).
 /// Fixture base: identica a `base_fixture` di `bench_sweep2.rs` (seed 42).
 fn fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
