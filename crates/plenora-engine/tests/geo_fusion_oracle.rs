@@ -29,20 +29,13 @@
 //! configurazione di build.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use geo::{
     line_string, polygon, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
     Polygon,
 };
-use geozero::{CoordDimensions, ToWkb};
-use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use plenora_core::contract::{
-    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions,
-};
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::arrow::array::RecordBatch;
+use plenora_core::arrow::schema::DataType;
 use plenora_core::diagnostics::RowDiagnostics;
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
 use plenora_engine::planner::{validate, ValidatedGraph};
@@ -51,48 +44,13 @@ use plenora_engine::{
 };
 use serde_json::{json, Value};
 
+mod fixture_geo;
+
+use fixture_geo::{geo_batch, geo_contract, geo_schema, point_wkb, to_wkb};
+
 // ---------------------------------------------------------------------------
 // Fixture (stessa forma dei test di executor: colonna `id` + WKB XY EPSG:32632)
 // ---------------------------------------------------------------------------
-
-fn geo_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        plenora_kernels_geo::arrow_adapter::geometry_output_field("geom", "EPSG:32632")
-            .expect("campo geometria"),
-    ]))
-}
-
-fn geo_contract() -> DataContract {
-    DataContract::new(
-        geo_schema(),
-        vec![GeometryColumnContract {
-            field_id: FieldId(3),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
-                "EPSG:32632".to_owned(),
-                json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-                CrsKind::Projected,
-                Some(1.0),
-            )),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
-}
-
-fn to_wkb(geometry: &Geometry<f64>) -> Vec<u8> {
-    geometry.to_wkb(CoordDimensions::xy()).expect("wkb fixture")
-}
-
-fn point_wkb(x: f64, y: f64) -> Vec<u8> {
-    to_wkb(&Geometry::Point(Point::new(x, y)))
-}
 
 fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
     to_wkb(&Geometry::Polygon(polygon![
@@ -102,18 +60,6 @@ fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
         (x: origin_x, y: origin_y + side),
         (x: origin_x, y: origin_y),
     ]))
-}
-
-fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    RecordBatch::try_new(
-        geo_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch geo fixture valido")
 }
 
 // ---------------------------------------------------------------------------
