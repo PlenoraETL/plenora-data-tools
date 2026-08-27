@@ -15,15 +15,17 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::measure;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::analysis::{flatten_json, statistics, FlattenJson, Stat, Statistics};
 use plenora_kernels_table::Limits;
-use serde_json::json;
 
 /// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
 struct Rng(u64);
@@ -100,53 +102,6 @@ fn json_fixture(rows: usize) -> RecordBatch {
         ],
     )
     .expect("fixture json")
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn measure(
-    op: &'static str,
-    rows: usize,
-    repetitions: usize,
-    note: &str,
-    execute: impl Fn() -> RecordBatch,
-) {
-    black_box(execute());
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute();
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    let record = json!({
-        "scenario": op,
-        "rows": rows,
-        "repetitions": repetitions,
-        "median_seconds": median,
-        "rows_per_second": rows_per_second,
-        "output_rows": output_rows,
-        "peak_rss_kib": peak_rss_kib(),
-        "note": note,
-    });
-    println!("{}", serde_json::to_string(&record).expect("JSON"));
 }
 
 fn main() {

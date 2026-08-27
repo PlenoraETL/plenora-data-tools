@@ -22,10 +22,13 @@
 //! `benchmarks/sweep/sweep2.md` (relativi alla cwd, /work in Docker) e
 //! stampa le stesse righe JSON su stdout.
 
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::{measure_record, Measurement};
+
 use std::fmt::Write as _;
-use std::hint::black_box;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
 
 use plenora_core::arrow::array::{
     types::Int64Type, Array, ArrayRef, Float64Array, Int64Array, ListArray, RecordBatch,
@@ -465,74 +468,6 @@ fn anagrafica(rows: usize, names: &[String], payload_prefix: i64) -> RecordBatch
     .expect("fixture anagrafica")
 }
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-struct Measurement {
-    op: &'static str,
-    rows: usize,
-    repetitions: usize,
-    median_seconds: f64,
-    rows_per_second: f64,
-    output_rows: usize,
-    peak_rss_kib: Option<u64>,
-    note: String,
-}
-
-fn measure(
-    op: &'static str,
-    rows: usize,
-    repetitions: usize,
-    note: &str,
-    execute: impl Fn() -> RecordBatch,
-) -> Measurement {
-    black_box(execute());
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute();
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    let record = json!({
-        "scenario": op,
-        "rows": rows,
-        "repetitions": repetitions,
-        "median_seconds": median,
-        "rows_per_second": rows_per_second,
-        "output_rows": output_rows,
-        "peak_rss_kib": peak_rss_kib(),
-        "note": note,
-    });
-    println!("{}", serde_json::to_string(&record).expect("JSON"));
-    Measurement {
-        op,
-        rows,
-        repetitions,
-        median_seconds: median,
-        rows_per_second,
-        output_rows,
-        peak_rss_kib: peak_rss_kib(),
-        note: note.to_owned(),
-    }
-}
-
 static BASE_1M: OnceLock<RecordBatch> = OnceLock::new();
 static BASE_10M: OnceLock<RecordBatch> = OnceLock::new();
 static WIDE_1M: OnceLock<RecordBatch> = OnceLock::new();
@@ -563,12 +498,12 @@ fn sweep_unary(
     note: &str,
     execute: impl Fn(&RecordBatch) -> RecordBatch + Copy,
 ) {
-    let measured = measure(op, M1, 3, note, || execute(base_1m()));
+    let measured = measure_record(op, M1, 3, note, || execute(base_1m()));
     let fast = measured.median_seconds < ESCALATION_SECONDS;
     results.push(measured);
     if escalate && fast {
         let note10 = format!("{note} [10M]");
-        let scaled = measure(op, M10, 3, &note10, || execute(base_10m()));
+        let scaled = measure_record(op, M10, 3, &note10, || execute(base_10m()));
         results.push(scaled);
     }
 }
@@ -581,12 +516,12 @@ fn sweep_wide(
     note: &str,
     execute: impl Fn(&RecordBatch) -> RecordBatch + Copy,
 ) {
-    let measured = measure(op, M1, 3, note, || execute(wide_1m()));
+    let measured = measure_record(op, M1, 3, note, || execute(wide_1m()));
     let fast = measured.median_seconds < ESCALATION_SECONDS;
     results.push(measured);
     if escalate && fast {
         let note10 = format!("{note} [10M]");
-        let scaled = measure(op, M10, 3, &note10, || execute(wide_10m()));
+        let scaled = measure_record(op, M10, 3, &note10, || execute(wide_10m()));
         results.push(scaled);
     }
 }
@@ -799,7 +734,7 @@ fn main() {
         empty_policy: plenora_kernels_table::reshape::EmptyListPolicy::Null,
     };
     let list_input = list_fixture(M1);
-    results.push(measure(
+    results.push(measure_record(
         "table.explode",
         M1,
         3,
@@ -813,9 +748,13 @@ fn main() {
         drop_source: true,
     };
     let struct_input = struct_fixture(M1);
-    results.push(measure("table.unnest", M1, 3, "Struct{a,b,c}", || {
-        unnest(&struct_input, &unnest_config, &limits).expect("unnest")
-    }));
+    results.push(measure_record(
+        "table.unnest",
+        M1,
+        3,
+        "Struct{a,b,c}",
+        || unnest(&struct_input, &unnest_config, &limits).expect("unnest"),
+    ));
 
     let transpose_config = Transpose {
         id_column: None,
@@ -823,7 +762,7 @@ fn main() {
         type_policy: HeterogeneousTypePolicy::Reject,
     };
     let transpose_input = transpose_fixture(4_000);
-    results.push(measure(
+    results.push(measure_record(
         "table.transpose",
         4_000,
         3,
@@ -833,17 +772,23 @@ fn main() {
 
     // --- Join --------------------------------------------------------------------------
     let concat_config = Concat { ignore_index: true };
-    results.push(measure("table.concat", M1, 3, "500k + 500k righe", || {
-        let half = base_1m().num_rows() / 2;
-        let left = base_1m().slice(0, half);
-        let right = base_1m().slice(half, base_1m().num_rows() - half);
-        concat(&left, &right, &concat_config, &limits).expect("concat")
-    }));
+    results.push(measure_record(
+        "table.concat",
+        M1,
+        3,
+        "500k + 500k righe",
+        || {
+            let half = base_1m().num_rows() / 2;
+            let left = base_1m().slice(0, half);
+            let right = base_1m().slice(half, base_1m().num_rows() - half);
+            concat(&left, &right, &concat_config, &limits).expect("concat")
+        },
+    ));
 
     let cross_join_config = CrossJoin {};
     let cross_left = base_fixture(1_000);
     let cross_right = right_fixture(1_000);
-    results.push(measure(
+    results.push(measure_record(
         "table.cross_join",
         M1,
         3,
@@ -862,7 +807,7 @@ fn main() {
     };
     let asof_left = asof_fixture(M1, 0);
     let asof_right = asof_fixture(M1, 1);
-    results.push(measure(
+    results.push(measure_record(
         "table.asof_join",
         M1,
         3,
@@ -1173,7 +1118,7 @@ fn main() {
         },
     )
     .expect("cbn input 3");
-    results.push(measure(
+    results.push(measure_record(
         "table.concat_by_name",
         M1,
         3,
@@ -1285,7 +1230,7 @@ fn main() {
         max_rows: 1_000_000_000,
         ..Limits::default()
     };
-    results.push(measure(
+    results.push(measure_record(
         "table.fuzzy_join",
         M1,
         3,

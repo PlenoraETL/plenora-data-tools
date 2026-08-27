@@ -13,6 +13,11 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::peak_rss_kib;
+
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
@@ -155,19 +160,6 @@ fn pivot_fixture(rows: usize) -> RecordBatch {
         ],
     )
     .expect("benchmark fixture")
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
 }
 
 fn run_scenario(

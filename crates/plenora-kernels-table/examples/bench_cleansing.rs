@@ -9,9 +9,12 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::run_scenario;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -19,7 +22,7 @@ use plenora_kernels_table::cleansing::{
     fill_na, type_cast, CastErrors, FillMethod, FillNa, TargetType, TypeCast,
 };
 use plenora_kernels_table::quality::{coalesce, Coalesce};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 const fn nullable(row: usize, modulus: usize, remainder: usize) -> bool {
     row % modulus == remainder
@@ -116,55 +119,6 @@ fn fixture(rows: usize) -> RecordBatch {
     .expect("benchmark fixture")
 }
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn run_scenario(
-    name: &str,
-    rows: usize,
-    repetitions: usize,
-    input: &RecordBatch,
-    execute: impl Fn(&RecordBatch) -> RecordBatch,
-) {
-    black_box(execute(input));
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute(input);
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    println!(
-        "{}",
-        serde_json::to_string(&json!({
-            "scenario": name,
-            "rows": rows,
-            "repetitions": repetitions,
-            "median_seconds": median,
-            "rows_per_second": rows_per_second,
-            "output_rows": output_rows,
-            "peak_rss_kib": peak_rss_kib(),
-        }))
-        .expect("JSON")
-    );
-}
-
 fn cast(column: &str, target_type: TargetType) -> TypeCast {
     TypeCast {
         column: column.into(),
@@ -194,8 +148,8 @@ fn main() {
         method: FillMethod::Value,
         value: Value::from(0),
     };
-    run_scenario("fill_na_int_value", rows, repetitions, &input, |batch| {
-        fill_na(batch, &fill_id).expect("fill id")
+    run_scenario("fill_na_int_value", rows, repetitions, || {
+        fill_na(&input, &fill_id).expect("fill id")
     });
 
     let fill_num = FillNa {
@@ -203,8 +157,8 @@ fn main() {
         method: FillMethod::Ffill,
         value: Value::Null,
     };
-    run_scenario("fill_na_float_ffill", rows, repetitions, &input, |batch| {
-        fill_na(batch, &fill_num).expect("fill num")
+    run_scenario("fill_na_float_ffill", rows, repetitions, || {
+        fill_na(&input, &fill_num).expect("fill num")
     });
 
     let fill_group = FillNa {
@@ -212,8 +166,8 @@ fn main() {
         method: FillMethod::Value,
         value: Value::from("n/d"),
     };
-    run_scenario("fill_na_utf8_value", rows, repetitions, &input, |batch| {
-        fill_na(batch, &fill_group).expect("fill group")
+    run_scenario("fill_na_utf8_value", rows, repetitions, || {
+        fill_na(&input, &fill_group).expect("fill group")
     });
 
     let fill_group_ffill = FillNa {
@@ -221,57 +175,53 @@ fn main() {
         method: FillMethod::Ffill,
         value: Value::Null,
     };
-    run_scenario("fill_na_utf8_ffill", rows, repetitions, &input, |batch| {
-        fill_na(batch, &fill_group_ffill).expect("fill group ffill")
+    run_scenario("fill_na_utf8_ffill", rows, repetitions, || {
+        fill_na(&input, &fill_group_ffill).expect("fill group ffill")
     });
 
     let coalesce_int = Coalesce {
         columns: vec!["ca".into(), "cb".into(), "cc".into()],
         output_column: "coalesced_int".into(),
     };
-    run_scenario("coalesce_int64", rows, repetitions, &input, |batch| {
-        coalesce(batch, &coalesce_int).expect("coalesce int")
+    run_scenario("coalesce_int64", rows, repetitions, || {
+        coalesce(&input, &coalesce_int).expect("coalesce int")
     });
 
     let coalesce_str = Coalesce {
         columns: vec!["sa".into(), "sb".into(), "sc".into()],
         output_column: "coalesced_str".into(),
     };
-    run_scenario("coalesce_utf8", rows, repetitions, &input, |batch| {
-        coalesce(batch, &coalesce_str).expect("coalesce str")
+    run_scenario("coalesce_utf8", rows, repetitions, || {
+        coalesce(&input, &coalesce_str).expect("coalesce str")
     });
 
     let cast_text_int = cast("text", TargetType::Int);
-    run_scenario("type_cast_utf8_int", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_text_int).expect("cast text->int")
+    run_scenario("type_cast_utf8_int", rows, repetitions, || {
+        type_cast(&input, &cast_text_int).expect("cast text->int")
     });
 
     let cast_ftext_float = cast("ftext", TargetType::Float);
-    run_scenario("type_cast_utf8_float", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_ftext_float).expect("cast ftext->float")
+    run_scenario("type_cast_utf8_float", rows, repetitions, || {
+        type_cast(&input, &cast_ftext_float).expect("cast ftext->float")
     });
 
     let cast_btext_bool = cast("btext", TargetType::Bool);
-    run_scenario("type_cast_utf8_bool", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_btext_bool).expect("cast btext->bool")
+    run_scenario("type_cast_utf8_bool", rows, repetitions, || {
+        type_cast(&input, &cast_btext_bool).expect("cast btext->bool")
     });
 
     let cast_dtext_date32 = cast("dtext", TargetType::Date32);
-    run_scenario(
-        "type_cast_utf8_date32",
-        rows,
-        repetitions,
-        &input,
-        |batch| type_cast(batch, &cast_dtext_date32).expect("cast dtext->date32"),
-    );
+    run_scenario("type_cast_utf8_date32", rows, repetitions, || {
+        type_cast(&input, &cast_dtext_date32).expect("cast dtext->date32")
+    });
 
     let cast_seq_str = cast("seq", TargetType::Str);
-    run_scenario("type_cast_int_utf8", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_seq_str).expect("cast seq->str")
+    run_scenario("type_cast_int_utf8", rows, repetitions, || {
+        type_cast(&input, &cast_seq_str).expect("cast seq->str")
     });
 
     let cast_fnum_int = cast("fnum", TargetType::Int);
-    run_scenario("type_cast_float_int", rows, repetitions, &input, |batch| {
-        type_cast(batch, &cast_fnum_int).expect("cast fnum->int")
+    run_scenario("type_cast_float_int", rows, repetitions, || {
+        type_cast(&input, &cast_fnum_int).expect("cast fnum->int")
     });
 }

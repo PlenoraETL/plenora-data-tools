@@ -10,9 +10,12 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::run_scenario;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -20,7 +23,6 @@ use plenora_kernels_table::security::{
     hmac_sha256, stable_fingerprint, FingerprintAlgorithm, HmacNullPolicy, HmacSha256,
     StableFingerprint,
 };
-use serde_json::json;
 
 /// Variabile d'ambiente con la chiave HMAC del benchmark (impostata in main).
 const HMAC_KEY_ENV: &str = "PLENORA_BENCH_HMAC_KEY";
@@ -95,55 +97,6 @@ fn fixture(rows: usize) -> RecordBatch {
     .expect("benchmark fixture")
 }
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn run_scenario(
-    name: &str,
-    rows: usize,
-    repetitions: usize,
-    input: &RecordBatch,
-    execute: impl Fn(&RecordBatch) -> RecordBatch,
-) {
-    black_box(execute(input));
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute(input);
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    println!(
-        "{}",
-        serde_json::to_string(&json!({
-            "scenario": name,
-            "rows": rows,
-            "repetitions": repetitions,
-            "median_seconds": median,
-            "rows_per_second": rows_per_second,
-            "output_rows": output_rows,
-            "peak_rss_kib": peak_rss_kib(),
-        }))
-        .expect("JSON")
-    );
-}
-
 fn main() {
     let mut args = std::env::args().skip(1);
     let rows: usize = args
@@ -164,25 +117,17 @@ fn main() {
         output_column: "fingerprint".into(),
         algorithm: FingerprintAlgorithm::Sha256,
     };
-    run_scenario(
-        "stable_fingerprint_sha256_all6",
-        rows,
-        repetitions,
-        &input,
-        |batch| stable_fingerprint(batch, &fingerprint_sha256).expect("fingerprint sha256"),
-    );
+    run_scenario("stable_fingerprint_sha256_all6", rows, repetitions, || {
+        stable_fingerprint(&input, &fingerprint_sha256).expect("fingerprint sha256")
+    });
 
     let fingerprint_md5 = StableFingerprint {
         algorithm: FingerprintAlgorithm::Md5,
         ..fingerprint_sha256
     };
-    run_scenario(
-        "stable_fingerprint_md5_all6",
-        rows,
-        repetitions,
-        &input,
-        |batch| stable_fingerprint(batch, &fingerprint_md5).expect("fingerprint md5"),
-    );
+    run_scenario("stable_fingerprint_md5_all6", rows, repetitions, || {
+        stable_fingerprint(&input, &fingerprint_md5).expect("fingerprint md5")
+    });
 
     // Stessa config dello sweep2: 2 colonne (id+text), chiave da env.
     let hmac_config = HmacSha256 {
@@ -191,7 +136,7 @@ fn main() {
         output_column: "hmac".into(),
         null_policy: HmacNullPolicy::Empty,
     };
-    run_scenario("hmac_sha256_id_text", rows, repetitions, &input, |batch| {
-        hmac_sha256(batch, &hmac_config).expect("hmac")
+    run_scenario("hmac_sha256_id_text", rows, repetitions, || {
+        hmac_sha256(&input, &hmac_config).expect("hmac")
     });
 }

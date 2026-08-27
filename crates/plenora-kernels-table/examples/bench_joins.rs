@@ -9,15 +9,17 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::run_scenario;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::joins::{anti_join, join, semi_join, Join, JoinHow, MembershipJoin};
 use plenora_kernels_table::Limits;
-use serde_json::json;
 
 /// LCG deterministico (Knuth MMIX), seed logico 42.
 struct Lcg(u64);
@@ -123,54 +125,6 @@ fn limits() -> Limits {
         max_rows: 1_000_000_000,
         ..Limits::default()
     }
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn run_scenario(
-    name: &str,
-    rows: usize,
-    repetitions: usize,
-    mut operation: impl FnMut() -> RecordBatch,
-) {
-    black_box(operation());
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = operation();
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    println!(
-        "{}",
-        serde_json::to_string(&json!({
-            "scenario": name,
-            "rows": rows,
-            "repetitions": repetitions,
-            "median_seconds": median,
-            "rows_per_second": rows_per_second,
-            "output_rows": output_rows,
-            "peak_rss_kib": peak_rss_kib(),
-        }))
-        .expect("JSON")
-    );
 }
 
 fn main() {

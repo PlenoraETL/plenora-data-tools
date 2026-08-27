@@ -9,9 +9,12 @@
 //! (default 100000 10000 3, lo scenario del report). Emette una riga JSON per
 //! scenario con mediana dei tempi, righe/s e peak RSS (`VmHWM`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::run_scenario;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -101,54 +104,6 @@ fn table(rows: usize, names: &[String], payload_prefix: i64) -> RecordBatch {
         ],
     )
     .expect("fixture")
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn run_scenario(
-    name: &str,
-    rows: usize,
-    repetitions: usize,
-    mut operation: impl FnMut() -> RecordBatch,
-) {
-    black_box(operation());
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = operation();
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    println!(
-        "{}",
-        serde_json::to_string(&json!({
-            "scenario": name,
-            "rows": rows,
-            "repetitions": repetitions,
-            "median_seconds": median,
-            "rows_per_second": rows_per_second,
-            "output_rows": output_rows,
-            "peak_rss_kib": peak_rss_kib(),
-        }))
-        .expect("JSON")
-    );
 }
 
 fn config(metric: &str, blocking: &str) -> FuzzyJoin {
