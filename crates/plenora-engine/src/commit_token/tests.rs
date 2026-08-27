@@ -3,13 +3,13 @@
 //! La conformita' di forma — accettazione, rifiuti, riservatezza del testo
 //! rifiutato — sta nelle prove della rappresentazione condivisa, dove vive il
 //! codice che la decide. Qui resta la **riservatezza del valore**, che e' la
-//! proprieta' per cui questo tipo esiste separato dal digest: un token in un
-//! log e' un token che qualcun altro puo' presentare.
+//! proprieta' per cui questo tipo esiste separato dal digest: un valore che
+//! l'altro capo del canale controlla non si copia nei log, perche' il log lo
+//! conserva e lo diffonde insieme al motivo per cui qualcuno lo stava
+//! guardando.
 
-use super::{
-    CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN, COMMIT_TOKEN_BYTES,
-    COMMIT_TOKEN_CARATTERI,
-};
+use super::{CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN};
+use crate::esadecimale32::CARATTERI;
 
 /// Un token valido, scritto a mano.
 const CANONICO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -54,7 +54,7 @@ fn la_traduzione_del_difetto_distingue_la_maiuscola() {
     assert_eq!(
         CommitToken::da_esadecimale("0"),
         Err(FormaTokenNonValida::LunghezzaErrata {
-            attesi: COMMIT_TOKEN_CARATTERI,
+            attesi: CARATTERI,
             trovati: 1,
         })
     );
@@ -151,6 +151,5 @@ fn nessun_errore_porta_il_valore() {
 #[test]
 fn la_chiave_del_footer_e_una_sola_e_dichiarata() {
     assert_eq!(CHIAVE_FOOTER_COMMIT_TOKEN, "plenora.commit.token");
-    assert_eq!(COMMIT_TOKEN_CARATTERI, COMMIT_TOKEN_BYTES * 2);
-    assert_eq!(CANONICO.len(), COMMIT_TOKEN_CARATTERI);
+    assert_eq!(CANONICO.len(), CARATTERI);
 }

@@ -70,10 +70,9 @@ mod classificazione;
 //
 // Un `pub mod` piu' il re-export avrebbe dato due percorsi per la stessa cosa
 // — `plenora_engine::commit_token::CommitToken` e
-// `plenora_engine::CommitToken` — e con essi tutte le costanti del modulo,
-// che a un consumatore non servono: `COMMIT_TOKEN_BYTES` e
-// `COMMIT_TOKEN_CARATTERI` sono dettagli della forma canonica, e
-// `CHIAVE_FOOTER_COMMIT_TOKEN` e' il nome di una chiave che scriviamo noi.
+// `plenora_engine::CommitToken` — e con essi le costanti del modulo, che a un
+// consumatore non servono: `CHIAVE_FOOTER_COMMIT_TOKEN` e' il nome di una
+// chiave che scriviamo noi.
 // Cio' che il chiamante deve poter fare e' costruire un token e riceverne il
 // rifiuto motivato: due nomi, non sei.
 /// Il `commit_token` nel footer di un artefatto: scrittura prima di `finish`,

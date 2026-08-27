@@ -15,6 +15,15 @@ use super::{deserializza, Esadecimale32, FormaNonValida, Visitatore, BYTE, CARAT
 use crate::commit_token::CommitToken;
 use crate::protocollo::digest::DigestSha256;
 
+/// I byte in forma esadecimale, per costruire i vettori di prova.
+fn in_testo(byte: &[u8]) -> String {
+    use std::fmt::Write as _;
+    byte.iter().fold(String::new(), |mut testo, b| {
+        write!(testo, "{b:02x}").expect("scrivere in una String non fallisce");
+        testo
+    })
+}
+
 /// Un valore canonico, scritto a mano.
 const CANONICO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -43,6 +52,42 @@ fn lo_stesso_testo_da_lo_stesso_valore_e_la_stessa_forma() {
     assert!(uno == due, "lo stesso testo ha dato valori diversi");
     assert_eq!(uno.in_esadecimale(), CANONICO);
     assert_eq!(due.in_esadecimale(), CANONICO);
+}
+
+/// I trentadue byte sono **quelli attesi**, contro un vettore noto.
+///
+/// Confrontare due risultati dello stesso percorso e poi la forma ricostruita
+/// prova la coerenza interna, non la correttezza: una trasformazione sbagliata
+/// ma coerente — i byte scambiati a coppie, per dire — supererebbe entrambi i
+/// confronti e renderebbe pure la stessa stringa. Qui si guardano i byte, che
+/// e' possibile perche' il modulo di prova e' figlio di quello che li tiene.
+///
+/// Sorveglia anche `Ord` e `Hash`, che ordinano e dispongono **per byte**: una
+/// permutazione interna li cambierebbe senza cambiare nulla di visibile.
+#[test]
+fn i_byte_sono_quelli_del_vettore_noto() {
+    // 00 01 02 … 1f: ogni byte diverso e in ordine, cosi' una permutazione si
+    // vede. Un vettore di byte tutti uguali non distinguerebbe nulla.
+    let attesi: [u8; BYTE] = std::array::from_fn(|i| u8::try_from(i).expect("sotto 32"));
+    let testo = in_testo(&attesi);
+    let valore = Esadecimale32::da_esadecimale(&testo).expect("canonico");
+    assert_eq!(valore.byte, attesi, "i byte non sono quelli del vettore");
+    assert_eq!(valore.in_esadecimale(), testo, "il giro non torna al testo");
+
+    // E l'ordine segue i byte: il vettore che differisce nell'ultimo e' il
+    // maggiore, e due valori uguali hanno lo stesso `Hash`.
+    let mut altri = attesi;
+    altri[BYTE - 1] = 0xff;
+    let maggiore = Esadecimale32::da_esadecimale(&in_testo(&altri)).expect("canonico");
+    assert!(valore < maggiore, "l'ordine non segue i byte");
+
+    let mut impronte = std::collections::HashSet::new();
+    impronte.insert(valore);
+    assert!(
+        impronte.contains(&Esadecimale32::da_esadecimale(&testo).expect("canonico")),
+        "due valori uguali hanno impronte diverse"
+    );
+    assert!(!impronte.contains(&maggiore));
 }
 
 /// E i **due wrapper** costruiti dallo stesso testo rendono la stessa forma.
@@ -176,6 +221,23 @@ fn i_valori_non_testuali_si_rifiutano_senza_il_valore() {
                 "rifiuto inatteso: {reso}"
             );
         }
+    }
+
+    // E i tipi che **non** passano da un `visit_*` scalare: `null`, una
+    // sequenza e una mappa arrivano a `visit_unit`, `visit_seq` e `visit_map`,
+    // cioe' tre percorsi diversi da quelli sopra. Il rifiuto qui e' quello di
+    // `serde`, non il nostro — non porta il valore — ma resta un rifiuto, e
+    // che lo resti va sorvegliato: sono i casi in cui una lettura permissiva
+    // costruirebbe un valore dal nulla.
+    for json in ["null", "[]", "{}"] {
+        assert!(
+            serde_json::from_str::<CommitToken>(json).is_err(),
+            "accettato `{json}` come token"
+        );
+        assert!(
+            serde_json::from_str::<DigestSha256>(json).is_err(),
+            "accettato `{json}` come digest"
+        );
     }
 
     // I due a 128 bit non li produce `serde_json`, quindi il giro JSON non li

@@ -29,10 +29,12 @@
 //! # Il valore non compare mai
 //!
 //! `Debug` e `Display` non lo mostrano, e nessun errore di questo modulo lo
-//! contiene. E' l'unica proprieta' del tipo che vada difesa deliberatamente:
-//! un token in un log e' un token che qualcun altro puo' presentare. E' anche
-//! la ragione per cui la primitiva condivisa non ha ne' `Debug` ne' `Display`:
-//! averli la' avrebbe imposto una politica a chi non la vuole.
+//! contiene. La regola e' generale e non riguarda un potere del token: un
+//! valore che l'altro capo del canale controlla non si copia nei log, perche'
+//! il log lo conserva e lo diffonde insieme al motivo per cui qualcuno lo
+//! stava guardando. E' anche la ragione per cui la primitiva condivisa non ha
+//! ne' `Debug` ne' `Display`: averli la' avrebbe imposto una politica a chi
+//! non la vuole.
 //!
 //! La serializzazione invece lo emette, e l'asimmetria e' voluta: sul filo
 //! serve, in un log no.
@@ -42,16 +44,6 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::esadecimale32::{self, DaEsadecimale32, Esadecimale32, FormaNonValida};
-
-/// Byte del token: 32, cioe' 64 caratteri esadecimali.
-///
-/// `pub` qui non significa pubblico: il **modulo** e' privato, e dal crate
-/// esce solo cio' che `lib.rs` ri-esporta esplicitamente — [`CommitToken`] e
-/// [`FormaTokenNonValida`]. Questa costante resta interna.
-pub const COMMIT_TOKEN_BYTES: usize = esadecimale32::BYTE;
-
-/// Caratteri della forma canonica.
-pub const COMMIT_TOKEN_CARATTERI: usize = esadecimale32::CARATTERI;
 
 /// La chiave con cui il token vive nel footer di un artefatto.
 ///
@@ -137,9 +129,9 @@ impl CommitToken {
     /// [`FormaTokenNonValida`] se il testo non e' esattamente **64** caratteri
     /// esadecimali minuscoli.
     ///
-    /// Il numero e' scritto e non collegato: `COMMIT_TOKEN_CARATTERI` e' una
-    /// costante di un modulo privato, e un link da una doc pubblica a un
-    /// simbolo privato non si risolve.
+    /// Il numero e' scritto e non collegato: la costante che lo definisce sta
+    /// nella rappresentazione condivisa, che e' privata, e un link da una doc
+    /// pubblica a un simbolo privato non si risolve.
     pub fn da_esadecimale(testo: &str) -> Result<Self, FormaTokenNonValida> {
         Esadecimale32::da_esadecimale(testo)
             .map(Self)

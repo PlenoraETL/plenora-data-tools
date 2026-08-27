@@ -1,14 +1,13 @@
 //! Trentadue byte in forma esadecimale minuscola: la **rappresentazione**,
 //! senza semantica.
 //!
-//! Due tipi del crate hanno la stessa forma sul filo e significati diversi: il
-//! `commit_token`, che identifica un tentativo, e il digest SHA-256, che
-//! identifica un contenuto. Prima ciascuno portava la propria copia di
-//! parsing, codifica e deserializzazione: la stessa regola scritta due volte,
-//! con due occasioni di correggerne una sola.
+//! Una rappresentazione condivisa, due semantiche distinte: il `commit_token`
+//! identifica un tentativo, il digest SHA-256 identifica un contenuto. La
+//! forma che hanno in comune vive qui, e la regola che la definisce esiste in
+//! un punto solo — due copie sarebbero due occasioni di correggerne una sola.
 //!
-//! Qui c'e' la regola, una volta. I due tipi restano distinti perche' cio' che
-//! li distingue **non e' la forma**.
+//! I due tipi restano distinti perche' cio' che li distingue **non e' la
+//! forma**.
 //!
 //! # Che cosa questo modulo deliberatamente non ha
 //!
@@ -29,9 +28,9 @@ use serde::{de, Deserializer, Serializer};
 
 /// Byte della rappresentazione: **32**, ed e' questa l'autorita'.
 ///
-/// I caratteri della forma testuale si derivano da qui, non il contrario:
-/// `caratteri / 2` su un numero dispari ne perderebbe uno in silenzio, e un 66
-/// continuerebbe a compilare dichiarando 33 byte.
+/// L'invariante e' che la lunghezza testuale **derivi** dai byte. Nel verso
+/// opposto la derivazione ammette valori che non sono uno SHA-256 e li lascia
+/// compilare.
 pub const BYTE: usize = 32;
 
 /// Caratteri della forma esadecimale, derivati.

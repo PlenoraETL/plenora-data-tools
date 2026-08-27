@@ -161,9 +161,9 @@ di stare confrontando due ambienti diversi.
 `plenora-engine` esporta `CommitToken` e `FormaTokenNonValida`, e nient'altro
 del modulo che li definisce. Il modulo è **privato**: un `pub mod` più il
 re-export avrebbe dato due percorsi per la stessa cosa e, con essi, costanti
-che a un consumatore non servono — `COMMIT_TOKEN_BYTES` e
-`COMMIT_TOKEN_CARATTERI` sono dettagli della forma canonica,
-`CHIAVE_FOOTER_COMMIT_TOKEN` è il nome di una chiave che scriviamo noi.
+che a un consumatore non servono: `CHIAVE_FOOTER_COMMIT_TOKEN` è il nome di
+una chiave che scriviamo noi, e la lunghezza della forma canonica è un
+dettaglio della rappresentazione interna.
 
 Ciò che il chiamante deve poter fare è costruire un token e ricevere il
 rifiuto motivato quando il testo non è canonico. Due nomi bastano, e ogni nome
