@@ -29,6 +29,7 @@
 #![allow(dead_code)]
 
 pub mod fixture;
+pub mod lcg;
 pub mod rng;
 
 use std::hint::black_box;

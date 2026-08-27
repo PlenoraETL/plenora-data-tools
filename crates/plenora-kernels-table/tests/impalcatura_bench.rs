@@ -8,6 +8,10 @@
 #[path = "../examples/comune/rng.rs"]
 mod rng;
 
+#[path = "../examples/comune/lcg.rs"]
+mod lcg;
+
+use lcg::Lcg;
 use rng::Rng;
 
 /// I primi otto valori con seme 42.
@@ -273,4 +277,99 @@ fn struct_fixture_produce_i_dati_attesi() {
     )
     .expect("batch atteso");
     assert_batch_identico("struct_fixture(2)", &struct_fixture(2), &atteso);
+}
+
+// ---------------------------------------------------------------------------
+// Il secondo generatore: LCG di Knuth (MMIX)
+// ---------------------------------------------------------------------------
+//
+// Sequenza diversa da quella dello xorshift, e con la stessa proprieta': un
+// seme o una costante che cambiano non rompono niente e spostano in silenzio
+// i dati misurati.
+
+/// I primi sei valori con seme 42, e i primi quattro con seme 43.
+///
+/// Calcolati a parte dalla ricorrenza di Knuth (MMIX) su aritmetica a 64 bit
+/// — moltiplicatore 6364136223846793005, incremento 1442695040888963407,
+/// uscita presa dopo l'aggiornamento e spostata di undici bit — e trascritti
+/// qui. Non letti dall'implementazione: un oracolo che chiedesse al codice
+/// quale sia la risposta giusta direbbe soltanto che il codice concorda con
+/// se stesso.
+const LCG_SEME_42: [u64; 6] = [
+    5_118_163_774_668_235,
+    2_030_794_029_189_534,
+    3_718_516_997_689_703,
+    5_678_120_844_705_401,
+    6_126_226_822_504_904,
+    236_249_024_909_153,
+];
+
+const LCG_SEME_43: [u64; 4] = [
+    8_225_652_165_218_427,
+    5_703_107_371_137_940,
+    4_106_151_467_374_092,
+    5_512_813_399_444_688,
+];
+
+#[test]
+fn la_sequenza_dell_lcg_e_quella_dichiarata() {
+    let mut lcg = Lcg::seeded();
+    let ottenuti: Vec<u64> = (0..LCG_SEME_42.len()).map(|_| lcg.next_u64()).collect();
+    assert_eq!(
+        ottenuti,
+        LCG_SEME_42.to_vec(),
+        concat!(
+            "la sequenza dell'LCG e' cambiata: le fixture di benchmark non ",
+            "sono piu' quelle su cui la baseline e' stata raccolta"
+        )
+    );
+}
+
+/// Il secondo seme, e la prova che l'argomento non venga ignorato.
+#[test]
+fn il_seme_dichiarato_dell_lcg_e_quello_usato() {
+    let mut lcg = Lcg::con_seme(43);
+    let ottenuti: Vec<u64> = (0..LCG_SEME_43.len()).map(|_| lcg.next_u64()).collect();
+    assert_eq!(
+        ottenuti,
+        LCG_SEME_43.to_vec(),
+        "seme 43 ignorato o alterato"
+    );
+
+    let mut quarantadue = Lcg::seeded();
+    let mut quarantatre = Lcg::con_seme(43);
+    assert_ne!(
+        quarantadue.next_u64(),
+        quarantatre.next_u64(),
+        "i due semi producono la stessa sequenza"
+    );
+}
+
+/// `below` e' il resto della sequenza, non una sequenza sua.
+///
+/// Serve perche' e' il modo in cui le fixture lo usano davvero: se `below`
+/// avanzasse lo stato due volte, o applicasse il modulo prima dello shift, i
+/// dati cambierebbero senza che la prova sulla sequenza se ne accorga.
+#[test]
+fn below_e_il_resto_della_sequenza() {
+    let mut lcg = Lcg::seeded();
+    let sotto: Vec<u64> = (0..LCG_SEME_42.len()).map(|_| lcg.below(1_000)).collect();
+    let atteso: Vec<u64> = LCG_SEME_42.iter().map(|valore| valore % 1_000).collect();
+    assert_eq!(sotto, atteso, "`below` non e' il resto della sequenza");
+    assert!(sotto.iter().all(|valore| *valore < 1_000), "limite violato");
+}
+
+/// I due generatori restano distinti.
+///
+/// Sostituire l'uno con l'altro non romperebbe niente e cambierebbe i dati di
+/// tre benchmark: e' la ragione per cui sono due moduli e non uno.
+#[test]
+fn i_due_generatori_non_producono_la_stessa_sequenza() {
+    let mut xorshift = Rng::seeded();
+    let mut lineare = Lcg::seeded();
+    assert_ne!(
+        (0..4).map(|_| xorshift.next()).collect::<Vec<_>>(),
+        (0..4).map(|_| lineare.next_u64()).collect::<Vec<_>>(),
+        "i due generatori coincidono: uno dei due non e' quello dichiarato"
+    );
 }
