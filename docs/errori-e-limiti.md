@@ -755,7 +755,7 @@ diverse:
 | `MAX_INGRESSI` | 16 | descrittori d'ingresso per `Incarico` |
 | `MAX_IDENTIFICATORE_BYTES` | 256 | byte decodificati di un identificatore |
 | `MAX_PERCORSO_BYTES` | 4096 | byte decodificati di un percorso |
-| `MAX_DIGEST_BYTES` | 64 | byte decodificati di un digest esadecimale |
+| `MAX_DIGEST_BYTES` | 64, **derivato** | i caratteri della forma esadecimale di uno SHA-256, cioè `DIGEST_BYTES * 2`. Non è un tetto: la forma pretende esattamente questa lunghezza, e a garantirla è il **tipo** `DigestSha256`, non un controllo |
 | `MAX_VERSIONE_BYTES` | 64 | byte decodificati di una versione dichiarata |
 | `MAX_CAPABILITY` | 32 | capability dichiarate in `Risposta` |
 | `MAX_RISORSE` | 64 | risorse risolte elencate nell'handshake |

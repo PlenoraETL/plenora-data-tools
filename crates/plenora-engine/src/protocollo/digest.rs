@@ -35,10 +35,18 @@ use std::fmt;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use super::limiti::MAX_DIGEST_BYTES;
+/// Byte di un digest SHA-256: **32**, ed e' questa l'autorita'.
+///
+/// I 64 caratteri della forma sul filo si derivano da qui — `limiti.rs` li
+/// calcola come `DIGEST_BYTES * 2` — e non il contrario. Derivare i byte dai
+/// caratteri sembrava equivalente e non lo e': `caratteri / 2` su un numero
+/// dispari ne perderebbe uno in silenzio, e un 66 continuerebbe a compilare
+/// dichiarando 33 byte, che non e' piu' uno SHA-256. Il numero che non puo'
+/// cambiare senza cambiare algoritmo e' questo.
+pub const DIGEST_BYTES: usize = 32;
 
-/// Byte di un digest SHA-256.
-const DIGEST_BYTES: usize = MAX_DIGEST_BYTES / 2;
+/// Caratteri della forma esadecimale, derivati.
+const DIGEST_CARATTERI: usize = DIGEST_BYTES * 2;
 
 /// Perche' un testo non e' un digest.
 ///
@@ -48,7 +56,7 @@ const DIGEST_BYTES: usize = MAX_DIGEST_BYTES / 2;
 /// di chi indaga. La posizione c'e', perche' e' struttura.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub(super) enum FormaDigestNonValida {
+pub enum FormaDigestNonValida {
     /// La lunghezza non e' quella richiesta, **in byte**.
     LunghezzaErrata {
         /// Byte attesi.
@@ -92,7 +100,7 @@ impl std::error::Error for FormaDigestNonValida {}
 /// puo' esistere un digest che rende una grafia diversa da quella che
 /// viaggera' sul filo.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(super) struct DigestSha256 {
+pub struct DigestSha256 {
     byte: [u8; DIGEST_BYTES],
 }
 
@@ -103,13 +111,13 @@ impl DigestSha256 {
     ///
     /// [`FormaDigestNonValida`] se non e' esattamente 64 caratteri esadecimali
     /// minuscoli.
-    pub(super) fn da_esadecimale(testo: &str) -> Result<Self, FormaDigestNonValida> {
+    pub fn da_esadecimale(testo: &str) -> Result<Self, FormaDigestNonValida> {
         // Sui byte e non sui caratteri, e il numero riportato e' la stessa
         // misura che ha deciso: due misure diverse nello stesso errore si
         // contraddicono proprio nei casi in cui l'errore serve.
-        if testo.len() != MAX_DIGEST_BYTES {
+        if testo.len() != DIGEST_CARATTERI {
             return Err(FormaDigestNonValida::LunghezzaErrata {
-                attesi: MAX_DIGEST_BYTES,
+                attesi: DIGEST_CARATTERI,
                 trovati: testo.len(),
             });
         }
@@ -124,9 +132,9 @@ impl DigestSha256 {
     }
 
     /// La forma canonica: 64 caratteri esadecimali minuscoli.
-    pub(super) fn in_esadecimale(&self) -> String {
+    pub fn in_esadecimale(&self) -> String {
         const CIFRE: &[u8; 16] = b"0123456789abcdef";
-        let mut fuori = String::with_capacity(MAX_DIGEST_BYTES);
+        let mut fuori = String::with_capacity(DIGEST_CARATTERI);
         for grezzo in self.byte {
             fuori.push(char::from(CIFRE[usize::from(grezzo >> 4)]));
             fuori.push(char::from(CIFRE[usize::from(grezzo & 0x0F)]));
@@ -182,7 +190,7 @@ impl<'de> Deserialize<'de> for DigestSha256 {
 /// Il rifiuto di cio' che non e' testo, **senza** il valore.
 fn non_testuale<E: de::Error>() -> E {
     E::custom(format_args!(
-        "il digest deve essere una stringa di {MAX_DIGEST_BYTES} caratteri \
+        "il digest deve essere una stringa di {DIGEST_CARATTERI} caratteri \
          esadecimali minuscoli, non un valore di un altro tipo"
     ))
 }
@@ -201,7 +209,7 @@ impl de::Visitor<'_> for VisitatoreDigest {
     fn expecting(&self, formattatore: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formattatore,
-            "una stringa di {MAX_DIGEST_BYTES} caratteri esadecimali minuscoli"
+            "una stringa di {DIGEST_CARATTERI} caratteri esadecimali minuscoli"
         )
     }
 

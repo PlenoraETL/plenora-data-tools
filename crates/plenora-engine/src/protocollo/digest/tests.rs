@@ -4,7 +4,7 @@
 //! cosa no — e la **distinzione dal `commit_token`**, che ha la stessa
 //! rappresentazione e politiche opposte su cosa si puo' mostrare.
 
-use serde::de::{Error as _, Visitor as _};
+use serde::de::Visitor as _;
 
 use super::{DigestSha256, FormaDigestNonValida, VisitatoreDigest};
 use crate::protocollo::limiti::MAX_DIGEST_BYTES;

@@ -46,8 +46,8 @@ use super::limiti::{
     MAX_MESSAGGI_VERSO_SUPERVISORE, MAX_MESSAGGI_VERSO_WORKER, MAX_PIANO_CANONICO_BYTES,
 };
 use super::messaggi::{
-    Ambiente, BackendDinamico, Corpo, Frame, IdentitaArtefatto, IdentitaResolver, Incarico,
-    LimitiDichiarati, RisorsaRisolta, Risposta, Saluto, TipoMessaggio,
+    Ambiente, Corpo, Frame, IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati,
+    Risposta, Saluto, TipoMessaggio,
 };
 
 // ---------------------------------------------------------------------------
