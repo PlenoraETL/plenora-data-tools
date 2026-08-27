@@ -638,6 +638,7 @@ pub(crate) fn metrics_json(
         "output_batches": metrics.output_batches,
         "total_rows_processed": metrics.total_rows_processed,
         "geo_fusion_fallbacks": metrics.geo_fusion_fallbacks,
+        "geo_fusion_groups_started": metrics.geo_fusion_groups_started,
         "memory": {
             "budget_bytes": metrics.memory.budget_bytes,
             "reserved_bytes": metrics.memory.reserved_bytes,

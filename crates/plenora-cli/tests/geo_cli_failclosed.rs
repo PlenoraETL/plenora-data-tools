@@ -36,8 +36,56 @@ fn write_ipc(path: &std::path::Path, schema: &SchemaRef, batches: &[RecordBatch]
 
 /// L'envelope d'errore viaggia su STDOUT (stderr resta vuoto), come in
 /// `plenora-database-tools`.
-fn stderr_of(output: &std::process::Output) -> String {
+fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Invoca `pair-arrow` coi due lati dichiarati dalla prova.
+///
+/// Quale dei due sia `-` e' il caso: resta scritto nella chiamata, non qui.
+/// L'uscita torna grezza — codice, stdout e stderr sono gli oracoli e li
+/// esamina chi chiama.
+fn cli_pair_arrow(
+    sinistra: &str,
+    destra: &str,
+    schema: &std::path::Path,
+    uscita: &std::path::Path,
+) -> std::process::Output {
+    cli()
+        .args([
+            "pair-arrow",
+            "--left",
+            sinistra,
+            "--right",
+            destra,
+            "--schema",
+        ])
+        .arg(schema)
+        .arg("--output")
+        .arg(uscita)
+        .output()
+        .expect("il processo si avvia")
+}
+
+/// Invoca il confine binario (`transform`) o quello Arrow
+/// (`transform-arrow`) sullo stesso ingresso.
+///
+/// Il sottocomando e' un parametro perche' la distinzione fra i due confini
+/// resti esplicita nella chiamata: rifiutano le stesse cose per ragioni
+/// diverse. L'uscita torna grezza.
+fn cli_transform(
+    comando: &str,
+    ingresso: &str,
+    schema: &std::path::Path,
+    uscita: &std::path::Path,
+) -> std::process::Output {
+    cli()
+        .args([comando, "--input", ingresso, "--schema"])
+        .arg(schema)
+        .arg("--output")
+        .arg(uscita)
+        .output()
+        .expect("il processo si avvia")
 }
 
 #[test]
@@ -50,7 +98,7 @@ fn self_test_writes_a_valid_control_frame_and_never_overwrites() {
         .arg(&output)
         .output()
         .expect("self-test");
-    assert!(result.status.success(), "stdout: {}", stderr_of(&result));
+    assert!(result.status.success(), "stdout: {}", stdout_of(&result));
     assert!(String::from_utf8_lossy(&result.stdout).contains("\"ok\""));
 
     // Il frame di controllo e' un WKB v2 leggibile: una riga, POINT (2 3)
@@ -104,9 +152,9 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
         .expect("transform");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("stdout disabilitato"),
+        stdout_of(&result).contains("stdout disabilitato"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
 
     // schema_version diversa da 2: rifiutata prima di toccare i dati.
@@ -115,18 +163,12 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
         br#"{"schema_version":3,"operation":"centroid","row_count":0}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform", "--input", "input.bin", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform");
+    let result = cli_transform("transform", "input.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("schema_version"),
+        stdout_of(&result).contains("schema_version"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists(), "nessun output parziale");
 }
@@ -143,18 +185,12 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
         br#"{"schema_version":2,"operation":"centroid","row_count":0}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform", "--input", "input.bin", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform");
+    let result = cli_transform("transform", "input.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("crs"),
+        stdout_of(&result).contains("crs"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -165,13 +201,7 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
         br#"{"schema_version":2,"operation":"centroid","row_count":0,"crs":"EPSG:32632"}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform", "--input", "input.bin", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform");
+    let result = cli_transform("transform", "input.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(!output.exists(), "nessun output parziale");
 }
@@ -196,9 +226,9 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         .expect("transform-arrow");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("stdout disabilitato"),
+        stdout_of(&result).contains("stdout disabilitato"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
 
     // schema_version diversa da 3.
@@ -207,18 +237,12 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         br#"{"schema_version":2,"operation":"centroid","row_count":0}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform-arrow");
+    let result = cli_transform("transform-arrow", "input.plngeo3", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("schema_version"),
+        stdout_of(&result).contains("schema_version"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -228,18 +252,12 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         br#"{"schema_version":3,"operation":"centroid","row_count":0}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform-arrow");
+    let result = cli_transform("transform-arrow", "input.plngeo3", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("crs"),
+        stdout_of(&result).contains("crs"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -249,13 +267,7 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         br#"{"schema_version":3,"operation":"centroid","row_count":0,"crs":"EPSG:32632"}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args(["transform-arrow", "--input", "input.plngeo3", "--schema"])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("transform-arrow");
+    let result = cli_transform("transform-arrow", "input.plngeo3", &schema, &output);
     assert!(!result.status.success());
     assert!(!output.exists());
 }
@@ -274,25 +286,12 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         br#"{"schema_version":3,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args([
-            "pair-arrow",
-            "--left",
-            "-",
-            "--right",
-            "right.bin",
-            "--schema",
-        ])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("pair-arrow");
+    let result = cli_pair_arrow("-", "right.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("percorsi file"),
+        stdout_of(&result).contains("percorsi file"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
 
     // schema_version diversa da 3.
@@ -301,25 +300,12 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         br#"{"schema_version":2,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args([
-            "pair-arrow",
-            "--left",
-            "left.bin",
-            "--right",
-            "right.bin",
-            "--schema",
-        ])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("pair-arrow");
+    let result = cli_pair_arrow("left.bin", "right.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("schema_version"),
+        stdout_of(&result).contains("schema_version"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -329,25 +315,12 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         br#"{"schema_version":3,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args([
-            "pair-arrow",
-            "--left",
-            "left.bin",
-            "--right",
-            "right.bin",
-            "--schema",
-        ])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("pair-arrow");
+    let result = cli_pair_arrow("left.bin", "right.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("crs"),
+        stdout_of(&result).contains("crs"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -357,20 +330,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         br#"{"schema_version":3,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10,"left_crs":"EPSG:32632","right_crs":"EPSG:32632"}"#,
     )
     .expect("schema");
-    let result = cli()
-        .args([
-            "pair-arrow",
-            "--left",
-            "left.bin",
-            "--right",
-            "right.bin",
-            "--schema",
-        ])
-        .arg(&schema)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("pair-arrow");
+    let result = cli_pair_arrow("left.bin", "right.bin", &schema, &output);
     assert!(!result.status.success());
     assert!(!output.exists());
 }
@@ -404,9 +364,9 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         .expect("spatial-join");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("percorsi file"),
+        stdout_of(&result).contains("percorsi file"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
 
     // schema_version diversa da 2.
@@ -431,9 +391,9 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         .expect("spatial-join");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("schema_version"),
+        stdout_of(&result).contains("schema_version"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
 
     // max_pairs fuori dominio (0 e oltre il limite del protocollo).
@@ -462,9 +422,9 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
             .expect("spatial-join");
         assert!(!result.status.success(), "max_pairs={max_pairs}");
         assert!(
-            stderr_of(&result).contains("max_pairs"),
+            stdout_of(&result).contains("max_pairs"),
             "max_pairs={max_pairs}, stdout: {}",
-            stderr_of(&result)
+            stdout_of(&result)
         );
         assert!(!output.exists());
     }
@@ -491,9 +451,9 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         .expect("spatial-join");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("crs"),
+        stdout_of(&result).contains("crs"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 }
@@ -517,9 +477,9 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
         .expect("run");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("--right"),
+        stdout_of(&result).contains("--right"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists());
 
@@ -554,7 +514,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
         .arg(&output)
         .output()
         .expect("run");
-    assert!(result.status.success(), "stdout: {}", stderr_of(&result));
+    assert!(result.status.success(), "stdout: {}", stdout_of(&result));
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(stdout.contains("\"output_rows\": 2"), "stdout: {stdout}");
     let mut reader =
@@ -597,9 +557,9 @@ fn blocking_plan_over_max_rows_fails_before_any_publication() {
         .expect("run");
     assert!(!result.status.success());
     assert!(
-        stderr_of(&result).contains("oltre"),
+        stdout_of(&result).contains("oltre"),
         "stdout: {}",
-        stderr_of(&result)
+        stdout_of(&result)
     );
     assert!(!output.exists(), "nessun output parziale");
 }

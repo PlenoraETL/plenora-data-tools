@@ -296,6 +296,14 @@ pub(super) fn try_run_fused_group(
         output_is_plan_output,
         edges: RefCell::new(vec![Instant::now()]),
     };
+    // Da qui il runner fuso viene eseguito: si conta **prima** della
+    // chiamata, non dopo, perche' un gruppo che termina con errore o con un
+    // panic convertito lo ha comunque raggiunto — ed e' proprio negli oracoli
+    // degli errori che «il percorso fuso e' stato eseguito» va dimostrato.
+    // Tutto cio' che puo' far rinunciare alla fusione e' gia' stato deciso
+    // prima di questo punto: kill switch e formazione del gruppo dal
+    // chiamante, byte decodificati ignoti e reservation fallita qui sopra.
+    state.record_geo_fusion_group_started();
     // `AssertUnwindSafe`: stessa giustificazione di `run_kernel` — esecuzione
     // seriale, batch e config proprieta' esclusiva della chiamata, l'errore
     // ferma lo stream e nessuno stato del kernel e' riusato dopo un panic.

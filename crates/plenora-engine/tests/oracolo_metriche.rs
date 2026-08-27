@@ -221,6 +221,7 @@ fn deterministiche(metriche: &ExecutionMetrics) -> Value {
         "output_batches": metriche.output_batches,
         "total_rows_processed": metriche.total_rows_processed,
         "geo_fusion_fallbacks": metriche.geo_fusion_fallbacks,
+        "geo_fusion_groups_started": metriche.geo_fusion_groups_started,
         "counters_saturated": metriche.counters_saturated,
         "spill_files": metriche.spill.files,
         "spill_bytes_written": metriche.spill.bytes_written,

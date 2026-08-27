@@ -70,19 +70,12 @@
 //!    e' taggata di fase ai confini dell'executor.
 
 use std::io::Cursor;
-use std::sync::Arc;
 
-use geo::{polygon, Geometry, LineString, MultiLineString, Point, Polygon};
-use geozero::{CoordDimensions, ToWkb};
+use geo::{polygon, Geometry, LineString, MultiLineString, Polygon};
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, RecordBatch, UInt64Array,
+    Array, BinaryArray, BooleanArray, Float64Array, Int64Array, RecordBatch, UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use plenora_core::contract::{
-    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions,
-};
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::arrow::schema::SchemaRef;
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
 use plenora_engine::geo_transport::transport::{
     decode_ipc, encode_ipc, pair_arrow, preflight_decoded_bytes, ArrowTransportError,
@@ -95,6 +88,10 @@ use plenora_engine::{
     RuntimeContext,
 };
 use serde_json::{json, Value};
+
+mod fixture_geo;
+
+use fixture_geo::{geo_batch, geo_contract, geo_schema, point_wkb, to_wkb};
 
 // ---------------------------------------------------------------------------
 // Tetti assoluti D14.6 risolti dalla prepare (fonte delle costanti)
@@ -120,45 +117,6 @@ const RESOLVED_MAX_COMPARISONS: u64 = 100_000_000_000_000;
 // ---------------------------------------------------------------------------
 // Fixture (stessa forma degli altri test geo: colonna `id` + WKB XY EPSG:32632)
 // ---------------------------------------------------------------------------
-
-fn geo_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        plenora_kernels_geo::arrow_adapter::geometry_output_field("geom", "EPSG:32632")
-            .expect("campo geometria"),
-    ]))
-}
-
-fn geo_contract() -> DataContract {
-    DataContract::new(
-        geo_schema(),
-        vec![GeometryColumnContract {
-            field_id: FieldId(3),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
-                "EPSG:32632".to_owned(),
-                json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-                CrsKind::Projected,
-                Some(1.0),
-            )),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
-}
-
-fn to_wkb(geometry: &Geometry<f64>) -> Vec<u8> {
-    geometry.to_wkb(CoordDimensions::xy()).expect("wkb fixture")
-}
-
-fn point_wkb(x: f64, y: f64) -> Vec<u8> {
-    to_wkb(&Geometry::Point(Point::new(x, y)))
-}
 
 /// Quadrato allineato agli assi (min corner, max corner).
 fn square_wkb(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Vec<u8> {
@@ -243,18 +201,6 @@ fn big_linestring_wkb(points: u32) -> Vec<u8> {
             .map(|index| (f64::from(index), f64::from(index % 7)))
             .collect::<Vec<_>>(),
     )))
-}
-
-fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    RecordBatch::try_new(
-        geo_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch geo fixture valido")
 }
 
 // ---------------------------------------------------------------------------
