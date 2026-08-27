@@ -12,11 +12,12 @@ use serde::Deserialize;
 
 use plenora_core::{PlenoraError, Result};
 
+use crate::float64_source::Float64Source;
 use crate::{column_index, replace_or_append, scalar_as_string, select_rows, validate_output_name};
 
 use super::grouping::{
     build_native_groups, build_string_groups, cmp_i64_group_key, cmp_str_group_key,
-    cmp_u64_group_key, map_groups, NumericSource, TextSource, PARALLEL_THRESHOLD,
+    cmp_u64_group_key, map_groups, TextSource, PARALLEL_THRESHOLD,
 };
 use super::sort::default_true;
 
@@ -269,9 +270,15 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// - `ResourceLimit`: conteggi e dimensioni di gruppo non rappresentabili
 ///   (`i64`/`f64`): crescono col numero di righe del gruppo;
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
-///   schema; valore intero non rappresentabile come `f64`; in piu' gli
-///   errori di `scalar_as_string`/`scalar_as_f64` (tipi fuori dal fast
-///   path), `select_rows` e `replace_or_append`.
+///   schema; in piu' gli errori di `scalar_as_string`/`scalar_as_f64_rounded`
+///   (tipi fuori dal fast path), `select_rows` e `replace_or_append`.
+///
+/// Un intero oltre 2^53 **non** e' un errore nelle aggregazioni numeriche —
+/// quelle il cui risultato e' un `Float64` per contratto: li' la conversione
+/// arrotonda
+/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+/// Le altre aggregazioni non attraversano quella conversione e rendono il
+/// proprio tipo.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     let group_indices = config
         .group_by
@@ -505,7 +512,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 )?;
             }
             _ => {
-                let source = NumericSource::new(batch.column(index));
+                let source = Float64Source::new(batch.column(index));
                 let values = map_groups(&groups, parallel, |rows| {
                     let raw = rows
                         .iter()

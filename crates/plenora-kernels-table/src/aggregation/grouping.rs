@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use plenora_core::{PlenoraError, Result};
 
 use crate::hashing::FastHasher;
-use crate::{exact_f64_from_i64, exact_f64_from_u64, scalar_as_f64_rounded, scalar_as_string};
+use crate::scalar_as_string;
 
 // ---------------------------------------------------------------------------
 // Fast path di `table.aggregate` (ottimizzazione kernel, secondo batch).
@@ -357,61 +357,6 @@ pub(in crate::aggregation) fn build_string_groups(
         .collect::<Vec<_>>();
     drop(keyed);
     Ok(groups)
-}
-
-/// Sorgente numerica per le aggregazioni Float64: valori nativi Arrow per i
-/// tipi principali, `scalar_as_f64_rounded` (invariato) per gli altri.
-pub(in crate::aggregation) enum NumericSource<'a> {
-    Float64(&'a Float64Array),
-    Int64(&'a Int64Array),
-    UInt64(&'a UInt64Array),
-    Generic(&'a ArrayRef),
-}
-
-impl<'a> NumericSource<'a> {
-    pub(in crate::aggregation) fn new(array: &'a ArrayRef) -> Self {
-        if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-            return Self::Float64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-            return Self::Int64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-            return Self::UInt64(values);
-        }
-        Self::Generic(array)
-    }
-
-    pub(in crate::aggregation) fn value(&self, row: usize) -> Result<Option<f64>> {
-        match self {
-            Self::Float64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row))
-            }),
-            Self::Int64(values) => {
-                if values.is_null(row) {
-                    return Ok(None);
-                }
-                exact_f64_from_i64(values.value(row))
-                    .map(Some)
-                    .ok_or_else(|| {
-                        PlenoraError::Schema("intero non rappresentabile come f64".into())
-                    })
-            }
-            Self::UInt64(values) => {
-                if values.is_null(row) {
-                    return Ok(None);
-                }
-                exact_f64_from_u64(values.value(row))
-                    .map(Some)
-                    .ok_or_else(|| {
-                        PlenoraError::Schema("uint64 non rappresentabile come f64".into())
-                    })
-            }
-            Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
-        }
-    }
 }
 
 /// Sorgente testuale per nunique/concat: valori Utf8 presi in prestito,

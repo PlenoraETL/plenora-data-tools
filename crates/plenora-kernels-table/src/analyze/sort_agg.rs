@@ -296,6 +296,20 @@ pub(in crate::analyze) fn analyze_window_function(
         _ => {}
     }
     require_numeric(op, input, &config.column)?;
+    // Le funzioni di rango ordinano: il testo numerico non ha un ordine
+    // esatto, e interpretarlo come double renderebbe a pari merito numeri
+    // distinti. Rifiutato qui **e** nel kernel, con lo stesso confine.
+    if aggregation::strategia(&config.function) == aggregation::Strategia::Rango
+        && field_of(op, input, &config.column)?.data_type() == &DataType::Utf8
+    {
+        return contract_error(
+            op,
+            format!(
+                "colonna {}: il testo numerico non ha un ordine esatto e le funzioni di rango non lo accettano",
+                config.column
+            ),
+        );
+    }
     if let Some(group_by) = &config.group_by {
         field_of(op, input, group_by)?;
     }

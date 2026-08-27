@@ -29,6 +29,10 @@ pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, K
 pub use window::{
     rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
 };
+// La classificazione delle varianti serve all'analizzatore, non a chi usa il
+// crate: `aggregation` e' un modulo pubblico, quindi il re-export va
+// ristretto qui — altrimenti un dettaglio interno diventa API.
+pub(crate) use window::{strategia, Strategia};
 
 // Simboli usati solo dai test-oracolo (`mod tests` li importa con
 // `use super::*`, come nel modulo originario).
@@ -1845,6 +1849,29 @@ mod tests {
             ));
         }
         let source_index = column_index(batch, &config.column)?;
+        // Il riferimento incarna il contratto, e il contratto dice che le
+        // funzioni di rango non ordinano il testo numerico: non ha un ordine
+        // esatto, e interpretarlo come double renderebbe a pari merito numeri
+        // distinti. Scritto qui in modo indipendente, non chiamando il
+        // kernel.
+        if matches!(
+            config.function,
+            WindowKind::Rank
+                | WindowKind::DenseRank
+                | WindowKind::PercentRank
+                | WindowKind::CumeDist
+        ) && batch.column(source_index).data_type() == &DataType::Utf8
+        {
+            return Err(PlenoraError::Schema(
+                "il testo numerico non ha un ordine esatto: le funzioni di rango non lo accettano"
+                    .to_owned(),
+            ));
+        }
+        // Per i tipi nativi il riferimento ordina ancora confrontando `f64`:
+        // resta un oracolo valido finche' i valori stanno nell'intervallo
+        // esattamente rappresentabile, che e' dove vive la fixture. Fuori da
+        // li' l'oracolo e' `tests/arrotondamento_float64.rs`, con attese
+        // letterali.
         let ordered = if let Some(column) = &config.order_column {
             sort(
                 batch,
