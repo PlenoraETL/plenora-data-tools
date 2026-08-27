@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use super::framing::{self, DifettoChiusura};
+
 pub const PROTOCOL_MAGIC: &[u8; 8] = b"PLNGEO2\0";
 pub const TRAILER_MAGIC: &[u8; 8] = b"GEOEND2\0";
 pub const NULL_FRAME_LENGTH: u32 = u32::MAX;
@@ -45,10 +47,7 @@ pub enum Frame {
 }
 
 fn header_bytes(rows: u64) -> [u8; 16] {
-    let mut header = [0_u8; 16];
-    header[..8].copy_from_slice(PROTOCOL_MAGIC);
-    header[8..].copy_from_slice(&rows.to_le_bytes());
-    header
+    framing::header(*PROTOCOL_MAGIC, rows)
 }
 
 pub struct FrameReader<R> {
@@ -78,11 +77,9 @@ impl<R: Read> FrameReader<R> {
         }
         let mut header = [0_u8; 16];
         inner.read_exact(&mut header)?;
-        if &header[..8] != PROTOCOL_MAGIC {
+        let Some(stream_rows) = framing::contatore_dichiarato(&header, *PROTOCOL_MAGIC) else {
             return Err(ProtocolError::InvalidMagic);
-        }
-        let [_, _, _, _, _, _, _, _, c0, c1, c2, c3, c4, c5, c6, c7] = header;
-        let stream_rows = u64::from_le_bytes([c0, c1, c2, c3, c4, c5, c6, c7]);
+        };
         if stream_rows > MAX_ROWS {
             return Err(ProtocolError::TooManyRows(stream_rows));
         }
@@ -148,21 +145,15 @@ impl<R: Read> FrameReader<R> {
     }
 
     fn verify_trailer(&mut self) -> Result<(), ProtocolError> {
-        let mut trailer_magic = [0_u8; 8];
-        self.inner.read_exact(&mut trailer_magic)?;
-        if &trailer_magic != TRAILER_MAGIC {
-            return Err(ProtocolError::InvalidTrailer);
-        }
-        let mut expected_digest = [0_u8; 32];
-        self.inner.read_exact(&mut expected_digest)?;
-        let actual_digest: [u8; 32] = self.hasher.clone().finalize().into();
-        if actual_digest != expected_digest {
-            return Err(ProtocolError::ChecksumMismatch);
-        }
-        let mut extra = [0_u8; 1];
-        if self.inner.read(&mut extra)? != 0 {
-            return Err(ProtocolError::TrailingBytes);
-        }
+        let digest: [u8; 32] = self.hasher.clone().finalize().into();
+        framing::verifica_chiusura(&mut self.inner, *TRAILER_MAGIC, &digest).map_err(
+            |difetto| match difetto {
+                DifettoChiusura::Io(errore) => ProtocolError::Io(errore),
+                DifettoChiusura::Trailer => ProtocolError::InvalidTrailer,
+                DifettoChiusura::Checksum => ProtocolError::ChecksumMismatch,
+                DifettoChiusura::ByteResidui => ProtocolError::TrailingBytes,
+            },
+        )?;
         self.verified = true;
         Ok(())
     }
@@ -261,9 +252,7 @@ impl<W: Write> FrameWriter<W> {
             });
         }
         let digest: [u8; 32] = self.hasher.finalize().into();
-        self.inner.write_all(TRAILER_MAGIC)?;
-        self.inner.write_all(&digest)?;
-        self.inner.flush()?;
+        framing::scrivi_chiusura(&mut self.inner, *TRAILER_MAGIC, &digest)?;
         Ok((self.inner, digest))
     }
 }
@@ -349,6 +338,62 @@ mod tests {
             reader.next_frame(),
             Err(ProtocolError::TrailingBytes)
         ));
+    }
+
+    /// La chiusura di `PLNGEO2`, un difetto per volta e con la variante attesa.
+    ///
+    /// Senza la variante, una traduzione scambiata — trailer letto come
+    /// checksum — resterebbe verde: i test di troncamento guardano solo che
+    /// ci sia un errore, non quale.
+    #[test]
+    fn ogni_difetto_della_chiusura_ha_la_propria_variante() {
+        let valido = valid_stream(&[Some(b"abcdef")]);
+        let inizio_trailer = valido.len() - 40;
+        let inizio_digest = valido.len() - 32;
+
+        let mut magic = valido.clone();
+        magic[0] ^= 0x01;
+        assert!(matches!(
+            FrameReader::new(magic.as_slice(), 1),
+            Err(ProtocolError::InvalidMagic)
+        ));
+
+        let mut trailer = valido.clone();
+        trailer[inizio_trailer] ^= 0x01;
+        assert!(matches!(
+            dopo_il_primo_frame(&trailer),
+            Err(ProtocolError::InvalidTrailer)
+        ));
+
+        let mut checksum = valido.clone();
+        checksum[inizio_digest] ^= 0x01;
+        assert!(matches!(
+            dopo_il_primo_frame(&checksum),
+            Err(ProtocolError::ChecksumMismatch)
+        ));
+
+        let mut residui = valido.clone();
+        residui.push(0);
+        assert!(matches!(
+            dopo_il_primo_frame(&residui),
+            Err(ProtocolError::TrailingBytes)
+        ));
+
+        // Chiusura troncata a meta': il canale e' finito prima, e questo e'
+        // un errore di I/O, non una violazione del protocollo.
+        let troncato = &valido[..inizio_digest + 4];
+        assert!(matches!(
+            dopo_il_primo_frame(troncato),
+            Err(ProtocolError::Io(_))
+        ));
+    }
+
+    /// Consuma il primo frame e rende cio' che dice il secondo, cioe' la
+    /// chiusura.
+    fn dopo_il_primo_frame(stream: &[u8]) -> Result<Option<Frame>, ProtocolError> {
+        let mut reader = FrameReader::new(stream, 1).expect("header valido");
+        reader.next_frame().expect("primo frame");
+        reader.next_frame()
     }
 
     #[test]
