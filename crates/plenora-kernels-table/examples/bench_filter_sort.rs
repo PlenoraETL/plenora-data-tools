@@ -9,15 +9,18 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::run_scenario;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::aggregation::{sort, Sort};
 use plenora_kernels_table::filtering::{filter, Filter, Operator};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 fn fixture(rows: usize) -> RecordBatch {
     let ids = (0..rows)
@@ -49,55 +52,6 @@ fn fixture(rows: usize) -> RecordBatch {
     .expect("benchmark fixture")
 }
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
-fn run_scenario(
-    name: &str,
-    rows: usize,
-    repetitions: usize,
-    input: &RecordBatch,
-    execute: impl Fn(&RecordBatch) -> RecordBatch,
-) {
-    black_box(execute(input));
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute(input);
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    println!(
-        "{}",
-        serde_json::to_string(&json!({
-            "scenario": name,
-            "rows": rows,
-            "repetitions": repetitions,
-            "median_seconds": median,
-            "rows_per_second": rows_per_second,
-            "output_rows": output_rows,
-            "peak_rss_kib": peak_rss_kib(),
-        }))
-        .expect("JSON")
-    );
-}
-
 fn main() {
     let rows: usize = std::env::args()
         .nth(1)
@@ -115,8 +69,8 @@ fn main() {
         operator: Operator::Eq,
         value: Value::from(42),
     };
-    run_scenario("filter_num_eq", rows, repetitions, &input, |batch| {
-        filter(batch, &filter_num).expect("filter num")
+    run_scenario("filter_num_eq", rows, repetitions, || {
+        filter(&input, &filter_num).expect("filter num")
     });
 
     let filter_group = Filter {
@@ -124,23 +78,23 @@ fn main() {
         operator: Operator::Eq,
         value: Value::from("g42"),
     };
-    run_scenario("filter_utf8_eq", rows, repetitions, &input, |batch| {
-        filter(batch, &filter_group).expect("filter group")
+    run_scenario("filter_utf8_eq", rows, repetitions, || {
+        filter(&input, &filter_group).expect("filter group")
     });
 
     let sort_num = Sort {
         columns: vec!["num".into()],
         ascending: true,
     };
-    run_scenario("sort_num", rows, repetitions, &input, |batch| {
-        sort(batch, &sort_num).expect("sort num")
+    run_scenario("sort_num", rows, repetitions, || {
+        sort(&input, &sort_num).expect("sort num")
     });
 
     let sort_group_num = Sort {
         columns: vec!["group".into(), "num".into()],
         ascending: true,
     };
-    run_scenario("sort_group_num", rows, repetitions, &input, |batch| {
-        sort(batch, &sort_group_num).expect("sort group+num")
+    run_scenario("sort_group_num", rows, repetitions, || {
+        sort(&input, &sort_group_num).expect("sort group+num")
     });
 }

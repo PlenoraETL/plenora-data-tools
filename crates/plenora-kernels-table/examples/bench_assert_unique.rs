@@ -2,7 +2,7 @@
 //! kernel: quality).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep2` (seed logico 42,
-//! xorshift64*, stesse colonne), cosi' lo scenario `unique_id` e'
+//! xorshift64, stesse colonne), cosi' lo scenario `unique_id` e'
 //! confrontabile con la baseline di `benchmarks/sweep/sweep2.json`
 //! (`table.assert_unique`, "chiave id unica", 5.03M righe/s).
 //!
@@ -17,6 +17,12 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::peak_rss_kib;
+use comune::rng::Rng;
+
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,24 +31,6 @@ use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringAr
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::quality::{assert_unique, AssertUnique};
 use serde_json::json;
-
-/// RNG deterministico (xorshift64*, stesso schema di `bench_sweep2`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
 
 /// Fixture base condivisa: identica a `bench_sweep2::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
@@ -122,19 +110,6 @@ fn fixture_with_duplicate(rows: usize, at: usize) -> RecordBatch {
         ],
     )
     .expect("fixture con duplicato")
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
 }
 
 fn measure(

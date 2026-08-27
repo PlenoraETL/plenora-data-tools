@@ -3,7 +3,7 @@
 //! (filone ottimizzazioni kernel, batch 4: quality/governance/diff/security).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep` (seed logico 42,
-//! xorshift64*, stesse colonne e stesse configurazioni), cosi' le misure
+//! xorshift64, stesse colonne e stesse configurazioni), cosi' le misure
 //! sono confrontabili con le baseline di `benchmarks/sweep/sweep.json`:
 //! - fixture base: `id` int64, `num` float64, `grp` utf8 (1024 gruppi),
 //!   `text` utf8 (40 char esadecimali), `key` int64 (1M valori distinti
@@ -15,9 +15,15 @@
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
 //! peak RSS (`VmHWM` da `/proc/self/status`).
 
-use std::hint::black_box;
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::fixture::right_fixture;
+
+use comune::measure;
+use comune::rng::Rng;
+
 use std::sync::Arc;
-use std::time::Instant;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -25,25 +31,6 @@ use plenora_kernels_table::governance::{assert_foreign_key, reconcile, ForeignKe
 use plenora_kernels_table::reshape::{table_diff, TableDiff};
 use plenora_kernels_table::security::{mask_data, MaskData, MaskType, Masking};
 use plenora_kernels_table::Limits;
-use serde_json::json;
-
-/// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
 
 /// Fixture base condivisa: identica a `bench_sweep::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
@@ -101,48 +88,6 @@ fn base_fixture(rows: usize) -> RecordBatch {
     .expect("fixture base")
 }
 
-/// Fixture destra per diff/FK: identica a `bench_sweep::right_fixture`.
-fn right_fixture(rows: usize) -> RecordBatch {
-    let mut rng = Rng::seeded();
-    let mut ids = Vec::with_capacity(rows);
-    let mut nums = Vec::with_capacity(rows);
-    let mut rvals = Vec::with_capacity(rows);
-    for row in 0..rows {
-        ids.push(i64::try_from(row).ok());
-        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
-        #[allow(clippy::cast_precision_loss)]
-        let base = (rng.next() % 1_000_000) as f64 / 100.0;
-        nums.push(Some(if row % 10 == 0 { base + 1.0 } else { base }));
-        rvals.push(format!("r{:016x}", rng.next()));
-    }
-    RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("num", DataType::Float64, false),
-            Field::new("rval", DataType::Utf8, false),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(ids)),
-            Arc::new(Float64Array::from(nums)),
-            Arc::new(StringArray::from(rvals)),
-        ],
-    )
-    .expect("fixture destra")
-}
-
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-}
-
 /// Limiti allargati per le scale di benchmark (come `bench_sweep`).
 fn bench_limits() -> Limits {
     Limits {
@@ -150,40 +95,6 @@ fn bench_limits() -> Limits {
         max_governed_memory_bytes: 6 * 1024 * 1024 * 1024,
         ..Limits::default()
     }
-}
-
-fn measure(
-    op: &'static str,
-    rows: usize,
-    repetitions: usize,
-    note: &str,
-    execute: impl Fn() -> RecordBatch,
-) {
-    black_box(execute());
-    let mut durations = Vec::with_capacity(repetitions);
-    let mut output_rows = 0;
-    for _ in 0..repetitions {
-        let start = Instant::now();
-        let output = execute();
-        durations.push(start.elapsed().as_secs_f64());
-        output_rows = output.num_rows();
-        black_box(output);
-    }
-    durations.sort_by(f64::total_cmp);
-    let median = durations[durations.len() / 2];
-    #[allow(clippy::cast_precision_loss)]
-    let rows_per_second = rows as f64 / median;
-    let record = json!({
-        "scenario": op,
-        "rows": rows,
-        "repetitions": repetitions,
-        "median_seconds": median,
-        "rows_per_second": rows_per_second,
-        "output_rows": output_rows,
-        "peak_rss_kib": peak_rss_kib(),
-        "note": note,
-    });
-    println!("{}", serde_json::to_string(&record).expect("JSON"));
 }
 
 fn main() {
