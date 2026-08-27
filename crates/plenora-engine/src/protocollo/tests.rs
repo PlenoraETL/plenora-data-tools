@@ -19,6 +19,7 @@ use crate::commit_token::CommitToken;
 use super::codifica::{
     codifica, decodifica, ScrittoreLimitato, BYTE_PREFISSO, MAX_PROTOCOL_FRAME_BYTES,
 };
+use super::digest::DigestSha256;
 use super::limiti::{
     MAX_BACKEND_DINAMICI, MAX_CAPABILITY, MAX_CHIAVE_CONTEGGIO_BYTES, MAX_CONTEGGI_DIAGNOSTICA,
     MAX_DIGEST_BYTES, MAX_ESEMPIO_BYTES, MAX_ESEMPI_DIAGNOSTICA, MAX_IDENTIFICATORE_BYTES,
@@ -121,9 +122,21 @@ fn token_di_prova() -> CommitToken {
         .expect("canonico")
 }
 
+/// Un digest dalla forma canonica, per le fixture.
+///
+/// I test condividono **il costruttore**, non un valore: ciascuno sceglie il
+/// proprio testo, e a garantirne la forma e' il tipo del filo.
+///
+/// Nei casi «massimi» un digest non puo' essere fatto di caratteri che JSON
+/// espande — e' ASCII esadecimale — quindi il tetto del frame resta su questi
+/// campi un maggiorante conservativo, ed e' giusto che lo sia.
+fn digest(testo: &str) -> DigestSha256 {
+    DigestSha256::da_esadecimale(testo).expect("canonico")
+}
+
 fn artefatto() -> IdentitaArtefatto {
     IdentitaArtefatto {
-        digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        digest: digest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         versione: "1.0".to_owned(),
     }
 }
@@ -140,8 +153,9 @@ fn saluto() -> Frame {
         artefatto: artefatto(),
         resolver: resolver(),
         ambiente: Ambiente {
-            digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .to_owned(),
+            digest_insieme: digest(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
             acquisizione_dinamica: false,
             risorse: vec![RisorsaRisolta {
                 nome: "grid".to_owned(),
@@ -163,14 +177,16 @@ fn saluto() -> Frame {
 fn incarico() -> Frame {
     Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
         piano_canonico: grezzo(r#"{"schema_version":6}"#),
-        plan_hash_atteso: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            .to_owned(),
+        plan_hash_atteso: digest(
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
         ingressi: vec![DescrittoreIngresso {
             nome: "in".to_owned(),
             percorso: "/d/a.arrow".to_owned(),
             formato: FormatoIngresso::File,
-            contract_fingerprint_atteso:
-                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_owned(),
+            contract_fingerprint_atteso: digest(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            ),
         }],
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -187,8 +203,9 @@ fn annulla() -> Frame {
 fn incarico_con(piano: Box<RawValue>, ingressi: Vec<DescrittoreIngresso>) -> Frame {
     Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
         piano_canonico: piano,
-        plan_hash_atteso: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            .to_owned(),
+        plan_hash_atteso: digest(
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
         ingressi,
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -199,8 +216,9 @@ fn risposta() -> Frame {
         artefatto: artefatto(),
         resolver: resolver(),
         ambiente: Ambiente {
-            digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .to_owned(),
+            digest_insieme: digest(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
             acquisizione_dinamica: false,
             risorse: Vec::new(),
             backend_dinamici: vec![BackendDinamico {
@@ -963,17 +981,6 @@ fn ripeti(n: usize) -> String {
 const ESPANDIBILE: &str = "\u{1}";
 
 /// `n` byte decodificati che ne diventano `n * ESPANSIONE_ESCAPE` codificati.
-/// Un digest nella forma sul filo, per i casi «massimi».
-///
-/// **Non** puo' essere fatto di caratteri che JSON espande: un digest canonico
-/// e' ASCII esadecimale, e sei byte per carattere qui non sono raggiungibili.
-/// Il tetto del frame resta percio' un maggiorante conservativo su questi
-/// campi, ed e' giusto che lo sia: un maggiorante che si stringe quando una
-/// regola si stringe e' un maggiorante da ricalcolare a ogni regola.
-fn digest_massimo() -> String {
-    "f".repeat(MAX_DIGEST_BYTES)
-}
-
 fn ripeti_espandendo(n: usize) -> String {
     ESPANDIBILE.repeat(n)
 }
@@ -985,7 +992,7 @@ fn ingresso_minimo() -> DescrittoreIngresso {
         nome: "i".to_owned(),
         percorso: "/p".to_owned(),
         formato: FormatoIngresso::File,
-        contract_fingerprint_atteso: "e".repeat(MAX_DIGEST_BYTES),
+        contract_fingerprint_atteso: digest(&"e".repeat(MAX_DIGEST_BYTES)),
     }
 }
 
@@ -1051,17 +1058,6 @@ type CasoTetto = (&'static str, usize, Box<dyn Fn(usize) -> Frame>);
 fn casi_saluto() -> Vec<CasoTetto> {
     vec![
         (
-            "artefatto.digest",
-            MAX_DIGEST_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.artefatto.digest = ripeti(n);
-                }
-                f
-            }),
-        ),
-        (
             "artefatto.versione",
             MAX_VERSIONE_BYTES,
             Box::new(|n| {
@@ -1090,17 +1086,6 @@ fn casi_saluto() -> Vec<CasoTetto> {
                 let mut f = saluto();
                 if let Corpo::Saluto(s) = f.corpo_mutabile() {
                     s.resolver.versione = ripeti(n);
-                }
-                f
-            }),
-        ),
-        (
-            "digest_insieme",
-            MAX_DIGEST_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.ambiente.digest_insieme = ripeti(n);
                 }
                 f
             }),
@@ -1228,17 +1213,6 @@ fn risposta_con_backend(nome: String, versione: String, percorso: String) -> Fra
 fn casi_incarico() -> Vec<CasoTetto> {
     vec![
         (
-            "plan_hash_atteso",
-            MAX_DIGEST_BYTES,
-            Box::new(|n| {
-                let mut f = incarico();
-                if let Corpo::Incarico(i) = f.corpo_mutabile() {
-                    i.plan_hash_atteso = ripeti(n);
-                }
-                f
-            }),
-        ),
-        (
             "artefatto_temporaneo",
             MAX_PERCORSO_BYTES,
             Box::new(|n| {
@@ -1252,22 +1226,29 @@ fn casi_incarico() -> Vec<CasoTetto> {
         (
             "ingresso.nome",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| ingresso_con(ripeti(n), "/x".to_owned(), digest_massimo())),
+            Box::new(|n| {
+                ingresso_con(
+                    ripeti(n),
+                    "/x".to_owned(),
+                    digest(&"f".repeat(MAX_DIGEST_BYTES)),
+                )
+            }),
         ),
         (
             "ingresso.percorso",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| ingresso_con("x".to_owned(), ripeti(n), digest_massimo())),
-        ),
-        (
-            "ingresso.contract_fingerprint_atteso",
-            MAX_DIGEST_BYTES,
-            Box::new(|n| ingresso_con("x".to_owned(), "/x".to_owned(), ripeti(n))),
+            Box::new(|n| {
+                ingresso_con(
+                    "x".to_owned(),
+                    ripeti(n),
+                    digest(&"f".repeat(MAX_DIGEST_BYTES)),
+                )
+            }),
         ),
     ]
 }
 
-fn ingresso_con(nome: String, percorso: String, impronta: String) -> Frame {
+fn ingresso_con(nome: String, percorso: String, impronta: DigestSha256) -> Frame {
     incarico_con(
         grezzo(r#"{"schema_version":6}"#),
         vec![DescrittoreIngresso {
@@ -1418,6 +1399,12 @@ fn diagnostica_con(applica: impl FnOnce(&mut DiagnosticaSulFilo)) -> Frame {
     errore_con(|e| e.diagnostica = Some(diagnostica))
 }
 
+/// I quattro **digest** non compaiono in questa tabella, e non per
+/// dimenticanza: non hanno un tetto da provare. Un digest ha una **forma** —
+/// 64 esadecimali minuscoli — e la forma e' del tipo, quindi «al tetto» e
+/// «oltre il tetto» non sono stati che si possano costruire. Le forme
+/// rifiutate stanno nelle prove del tipo, una per una.
+///
 /// **Ogni** campo limitato, provato sul proprio confine.
 ///
 /// Senza questo, i tetti erano applicati ma quasi mai esercitati: una
@@ -1451,15 +1438,16 @@ fn ogni_campo_limitato_e_provato_sul_proprio_confine() {
         // entrambi i casi e' che il rifiuto nomini il campo: un tetto
         // applicato al campo sbagliato passerebbe altrimenti inosservato.
         assert!(
-            (messaggio.contains("oltre il tetto") || messaggio.contains("digest canonico"))
-                && messaggio.contains(nome),
+            messaggio.contains("oltre il tetto") && messaggio.contains(nome),
             "«{nome}» a tetto+1 non e' stato respinto sul proprio nome: {messaggio}"
         );
         provati += 1;
     }
     // Se qualcuno aggiunge un `limita` senza aggiungere la riga, questo numero
-    // resta indietro ed e' il segnale che manca una prova.
-    assert_eq!(provati, 33, "la tabella dei confini non copre piu' tutto");
+    // resta indietro ed e' il segnale che manca una prova. Sono quattro meno
+    // di prima perche' i quattro digest hanno smesso di avere un tetto: hanno
+    // un tipo.
+    assert_eq!(provati, 29, "la tabella dei confini non copre piu' tutto");
 }
 
 #[test]
@@ -1481,7 +1469,7 @@ fn i_tetti_di_cardinalita_valgono_in_scrittura() {
 
 fn ambiente_massimo() -> Ambiente {
     Ambiente {
-        digest_insieme: digest_massimo(),
+        digest_insieme: digest(&"f".repeat(MAX_DIGEST_BYTES)),
         acquisizione_dinamica: true,
         risorse: vec![
             RisorsaRisolta {
@@ -1509,7 +1497,7 @@ fn piano_al_tetto() -> Box<RawValue> {
 /// I sei massimi **veri**, prodotti dal codificatore.
 fn massimi() -> Vec<(&'static str, Frame)> {
     let artefatto = IdentitaArtefatto {
-        digest: digest_massimo(),
+        digest: digest(&"f".repeat(MAX_DIGEST_BYTES)),
         versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
     };
     let resolver = IdentitaResolver {
@@ -1536,13 +1524,13 @@ fn massimi() -> Vec<(&'static str, Frame)> {
             "incarico",
             Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
                 piano_canonico: piano_al_tetto(),
-                plan_hash_atteso: digest_massimo(),
+                plan_hash_atteso: digest(&"f".repeat(MAX_DIGEST_BYTES)),
                 ingressi: vec![
                     DescrittoreIngresso {
                         nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
                         percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
                         formato: FormatoIngresso::Stream,
-                        contract_fingerprint_atteso: digest_massimo(),
+                        contract_fingerprint_atteso: digest(&"f".repeat(MAX_DIGEST_BYTES)),
                     };
                     MAX_INGRESSI
                 ],

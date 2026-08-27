@@ -50,6 +50,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use super::digest::DigestSha256;
 use crate::commit_token::CommitToken;
 
 /// Versione del protocollo.
@@ -215,7 +216,9 @@ pub enum Direzione {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentitaArtefatto {
-    pub digest: String,
+    /// Digest dell'eseguibile. E' un tipo e non una `String`: la forma
+    /// canonica non e' un controllo da ricordare in `codifica`.
+    pub digest: DigestSha256,
     pub versione: String,
 }
 
@@ -254,7 +257,7 @@ pub struct BackendDinamico {
 pub struct Ambiente {
     /// Digest dell'insieme immutabile e content-addressed delle risorse
     /// **disponibili**, non di quelle usate.
-    pub digest_insieme: String,
+    pub digest_insieme: DigestSha256,
     /// Deve essere `false`. E' dichiarato invece che assunto perche' un
     /// backend che scarica una griglia a meta' esecuzione renderebbe il
     /// digest una fotografia scaduta.
@@ -322,7 +325,7 @@ pub struct DescrittoreIngresso {
     pub formato: FormatoIngresso,
     /// Verifica **schema e contratto**, non l'identita' dei dati: due file
     /// con righe diverse e lo stesso schema hanno lo stesso fingerprint.
-    pub contract_fingerprint_atteso: String,
+    pub contract_fingerprint_atteso: DigestSha256,
 }
 
 /// L'incarico: il piano e da dove leggere.
@@ -340,7 +343,7 @@ pub struct Incarico {
     pub piano_canonico: Box<RawValue>,
     /// Senza questo il worker puo' ricalcolare un hash e non ha nulla con cui
     /// confrontarlo.
-    pub plan_hash_atteso: String,
+    pub plan_hash_atteso: DigestSha256,
     pub ingressi: Vec<DescrittoreIngresso>,
     /// Un solo percorso, dentro una directory che il supervisore ha creato.
     /// Il worker non ne sceglie ne' il nome ne' la posizione.

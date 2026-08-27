@@ -405,28 +405,6 @@ fn identificatore(valore: &str, tetto: usize, campo: &str) -> Result<()> {
     limita(valore, tetto, campo)
 }
 
-/// Un digest sul filo e' esattamente 64 esadecimali **minuscoli**.
-///
-/// La stessa forma canonica del `commit_token`, e per la stessa ragione: e'
-/// l'uscita di `to_hex` su 32 byte, e due grafie dello stesso valore sarebbero
-/// due digest diversi in un confronto che e' un confronto di stringhe.
-/// Accettare qualunque stringa avrebbe reso «digest» un nome, non una forma.
-///
-/// Il valore non compare nell'errore: arriva dal filo.
-pub(super) fn digest_canonico(valore: &str, campo: &str) -> Result<()> {
-    if valore.len() != MAX_DIGEST_BYTES
-        || !valore
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(errore(format!(
-            "`{campo}` non e' un digest canonico: servono {MAX_DIGEST_BYTES} \
-             caratteri esadecimali minuscoli"
-        )));
-    }
-    Ok(())
-}
-
 fn limita_elementi<T>(elementi: &[T], tetto: usize, campo: &str) -> Result<()> {
     if elementi.len() > tetto {
         return Err(errore(format!(
@@ -471,7 +449,6 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
 /// l'handshake al frame che gli viene consegnato, che puo' non essere passato
 /// dal decoder.
 pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<()> {
-    digest_canonico(&incarico.plan_hash_atteso, "plan_hash_atteso")?;
     identificatore(
         &incarico.artefatto_temporaneo,
         MAX_PERCORSO_BYTES,
@@ -481,10 +458,6 @@ pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<
     for ingresso in &incarico.ingressi {
         identificatore(&ingresso.nome, MAX_IDENTIFICATORE_BYTES, "ingresso.nome")?;
         identificatore(&ingresso.percorso, MAX_PERCORSO_BYTES, "ingresso.percorso")?;
-        digest_canonico(
-            &ingresso.contract_fingerprint_atteso,
-            "ingresso.contract_fingerprint_atteso",
-        )?;
     }
     // Il piano e' JSON grezzo: i byte che si misurano qui sono
     // esattamente quelli che il writer emettera'. Con un `Value` si
@@ -510,7 +483,6 @@ pub(super) fn verifica_identita(
     artefatto: &super::messaggi::IdentitaArtefatto,
     resolver: &super::messaggi::IdentitaResolver,
 ) -> Result<()> {
-    digest_canonico(&artefatto.digest, "artefatto.digest")?;
     identificatore(
         &artefatto.versione,
         MAX_VERSIONE_BYTES,
@@ -537,7 +509,6 @@ pub(super) fn verifica_capability(capability: &[String]) -> Result<()> {
 }
 
 pub(super) fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<()> {
-    digest_canonico(&ambiente.digest_insieme, "digest_insieme")?;
     limita_elementi(&ambiente.risorse, MAX_RISORSE, "risorse")?;
     for risorsa in &ambiente.risorse {
         identificatore(&risorsa.nome, MAX_IDENTIFICATORE_BYTES, "risorsa.nome")?;

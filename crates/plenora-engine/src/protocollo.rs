@@ -20,6 +20,9 @@
 //! una costante e **non** i tipi di questo modulo.
 
 pub mod codifica;
+/// Il digest SHA-256 sul filo: privato al protocollo, perche' la sua forma e'
+/// una regola del protocollo e non della superficie pubblica.
+mod digest;
 pub mod handshake;
 pub mod lettore;
 pub mod limiti;

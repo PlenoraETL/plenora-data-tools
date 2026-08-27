@@ -12,10 +12,11 @@
 use plenora_core::{ErrorCategory, PlenoraError};
 
 use super::{
-    limiti_correnti, AtteseSupervisore, DaRispecchiare, DescrizioneLocale, SupervisoreInAttesa,
+    limiti_correnti, AtteseSupervisore, Descrizione, DescrizioneLocale, SupervisoreInAttesa,
     WorkerInAttesa,
 };
 use crate::commit_token::CommitToken;
+use crate::protocollo::digest::DigestSha256;
 use crate::protocollo::messaggi::{
     Ambiente, Annulla, BackendDinamico, Corpo, DescrittoreIngresso, FormatoIngresso, Frame,
     IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati, Progresso, RisorsaRisolta,
@@ -23,6 +24,18 @@ use crate::protocollo::messaggi::{
 };
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// I digest delle fixture, come costanti: i test li condividono, e ciascuno
+/// resta libero di costruirsi il proprio caso.
+const ARTEFATTO: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const INSIEME: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const PIANO: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const CONTRATTO: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+/// Un digest dalla forma canonica, per le fixture.
+fn digest(testo: &str) -> DigestSha256 {
+    DigestSha256::da_esadecimale(testo).expect("canonico")
+}
 
 fn token() -> CommitToken {
     CommitToken::da_esadecimale(TOKEN).expect("canonico")
@@ -46,18 +59,17 @@ fn backend(nome: &str) -> BackendDinamico {
 
 fn ambiente() -> Ambiente {
     Ambiente {
-        digest_insieme: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            .to_owned(),
+        digest_insieme: digest(INSIEME),
         acquisizione_dinamica: false,
         risorse: vec![risorsa("grid"), risorsa("tin")],
         backend_dinamici: vec![backend("gdal"), backend("proj")],
     }
 }
 
-fn locale() -> DescrizioneLocale {
-    DescrizioneLocale {
+fn comune() -> Descrizione {
+    Descrizione {
         artefatto: IdentitaArtefatto {
-            digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            digest: digest(ARTEFATTO),
             versione: "1.0".to_owned(),
         },
         resolver: IdentitaResolver {
@@ -65,32 +77,19 @@ fn locale() -> DescrizioneLocale {
             versione: "9.4".to_owned(),
         },
         ambiente: ambiente(),
-        capability: vec!["arrow_ipc".to_owned(), "wkb".to_owned()],
     }
 }
 
-/// Le attese del supervisore, coerenti con [`locale`].
-///
-/// Le tre identita' si prendono da `locale()` **campo per campo** e non
-/// clonando una descrizione: il supervisore non ha una descrizione da
-/// rispecchiare che includa le capability, e il tipo lo dice.
-fn da_rispecchiare() -> DaRispecchiare {
-    let DescrizioneLocale {
-        artefatto,
-        resolver,
-        ambiente,
-        capability: _,
-    } = locale();
-    DaRispecchiare {
-        artefatto,
-        resolver,
-        ambiente,
+fn locale() -> DescrizioneLocale {
+    DescrizioneLocale {
+        comune: comune(),
+        capability: vec!["arrow_ipc".to_owned(), "wkb".to_owned()],
     }
 }
 
 fn attese() -> AtteseSupervisore {
     AtteseSupervisore {
-        da_rispecchiare: da_rispecchiare(),
+        comune: comune(),
         capability_richieste: vec!["arrow_ipc".to_owned()],
         commit_token: token(),
     }
@@ -180,8 +179,8 @@ fn saluto_nominale() -> Saluto {
 
 fn risposta_nominale() -> Risposta {
     Risposta {
-        artefatto: locale().artefatto,
-        resolver: locale().resolver,
+        artefatto: locale().comune.artefatto,
+        resolver: locale().comune.resolver,
         ambiente: ambiente(),
         capability: locale().capability,
     }
@@ -196,7 +195,7 @@ fn un_artefatto_diverso_e_protocol_su_entrambi_i_lati() {
     // test passerebbe senza aver mai raggiunto il confronto che dichiara di
     // provare.
     let mut saluto = saluto_nominale();
-    saluto.artefatto.digest = "f".repeat(64);
+    saluto.artefatto.digest = digest(&"f".repeat(64));
     let errore = worker_riceve(saluto).expect_err("digest diverso");
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 
@@ -206,7 +205,7 @@ fn un_artefatto_diverso_e_protocol_su_entrambi_i_lati() {
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 
     let mut risposta = risposta_nominale();
-    risposta.artefatto.digest = "f".repeat(64);
+    risposta.artefatto.digest = digest(&"f".repeat(64));
     let errore = supervisore_riceve(risposta).expect_err("digest diverso");
     assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
 }
@@ -240,7 +239,7 @@ fn un_digest_dell_insieme_diverso_e_configurazione() {
     // arriverebbe prima, dalla verifica di forma, e questo test proverebbe
     // quella invece del confronto che dichiara di provare.
     let mut saluto = saluto_nominale();
-    saluto.ambiente.digest_insieme = "c".repeat(64);
+    saluto.ambiente.digest_insieme = digest(&"c".repeat(64));
     let errore = worker_riceve(saluto).expect_err("insieme diverso");
     assert_eq!(
         errore.category(),
@@ -278,7 +277,7 @@ fn l_acquisizione_dinamica_e_rifiutata_da_entrambi_i_lati() {
     // E il supervisore non riesce nemmeno a costruirsi con quella dichiarata:
     // scoprire un difetto proprio dalla risposta altrui sarebbe tardi.
     let mut sue = attese();
-    sue.da_rispecchiare.ambiente.acquisizione_dinamica = true;
+    sue.comune.ambiente.acquisizione_dinamica = true;
     assert!(SupervisoreInAttesa::nuovo(sue).is_err());
 }
 
@@ -399,7 +398,7 @@ fn l_ordine_di_risorse_backend_e_capability_non_conta() {
     // E anche dal lato di chi le dichiara: un supervisore che le elenca al
     // contrario produce un `Saluto` che il worker accetta lo stesso.
     let mut sue = attese();
-    sue.da_rispecchiare.ambiente.risorse.reverse();
+    sue.comune.ambiente.risorse.reverse();
     sue.capability_richieste.reverse();
     let supervisore = SupervisoreInAttesa::nuovo(sue).expect("coerenti");
     let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
@@ -418,7 +417,7 @@ fn l_ordine_di_risorse_backend_e_capability_non_conta() {
 fn i_duplicati_sono_rifiutati_ovunque() {
     // Nella descrizione propria, prima ancora di spedire.
     let mut sue = attese();
-    sue.da_rispecchiare.ambiente.risorse.push(risorsa("grid"));
+    sue.comune.ambiente.risorse.push(risorsa("grid"));
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("risorsa duplicata");
     assert!(
         errore.to_string().contains("3 voci, 2 nomi distinti"),
@@ -427,10 +426,7 @@ fn i_duplicati_sono_rifiutati_ovunque() {
     assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
 
     let mut sue = attese();
-    sue.da_rispecchiare
-        .ambiente
-        .backend_dinamici
-        .push(backend("gdal"));
+    sue.comune.ambiente.backend_dinamici.push(backend("gdal"));
     assert!(
         SupervisoreInAttesa::nuovo(sue).is_err(),
         "backend duplicato"
@@ -476,7 +472,7 @@ fn due_risorse_con_lo_stesso_nome_e_versioni_diverse_sono_un_duplicato() {
     let mut sue = attese();
     let mut gemella = risorsa("grid");
     gemella.versione = "2".to_owned();
-    sue.da_rispecchiare.ambiente.risorse.push(gemella);
+    sue.comune.ambiente.risorse.push(gemella);
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("nome ripetuto");
     assert!(
         errore.to_string().contains("3 voci, 2 nomi distinti"),
@@ -494,12 +490,12 @@ fn incarico() -> Frame {
             r#"{"schema_version":6}"#.to_owned(),
         )
         .expect("JSON valido"),
-        plan_hash_atteso: "d".repeat(64),
+        plan_hash_atteso: digest(PIANO),
         ingressi: vec![DescrittoreIngresso {
             nome: "in".to_owned(),
             percorso: "/d/a.arrow".to_owned(),
             formato: FormatoIngresso::File,
-            contract_fingerprint_atteso: "e".repeat(64),
+            contract_fingerprint_atteso: digest(CONTRATTO),
         }],
         artefatto_temporaneo: "/t/out.arrow".to_owned(),
     })))
@@ -528,7 +524,7 @@ fn dopo_l_accordo_l_incarico_si_riceve_col_token_concordato() {
     let (ricevuto, token_concordato) = accordato
         .ricevi_incarico(incarico())
         .expect("l'incarico si riceve");
-    assert_eq!(ricevuto.plan_hash_atteso, "d".repeat(64));
+    assert_eq!(ricevuto.plan_hash_atteso, digest(PIANO));
     assert_eq!(token_concordato.in_esadecimale(), TOKEN);
 }
 
@@ -737,12 +733,12 @@ fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
 fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
     // Il proprio lato, prima di spedire.
     let mut sue = attese();
-    sue.da_rispecchiare.resolver.identita = String::new();
+    sue.comune.resolver.identita = String::new();
     let errore = SupervisoreInAttesa::nuovo(sue).expect_err("identita' vuota");
     assert!(errore.to_string().contains("resolver.identita"), "{errore}");
 
     let mut sua = locale();
-    sua.artefatto.versione = String::new();
+    sua.comune.artefatto.versione = String::new();
     let errore = WorkerInAttesa::nuovo(sua).expect_err("versione vuota");
     assert!(
         errore.to_string().contains("artefatto.versione"),
@@ -758,50 +754,38 @@ fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
     // E il caso che il difetto rendeva possibile: due lati che dichiarano il
     // vuoto sullo stesso asse **coinciderebbero**.
     let mut sue = attese();
-    sue.da_rispecchiare.resolver.identita = String::new();
+    sue.comune.resolver.identita = String::new();
     let mut sua = locale();
-    sua.resolver.identita = String::new();
+    sua.comune.resolver.identita = String::new();
     assert!(
         SupervisoreInAttesa::nuovo(sue).is_err() && WorkerInAttesa::nuovo(sua).is_err(),
         "due descrizioni vuote sono arrivate al confronto, dove si sarebbero accordate"
     );
 }
 
-/// Un digest e' una forma, non una stringa qualunque.
+/// Un digest non canonico **non si costruisce**, quindi non arriva qui.
 ///
-/// Il confronto fra i due lati e' un confronto di stringhe: `AA…` e `aa…`
-/// sarebbero due digest diversi dello stesso valore, e `zz` non e' un digest
-/// affatto. Accettare qualunque testo avrebbe reso «digest» un nome di campo
-/// invece di un contratto.
+/// Questo test non prova piu' un rifiuto: prova che il rifiuto non serve. I
+/// quattro digest del filo sono `DigestSha256`, e non esiste un valore di quel
+/// tipo che non sia canonico — le forme rifiutate stanno nelle prove del tipo,
+/// dove sono esercitate una per una.
+///
+/// Cio' che resta da provare **qui** e' l'altra meta': che due digest canonici
+/// e diversi siano un disaccordo, e che il disaccordo sia dell'asse giusto.
 #[test]
-fn un_digest_non_canonico_e_rifiutato_su_entrambi_i_lati() {
-    let non_canonici = [
-        String::new(),
-        "aa".to_owned(),
-        "z".repeat(64),
-        "A".repeat(64),
-        "a".repeat(63),
-        "a".repeat(65),
-    ];
-    for forma in non_canonici {
-        let mut sue = attese();
-        sue.da_rispecchiare.artefatto.digest.clone_from(&forma);
-        let errore = SupervisoreInAttesa::nuovo(sue)
-            .expect_err("digest non canonico accettato alla costruzione");
-        assert!(
-            errore.to_string().contains("artefatto.digest"),
-            "rifiuto che non nomina il campo: {errore}"
-        );
-
-        let mut risposta = risposta_nominale();
-        risposta.ambiente.digest_insieme.clone_from(&forma);
-        let errore =
-            supervisore_riceve(risposta).expect_err("digest non canonico accettato alla verifica");
-        assert!(
-            errore.to_string().contains("digest_insieme"),
-            "rifiuto che non nomina il campo: {errore}"
-        );
-    }
+fn due_digest_canonici_e_diversi_sono_un_disaccordo() {
+    let mut risposta = risposta_nominale();
+    risposta.ambiente.digest_insieme = digest(&"c".repeat(64));
+    let errore = supervisore_riceve(risposta).expect_err("insieme diverso");
+    assert_eq!(
+        errore.category(),
+        ErrorCategory::InvalidConfiguration,
+        "{errore}"
+    );
+    assert!(
+        errore.to_string().contains("digest dell'insieme"),
+        "{errore}"
+    );
 }
 
 /// Attese che **nessuna** risposta valida potrebbe soddisfare.
@@ -838,11 +822,14 @@ fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
 /// rifiutarlo sarebbe stato chi lo esegue — cioe' piu' tardi, e altrove.
 #[test]
 fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
+    // I guasti sui digest non compaiono, e non per dimenticanza: dopo che i
+    // quattro digest sono un tipo, `plan_hash_atteso = "dd"` non si scrive
+    // piu'. Restano i campi che una `String` puo' ancora sbagliare.
     for guasto in [
-        |i: &mut Incarico| i.plan_hash_atteso = "dd".to_owned(),
         |i: &mut Incarico| i.artefatto_temporaneo = String::new(),
-        |i: &mut Incarico| i.ingressi[0].contract_fingerprint_atteso = "ee".to_owned(),
+        |i: &mut Incarico| i.ingressi[0].nome = "x".repeat(300),
         |i: &mut Incarico| i.ingressi[0].nome = String::new(),
+        |i: &mut Incarico| i.ingressi[0].percorso = String::new(),
     ] {
         let mut frame = incarico();
         if let Corpo::Incarico(dentro) = frame.corpo_mutabile() {
@@ -854,4 +841,133 @@ fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
             .expect_err("incarico malformato accettato da un frame diretto");
         assert_eq!(errore.category(), ErrorCategory::Protocol, "{errore}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// La forma canonica e' anche quella spedita
+// ---------------------------------------------------------------------------
+
+/// Due descrizioni **logicamente uguali** producono lo stesso frame.
+///
+/// Risorse, backend e capability sono insiemi: elencarli in ordine diverso
+/// descrive lo stesso ambiente. Se il frame spedito conservasse l'ordine
+/// d'origine, due supervisori d'accordo emetterebbero byte diversi, e il
+/// determinismo del filo dipenderebbe dall'ordine in cui qualcuno ha riempito
+/// un `Vec`.
+///
+/// L'oracolo sono i **byte**, non la struttura: confrontare due `Saluto` con
+/// `==` proverebbe che i campi coincidono, non che coincida cio' che viaggia.
+#[test]
+fn due_descrizioni_equivalenti_producono_lo_stesso_saluto() {
+    let dritto = SupervisoreInAttesa::nuovo(attese()).expect("coerenti");
+
+    let mut al_contrario = attese();
+    al_contrario.comune.ambiente.risorse.reverse();
+    al_contrario.comune.ambiente.backend_dinamici.reverse();
+    al_contrario.capability_richieste.reverse();
+    let rovescio = SupervisoreInAttesa::nuovo(al_contrario).expect("coerenti");
+
+    let byte = |s: &SupervisoreInAttesa| {
+        crate::protocollo::codifica::codifica(&Frame::nuovo(Corpo::Saluto(Box::new(
+            s.saluto().clone(),
+        ))))
+        .expect("il saluto si codifica")
+    };
+    assert_eq!(
+        byte(&dritto),
+        byte(&rovescio),
+        "due descrizioni equivalenti hanno prodotto frame diversi"
+    );
+}
+
+/// Lo stesso per la `Risposta`, che il worker costruisce.
+///
+/// Non e' lo stesso test scritto due volte: i due frame li costruiscono due
+/// percorsi diversi — il supervisore alla costruzione, il worker alla
+/// ricezione — e una sola delle due forme canonicalizzate direbbe che il giro
+/// funziona solo in un verso.
+#[test]
+fn due_worker_equivalenti_producono_la_stessa_risposta() {
+    let byte = |mut descrizione: DescrizioneLocale, rovescia: bool| {
+        if rovescia {
+            descrizione.comune.ambiente.risorse.reverse();
+            descrizione.comune.ambiente.backend_dinamici.reverse();
+            descrizione.capability.reverse();
+        }
+        let worker = WorkerInAttesa::nuovo(descrizione).expect("coerente");
+        let saluto = Frame::nuovo(Corpo::Saluto(Box::new(saluto_nominale())));
+        let (risposta, _) = worker.ricevi(saluto).expect("accordo");
+        crate::protocollo::codifica::codifica(&Frame::nuovo(Corpo::Risposta(Box::new(risposta))))
+            .expect("la risposta si codifica")
+    };
+    assert_eq!(
+        byte(locale(), false),
+        byte(locale(), true),
+        "due worker equivalenti hanno prodotto risposte diverse"
+    );
+}
+
+/// La riduzione avviene **una volta**, e cio' che si confronta e' gia' ridotto.
+///
+/// Si osserva dall'esterno cosi': l'ordine d'origine non sopravvive in nessuno
+/// dei due lati, quindi un `Saluto` costruito da un ordine e una `Risposta`
+/// costruita dall'altro si accordano — e il giro nominale, che parte da
+/// descrizioni gia' ordinate, resta identico.
+#[test]
+fn i_due_lati_si_accordano_qualunque_sia_l_ordine_d_origine() {
+    let mut sue = attese();
+    sue.comune.ambiente.risorse.reverse();
+    let supervisore = SupervisoreInAttesa::nuovo(sue).expect("coerenti");
+    let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
+
+    let mut sua = locale();
+    sua.comune.ambiente.backend_dinamici.reverse();
+    sua.capability.reverse();
+    let worker = WorkerInAttesa::nuovo(sua).expect("coerente");
+    let (risposta, _) = worker.ricevi(saluto).expect("il worker accetta");
+
+    supervisore
+        .ricevi(Frame::nuovo(Corpo::Risposta(Box::new(risposta))))
+        .expect("il supervisore accetta");
+}
+
+/// Cio' che si spedisce e' **ordinato**, e lo si dice senza confrontarlo con
+/// se stesso.
+///
+/// I due oracoli qui sopra confrontano due esiti dello **stesso** percorso:
+/// provano che l'ordine d'origine non conta, e infatti una deviazione
+/// applicata a entrambi i lati sfugge a tutti e due — verificato iniettandola.
+/// Questo test dice invece una proprieta' assoluta del frame emesso, che non
+/// ha bisogno di un secondo frame per essere vera.
+#[test]
+fn cio_che_si_spedisce_porta_gli_insiemi_ordinati() {
+    let mut sue = attese();
+    sue.comune.ambiente.risorse.reverse();
+    sue.comune.ambiente.backend_dinamici.reverse();
+    let supervisore = SupervisoreInAttesa::nuovo(sue).expect("coerenti");
+    let ambiente = &supervisore.saluto().ambiente;
+    assert!(
+        ambiente.risorse.is_sorted_by_key(|r| &r.nome),
+        "il `Saluto` porta risorse non ordinate"
+    );
+    assert!(
+        ambiente.backend_dinamici.is_sorted_by_key(|b| &b.nome),
+        "il `Saluto` porta backend non ordinati"
+    );
+
+    let mut sua = locale();
+    sua.comune.ambiente.risorse.reverse();
+    sua.capability.reverse();
+    let worker = WorkerInAttesa::nuovo(sua).expect("coerente");
+    let (risposta, _) = worker
+        .ricevi(Frame::nuovo(Corpo::Saluto(Box::new(saluto_nominale()))))
+        .expect("accordo");
+    assert!(
+        risposta.ambiente.risorse.is_sorted_by_key(|r| &r.nome),
+        "la `Risposta` porta risorse non ordinate"
+    );
+    assert!(
+        risposta.capability.is_sorted(),
+        "la `Risposta` porta capability non ordinate"
+    );
 }

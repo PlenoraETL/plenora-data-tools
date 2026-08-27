@@ -37,8 +37,6 @@
 //! macchina. La descrizione locale **arriva**: qui si verifica che due
 //! descrizioni concordino, non si va a vedere com'e' fatto l'host.
 
-use std::collections::BTreeSet;
-
 use plenora_core::{PlenoraError, Result};
 
 use crate::commit_token::CommitToken;
@@ -75,54 +73,48 @@ pub const fn limiti_correnti() -> LimitiDichiarati {
 // Le descrizioni che i due lati portano
 // ---------------------------------------------------------------------------
 
-/// Cio' che il **worker** sa di se stesso.
+/// Cio' che i due lati devono **rispecchiare identico**.
 ///
-/// **Non** viene scoperto qui: e' uno snapshot tipizzato che arriva da fuori.
+/// Una sola, condivisa: un tipo per lato avrebbe significato due elenchi di
+/// campi da tenere allineati a mano, e il giorno che uno dei due ne acquista
+/// uno il disallineamento non lo dice nessuno — l'handshake confronta cio' che
+/// i due tipi hanno in comune, e cio' che non ce l'hanno smette
+/// silenziosamente di essere confrontato.
+///
+/// **Non** viene scoperta qui: e' uno snapshot tipizzato che arriva da fuori.
 /// La scoperta dell'ambiente della macchina e' un'altra cosa e un'altra PR;
 /// mescolarla con la verifica avrebbe reso impossibile provare la verifica
 /// senza una macchina vera sotto.
-///
-/// Il supervisore **non** la usa: le sue attese hanno un tipo proprio,
-/// [`DaRispecchiare`], e il perche' e' scritto li'.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DescrizioneLocale {
+pub struct Descrizione {
     /// Identita' dell'eseguibile.
     pub artefatto: IdentitaArtefatto,
     /// Identita' del resolver CRS.
     pub resolver: IdentitaResolver,
     /// Ambiente risolto.
     pub ambiente: Ambiente,
-    /// Capability offerte.
-    pub capability: Vec<String>,
 }
 
-/// Cio' che il worker deve rispecchiare **identico**.
+/// Cio' che il **worker** sa di se stesso: la descrizione comune, piu' le
+/// capability che **offre**.
 ///
-/// Non e' una [`DescrizioneLocale`], e la differenza e' il difetto che questo
-/// tipo chiude. Quella porta anche le `capability` **offerte**: il supervisore
-/// non ne offre, quindi il campo si poteva riempire e nessuno lo guardava — ne'
-/// la validazione della propria descrizione, ne' il confronto con la
-/// `Risposta`. Configurazione autorevole in apparenza, ignorata in silenzio, e
-/// non c'e' modo di accorgersene leggendo l'esito: l'handshake riesce.
-///
-/// Cio' che il supervisore ha da dire sulle capability sta in
-/// [`AtteseSupervisore::capability_richieste`], che e' un'altra cosa — non
-/// quelle che offre, quelle senza le quali l'incarico non si puo' dare.
+/// Le capability stanno qui e non in [`Descrizione`] perche' sono l'unico asse
+/// asimmetrico: il worker le offre, il supervisore le richiede, e i due
+/// insiemi non hanno lo stesso significato. Metterle nel tipo comune avrebbe
+/// dato al supervisore un campo da riempire che nessuno guarda.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaRispecchiare {
-    /// Identita' dell'eseguibile.
-    pub artefatto: IdentitaArtefatto,
-    /// Identita' del resolver CRS.
-    pub resolver: IdentitaResolver,
-    /// Ambiente risolto.
-    pub ambiente: Ambiente,
+pub struct DescrizioneLocale {
+    /// Cio' che il supervisore deve rispecchiare.
+    pub comune: Descrizione,
+    /// Capability offerte.
+    pub capability: Vec<String>,
 }
 
 /// Cio' che il supervisore pretende dall'altro lato.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtteseSupervisore {
-    /// Le tre identita' che il worker deve rispecchiare identiche.
-    pub da_rispecchiare: DaRispecchiare,
+    /// Cio' che il worker deve rispecchiare identico.
+    pub comune: Descrizione,
     /// Le capability senza le quali l'incarico non si puo' dare.
     ///
     /// Confronto **asimmetrico**: il worker puo' offrirne di piu', non di
@@ -133,53 +125,109 @@ pub struct AtteseSupervisore {
 }
 
 // ---------------------------------------------------------------------------
-// Forma canonica di cio' che e' un insieme
+// La forma canonica, prodotta una volta sola
 // ---------------------------------------------------------------------------
 
-/// Un ambiente ridotto alla propria forma canonica.
+/// Un ambiente **gia'** ordinato e senza ripetizioni.
 ///
-/// Ordine deterministico e duplicati gia' rifiutati: da qui in poi il
-/// confronto e' l'uguaglianza, e non c'e' spazio perche' due descrizioni
-/// equivalenti risultino diverse.
+/// L'invariante e' del tipo, non di chi lo usa: si entra solo da
+/// [`AmbienteCanonico::da`], che ordina e rifiuta. Da qui in poi il confronto
+/// e' l'uguaglianza, e non c'e' spazio perche' due descrizioni equivalenti
+/// risultino diverse.
+///
+/// La riduzione avviene **una volta**, alla costruzione dello stato, e non
+/// dentro ogni confronto su un clone: due ordinamenti e due copie per
+/// handshake, con la forma ridotta buttata via subito dopo mentre quella
+/// spedita restava quella d'origine. Cosi' invece la forma canonica e' anche
+/// quella che viaggia.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AmbienteCanonico {
-    digest_insieme: String,
-    acquisizione_dinamica: bool,
-    risorse: Vec<RisorsaRisolta>,
-    backend_dinamici: Vec<BackendDinamico>,
+struct AmbienteCanonico(Ambiente);
+
+impl AmbienteCanonico {
+    /// **Consuma** l'ambiente: ordina gli insiemi e rifiuta le ambiguita'.
+    fn da(mut ambiente: Ambiente, lato: &str) -> Result<Self> {
+        // `acquisizione_dinamica` e' una proprieta' della descrizione, non del
+        // confronto: un ambiente che puo' cambiare sotto i piedi non ha una
+        // forma canonica, quindi non ne esce una.
+        if ambiente.acquisizione_dinamica {
+            return Err(PlenoraError::InvalidConfiguration(format!(
+                "{lato}: `acquisizione_dinamica` e' vera; l'insieme delle risorse \
+                 non sarebbe immutabile e il suo digest non descriverebbe piu' \
+                 cio' che verra' aperto"
+            )));
+        }
+        ambiente.risorse.sort_by(|sinistra, destra| {
+            (&sinistra.nome, &sinistra.versione, &sinistra.percorso).cmp(&(
+                &destra.nome,
+                &destra.versione,
+                &destra.percorso,
+            ))
+        });
+        rifiuta_nomi_ripetuti(&ambiente.risorse, |r| &r.nome, lato, "risorsa")?;
+
+        ambiente.backend_dinamici.sort_by(|sinistra, destra| {
+            (&sinistra.nome, &sinistra.versione, &sinistra.percorso).cmp(&(
+                &destra.nome,
+                &destra.versione,
+                &destra.percorso,
+            ))
+        });
+        rifiuta_nomi_ripetuti(
+            &ambiente.backend_dinamici,
+            |b| &b.nome,
+            lato,
+            "backend dinamico",
+        )?;
+        Ok(Self(ambiente))
+    }
+
+    /// L'ambiente canonico, per confrontarlo.
+    const fn come_ambiente(&self) -> &Ambiente {
+        &self.0
+    }
+
+    /// L'ambiente canonico, per spedirlo.
+    fn in_ambiente(self) -> Ambiente {
+        self.0
+    }
 }
 
-fn ambiente_canonico(ambiente: &Ambiente, lato: &str) -> Result<AmbienteCanonico> {
-    let mut risorse = ambiente.risorse.clone();
-    risorse.sort_by(|sinistra, destra| {
-        (&sinistra.nome, &sinistra.versione, &sinistra.percorso).cmp(&(
-            &destra.nome,
-            &destra.versione,
-            &destra.percorso,
-        ))
-    });
-    rifiuta_nomi_ripetuti(risorse.iter().map(|r| r.nome.as_str()), lato, "risorsa")?;
+/// Una descrizione validata e ridotta, **una volta sola**.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DescrizioneCanonica {
+    artefatto: IdentitaArtefatto,
+    resolver: IdentitaResolver,
+    ambiente: AmbienteCanonico,
+}
 
-    let mut backend_dinamici = ambiente.backend_dinamici.clone();
-    backend_dinamici.sort_by(|sinistra, destra| {
-        (&sinistra.nome, &sinistra.versione, &sinistra.percorso).cmp(&(
-            &destra.nome,
-            &destra.versione,
-            &destra.percorso,
-        ))
-    });
-    rifiuta_nomi_ripetuti(
-        backend_dinamici.iter().map(|b| b.nome.as_str()),
-        lato,
-        "backend dinamico",
-    )?;
+impl DescrizioneCanonica {
+    /// **Consuma** la descrizione: ne verifica la forma e la riduce.
+    ///
+    /// La verifica di forma e' quella del decoder, chiamata qui e non
+    /// riscritta: due controlli separati per i due versi divergerebbero, e il
+    /// verso piu' debole deciderebbe che cosa passa.
+    fn da(descrizione: Descrizione, lato: &str) -> Result<Self> {
+        super::codifica::verifica_identita(&descrizione.artefatto, &descrizione.resolver)?;
+        super::codifica::verifica_ambiente(&descrizione.ambiente)?;
+        Ok(Self {
+            artefatto: descrizione.artefatto,
+            resolver: descrizione.resolver,
+            ambiente: AmbienteCanonico::da(descrizione.ambiente, lato)?,
+        })
+    }
+}
 
-    Ok(AmbienteCanonico {
-        digest_insieme: ambiente.digest_insieme.clone(),
-        acquisizione_dinamica: ambiente.acquisizione_dinamica,
-        risorse,
-        backend_dinamici,
-    })
+/// Le capability in forma canonica: verificate, ordinate, senza ripetizioni.
+///
+/// **Consuma** l'elenco. La verifica e' la stessa per quelle offerte e per
+/// quelle richieste: un nome vuoto non e' offribile ne' richiedibile, e un
+/// elenco piu' lungo di quanto una `Risposta` ne ammetta e' un'attesa che
+/// nessun worker conforme puo' soddisfare.
+fn capability_canoniche(mut capability: Vec<String>, lato: &str) -> Result<Vec<String>> {
+    super::codifica::verifica_capability(&capability)?;
+    capability.sort();
+    rifiuta_nomi_ripetuti(&capability, String::as_str, lato, "capability")?;
+    Ok(capability)
 }
 
 /// Due voci con lo stesso nome sono un'ambiguita', non una ridondanza.
@@ -187,38 +235,31 @@ fn ambiente_canonico(ambiente: &Ambiente, lato: &str) -> Result<AmbienteCanonico
 /// Il nome e' l'identita' con cui la risorsa verra' cercata: se ne esistono
 /// due, «quale si apre» non ha una risposta, e ridurle a una sceglierebbe al
 /// posto di chi ha costruito l'ambiente.
-fn rifiuta_nomi_ripetuti<'a>(
-    nomi: impl Iterator<Item = &'a str>,
+///
+/// Pretende l'elenco **gia' ordinato**, e li' i ripetuti sono adiacenti: un
+/// secondo insieme costruito apposta direbbe la stessa cosa allocando. Il
+/// conteggio dei distinti resta esatto proprio perche' l'ordine lo garantisce
+/// — `voci - ripetuti` e' vero solo su un elenco ordinato, ed e' il motivo per
+/// cui questa funzione non si puo' chiamare prima di aver ordinato.
+fn rifiuta_nomi_ripetuti<T>(
+    ordinati: &[T],
+    nome: impl Fn(&T) -> &str,
     lato: &str,
     genere: &str,
 ) -> Result<()> {
-    // Si scorrono tutti invece di fermarsi al primo ripetuto: il nome non si
-    // puo' nominare — arriva dal filo — quindi cio' che resta da dire e' un
-    // conteggio, e un conteggio interrotto al primo duplicato non direbbe
-    // quanti sono.
-    let mut visti: BTreeSet<&str> = BTreeSet::new();
-    let mut totale: usize = 0;
-    for nome in nomi {
-        totale += 1;
-        visti.insert(nome);
-    }
-    if visti.len() != totale {
+    let ripetuti = ordinati
+        .windows(2)
+        .filter(|coppia| nome(&coppia[0]) == nome(&coppia[1]))
+        .count();
+    if ripetuti != 0 {
         return Err(PlenoraError::InvalidConfiguration(format!(
             "{lato}: {genere} dichiarata piu' volte con lo stesso nome \
-             ({totale} voci, {} nomi distinti); quale si apra non ha una \
-             risposta",
-            visti.len()
+             ({} voci, {} nomi distinti); quale si apra non ha una risposta",
+            ordinati.len(),
+            ordinati.len() - ripetuti
         )));
     }
     Ok(())
-}
-
-/// Le capability in forma canonica: ordinate e senza ripetizioni.
-fn capability_canoniche(capability: &[String], lato: &str) -> Result<Vec<String>> {
-    let mut ordinate = capability.to_vec();
-    ordinate.sort();
-    rifiuta_nomi_ripetuti(ordinate.iter().map(String::as_str), lato, "capability")?;
-    Ok(ordinate)
 }
 
 // ---------------------------------------------------------------------------
@@ -262,23 +303,14 @@ fn confronta_resolver(atteso: &IdentitaResolver, ricevuto: &IdentitaResolver) ->
     Ok(())
 }
 
-fn confronta_ambiente(atteso: &Ambiente, ricevuto: &Ambiente) -> Result<()> {
-    // L'acquisizione dinamica si controlla su **entrambi** e prima di tutto:
-    // un backend che scarica una griglia a meta' esecuzione rende il digest
-    // una fotografia scaduta, e allora confrontare i digest non dice piu'
-    // nulla.
-    for (lato, ambiente) in [("supervisore", atteso), ("worker", ricevuto)] {
-        if ambiente.acquisizione_dinamica {
-            return Err(PlenoraError::InvalidConfiguration(format!(
-                "{lato}: `acquisizione_dinamica` e' vera; l'insieme delle risorse \
-                 non sarebbe immutabile e il suo digest non descriverebbe piu' \
-                 cio' che verra' aperto"
-            )));
-        }
-    }
-
-    let atteso = ambiente_canonico(atteso, "supervisore")?;
-    let ricevuto = ambiente_canonico(ricevuto, "worker")?;
+fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) -> Result<()> {
+    // Nessun ordinamento e nessun clone: le due forme sono gia' canoniche,
+    // e ridurle qui significherebbe rifarlo a ogni confronto su copie che
+    // vengono buttate via subito dopo. `acquisizione_dinamica` non si
+    // ricontrolla per la stessa ragione: un ambiente che la dichiara non
+    // diventa mai un `AmbienteCanonico`.
+    let atteso = atteso.come_ambiente();
+    let ricevuto = ricevuto.come_ambiente();
 
     if atteso.digest_insieme != ricevuto.digest_insieme {
         return Err(PlenoraError::InvalidConfiguration(
@@ -308,22 +340,30 @@ fn confronta_ambiente(atteso: &Ambiente, ricevuto: &Ambiente) -> Result<()> {
 ///
 /// Non uguaglianza: un worker che ne offre di piu' va benissimo. Cio' che non
 /// va bene e' che ne manchi una, perche' l'incarico la userebbe.
+///
+/// Entrambi gli elenchi arrivano **gia' ordinati**, quindi l'appartenenza si
+/// decide con una scansione parallela invece che costruendo un insieme:
+/// l'insieme sarebbe una terza copia dei nomi, e i nomi vengono dal filo.
 fn confronta_capability(richieste: &[String], offerte: &[String]) -> Result<()> {
-    let richieste = capability_canoniche(richieste, "supervisore")?;
-    let offerte = capability_canoniche(offerte, "worker")?;
-    let disponibili: BTreeSet<&str> = offerte.iter().map(String::as_str).collect();
-    let mancanti: Vec<&str> = richieste
-        .iter()
-        .map(String::as_str)
-        .filter(|nome| !disponibili.contains(nome))
-        .collect();
-    if !mancanti.is_empty() {
+    let mut scorre = offerte.iter();
+    let mut corrente = scorre.next();
+    let mut mancanti = 0_usize;
+    for richiesta in richieste {
+        while corrente.is_some_and(|offerta| offerta < richiesta) {
+            corrente = scorre.next();
+        }
+        if corrente == Some(richiesta) {
+            corrente = scorre.next();
+        } else {
+            mancanti += 1;
+        }
+    }
+    if mancanti != 0 {
         // Il conteggio e non i nomi: le richieste sono configurazione nostra,
         // ma le offerte arrivano dal filo, e un elenco di «mancanti» dice per
         // differenza che cosa l'altro capo ha dichiarato.
         return Err(PlenoraError::InvalidConfiguration(format!(
-            "il worker non offre {} delle {} capability richieste",
-            mancanti.len(),
+            "il worker non offre {mancanti} delle {} capability richieste",
             richieste.len()
         )));
     }
@@ -410,7 +450,11 @@ fn verifica_direzione(frame: &Frame, attesa: super::messaggi::Direzione) -> Resu
 /// e' riusabile perche' non esiste piu'.
 #[derive(Debug)]
 pub struct SupervisoreInAttesa {
-    attese: AtteseSupervisore,
+    /// Gia' ridotta: il confronto con la `Risposta` non deve rifare nulla.
+    da_rispecchiare: DescrizioneCanonica,
+    /// Gia' verificate e ordinate.
+    capability_richieste: Vec<String>,
+    commit_token: CommitToken,
     saluto: Saluto,
 }
 
@@ -420,51 +464,43 @@ impl SupervisoreInAttesa {
     /// I limiti non sono un parametro: vengono da [`limiti_correnti`], cosi'
     /// nessuno puo' dichiararne di diversi da quelli che applica.
     ///
+    /// Il `Saluto` porta la descrizione **canonica**, non quella d'origine:
+    /// due supervisori che dichiarano lo stesso ambiente con gli insiemi in
+    /// ordine diverso emettono percio' lo stesso frame, byte per byte.
+    /// Spedire la forma d'origine e confrontare quella ridotta avrebbe reso il
+    /// frame dipendente dall'ordine in cui qualcuno ha riempito un `Vec`.
+    ///
     /// # Errors
     ///
     /// [`PlenoraError::InvalidConfiguration`] se cio' che il supervisore
-    /// dichiara non e' coerente — duplicati fra risorse, backend o capability
-    /// **richieste**, oppure acquisizione dinamica dichiarata.
+    /// dichiara non e' coerente — campi vuoti, digest non canonici, duplicati
+    /// fra risorse, backend o capability **richieste**, oppure acquisizione
+    /// dinamica dichiarata.
     ///
     /// Le capability offerte non compaiono, e non per omissione: il
-    /// supervisore non ne offre, e [`DaRispecchiare`] non gliele fa
+    /// supervisore non ne offre, e [`AtteseSupervisore`] non gliele fa
     /// dichiarare.
     pub fn nuovo(attese: AtteseSupervisore) -> Result<Self> {
-        // La propria descrizione si valida **prima** di spedirla: dichiarare
-        // un ambiente ambiguo e scoprirlo dalla risposta dell'altro sarebbe
-        // scoprire dall'esterno un difetto proprio.
-        //
-        // Le stesse funzioni che applica il decoder a cio' che arriva. Due
-        // controlli scritti separatamente per i due versi divergerebbero, e il
-        // verso piu' debole deciderebbe che cosa passa.
-        super::codifica::verifica_identita(
-            &attese.da_rispecchiare.artefatto,
-            &attese.da_rispecchiare.resolver,
-        )?;
-        super::codifica::verifica_ambiente(&attese.da_rispecchiare.ambiente)?;
-        // Le richieste passano dalla **stessa** verifica delle offerte, e
-        // prima di essere ordinate. Senza, il supervisore poteva chiedere un
-        // nome vuoto o piu' capability di quante una `Risposta` valida ne
-        // possa portare: attese che nessun worker conforme puo' soddisfare,
-        // scoperte al confronto invece che alla costruzione.
-        super::codifica::verifica_capability(&attese.capability_richieste)?;
-        let _ = ambiente_canonico(&attese.da_rispecchiare.ambiente, "supervisore")?;
-        let _ = capability_canoniche(&attese.capability_richieste, "supervisore")?;
-        if attese.da_rispecchiare.ambiente.acquisizione_dinamica {
-            return Err(PlenoraError::InvalidConfiguration(
-                "supervisore: `acquisizione_dinamica` e' vera; l'insieme delle \
-                 risorse non sarebbe immutabile"
-                    .to_owned(),
-            ));
-        }
+        // La propria descrizione si valida e si riduce **prima** di spedirla,
+        // una volta sola: dichiarare un ambiente ambiguo e scoprirlo dalla
+        // risposta dell'altro sarebbe scoprire dall'esterno un difetto
+        // proprio.
+        let da_rispecchiare = DescrizioneCanonica::da(attese.comune, "supervisore")?;
+        let capability_richieste =
+            capability_canoniche(attese.capability_richieste, "supervisore")?;
         let saluto = Saluto {
-            artefatto: attese.da_rispecchiare.artefatto.clone(),
-            resolver: attese.da_rispecchiare.resolver.clone(),
-            ambiente: attese.da_rispecchiare.ambiente.clone(),
+            artefatto: da_rispecchiare.artefatto.clone(),
+            resolver: da_rispecchiare.resolver.clone(),
+            ambiente: da_rispecchiare.ambiente.clone().in_ambiente(),
             commit_token: attese.commit_token,
             limiti: limiti_correnti(),
         };
-        Ok(Self { attese, saluto })
+        Ok(Self {
+            da_rispecchiare,
+            capability_richieste,
+            commit_token: attese.commit_token,
+            saluto,
+        })
     }
 
     /// Il `Saluto` da spedire.
@@ -493,23 +529,38 @@ impl SupervisoreInAttesa {
         let Corpo::Risposta(risposta) = frame.in_corpo() else {
             return Err(fuori_sequenza(TipoMessaggio::Risposta, tipo));
         };
+        let Risposta {
+            artefatto,
+            resolver,
+            ambiente,
+            capability,
+        } = *risposta;
 
         // La **forma** prima del confronto, e non perche' il decoder l'abbia
         // gia' applicata: un `Frame` si costruisce anche in processo, senza
         // passare da `decodifica`. Un campo malformato confrontato per primo
         // esce come «non coincide», che manda a cercare un disaccordo dove
         // c'e' un valore che non e' un valore.
-        super::codifica::verifica_identita(&risposta.artefatto, &risposta.resolver)?;
-        super::codifica::verifica_ambiente(&risposta.ambiente)?;
-        super::codifica::verifica_capability(&risposta.capability)?;
+        //
+        // La riduzione consuma cio' che e' arrivato: il frame e' gia' stato
+        // esaurito, quindi non c'e' niente da clonare.
+        let ricevuta = DescrizioneCanonica::da(
+            Descrizione {
+                artefatto,
+                resolver,
+                ambiente,
+            },
+            "worker",
+        )?;
+        let offerte = capability_canoniche(capability, "worker")?;
 
-        confronta_artefatto(&self.attese.da_rispecchiare.artefatto, &risposta.artefatto)?;
-        confronta_resolver(&self.attese.da_rispecchiare.resolver, &risposta.resolver)?;
-        confronta_ambiente(&self.attese.da_rispecchiare.ambiente, &risposta.ambiente)?;
-        confronta_capability(&self.attese.capability_richieste, &risposta.capability)?;
+        confronta_artefatto(&self.da_rispecchiare.artefatto, &ricevuta.artefatto)?;
+        confronta_resolver(&self.da_rispecchiare.resolver, &ricevuta.resolver)?;
+        confronta_ambiente(&self.da_rispecchiare.ambiente, &ricevuta.ambiente)?;
+        confronta_capability(&self.capability_richieste, &offerte)?;
 
         Ok(HandshakeAccettato {
-            commit_token: self.attese.commit_token,
+            commit_token: self.commit_token,
         })
     }
 }
@@ -539,7 +590,10 @@ impl HandshakeAccettato {
 /// Il worker che aspetta il `Saluto`.
 #[derive(Debug)]
 pub struct WorkerInAttesa {
-    locale: DescrizioneLocale,
+    /// Gia' ridotta, come dal lato supervisore e per la stessa ragione.
+    locale: DescrizioneCanonica,
+    /// Gia' verificate e ordinate.
+    capability: Vec<String>,
 }
 
 impl WorkerInAttesa {
@@ -548,16 +602,12 @@ impl WorkerInAttesa {
     /// # Errors
     ///
     /// [`PlenoraError::InvalidConfiguration`] se la propria descrizione e'
-    /// ambigua.
+    /// ambigua, incompleta o con digest non canonici.
     pub fn nuovo(locale: DescrizioneLocale) -> Result<Self> {
-        // Le stesse funzioni del decoder, per la stessa ragione del
-        // supervisore: la propria descrizione si valida prima di spedirla.
-        super::codifica::verifica_identita(&locale.artefatto, &locale.resolver)?;
-        super::codifica::verifica_ambiente(&locale.ambiente)?;
-        super::codifica::verifica_capability(&locale.capability)?;
-        let _ = ambiente_canonico(&locale.ambiente, "worker")?;
-        let _ = capability_canoniche(&locale.capability, "worker")?;
-        Ok(Self { locale })
+        Ok(Self {
+            locale: DescrizioneCanonica::da(locale.comune, "worker")?,
+            capability: capability_canoniche(locale.capability, "worker")?,
+        })
     }
 
     /// Riceve un frame; se e' il `Saluto` e concorda, produce la `Risposta` e
@@ -566,6 +616,10 @@ impl WorkerInAttesa {
     /// Un `Incarico` che arrivi qui e' rifiutato **esplicitamente**: e' il
     /// caso «incarico prima dell'accordo», e va detto con quel nome invece di
     /// somigliare a un messaggio malformato.
+    ///
+    /// La `Risposta` porta la forma **canonica**, come il `Saluto`: due worker
+    /// che descrivono lo stesso ambiente in ordine diverso rispondono con lo
+    /// stesso frame.
     ///
     /// # Errors
     ///
@@ -585,37 +639,42 @@ impl WorkerInAttesa {
         let Corpo::Saluto(saluto) = frame.in_corpo() else {
             return Err(fuori_sequenza(TipoMessaggio::Saluto, tipo));
         };
+        let Saluto {
+            artefatto,
+            resolver,
+            ambiente,
+            commit_token,
+            limiti,
+        } = *saluto;
 
         // I limiti per primi: se i due lati non applicano le stesse regole al
         // canale, il resto del confronto avviene su un canale su cui non si e'
         // d'accordo.
-        confronta_limiti(&saluto.limiti)?;
+        confronta_limiti(&limiti)?;
         // Poi la forma di cio' che e' arrivato, e solo dopo il confronto: la
         // ragione e' la stessa del lato supervisore, e vale anche qui perche'
         // un `Frame` puo' non essere passato dal decoder.
-        super::codifica::verifica_identita(&saluto.artefatto, &saluto.resolver)?;
-        super::codifica::verifica_ambiente(&saluto.ambiente)?;
-        confronta_artefatto(&self.locale.artefatto, &saluto.artefatto)?;
-        confronta_resolver(&self.locale.resolver, &saluto.resolver)?;
-        confronta_ambiente(&saluto.ambiente, &self.locale.ambiente)?;
+        let ricevuta = DescrizioneCanonica::da(
+            Descrizione {
+                artefatto,
+                resolver,
+                ambiente,
+            },
+            "supervisore",
+        )?;
+        confronta_artefatto(&self.locale.artefatto, &ricevuta.artefatto)?;
+        confronta_resolver(&self.locale.resolver, &ricevuta.resolver)?;
+        confronta_ambiente(&ricevuta.ambiente, &self.locale.ambiente)?;
 
         // `self` e' gia' consumato: la descrizione locale si **sposta** nella
         // risposta invece di essere clonata.
-        let DescrizioneLocale {
-            artefatto,
-            resolver,
-            ambiente,
-            capability,
-        } = self.locale;
         let risposta = Risposta {
-            artefatto,
-            resolver,
-            ambiente,
-            capability,
+            artefatto: self.locale.artefatto,
+            resolver: self.locale.resolver,
+            ambiente: self.locale.ambiente.in_ambiente(),
+            capability: self.capability,
         };
-        let accordato = WorkerAccordato {
-            commit_token: saluto.commit_token,
-        };
+        let accordato = WorkerAccordato { commit_token };
         Ok((risposta, accordato))
     }
 }

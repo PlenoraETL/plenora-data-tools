@@ -594,11 +594,29 @@ non protegge. Perciò due regole in più, applicate nei due versi come i tetti:
   qualunque testo avrebbe reso «digest» un nome di campo invece di un
   contratto.
 
+  La forma è di un **tipo**, non di un controllo: i quattro campi non sono
+  stringhe, e un digest non canonico non è uno stato che si possa costruire.
+  Un controllo scritto accanto ai quattro campi sarebbe stato quattro
+  occasioni di dimenticarlo al quinto. Il tipo resta **distinto** da quello
+  del `commit_token` pur avendo la stessa rappresentazione: un digest si
+  mostra — vedere due digest diversi affiancati è come si diagnostica un
+  disaccordo — un token no, mai. Un tipo solo avrebbe dovuto scegliere una
+  politica sola per entrambi.
+
 Le stesse funzioni le applicano **il decoder su ciò che arriva e l'handshake
 sulla propria descrizione prima di spedirla**. Non è ridondanza: un `Frame` si
 costruisce anche in processo senza passare dal decoder, e un lato che si
 validasse con regole più deboli dell'altro scoprirebbe i propri difetti dalla
 risposta dell'interlocutore.
+
+**La forma canonica è anche quella che viaggia.** La riduzione a insiemi
+ordinati e senza ripetizioni avviene una volta sola, quando lo stato nasce, e
+il `Saluto` e la `Risposta` portano quella: due descrizioni logicamente
+uguali, con gli insiemi elencati in ordine diverso, producono percio' frame
+**identici byte per byte**. Ridurre dentro ogni confronto e spedire la forma
+d'origine avrebbe reso il frame dipendente dall'ordine in cui qualcuno ha
+riempito un `Vec`, e avrebbe pagato due ordinamenti e due copie per handshake
+per poi buttarli via.
 
 Resta **fuori** da queste regole, deliberatamente, il `digest_artefatto`
 dell'`Esito`: porta un campo `algoritmo` accanto al valore, quindi la sua
