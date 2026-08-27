@@ -24,6 +24,39 @@ fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
 }
 
+/// Invoca `run --plan <piano> --inputs <ingresso> --output <uscita>`.
+///
+/// Rende l'uscita del processo **grezza**: codice, stdout e stderr restano da
+/// esaminare a chi chiama, perche' sono gli oracoli e non possono stare qui.
+fn cli_run(
+    piano: &std::path::Path,
+    ingresso: &std::path::Path,
+    uscita: &std::path::Path,
+) -> std::process::Output {
+    cli()
+        .args(["run", "--plan"])
+        .arg(piano)
+        .arg("--inputs")
+        .arg(ingresso)
+        .arg("--output")
+        .arg(uscita)
+        .output()
+        .expect("il processo si avvia")
+}
+
+/// Invoca `validate --plan <piano> --inputs <ingresso>`.
+///
+/// Come [`cli_run`]: l'uscita torna grezza.
+fn cli_validate(piano: &std::path::Path, ingresso: &std::path::Path) -> std::process::Output {
+    cli()
+        .args(["validate", "--plan"])
+        .arg(piano)
+        .arg("--inputs")
+        .arg(ingresso)
+        .output()
+        .expect("il processo si avvia")
+}
+
 fn write_ipc(path: &std::path::Path, schema: &SchemaRef, batches: &[RecordBatch]) {
     let file = std::fs::File::create(path).expect("create input");
     let mut writer = FileWriter::try_new(file, schema).expect("writer");
@@ -86,13 +119,7 @@ fn validate_v4_stampa_il_riepilogo_del_dag() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = write_table_fixture(directory.path());
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let result = cli_validate(&plan, &input);
     assert!(
         result.status.success(),
         "stdout: {}",
@@ -153,15 +180,7 @@ fn run_v4_scrive_output_e_metriche_json_su_stdout() {
     let (plan, input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("output.arrow");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let result = cli_run(&plan, &input, &output_path);
     assert!(
         result.status.success(),
         "stdout: {}",
@@ -274,15 +293,7 @@ fn run_v4_schema_mismatch_fallisce_in_validazione() {
     )
     .expect("plan");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let result = cli_run(&plan, &input, &output_path);
     assert!(!result.status.success());
     assert!(!result.stdout.is_empty(), "errore diagnostico presente");
     assert!(
@@ -299,15 +310,7 @@ fn run_v4_non_sovrascrive_un_output_esistente() {
     let output_path = directory.path().join("output.arrow");
     std::fs::write(&output_path, b"contenuto precedente").expect("output preesistente");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let result = cli_run(&plan, &input, &output_path);
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("esistente"), "stderr: {stderr}");
@@ -336,13 +339,7 @@ fn piano_legacy_continua_a_funzionare_invariato() {
     );
 
     // validate legacy: riepilogo di Fase 1, senza i campi del DAG v4.
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate legacy");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {}",
@@ -473,13 +470,7 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
 
     // R4.6.3: il filtro tabellare non richiede alcun CRS — validate passa e
     // dichiara lo stato, non un CRS.
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {}",
@@ -494,15 +485,7 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
 
     // run: i byte geometrici transitano invariati (mai decodificati).
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -562,13 +545,7 @@ fn dag_v4_filter_on_geometry_without_crs_passes_and_propagates_missing() {
     // Round-trip R4.6.4: l'output (con le chiavi canoniche `missing`)
     // rientra come input dello stesso piano e ripassa — la dichiarazione
     // sopravvive al giro bordo-centro-bordo senza risoluzioni.
-    let revalidate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&output_path)
-        .output()
-        .expect("re-validate");
+    let revalidate = cli_validate(&plan, &output_path);
     assert!(
         revalidate.status.success(),
         "round-trip stdout: {}",
@@ -610,15 +587,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
     .expect("batch WKB invalido");
     write_ipc(&input, &schema, &[batch]);
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("run");
+    let result = cli_run(&plan, &input, &output);
 
     // WKB invalido: categoria `data_mapping` -> exit 3 (cli.md#exit-code).
     assert_eq!(result.status.code(), Some(3));
@@ -682,13 +651,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     });
     std::fs::write(&plan, serde_json::to_vec(&buffer_plan).expect("json")).expect("plan");
 
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         !validate.status.success(),
         "geo.buffer su CRS mancante deve fallire"
@@ -702,15 +665,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     // Stesso esito in `run` (la validazione del piano e' il gate, mai lo
     // stream a meta' esecuzione).
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(!run.status.success(), "run deve fallire in validazione");
     let stderr = String::from_utf8_lossy(&run.stdout);
     assert!(
@@ -830,13 +785,7 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
         &crs_unresolved_pairs(),
     );
 
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {}",
@@ -847,15 +796,7 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
     assert_eq!(geometry["crs_resolution"], "declared_unresolved");
 
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -884,13 +825,7 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
     );
 
     // Round-trip: l'output rientra come input dello stesso piano e ripassa.
-    let revalidate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&output_path)
-        .output()
-        .expect("re-validate");
+    let revalidate = cli_validate(&plan, &output_path);
     assert!(
         revalidate.status.success(),
         "round-trip stdout: {}",
@@ -914,15 +849,7 @@ fn dag_v4_conflicting_crs_is_preserved_and_declared_not_reconciled() {
     );
 
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "il centro preserva, non rifiuta — stdout: {}",
@@ -989,13 +916,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         &mysql_srid_only_unresolved_pairs(),
     );
 
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {} — stderr: {}",
@@ -1012,15 +933,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
     );
 
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {} — stderr: {}",
@@ -1055,13 +968,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
     }
 
     // Round-trip: l'output rientra come input dello stesso piano e ripassa.
-    let revalidate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&output_path)
-        .output()
-        .expect("re-validate");
+    let revalidate = cli_validate(&plan, &output_path);
     assert!(
         revalidate.status.success(),
         "round-trip stdout: {} — stderr: {}",
@@ -1124,13 +1031,7 @@ fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
         &monte_mario_resolved_pairs(),
     );
 
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {}",
@@ -1143,15 +1044,7 @@ fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
     );
 
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -1216,13 +1109,7 @@ fn dag_v4_geo_op_on_declared_unresolved_fails_with_distinct_cause() {
     });
     let (plan, input) =
         canonical_crs_fixture(directory.path(), &buffer_plan, &crs_unresolved_pairs());
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(!validate.status.success(), "geo.buffer deve fallire");
     let stderr = String::from_utf8_lossy(&validate.stdout);
     assert!(
@@ -1249,13 +1136,7 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
     });
     let (plan, input) = write_geometry_without_crs_fixture(directory.path(), None);
     std::fs::write(&plan, serde_json::to_vec(&decision_plan).expect("json")).expect("plan");
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         !validate.status.success(),
         "decisione su missing deve fallire"
@@ -1285,15 +1166,7 @@ fn dag_v4_crs_decision_resolves_declared_unresolved() {
     let (plan, input) = canonical_crs_fixture(directory.path(), &plan, &crs_unresolved_pairs());
 
     let output_path = directory.path().join("output.arrow");
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "con la decisione il piano geo valida — stdout: {}",
@@ -1402,13 +1275,7 @@ fn dag_v4_misto_geo_end_to_end() {
     );
 
     // validate-only: il contratto di input e' scoperto dai metadati GeoArrow.
-    let validate = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
         "stdout: {}",
@@ -1423,15 +1290,7 @@ fn dag_v4_misto_geo_end_to_end() {
     assert_eq!(geometry["crs_kind"], "Projected");
 
     // run: esecuzione del DAG e metriche per nodo.
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -1676,15 +1535,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     .expect("batch catena");
     write_ipc(&input, &schema, &[batch]);
 
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run catena");
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -1889,15 +1740,7 @@ fn run_plan(
     let output_path = directory.join("output.arrow");
     std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
     write_fixture_batch(&input, schema);
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan_path)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let run = cli_run(&plan_path, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -2176,16 +2019,7 @@ fn un_solo_input_resta_compatibile_con_la_forma_posizionale() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("uno.arrow");
-    let esito = cli()
-        .arg("run")
-        .arg("--plan")
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let esito = cli_run(&plan, &input, &output_path);
     assert!(
         esito.status.success(),
         "un solo input deve restare compatibile: {}",
@@ -2345,13 +2179,7 @@ fn table_plan_v4() -> serde_json::Value {
 }
 
 fn riepilogo_validate(plan: &std::path::Path, input: &std::path::Path) -> serde_json::Value {
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(plan)
-        .arg("--inputs")
-        .arg(input)
-        .output()
-        .expect("validate");
+    let result = cli_validate(plan, input);
     assert!(
         result.status.success(),
         "stderr: {}",
@@ -2396,13 +2224,7 @@ fn un_piano_v4_col_nome_della_v5_e_rifiutato_dalla_cli() {
     let percorso = directory.path().join("plan_misto.json");
     std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&percorso)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let result = cli_validate(&percorso, &input);
     assert!(!result.status.success());
     // Canale congelato: l'envelope diagnostico vive su stdout, stderr resta
     // vuoto (par. 9).
@@ -2421,13 +2243,7 @@ fn un_piano_v5_col_nome_della_v4_e_rifiutato_dalla_cli() {
     let percorso = directory.path().join("plan_vecchio.json");
     std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&percorso)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let result = cli_validate(&percorso, &input);
     assert!(!result.status.success());
     assert!(result.stderr.is_empty());
     let envelope = String::from_utf8_lossy(&result.stdout);
@@ -2444,15 +2260,7 @@ fn un_piano_v4_esegue_e_produce_lo_stesso_output_del_v5() {
     std::fs::write(&piano_v4, serde_json::to_vec(&v4).expect("json")).expect("plan");
 
     let esegui = |plan: &std::path::Path, output: &std::path::Path| {
-        let result = cli()
-            .args(["run", "--plan"])
-            .arg(plan)
-            .arg("--inputs")
-            .arg(&input)
-            .arg("--output")
-            .arg(output)
-            .output()
-            .expect("run");
+        let result = cli_run(plan, &input, output);
         assert!(
             result.status.success(),
             "stderr: {}",
@@ -2495,13 +2303,7 @@ fn un_piano_legacy_conserva_il_nome_del_proprio_formato() {
         &[table_batch(&[1, 2], &["a", "b"])],
     );
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate legacy");
+    let result = cli_validate(&plan, &input);
     assert!(
         result.status.success(),
         "stdout: {}",
@@ -2530,13 +2332,7 @@ fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
         &[table_batch(&[1, 2], &["a", "b"])],
     );
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate legacy");
+    let result = cli_validate(&plan, &input);
     assert!(!result.status.success());
     assert!(result.stderr.is_empty());
     let envelope = String::from_utf8_lossy(&result.stdout);
@@ -2576,13 +2372,7 @@ fn validate_v6_dichiara_la_versione_sei() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = write_v6_fixture(directory.path());
 
-    let result = cli()
-        .args(["validate", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .output()
-        .expect("validate");
+    let result = cli_validate(&plan, &input);
     assert!(
         result.status.success(),
         "stdout: {}",
@@ -2600,15 +2390,7 @@ fn run_v6_dichiara_la_versione_sei() {
     let (plan, input) = write_v6_fixture(directory.path());
     let output_path = directory.path().join("output-v6.arrow");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
+    let result = cli_run(&plan, &input, &output_path);
     assert!(
         result.status.success(),
         "stdout: {}",
@@ -2632,13 +2414,7 @@ fn un_v5_e_il_v6_equivalente_hanno_plan_hash_diversi() {
     std::fs::write(&plan_v6, serde_json::to_vec(&senza_tetto).expect("json")).expect("plan");
 
     let hash_di = |percorso: &std::path::Path| -> String {
-        let result = cli()
-            .args(["validate", "--plan"])
-            .arg(percorso)
-            .arg("--inputs")
-            .arg(&input)
-            .output()
-            .expect("validate");
+        let result = cli_validate(percorso, &input);
         assert!(
             result.status.success(),
             "stdout: {}",
