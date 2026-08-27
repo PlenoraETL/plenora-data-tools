@@ -1276,6 +1276,25 @@ mod tests {
             run(&arrow_schema(1, ArrowOperation::Centroid), &bad_trailer),
             Err(ArrowTransportError::InvalidTrailer)
         ));
+
+        // Il digest sbagliato e la chiusura troncata sono due difetti diversi,
+        // e vanno distinti: senza la variante attesa, una traduzione scambiata
+        // fra i due passerebbe.
+        let valido = envelope_bytes(&schema, std::slice::from_ref(&batch));
+        let inizio_digest = valido.len() - 32;
+        let mut checksum = valido.clone();
+        checksum[inizio_digest] ^= 0x01;
+        assert!(matches!(
+            run(&arrow_schema(1, ArrowOperation::Centroid), &checksum),
+            Err(ArrowTransportError::ChecksumMismatch)
+        ));
+        assert!(matches!(
+            run(
+                &arrow_schema(1, ArrowOperation::Centroid),
+                &valido[..inizio_digest + 4]
+            ),
+            Err(ArrowTransportError::Io(_))
+        ));
     }
 
     #[test]

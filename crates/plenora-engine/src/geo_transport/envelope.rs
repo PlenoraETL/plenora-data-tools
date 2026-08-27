@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use sha2::{Digest, Sha256};
 
 use super::error::ArrowTransportError;
+use super::framing::{self, DifettoChiusura};
 use super::protocol::MAX_STREAM_BYTES;
 use super::transport::{ENVELOPE_MAGIC, ENVELOPE_TRAILER_MAGIC};
 
@@ -28,20 +29,16 @@ impl<R: Read> EnvelopeReader<R> {
     /// `ArrowTransportError::StreamTooLarge` se il payload dichiarato supera
     /// `MAX_STREAM_BYTES`, `ArrowTransportError::Io` per errori di lettura.
     pub fn new(mut inner: R) -> Result<Self, ArrowTransportError> {
-        let mut magic = [0_u8; 8];
-        inner.read_exact(&mut magic)?;
-        if &magic != ENVELOPE_MAGIC {
+        let mut header = [0_u8; 16];
+        inner.read_exact(&mut header)?;
+        let Some(payload_len) = framing::contatore_dichiarato(&header, *ENVELOPE_MAGIC) else {
             return Err(ArrowTransportError::InvalidMagic);
-        }
-        let mut payload_len_bytes = [0_u8; 8];
-        inner.read_exact(&mut payload_len_bytes)?;
-        let payload_len = u64::from_le_bytes(payload_len_bytes);
+        };
         if payload_len > MAX_STREAM_BYTES {
             return Err(ArrowTransportError::StreamTooLarge);
         }
         let mut hasher = Sha256::new();
-        hasher.update(magic);
-        hasher.update(payload_len_bytes);
+        hasher.update(header);
         Ok(Self {
             inner,
             hasher,
@@ -70,21 +67,15 @@ impl<R: Read> EnvelopeReader<R> {
         }
         self.hasher.update(&payload);
 
-        let mut trailer_magic = [0_u8; 8];
-        self.inner.read_exact(&mut trailer_magic)?;
-        if &trailer_magic != ENVELOPE_TRAILER_MAGIC {
-            return Err(ArrowTransportError::InvalidTrailer);
-        }
-        let mut expected_digest = [0_u8; 32];
-        self.inner.read_exact(&mut expected_digest)?;
-        let actual_digest: [u8; 32] = self.hasher.finalize().into();
-        if actual_digest != expected_digest {
-            return Err(ArrowTransportError::ChecksumMismatch);
-        }
-        let mut extra = [0_u8; 1];
-        if self.inner.read(&mut extra)? != 0 {
-            return Err(ArrowTransportError::TrailingBytes);
-        }
+        let digest: [u8; 32] = self.hasher.finalize().into();
+        framing::verifica_chiusura(&mut self.inner, *ENVELOPE_TRAILER_MAGIC, &digest).map_err(
+            |difetto| match difetto {
+                DifettoChiusura::Io(errore) => ArrowTransportError::Io(errore),
+                DifettoChiusura::Trailer => ArrowTransportError::InvalidTrailer,
+                DifettoChiusura::Checksum => ArrowTransportError::ChecksumMismatch,
+                DifettoChiusura::ByteResidui => ArrowTransportError::TrailingBytes,
+            },
+        )?;
         Ok(payload)
     }
 }
@@ -108,9 +99,7 @@ impl<W: Write> EnvelopeWriter<W> {
         if payload_len > MAX_STREAM_BYTES {
             return Err(ArrowTransportError::StreamTooLarge);
         }
-        let mut header = [0_u8; 16];
-        header[..8].copy_from_slice(ENVELOPE_MAGIC);
-        header[8..].copy_from_slice(&payload_len.to_le_bytes());
+        let header = framing::header(*ENVELOPE_MAGIC, payload_len);
         inner.write_all(&header)?;
         let mut hasher = Sha256::new();
         hasher.update(header);
@@ -157,9 +146,7 @@ impl<W: Write> EnvelopeWriter<W> {
             });
         }
         let digest: [u8; 32] = self.hasher.finalize().into();
-        self.inner.write_all(ENVELOPE_TRAILER_MAGIC)?;
-        self.inner.write_all(&digest)?;
-        self.inner.flush()?;
+        framing::scrivi_chiusura(&mut self.inner, *ENVELOPE_TRAILER_MAGIC, &digest)?;
         Ok((self.inner, digest))
     }
 }

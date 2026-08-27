@@ -7,6 +7,8 @@ use thiserror::Error;
 
 use plenora_kernels_geo::spatial_join::JoinPair;
 
+use super::framing::{self, DifettoChiusura};
+
 pub const PAIR_MAGIC: &[u8; 8] = b"PLNPAIR1";
 pub const PAIR_TRAILER_MAGIC: &[u8; 8] = b"PAIREND1";
 pub const MAX_PAIRS: u64 = 10_000_000;
@@ -31,10 +33,7 @@ fn header_bytes(pair_count: u64) -> Result<[u8; 16], PairProtocolError> {
     if pair_count > MAX_PAIRS {
         return Err(PairProtocolError::TooManyPairs(pair_count));
     }
-    let mut header = [0_u8; 16];
-    header[..8].copy_from_slice(PAIR_MAGIC);
-    header[8..].copy_from_slice(&pair_count.to_le_bytes());
-    Ok(header)
+    Ok(framing::header(*PAIR_MAGIC, pair_count))
 }
 
 /// Codifica le coppie di indici con header, un frame per coppia e trailer
@@ -62,9 +61,7 @@ pub fn write_pairs<W: Write>(
         hasher.update(frame);
     }
     let digest: [u8; 32] = hasher.finalize().into();
-    writer.write_all(PAIR_TRAILER_MAGIC)?;
-    writer.write_all(&digest)?;
-    writer.flush()?;
+    framing::scrivi_chiusura(&mut writer, *PAIR_TRAILER_MAGIC, &digest)?;
     Ok((writer, digest))
 }
 
@@ -83,11 +80,9 @@ pub fn write_pairs<W: Write>(
 pub fn read_pairs<R: Read>(mut reader: R) -> Result<Vec<JoinPair>, PairProtocolError> {
     let mut header = [0_u8; 16];
     reader.read_exact(&mut header)?;
-    if &header[..8] != PAIR_MAGIC {
+    let Some(pair_count) = framing::contatore_dichiarato(&header, *PAIR_MAGIC) else {
         return Err(PairProtocolError::InvalidMagic);
-    }
-    let [_, _, _, _, _, _, _, _, c0, c1, c2, c3, c4, c5, c6, c7] = header;
-    let pair_count = u64::from_le_bytes([c0, c1, c2, c3, c4, c5, c6, c7]);
+    };
     if pair_count > MAX_PAIRS {
         return Err(PairProtocolError::TooManyPairs(pair_count));
     }
@@ -106,21 +101,15 @@ pub fn read_pairs<R: Read>(mut reader: R) -> Result<Vec<JoinPair>, PairProtocolE
             right: u64::from_le_bytes([r0, r1, r2, r3, r4, r5, r6, r7]),
         });
     }
-    let mut trailer = [0_u8; 8];
-    reader.read_exact(&mut trailer)?;
-    if &trailer != PAIR_TRAILER_MAGIC {
-        return Err(PairProtocolError::InvalidTrailer);
-    }
-    let mut expected = [0_u8; 32];
-    reader.read_exact(&mut expected)?;
-    let actual: [u8; 32] = hasher.finalize().into();
-    if actual != expected {
-        return Err(PairProtocolError::ChecksumMismatch);
-    }
-    let mut extra = [0_u8; 1];
-    if reader.read(&mut extra)? != 0 {
-        return Err(PairProtocolError::TrailingBytes);
-    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    framing::verifica_chiusura(&mut reader, *PAIR_TRAILER_MAGIC, &digest).map_err(|difetto| {
+        match difetto {
+            DifettoChiusura::Io(errore) => PairProtocolError::Io(errore),
+            DifettoChiusura::Trailer => PairProtocolError::InvalidTrailer,
+            DifettoChiusura::Checksum => PairProtocolError::ChecksumMismatch,
+            DifettoChiusura::ByteResidui => PairProtocolError::TrailingBytes,
+        }
+    })?;
     Ok(pairs)
 }
 
@@ -171,6 +160,51 @@ mod tests {
         assert!(matches!(
             read_pairs(extra.as_slice()),
             Err(PairProtocolError::TrailingBytes)
+        ));
+    }
+
+    /// La chiusura di `PLNPAIR1`, un difetto per volta e con la variante
+    /// attesa. Le attese restano qui: quelle di `PLNGEO2` provano un altro
+    /// formato, e farle coincidere per costruzione le renderebbe una sola.
+    #[test]
+    fn ogni_difetto_della_chiusura_ha_la_propria_variante() {
+        let valido = write_pairs(Vec::new(), &[JoinPair { left: 1, right: 2 }])
+            .expect("scrittura")
+            .0;
+        let inizio_trailer = valido.len() - 40;
+        let inizio_digest = valido.len() - 32;
+
+        let mut magic = valido.clone();
+        magic[0] ^= 0x01;
+        assert!(matches!(
+            read_pairs(magic.as_slice()),
+            Err(PairProtocolError::InvalidMagic)
+        ));
+
+        let mut trailer = valido.clone();
+        trailer[inizio_trailer] ^= 0x01;
+        assert!(matches!(
+            read_pairs(trailer.as_slice()),
+            Err(PairProtocolError::InvalidTrailer)
+        ));
+
+        let mut checksum = valido.clone();
+        checksum[inizio_digest] ^= 0x01;
+        assert!(matches!(
+            read_pairs(checksum.as_slice()),
+            Err(PairProtocolError::ChecksumMismatch)
+        ));
+
+        let mut residui = valido.clone();
+        residui.push(0);
+        assert!(matches!(
+            read_pairs(residui.as_slice()),
+            Err(PairProtocolError::TrailingBytes)
+        ));
+
+        assert!(matches!(
+            read_pairs(&valido[..inizio_digest + 4]),
+            Err(PairProtocolError::Io(_))
         ));
     }
 

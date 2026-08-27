@@ -117,58 +117,76 @@ impl SchemaBudget {
     }
 }
 
-fn fb_u16(buf: &[u8], pos: usize) -> Result<u16, ArrowTransportError> {
-    buf.get(pos..pos + 2)
-        .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
-        .map(u16::from_le_bytes)
+/// Somma di posizioni dentro il buffer.
+///
+/// Gli addendi arrivano dal file: un traboccamento e' un riferimento
+/// malformato, non un indirizzo. Sommare senza controllo lo farebbe rientrare
+/// nel buffer da capo — in release — e in debug farebbe panicare il confine
+/// che esiste per non panicare.
+///
+/// Aritmetica totale **localmente**, anche dove il chiamante ha gia' provato
+/// il confine: la garanzia altrui vale finche' resta dove sta.
+fn fb_somma(a: usize, b: usize) -> Result<usize, ArrowTransportError> {
+    a.checked_add(b).ok_or(ArrowTransportError::IpcTruncated)
+}
+
+/// Prodotto di un indice per la dimensione di un elemento.
+///
+/// Stessa ragione della somma: il conteggio degli elementi arriva dal file.
+fn fb_prodotto(indice: usize, dimensione: usize) -> Result<usize, ArrowTransportError> {
+    indice
+        .checked_mul(dimensione)
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
-fn fb_u32(buf: &[u8], pos: usize) -> Result<u32, ArrowTransportError> {
-    buf.get(pos..pos + 4)
-        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-        .map(u32::from_le_bytes)
-        .ok_or(ArrowTransportError::IpcTruncated)
+/// Le quattro letture little-endian dal buffer flatbuffer.
+///
+/// Cambia la larghezza, non la regola: ogni posizione fuori dal buffer e' un
+/// troncamento, mai un valore inventato. La fine dell'intervallo passa da
+/// [`fb_somma`] perche' `pos` arriva dal file, quindi `pos + larghezza` puo'
+/// traboccare — e una lettura che panica al posto di rifiutare non e' un
+/// confine.
+macro_rules! lettura_le {
+    ($nome:ident, $tipo:ty, $byte:literal) => {
+        fn $nome(buf: &[u8], pos: usize) -> Result<$tipo, ArrowTransportError> {
+            let fine = fb_somma(pos, $byte)?;
+            buf.get(pos..fine)
+                .and_then(|bytes| <[u8; $byte]>::try_from(bytes).ok())
+                .map(<$tipo>::from_le_bytes)
+                .ok_or(ArrowTransportError::IpcTruncated)
+        }
+    };
 }
 
-fn fb_i32(buf: &[u8], pos: usize) -> Result<i32, ArrowTransportError> {
-    buf.get(pos..pos + 4)
-        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-        .map(i32::from_le_bytes)
-        .ok_or(ArrowTransportError::IpcTruncated)
-}
-
-fn fb_i64(buf: &[u8], pos: usize) -> Result<i64, ArrowTransportError> {
-    buf.get(pos..pos + 8)
-        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
-        .map(i64::from_le_bytes)
-        .ok_or(ArrowTransportError::IpcTruncated)
-}
+lettura_le!(fb_u16, u16, 2);
+lettura_le!(fb_u32, u32, 4);
+lettura_le!(fb_i32, i32, 4);
+lettura_le!(fb_i64, i64, 8);
 
 /// Tabella flatbuffer in `pos`: ritorna (`vtable_start`, `vtable_len`).
 /// A `pos` c'e' l'`soffset` (i32, distanza alla vtable); `vtable_len` e
 /// `table_len` stanno nella vtable stessa. L'`soffset` puo' essere NEGATIVO:
 /// con vtable deduplicate il writer puo' piazzare la vtable dopo la tabella.
 fn fb_table(buf: &[u8], pos: usize) -> Result<(usize, usize), ArrowTransportError> {
-    let soffset = buf
-        .get(pos..pos + 4)
-        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-        .map(i32::from_le_bytes)
-        .ok_or(ArrowTransportError::IpcTruncated)?;
+    let soffset = fb_i32(buf, pos)?;
     if soffset == 0 {
         return Err(ArrowTransportError::IpcTruncated);
     }
     // Conversioni totali: un offset che non entra in i64/usize e' un
     // riferimento malformato, mai un troncamento silenzioso (R5.4).
-    let vtable_signed =
-        i64::try_from(pos).map_err(|_| ArrowTransportError::IpcTruncated)? - i64::from(soffset);
+    // `checked_sub` perche' un `soffset` negativo — le vtable deduplicate
+    // stanno dopo la tabella — equivale a una somma.
+    let vtable_signed = i64::try_from(pos)
+        .map_err(|_| ArrowTransportError::IpcTruncated)?
+        .checked_sub(i64::from(soffset))
+        .ok_or(ArrowTransportError::IpcTruncated)?;
     let vtable = usize::try_from(vtable_signed).map_err(|_| ArrowTransportError::IpcTruncated)?;
     let vtable_len = fb_u16(buf, vtable)? as usize;
-    let table_len = fb_u16(buf, vtable + 2)? as usize;
+    let table_len = fb_u16(buf, fb_somma(vtable, 2)?)? as usize;
     if vtable_len < 4
         || !vtable_len.is_multiple_of(2)
-        || vtable + vtable_len > buf.len()
-        || pos + table_len > buf.len()
+        || fb_somma(vtable, vtable_len)? > buf.len()
+        || fb_somma(pos, table_len)? > buf.len()
     {
         return Err(ArrowTransportError::IpcTruncated);
     }
@@ -182,24 +200,29 @@ fn fb_field(
     vtable_len: usize,
     index: usize,
 ) -> Result<usize, ArrowTransportError> {
-    let entry = 4 + index * 2;
-    if entry + 2 > vtable_len {
+    let entry = index
+        .checked_mul(2)
+        .and_then(|doppio| doppio.checked_add(4))
+        .ok_or(ArrowTransportError::IpcTruncated)?;
+    if fb_somma(entry, 2)? > vtable_len {
         return Ok(0);
     }
-    let bytes: [u8; 2] = buf
-        .get(vtable + entry..vtable + entry + 2)
-        .and_then(|slice| slice.try_into().ok())
-        .ok_or(ArrowTransportError::IpcTruncated)?;
-    Ok(u16::from_le_bytes(bytes) as usize)
+    Ok(fb_u16(buf, fb_somma(vtable, entry)?)? as usize)
 }
 
 /// Posizione assoluta di un campo indiretto (tabella, vettore, stringa).
+///
+/// La somma con `relative` resta controllata anche se su un bersaglio a 64 bit
+/// non puo' traboccare — `relative` viene da un `u32` e `campo` sta nel buffer
+/// — e nessun test puo' quindi vederla fallire li'. A 32 bit invece i due
+/// addendi ci arrivano vicini, ed e' l'unico controllo che li separa: toglierlo
+/// perche' «la suite resta verde» significherebbe fidarsi della larghezza di
+/// `usize` del bersaglio in cui si e' provato.
 fn fb_indirect(buf: &[u8], table: usize, offset: usize) -> Result<usize, ArrowTransportError> {
-    let relative = fb_u32(buf, table + offset)? as usize;
-    let target = (table + offset)
-        .checked_add(relative)
-        .ok_or(ArrowTransportError::IpcTruncated)?;
-    if target + 4 > buf.len() {
+    let campo = fb_somma(table, offset)?;
+    let relative = fb_u32(buf, campo)? as usize;
+    let target = fb_somma(campo, relative)?;
+    if fb_somma(target, 4)? > buf.len() {
         return Err(ArrowTransportError::IpcTruncated);
     }
     Ok(target)
@@ -213,7 +236,7 @@ fn fb_vector(buf: &[u8], pos: usize, elem_size: usize) -> Result<usize, ArrowTra
         .checked_mul(elem_size)
         .and_then(|bytes| bytes.checked_add(4))
         .ok_or(ArrowTransportError::IpcTruncated)?;
-    if pos + bytes > buf.len() {
+    if fb_somma(pos, bytes)? > buf.len() {
         return Err(ArrowTransportError::IpcTruncated);
     }
     Ok(count)
@@ -225,12 +248,17 @@ fn fb_vector(buf: &[u8], pos: usize, elem_size: usize) -> Result<usize, ArrowTra
 /// contenuto — una chiave da confrontare, una lunghezza da misurare — lo usa.
 /// Una funzione sola, quindi un solo posto dove il controllo dei confini puo'
 /// sbagliare.
+///
+/// [`fb_vector`] ha gia' provato che `pos + 4 + count` stia nel buffer; la
+/// costruzione dell'intervallo resta comunque controllata.
 fn fb_string(buf: &[u8], pos: usize) -> Result<&[u8], ArrowTransportError> {
     let count = fb_vector(buf, pos, 1)?;
-    if pos + 4 + count >= buf.len() {
+    let inizio = fb_somma(pos, 4)?;
+    let fine = fb_somma(inizio, count)?;
+    if fine >= buf.len() {
         return Err(ArrowTransportError::IpcTruncated);
     }
-    buf.get(pos + 4..pos + 4 + count)
+    buf.get(inizio..fine)
         .ok_or(ArrowTransportError::IpcTruncated)
 }
 
@@ -365,7 +393,7 @@ fn fb_custom_metadata_estraendo<'a>(
     let mut viste: BTreeSet<&str> = BTreeSet::new();
     let mut trovato: Option<&str> = None;
     for index in 0..count {
-        let entry = fb_indirect(buf, vector + 4, index * 4)?;
+        let entry = fb_indirect(buf, fb_somma(vector, 4)?, fb_prodotto(index, 4)?)?;
         let (chiave, valore) = fb_key_value(buf, entry)?;
         // Duplicati rifiutati, non risolti. Chi li raccoglie in una mappa
         // applica «vince l'ultima», che per una chiave autoritativa sceglie
@@ -406,7 +434,7 @@ fn fb_field_table(
         let (type_vtable, type_vtable_len) = fb_table(buf, union_table)?;
         if type_type_offset != 0 {
             let type_type = *buf
-                .get(table + type_type_offset)
+                .get(fb_somma(table, type_type_offset)?)
                 .ok_or(ArrowTransportError::IpcTruncated)?;
             if type_type == 14 {
                 let type_ids = fb_field(buf, type_vtable, type_vtable_len, 3)?;
@@ -439,7 +467,7 @@ fn fb_field_table(
         let vector = fb_indirect(buf, table, children)?;
         let count = fb_vector(buf, vector, 4)?;
         for index in 0..count {
-            let child = fb_indirect(buf, vector + 4, index * 4)?;
+            let child = fb_indirect(buf, fb_somma(vector, 4)?, fb_prodotto(index, 4)?)?;
             fb_field_table(buf, child, depth + 1, budget)?;
         }
     }
@@ -461,9 +489,9 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
         let vector = fb_indirect(buf, table, buffers)?;
         let count = fb_vector(buf, vector, 16)?;
         for index in 0..count {
-            let entry = vector + 4 + index * 16;
+            let entry = fb_somma(fb_somma(vector, 4)?, fb_prodotto(index, 16)?)?;
             let buffer_offset = fb_i64(buf, entry)?;
-            let length = fb_i64(buf, entry + 8)?;
+            let length = fb_i64(buf, fb_somma(entry, 8)?)?;
             // Conversione totale: negativi o oltre usize (target a 32 bit)
             // sono offset malformati, rifiutati invece che troncati.
             let end = usize::try_from(buffer_offset)
@@ -526,7 +554,7 @@ fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
         // stesso conto dei campi di primo livello.
         let mut budget = SchemaBudget::new();
         for index in 0..count {
-            let field = fb_indirect(buf, vector + 4, index * 4)?;
+            let field = fb_indirect(buf, fb_somma(vector, 4)?, fb_prodotto(index, 4)?)?;
             fb_field_table(buf, field, 0, &mut budget)?;
         }
     }
@@ -556,7 +584,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
         0
     } else {
         *metadata
-            .get(table + header_type_offset)
+            .get(fb_somma(table, header_type_offset)?)
             .ok_or(ArrowTransportError::IpcTruncated)?
     };
     let header_offset = fb_field(metadata, vtable, vtable_len, 2)?;
@@ -575,7 +603,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
     let body_len = if body_len_offset == 0 {
         0
     } else {
-        let value = fb_i64(metadata, table + body_len_offset)?;
+        let value = fb_i64(metadata, fb_somma(table, body_len_offset)?)?;
         if value < 0 {
             return Err(ArrowTransportError::IpcTruncated);
         }
@@ -1023,13 +1051,16 @@ fn fb_footer_blocks(
         ));
     }
     for index in 0..count {
-        let entry = vector + 4 + index * FOOTER_BLOCK_BYTES;
+        let entry = fb_somma(
+            fb_somma(vector, 4)?,
+            fb_prodotto(index, FOOTER_BLOCK_BYTES)?,
+        )?;
         // Layout dello struct flatbuffer `Block`: offset (i64), poi
         // metaDataLength (i32) con quattro byte di padding, poi bodyLength
         // (i64) — 24 byte in tutto, allineati a 8.
         let block_offset = fb_i64(footer, entry)?;
-        let metadata_len = fb_i32(footer, entry + 8)?;
-        let body_len = fb_i64(footer, entry + 16)?;
+        let metadata_len = fb_i32(footer, fb_somma(entry, 8)?)?;
+        let body_len = fb_i64(footer, fb_somma(entry, 16)?)?;
         let (Ok(offset), Ok(metadata_len), Ok(body_len)) = (
             u64::try_from(block_offset),
             u64::try_from(metadata_len),
@@ -2202,5 +2233,84 @@ mod barriera_antipanico {
             matches!(esito, Err(ArrowTransportError::ArrowPanic(_))),
             "atteso ArrowPanic dalla barriera, ottenuto {esito:?}"
         );
+    }
+}
+
+/// Le posizioni che farebbero traboccare una somma non controllata.
+///
+/// `pos` arriva dal file: `pos + larghezza` puo' uscire da `usize`. Senza
+/// controllo la somma rientrerebbe da capo nel buffer in release, e in debug
+/// farebbe panicare proprio il confine che esiste per non panicare. Qui si
+/// pretende `IpcTruncated`, che e' cio' che la macro promette.
+#[cfg(test)]
+mod somme_al_limite {
+    use super::{
+        fb_field, fb_i32, fb_i64, fb_indirect, fb_string, fb_table, fb_u16, fb_u32, fb_vector,
+        ArrowTransportError,
+    };
+
+    #[test]
+    fn le_quattro_letture_al_limite_di_usize_dicono_troncato() {
+        let vuoto: &[u8] = &[];
+        let pieno = [0_u8; 64];
+        for buf in [vuoto, pieno.as_slice()] {
+            for posizione in [usize::MAX, usize::MAX - 1, usize::MAX - 7] {
+                assert!(
+                    matches!(
+                        fb_u16(buf, posizione),
+                        Err(ArrowTransportError::IpcTruncated)
+                    ),
+                    "fb_u16 a {posizione}"
+                );
+                assert!(
+                    matches!(
+                        fb_u32(buf, posizione),
+                        Err(ArrowTransportError::IpcTruncated)
+                    ),
+                    "fb_u32 a {posizione}"
+                );
+                assert!(
+                    matches!(
+                        fb_i32(buf, posizione),
+                        Err(ArrowTransportError::IpcTruncated)
+                    ),
+                    "fb_i32 a {posizione}"
+                );
+                assert!(
+                    matches!(
+                        fb_i64(buf, posizione),
+                        Err(ArrowTransportError::IpcTruncated)
+                    ),
+                    "fb_i64 a {posizione}"
+                );
+            }
+        }
+    }
+
+    /// Le stesse posizioni sui lettori composti: ognuno somma per conto suo,
+    /// e nessuna di quelle somme puo' panicare.
+    #[test]
+    fn i_lettori_composti_al_limite_di_usize_dicono_troncato() {
+        let buf = [0_u8; 64];
+        assert!(matches!(
+            fb_table(&buf, usize::MAX),
+            Err(ArrowTransportError::IpcTruncated)
+        ));
+        assert!(matches!(
+            fb_field(&buf, usize::MAX, usize::MAX, usize::MAX),
+            Err(ArrowTransportError::IpcTruncated)
+        ));
+        assert!(matches!(
+            fb_indirect(&buf, usize::MAX, 4),
+            Err(ArrowTransportError::IpcTruncated)
+        ));
+        assert!(matches!(
+            fb_vector(&buf, usize::MAX, 16),
+            Err(ArrowTransportError::IpcTruncated)
+        ));
+        assert!(matches!(
+            fb_string(&buf, usize::MAX),
+            Err(ArrowTransportError::IpcTruncated)
+        ));
     }
 }
