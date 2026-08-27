@@ -14,8 +14,8 @@ use serde::Deserialize;
 use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
-    column_index, exact_f64_from_i64, exact_f64_from_u64, replace_or_append, scalar_as_f64_rounded,
-    scalar_as_string, select_rows, validate_output_name,
+    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
+    validate_output_name,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -179,26 +179,26 @@ impl<'a> NumericColumn<'a> {
             } else {
                 Some(values.value(row))
             }),
-            Self::Int64(values) => {
-                if values.is_null(row) {
-                    return Ok(None);
-                }
-                exact_f64_from_i64(values.value(row))
-                    .map(Some)
-                    .ok_or_else(|| {
-                        PlenoraError::Schema("intero non rappresentabile come f64".into())
-                    })
-            }
-            Self::UInt64(values) => {
-                if values.is_null(row) {
-                    return Ok(None);
-                }
-                exact_f64_from_u64(values.value(row))
-                    .map(Some)
-                    .ok_or_else(|| {
-                        PlenoraError::Schema("uint64 non rappresentabile come f64".into())
-                    })
-            }
+            // **Tutti i rami devono concordare con `scalar_as_f64_rounded`.**
+            // Sono percorsi veloci per i tipi fisici Arrow piu' comuni, non
+            // una semantica alternativa: se uno di essi rifiutasse o
+            // convertisse diversamente dal ramo generico qui sotto, lo stesso
+            // valore darebbe esiti diversi a seconda di come e' codificata la
+            // colonna. Il risultato di queste aggregazioni e' un `Float64`
+            // per contratto, quindi si arrotonda
+            // (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
+            Self::Int64(values) => Ok(if values.is_null(row) {
+                None
+            } else {
+                Some(values.value(row) as f64)
+            }),
+            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
+            Self::UInt64(values) => Ok(if values.is_null(row) {
+                None
+            } else {
+                Some(values.value(row) as f64)
+            }),
             Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
         }
     }
@@ -706,8 +706,12 @@ fn pivot_column(
 /// - `Schema`: colonna indice/pivot/valore assente;
 /// - `ResourceLimit`: chiavi o colonne di output oltre i limiti `max_rows`/
 ///   `max_columns`, nome di colonna di output non valido, oppure gli errori
-///   di conversione/indice di `pivot_column` (es. intero non rappresentabile
-///   come f64 nelle aggregazioni numeriche).
+///   di conversione/indice di `pivot_column`.
+///
+/// Un intero oltre 2^53 **non** e' un errore: le aggregazioni numeriche di
+/// `pivot` producono un `Float64` per contratto, quindi la conversione
+/// arrotonda
+/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
 // Pipeline lineare (una passata di raggruppamento, ordinamento di chiavi e
 // pivot, take sulle colonne indice, materializzazione delle colonne pivot):
 // lunga per costruzione, uno spezzone artificiale peggiorerebbe la

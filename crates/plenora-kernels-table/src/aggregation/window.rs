@@ -54,9 +54,12 @@ pub struct RollingWindow {
 /// - `ResourceLimit`: dimensioni/divisori della finestra non rappresentabili
 ///   come `f64` (dipendono dal numero di righe nella finestra);
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
-///   schema; valore intero non rappresentabile come `f64`; in piu' gli
-///   errori di `sort`, `scalar_as_string`/`scalar_as_f64` e
-///   `replace_or_append`.
+///   schema; in piu' gli errori di `sort`,
+///   `scalar_as_string`/`scalar_as_f64_rounded` e `replace_or_append`.
+///
+/// Un intero oltre 2^53 **non** e' un errore: il risultato e' un `Float64`
+/// per contratto, quindi la conversione arrotonda
+/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return Err(PlenoraError::InvalidPlan(
@@ -204,9 +207,12 @@ pub struct WindowFunction {
 /// - `InvalidPlan`: `offset` nullo; `ntile` senza `buckets` maggiore di zero;
 ///   `buckets` specificato per una funzione diversa da `ntile`;
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
-///   schema; valore intero non rappresentabile come `f64`; in piu' gli
-///   errori di `sort`, `scalar_as_string`/`scalar_as_f64` e
-///   `replace_or_append`.
+///   schema; in piu' gli errori di `sort`,
+///   `scalar_as_string`/`scalar_as_f64_rounded` e `replace_or_append`.
+///
+/// Un intero oltre 2^53 **non** e' un errore: il risultato e' un `Float64`
+/// per contratto, quindi la conversione arrotonda
+/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
         return Err(PlenoraError::InvalidPlan(

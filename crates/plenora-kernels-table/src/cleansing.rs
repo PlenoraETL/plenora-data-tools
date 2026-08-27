@@ -817,9 +817,15 @@ fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>
 /// `cast(to: "float")` e' l'operazione con cui l'utente CHIEDE un `Float64`:
 /// l'arrotondamento al double piu' vicino e' la sua semantica, non un
 /// difetto. Un `i64`/`u64` oltre 2^53 perde quindi le cifre basse, come in
-/// qualunque cast a virgola mobile. E' l'unico punto del kernel in cui la
-/// conversione intero -> f64 e' volutamente lossy; ovunque altro vale
-/// `exact_f64_from_*` (esatta o errore).
+/// qualunque cast a virgola mobile.
+///
+/// Non e' l'unico punto in cui la conversione intero -> f64 e' volutamente
+/// lossy: lo sono anche le operazioni il cui risultato e' un `Float64` **per
+/// contratto** — aggregazioni, finestre, pivot numerico
+/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+/// `exact_f64_from_*` (esatta o errore) resta la regola dove il double e' un
+/// passaggio intermedio o partecipa a una decisione, come la chiave `on` di
+/// `asof_join`.
 ///
 /// La deroga e' qui e non implicita: i cast espliciti sotto non fingono un
 /// controllo di rappresentabilita' che non c'e'.
