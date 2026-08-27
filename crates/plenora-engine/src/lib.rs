@@ -81,6 +81,11 @@ mod classificazione;
 pub(crate) mod commit_footer;
 mod commit_token;
 mod error_propagation;
+// La rappresentazione condivisa dal `commit_token` e dal digest del
+// protocollo: 32 byte in esadecimale minuscolo. Privata alla radice e **mai**
+// ri-esportata — cio' che esce dal crate sono i due tipi che la usano, non la
+// forma che hanno in comune.
+mod esadecimale32;
 pub mod executor;
 pub mod geo_transport;
 pub mod governor;

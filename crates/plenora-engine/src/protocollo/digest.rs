@@ -14,10 +14,10 @@
 //!
 //! # Perche' resta distinto da `CommitToken`
 //!
-//! La rappresentazione e' la stessa — 32 byte, 64 caratteri esadecimali
-//! minuscoli — e la tentazione di unificarli e' esattamente il motivo per cui
-//! sono due tipi. Differiscono in **cosa dicono** e in **cosa si puo'
-//! mostrare**:
+//! La rappresentazione e' **la stessa**, e infatti e' condivisa:
+//! [`crate::esadecimale32`] tiene i 32 byte, il parsing, la forma canonica e
+//! la lettura sanificata. Cio' che i due tipi non condividono e' quel che li
+//! rende due tipi:
 //!
 //! - un digest e' l'identita' di un contenuto, e va **confrontato**: `Debug` e
 //!   `Display` lo mostrano, perche' vedere due digest diversi affiancati e'
@@ -25,28 +25,18 @@
 //! - un `commit_token` identifica un **tentativo**, e non compare mai: ne'
 //!   in `Debug`, ne' in `Display`, ne' in un errore.
 //!
-//! Un tipo solo avrebbe dovuto scegliere una delle due politiche, e
-//! qualunque scelta sarebbe stata sbagliata per meta' degli usi. La piu'
-//! pericolosa e' la piu' comoda: mostrarli tutti, e scoprire un giorno che il
-//! token e' finito in un log perche' condivideva un `Debug` con qualcosa che
-//! non era segreto.
+//! La primitiva condivisa non ha percio' ne' `Debug` ne' `Display`: darglieli
+//! avrebbe imposto una politica a entrambi, e la piu' comoda — mostrare — e'
+//! quella che un giorno mette il token in un log.
 
 use std::fmt;
 
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Byte di un digest SHA-256: **32**, ed e' questa l'autorita'.
-///
-/// I 64 caratteri della forma sul filo si derivano da qui — `limiti.rs` li
-/// calcola come `DIGEST_BYTES * 2` — e non il contrario. Derivare i byte dai
-/// caratteri sembrava equivalente e non lo e': `caratteri / 2` su un numero
-/// dispari ne perderebbe uno in silenzio, e un 66 continuerebbe a compilare
-/// dichiarando 33 byte, che non e' piu' uno SHA-256. Il numero che non puo'
-/// cambiare senza cambiare algoritmo e' questo.
-pub const DIGEST_BYTES: usize = 32;
+use crate::esadecimale32::{self, DaEsadecimale32, Esadecimale32, FormaNonValida};
 
-/// Caratteri della forma esadecimale, derivati.
-const DIGEST_CARATTERI: usize = DIGEST_BYTES * 2;
+/// Byte di un digest SHA-256: **32**, e l'autorita' e' quella della primitiva.
+pub const DIGEST_BYTES: usize = esadecimale32::BYTE;
 
 /// Perche' un testo non e' un digest.
 ///
@@ -66,9 +56,10 @@ pub enum FormaDigestNonValida {
     },
     /// Un carattere non e' esadecimale minuscolo.
     ///
-    /// Le maiuscole non sono una variante accettabile: il confronto fra i due
-    /// lati e' un confronto di stringhe, e `AA…` e `aa…` sarebbero due digest
-    /// diversi dello stesso valore.
+    /// Una variante sola dove il `commit_token` ne ha due: qui la maiuscola e
+    /// la spazzatura portano alla stessa azione — riscrivere il campo — mentre
+    /// per il token la distinzione dice a chi legge che il valore poteva
+    /// essere giusto e la grafia no.
     NonEsadecimaleMinuscolo {
         /// Posizione, in byte dall'inizio.
         posizione: usize,
@@ -94,15 +85,8 @@ impl fmt::Display for FormaDigestNonValida {
 impl std::error::Error for FormaDigestNonValida {}
 
 /// Un digest SHA-256 valido, per costruzione.
-///
-/// I 32 byte non sono raggiungibili: la sola uscita e' la forma canonica,
-/// **ricostruita** dai byte e non conservata dal testo d'origine, cosi' non
-/// puo' esistere un digest che rende una grafia diversa da quella che
-/// viaggera' sul filo.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DigestSha256 {
-    byte: [u8; DIGEST_BYTES],
-}
+pub struct DigestSha256(Esadecimale32);
 
 impl DigestSha256 {
     /// Interpreta un testo come digest.
@@ -112,52 +96,45 @@ impl DigestSha256 {
     /// [`FormaDigestNonValida`] se non e' esattamente 64 caratteri esadecimali
     /// minuscoli.
     pub fn da_esadecimale(testo: &str) -> Result<Self, FormaDigestNonValida> {
-        // Sui byte e non sui caratteri, e il numero riportato e' la stessa
-        // misura che ha deciso: due misure diverse nello stesso errore si
-        // contraddicono proprio nei casi in cui l'errore serve.
-        if testo.len() != DIGEST_CARATTERI {
-            return Err(FormaDigestNonValida::LunghezzaErrata {
-                attesi: DIGEST_CARATTERI,
-                trovati: testo.len(),
-            });
-        }
-        let (coppie, _) = testo.as_bytes().as_chunks::<2>();
-        let mut byte = [0_u8; DIGEST_BYTES];
-        for (indice, coppia) in coppie.iter().enumerate() {
-            let alto = cifra(coppia[0], indice * 2)?;
-            let basso = cifra(coppia[1], indice * 2 + 1)?;
-            byte[indice] = (alto << 4) | basso;
-        }
-        Ok(Self { byte })
+        Esadecimale32::da_esadecimale(testo)
+            .map(Self)
+            .map_err(Self::da_forma_non_valida)
     }
 
     /// La forma canonica: 64 caratteri esadecimali minuscoli.
     pub fn in_esadecimale(&self) -> String {
-        const CIFRE: &[u8; 16] = b"0123456789abcdef";
-        let mut fuori = String::with_capacity(DIGEST_CARATTERI);
-        for grezzo in self.byte {
-            fuori.push(char::from(CIFRE[usize::from(grezzo >> 4)]));
-            fuori.push(char::from(CIFRE[usize::from(grezzo & 0x0F)]));
-        }
-        fuori
+        self.0.in_esadecimale()
     }
 }
 
-/// Il valore di una cifra esadecimale **minuscola**.
-const fn cifra(grezzo: u8, posizione: usize) -> Result<u8, FormaDigestNonValida> {
-    match grezzo {
-        b'0'..=b'9' => Ok(grezzo - b'0'),
-        b'a'..=b'f' => Ok(grezzo - b'a' + 10),
-        _ => Err(FormaDigestNonValida::NonEsadecimaleMinuscolo { posizione }),
+impl DaEsadecimale32 for DigestSha256 {
+    type Errore = FormaDigestNonValida;
+
+    const NOME: &'static str = "il digest";
+
+    fn da_esadecimale32(primitiva: Esadecimale32) -> Self {
+        Self(primitiva)
+    }
+
+    fn da_forma_non_valida(difetto: FormaNonValida) -> Self::Errore {
+        match difetto {
+            FormaNonValida::LunghezzaErrata { attesi, trovati } => {
+                FormaDigestNonValida::LunghezzaErrata { attesi, trovati }
+            }
+            FormaNonValida::Maiuscolo { posizione }
+            | FormaNonValida::NonEsadecimale { posizione } => {
+                FormaDigestNonValida::NonEsadecimaleMinuscolo { posizione }
+            }
+        }
     }
 }
 
 /// Mostra il valore, a differenza di `CommitToken`.
 ///
 /// Un digest e' l'identita' di un contenuto e serve **confrontarlo**: due
-/// digest diversi affiancati sono la diagnosi di un disaccordo. Il motivo per
-/// cui questa riga esiste e' che la scelta sia deliberata e scritta, non
-/// ereditata da un `derive`.
+/// digest diversi affiancati sono la diagnosi di un disaccordo. La scelta e'
+/// scritta e non ereditata da un `derive`, perche' e' meta' della ragione per
+/// cui questo tipo esiste separato.
 impl fmt::Debug for DigestSha256 {
     fn fmt(&self, formattatore: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formattatore, "DigestSha256({})", self.in_esadecimale())
@@ -172,76 +149,14 @@ impl fmt::Display for DigestSha256 {
 
 impl Serialize for DigestSha256 {
     fn serialize<S: Serializer>(&self, serializzatore: S) -> Result<S::Ok, S::Error> {
-        serializzatore.serialize_str(&self.in_esadecimale())
+        self.0.serializza(serializzatore)
     }
 }
 
 /// Accetta **solo** la forma canonica.
-///
-/// `deserialize_any` e non `deserialize_str`, per la stessa ragione del
-/// `commit_token`: di fronte a un numero `serde_json` non chiamerebbe il
-/// visitatore e comporrebbe da se' un messaggio **dal valore letto**.
 impl<'de> Deserialize<'de> for DigestSha256 {
     fn deserialize<D: Deserializer<'de>>(deserializzatore: D) -> Result<Self, D::Error> {
-        deserializzatore.deserialize_any(VisitatoreDigest)
-    }
-}
-
-/// Il rifiuto di cio' che non e' testo, **senza** il valore.
-fn non_testuale<E: de::Error>() -> E {
-    E::custom(format_args!(
-        "il digest deve essere una stringa di {DIGEST_CARATTERI} caratteri \
-         esadecimali minuscoli, non un valore di un altro tipo"
-    ))
-}
-
-/// Un visitatore **suo**, non quello del `commit_token`.
-///
-/// I due tipi hanno la stessa forma e politiche di riservatezza diverse:
-/// condividere il visitatore significherebbe condividere anche la scelta su
-/// cosa un messaggio d'errore puo' dire, che e' precisamente cio' che li
-/// distingue.
-struct VisitatoreDigest;
-
-impl de::Visitor<'_> for VisitatoreDigest {
-    type Value = DigestSha256;
-
-    fn expecting(&self, formattatore: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formattatore,
-            "una stringa di {DIGEST_CARATTERI} caratteri esadecimali minuscoli"
-        )
-    }
-
-    fn visit_str<E: de::Error>(self, testo: &str) -> Result<Self::Value, E> {
-        DigestSha256::da_esadecimale(testo).map_err(E::custom)
-    }
-
-    // Le larghezze minori ricadono per default su questi; i due a 128 bit no,
-    // e il loro default di `serde` nomina il tipo invece del valore. Sono
-    // coperti lo stesso perche' quel default appartiene a una dipendenza.
-    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
-        Err(non_testuale())
-    }
-
-    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
-        Err(non_testuale())
-    }
-
-    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
-        Err(non_testuale())
-    }
-
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
-        Err(non_testuale())
-    }
-
-    fn visit_i128<E: de::Error>(self, _: i128) -> Result<Self::Value, E> {
-        Err(non_testuale())
-    }
-
-    fn visit_u128<E: de::Error>(self, _: u128) -> Result<Self::Value, E> {
-        Err(non_testuale())
+        esadecimale32::deserializza(deserializzatore)
     }
 }
 
