@@ -6,6 +6,15 @@ set -uo pipefail
 IMAGE="${FUZZ_IMAGE:-plenora-rust:nightly-fuzz}"
 SECONDS_PER_TARGET="${FUZZ_SMOKE_SECONDS:-90}"
 CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
+# Dove sta `cargo-fuzz` sull'host, montato read-only su /fuzzbin.
+#
+# Il default e' **sotto la home**, non `C:/tmp/...`: quel percorso era la
+# macchina di chi ha scritto lo script scritta dentro lo script, e su
+# qualunque altra non esiste. `$HOME` esiste ovunque, Git Bash compreso, e
+# Docker Desktop sa montare da li'. Chi lo tiene altrove passa `FUZZBIN_HOST`,
+# che e' lo stesso nome gia' usato da `fuzz-campaign.sh`: due script che
+# montano la stessa cosa non possono avere due nomi per dirlo.
+FUZZBIN_HOST="${FUZZBIN_HOST:-$HOME/.plenora-fuzz/bin}"
 
 ALL_TARGETS=(
     plan_contract string_chain candidate_chain binary_ops
@@ -17,6 +26,11 @@ ALL_TARGETS=(
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=scripts/fuzz-preflight.sh
+. "$PROJECT_ROOT/scripts/fuzz-preflight.sh"
+fuzz_preflight "$IMAGE" "$CARGO_FUZZ" "$FUZZBIN_HOST" || exit 1
+
 mkdir -p "$PROJECT_ROOT/fuzz/campaign-logs"
 SUMMARY="$PROJECT_ROOT/fuzz/campaign-logs/smoke-summary.txt"
 echo "== smoke $(date -Is): ${TARGETS[*]} (${SECONDS_PER_TARGET}s)" >> "$SUMMARY"
@@ -32,7 +46,7 @@ for target in "${TARGETS[@]}"; do
     log="$PROJECT_ROOT/fuzz/campaign-logs/smoke-$target.log"
     MSYS_NO_PATHCONV=1 docker run --rm --cpus=4 --memory=10g \
         -v "$PROJECT_ROOT:/work" \
-        -v "C:/tmp/plenora-geo-tools-arrow/.fuzz-cargo/bin:/fuzzbin:ro" \
+        -v "$FUZZBIN_HOST:/fuzzbin:ro" \
         -w /work/fuzz -e CARGO_TERM_COLOR=never \
         "$IMAGE" \
         "$CARGO_FUZZ" fuzz run "$target" -- \

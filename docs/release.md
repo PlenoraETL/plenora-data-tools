@@ -261,14 +261,57 @@ release**, non una voce di arretrato. Se una campagna lunga trova qualcosa
 dopo il merge, la release aspetta quella fix: il momento in cui il difetto è
 emerso non cambia che cosa sarebbe successo in produzione.
 
-Lo smoke locale ha un prerequisito che **oggi non è riproducibile**:
-`scripts/fuzz-smoke.sh` gira in un'immagine (`plenora-rust:nightly-fuzz`) e
-monta `cargo-fuzz` da un percorso fisso dell'host. Nessuno dei due nasce da
-solo, e se manca lo script fallisce con un errore di Docker che non nomina la
-causa. La procedura riproducibile è lavoro suo — parametrizzare il percorso,
-dargli un default neutro, diagnosticare esplicitamente ciò che manca — e non
-sta qui: fino ad allora lo smoke prima del merge richiede un ambiente
-preparato a mano, ed è un costo dichiarato, non una svista.
+### Preparare l'ambiente locale
+
+`fuzz-smoke.sh` e `fuzz-campaign.sh` girano in un'immagine
+(`plenora-rust:nightly-fuzz`) e montano `cargo-fuzz` da una cartella dell'host
+(`FUZZBIN_HOST`, default `$HOME/.plenora-fuzz/bin`). Nessuno dei due nasce da
+solo: si costruiscono una volta, con la configurazione **del workflow** e non
+con una variante locale — stessa nightly datata, stessa versione di
+`cargo-fuzz`.
+
+```sh
+# 1. L'immagine: la pinnata piu' la nightly datata di fuzz.yml. Nessun
+#    componente in piu': il workflow non ne chiede, e chiederne uno che quella
+#    nightly non ha fa fallire la build senza dire perche'.
+printf 'FROM rust:1.98\nRUN rustup toolchain install nightly-2026-08-01\n\
+ENV RUSTUP_TOOLCHAIN=nightly-2026-08-01\n' \
+  | docker build -t plenora-rust:nightly-fuzz -
+# 2. `cargo-fuzz` dove gli script lo montano. `--root` scrive in `bin/`, ed e'
+#    quel `bin/` che viene montato: il binario deve trovarsi in
+#    `/fuzzbin/cargo-fuzz`, non in `/fuzzbin/bin/cargo-fuzz`.
+#    `MSYS_NO_PATHCONV=1` serve su Git Bash per Windows, che altrimenti
+#    riscrive `/out` in un percorso Windows dentro l'argomento di `-v`; sugli
+#    altri sistemi e' una variabile che nessuno legge, quindi si lascia.
+MSYS_NO_PATHCONV=1 docker run --rm -v "$HOME/.plenora-fuzz:/out" \
+  plenora-rust:nightly-fuzz \
+  cargo install cargo-fuzz --version 0.13.2 --locked --root /out
+# 3. Lo smoke dei soli target coinvolti.
+FUZZ_TARGETS=protocollo_frame scripts/fuzz-smoke.sh
+```
+
+Se qualcosa manca, gli script **lo dicono e si fermano prima di partire**
+(`scripts/fuzz-preflight.sh`, condiviso fra smoke e campagna). Non è cortesia:
+senza quel controllo Docker fallisce con «pull access denied for
+plenora-rust» — che manda a cercare credenziali per un'immagine che non è su
+nessun registry — o con un mount vuoto, e in una campagna da ore lo si scopre
+la mattina dopo.
+
+I casi sono tre e vanno **distinti**, perché una diagnosi sbagliata costa più
+di nessuna diagnosi:
+
+- **il daemon non risponde.** Si controlla per primo: `docker image inspect`
+  fallisce allo stesso modo se l'immagine non c'è e se Docker è spento, quindi
+  senza questo controllo un Docker Desktop chiuso veniva riportato come
+  «immagine mancante» e mandava a ricostruire un'immagine che c'era già;
+- **l'immagine non c'è.** Ora che il daemon risponde, l'assenza è assenza;
+- **il binario non è eseguibile.** Si prova quello **configurato**
+  (`FUZZ_CARGO_FUZZ`, default `/fuzzbin/cargo-fuzz`) dentro il container e con
+  lo stesso mount del run vero, non un percorso sull'host: chi punta a un
+  binario dell'immagine non ha bisogno di alcun mount e non va rifiutato, e
+  chi ne monta uno con un altro nome non va approvato guardando altrove.
+  `--version` dimostra insieme presenza ed eseguibilità — un binario per
+  l'architettura sbagliata esiste e non parte.
 
 Il solo step `cargo fuzz run` gira su toolchain **nightly**, mentre build,
 test, clippy e gate anti-panico restano sulla pinnata. È una divergenza
