@@ -12,6 +12,8 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::lcg::Lcg;
+
 use comune::run_scenario;
 
 use std::sync::Arc;
@@ -22,27 +24,6 @@ use plenora_kernels_table::fuzzy::{fuzzy_join, FuzzyJoin};
 use plenora_kernels_table::Limits;
 use serde_json::json;
 
-/// LCG deterministico (Knuth MMIX), seed logico 42.
-struct Lcg(u64);
-
-impl Lcg {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next_u64(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 11
-    }
-
-    const fn below(&mut self, bound: u64) -> u64 {
-        self.next_u64() % bound
-    }
-}
-
 const SYLLABLES: &[&str] = &[
     "mar", "ros", "ber", "lan", "gio", "van", "fer", "col", "ric", "fra", "gal", "ben", "pas",
     "lom", "tre", "vis", "zan", "qui", "dor", "mel", "nar", "fos", "bru", "car", "sil", "tam",
@@ -51,7 +32,7 @@ const SYLLABLES: &[&str] = &[
 
 /// Nome sintetico da tre sillabe (lettera iniziale maiuscola).
 fn name_of(seed: u64) -> String {
-    let mut lcg = Lcg(seed.wrapping_add(1));
+    let mut lcg = Lcg::con_seme(seed.wrapping_add(1));
     // Bound evidente: below(n) < n e n = SYLLABLES.len() deriva da usize,
     // quindi il risultato rientra in usize.
     #[allow(clippy::cast_possible_truncation)]
@@ -71,7 +52,7 @@ fn name_of(seed: u64) -> String {
 /// Errore di battitura deterministico: trasposizione di due caratteri
 /// adiacenti o sostituzione con una lettera vicina.
 fn typo(name: &str, seed: u64) -> String {
-    let mut lcg = Lcg(seed.wrapping_add(7));
+    let mut lcg = Lcg::con_seme(seed.wrapping_add(7));
     let mut chars: Vec<char> = name.chars().collect();
     if chars.len() < 2 {
         return name.to_owned();

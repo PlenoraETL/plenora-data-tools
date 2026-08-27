@@ -12,6 +12,8 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::lcg::Lcg;
+
 use comune::run_scenario;
 
 use std::sync::Arc;
@@ -20,27 +22,6 @@ use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::joins::{anti_join, join, semi_join, Join, JoinHow, MembershipJoin};
 use plenora_kernels_table::Limits;
-
-/// LCG deterministico (Knuth MMIX), seed logico 42.
-struct Lcg(u64);
-
-impl Lcg {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next_u64(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 11
-    }
-
-    const fn below(&mut self, bound: u64) -> u64 {
-        self.next_u64() % bound
-    }
-}
 
 fn left_table(rows: usize, keys: ArrayRef) -> RecordBatch {
     let payload = (0..rows)
