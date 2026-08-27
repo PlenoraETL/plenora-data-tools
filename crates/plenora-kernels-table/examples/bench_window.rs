@@ -14,12 +14,13 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::fixture::base_fixture;
+
 use comune::measure;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
-use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::arrow::array::RecordBatch;
 use plenora_kernels_table::aggregation::{
     dedup_advanced, distinct, rolling_window, window_function, DedupAdvanced, Distinct, Keep,
     RollingKind, RollingWindow, WindowFunction, WindowKind,
@@ -29,81 +30,9 @@ const M1: usize = 1_000_000;
 const M10: usize = 10_000_000;
 
 /// RNG deterministico (xorshift64*, identico a `bench_sweep`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
-
 /// Fixture base dello sweep, copiata verbatim: `id` int64, `num` float64,
 /// `grp` utf8 (1024 gruppi), `text` utf8 (40 char), `key` int64 (~1M
 /// distinti), `path` utf8.
-fn base_fixture(rows: usize) -> RecordBatch {
-    let mut rng = Rng::seeded();
-    let mut ids = Vec::with_capacity(rows);
-    let mut nums = Vec::with_capacity(rows);
-    let mut groups = Vec::with_capacity(rows);
-    let mut texts = Vec::with_capacity(rows);
-    let mut keys = Vec::with_capacity(rows);
-    let mut paths = Vec::with_capacity(rows);
-    for row in 0..rows {
-        ids.push(i64::try_from(row).ok());
-        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
-        #[allow(clippy::cast_precision_loss)]
-        nums.push(Some((rng.next() % 1_000_000) as f64 / 100.0));
-        groups.push(format!("g{}", rng.next() % 1_024));
-        texts.push(format!(
-            "{:016x}{:016x}{:08x}",
-            rng.next(),
-            rng.next(),
-            rng.next() & 0xffff_ffff
-        ));
-        // Bound evidente: draw % 1_000_000 <= 999_999, entra in i64 senza wrap.
-        #[allow(clippy::cast_possible_wrap)]
-        keys.push((rng.next() % 1_000_000) as i64);
-        paths.push(format!(
-            "p{:03}/q{:03}/r{:03}",
-            rng.next() % 500,
-            rng.next() % 500,
-            rng.next() % 500
-        ));
-    }
-    let schema = Schema::new_with_metadata(
-        vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("num", DataType::Float64, false),
-            Field::new("grp", DataType::Utf8, false),
-            Field::new("text", DataType::Utf8, false),
-            Field::new("key", DataType::Int64, false),
-            Field::new("path", DataType::Utf8, false),
-        ],
-        std::iter::once(("source".to_owned(), "bench_sweep".to_owned())).collect(),
-    );
-    RecordBatch::try_new(
-        Arc::new(schema),
-        vec![
-            Arc::new(Int64Array::from(ids)),
-            Arc::new(Float64Array::from(nums)),
-            Arc::new(StringArray::from(groups)),
-            Arc::new(StringArray::from(texts)),
-            Arc::new(Int64Array::from(keys)),
-            Arc::new(StringArray::from(paths)),
-        ],
-    )
-    .expect("fixture base")
-}
-
 static BASE_1M: OnceLock<RecordBatch> = OnceLock::new();
 static BASE_10M: OnceLock<RecordBatch> = OnceLock::new();
 

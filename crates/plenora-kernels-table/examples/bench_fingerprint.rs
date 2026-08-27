@@ -13,6 +13,7 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::rng::Rng;
 use comune::run_scenario;
 
 use std::sync::Arc;
@@ -28,23 +29,6 @@ use plenora_kernels_table::security::{
 const HMAC_KEY_ENV: &str = "PLENORA_BENCH_HMAC_KEY";
 
 /// RNG deterministico (xorshift64*, identico a `bench_sweep`/`bench_sweep2`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
-
 /// Fixture base: identica a `base_fixture` di `bench_sweep2.rs` (seed 42).
 fn fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();

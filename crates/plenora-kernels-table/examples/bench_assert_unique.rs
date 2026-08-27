@@ -21,6 +21,7 @@
 mod comune;
 
 use comune::peak_rss_kib;
+use comune::rng::Rng;
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -32,23 +33,6 @@ use plenora_kernels_table::quality::{assert_unique, AssertUnique};
 use serde_json::json;
 
 /// RNG deterministico (xorshift64*, stesso schema di `bench_sweep2`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
-
 /// Fixture base condivisa: identica a `bench_sweep2::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();

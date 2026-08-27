@@ -18,7 +18,10 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::fixture::right_fixture;
+
 use comune::measure;
+use comune::rng::Rng;
 
 use std::sync::Arc;
 
@@ -30,23 +33,6 @@ use plenora_kernels_table::security::{mask_data, MaskData, MaskType, Masking};
 use plenora_kernels_table::Limits;
 
 /// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
-
 /// Fixture base condivisa: identica a `bench_sweep::base_fixture`.
 fn base_fixture(rows: usize) -> RecordBatch {
     let mut rng = Rng::seeded();
@@ -104,34 +90,6 @@ fn base_fixture(rows: usize) -> RecordBatch {
 }
 
 /// Fixture destra per diff/FK: identica a `bench_sweep::right_fixture`.
-fn right_fixture(rows: usize) -> RecordBatch {
-    let mut rng = Rng::seeded();
-    let mut ids = Vec::with_capacity(rows);
-    let mut nums = Vec::with_capacity(rows);
-    let mut rvals = Vec::with_capacity(rows);
-    for row in 0..rows {
-        ids.push(i64::try_from(row).ok());
-        // Bound evidente: draw % 1_000_000 <= 999_999 < 2^53, cast esatto in f64.
-        #[allow(clippy::cast_precision_loss)]
-        let base = (rng.next() % 1_000_000) as f64 / 100.0;
-        nums.push(Some(if row % 10 == 0 { base + 1.0 } else { base }));
-        rvals.push(format!("r{:016x}", rng.next()));
-    }
-    RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("num", DataType::Float64, false),
-            Field::new("rval", DataType::Utf8, false),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(ids)),
-            Arc::new(Float64Array::from(nums)),
-            Arc::new(StringArray::from(rvals)),
-        ],
-    )
-    .expect("fixture destra")
-}
-
 /// Limiti allargati per le scale di benchmark (come `bench_sweep`).
 fn bench_limits() -> Limits {
     Limits {

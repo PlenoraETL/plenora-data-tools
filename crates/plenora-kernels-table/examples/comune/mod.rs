@@ -28,6 +28,9 @@
 // non e' codice morto, e' codice di un altro benchmark.
 #![allow(dead_code)]
 
+pub mod fixture;
+pub mod rng;
+
 use std::hint::black_box;
 use std::time::Instant;
 

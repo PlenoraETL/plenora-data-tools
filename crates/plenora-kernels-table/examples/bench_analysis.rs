@@ -18,33 +18,19 @@
 #[path = "comune/mod.rs"]
 mod comune;
 
+use comune::fixture::json_fixture;
+
 use comune::measure;
+use comune::rng::Rng;
 
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{Float64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::analysis::{flatten_json, statistics, FlattenJson, Stat, Statistics};
 use plenora_kernels_table::Limits;
 
 /// RNG deterministico (xorshift64*, stesso schema di `bench_sweep`).
-struct Rng(u64);
-
-impl Rng {
-    const fn seeded() -> Self {
-        Self(42)
-    }
-
-    const fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-}
-
 /// Fixture base di `bench_sweep` (stesso stream xorshift: 9 draw per riga
 /// nello stesso ordine); servono solo `num` e `grp`, ma i draw extra
 /// mantengono lo stream allineato allo sweep.
@@ -75,35 +61,6 @@ fn stats_fixture(rows: usize) -> RecordBatch {
 }
 
 /// Fixture JSON annidati (3 livelli), identica a `bench_sweep::json_fixture`.
-fn json_fixture(rows: usize) -> RecordBatch {
-    let mut rng = Rng::seeded();
-    let ids = (0..rows)
-        .map(|row| i64::try_from(row).ok())
-        .collect::<Vec<_>>();
-    let docs = (0..rows)
-        .map(|_| {
-            format!(
-                "{{\"a\":{},\"b\":{{\"c\":{},\"d\":{{\"e\":\"{:08x}\",\"f\":[1,2,3]}}}},\"g\":\"{:08x}\"}}",
-                rng.next() % 1000,
-                rng.next() % 1000,
-                rng.next() & 0xffff_ffff,
-                rng.next() & 0xffff_ffff
-            )
-        })
-        .collect::<Vec<_>>();
-    RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("doc", DataType::Utf8, false),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(ids)),
-            Arc::new(StringArray::from(docs)),
-        ],
-    )
-    .expect("fixture json")
-}
-
 fn main() {
     let rows = std::env::args()
         .nth(1)
