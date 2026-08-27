@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
     GeometryColumnContract, PropertyConfidence, PropertyScope,
@@ -14,6 +14,7 @@ use plenora_core::{PlenoraError, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::float64_source::dominio_numerico;
 use crate::validate_output_name;
 
 // ---------------------------------------------------------------------------
@@ -66,20 +67,6 @@ pub(in crate::analyze) fn require_scalar_string_field(op: &str, field: &Field) -
     })
 }
 
-/// Tipi leggibili da `scalar_as_f64` (profilo numerico).
-const fn is_numeric(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Float64
-            | DataType::Int64
-            | DataType::UInt64
-            | DataType::Date32
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Utf8
-    )
-}
-
 pub(in crate::analyze) fn require_scalar_string(
     op: &str,
     input: &DataContract,
@@ -94,7 +81,10 @@ pub(in crate::analyze) fn require_numeric(
     name: &str,
 ) -> Result<()> {
     let field = field_of(op, input, name)?;
-    if is_numeric(field.data_type()) {
+    // Una tabella sola per tutto il crate: l'analizzatore e i kernel devono
+    // accettare gli stessi tipi, o un piano passa l'analisi e cade in
+    // esecuzione.
+    if dominio_numerico(field.data_type()) {
         Ok(())
     } else {
         contract_error(

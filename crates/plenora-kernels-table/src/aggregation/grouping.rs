@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use plenora_core::{PlenoraError, Result};
 
 use crate::hashing::FastHasher;
-use crate::{scalar_as_f64_rounded, scalar_as_string};
+use crate::scalar_as_string;
 
 // ---------------------------------------------------------------------------
 // Fast path di `table.aggregate` (ottimizzazione kernel, secondo batch).
@@ -357,61 +357,6 @@ pub(in crate::aggregation) fn build_string_groups(
         .collect::<Vec<_>>();
     drop(keyed);
     Ok(groups)
-}
-
-/// Sorgente numerica per le aggregazioni Float64: valori nativi Arrow per i
-/// tipi principali, `scalar_as_f64_rounded` (invariato) per gli altri.
-pub(in crate::aggregation) enum NumericSource<'a> {
-    Float64(&'a Float64Array),
-    Int64(&'a Int64Array),
-    UInt64(&'a UInt64Array),
-    Generic(&'a ArrayRef),
-}
-
-impl<'a> NumericSource<'a> {
-    pub(in crate::aggregation) fn new(array: &'a ArrayRef) -> Self {
-        if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-            return Self::Float64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-            return Self::Int64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-            return Self::UInt64(values);
-        }
-        Self::Generic(array)
-    }
-
-    pub(in crate::aggregation) fn value(&self, row: usize) -> Result<Option<f64>> {
-        match self {
-            Self::Float64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row))
-            }),
-            // **Tutti i rami devono concordare con `scalar_as_f64_rounded`.**
-            // Sono percorsi veloci per i tipi fisici Arrow piu' comuni, non
-            // una semantica alternativa: se uno di essi rifiutasse o
-            // convertisse diversamente dal ramo generico qui sotto, lo stesso
-            // valore darebbe esiti diversi a seconda di come e' codificata la
-            // colonna. Il risultato di queste aggregazioni e' un `Float64`
-            // per contratto, quindi si arrotonda
-            // (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
-            Self::Int64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row) as f64)
-            }),
-            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
-            Self::UInt64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row) as f64)
-            }),
-            Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
-        }
-    }
 }
 
 /// Sorgente testuale per nunique/concat: valori Utf8 presi in prestito,

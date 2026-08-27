@@ -340,13 +340,13 @@ fn il_percorso_veloce_e_quello_generico_concordano() {
 }
 
 // ---------------------------------------------------------------------------
-// La seconda copia dell'accessore, provata su tutti i suoi rami
+// `pivot`, su tutti i rami dell'accessore
 // ---------------------------------------------------------------------------
 //
-// L'accessore di `pivot` e' una copia di quello delle aggregazioni, e finche'
-// sono due copie il contratto va provato su entrambe: gli oracoli qui sopra
-// passano quasi tutti da `aggregate`, e lascerebbero scoperti i rami UInt64,
-// Float64, generico ed errori della copia di `reshape`.
+// Gli oracoli qui sopra passano quasi tutti da `aggregate`. Ogni operazione
+// deve pero' attraversare l'accessore per conto proprio: e' l'unico modo di
+// accorgersi se una di esse smettesse di usarlo, o lo usasse diversamente.
+// Questi coprono `pivot` su UInt64, Float64, percorso generico ed errori.
 
 #[test]
 fn pivot_arrotonda_gli_uint64_e_conserva_i_null() {
@@ -426,4 +426,297 @@ fn pivot_rifiuta_il_testo_non_numerico_e_i_tipi_non_convertibili() {
         matches!(errore, PlenoraError::Schema(_)),
         "categoria inattesa: {errore:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Le varianti di rango decidono: non convertono
+// ---------------------------------------------------------------------------
+//
+// `rank`, `dense_rank`, `percent_rank` e `cume_dist` ordinano e confrontano.
+// Se leggessero la colonna come `f64`, 2^53 e 2^53 + 1 diventerebbero lo
+// stesso double e due valori distinti risulterebbero a pari merito. Il
+// confronto avviene quindi sul dominio originale.
+
+fn rango(valori: Vec<i64>, funzione: &str) -> plenora_core::Result<Vec<Option<f64>>> {
+    let ingresso = batch("v", Arc::new(Int64Array::from(valori)), true);
+    let config = serde_json::from_value(serde_json::json!({
+        "column": "v",
+        "function": funzione,
+        "output_column": "out",
+    }))
+    .expect("config window_function");
+    window_function(&ingresso, &config).map(|uscita| colonna_f64(&uscita, "out"))
+}
+
+/// Due interi **distinti** che condividono lo stesso `f64`.
+///
+/// Provati nei due ordini: se il confronto passasse dai double, l'esito
+/// sarebbe lo stesso in entrambi — a pari merito — mentre il confronto esatto
+/// distingue, e l'ordine dice quale viene prima.
+#[test]
+fn rank_distingue_due_interi_che_condividono_lo_stesso_double() {
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53_PIU_1], "rank").expect("rank"),
+        vec![Some(1.0), Some(2.0)]
+    );
+    assert_eq!(
+        rango(vec![DUE_53_PIU_1, DUE_53], "rank").expect("rank invertito"),
+        vec![Some(2.0), Some(1.0)]
+    );
+}
+
+#[test]
+fn dense_rank_distingue_due_interi_che_condividono_lo_stesso_double() {
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53_PIU_1], "dense_rank").expect("dense_rank"),
+        vec![Some(1.0), Some(2.0)]
+    );
+    assert_eq!(
+        rango(vec![DUE_53_PIU_1, DUE_53], "dense_rank").expect("dense_rank invertito"),
+        vec![Some(2.0), Some(1.0)]
+    );
+}
+
+#[test]
+fn percent_rank_distingue_due_interi_che_condividono_lo_stesso_double() {
+    // Due righe: il rango 0 vale 0.0, il rango 1 vale 1/(2-1) = 1.0.
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53_PIU_1], "percent_rank").expect("percent_rank"),
+        vec![Some(0.0), Some(1.0)]
+    );
+    assert_eq!(
+        rango(vec![DUE_53_PIU_1, DUE_53], "percent_rank").expect("percent_rank invertito"),
+        vec![Some(1.0), Some(0.0)]
+    );
+}
+
+#[test]
+fn cume_dist_distingue_due_interi_che_condividono_lo_stesso_double() {
+    // Il piu' piccolo copre 1/2 della partizione, il piu' grande 2/2.
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53_PIU_1], "cume_dist").expect("cume_dist"),
+        vec![Some(0.5), Some(1.0)]
+    );
+    assert_eq!(
+        rango(vec![DUE_53_PIU_1, DUE_53], "cume_dist").expect("cume_dist invertito"),
+        vec![Some(1.0), Some(0.5)]
+    );
+}
+
+/// I valori davvero uguali restano a pari merito: il confronto esatto non
+/// rende tutto distinto, distingue cio' che e' distinto.
+#[test]
+fn i_valori_uguali_restano_a_pari_merito() {
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53], "rank").expect("rank"),
+        vec![Some(1.5), Some(1.5)]
+    );
+    assert_eq!(
+        rango(vec![DUE_53, DUE_53], "dense_rank").expect("dense_rank"),
+        vec![Some(1.0), Some(1.0)]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Il dominio numerico e' uno solo, e vale per tutte le varianti
+// ---------------------------------------------------------------------------
+//
+// «Ordinabile» non e' «numerico»: `Boolean`, `Binary` e le dictionary hanno
+// un ordine ma non sono numeri, e il testo — che il contratto ammette come
+// numero — ordinato per byte metterebbe "10" prima di "9", cioe' nell'ordine
+// di un dominio diverso da quello dichiarato.
+
+fn rango_testuale(valori: Vec<&str>, funzione: &str) -> plenora_core::Result<Vec<Option<f64>>> {
+    let ingresso = batch("v", Arc::new(StringArray::from(valori)), true);
+    let mut grezza = serde_json::json!({
+        "column": "v",
+        "function": funzione,
+        "output_column": "out",
+    });
+    if funzione == "ntile" {
+        grezza["buckets"] = serde_json::json!(2);
+    }
+    let config = serde_json::from_value(grezza).expect("config window_function");
+    window_function(&ingresso, &config).map(|uscita| colonna_f64(&uscita, "out"))
+}
+
+#[test]
+fn il_rango_rifiuta_il_testo_numerico() {
+    // `"9007199254740992"` e `"9007199254740993"` sono numeri distinti.
+    // Interpretarli come double li renderebbe a pari merito — la stessa cosa
+    // che il confronto sul dominio originale evita per gli interi nativi — e
+    // confrontarli esattamente richiederebbe un'aritmetica decimale che
+    // questo kernel non ha. Il rango quindi li rifiuta, in entrambi gli
+    // ordini e per tutte e quattro le funzioni.
+    for funzione in ["rank", "dense_rank", "percent_rank", "cume_dist"] {
+        for coppia in [
+            vec!["9007199254740992", "9007199254740993"],
+            vec!["9007199254740993", "9007199254740992"],
+            vec!["10", "9"],
+        ] {
+            let primo = coppia[0].to_owned();
+            let errore = rango_testuale(coppia, funzione)
+                .expect_err(&format!("{funzione}: il testo non e' ordinabile"));
+            assert!(
+                matches!(errore, PlenoraError::Schema(_)),
+                "{funzione}: categoria inattesa {errore:?}"
+            );
+            assert!(
+                !errore.to_string().contains(&primo),
+                "{funzione}: il messaggio riporta il valore in ingresso: {errore}"
+            );
+        }
+    }
+}
+
+/// Il testo resta ammesso dove il risultato e' un valore, non un ordine.
+#[test]
+fn il_testo_numerico_resta_ammesso_per_le_varianti_di_valore() {
+    assert_eq!(
+        rango_testuale(vec!["9", "10"], "cumsum").expect("cumsum su testo numerico"),
+        vec![Some(9.0), Some(19.0)]
+    );
+}
+
+#[test]
+fn il_testo_non_numerico_e_un_errore_per_ogni_variante() {
+    // `cumcount` e `ntile` dipendono dalla sola posizione e non leggono i
+    // valori: il contratto della colonna vale lo stesso, e una colonna
+    // dichiarata numerica piena di parole resta un ingresso invalido.
+    for funzione in [
+        "rank",
+        "dense_rank",
+        "percent_rank",
+        "cume_dist",
+        "cumsum",
+        "cumcount",
+        "ntile",
+    ] {
+        let errore = rango_testuale(vec!["non un numero", "2"], funzione)
+            .expect_err(&format!("{funzione}: il testo non numerico e' un errore"));
+        assert!(
+            matches!(errore, PlenoraError::Schema(_)),
+            "{funzione}: categoria inattesa {errore:?}"
+        );
+        assert!(
+            !errore.to_string().contains("non un numero"),
+            "{funzione}: il messaggio riporta il valore in ingresso: {errore}"
+        );
+    }
+}
+
+#[test]
+fn il_booleano_resta_fuori_dal_dominio_numerico() {
+    // `Boolean` e' ordinabile ma non numerico: nessuna variante lo accetta,
+    // nemmeno quelle che dipendono dalla sola posizione — il contratto e'
+    // della colonna, non di cio' che il kernel poi ne fa.
+    for funzione in [
+        "rank",
+        "dense_rank",
+        "percent_rank",
+        "cume_dist",
+        "cumsum",
+        "cumcount",
+        "ntile",
+    ] {
+        let ingresso = batch("v", Arc::new(BooleanArray::from(vec![true, false])), true);
+        let mut config = serde_json::json!({
+            "column": "v",
+            "function": funzione,
+            "output_column": "out",
+        });
+        if funzione == "ntile" {
+            config["buckets"] = serde_json::json!(2);
+        }
+        let config = serde_json::from_value(config).expect("config");
+        let errore = window_function(&ingresso, &config)
+            .expect_err(&format!("{funzione}: il booleano non e' numerico"));
+        assert!(
+            matches!(errore, PlenoraError::Schema(_)),
+            "{funzione}: categoria inattesa {errore:?}"
+        );
+    }
+}
+
+/// L'analizzatore e il kernel devono dire la stessa cosa.
+///
+/// Due elenchi di tipi numerici divergerebbero come un piano accettato in
+/// analisi e rifiutato in esecuzione — o accettato da entrambi e calcolato su
+/// un ordine che nessuno dei due aveva inteso.
+#[test]
+fn analisi_ed_esecuzione_concordano_sul_dominio() {
+    use plenora_core::arrow::schema::Schema as ArrowSchema;
+    use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+    use plenora_kernels_table::analyze::analyze_table_contract;
+
+    for (tipo, array, numerico) in [
+        (
+            DataType::Int64,
+            Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+            true,
+        ),
+        // Il testo e' nel dominio numerico, ma non ha un ordine esatto: per
+        // il rango lo rifiutano **entrambi**, ed e' il punto della prova.
+        (
+            DataType::Utf8,
+            Arc::new(StringArray::from(vec!["1", "2"])) as ArrayRef,
+            false,
+        ),
+        (
+            DataType::Boolean,
+            Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
+            false,
+        ),
+    ] {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("g", DataType::Utf8, false),
+            Field::new("v", tipo.clone(), true),
+        ]));
+        let contratto = DataContract::new(
+            Arc::clone(&schema),
+            Vec::new(),
+            None,
+            ContractProperties::default(),
+        )
+        .expect("contratto");
+        // Tutte e quattro le funzioni di rango, non una sola: un
+        // analizzatore che ne classificasse solo alcune concorderebbe sul
+        // caso provato e divergerebbe sugli altri.
+        for funzione in ["rank", "dense_rank", "percent_rank", "cume_dist"] {
+            let config = serde_json::json!({
+                "column": "v",
+                "function": funzione,
+                "output_column": "out",
+            });
+            let mut campi = FieldAllocator::default();
+            let analisi = analyze_table_contract(
+                "table.window_function",
+                std::slice::from_ref(&contratto),
+                &config,
+                &mut campi,
+            );
+
+            let ingresso = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(StringArray::from(vec!["g", "g"])) as ArrayRef,
+                    Arc::clone(&array),
+                ],
+            )
+            .expect("batch");
+            let config = serde_json::from_value(config).expect("config");
+            let esecuzione = window_function(&ingresso, &config);
+
+            assert_eq!(
+                analisi.is_ok(),
+                numerico,
+                "{tipo:?}/{funzione}: l'analizzatore non concorda col contratto atteso"
+            );
+            assert_eq!(
+                esecuzione.is_ok(),
+                analisi.is_ok(),
+                "{tipo:?}/{funzione}: analisi ed esecuzione in disaccordo"
+            );
+        }
+    }
 }

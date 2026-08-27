@@ -11,12 +11,10 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
+use crate::float64_source::Float64Source;
 use crate::hashing::FastHasher;
 use crate::Limits;
-use crate::{
-    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
-    validate_output_name,
-};
+use crate::{column_index, replace_or_append, scalar_as_string, select_rows, validate_output_name};
 use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
@@ -53,8 +51,9 @@ fn default_value() -> String {
 // ---------------------------------------------------------------------------
 // Fast path di `melt`/`pivot` (ultimo batch ottimizzazioni kernel).
 //
-// `TextColumn`/`NumericColumn` preparano una sola volta il downcast Arrow
-// per colonna e iterano sui valori nativi, producendo gli STESSI byte dei
+// `TextColumn` e `Float64Source` (quest'ultimo condiviso col resto del
+// crate) preparano una sola volta il downcast Arrow per colonna e iterano sui
+// valori nativi, producendo gli STESSI byte dei
 // percorsi scalari originali (`scalar_as_string` / `scalar_as_f64_rounded`):
 // stesso formato Display per numerici e booleani (NaN -> "NaN",
 // -0.0 -> "-0" distinto da "0"), stessi null, stessi errori. I tipi fuori
@@ -146,61 +145,6 @@ impl<'a> TextColumn<'a> {
             }
         }
         Ok(true)
-    }
-}
-
-/// Sorgente numerica tipizzata per le aggregazioni Float64 di `pivot`.
-enum NumericColumn<'a> {
-    Float64(&'a Float64Array),
-    Int64(&'a Int64Array),
-    UInt64(&'a UInt64Array),
-    Generic(&'a ArrayRef),
-}
-
-impl<'a> NumericColumn<'a> {
-    fn new(array: &'a ArrayRef) -> Self {
-        if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-            return Self::Float64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
-            return Self::Int64(values);
-        }
-        if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
-            return Self::UInt64(values);
-        }
-        Self::Generic(array)
-    }
-
-    /// Stesso valore di `scalar_as_f64_rounded` (null inclusi), senza downcast per riga.
-    fn value(&self, row: usize) -> Result<Option<f64>> {
-        match self {
-            Self::Float64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row))
-            }),
-            // **Tutti i rami devono concordare con `scalar_as_f64_rounded`.**
-            // Sono percorsi veloci per i tipi fisici Arrow piu' comuni, non
-            // una semantica alternativa: se uno di essi rifiutasse o
-            // convertisse diversamente dal ramo generico qui sotto, lo stesso
-            // valore darebbe esiti diversi a seconda di come e' codificata la
-            // colonna. Il risultato di queste aggregazioni e' un `Float64`
-            // per contratto, quindi si arrotonda
-            // (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
-            Self::Int64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row) as f64)
-            }),
-            #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi sopra.
-            Self::UInt64(values) => Ok(if values.is_null(row) {
-                None
-            } else {
-                Some(values.value(row) as f64)
-            }),
-            Self::Generic(array) => scalar_as_f64_rounded(array.as_ref(), row),
-        }
     }
 }
 
@@ -647,7 +591,7 @@ fn pivot_column(
             // cosi' anche i segni di zero restano bit-identici
             // ([-0.0] -> -0.0, [+0.0] -> +0.0). f64::min/f64::max
             // passo-passo danno gli stessi bit di reduce, NaN incluso.
-            let numeric = NumericColumn::new(source);
+            let numeric = Float64Source::new(source);
             let values = groups
                 .iter()
                 .map(|rows| {
@@ -1506,6 +1450,10 @@ mod tests {
     // -------------------------------------------------------------------
 
     use super::*;
+    // L'oracolo qui sotto ricalcola il percorso generico originale, e quello
+    // usa `scalar_as_f64_rounded` direttamente: la produzione ora ci arriva
+    // tramite `Float64Source`, quindi l'importazione serve solo qui.
+    use crate::scalar_as_f64_rounded;
     use std::collections::BTreeSet;
 
     use plenora_core::arrow::array::Date32Array;

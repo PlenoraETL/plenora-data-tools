@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
-use plenora_core::arrow::array::{Float64Array, RecordBatch};
+use plenora_core::arrow::array::{Array, Float64Array, RecordBatch};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
@@ -11,8 +11,9 @@ use plenora_core::{PlenoraError, Result};
 use crate::{column_index, replace_or_append};
 
 use super::aggregate::default_ddof;
-use super::grouping::{build_partitions, scatter_partitions, NumericSource};
+use super::grouping::{build_partitions, scatter_partitions};
 use super::sort::{sort, Sort};
+use crate::float64_source::{valida_valori_numerici, Float64Source, OrdineNumerico};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +44,63 @@ pub struct RollingWindow {
     #[serde(default = "default_ddof")]
     pub ddof: usize,
     pub output_column: String,
+}
+
+/// Che cosa serve a una variante per essere calcolata.
+///
+/// Un `match` **esaustivo** e non due `matches!` indipendenti: con due elenchi
+/// una variante nuova puo' mancare da entrambi, compilare, e finire a leggere
+/// valori che nessuno ha calcolato. Qui una `WindowKind` senza strategia non
+/// compila.
+///
+/// E' anche l'**unica** autorita' sulla classificazione: l'analizzatore la
+/// interroga invece di tenere un proprio elenco, cosi' una variante nuova non
+/// puo' essere di rango per il kernel e di qualcos'altro per l'analisi.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Strategia {
+    /// Rende un valore numerico: legge la colonna come `f64`, arrotondando.
+    Valore,
+    /// Ordina e confronta: legge la colonna nel dominio originale.
+    Rango,
+    /// Dipende dalla sola posizione nella partizione.
+    Posizione,
+}
+
+#[must_use]
+pub const fn strategia(funzione: &WindowKind) -> Strategia {
+    match funzione {
+        WindowKind::Cumsum
+        | WindowKind::RunningMean
+        | WindowKind::Lag
+        | WindowKind::Lead
+        | WindowKind::PctChange => Strategia::Valore,
+        WindowKind::Rank
+        | WindowKind::DenseRank
+        | WindowKind::PercentRank
+        | WindowKind::CumeDist => Strategia::Rango,
+        WindowKind::Cumcount | WindowKind::Ntile => Strategia::Posizione,
+    }
+}
+
+/// Confronta due righe della stessa colonna, ricordando l'eventuale guasto.
+///
+/// `compare_cells_typed` e' fallibile e `sort_by`/`partition_point` non lo
+/// sono: l'errore si mette da parte e lo rende il chiamante. Rendere `Equal`
+/// e proseguire in silenzio sarebbe fail-open proprio dove si decide un
+/// ordine.
+fn confronta(
+    ordine: &OrdineNumerico<'_>,
+    sinistra: usize,
+    destra: usize,
+    guasto: &mut Option<PlenoraError>,
+) -> Ordering {
+    match ordine.compare(sinistra, destra) {
+        Ok(ordine) => ordine,
+        Err(errore) => {
+            guasto.get_or_insert(errore);
+            Ordering::Equal
+        }
+    }
 }
 
 /// Finestra mobile (`window` righe) su `column`, opzionalmente partizionata
@@ -88,7 +146,7 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
     // FxHash+splitmix64, iterazione delle partizioni nello stesso ordine
     // del BTreeMap originale (chiave `Option<String>` crescente).
     let partitions = build_partitions(&ordered, group)?;
-    let numbers = NumericSource::new(ordered.column(source));
+    let numbers = Float64Source::new(ordered.column(source));
     let compute = |rows: &[usize]| -> Result<Vec<Option<f64>>> {
         let numbers = rows
             .iter()
@@ -210,9 +268,20 @@ pub struct WindowFunction {
 ///   schema; in piu' gli errori di `sort`,
 ///   `scalar_as_string`/`scalar_as_f64_rounded` e `replace_or_append`.
 ///
-/// Un intero oltre 2^53 **non** e' un errore: il risultato e' un `Float64`
-/// per contratto, quindi la conversione arrotonda
+/// L'arrotondamento vale per le varianti che producono un **valore** —
+/// `cumsum`, `running_mean`, `lag`, `lead`, `pct_change` — il cui risultato e'
+/// un `Float64` per contratto
 /// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+///
+/// Le quattro varianti di **rango** — `rank`, `dense_rank`, `percent_rank`,
+/// `cume_dist` — non convertono: ordinano e confrontano il dominio originale
+/// con la stessa autorita' tipizzata del sort, perche' su una decisione
+/// l'arrotondamento farebbe risultare a pari merito valori distinti. Per la
+/// stessa ragione **non accettano colonne `Utf8`**: il testo numerico non ha
+/// un ordine esatto, e l'analizzatore lo rifiuta con lo stesso confine.
+///
+/// `cumcount` e `ntile` non leggono i valori — dipendono dalla posizione — ma
+/// il contratto numerico della colonna vale anche per loro.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
         return Err(PlenoraError::InvalidPlan(
@@ -252,33 +321,75 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
     // FxHash+splitmix64, iterazione delle partizioni nello stesso ordine
     // del BTreeMap originale (chiave `Option<String>` crescente).
     let partitions = build_partitions(&ordered, group_index)?;
-    let source = NumericSource::new(ordered.column(source_index));
+    let colonna = ordered.column(source_index);
+    // Due letture diverse della stessa colonna, e la differenza e' il
+    // contratto.
+    //
+    // Le varianti che producono un VALORE rendono un `Float64`: li'
+    // l'arrotondamento e' la semantica dichiarata
+    // (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+    //
+    // Le varianti di RANGO **decidono**: ordinano e confrontano. Convertire
+    // prima di confrontare farebbe collassare due interi distinti oltre 2^53
+    // sullo stesso double, e valori diversi risulterebbero a pari merito.
+    // Quelle confrontano il dominio originale.
+    //
+    // Il dominio numerico si valida **sempre**, anche per le varianti di
+    // posizione: e' il contratto della colonna, e non dipende da cosa il
+    // kernel poi ne fa.
+    let strategia = strategia(&config.function);
+    let source = (strategia == Strategia::Valore).then(|| Float64Source::new(colonna));
+    let ordine = match strategia {
+        Strategia::Rango => Some(OrdineNumerico::new(colonna)?),
+        Strategia::Valore => None,
+        // Non legge i valori, ma il contratto della colonna vale lo stesso:
+        // una colonna dichiarata numerica e piena di parole e' un ingresso
+        // invalido a prescindere da cosa il kernel ne fa.
+        Strategia::Posizione => {
+            valida_valori_numerici(colonna)?;
+            None
+        }
+    };
     let compute = |rows: &[usize]| -> Result<Vec<Option<f64>>> {
-        let numbers = rows
-            .iter()
-            .map(|row| source.value(*row))
-            .collect::<Result<Vec<_>>>()?;
-        // `sorted`/`dense` servono solo alle funzioni di rango: costruiti
-        // solo per quelle (l'originale li calcolava comunque, senza
-        // effetti osservabili).
-        let needs_rank = matches!(
-            config.function,
-            WindowKind::Rank
-                | WindowKind::DenseRank
-                | WindowKind::PercentRank
-                | WindowKind::CumeDist
-        );
-        let mut sorted = Vec::new();
-        let mut dense = Vec::new();
-        if needs_rank {
-            sorted = numbers.iter().flatten().copied().collect::<Vec<_>>();
-            sorted.sort_by(f64::total_cmp);
+        let numbers = match &source {
+            Some(source) => rows
+                .iter()
+                .map(|row| source.value(*row))
+                .collect::<Result<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        // Righe non nulle della partizione, ordinate per VALORE della cella:
+        // il rango si legge dalle posizioni, e nessun valore viene convertito.
+        let mut sorted: Vec<usize> = Vec::new();
+        let mut dense: Vec<usize> = Vec::new();
+        if let Some(ordine) = &ordine {
+            sorted = rows
+                .iter()
+                .copied()
+                .filter(|row| !colonna.is_null(*row))
+                .collect();
+            let mut guasto = None;
+            sorted.sort_by(|sinistra, destra| confronta(ordine, *sinistra, *destra, &mut guasto));
+            if let Some(errore) = guasto {
+                return Err(errore);
+            }
             dense.clone_from(&sorted);
-            dense.dedup_by(|left, right| left.total_cmp(right) == Ordering::Equal);
+            let mut guasto = None;
+            dense.dedup_by(|sinistra, destra| {
+                confronta(ordine, *sinistra, *destra, &mut guasto) == Ordering::Equal
+            });
+            if let Some(errore) = guasto {
+                return Err(errore);
+            }
         }
         let mut sum = 0.0;
         let mut count = 0.0_f64;
+        // I confronti dentro il ciclo sono fallibili: l'errore si raccoglie e
+        // si rende PRIMA dei valori, che altrimenti sarebbero calcolati su un
+        // ordinamento che non si e' potuto stabilire.
+        let mut errore: Option<PlenoraError> = None;
         let mut values = Vec::with_capacity(rows.len());
+        let ordine = ordine.as_ref();
         for position in 0..rows.len() {
             values.push(match config.function {
                 WindowKind::Cumcount => position.to_f64(),
@@ -303,37 +414,59 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                             .filter(|_| previous != 0.0)
                             .map(|current| (current - previous) / previous)
                     }),
-                WindowKind::Rank | WindowKind::DenseRank => numbers[position].and_then(|current| {
-                    if matches!(config.function, WindowKind::DenseRank) {
+                WindowKind::Rank | WindowKind::DenseRank => ordine.and_then(|ordine| {
+                    let riga = rows[position];
+                    if colonna.is_null(riga) {
+                        None
+                    } else if matches!(config.function, WindowKind::DenseRank) {
                         dense
-                            .binary_search_by(|value| value.total_cmp(&current))
+                            .binary_search_by(|altra| confronta(ordine, *altra, riga, &mut errore))
                             .ok()
                             .and_then(|index| (index + 1).to_f64())
                     } else {
-                        let first =
-                            sorted.partition_point(|value| value.total_cmp(&current).is_lt());
-                        let last = sorted
-                            .partition_point(|value| !value.total_cmp(&current).is_gt())
-                            .checked_sub(1)?;
-                        (first + last + 2).to_f64().map(|sum| sum / 2.0)
+                        let first = sorted.partition_point(|altra| {
+                            confronta(ordine, *altra, riga, &mut errore).is_lt()
+                        });
+                        sorted
+                            .partition_point(|altra| {
+                                !confronta(ordine, *altra, riga, &mut errore).is_gt()
+                            })
+                            .checked_sub(1)
+                            .and_then(|last| (first + last + 2).to_f64().map(|sum| sum / 2.0))
                     }
                 }),
-                WindowKind::PercentRank => numbers[position].and_then(|current| {
-                    if sorted.len() <= 1 {
-                        return Some(0.0);
+                WindowKind::PercentRank => ordine.and_then(|ordine| {
+                    let riga = rows[position];
+                    if colonna.is_null(riga) {
+                        None
+                    } else if sorted.len() <= 1 {
+                        Some(0.0)
+                    } else {
+                        let rank = sorted.partition_point(|altra| {
+                            confronta(ordine, *altra, riga, &mut errore).is_lt()
+                        });
+                        rank.to_f64()
+                            .zip((sorted.len() - 1).to_f64())
+                            .map(|(numeratore, denominatore)| numeratore / denominatore)
                     }
-                    let rank = sorted.partition_point(|value| value.total_cmp(&current).is_lt());
-                    let numerator = rank.to_f64()?;
-                    let denominator = (sorted.len() - 1).to_f64()?;
-                    Some(numerator / denominator)
                 }),
-                WindowKind::CumeDist => numbers[position].and_then(|current| {
-                    let last = sorted
-                        .partition_point(|value| !value.total_cmp(&current).is_gt())
-                        .checked_sub(1)?;
-                    let numerator = (last + 1).to_f64()?;
-                    let denominator = sorted.len().to_f64()?;
-                    Some(numerator / denominator)
+                WindowKind::CumeDist => ordine.and_then(|ordine| {
+                    let riga = rows[position];
+                    if colonna.is_null(riga) {
+                        None
+                    } else {
+                        sorted
+                            .partition_point(|altra| {
+                                !confronta(ordine, *altra, riga, &mut errore).is_gt()
+                            })
+                            .checked_sub(1)
+                            .and_then(|last| {
+                                (last + 1)
+                                    .to_f64()
+                                    .zip(sorted.len().to_f64())
+                                    .map(|(numeratore, denominatore)| numeratore / denominatore)
+                            })
+                    }
                 }),
                 WindowKind::Ntile => {
                     let buckets = config.buckets.unwrap_or(1);
@@ -344,6 +477,9 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                         .and_then(|value| (value + 1).to_f64())
                 }
             });
+        }
+        if let Some(errore) = errore {
+            return Err(errore);
         }
         Ok(values)
     };

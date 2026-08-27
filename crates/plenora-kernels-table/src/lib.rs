@@ -85,6 +85,7 @@ pub mod dates;
 pub mod exact_compare;
 pub mod expressions;
 pub mod filtering;
+mod float64_source;
 pub mod formula;
 pub mod fuzzy;
 pub mod governance;

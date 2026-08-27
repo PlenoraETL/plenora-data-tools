@@ -432,6 +432,36 @@ proprietà.
 
 Non è una deroga con rientro: è la semantica dichiarata di quelle operazioni.
 
+Il contro-esempio sta nella stessa famiglia: le funzioni di **rango**
+(`rank`, `dense_rank`, `percent_rank`, `cume_dist`) producono un `Float64` ma
+**ordinano**, quindi non convertono — confrontano il dominio originale.
+
+### Le funzioni di rango non accettano colonne testuali
+
+**Regola.** `rank`, `dense_rank`, `percent_rank` e `cume_dist` rifiutano una
+`column` di tipo `Utf8`, in analisi e in esecuzione, con lo stesso confine. Le
+altre varianti di `table.window_function` continuano ad accettarla: il testo
+resta ammesso dove il risultato è un valore, non un ordine.
+
+**Perché.** Il testo numerico non ha un ordine esatto senza un'aritmetica
+decimale. Interpretarlo come double renderebbe a pari merito numeri distinti —
+`"9007199254740993"` e `"9007199254740992"` collassano sullo stesso `f64` —
+che è esattamente ciò che il confronto sul dominio originale evita per gli
+interi nativi.
+
+**Hazard di compatibilità.** Un piano che oggi ordina per rango una colonna
+`Utf8` era accettato e produceva un risultato; ora è **respinto in analisi**.
+Il rifiuto è preferibile al risultato precedente, che sopra 2^53 era
+silenziosamente sbagliato, ma resta una rottura di compatibilità: chi ha piani
+del genere deve convertire la colonna a un tipo numerico prima del rango.
+
+**Condizione di rientro.** La restrizione cade quando esiste un comparatore
+esatto sull'intera grammatica numerica testuale — segno, parte intera,
+frazionaria ed esponente — condiviso da analizzatore e kernel e sorvegliato
+dagli stessi oracoli letterali che oggi coprono gli interi nativi. Finché quel
+comparatore non c'è, la restrizione resta: non è una scelta di comodo, è
+l'assenza di un'aritmetica.
+
 ### Row diagnostics: le collettive di solo trasporto
 
 Le operazioni collettive e one-to-many del solo trasporto non raccolgono
