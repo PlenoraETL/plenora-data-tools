@@ -275,9 +275,23 @@ fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool)
                 metrics.geo_fusion_fallbacks, 0,
                 "{label}: nessun fallback governor atteso sulla fixture"
             );
+            // Senza questo il confronto A/B misurerebbe due volte il percorso
+            // generico e chiamerebbe «delta» la differenza fra due rumori.
+            // Il numero e' esatto — un ingresso per batch della fixture —
+            // perche' meta' dei batch fusi darebbe comunque un conteggio
+            // positivo e una mediana che non misura cio' che dichiara.
+            assert_eq!(
+                metrics.geo_fusion_groups_started,
+                fixture.len() as u64,
+                "{label}: ingressi nel runner fuso"
+            );
             durations_fused.push(seconds);
             fused_reference.get_or_insert(batches);
         } else {
+            assert_eq!(
+                metrics.geo_fusion_groups_started, 0,
+                "{label}: la run non fusa ha eseguito il runner fuso"
+            );
             durations_plain.push(seconds);
             plain_reference.get_or_insert(batches);
         }
@@ -296,7 +310,7 @@ fn run_scenario_with_warmup(label: &str, plan: &serde_json::Value, warmup: bool)
     let median_plain = report("unfused", &mut durations_plain);
     let delta = (median_fused - median_plain) / median_plain * 100.0;
     println!(
-        "{{\"scenario\":\"{label}\",\"delta_percent\":{delta},\"outputs_identical\":{outputs_identical},\"geo_fusion_fallbacks\":0}}"
+        "{{\"scenario\":\"{label}\",\"delta_percent\":{delta},\"outputs_identical\":{outputs_identical},\"geo_fusion_fallbacks\":0,\"geo_fusion_verified\":true}}"
     );
 }
 

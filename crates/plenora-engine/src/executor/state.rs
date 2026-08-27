@@ -296,6 +296,22 @@ impl ExecState {
         );
     }
 
+    /// Un gruppo geo e' entrato nel runner fuso: contatore dedicato, saturante
+    /// come gli altri.
+    ///
+    /// Sale **all'ingresso**, non all'uscita riuscita: e' cio' che permette a
+    /// un oracolo di dimostrare che il percorso fuso e' stato raggiunto anche
+    /// quando finisce in errore.
+    pub(super) fn record_geo_fusion_group_started(&self) {
+        let mut metrics = self.metrics.borrow_mut();
+        let metrics = &mut *metrics;
+        accumulate(
+            &mut metrics.geo_fusion_groups_started,
+            1,
+            &mut metrics.counters_saturated,
+        );
+    }
+
     /// Heartbeat del `TempStore` al punto centrale (ogni batch processato
     /// passa dal conteggio delle metriche), con throttle di
     /// [`HEARTBEAT_MIN_INTERVAL`]. Best-effort: un heartbeat fallito degrada

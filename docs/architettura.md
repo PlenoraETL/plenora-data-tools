@@ -260,6 +260,7 @@ solo ciò che vale oggi.
 | **D12.7** | Memoria: **reservation esatta** dei byte decodificati prima del ciclo del gruppo, e fallback strumentato quando il budget non basta. È uno dei due punti in cui la prenotazione precede l'allocazione. |
 | **D12.8** | `max_batch_bytes` non è applicabile sugli archi interni fusi, dove il batch non è materializzato: la protezione è spostata sul governor, non rimossa. Vedi [`errori-e-limiti.md`](errori-e-limiti.md). |
 | **D12.9** | Kill switch `geo_fusion` (flag `--no-geo-fusion`), registrato nel piano: a `false` i gruppi non si formano e l'esecuzione è quella non fusa. Serve a isolare un sospetto senza ricompilare. |
+| **D12.10** | Il percorso fuso è **osservabile in positivo**: `geo_fusion_groups_started` conta i gruppi entrati nel runner fuso. Serve perché `geo_fusion_fallbacks` non è il suo complemento: quel contatore sale **solo** per la rinuncia dovuta alla reservation del governor (D12.7), e resta a zero in tutti gli altri modi di non fondere — kill switch spento, gruppo non formato, byte decodificati ignoti. Zero fallback è quindi vero anche quando la fusione non è mai stata tentata, e un oracolo A/B che guardi solo i fallback può confrontare il percorso generico con sé stesso e chiamarlo parità. Il conteggio degli ingressi va verificato **esatto**, non positivo: `> 0` accetterebbe sia un incremento doppio sia un batch non contato. Conta gli ingressi, non i successi: un gruppo che entra e fallisce, anche con un panic convertito, resta contato. |
 
 ### Operazioni geo binarie nel piano
 
@@ -294,5 +295,7 @@ produrre un risultato approssimato.
 ## Osservabilità
 
 `run` riporta metriche per nodo e per segmento: righe in ingresso e in uscita,
-batch, tempo. Le metriche di memoria riportano riservato, picco, lease vivi,
-età del più vecchio e lo stato di integrità della contabilità.
+batch, tempo. I due contatori della fusione geometrica (D12.10) sono campi
+top-level del JSON, presenti anche per piani senza geometrie. Le metriche di
+memoria riportano riservato, picco, lease vivi, età del più vecchio e lo stato
+di integrità della contabilità.

@@ -4,6 +4,7 @@
     "metriche": {
       "counters_saturated": false,
       "geo_fusion_fallbacks": 0,
+      "geo_fusion_groups_started": 0,
       "nodes": [
         {
           "batches_in": 3,
@@ -42,6 +43,7 @@
     "metriche": {
       "counters_saturated": false,
       "geo_fusion_fallbacks": 0,
+      "geo_fusion_groups_started": 0,
       "nodes": [
         {
           "batches_in": 1,
@@ -80,6 +82,7 @@
     "metriche": {
       "counters_saturated": false,
       "geo_fusion_fallbacks": 0,
+      "geo_fusion_groups_started": 0,
       "nodes": [
         {
           "batches_in": 1,
@@ -118,6 +121,7 @@
     "metriche": {
       "counters_saturated": false,
       "geo_fusion_fallbacks": 0,
+      "geo_fusion_groups_started": 0,
       "nodes": [
         {
           "batches_in": 3,
@@ -174,6 +178,7 @@
     "metriche": {
       "counters_saturated": false,
       "geo_fusion_fallbacks": 0,
+      "geo_fusion_groups_started": 0,
       "nodes": [
         {
           "batches_in": 6,

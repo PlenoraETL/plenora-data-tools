@@ -5064,6 +5064,30 @@ fn fusion_fixture_batches() -> Vec<RecordBatch> {
     ]
 }
 
+/// I batch della fixture sopra, e quindi gli ingressi attesi nel runner fuso
+/// quando lo stream viene drenato per intero: un ingresso per batch.
+const GRUPPI_DELLA_FIXTURE: u64 = 2;
+
+/// Quale percorso ha girato davvero: ingressi **esatti** nel runner fuso, e
+/// nessuno sul percorso generico.
+///
+/// Il numero esatto e non `> 0`: quest'ultimo accetterebbe sia un incremento
+/// doppio sia un batch non contato, e il contatore e' una metrica pubblica.
+fn assert_gruppi_avviati(
+    fused_metrics: &ExecutionMetrics,
+    plain_metrics: &ExecutionMetrics,
+    attesi: u64,
+) {
+    assert_eq!(
+        fused_metrics.geo_fusion_groups_started, attesi,
+        "ingressi nel runner fuso"
+    );
+    assert_eq!(
+        plain_metrics.geo_fusion_groups_started, 0,
+        "il percorso generico ha eseguito il runner fuso"
+    );
+}
+
 /// A/B via kill switch (D12.9): la pipeline di tre geo transform fusi
 /// produce output identico al percorso non fuso, con metriche per nodo
 /// preservate (D12.6).
@@ -5097,6 +5121,7 @@ fn fused_geo_group_matches_unfused_output_and_keeps_per_node_metrics() {
     }
     assert_eq!(fused_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+    assert_gruppi_avviati(&fused_metrics, &plain_metrics, GRUPPI_DELLA_FIXTURE);
 }
 
 /// Poligono semplice valido (anello da `coords` coordinate su un cerchio):
@@ -5153,6 +5178,7 @@ fn geo_fusion_falls_back_when_the_governor_rejects_the_reservation() {
         fused_metrics.geo_fusion_fallbacks, 1,
         "un batch -> un fallback"
     );
+    assert_gruppi_avviati(&fused_metrics, &plain_metrics, 0);
     assert_eq!(fused_batches, plain_batches, "output diverso dal non fuso");
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
 }
@@ -5182,17 +5208,26 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
             geo_fusion,
             ..RuntimeContext::default()
         };
-        execute(
+        let mut output = execute(
             &graph,
             single_input("main", fusion_fixture_batches()),
             runtime,
         )
-        .expect("execute")
-        .collect_batches()
-        .expect_err("panic convertito in errore")
+        .expect("execute");
+        // Lo stream si drena conservando l'`Output`: `collect_batches` rende
+        // le metriche solo in caso di successo, e qui il successo non c'e'.
+        let error = output
+            .by_ref()
+            .find_map(Result::err)
+            .expect("panic convertito in errore");
+        (error, output.metrics())
     };
-    let fused_error = run(true);
-    let plain_error = run(false);
+    let (fused_error, fused_metrics) = run(true);
+    let (plain_error, plain_metrics) = run(false);
+    // Il panic nasce nel kernel centrale del gruppo: il gruppo era **entrato**,
+    // e resta contato. E' la promessa scritta su `geo_fusion_groups_started`,
+    // e senza questo caso resterebbe soltanto scritta.
+    assert_gruppi_avviati(&fused_metrics, &plain_metrics, 1);
     for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
         let (node, operation, reason) = attribuzione(error);
         assert_eq!(
@@ -5252,9 +5287,10 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
     }
     assert_eq!(
         fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+        "nessun fallback sul percorso fuso"
     );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+    assert_gruppi_avviati(&fused_metrics, &plain_metrics, GRUPPI_DELLA_FIXTURE);
     // Schema [id, geom, area]: la geometria sopravvive (Binary) e la misura
     // e' null esattamente dove la geometria e' null (riga 2 del batch 0).
     let batch = &fused_batches[0];
@@ -5311,9 +5347,10 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
     }
     assert_eq!(
         fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+        "nessun fallback sul percorso fuso"
     );
     assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
+    assert_gruppi_avviati(&fused_metrics, &plain_metrics, GRUPPI_DELLA_FIXTURE);
     let batch = &fused_batches[0];
     assert_eq!(
         batch.schema().fields().len(),

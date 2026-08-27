@@ -75,6 +75,14 @@ cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
   --lib --bins --locked --features full-backends -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+# gli altri due passi feature-gated del job `backends`, che qui mancavano: il
+# comando sopra copre `--lib --bins`, quindi il codice di TEST dietro
+# `cfg(feature = "geos-backend")`/`"proj-backend"` non veniva compilato in
+# locale. Un import caduto in un file di test e' arrivato cosi' fino alla CI.
+cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --all-targets --locked --features full-backends
+cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --locked --features full-backends
 # gate assert (bloccante, identico alla CI): le macro `assert!`/`assert_eq!`/
 # `debug_assert*` sono primitive di panic che clippy non sa nominare, quindi
 # il gate R6 non le vede. Perimetro identico: crates/*/src meno il codice di

@@ -1356,6 +1356,7 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
     );
 
     let mut outputs = Vec::new();
+    let mut avviati = Vec::new();
     for (label, extra_args) in [("fuso", vec![]), ("non-fuso", vec!["--no-geo-fusion"])] {
         let output_path = directory.path().join(format!("output-{label}.arrow"));
         let mut command = cli();
@@ -1379,18 +1380,32 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
             metrics["geo_fusion_fallbacks"], 0,
             "{label}: nessun fallback governor sulla fixture"
         );
+        avviati.push(
+            metrics["geo_fusion_groups_started"]
+                .as_u64()
+                .unwrap_or_else(|| {
+                    panic!("{label}: geo_fusion_groups_started assente o non intero")
+                }),
+        );
         outputs.push(std::fs::read(&output_path).expect("output"));
     }
+    // Senza questi due l'identita' degli output sarebbe compatibile con la
+    // fusione mai eseguita: due volte lo stesso percorso generico.
+    assert_eq!(
+        avviati[0], 1,
+        "un batch nella fixture, un ingresso nel runner fuso"
+    );
+    assert_eq!(avviati[1], 0, "il kill switch non ha spento il runner fuso");
     assert_eq!(
         outputs[0], outputs[1],
         "l'output col kill switch spento deve essere byte-identico al fuso"
     );
 }
 
-/// Il contatore dei fallback e' esposto anche per piani senza geo (campo
-/// top-level del JSON metriche, sempre presente).
+/// I contatori della fusione geometrica sono esposti anche per piani senza
+/// geo (campi top-level del JSON metriche, sempre presenti).
 #[test]
-fn run_v4_espone_geo_fusion_fallbacks_anche_senza_geo() {
+fn run_v4_espone_contatori_geo_fusion_anche_senza_geo() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("output.arrow");
@@ -1412,6 +1427,7 @@ fn run_v4_espone_geo_fusion_fallbacks_anche_senza_geo() {
     );
     let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON metriche");
     assert_eq!(metrics["geo_fusion_fallbacks"], 0);
+    assert_eq!(metrics["geo_fusion_groups_started"], 0);
 }
 
 // ---------------------------------------------------------------------------

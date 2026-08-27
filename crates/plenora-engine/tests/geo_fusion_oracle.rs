@@ -35,6 +35,11 @@ use geo::{
     Polygon,
 };
 use plenora_core::arrow::array::RecordBatch;
+// Solo i casi M3 leggono le celle come binario, e stanno dietro il backend:
+// senza il gate questo sarebbe un import inutilizzato in ogni build senza
+// GEOS, cioe' in tutte quelle locali.
+#[cfg(feature = "geos-backend")]
+use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::schema::DataType;
 use plenora_core::diagnostics::RowDiagnostics;
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, RetryDisposition};
@@ -252,9 +257,15 @@ fn first_stream_error(output: &mut Output) -> Option<PlenoraError> {
     None
 }
 
-/// Esegue il piano fino al primo errore dello stream; restituisce anche le
-/// metriche parziali: `geo_fusion_fallbacks == 0` sul percorso fuso dimostra
-/// che l'errore viene dal runner fuso e non da un fallback silenzioso (D12.7).
+/// Esegue il piano fino al primo errore dello stream, e rende anche le
+/// metriche parziali.
+///
+/// Servono **due** conteggi per sapere da dove viene l'errore:
+/// `geo_fusion_groups_started` dice quante volte il runner fuso e' stato
+/// raggiunto, `geo_fusion_fallbacks` se il gruppo e' ricaduto sul generico
+/// per la reservation del governor. Il secondo da solo non basta: e' zero
+/// anche quando la fusione non e' mai stata tentata. Li verifica
+/// [`assert_percorsi`], sul valore esatto.
 fn run_until_error(
     plan: &Value,
     batches: Vec<RecordBatch>,
@@ -267,25 +278,77 @@ fn run_until_error(
     (error, output.metrics())
 }
 
-/// Oracolo sugli errori: stessa firma nei due percorsi, attribuzione al nodo
-/// atteso (`None` per errori senza nodo, es. validazione dell'arco di
-/// input), nessun fallback. Restituisce la firma per asserzioni ulteriori.
-fn assert_oracle_error(
+/// Da che parte del confine della fusione accade cio' che il caso osserva, e
+/// quante volte il gruppo entra nel runner fuso.
+///
+/// Non e' un dettaglio d'implementazione: decide **che cosa** l'oracolo sta
+/// confrontando. Con `RunnerFuso` i due percorsi sono davvero due, e la
+/// coincidenza dell'esito e' una prova. Con `PrimaDellaFusione` cio' che
+/// accade precede il runner in entrambi i casi, quindi i due percorsi
+/// eseguono lo stesso codice: il confronto vale ancora sull'**attribuzione**,
+/// non sulla parita' fra due implementazioni.
+///
+/// Il numero di ingressi e' **esatto**, non positivo: `> 0` accetterebbe sia
+/// un incremento doppio sia un batch non contato, e questa e' una metrica
+/// pubblica. Un ingresso per batch che raggiunge il gruppo, quindi il valore
+/// si deduce dalla fixture e dal punto in cui lo stream si ferma.
+#[derive(Clone, Copy)]
+enum Origine {
+    /// Il gruppo entra `gruppi` volte nel runner fuso.
+    RunnerFuso { gruppi: u64 },
+    /// Nessun ingresso: pre-gate dell'arco, o cancellazione osservata al
+    /// confine del primo kernel.
+    PrimaDellaFusione,
+}
+
+/// Quale percorso ha girato davvero, nei due sensi.
+///
+/// Serve **il conteggio degli ingressi insieme a quello dei fallback**:
+/// l'assenza di fallback e' vera anche quando la fusione non e' mai stata
+/// tentata, e da sola lascerebbe l'oracolo confrontare il percorso generico
+/// con se stesso.
+fn assert_percorsi(
     case: &str,
-    plan: &Value,
-    fixture: &dyn Fn() -> Vec<RecordBatch>,
-    expected_node: Option<&str>,
-) -> ErrorSignature {
-    let (fused_error, fused_metrics) = run_until_error(plan, fixture(), true);
-    let (plain_error, plain_metrics) = run_until_error(plan, fixture(), false);
+    fused_metrics: &ExecutionMetrics,
+    plain_metrics: &ExecutionMetrics,
+    origine: Origine,
+) {
+    let attesi = match origine {
+        Origine::RunnerFuso { gruppi } => gruppi,
+        Origine::PrimaDellaFusione => 0,
+    };
+    assert_eq!(
+        fused_metrics.geo_fusion_groups_started, attesi,
+        "{case}: ingressi nel runner fuso"
+    );
     assert_eq!(
         fused_metrics.geo_fusion_fallbacks, 0,
-        "{case}: fallback nel percorso fuso — l'oracolo non starebbe confrontando il runner fuso"
+        "{case}: fallback nel percorso fuso"
+    );
+    assert_eq!(
+        plain_metrics.geo_fusion_groups_started, 0,
+        "{case}: il percorso generico ha eseguito il runner fuso"
     );
     assert_eq!(
         plain_metrics.geo_fusion_fallbacks, 0,
         "{case}: fallback inatteso nel percorso non fuso"
     );
+}
+
+/// Oracolo sugli errori: stessa firma nei due percorsi, attribuzione al nodo
+/// atteso (`None` per errori senza nodo, es. validazione dell'arco di
+/// input), nessun fallback, e il percorso dichiarato da `origine` e' quello
+/// davvero eseguito. Restituisce la firma per asserzioni ulteriori.
+fn assert_oracle_error(
+    case: &str,
+    plan: &Value,
+    fixture: &dyn Fn() -> Vec<RecordBatch>,
+    expected_node: Option<&str>,
+    origine: Origine,
+) -> ErrorSignature {
+    let (fused_error, fused_metrics) = run_until_error(plan, fixture(), true);
+    let (plain_error, plain_metrics) = run_until_error(plan, fixture(), false);
+    assert_percorsi(case, &fused_metrics, &plain_metrics, origine);
     let signature = error_signature(&fused_error);
     assert_eq!(
         signature.node.as_deref(),
@@ -427,11 +490,12 @@ fn a_happy_path_multi_type_byte_per_byte() {
     assert_group_formation(&plan, &["t", "d", "r", "s", "k", "e"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "a_happy_path_multi_type_byte_per_byte",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "output fuso diverso dal non fuso"
@@ -529,7 +593,13 @@ fn oversized_cell_batches() -> Vec<RecordBatch> {
 fn b_cell_over_max_cell_bytes_attributed_to_first_node() {
     let plan = cell_too_large_plan();
     assert_group_formation(&plan, &["d1", "t", "s"]);
-    let signature = assert_oracle_error("b", &plan, &oversized_cell_batches, Some("d1"));
+    let signature = assert_oracle_error(
+        "b",
+        &plan,
+        &oversized_cell_batches,
+        Some("d1"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
     assert_eq!(
         signature.variant, "Replayed",
         "b: errore con diagnostica row-scoped (contesto nodo nel Replayed)"
@@ -630,6 +700,11 @@ fn c_malformed_wkb_attributed_to_first_node() {
                 )]
             },
             Some("t"),
+            // Il pre-gate dell'arco rifiuta il WKB strutturalmente invalido
+            // prima che il gruppo entri nel runner: i due percorsi eseguono
+            // lo stesso codice, e cio' che l'oracolo confronta e'
+            // l'attribuzione, non la parita' fra due implementazioni.
+            Origine::PrimaDellaFusione,
         );
         assert_eq!(
             signature.variant, "Replayed",
@@ -651,6 +726,8 @@ fn c_malformed_wkb_attributed_to_first_node() {
             )]
         },
         Some("t"),
+        // Anche qui il rifiuto e' del pre-gate.
+        Origine::PrimaDellaFusione,
     );
     assert_eq!(
         signature.reason, first_reason,
@@ -664,6 +741,7 @@ fn c_malformed_wkb_attributed_to_first_node() {
         &plan,
         &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
         Some("t"),
+        Origine::RunnerFuso { gruppi: 1 },
     );
     assert_eq!(
         signature.variant, "Replayed",
@@ -698,7 +776,13 @@ fn d1_centroid_overflow_attributed_to_producer() {
     let plan = centroid_overflow_plan();
     assert_group_formation(&plan, &["t", "c", "s"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(1e308, 1e308, 1e307))])];
-    let signature = assert_oracle_error("d1", &plan, &fixture, Some("c"));
+    let signature = assert_oracle_error(
+        "d1",
+        &plan,
+        &fixture,
+        Some("c"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
     assert_eq!(
         signature.variant, "Replayed",
         "d1: errore con diagnostica row-scoped"
@@ -733,7 +817,13 @@ fn d2_scale_to_infinite_attributed_to_producer() {
     let plan = scale_inf_plan();
     assert_group_formation(&plan, &["t", "k", "r"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(1e30, 1e30, 1e30))])];
-    let signature = assert_oracle_error("d2", &plan, &fixture, Some("k"));
+    let signature = assert_oracle_error(
+        "d2",
+        &plan,
+        &fixture,
+        Some("k"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
     assert_eq!(
         signature.variant, "Replayed",
         "d2: errore con diagnostica row-scoped"
@@ -776,7 +866,13 @@ fn e_ogc_invalid_mid_chain_attributed_to_producer() {
     let plan = ogc_invalid_plan();
     assert_group_formation(&plan, &["t", "k", "r"]);
     let fixture = || vec![geo_batch(&[0], &[Some(square_wkb(0.0, 0.0, 10.0))])];
-    let signature = assert_oracle_error("e", &plan, &fixture, Some("k"));
+    let signature = assert_oracle_error(
+        "e",
+        &plan,
+        &fixture,
+        Some("k"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
     assert_eq!(
         signature.variant, "Replayed",
         "e: errore con diagnostica row-scoped"
@@ -867,11 +963,17 @@ fn f_cancellation_mid_group_same_node() {
     assert_group_formation(&plan, &["t", "s", "e"]);
     let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
     let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    // Il runner fuso **non** viene raggiunto, e non e' un difetto: il token e'
+    // gia' attivo quando il primo batch arriva al confine, e la cancellazione
+    // e' osservata li'. I due percorsi eseguono quindi lo stesso codice, e cio'
+    // che questo caso prova e' l'**attribuzione** — nodo `t` in entrambi —
+    // non la parita' fra due implementazioni.
+    assert_percorsi(
+        "f",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::PrimaDellaFusione,
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let signature = error_signature(&fused_error);
     assert_eq!(signature.variant, "Cancelled", "f: variante Cancelled");
     assert_eq!(
@@ -949,13 +1051,11 @@ fn m2_happy_path_terminal_measure_byte_per_byte() {
         assert_group_formation(&plan, &nodes);
         let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
         let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-        assert_eq!(
-            fused_metrics.geo_fusion_fallbacks, 0,
-            "{case}: percorso fuso eseguito"
-        );
-        assert_eq!(
-            plain_metrics.geo_fusion_fallbacks, 0,
-            "{case}: nessun fallback atteso"
+        assert_percorsi(
+            case,
+            &fused_metrics,
+            &plain_metrics,
+            Origine::RunnerFuso { gruppi: 2 },
         );
         assert_eq!(
             fused_batches, plain_batches,
@@ -1016,7 +1116,13 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
         "output": "vc",
     });
     assert_group_formation(&plan, &["d1", "t", "vc"]);
-    let signature = assert_oracle_error("m2-b", &plan, &oversized_cell_batches, Some("d1"));
+    let signature = assert_oracle_error(
+        "m2-b",
+        &plan,
+        &oversized_cell_batches,
+        Some("d1"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
     assert_eq!(
         signature.variant, "Replayed",
         "m2-b: errore con diagnostica row-scoped"
@@ -1048,6 +1154,7 @@ fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
         &plan,
         &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
         Some("t"),
+        Origine::RunnerFuso { gruppi: 1 },
     );
     assert_eq!(
         signature.variant, "Replayed",
@@ -1166,11 +1273,12 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
     assert_group_formation(&plan, &["mv", "t"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "m3a_ogc_invalid_input_to_make_valid_repaired_identically",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "m3-a: riparazione diversa tra i percorsi"
@@ -1224,11 +1332,12 @@ fn m3a2_make_valid_then_measure_boundary_bytes_match() {
     assert_group_formation(&plan, &["mv", "a"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "m3a2_make_valid_then_measure_boundary_bytes_match",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "m3-a2: byte di confine o misura diversi tra i percorsi"
@@ -1247,11 +1356,12 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
     assert_group_formation(&plan, &["p", "t"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "m3b_reproject_chain_byte_per_byte_with_target_crs_schema",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "m3-b: output fuso diverso dal non fuso"
@@ -1282,11 +1392,12 @@ fn m3b2_reproject_to_geographic_with_terminal_measure() {
     assert_group_formation(&plan, &["p", "w"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "m3b2_reproject_to_geographic_with_terminal_measure",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "m3-b2: output fuso diverso dal non fuso"
@@ -1309,11 +1420,12 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
     assert_group_formation(&plan, &["t", "mv", "r"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    assert_percorsi(
+        "m3c_make_valid_mid_chain_byte_per_byte",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     assert_eq!(
         fused_batches, plain_batches,
         "m3-c: output fuso diverso dal non fuso"
@@ -1352,11 +1464,15 @@ fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
     assert_group_formation(&plan, &["mv", "t", "r"]);
     let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
     let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
-    assert_eq!(
-        fused_metrics.geo_fusion_fallbacks, 0,
-        "percorso fuso eseguito"
+    // Zero ingressi e' cio' che la doc qui sopra prevede: la cancellazione e'
+    // osservata a `main`, prima che il gruppo parta. Dichiararlo rende la
+    // previsione verificabile invece che soltanto scritta.
+    assert_percorsi(
+        "m3-d",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::PrimaDellaFusione,
     );
-    assert_eq!(plain_metrics.geo_fusion_fallbacks, 0);
     let signature = error_signature(&fused_error);
     assert_eq!(signature.variant, "Cancelled", "m3-d: variante Cancelled");
     assert_eq!(
