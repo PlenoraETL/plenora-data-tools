@@ -462,14 +462,11 @@ pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<
     // Il piano e' JSON grezzo: i byte che si misurano qui sono
     // esattamente quelli che il writer emettera'. Con un `Value` si
     // sarebbe misurata una serializzazione e spedita un'altra.
-    let byte_piano = incarico.piano_canonico.get().len();
-    if byte_piano > MAX_PIANO_CANONICO_BYTES {
-        return Err(errore(format!(
-            "`piano_canonico` oltre il tetto: {byte_piano} byte > \
-                 {MAX_PIANO_CANONICO_BYTES}"
-        )));
-    }
-    Ok(())
+    limita(
+        incarico.piano_canonico.get(),
+        MAX_PIANO_CANONICO_BYTES,
+        "piano_canonico",
+    )
 }
 
 /// Le due identita' che i due lati confrontano.
@@ -572,21 +569,13 @@ fn verifica_esito(esito: &super::messaggi::EsitoWorkerSulFilo) -> Result<()> {
 }
 
 fn verifica_diagnostica(diagnostica: &super::messaggi::DiagnosticaSulFilo) -> Result<()> {
-    limita(
-        &diagnostica.contract,
-        MAX_IDENTIFICATORE_BYTES,
-        "diagnostica.contract",
-    )?;
-    limita(
-        &diagnostica.scope,
-        MAX_IDENTIFICATORE_BYTES,
-        "diagnostica.scope",
-    )?;
-    limita(
-        &diagnostica.completeness,
-        MAX_IDENTIFICATORE_BYTES,
-        "diagnostica.completeness",
-    )?;
+    for (campo, valore) in [
+        ("diagnostica.contract", &diagnostica.contract),
+        ("diagnostica.scope", &diagnostica.scope),
+        ("diagnostica.completeness", &diagnostica.completeness),
+    ] {
+        limita(valore, MAX_IDENTIFICATORE_BYTES, campo)?;
+    }
     limita_elementi(
         &diagnostica.conteggi,
         MAX_CONTEGGI_DIAGNOSTICA,

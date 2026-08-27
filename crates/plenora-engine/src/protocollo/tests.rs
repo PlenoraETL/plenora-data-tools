@@ -148,22 +148,34 @@ fn resolver() -> IdentitaResolver {
     }
 }
 
+/// L'ambiente dei vettori: digest e bandiera sono gli stessi nei due messaggi
+/// che lo portano, a distinguerli e' il **contenuto**, che resta del
+/// chiamante. I vettori scritti a mano restano due e indipendenti: qui c'e'
+/// l'ingresso, l'atteso e' li'.
+fn ambiente_di_prova(
+    risorse: Vec<RisorsaRisolta>,
+    backend_dinamici: Vec<BackendDinamico>,
+) -> Ambiente {
+    Ambiente {
+        digest_insieme: digest("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        acquisizione_dinamica: false,
+        risorse,
+        backend_dinamici,
+    }
+}
+
 fn saluto() -> Frame {
     Frame::nuovo(Corpo::Saluto(Box::new(Saluto {
         artefatto: artefatto(),
         resolver: resolver(),
-        ambiente: Ambiente {
-            digest_insieme: digest(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
-            acquisizione_dinamica: false,
-            risorse: vec![RisorsaRisolta {
+        ambiente: ambiente_di_prova(
+            vec![RisorsaRisolta {
                 nome: "grid".to_owned(),
                 versione: "1".to_owned(),
                 percorso: "/r/g".to_owned(),
             }],
-            backend_dinamici: Vec::new(),
-        },
+            Vec::new(),
+        ),
         commit_token: token_di_prova(),
         limiti: LimitiDichiarati {
             max_frame_bytes: 1,
@@ -175,12 +187,9 @@ fn saluto() -> Frame {
 }
 
 fn incarico() -> Frame {
-    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
-        piano_canonico: grezzo(r#"{"schema_version":6}"#),
-        plan_hash_atteso: digest(
-            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        ),
-        ingressi: vec![DescrittoreIngresso {
+    incarico_con(
+        grezzo(r#"{"schema_version":6}"#),
+        vec![DescrittoreIngresso {
             nome: "in".to_owned(),
             percorso: "/d/a.arrow".to_owned(),
             formato: FormatoIngresso::File,
@@ -188,8 +197,7 @@ fn incarico() -> Frame {
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
             ),
         }],
-        artefatto_temporaneo: "/t/out.arrow".to_owned(),
-    })))
+    )
 }
 
 fn annulla_con(motivo: String) -> Frame {
@@ -215,18 +223,14 @@ fn risposta() -> Frame {
     Frame::nuovo(Corpo::Risposta(Box::new(Risposta {
         artefatto: artefatto(),
         resolver: resolver(),
-        ambiente: Ambiente {
-            digest_insieme: digest(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
-            acquisizione_dinamica: false,
-            risorse: Vec::new(),
-            backend_dinamici: vec![BackendDinamico {
+        ambiente: ambiente_di_prova(
+            Vec::new(),
+            vec![BackendDinamico {
                 nome: "gdal".to_owned(),
                 versione: "3.8".to_owned(),
                 percorso: "/l/libgdal.so".to_owned(),
             }],
-        },
+        ),
         capability: vec!["arrow_ipc".to_owned()],
     })))
 }
@@ -1055,40 +1059,66 @@ fn il_piano_oltre_il_tetto_e_rifiutato_in_entrambi_i_versi() {
 /// Un campo limitato: come portarlo a una lunghezza e quale tetto ha.
 type CasoTetto = (&'static str, usize, Box<dyn Fn(usize) -> Frame>);
 
+/// I tre costruttori di caso, uno per corpo che ne ha bisogno.
+///
+/// Ognuno ripete lo stesso gesto — parti dal frame di prova, entra nel corpo,
+/// porta **un** campo a lunghezza `n` — e cio' che cambia e' la sola riga che
+/// nomina il campo. Il resto e' impalcatura: tenerne una copia per caso
+/// significa che una svista nell'impalcatura si legge tredici volte.
+///
+/// L'`if let` che non trova la variante attesa lascia il frame intatto, e la
+/// riga fallisce a `tetto + 1` perche' il frame resta valido. E' il controllo
+/// sulla tabella descritto in `ogni_campo_limitato_e_provato_sul_proprio_confine`.
+fn caso_su_saluto(applica: impl Fn(&mut Saluto, usize) + 'static) -> Box<dyn Fn(usize) -> Frame> {
+    Box::new(move |n| {
+        let mut frame = saluto();
+        if let Corpo::Saluto(dentro) = frame.corpo_mutabile() {
+            applica(dentro, n);
+        }
+        frame
+    })
+}
+
+fn caso_su_risposta(
+    applica: impl Fn(&mut Risposta, usize) + 'static,
+) -> Box<dyn Fn(usize) -> Frame> {
+    Box::new(move |n| {
+        let mut frame = risposta();
+        if let Corpo::Risposta(dentro) = frame.corpo_mutabile() {
+            applica(dentro, n);
+        }
+        frame
+    })
+}
+
+fn caso_su_incarico(
+    applica: impl Fn(&mut Incarico, usize) + 'static,
+) -> Box<dyn Fn(usize) -> Frame> {
+    Box::new(move |n| {
+        let mut frame = incarico();
+        if let Corpo::Incarico(dentro) = frame.corpo_mutabile() {
+            applica(dentro, n);
+        }
+        frame
+    })
+}
+
 fn casi_saluto() -> Vec<CasoTetto> {
     vec![
         (
             "artefatto.versione",
             MAX_VERSIONE_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.artefatto.versione = ripeti(n);
-                }
-                f
-            }),
+            caso_su_saluto(|s, n| s.artefatto.versione = ripeti(n)),
         ),
         (
             "resolver.identita",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.resolver.identita = ripeti(n);
-                }
-                f
-            }),
+            caso_su_saluto(|s, n| s.resolver.identita = ripeti(n)),
         ),
         (
             "resolver.versione",
             MAX_VERSIONE_BYTES,
-            Box::new(|n| {
-                let mut f = saluto();
-                if let Corpo::Saluto(s) = f.corpo_mutabile() {
-                    s.resolver.versione = ripeti(n);
-                }
-                f
-            }),
+            caso_su_saluto(|s, n| s.resolver.versione = ripeti(n)),
         ),
     ]
 }
@@ -1128,60 +1158,40 @@ fn casi_risposta() -> Vec<CasoTetto> {
         (
             "risorse",
             MAX_RISORSE,
-            Box::new(|n| {
-                let mut f = risposta();
-                if let Corpo::Risposta(r) = f.corpo_mutabile() {
-                    r.ambiente.risorse = vec![
-                        RisorsaRisolta {
-                            nome: "r".to_owned(),
-                            versione: "1".to_owned(),
-                            percorso: "/r".to_owned(),
-                        };
-                        n
-                    ];
-                }
-                f
+            caso_su_risposta(|r, n| {
+                r.ambiente.risorse = vec![
+                    RisorsaRisolta {
+                        nome: "r".to_owned(),
+                        versione: "1".to_owned(),
+                        percorso: "/r".to_owned(),
+                    };
+                    n
+                ];
             }),
         ),
         (
             "backend_dinamici",
             MAX_BACKEND_DINAMICI,
-            Box::new(|n| {
-                let mut f = risposta();
-                if let Corpo::Risposta(r) = f.corpo_mutabile() {
-                    r.ambiente.backend_dinamici = vec![
-                        BackendDinamico {
-                            nome: "b".to_owned(),
-                            versione: "1".to_owned(),
-                            percorso: "/b".to_owned(),
-                        };
-                        n
-                    ];
-                }
-                f
+            caso_su_risposta(|r, n| {
+                r.ambiente.backend_dinamici = vec![
+                    BackendDinamico {
+                        nome: "b".to_owned(),
+                        versione: "1".to_owned(),
+                        percorso: "/b".to_owned(),
+                    };
+                    n
+                ];
             }),
         ),
         (
             "capability",
             MAX_CAPABILITY,
-            Box::new(|n| {
-                let mut f = risposta();
-                if let Corpo::Risposta(r) = f.corpo_mutabile() {
-                    r.capability = vec!["c".to_owned(); n];
-                }
-                f
-            }),
+            caso_su_risposta(|r, n| r.capability = vec!["c".to_owned(); n]),
         ),
         (
             "capability (elemento)",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| {
-                let mut f = risposta();
-                if let Corpo::Risposta(r) = f.corpo_mutabile() {
-                    r.capability = vec![ripeti(n)];
-                }
-                f
-            }),
+            caso_su_risposta(|r, n| r.capability = vec![ripeti(n)]),
         ),
     ]
 }
@@ -1215,35 +1225,17 @@ fn casi_incarico() -> Vec<CasoTetto> {
         (
             "artefatto_temporaneo",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| {
-                let mut f = incarico();
-                if let Corpo::Incarico(i) = f.corpo_mutabile() {
-                    i.artefatto_temporaneo = ripeti(n);
-                }
-                f
-            }),
+            caso_su_incarico(|i, n| i.artefatto_temporaneo = ripeti(n)),
         ),
         (
             "ingresso.nome",
             MAX_IDENTIFICATORE_BYTES,
-            Box::new(|n| {
-                ingresso_con(
-                    ripeti(n),
-                    "/x".to_owned(),
-                    digest(&"f".repeat(MAX_DIGEST_BYTES)),
-                )
-            }),
+            Box::new(|n| ingresso_con(ripeti(n), "/x".to_owned(), digest_massimo())),
         ),
         (
             "ingresso.percorso",
             MAX_PERCORSO_BYTES,
-            Box::new(|n| {
-                ingresso_con(
-                    "x".to_owned(),
-                    ripeti(n),
-                    digest(&"f".repeat(MAX_DIGEST_BYTES)),
-                )
-            }),
+            Box::new(|n| ingresso_con("x".to_owned(), ripeti(n), digest_massimo())),
         ),
     ]
 }
@@ -1469,7 +1461,7 @@ fn i_tetti_di_cardinalita_valgono_in_scrittura() {
 
 fn ambiente_massimo() -> Ambiente {
     Ambiente {
-        digest_insieme: digest(&"f".repeat(MAX_DIGEST_BYTES)),
+        digest_insieme: digest_massimo(),
         acquisizione_dinamica: true,
         risorse: vec![
             RisorsaRisolta {
@@ -1490,6 +1482,11 @@ fn ambiente_massimo() -> Ambiente {
     }
 }
 
+/// Il digest piu' lungo che la forma canonica ammette: 64 esadecimali.
+fn digest_massimo() -> DigestSha256 {
+    digest(&"f".repeat(MAX_DIGEST_BYTES))
+}
+
 fn piano_al_tetto() -> Box<RawValue> {
     grezzo(&piano_di(MAX_PIANO_CANONICO_BYTES))
 }
@@ -1497,7 +1494,7 @@ fn piano_al_tetto() -> Box<RawValue> {
 /// I sei massimi **veri**, prodotti dal codificatore.
 fn massimi() -> Vec<(&'static str, Frame)> {
     let artefatto = IdentitaArtefatto {
-        digest: digest(&"f".repeat(MAX_DIGEST_BYTES)),
+        digest: digest_massimo(),
         versione: ripeti_espandendo(MAX_VERSIONE_BYTES),
     };
     let resolver = IdentitaResolver {
@@ -1524,13 +1521,13 @@ fn massimi() -> Vec<(&'static str, Frame)> {
             "incarico",
             Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
                 piano_canonico: piano_al_tetto(),
-                plan_hash_atteso: digest(&"f".repeat(MAX_DIGEST_BYTES)),
+                plan_hash_atteso: digest_massimo(),
                 ingressi: vec![
                     DescrittoreIngresso {
                         nome: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
                         percorso: ripeti_espandendo(MAX_PERCORSO_BYTES),
                         formato: FormatoIngresso::Stream,
-                        contract_fingerprint_atteso: digest(&"f".repeat(MAX_DIGEST_BYTES)),
+                        contract_fingerprint_atteso: digest_massimo(),
                     };
                     MAX_INGRESSI
                 ],
