@@ -851,7 +851,8 @@ pub(super) fn execute_geo_binary(
             plenora_core::batch_with_rows(kernel.output_contract.schema.clone(), columns, righe)
         }
         _ => Err(PlenoraError::Internal(
-            "op binaria geo fuori perimetro M1: invariante di prepare violata".into(),
+            "operazione binaria geo fuori dal perimetro del dispatch: invariante di prepare violata"
+                .into(),
         )),
     }
 }

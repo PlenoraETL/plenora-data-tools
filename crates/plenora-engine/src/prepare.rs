@@ -1297,8 +1297,8 @@ fn prepare_table(
                 )))
             } else {
                 Err(PlenoraError::Unsupported(format!(
-                    "nodo `{}`: {} con {} input: l'executor v1 supporta solo 2 \
-                     (N-aria e' Fase 2B)",
+                    "nodo `{}`: {} con {} input: sono supportati al massimo 2 \
+                     input, l'esecuzione N-aria non e' implementata",
                     node.id,
                     descriptor.id,
                     node.inputs.len()
@@ -1542,7 +1542,7 @@ fn prepare_geo_binary(
         }
         _ => {
             return Err(PlenoraError::Internal(format!(
-                "nodo `{}`: op binaria geo fuori perimetro nel dispatch M1",
+                "nodo `{}`: operazione binaria geo fuori dal perimetro del dispatch",
                 node.id
             )))
         }
@@ -1774,14 +1774,14 @@ fn prepare_geo(
     }
 
     Err(PlenoraError::Unsupported(format!(
-        "nodo `{}`: {} non e' nel dispatch v1 dell'executor (Fase 2A-4): \
-         coperte le trasformazioni geo 1:1 in place, le misure area/length/\
-         perimeter/vertex_count/to_wkt, le estensioni v1.1-v1.3 (from_wkt, \
+        "nodo `{}`: {} non e' nel dispatch dell'executor: sono coperte le \
+         trasformazioni geo 1:1 in place, le misure area/length/perimeter/\
+         vertex_count/to_wkt, le estensioni v1.1-v1.3 (from_wkt, \
          geometry_accessors, collect, line_locate_point, generate_grid, \
          subdivide, snap, coverage_validate, shared_paths, cluster_dbscan) e \
-         i binari del perimetro architettura.md#geometrie M1 (sjoin, nearest, within, \
-         count_points_in_polygons); il resto e' Fase 2B/2C (clip, overlay e \
-         booleane pairwise al secondo cantiere D14.1)",
+         i binari geo senza ri-encode (sjoin, nearest, within, \
+         count_points_in_polygons); clip, overlay e booleane pairwise \
+         richiedono il ri-encode delle geometrie, che non e' implementato",
         node.id, descriptor.id
     )))
 }

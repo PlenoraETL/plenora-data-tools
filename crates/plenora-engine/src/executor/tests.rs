@@ -1196,7 +1196,7 @@ fn streaming_segment_flows_batch_by_batch_without_full_materialization() {
     assert_eq!(
         pulled.get(),
         1,
-        "una pull sull'output consuma esattamente un batch di input (V3)"
+        "streaming reale: una pull sull'output consuma esattamente un batch di input"
     );
     assert_eq!(output.metrics().nodes["f"].batches_out, 1);
 
@@ -4630,7 +4630,7 @@ fn cancelled_run_publishes_nothing_and_reports_execution_id() {
     }
     assert!(
         !destination.exists(),
-        "nessun publish dopo cancel (invariante I8)"
+        "nessun publish dopo la cancellazione"
     );
     assert!(
         std::fs::read_dir(directory.path())
@@ -6038,16 +6038,16 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
 // ---------------------------------------------------------------------------
 
 /// Schema e batch delle prove dello staging memory-first: quattro batch da tre righe.
-fn m2d_schema() -> SchemaRef {
+fn staging_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
         Field::new("etichetta", DataType::Utf8, true),
     ]))
 }
 
-fn m2d_batch(base: i64) -> RecordBatch {
+fn staging_batch(base: i64) -> RecordBatch {
     RecordBatch::try_new(
-        m2d_schema(),
+        staging_schema(),
         vec![
             Arc::new(Int64Array::from(vec![base, base + 1, base + 2])) as ArrayRef,
             Arc::new(StringArray::from(vec![
@@ -6057,16 +6057,21 @@ fn m2d_batch(base: i64) -> RecordBatch {
             ])) as ArrayRef,
         ],
     )
-    .expect("batch M2d")
+    .expect("batch di staging")
 }
 
-fn m2d_batches() -> Vec<RecordBatch> {
-    vec![m2d_batch(0), m2d_batch(10), m2d_batch(20), m2d_batch(30)]
+fn staging_batches() -> Vec<RecordBatch> {
+    vec![
+        staging_batch(0),
+        staging_batch(10),
+        staging_batch(20),
+        staging_batch(30),
+    ]
 }
 
 /// Piano con un nodo row-diagnostics (`table.formula`), con o senza il
 /// budget di memoria che forza la modalita' disco.
-fn m2d_plan(forza_disco: bool) -> serde_json::Value {
+fn staging_plan(forza_disco: bool) -> serde_json::Value {
     // `trattenuti + input + max_batch_bytes (64 MiB) > 1 MiB` gia' al primo
     // batch: modalita' disco dalla prima passata.
     let limits = if forza_disco {
@@ -6088,20 +6093,20 @@ fn m2d_plan(forza_disco: bool) -> serde_json::Value {
     })
 }
 
-fn m2d_contratti() -> Vec<(String, DataContract)> {
-    vec![("main".to_owned(), DataContract::tabular(m2d_schema()))]
+fn staging_contratti() -> Vec<(String, DataContract)> {
+    vec![("main".to_owned(), DataContract::tabular(staging_schema()))]
 }
 
-fn m2d_esegui(forza_disco: bool) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
+fn staging_esegui(forza_disco: bool) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
     output_rows(run(
-        &m2d_plan(forza_disco),
-        single_input("main", m2d_batches()),
-        &m2d_contratti(),
+        &staging_plan(forza_disco),
+        single_input("main", staging_batches()),
+        &staging_contratti(),
     )?)
 }
 
 /// Serializza i batch in IPC: confronto byte a byte fra le due modalita'.
-fn m2d_ipc(batches: &[RecordBatch]) -> Vec<u8> {
+fn staging_ipc(batches: &[RecordBatch]) -> Vec<u8> {
     let Some(primo) = batches.first() else {
         return Vec::new();
     };
@@ -6117,13 +6122,13 @@ fn m2d_ipc(batches: &[RecordBatch]) -> Vec<u8> {
 }
 
 #[test]
-fn m2d_memoria_e_disco_producono_gli_stessi_byte() {
-    let (memoria, metriche_memoria) = m2d_esegui(false).expect("modalita' memoria");
-    let (disco, metriche_disco) = m2d_esegui(true).expect("modalita' disco");
+fn staging_memoria_e_disco_producono_gli_stessi_byte() {
+    let (memoria, metriche_memoria) = staging_esegui(false).expect("modalita' memoria");
+    let (disco, metriche_disco) = staging_esegui(true).expect("modalita' disco");
 
     assert_eq!(
-        m2d_ipc(&memoria),
-        m2d_ipc(&disco),
+        staging_ipc(&memoria),
+        staging_ipc(&disco),
         "memoria e disco devono produrre byte IPC identici"
     );
     assert_eq!(
@@ -6135,16 +6140,16 @@ fn m2d_memoria_e_disco_producono_gli_stessi_byte() {
         "batch di output identici"
     );
     // Il numero di batch e' quello dell'input: nessuna ri-pacchettizzazione.
-    assert_eq!(memoria.len(), m2d_batches().len());
+    assert_eq!(memoria.len(), staging_batches().len());
 }
 
 #[test]
-fn m2d_ordine_e_sequenza_logica_preservati() {
+fn staging_ordine_e_sequenza_logica_preservati() {
     // La sequenza logica non e' esposta da `collect_batches`: si verifica
     // l'ordine osservabile, che ne e' la proiezione (architettura.md#determinismo, propagazione
     // 1:1 batch per batch).
     for forza_disco in [false, true] {
-        let (batches, _) = m2d_esegui(forza_disco).expect("esecuzione");
+        let (batches, _) = staging_esegui(forza_disco).expect("esecuzione");
         let ids: Vec<i64> = batches
             .iter()
             .flat_map(|b| {
@@ -6165,7 +6170,7 @@ fn m2d_ordine_e_sequenza_logica_preservati() {
 }
 
 #[test]
-fn m2d_rejection_tardiva_non_pubblica_nulla_in_memoria() {
+fn staging_rejection_tardiva_non_pubblica_nulla_in_memoria() {
     // Il terzo batch contiene un valore che la formula non sa valutare: la
     // rejection arriva DOPO che due batch sono gia' stati accettati e
     // trattenuti in memoria. Nessuno dei due deve uscire.
@@ -6214,17 +6219,18 @@ fn m2d_rejection_tardiva_non_pubblica_nulla_in_memoria() {
 }
 
 #[test]
-fn m2d_cancellazione_dopo_accepted_trattenuti_non_pubblica_nulla() {
+fn staging_cancellazione_dopo_accepted_trattenuti_non_pubblica_nulla() {
     let token = CancellationToken::new();
     let runtime = RuntimeContext {
         cancellation: token.clone(),
         ..RuntimeContext::default()
     };
-    let graph = validate(&m2d_plan(false).to_string(), &m2d_contratti()).expect("piano valido");
+    let graph =
+        validate(&staging_plan(false).to_string(), &staging_contratti()).expect("piano valido");
     // Cancellato PRIMA di drenare: la scansione si ferma al confine
     // cooperativo e i trattenuti muoiono con la coda.
     token.cancel();
-    let output = execute(&graph, single_input("main", m2d_batches()), runtime);
+    let output = execute(&graph, single_input("main", staging_batches()), runtime);
     let esito = output.and_then(Output::collect_batches);
     assert!(
         esito.is_err(),
@@ -6233,7 +6239,7 @@ fn m2d_cancellazione_dopo_accepted_trattenuti_non_pubblica_nulla() {
 }
 
 #[test]
-fn m2d_soglia_esatta_e_attraversamento() {
+fn staging_soglia_esatta_e_attraversamento() {
     // La soglia e' `trattenuti + input + max_batch_bytes <= budget`, tutta
     // derivata dal piano. Qui si verifica il comportamento ai due lati:
     // con budget ampio si resta in memoria (nessun file temporaneo puo'
@@ -6257,8 +6263,8 @@ fn m2d_soglia_esatta_e_attraversamento() {
     let ampio = output_rows(
         run(
             &piano(512 * 1024 * 1024),
-            single_input("main", m2d_batches()),
-            &m2d_contratti(),
+            single_input("main", staging_batches()),
+            &staging_contratti(),
         )
         .expect("execute"),
     );
@@ -6271,8 +6277,8 @@ fn m2d_soglia_esatta_e_attraversamento() {
     let stretto = output_rows(
         run(
             &piano(1_048_576),
-            single_input("main", m2d_batches()),
-            &m2d_contratti(),
+            single_input("main", staging_batches()),
+            &staging_contratti(),
         )
         .expect("execute"),
     );
@@ -6284,13 +6290,13 @@ fn m2d_soglia_esatta_e_attraversamento() {
 }
 
 #[test]
-fn m2d_lease_rilasciati_a_fine_esecuzione() {
+fn staging_lease_rilasciati_a_fine_esecuzione() {
     for forza_disco in [false, true] {
-        let graph =
-            validate(&m2d_plan(forza_disco).to_string(), &m2d_contratti()).expect("piano valido");
+        let graph = validate(&staging_plan(forza_disco).to_string(), &staging_contratti())
+            .expect("piano valido");
         let output = execute(
             &graph,
-            single_input("main", m2d_batches()),
+            single_input("main", staging_batches()),
             RuntimeContext::default(),
         )
         .expect("execute");
@@ -6308,10 +6314,10 @@ fn m2d_lease_rilasciati_a_fine_esecuzione() {
 }
 
 #[test]
-fn m2d_picco_governato_memoria_non_supera_il_budget() {
+fn staging_picco_governato_memoria_non_supera_il_budget() {
     // Il punto delicato: trattenere i lease NON deve far superare il budget.
     for forza_disco in [false, true] {
-        let (_, metriche) = m2d_esegui(forza_disco).expect("esecuzione");
+        let (_, metriche) = staging_esegui(forza_disco).expect("esecuzione");
         assert!(
             metriche.memory.peak_reserved_bytes <= metriche.memory.budget_bytes,
             "picco {} oltre il budget {} (forza_disco={forza_disco})",
@@ -6322,7 +6328,7 @@ fn m2d_picco_governato_memoria_non_supera_il_budget() {
 }
 
 #[test]
-fn m2d_output_consumato_da_un_segmento_successivo() {
+fn staging_output_consumato_da_un_segmento_successivo() {
     // Il segmento row-diagnostics non e' l'output del piano: un secondo
     // segmento consuma i suoi accepted. In memoria il batch e' lo stesso
     // oggetto prodotto dalla catena, quindi il consumatore a valle deve
@@ -6346,8 +6352,8 @@ fn m2d_output_consumato_da_un_segmento_successivo() {
         output_rows(
             run(
                 &piano(memoria),
-                single_input("main", m2d_batches()),
-                &m2d_contratti(),
+                single_input("main", staging_batches()),
+                &staging_contratti(),
             )
             .expect("execute"),
         )
@@ -6356,8 +6362,8 @@ fn m2d_output_consumato_da_un_segmento_successivo() {
     let (memoria, _) = esegui(None);
     let (disco, _) = esegui(Some(1_048_576));
     assert_eq!(
-        m2d_ipc(&memoria),
-        m2d_ipc(&disco),
+        staging_ipc(&memoria),
+        staging_ipc(&disco),
         "un segmento a valle deve vedere lo stesso risultato nelle due modalita'"
     );
     // L'ordinamento discendente e' effettivo: il consumatore ha visto i dati.
@@ -6376,16 +6382,16 @@ fn m2d_output_consumato_da_un_segmento_successivo() {
 }
 
 #[test]
-fn m2d_zero_colonne_e_batch_vuoti() {
+fn staging_zero_colonne_e_batch_vuoti() {
     // Un batch senza righe attraversa comunque la barriera: le due modalita'
     // devono concordare anche su questo caso degenere.
-    let vuoto = RecordBatch::new_empty(m2d_schema());
+    let vuoto = RecordBatch::new_empty(staging_schema());
     let esegui = |forza_disco: bool| {
         output_rows(
             run(
-                &m2d_plan(forza_disco),
-                single_input("main", vec![vuoto.clone(), m2d_batch(0), vuoto.clone()]),
-                &m2d_contratti(),
+                &staging_plan(forza_disco),
+                single_input("main", vec![vuoto.clone(), staging_batch(0), vuoto.clone()]),
+                &staging_contratti(),
             )
             .expect("execute"),
         )
@@ -6393,13 +6399,13 @@ fn m2d_zero_colonne_e_batch_vuoti() {
     };
     let (memoria, mm) = esegui(false);
     let (disco, md) = esegui(true);
-    assert_eq!(m2d_ipc(&memoria), m2d_ipc(&disco));
+    assert_eq!(staging_ipc(&memoria), staging_ipc(&disco));
     assert_eq!(mm.output_rows, md.output_rows);
     assert_eq!(mm.output_batches, md.output_batches);
 }
 
 #[test]
-fn m2d_tre_famiglie_row_diagnostics() {
+fn staging_tre_famiglie_row_diagnostics() {
     // `emits_row_diagnostics` non e' una proprieta' di `table.formula`: tutte
     // le operazioni della lista prendono lo stesso percorso, e tutte devono
     // dare lo stesso risultato nelle due modalita'.
@@ -6458,24 +6464,24 @@ fn m2d_tre_famiglie_row_diagnostics() {
         };
         let operazione = nodo["op"].as_str().unwrap_or("?");
         assert_eq!(
-            m2d_ipc(&esegui(None)),
-            m2d_ipc(&esegui(Some(1_048_576))),
+            staging_ipc(&esegui(None)),
+            staging_ipc(&esegui(Some(1_048_576))),
             "memoria e disco divergono su `{operazione}`"
         );
     }
 }
 
 #[test]
-fn m2d_batch_sequence_identica_fra_modalita() {
+fn staging_batch_sequence_identica_fra_modalita() {
     // L'ordine osservabile e' la proiezione della sequenza logica; qui si
     // verifica la sequenza STESSA, che il replay IPC ricostruisce dai
     // metadati e la modalita' memoria porta invariata (architettura.md#determinismo).
     let sequenze = |forza_disco: bool| -> Vec<Option<BatchSequence>> {
-        let graph =
-            validate(&m2d_plan(forza_disco).to_string(), &m2d_contratti()).expect("piano valido");
+        let graph = validate(&staging_plan(forza_disco).to_string(), &staging_contratti())
+            .expect("piano valido");
         let output = execute(
             &graph,
-            single_input("main", m2d_batches()),
+            single_input("main", staging_batches()),
             RuntimeContext::default(),
         )
         .expect("execute");
@@ -6486,7 +6492,7 @@ fn m2d_batch_sequence_identica_fra_modalita() {
     let disco = sequenze(true);
     assert_eq!(
         memoria.len(),
-        m2d_batches().len(),
+        staging_batches().len(),
         "un batch di uscita per batch di ingresso"
     );
     for (indice, (a, b)) in memoria.iter().zip(&disco).enumerate() {
@@ -6501,7 +6507,7 @@ fn m2d_batch_sequence_identica_fra_modalita() {
 }
 
 #[test]
-fn m2d_dictionary_e_nested() {
+fn staging_dictionary_e_nested() {
     // Il round-trip IPC e' il punto in cui memoria e disco potrebbero
     // divergere: i dizionari vengono ricostruiti dal lettore e le liste
     // ricopiate da `take`. Se le due modalita' concordano qui, concordano.
@@ -6598,7 +6604,7 @@ fn m2d_dictionary_e_nested() {
 }
 
 #[test]
-fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
+fn staging_budget_stretto_non_regredisce_a_resource_limit() {
     // Il rischio dichiarato dello staging memory-first: trattenere i lease
     // puo' trasformare un input eseguibile in un falso `ResourceLimit`. La
     // soglia lo impedisce facendo scattare il disco PRIMA della passata che
@@ -6621,8 +6627,8 @@ fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
         let esito = output_rows(
             run(
                 &piano,
-                single_input("main", m2d_batches()),
-                &m2d_contratti(),
+                single_input("main", staging_batches()),
+                &staging_contratti(),
             )
             .expect("execute"),
         );
@@ -6644,7 +6650,7 @@ fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
 
 /// Schema del fan-out: un identificativo e una colonna TESTUALE lunga che
 /// contiene un numero.
-fn m2d_fanout_schema() -> SchemaRef {
+fn staging_fanout_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
         Field::new("v", DataType::Utf8, true),
@@ -6652,12 +6658,12 @@ fn m2d_fanout_schema() -> SchemaRef {
 }
 
 /// Batch del fan-out: 64 righe, testo da 30 caratteri per riga.
-fn m2d_fanout_batch(indice: usize) -> RecordBatch {
+fn staging_fanout_batch(indice: usize) -> RecordBatch {
     let base = i64::try_from(indice).expect("indice rappresentabile") * 64;
     let id: Vec<i64> = (0..64).map(|r| base + r).collect();
     let v: Vec<Option<String>> = id.iter().map(|n| Some(format!("{n:030}"))).collect();
     RecordBatch::try_new(
-        m2d_fanout_schema(),
+        staging_fanout_schema(),
         vec![
             Arc::new(Int64Array::from(id)) as ArrayRef,
             Arc::new(StringArray::from(v)) as ArrayRef,
@@ -6681,7 +6687,7 @@ fn m2d_fanout_batch(indice: usize) -> RecordBatch {
 /// l'input, `check_batch_bytes` costringerebbe `max_batch_bytes` ad essere
 /// altrettanto grande, e quell'headroom coprirebbe **per caso** proprio le
 /// prenotazioni del tee che questo test deve esporre.
-fn m2d_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
+fn staging_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
     let cast = |id: &str| {
         json!({"id": id, "op": "table.type_cast", "in": ["main"],
                "config": {"column": "v", "target_type": "int"}})
@@ -6704,17 +6710,17 @@ fn m2d_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
 }
 
 /// Esegue il piano di fan-out con budget e tetto per batch dati.
-fn m2d_fanout_esito(
+fn staging_fanout_esito(
     primo_ramo_diagnostico: bool,
     budget: u64,
     max_batch_bytes: usize,
     batch: usize,
 ) -> Result<(usize, u64)> {
-    let mut piano = m2d_piano_fanout(primo_ramo_diagnostico);
+    let mut piano = staging_piano_fanout(primo_ramo_diagnostico);
     piano["limits"] = json!({"max_governed_memory_bytes": budget});
     let contratti = [(
         "main".to_owned(),
-        DataContract::tabular(m2d_fanout_schema()),
+        DataContract::tabular(staging_fanout_schema()),
     )];
     let graph = validate(&piano.to_string(), &contratti).expect("piano valido");
     let runtime = RuntimeContext {
@@ -6724,13 +6730,13 @@ fn m2d_fanout_esito(
         },
         ..RuntimeContext::default()
     };
-    let ingresso: Vec<RecordBatch> = (0..batch).map(m2d_fanout_batch).collect();
+    let ingresso: Vec<RecordBatch> = (0..batch).map(staging_fanout_batch).collect();
     let mut inputs = Inputs::strict();
     inputs
         .add_with_contract(
             "main",
             Input::from_batches(ingresso).expect("input"),
-            DataContract::tabular(m2d_fanout_schema()),
+            DataContract::tabular(staging_fanout_schema()),
         )
         .expect("input con contratto");
     let output = execute(&graph, inputs, runtime)?;
@@ -6742,7 +6748,7 @@ fn m2d_fanout_esito(
 }
 
 #[test]
-fn m2d_fanout_nessun_falso_resource_limit() {
+fn staging_fanout_nessun_falso_resource_limit() {
     // Invariante, non un budget fortunato: per OGNI budget in cui il percorso
     // disco riesce, deve riuscire anche quello che puo' scegliere la memoria,
     // con lo stesso risultato e senza sfondare il budget.
@@ -6766,14 +6772,14 @@ fn m2d_fanout_nessun_falso_resource_limit() {
         while budget <= 400_000 {
             // Percorso disco: tetto per batch >= budget, quindi la soglia e'
             // falsa per costruzione e non si trattiene nulla in memoria.
-            let disco = m2d_fanout_esito(
+            let disco = staging_fanout_esito(
                 primo_ramo_diagnostico,
                 budget,
                 usize::try_from(budget).unwrap_or(usize::MAX),
                 BATCH,
             );
             // Percorso automatico: la memoria e' ammessa.
-            let automatico = m2d_fanout_esito(primo_ramo_diagnostico, budget, PICCOLO, BATCH);
+            let automatico = staging_fanout_esito(primo_ramo_diagnostico, budget, PICCOLO, BATCH);
             if let Ok((righe_disco, _)) = disco {
                 let (righe, picco) = automatico.unwrap_or_else(|errore| {
                     panic!(
@@ -6802,11 +6808,11 @@ fn m2d_fanout_nessun_falso_resource_limit() {
 // ---------------------------------------------------------------------------
 
 /// Un `Output` semplice su cui esercitare i percorsi pubblici di consumo.
-fn m2d_output_semplice() -> Output {
+fn staging_output_semplice() -> Output {
     run(
-        &m2d_plan(false),
-        single_input("main", m2d_batches()),
-        &m2d_contratti(),
+        &staging_plan(false),
+        single_input("main", staging_batches()),
+        &staging_contratti(),
     )
     .expect("execute")
 }
@@ -6823,7 +6829,7 @@ fn iterator_pubblico_intercetta_la_contabilita_corrotta() {
     // comportamento giusto — piu' presto si ferma, meglio e'. Il caso in cui
     // a intercettare e' il controllo TERMINALE e' coperto da
     // `iterator_corrotto_a_meta_stream_emette_una_sola_volta`.
-    let output = m2d_output_semplice();
+    let output = staging_output_semplice();
     let governor = output.state.governor.clone();
     governor.corrompi_per_test("corruzione simulata");
 
@@ -6840,7 +6846,7 @@ fn iterator_pubblico_intercetta_la_contabilita_corrotta() {
 fn iterator_consegna_l_errore_una_volta_sola_poi_termina() {
     // Ripeterlo a ogni chiamata trasformerebbe un `for` in un ciclo che non
     // finisce: lo stato terminale esiste per questo.
-    let mut output = m2d_output_semplice();
+    let mut output = staging_output_semplice();
     let governor = output.state.governor.clone();
     // Si drena tutto lo stream prima di corrompere: cosi' l'errore puo'
     // arrivare solo dal controllo terminale.
@@ -6849,7 +6855,11 @@ fn iterator_consegna_l_errore_una_volta_sola_poi_termina() {
         item.expect("nessun errore prima della corruzione");
         consegnati += 1;
     }
-    assert_eq!(consegnati, m2d_batches().len(), "tutti i batch consegnati");
+    assert_eq!(
+        consegnati,
+        staging_batches().len(),
+        "tutti i batch consegnati"
+    );
 
     // A stream gia' esaurito, una corruzione successiva non puo' piu' essere
     // segnalata: il cancello e' passato. E' il limite dichiarato del
@@ -6863,7 +6873,7 @@ fn iterator_consegna_l_errore_una_volta_sola_poi_termina() {
 
 #[test]
 fn iterator_corrotto_a_meta_stream_emette_una_sola_volta() {
-    let mut output = m2d_output_semplice();
+    let mut output = staging_output_semplice();
     let governor = output.state.governor.clone();
     // Un batch consegnato, poi la corruzione: l'errore arriva alla fine
     // dello stream, una volta.
@@ -6889,7 +6899,7 @@ fn iterator_corrotto_a_meta_stream_emette_una_sola_volta() {
     );
     assert_eq!(
         batch,
-        m2d_batches().len() - 1,
+        staging_batches().len() - 1,
         "i batch rimanenti sono consegnati prima dell'errore"
     );
     assert!(output.next().is_none(), "poi l'iteratore termina");
@@ -6900,7 +6910,7 @@ fn metriche_parziali_dichiarano_la_contabilita_corrotta() {
     // `Output::metrics()` e' pubblica e leggibile a meta' stream, quando
     // l'errore non e' ancora stato consegnato. Senza il flag mostrerebbe
     // contatori apparentemente sani.
-    let mut output = m2d_output_semplice();
+    let mut output = staging_output_semplice();
     let governor = output.state.governor.clone();
     assert!(
         !output.metrics().memory.accounting_corrupted,
@@ -6918,7 +6928,7 @@ fn metriche_parziali_dichiarano_la_contabilita_corrotta() {
 #[test]
 fn collect_batches_e_publish_restano_protetti() {
     // I due cancelli gia' esistenti, verificati sulla stessa causa.
-    let output = m2d_output_semplice();
+    let output = staging_output_semplice();
     output
         .state
         .governor
@@ -6928,7 +6938,7 @@ fn collect_batches_e_publish_restano_protetti() {
         "collect_batches deve rifiutare"
     );
 
-    let output = m2d_output_semplice();
+    let output = staging_output_semplice();
     output
         .state
         .governor

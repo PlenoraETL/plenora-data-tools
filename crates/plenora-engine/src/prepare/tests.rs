@@ -894,8 +894,14 @@ fn nary_concat_over_two_inputs_is_rejected_fail_closed() {
     let result = prepare(&graph, &RuntimeContext::default());
     match result {
         Err(PlenoraError::Unsupported(message)) => {
-            assert!(message.contains("N-aria"), "{message}");
+            // Quanti input sono arrivati, quanti ne sono ammessi, e che cosa
+            // manca: il messaggio deve reggere tutte e tre le domande.
             assert!(message.contains("3 input"), "{message}");
+            assert!(message.contains("al massimo 2"), "{message}");
+            assert!(
+                message.contains("N-aria non e' implementata"),
+                "il messaggio non dice quale capacita' manca: {message}"
+            );
         }
         other => panic!("atteso Unsupported, ottenuto {other:?}"),
     }
@@ -1227,7 +1233,7 @@ fn geo_binary_config(segment: &PhysicalSegment) -> &GeoBinaryPlan {
 }
 
 #[test]
-fn geo_binary_m1_ops_prepare_as_geo_binary_with_resolved_plan() {
+fn geo_binary_ops_prepare_as_geo_binary_with_resolved_plan() {
     let cases: [(&str, serde_json::Value, PairOperation); 4] = [
         (
             "geo.sjoin",
@@ -1372,7 +1378,7 @@ fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
 }
 
 #[test]
-fn geo_binary_outside_m1_perimeter_stays_unsupported() {
+fn geo_binary_needing_reencode_stays_unsupported() {
     // Fuori dal perimetro dei binari geo: il ri-encode di D14.1 non e'
     // implementato, e il rifiuto resta `Unsupported`.
     let cases: [(&str, serde_json::Value); 6] = [
@@ -1387,9 +1393,17 @@ fn geo_binary_outside_m1_perimeter_stays_unsupported() {
         let graph = geo_binary_graph(op, &config);
         match prepare(&graph, &RuntimeContext::default()) {
             Err(PlenoraError::Unsupported(message)) => {
+                // Il messaggio deve dire QUALE operazione e PERCHE': senza il
+                // motivo, «non e' nel dispatch» non dice al chiamante se
+                // riprovare con un piano diverso o rinunciare.
+                assert!(message.contains(op), "{op}: {message}");
                 assert!(
-                    message.contains("non e' nel dispatch v1"),
+                    message.contains("non e' nel dispatch dell'executor"),
                     "{op}: {message}"
+                );
+                assert!(
+                    message.contains("richiedono il ri-encode"),
+                    "{op}: il messaggio non dice perche': {message}"
                 );
             }
             other => panic!("{op}: atteso Unsupported, ottenuto {other:?}"),

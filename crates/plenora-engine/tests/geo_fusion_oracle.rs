@@ -1041,12 +1041,12 @@ fn terminal_to_wkt_plan() -> Value {
 /// sono preservate (D12.6) e la colonna geometria SOPRAVVIVE (semantica v4
 /// "add column": misura appesa in coda, null-in -> null-out).
 #[test]
-fn m2_happy_path_terminal_measure_byte_per_byte() {
+fn happy_path_terminal_measure_byte_per_byte() {
     use plenora_core::arrow::array::{Array, Float64Array, StringArray};
 
     for (case, plan, nodes) in [
-        ("m2-area", terminal_area_plan(), vec!["t", "r", "a"]),
-        ("m2-to_wkt", terminal_to_wkt_plan(), vec!["t", "w"]),
+        ("misura-area", terminal_area_plan(), vec!["t", "r", "a"]),
+        ("misura-to_wkt", terminal_to_wkt_plan(), vec!["t", "w"]),
     ] {
         assert_group_formation(&plan, &nodes);
         let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
@@ -1102,7 +1102,7 @@ fn m2_happy_path_terminal_measure_byte_per_byte() {
 /// misura sia eseguito (nel non fuso il nodo misura parte solo dopo che il
 /// nodo trasformazione ha completato tutte le righe).
 #[test]
-fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
+fn oversize_cell_with_terminal_measure_attributed_to_transform() {
     let plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1117,7 +1117,7 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
     });
     assert_group_formation(&plan, &["d1", "t", "vc"]);
     let signature = assert_oracle_error(
-        "m2-b",
+        "cella-oltre-il-tetto",
         &plan,
         &oversized_cell_batches,
         Some("d1"),
@@ -1125,9 +1125,11 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
     );
     assert_eq!(
         signature.variant, "Replayed",
-        "m2-b: errore con diagnostica row-scoped"
+        "cella-oltre-il-tetto: errore con diagnostica row-scoped"
     );
-    let report = signature.diagnostics.expect("m2-b: diagnostica row-scoped");
+    let report = signature
+        .diagnostics
+        .expect("cella-oltre-il-tetto: diagnostica row-scoped");
     assert_eq!(report.counts["geometry.cell_too_large"], 1);
     assert_eq!(report.examples[0].source_index, 0);
 }
@@ -1137,7 +1139,7 @@ fn m2_oversize_cell_with_terminal_measure_attributed_to_transform() {
 /// i percorsi — la misura in coda non cambia l'attribuzione degli errori di
 /// input.
 #[test]
-fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
+fn ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
     let plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1150,7 +1152,7 @@ fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
     });
     assert_group_formation(&plan, &["t", "a"]);
     let signature = assert_oracle_error(
-        "m2-c",
+        "input-ogc-invalido",
         &plan,
         &|| vec![geo_batch(&[0], &[Some(bowtie_wkb())])],
         Some("t"),
@@ -1158,7 +1160,7 @@ fn m2_ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
     );
     assert_eq!(
         signature.variant, "Replayed",
-        "m2-c: errore con diagnostica row-scoped"
+        "input-ogc-invalido: errore con diagnostica row-scoped"
     );
 }
 
@@ -1266,7 +1268,7 @@ fn invalid_then_valid_batches() -> Vec<RecordBatch> {
 /// input OGC-invalido dall'arco) e' verificata qui.
 #[cfg(feature = "geos-backend")]
 #[test]
-fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
+fn ogc_invalid_input_to_make_valid_repaired_identically() {
     use plenora_core::arrow::array::Array;
 
     let plan = make_valid_first_plan();
@@ -1274,14 +1276,14 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
     assert_percorsi(
-        "m3a_ogc_invalid_input_to_make_valid_repaired_identically",
+        "ogc_invalid_input_to_make_valid_repaired_identically",
         &fused_metrics,
         &plain_metrics,
         Origine::RunnerFuso { gruppi: 2 },
     );
     assert_eq!(
         fused_batches, plain_batches,
-        "m3-a: riparazione diversa tra i percorsi"
+        "make_valid-in-testa: riparazione diversa tra i percorsi"
     );
     for node in ["mv", "t"] {
         let fused_node = &fused_metrics.nodes[node];
@@ -1289,7 +1291,7 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
         assert_eq!(
             (fused_node.rows_in, fused_node.rows_out),
             (plain_node.rows_in, plain_node.rows_out),
-            "m3-a: {node}: righe 1:1 in A/B"
+            "make_valid-in-testa: {node}: righe 1:1 in A/B"
         );
     }
     // Nessuna cella null persa/guadagnata (riga 3 del primo batch) e output
@@ -1299,7 +1301,7 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
         .as_any()
         .downcast_ref::<BinaryArray>()
         .expect("colonna geometria");
-    assert!(first.is_null(3), "m3-a: null-in -> null-out");
+    assert!(first.is_null(3), "make_valid-in-testa: null-in -> null-out");
     for batch in &fused_batches {
         let cells = batch
             .column(1)
@@ -1307,7 +1309,8 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
             .downcast_ref::<BinaryArray>()
             .expect("colonna geometria");
         for cell in cells.iter().flatten() {
-            plenora_kernels_geo::geometry_from_wkb(cell).expect("m3-a: output riparato OGC-valido");
+            plenora_kernels_geo::geometry_from_wkb(cell)
+                .expect("make_valid-in-testa: output riparato OGC-valido");
         }
     }
 }
@@ -1319,7 +1322,7 @@ fn m3a_ogc_invalid_input_to_make_valid_repaired_identically() {
 /// (parita' GEOS/geozero sulla stessa geometria riparata).
 #[cfg(feature = "geos-backend")]
 #[test]
-fn m3a2_make_valid_then_measure_boundary_bytes_match() {
+fn make_valid_then_measure_boundary_bytes_match() {
     let plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1333,14 +1336,14 @@ fn m3a2_make_valid_then_measure_boundary_bytes_match() {
     let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
     assert_percorsi(
-        "m3a2_make_valid_then_measure_boundary_bytes_match",
+        "make_valid_then_measure_boundary_bytes_match",
         &fused_metrics,
         &plain_metrics,
         Origine::RunnerFuso { gruppi: 2 },
     );
     assert_eq!(
         fused_batches, plain_batches,
-        "m3-a2: byte di confine o misura diversi tra i percorsi"
+        "make_valid-poi-misura: byte di confine o misura diversi tra i percorsi"
     );
 }
 
@@ -1351,20 +1354,20 @@ fn m3a2_make_valid_then_measure_boundary_bytes_match() {
 /// non contrattuale).
 #[cfg(feature = "proj-backend")]
 #[test]
-fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
+fn reproject_chain_byte_per_byte_with_target_crs_schema() {
     let plan = reproject_chain_plan();
     assert_group_formation(&plan, &["p", "t"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
     assert_percorsi(
-        "m3b_reproject_chain_byte_per_byte_with_target_crs_schema",
+        "reproject_chain_byte_per_byte_with_target_crs_schema",
         &fused_metrics,
         &plain_metrics,
         Origine::RunnerFuso { gruppi: 2 },
     );
     assert_eq!(
         fused_batches, plain_batches,
-        "m3-b: output fuso diverso dal non fuso"
+        "reproject-in-catena: output fuso diverso dal non fuso"
     );
     for node in ["p", "t"] {
         let fused_node = &fused_metrics.nodes[node];
@@ -1372,13 +1375,13 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
         assert_eq!(
             (fused_node.rows_in, fused_node.rows_out),
             (plain_node.rows_in, plain_node.rows_out),
-            "m3-b: {node}: righe 1:1 in A/B"
+            "reproject-in-catena: {node}: righe 1:1 in A/B"
         );
     }
     let metadata = format!("{:?}", fused_batches[0].schema().field(1).metadata());
     assert!(
         metadata.contains("EPSG:3857"),
-        "m3-b: il campo geometria di confine porta il CRS target: {metadata}"
+        "reproject-in-catena: il campo geometria di confine porta il CRS target: {metadata}"
     );
 }
 
@@ -1387,25 +1390,25 @@ fn m3b_reproject_chain_byte_per_byte_with_target_crs_schema() {
 /// target e la misura e' byte-per-byte identica.
 #[cfg(feature = "proj-backend")]
 #[test]
-fn m3b2_reproject_to_geographic_with_terminal_measure() {
+fn reproject_to_geographic_with_terminal_measure() {
     let plan = reproject_geographic_measure_plan();
     assert_group_formation(&plan, &["p", "w"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
     assert_percorsi(
-        "m3b2_reproject_to_geographic_with_terminal_measure",
+        "reproject_to_geographic_with_terminal_measure",
         &fused_metrics,
         &plain_metrics,
         Origine::RunnerFuso { gruppi: 2 },
     );
     assert_eq!(
         fused_batches, plain_batches,
-        "m3-b2: output fuso diverso dal non fuso"
+        "reproject-geografico: output fuso diverso dal non fuso"
     );
     let metadata = format!("{:?}", fused_batches[0].schema().field(1).metadata());
     assert!(
         metadata.contains("EPSG:4326"),
-        "m3-b2: il campo geometria di confine porta il CRS geografico: {metadata}"
+        "reproject-geografico: il campo geometria di confine porta il CRS geografico: {metadata}"
     );
 }
 
@@ -1415,20 +1418,20 @@ fn m3b2_reproject_to_geographic_with_terminal_measure() {
 /// successore (l'output riparato e' valido per contratto del kernel).
 #[cfg(feature = "geos-backend")]
 #[test]
-fn m3c_make_valid_mid_chain_byte_per_byte() {
+fn make_valid_mid_chain_byte_per_byte() {
     let plan = make_valid_mid_chain_plan();
     assert_group_formation(&plan, &["t", "mv", "r"]);
     let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
     let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
     assert_percorsi(
-        "m3c_make_valid_mid_chain_byte_per_byte",
+        "make_valid_mid_chain_byte_per_byte",
         &fused_metrics,
         &plain_metrics,
         Origine::RunnerFuso { gruppi: 2 },
     );
     assert_eq!(
         fused_batches, plain_batches,
-        "m3-c: output fuso diverso dal non fuso"
+        "make_valid-a-meta-catena: output fuso diverso dal non fuso"
     );
     for node in ["t", "mv", "r"] {
         let fused_node = &fused_metrics.nodes[node];
@@ -1436,7 +1439,7 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
         assert_eq!(
             (fused_node.rows_in, fused_node.rows_out),
             (plain_node.rows_in, plain_node.rows_out),
-            "m3-c: {node}: righe 1:1 in A/B"
+            "make_valid-a-meta-catena: {node}: righe 1:1 in A/B"
         );
     }
 }
@@ -1449,7 +1452,7 @@ fn m3c_make_valid_mid_chain_byte_per_byte() {
 /// unitario fuso `fused_control_observes_cancellation_after_non_interruptible_make_valid`.
 #[cfg(feature = "geos-backend")]
 #[test]
-fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
+fn cancellation_with_non_interruptible_make_valid_same_node() {
     let plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1468,22 +1471,25 @@ fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
     // osservata a `main`, prima che il gruppo parta. Dichiararlo rende la
     // previsione verificabile invece che soltanto scritta.
     assert_percorsi(
-        "m3-d",
+        "cancellazione-su-make_valid",
         &fused_metrics,
         &plain_metrics,
         Origine::PrimaDellaFusione,
     );
     let signature = error_signature(&fused_error);
-    assert_eq!(signature.variant, "Cancelled", "m3-d: variante Cancelled");
+    assert_eq!(
+        signature.variant, "Cancelled",
+        "cancellazione-su-make_valid: variante Cancelled"
+    );
     assert_eq!(
         signature.node.as_deref(),
         Some("main"),
-        "m3-d: la validazione WKB atomica osserva la cancellazione prima del gruppo"
+        "cancellazione-su-make_valid: la validazione WKB atomica osserva la cancellazione prima del gruppo"
     );
     assert_eq!(
         signature,
         error_signature(&plain_error),
-        "m3-d: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
+        "cancellazione-su-make_valid: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
     );
 }
 
@@ -1496,7 +1502,7 @@ fn m3d_cancellation_with_non_interruptible_make_valid_same_node() {
 /// (`unary.rs::tests`) perche' i piani non lo raggiungono mai: la
 /// validazione scatta prima.
 #[test]
-fn m3_backend_ops_identical_outcome_with_fusion_on_and_off() {
+fn backend_ops_identical_outcome_with_fusion_on_and_off() {
     /// Esito dell'esecuzione come `Result`: batch raccolti oppure il testo
     /// integrale del primo errore (validazione, esecuzione o stream).
     fn outcome(plan: &Value, geo_fusion: bool) -> Result<Vec<RecordBatch>, String> {
@@ -1516,8 +1522,8 @@ fn m3_backend_ops_identical_outcome_with_fusion_on_and_off() {
     }
 
     for (case, plan) in [
-        ("m3-off-make_valid", make_valid_first_plan()),
-        ("m3-off-reproject", reproject_chain_plan()),
+        ("feature-spenta-make_valid", make_valid_first_plan()),
+        ("feature-spenta-reproject", reproject_chain_plan()),
     ] {
         match (outcome(&plan, true), outcome(&plan, false)) {
             (Ok(fused), Ok(plain)) => assert_eq!(

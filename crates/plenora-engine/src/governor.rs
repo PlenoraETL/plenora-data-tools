@@ -1399,7 +1399,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn il_vecchio_fallback_del_ritaglio_non_esiste_piu() {
+    fn un_ritaglio_impossibile_fallisce_invece_di_riprenotare() {
         // Un ritaglio impossibile non ripiega su una nuova `reserve`:
         // rilascio e riprenotazione riaprirebbero proprio la finestra che il
         // permesso esiste per chiudere. Fallisce, e il messaggio dice perche'.
