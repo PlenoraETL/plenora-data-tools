@@ -49,8 +49,7 @@ fn tabular_contract() -> DataContract {
 /// Senza i metadati dell'estensione `GeoArrow` l'analyzer geo fallisce in
 /// `require_identifiable_geometry`, cioe' PRIMA del `match` sull'operazione:
 /// il gate non raggiungerebbe il punto che vuole verificare, e ogni op
-/// risulterebbe coperta. E' il difetto che la prima versione di questo test
-/// aveva.
+/// risulterebbe coperta.
 fn geo_contract() -> DataContract {
     let mut metadata = HashMap::new();
     metadata.insert(

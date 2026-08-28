@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(
             without,
             geo_metadata_json_with_dimensions(CRS, GeometryDimensions::Xyz).expect("dimensions"),
-            "None: byte-per-byte identico alla forma pre-B1.4"
+            "None: byte-per-byte identico alla forma senza chiave `encoding`"
         );
         let parsed: serde_json::Value = serde_json::from_str(&without).unwrap();
         assert!(parsed.get("encoding").is_none(), "chiave omessa con None");

@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.fill_na`, `table.coalesce` e
-//! `table.type_cast` (filone ottimizzazioni kernel, secondo batch).
+//! `table.type_cast`.
 //!
 //! Fixture deterministica (seed logico 42): stessa forma di
 //! `bench_filter_sort` con pattern di null regolari e colonne stringa

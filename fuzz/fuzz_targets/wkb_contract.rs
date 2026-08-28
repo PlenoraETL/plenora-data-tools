@@ -17,8 +17,8 @@ fuzz_target!(|payload: &[u8]| {
     // strutturalmente ben formata ma non valida — per esempio
     // `LINESTRING(0 0, 0 0, 0 0, 0 0)`, che geozero decodifica e il decoder
     // rifiuta correttamente con "line string must have at least 2 distinct
-    // points". Il target era rosso per questo motivo, e finche' lo restava
-    // non poteva segnalare divergenze vere.
+    // points". Un target rosso per questo motivo non puo' segnalare
+    // divergenze vere.
     let reference = validate_wkb_contract(payload)
         .ok()
         .and_then(|()| Wkb(payload).to_geo().ok())

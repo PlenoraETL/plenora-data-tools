@@ -25,8 +25,8 @@ IMAGE="${FUZZ_IMAGE:-plenora-rust:nightly-fuzz}"
 # cargo-fuzz non e' installato nell'immagine: si usa il binario precompilato
 # Linux condiviso dei progetti plenora (montato read-only su /fuzzbin).
 CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
-# Default sotto la home e non `C:/tmp/...`: quel percorso era una macchina
-# sola, e su ogni altra il mount sarebbe vuoto. Ricetta in docs/release.md,
+# Default sotto la home e non `C:/tmp/...`: un percorso del genere vale su
+# una macchina sola, e su ogni altra il mount sarebbe vuoto. Ricetta in docs/release.md,
 # sezione «Fuzzing».
 FUZZBIN_HOST="${FUZZBIN_HOST:-$HOME/.plenora-fuzz/bin}"
 HOURS="${FUZZ_HOURS_PER_TARGET:-1}"
@@ -39,11 +39,11 @@ ALL_TARGETS=(
     # Portati da plenora-nogeo-tools
     plan_contract string_chain candidate_chain binary_ops
     reshape_policies extended_ops advanced_ops
-    # Portati da plenora-geo-tools-arrow
+    # Trasporto geo e contratto WKB
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
-    # Nuovi (Fase 2A)
+    # Piano, analisi dei contratti, differenziale dei kernel, executor DAG
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
-    # Fase 4
+    # Protocollo supervisore/worker
     protocollo_frame
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})

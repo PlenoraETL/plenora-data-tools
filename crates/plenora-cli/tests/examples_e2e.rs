@@ -180,8 +180,8 @@ fn e1_filtro_e_ordinamento_riproduce_l_output_atteso() {
 #[test]
 fn e1_rifiuta_un_nome_di_input_che_il_piano_non_dichiara() {
     // Il difetto che la forma nominale chiude: con `--inputs` un percorso
-    // finiva sull'input sbagliato in silenzio. Qui un nome errato e' un
-    // errore prima di leggere qualunque dato.
+    // puo' finire sull'input sbagliato in silenzio. Qui un nome errato e'
+    // un errore prima di leggere qualunque dato.
     let esempio = repository().join("examples/e1-filtro-ordinamento");
     let lavoro = tempfile::tempdir().expect("tempdir");
     let input = lavoro.path().join("citta.arrow");

@@ -1,8 +1,8 @@
 # CI base: build e test su ogni push/PR.
 #
-# Fino al 2026-07-27 il progetto non aveva CI di test: un test rosso
-# (conteggio catalogo) e' sopravvissuto per giorni su main. Questo
-# workflow e' il minimo sindacale per impedirlo di nuovo.
+# Senza un gate di test su ogni push un test rosso sopravvive su main
+# finche' qualcuno non lo esegue a mano. Questo workflow e' il minimo
+# sindacale per impedirlo.
 #
 # Matrice Linux/Windows: il publish atomico (errori-e-limiti.md#publish-e-cleanup) ha rami per
 # piattaforma (cfg) che un test solo-Linux non eserciterebbe.
@@ -50,7 +50,7 @@ jobs:
         # sviluppo locale; qui la ripetiamo esplicitamente perche' la CI
         # non deve dipendere dal canale "stable" mobile.
         # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
-        # commit poteva essere verificato con codice di action diverso. Con
+        # commit potrebbe essere verificato con codice di action diverso. Con
         # la SHA il ramo non seleziona piu' la toolchain, che va percio'
         # dichiarata esplicitamente qui.
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
@@ -66,8 +66,8 @@ jobs:
             ~/.cargo/git
             target
           # La chiave include la toolchain: artefatti compilati da versioni
-          # diverse del compilatore non sono riusabili (ld bus error su
-          # restore incrociato, osservato 2026-07-27).
+          # diverse del compilatore non sono riusabili: un restore
+          # incrociato finisce in ld bus error.
           key: cargo-ci-1.98.0-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-ci-1.98.0-${{ matrix.os }}-
 
@@ -78,18 +78,17 @@ jobs:
 
       # Gate R6 (ICD): nel codice di produzione nessuna primitiva di panic e
       # nessun unsafe. Bloccante. MAI aggiungere --cap-lints=warn: cappera'
-      # anche i -D espliciti declassandoli a warn (regressione trovata il
-      # 2026-07-29 — il gate non bloccava nulla, 27 siti accumulati). I
+      # anche i -D espliciti declassandoli a warn: il gate smetterebbe di
+      # bloccare senza dirlo, e i siti si accumulerebbero in silenzio. I
       # lint di stile sono gia' deny da workspace.lints con zero warning,
       # non serve alcun cap.
       #
-      # Perimetro esteso il 2026-08-06 a plenora-cli con --bins: la CLI e'
-      # codice di produzione a tutti gli effetti (e' l'unico eseguibile
-      # distribuito) ma non ha target --lib, quindi restava fuori dal gate.
-      # L'estensione ha scoperto 3 expect() nel binario (hex_digest,
-      # graph_summary_json x2), corretti alla fonte. `--lib --bins` copre
-      # entrambe le forme senza allargare il gate ai target di test, dove le
-      # primitive di panic restano legittime.
+      # Il perimetro comprende plenora-cli con --bins: la CLI e' codice di
+      # produzione a tutti gli effetti (e' l'unico eseguibile distribuito)
+      # ma non ha target --lib, quindi senza --bins resterebbe fuori dal
+      # gate. `--lib --bins` copre entrambe le forme senza allargare il
+      # gate ai target di test, dove le primitive di panic restano
+      # legittime.
       - name: Gate anti-panic (R6)
         run: >
           cargo clippy -p plenora-core -p plenora-engine
@@ -99,10 +98,10 @@ jobs:
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 
-      # Clippy bloccante (dopo la passata di pulizia 2026-07-27 e il
-      # rialzo a deny di pedantic/nursery): tutti i gruppi lint sono deny
-      # da workspace.lints e il codebase passa con zero warning. Da qui in
-      # poi il debito lint non puo' piu' accumularsi.
+      # Clippy bloccante: tutti i gruppi lint, pedantic e nursery
+      # compresi, sono deny da workspace.lints e il codebase passa con
+      # zero warning. E' questo gate a impedire che il debito lint si
+      # riaccumuli.
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets --locked
 
@@ -127,8 +126,8 @@ jobs:
   # release.md impone job separati, e la ragione e' operativa: in serie il
   # primo fallimento nasconde tutto cio' che segue, e questi due non
   # dipendono ne' l'uno dall'altro ne' dalla compilazione. Tenerli come step
-  # del job `test` significava che un assert di troppo impediva di vedere
-  # nella stessa esecuzione lo stato del pin delle action.
+  # del job `test` significherebbe che un assert di troppo impedisce di
+  # vedere nella stessa esecuzione lo stato del pin delle action.
   #
   # Nessuna toolchain Rust: leggono testo.
   gate-assert:
@@ -151,10 +150,10 @@ jobs:
       # di assert: `assert!`, `assert_eq!`, `assert_ne!` e le varianti
       # `debug_assert*` sono panici a tutti gli effetti e non hanno un lint
       # corrispondente. Senza questo gate la promessa «nel codice di
-      # produzione non esistono primitive di panico» era piu' larga del
-      # controllo che avrebbe dovuto imporla, e due `debug_assert_eq!` erano
-      # rimasti (governor, columns) — uno dei due con il mutex della
-      # contabilita' tenuto.
+      # produzione non esistono primitive di panico» sarebbe piu' larga del
+      # controllo che dovrebbe imporla, e un `debug_assert_eq!` potrebbe
+      # sopravvivere anche in un percorso che tiene il mutex della
+      # contabilita'.
       - name: Gate assert nel codice di produzione (errori-e-limiti.md#panic-policy)
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -163,7 +162,7 @@ jobs:
   # Secondo gate sui sorgenti, in un job PROPRIO e non in coda al primo.
   #
   # In serie GitHub salta lo step successivo appena uno fallisce: un assert
-  # di troppo impediva di vedere nella stessa esecuzione lo stato del pin
+  # di troppo impedirebbe di vedere nella stessa esecuzione lo stato del pin
   # delle action. E' esattamente l'oscuramento che release.md vieta.
   gate-pin-action:
     name: gate pin delle action
@@ -190,9 +189,9 @@ jobs:
         run: python scripts/verifica_pin_workflow.py
 
       # I target fuzz sono elencati in quattro posti e tre sono copie a mano.
-      # Il 2026-08-20 una rinomina ne ha aggiornato uno solo: la campagna
-      # locale si fermava sul target inesistente e lo smoke usciva 0
-      # comunque, quindi la copertura mancante non si vedeva da nessuna parte.
+      # Se una rinomina ne aggiorna uno solo, la campagna locale si ferma
+      # sul target inesistente e lo smoke esce 0 comunque: la copertura
+      # mancante non si vedrebbe da nessuna parte.
       - name: Gate elenchi dei target fuzz
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -200,8 +199,9 @@ jobs:
 
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
-  # rami erano verificati solo localmente — lint pedantic su pair.rs sono
-  # emersi mesi dopo perche' nessuna CI li compilava (M3, architettura.md#geometrie).
+  # rami sarebbero verificati solo localmente: un lint pedantic su pair.rs
+  # resterebbe invisibile finche' qualcuno non li compila a mano
+  # (architettura.md#geometrie).
   # Solo Linux: e' la piattaforma di riferimento dei backend; le dipendenze
   # di build (cmake, sqlite3) sono quelle documentate in architettura.md#geometrie.
   backends:
@@ -221,7 +221,7 @@ jobs:
 
       - name: Installa toolchain (baseline ICD R13.1)
         # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
-        # commit poteva essere verificato con codice di action diverso. Con
+        # commit potrebbe essere verificato con codice di action diverso. Con
         # la SHA il ramo non seleziona piu' la toolchain, che va percio'
         # dichiarata esplicitamente qui.
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
@@ -264,10 +264,10 @@ jobs:
           cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli
           --locked --features full-backends
 
-  # Gate di coverage. Fino al 2026-08-06 `scripts/coverage.sh` esisteva ma
-  # nessun workflow lo invocava: la coverage era una misura facoltativa, non
-  # un vincolo — l'unico dei tre repo Plenora senza gate (plenora-IO-tools e
-  # plenora-database-tools lo hanno da tempo, soglia lines 80).
+  # Gate di coverage. Senza un job che la invochi, `scripts/coverage.sh`
+  # resterebbe una misura facoltativa e non un vincolo; i due repo gemelli
+  # (plenora-IO-tools, plenora-database-tools) hanno lo stesso gate con
+  # soglia lines 80.
   #
   # Il job non riusa scripts/coverage.sh perche' quello script gira dentro il
   # container rust:1.98 (toolchain riproducibile in locale): sul runner la
@@ -285,7 +285,7 @@ jobs:
   # Coprirlo qui raddoppierebbe il tempo del job per compilare C/C++ da
   # sorgente sotto strumentazione.
   #
-  # Soglie: misura reale del 2026-08-06 su rust:1.92, feature di default
+  # Soglie: misura reale su rust:1.92, feature di default
   # (lines 93.44%, functions 87.61%, regions 92.43%), arrotondata per difetto
   # con ~3 punti di margine. Sono deliberatamente piu' alte del minimo dei
   # repo gemelli (80): a 80 il gate sarebbe inerte su questo codebase e non
@@ -309,7 +309,7 @@ jobs:
 
       - name: Installa toolchain (baseline ICD R13.1)
         # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
-        # commit poteva essere verificato con codice di action diverso. Con
+        # commit potrebbe essere verificato con codice di action diverso. Con
         # la SHA il ramo non seleziona piu' la toolchain, che va percio'
         # dichiarata esplicitamente qui.
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
@@ -326,18 +326,16 @@ jobs:
             target-cov
           # Chiave separata: gli artefatti strumentati non sono riusabili
           # dai job di test.
-          # v2 dal 2026-08-21: le cache di GitHub sono IMMUTABILI, e quelle
-          # esistenti contengono i `.profraw` accumulati dalle esecuzioni
-          # precedenti. Senza cambiare chiave, il job continuerebbe a
-          # ripristinare proprio i residui che quel cambiamento elimina.
-          # v3 dal 2026-08-22, per la stessa ragione applicata all'altra
-          # classe: le cache v2 contengono i BINARI STRUMENTATI delle build
-          # precedenti, e la loro mappa di copertura gonfia il denominatore
-          # con righe che nessun test esegue. La pulizia introdotta qui li
-          # rimuove a ogni run, ma senza cambiare chiave il primo run
-          # ripartirebbe da una cache che li contiene ancora — e la
-          # `restore-keys` v2 li rimetterebbe sul disco a ogni giro
-          # successivo.
+          # Il suffisso `v3` va incrementato ogni volta che cambia cio'
+          # che il job pretende di NON trovare sul disco: le cache di
+          # GitHub sono IMMUTABILI, quindi una cache scritta prima
+          # continua a ripristinare proprio i residui che la pulizia
+          # elimina, e la `restore-keys` di una versione piu' vecchia li
+          # rimetterebbe a ogni giro successivo. Le due classi che hanno
+          # richiesto un incremento sono i `.profraw` accumulati e i
+          # BINARI STRUMENTATI delle build precedenti, la cui mappa di
+          # copertura gonfia il denominatore con righe che nessun test
+          # esegue.
           key: cargo-ci-cov-v3-1.98.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-ci-cov-v3-1.98.0-
 
@@ -355,8 +353,8 @@ jobs:
       # ed e' esattamente cio' che la cache ripristina — un processo nuovo
       # trova il proprio nome occupato, LLVM scrive l'errore su STDERR, e i
       # test che pretendono stderr vuoto falliscono per una ragione che non
-      # ha nulla a che vedere col codice. Il 2026-08-21 e' successo in locale
-      # con 6 770 profili accumulati: due campagne consecutive rosse, verdi
+      # ha nulla a che vedere col codice. Bastano poche migliaia di profili
+      # accumulati perche' le campagne diventino rosse, e tornino verdi
       # subito dopo la pulizia.
       #
       # I BINARI STRUMENTATI di una build precedente sono il difetto opposto e
@@ -396,8 +394,8 @@ jobs:
       #
       # Pulizia COMPLETA, non solo i profili, per tre ragioni:
       #
-      #   - peso. Misurato in LOCALE il 2026-08-22 a fine campagna:
-      #     `target-cov` sono 5 748 file / 7,49 GiB di spazio occupato, di cui
+      #   - peso. In LOCALE, a fine campagna, `target-cov` arriva a
+      #     5 748 file / 7,49 GiB di spazio occupato, di cui
       #     4 481 file e 6,78 GiB — il 90% dei byte — artefatti del workspace
       #     che la pulizia a inizio job cancella comunque. Qui la cifra e'
       #     piu' bassa, perche' `CARGO_INCREMENTAL: 0` toglie di mezzo
@@ -426,16 +424,15 @@ jobs:
   # `docs/operazioni.md` e' generato: il file committato deve coincidere
   # BYTE PER BYTE con la rigenerazione.
   #
-  # Fino al 2026-08-21 non esisteva questo gate, e il generatore era rotto da
-  # mesi senza che nulla lo dicesse: rustfmt aveva riformattato la macro `op!`
-  # del catalogo e la regex del parser aveva smesso di agganciarla, quindi lo
-  # script usciva con MISMATCH e non riscriveva niente. Un generatore che si
-  # ferma non rompe nulla di visibile — il documento resta com'era e sembra
-  # aggiornato: la CI restava verde perche' nessuno rigenerava.
+  # Senza questo gate un generatore rotto non rompe nulla di visibile: se
+  # rustfmt riformatta la macro `op!` del catalogo e la regex del parser
+  # smette di agganciarla, lo script esce con MISMATCH e non riscrive
+  # niente — il documento resta com'e' e sembra aggiornato, e la CI resta
+  # verde perche' nessuno rigenera.
   #
   # Nessuna dipendenza: `assemble.py` usa la sola libreria standard. Niente
-  # pip, niente container, niente font — il PDF e' stato ritirato il
-  # 2026-08-21 (documentazione obsoleta, non una capacita' di data-tools).
+  # pip, niente container, niente font: il PDF non fa parte di questo
+  # repository (documentazione obsoleta, non una capacita' di data-tools).
   #
   # Job PROPRIO, come i manifesti: un documento fuori data non deve nascondere
   # un test rosso, ne' viceversa.
@@ -498,19 +495,19 @@ jobs:
   # Verifica dei manifesti di rilascio STORICI (rc-1.0.3), con il checker che
   # vive in QUESTO repository (`scripts/check_release_manifest.py`).
   #
-  # Fino al 2026-08-18 il checker era clonato da `plenora-contracts` al tag
-  # `v2.0-rc10`. Quel repository e' stato sostituito quel giorno — storia,
-  # branch e tag non sono stati riportati — e il suo contenuto attuale e' una
-  # NUOVA linea normativa. Non lo si clona e non lo si consulta: i manifesti
-  # storici sono documenti immutabili e non vanno reinterpretati con regole
-  # nate dopo di loro. I manifesti futuri richiederanno un profilo separato del
-  # checker, costruito sulla nuova struttura.
+  # Il checker NON va clonato da `plenora-contracts`: quel repository e'
+  # stato sostituito senza riportare storia, branch e tag, e il suo
+  # contenuto e' una NUOVA linea normativa. Non lo si clona e non lo si
+  # consulta: i manifesti storici sono documenti immutabili e non vanno
+  # reinterpretati con regole nate dopo di loro. I manifesti futuri
+  # richiederanno un profilo separato del checker, costruito sulla nuova
+  # struttura.
   #
   # Tre gate distinti (manifesti, audit, compilazione fuzz) in JOB separati.
-  # Erano step dello stesso job, e il 2026-08-18 un errore di compilazione del
-  # crate fuzz ha reso `skipped` i sei step successivi. Spostare l'ordine non
-  # basta: con controlli in serie il primo fallimento nasconde sempre tutto
-  # cio' che segue.
+  # In un job solo sarebbero step in serie, e un errore di compilazione del
+  # crate fuzz renderebbe `skipped` tutti quelli successivi. Spostare
+  # l'ordine non basta: con controlli in serie il primo fallimento nasconde
+  # sempre tutto cio' che segue.
   release-manifest:
     name: gate manifesto storico ${{ matrix.manifest }}
     runs-on: ubuntu-latest
@@ -540,9 +537,9 @@ jobs:
   #
   # Nessun candidato in volo. `check_release_candidate.py` va invocato solo
   # finche' il tag non esiste: verifica proprio che il tag intended NON sia
-  # ancora stato creato. Ritirato il 2026-08-06, quando si e' visto che lo step
-  # era sopravvissuto al tag v1.0.3 (ac52a15) e faceva fallire ogni push su
-  # main con "candidate tag v1.0.3 must not already exist".
+  # ancora stato creato. Lasciato in piedi dopo la creazione del tag, fa
+  # fallire ogni push su main con "candidate tag X.Y.Z must not already
+  # exist": per questo qui non c'e'.
   #
   # Quando si apre il prossimo candidato, reintrodurre qui lo step:
   #   - name: Verifica identita candidato release X.Y.Z
@@ -570,15 +567,14 @@ jobs:
         if: always()
         run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_manifest
 
-  # Audit supply-chain sui lockfile. Fino al 2026-08-06 questo repo non aveva
-  # alcun controllo sulle advisory RUSTSEC: era l'unico gate di sicurezza
-  # presente in plenora-IO-tools e assente qui. Entrambi i lockfile sono
-  # coperti — quello del fuzz ha un grafo suo e non e' verificato dall'audit
-  # del workspace.
+  # Audit supply-chain sui lockfile: senza questo job nessun controllo
+  # osserverebbe le advisory RUSTSEC. Entrambi i lockfile sono coperti —
+  # quello del fuzz ha un grafo suo e non e' verificato dall'audit del
+  # workspace.
   #
   # Versione pinnata (R13.2): il verdetto dipende dal tool oltre che dal
-  # database. Misura del 2026-08-06 con 0.22.2: workspace 187 dipendenze e
-  # fuzz 152, zero advisory, nessun --ignore necessario.
+  # database. Con la versione pinnata qui i due grafi passano puliti, senza
+  # alcun --ignore.
   #
   # `--deny warnings` fa fallire anche unmaintained e yanked, non solo le
   # vulnerabilita'. Quando una advisory nuova rende rosso il gate, la deroga si
@@ -598,7 +594,7 @@ jobs:
 
       - name: Installa toolchain (baseline ICD R13.1)
         # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
-        # commit poteva essere verificato con codice di action diverso. Con
+        # commit potrebbe essere verificato con codice di action diverso. Con
         # la SHA il ramo non seleziona piu' la toolchain, che va percio'
         # dichiarata esplicitamente qui.
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23
@@ -623,10 +619,9 @@ jobs:
   #
   # E' il solo gate che compila questo crate: `fuzz/` e' fuori dai `members`
   # del workspace, quindi `cargo check/clippy/test --workspace` non lo tocca, e
-  # i target sono consumatori delle API pubbliche dei cinque crate. Il
-  # 2026-08-18 una variante aggiunta a un enum pubblico ha rotto un `match`
-  # esaustivo in `diff_kernels` senza che nessun gate del workspace se ne
-  # accorgesse.
+  # i target sono consumatori delle API pubbliche dei cinque crate: una
+  # variante aggiunta a un enum pubblico rompe un `match` esaustivo nei
+  # target senza che alcun gate del workspace se ne accorga.
   #
   # Il compilatore C++ serve al build script di `libfuzzer-sys`: sui runner
   # GitHub c'e' gia'; in container va installato (`g++`).
@@ -644,7 +639,7 @@ jobs:
 
       - name: Installa toolchain (baseline ICD R13.1)
         # Pin a SHA completa: `@1.98.0` e' un ramo mobile, quindi lo stesso
-        # commit poteva essere verificato con codice di action diverso. Con
+        # commit potrebbe essere verificato con codice di action diverso. Con
         # la SHA il ramo non seleziona piu' la toolchain, che va percio'
         # dichiarata esplicitamente qui.
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-23

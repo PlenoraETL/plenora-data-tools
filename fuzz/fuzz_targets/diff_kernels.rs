@@ -1,6 +1,6 @@
 #![no_main]
 
-//! Differenziale fast-vs-oracolo sui kernel ottimizzati (Fase post-2A).
+//! Differenziale fast-vs-oracolo sui kernel ottimizzati.
 //!
 //! Gli entry point del fast path con flag (`join_impl(fast)`,
 //! `membership_impl(fast)`, `fast_rows`, i fast path di aggregate/dates/
@@ -80,8 +80,7 @@ fn edge_uint(byte: u8) -> u64 {
 }
 
 /// Letterali numerici testuali che separano il confronto esatto da quello
-/// via `f64`: e' su questi che la vecchia semantica e quella attuale danno
-/// risposte diverse.
+/// via `f64`: e' su questi che i due confronti danno risposte diverse.
 const EDGE_NUMERIC_TEXT: [&str; 12] = [
     // Scala positiva: due scritture dello stesso valore, e due valori che
     // `f64` non distingue.
@@ -241,13 +240,13 @@ fn within_bounds(low: Option<Ordering>, high: Option<Ordering>) -> bool {
 
 /// Confronto sul percorso NON tipizzato, come `scalar_compare` del kernel.
 ///
-/// Qui c'era `bound_as_f64`, che degradava a `f64` sia il valore sia
-/// l'estremo. Era la replica di un `filtering::bound_as_f64` che il kernel
-/// non ha piu': i confronti sono passati al dominio esatto (`i64`, `i128`
-/// scalato per i decimali) proprio perche' `f64` sopra 2^53 collassa interi
-/// distinti e sui decimali cambia l'esito. Un oracolo differenziale con una
-/// semantica abbandonata non e' un oracolo: o segnala differenze inesistenti,
-/// o concorda per la ragione sbagliata.
+/// Nessun `bound_as_f64` qui: degradare a `f64` sia il valore sia l'estremo
+/// replicherebbe una semantica che il kernel non ha. I confronti stanno nel
+/// dominio esatto (`i64`, `i128` scalato per i decimali) proprio perche'
+/// `f64` sopra 2^53 collassa interi distinti e sui decimali cambia l'esito.
+/// Un oracolo differenziale che replica una semantica assente dal prodotto
+/// non e' un oracolo: o segnala differenze inesistenti, o concorda per la
+/// ragione sbagliata.
 ///
 /// **Fail-closed**: cio' che l'oracolo non sa confrontare esattamente e' un
 /// errore, mai un confronto approssimato. Il kernel su quei tipi fallisce a

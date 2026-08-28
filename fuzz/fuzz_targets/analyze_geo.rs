@@ -1,6 +1,6 @@
 #![no_main]
 
-//! `analyze_contract` dei kernel geo (Fase 2A-2b): config arbitrarie (base
+//! `analyze_contract` dei kernel geo: config arbitrarie (base
 //! valida fusa con JSON dal payload) su contratti sintetici con colonna
 //! geometrica GeoArrow-WKB. Invarianti: mai panic; il contratto inferito, se
 //! prodotto, ha schema senza nomi duplicati.

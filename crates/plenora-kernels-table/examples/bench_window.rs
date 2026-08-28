@@ -1,7 +1,6 @@
 //! Benchmark autonomo per i kernel `table.distinct`, `table.dedup_advanced`,
-//! `table.window_function` e `table.rolling_window` (filone ottimizzazioni
-//! kernel, batch 4, guidato dallo sweep tabellare
-//! `benchmarks/sweep/sweep.json`).
+//! `table.window_function` e `table.rolling_window`, guidato dallo sweep
+//! tabellare `benchmarks/sweep/sweep.json`.
 //!
 //! Stessa fixture e stessi scenari di `bench_sweep` (seed logico 42 via
 //! xorshift, 6 colonne: id/num/grp/text/key/path), stesse scale dello sweep

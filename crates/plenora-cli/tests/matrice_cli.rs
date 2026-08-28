@@ -206,8 +206,8 @@ fn un_flag_senza_valore_e_un_errore_di_invocazione() {
 
 #[test]
 fn nessun_comando_ignora_un_flag_che_non_conosce() {
-    // Prima di questa verifica `catalog --sconosciuto`, `capabilities --pippo`
-    // e `self-test --sconosciuto` uscivano con SUCCESSO ignorando il flag:
+    // Senza questa verifica `catalog --sconosciuto`, `capabilities --pippo`
+    // e `self-test --sconosciuto` escono con SUCCESSO ignorando il flag:
     // eseguire cio' che non si e' capito e' il difetto, non il flag.
     for comando in COMANDI.iter().chain(std::iter::once(&"self-test")) {
         let output = esegui(&[comando, "--sconosciuto"]);
@@ -228,8 +228,8 @@ fn nessun_comando_ignora_un_flag_che_non_conosce() {
 
 #[test]
 fn un_comando_inesistente_emette_solo_l_envelope() {
-    // L'help finiva su stderr insieme all'envelope su stdout: due canali per
-    // un errore solo. Ora l'envelope e' l'unico documento e indica `--help`.
+    // L'help su stderr insieme all'envelope su stdout sono due canali per un
+    // errore solo: l'envelope e' l'unico documento, e indica `--help`.
     let output = esegui(&["comando-inesistente"]);
     assert!(!output.status.success());
     let envelope = envelope_di(&output, "comando inesistente");
@@ -280,8 +280,8 @@ fn un_file_inesistente_o_illeggibile_e_un_errore_di_io_senza_pubblicazione() {
 
 #[test]
 fn un_flag_a_valore_singolo_non_si_ripete() {
-    // `describe --input a --input b` usava il primo e scartava il secondo in
-    // silenzio: l'utente credeva di aver descritto `b`.
+    // `describe --input a --input b` userebbe il primo e scarterebbe il
+    // secondo in silenzio: chi lo invoca crede di aver descritto `b`.
     for (comando, flag) in [
         ("describe", "--input"),
         ("catalog", "--family"),
@@ -510,7 +510,7 @@ fn i_comandi_che_riescono_emettono_un_solo_documento_su_stdout() {
 }
 
 // ---------------------------------------------------------------------------
-// Sesto giro, finding 6 — nessun token puo' restare inosservato
+// Nessun token puo' restare inosservato
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -606,10 +606,10 @@ fn nessun_token_estraneo_viene_ignorato() {
 
 #[test]
 fn stderr_resta_vuoto_su_ogni_esito_incluso_il_panico() {
-    // Sesto giro, finding 7: il contratto «stderr vuoto» aveva due crepe —
-    // l'avviso di durabilita' del publish e l'hook di panico di default.
-    // Il primo e' diventato un campo del documento di uscita, il secondo e'
-    // intercettato da `main`, che ne fa un envelope su stdout.
+    // Il contratto «stderr vuoto» ha due punti di rottura naturali: l'avviso
+    // di durabilita' del publish e l'hook di panico di default. Il primo e'
+    // un campo del documento di uscita, il secondo e' intercettato da
+    // `main`, che ne fa un envelope su stdout.
     let directory = tempfile::tempdir().expect("tempdir");
     let piano = directory.path().join("piano.json");
     let input = directory.path().join("input.arrow");
@@ -654,8 +654,8 @@ fn stderr_resta_vuoto_su_ogni_esito_incluso_il_panico() {
 }
 
 // ---------------------------------------------------------------------------
-// Settimo giro — parser fail-closed anche nei percorsi help/version, e
-// categoria `resource_limit` raggiungibile
+// Parser fail-closed anche nei percorsi help/version, e categoria
+// `resource_limit` raggiungibile
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -691,9 +691,9 @@ fn nemmeno_i_percorsi_help_e_version_ignorano_un_token() {
             vec!["describe", "--boh", "--help"],
             "non riconosciuto",
         ),
-        // Ottavo giro, finding 5. `--json` non e' un modificatore globale: e'
-        // dichiarato solo da `--version`. Accettarlo altrove significava
-        // ignorare un token, cioe' proprio cio' che il parser deve chiudere.
+        // `--json` non e' un modificatore globale: e' dichiarato solo da
+        // `--version`. Accettarlo altrove significa ignorare un token, cioe'
+        // proprio cio' che il parser deve chiudere.
         (
             "--json su un comando che non lo dichiara",
             vec!["describe", "--json"],
@@ -704,9 +704,9 @@ fn nemmeno_i_percorsi_help_e_version_ignorano_un_token() {
             vec!["--help", "--json"],
             "non accetta argomenti",
         ),
-        // `--help` e `-h` sono la stessa opzione: due forme diverse dello
-        // stesso flag restavano due token distinti e sfuggivano al controllo
-        // dei duplicati.
+        // `--help` e `-h` sono la stessa opzione: contando i TOKEN invece
+        // delle opzioni, due forme diverse dello stesso flag sfuggono al
+        // controllo dei duplicati.
         (
             "--help e -h insieme sono un duplicato",
             vec!["run", "--help", "-h"],
@@ -738,9 +738,9 @@ fn nemmeno_i_percorsi_help_e_version_ignorano_un_token() {
 
 #[test]
 fn un_limite_di_risorsa_produce_la_categoria_e_l_exit_code_dedicati() {
-    // Settimo giro, finding 7: `resource_limit` non era prodotta da nessuna
-    // variante concreta, quindi l'exit code 4 era irraggiungibile. Un piano
-    // legacy con `max_rows` minuscolo lo raggiunge.
+    // `resource_limit` dev'essere prodotta da almeno una variante concreta,
+    // altrimenti l'exit code 4 e' irraggiungibile. Un piano legacy con
+    // `max_rows` minuscolo lo raggiunge.
     let directory = tempfile::tempdir().expect("tempdir");
     let piano = directory.path().join("legacy.json");
     let input = directory.path().join("input.arrow");
@@ -784,15 +784,14 @@ fn un_limite_di_risorsa_produce_la_categoria_e_l_exit_code_dedicati() {
 
 #[test]
 fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
-    // Settimo giro, finding 4. La garanzia «stderr vuoto per i consumatori
+    // La garanzia «stderr vuoto per i consumatori
     // non interattivi» non e' verificabile da un test d'integrazione — non si
     // puo' inviare SIGINT in modo portabile — quindi si verifica
     // STRUTTURALMENTE sul sorgente: ogni `eprintln!` della CLI deve stare
     // dentro un ramo governato da `is_terminal`.
     //
-    // Il controllo esiste perche' la modifica precedente era stata scritta
-    // ma non salvata: il documento dichiarava la garanzia e il codice non la
-    // implementava.
+    // Serve un controllo eseguibile: senza, il documento puo' dichiarare la
+    // garanzia mentre il codice non la implementa, e niente lo dice.
     let sorgente =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
             .expect("sorgente della CLI");
@@ -822,9 +821,9 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
 
 #[test]
 fn il_budget_di_memoria_legacy_e_globale_e_include_il_picco() {
-    // Settimo giro, finding 2: il budget era verificato per singolo input e
-    // ignorava la duplicazione della concatenazione. Un piano legacy con un
-    // budget minuscolo deve fallire con `resource_limit`, non materializzare.
+    // Il budget e' GLOBALE, non per singolo input, e comprende la
+    // duplicazione della concatenazione. Un piano legacy con un budget
+    // minuscolo deve fallire con `resource_limit`, non materializzare.
     let directory = tempfile::tempdir().expect("tempdir");
     let piano = directory.path().join("legacy.json");
     let input = directory.path().join("input.arrow");
@@ -865,11 +864,11 @@ fn il_budget_di_memoria_legacy_e_globale_e_include_il_picco() {
 
 #[test]
 fn il_budget_legacy_e_globale_anche_fra_i_due_lati_di_un_piano_binario() {
-    // Ottavo giro, finding 1: il budget residuo era calcolato ma non
-    // collegato. Nel percorso binario ogni lato passava dalla propria
-    // verifica con il budget INTERO, quindi un piano dichiarato a N byte ne
-    // poteva trattenere 2N. Il test costruisce esattamente quel caso: ogni
-    // lato da solo sta nel budget, la somma no.
+    // Nel percorso binario il budget residuo dev'essere collegato fra i due
+    // lati: con ogni lato che passa dalla propria verifica sul budget
+    // INTERO, un piano dichiarato a N byte ne puo' trattenere 2N. Il test
+    // costruisce esattamente quel caso: ogni lato da solo sta nel budget, la
+    // somma no.
     //
     // Il budget e' scelto sul picco stimato (accumulato * 2, per la
     // duplicazione della concatenazione): un lato solo resta sotto, i due
@@ -966,23 +965,23 @@ fn un_lato_solo_resta_dentro_lo_stesso_budget() {
 }
 
 // ---------------------------------------------------------------------------
-// Nono giro — propagazione della categoria e budget globale
+// Propagazione della categoria e budget globale
 // ---------------------------------------------------------------------------
 
 #[test]
 fn il_percorso_legacy_non_declassa_un_limite_di_risorsa_a_esecuzione() {
-    // Finding 2, seconda meta'. L'executor DAG conservava gia' la categoria;
-    // il percorso legacy avvolgeva TUTTO in `Execution`, quindi lo stesso
-    // limite dava `resource_limit`/4 con un piano v4 e `execution`/6 con un
-    // piano legacy. La versione dello schema non puo' cambiare la natura di
-    // un errore.
+    // L'executor DAG conserva la categoria, e anche il percorso legacy deve
+    // conservarla: avvolgendo TUTTO in `Execution`, lo stesso limite darebbe
+    // `resource_limit`/4 con un piano v4 e `execution`/6 con un piano
+    // legacy. La versione dello schema non puo' cambiare la natura di un
+    // errore.
     let directory = tempfile::tempdir().expect("tempdir");
     let piano = directory.path().join("legacy.json");
     let input = directory.path().join("input.arrow");
     let uscita = directory.path().join("out.arrow");
     // `melt` alza il limite sui DATI prodotti (righe x colonne valore), non
     // sulla configurazione: e' un passo unario, quindi passa dal percorso
-    // legacy che avvolgeva tutto in `Execution`.
+    // legacy, dove avvolgere tutto in `Execution` perderebbe la categoria.
     std::fs::write(
         &piano,
         serde_json::to_vec(&json!({
@@ -1022,15 +1021,13 @@ fn il_percorso_legacy_non_declassa_un_limite_di_risorsa_a_esecuzione() {
 
 #[test]
 fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
-    // Il caricamento era limitato, l'esecuzione no: gli input restavano vivi
-    // e il kernel riceveva `max_governed_memory_bytes` INTERO, e l'output non veniva
-    // addebitato a nessuno. Un piano dichiarato a N byte poteva quindi
-    // arrivare molto oltre N.
+    // Limitare il caricamento e non l'esecuzione lascia gli input vivi, da'
+    // al kernel `max_governed_memory_bytes` INTERO e non addebita l'output a
+    // nessuno: un piano dichiarato a N byte arriverebbe molto oltre N.
     //
-    // Dal giro successivo questo caso passa dal rifiuto PREVENTIVO di
-    // `cross_join` (`preflight_output_bytes`), non piu' dal controllo di
-    // ammissione a valle: il numero di righe dell'output e' esatto prima di
-    // allocare. Per le operazioni senza preflight resta l'ammissione, ed e'
+    // Questo caso passa dal rifiuto PREVENTIVO di `cross_join`
+    // (`preflight_output_bytes`), non dal controllo di ammissione a valle:
+    // il numero di righe dell'output e' esatto prima di allocare. Per le operazioni senza preflight resta l'ammissione, ed e'
     // una deroga dichiarata (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce) — non un tetto duro.
     //
     // Il caso e' costruito con un margine che l'aritmetica di Arrow non puo'
@@ -1078,7 +1075,7 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
     );
     // Deve scattare DOPO il caricamento: se il budget chiudesse gia' in
     // lettura, il test non direbbe nulla sul budget dell'esecuzione — che e'
-    // esattamente cio' che mancava.
+    // esattamente cio' che sorveglia.
     let messaggio = envelope["error"]["message"].as_str().unwrap_or_default();
     assert!(
         !messaggio.contains("l'input materializzato"),

@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.melt` e `table.pivot`
-//! (filone ottimizzazioni kernel, ultimo batch: reshape).
+//! (reshape).
 //!
 //! Fixture deterministica (seed logico 42, xorshift64):
 //! - melt: `id` int64 + `grp` utf8 (100 gruppi) + 8 colonne float64

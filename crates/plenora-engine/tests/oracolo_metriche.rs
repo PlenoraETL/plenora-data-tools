@@ -2,11 +2,11 @@
 //!
 //! # Perche' esiste
 //!
-//! La PR 2 del refactor scompone `executor.rs` — 5400 righe in cui vivono il
-//! governo della memoria, il fan-out, lo spill e la cancellazione. La CLI
-//! aveva un criterio di uscita verificabile (l'output byte-identico); qui non
-//! c'era nulla di equivalente: la suite dell'executor verifica che il
-//! **comportamento osservato** non cambi, ma nessuno guardava i conteggi.
+//! `executor.rs` concentra il governo della memoria, il fan-out, lo spill e
+//! la cancellazione. Riorganizzarlo non ha un criterio di uscita
+//! verificabile come l'output byte-identico della CLI: la suite
+//! dell'executor verifica che il **comportamento osservato** non cambi, ma
+//! non guarda i conteggi.
 //!
 //! Uno spostamento meccanico non deve cambiare quante righe attraversano un
 //! nodo, quanti batch escono, quanti byte si spillano o quante volte il

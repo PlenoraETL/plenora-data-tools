@@ -127,7 +127,7 @@ fn casi() -> Vec<(&'static str, DataContract)> {
 ///
 /// Non lo schema: la scrittura aggiunge le chiavi canoniche, ed e' cio' che
 /// deve fare. Il contratto invece deve tornare identico, altrimenti il
-/// supervisore leggerebbe qualcosa di diverso da cio' che il worker intendeva
+/// supervisore leggerebbe qualcosa di diverso da cio' che il worker intende
 /// scrivere.
 #[test]
 fn il_contratto_sopravvive_al_round_trip() {
@@ -240,7 +240,7 @@ fn la_conversione_lavora_solo_sullo_schema() {
 /// Se il campo dichiara gia' una chiave canonica con un valore diverso da
 /// quello del contratto, il conflitto e' un ERRORE invece di un arbitrato.
 /// Arbitrare significherebbe che lo schema pubblicato non dice quale delle
-/// due versioni valeva.
+/// due versioni vale.
 ///
 /// La garanzia sta piu' a monte di dove la si cercherebbe: e'
 /// [`DataContract::new`] a rifiutare la coppia, prima ancora che l'emissione

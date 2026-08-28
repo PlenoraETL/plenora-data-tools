@@ -8,8 +8,8 @@ SECONDS_PER_TARGET="${FUZZ_SMOKE_SECONDS:-90}"
 CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
 # Dove sta `cargo-fuzz` sull'host, montato read-only su /fuzzbin.
 #
-# Il default e' **sotto la home**, non `C:/tmp/...`: quel percorso era la
-# macchina di chi ha scritto lo script scritta dentro lo script, e su
+# Il default e' **sotto la home**, non `C:/tmp/...`: un percorso del genere
+# e' la macchina di chi scrive lo script scritta dentro lo script, e su
 # qualunque altra non esiste. `$HOME` esiste ovunque, Git Bash compreso, e
 # Docker Desktop sa montare da li'. Chi lo tiene altrove passa `FUZZBIN_HOST`,
 # che e' lo stesso nome gia' usato da `fuzz-campaign.sh`: due script che
@@ -37,8 +37,8 @@ echo "== smoke $(date -Is): ${TARGETS[*]} (${SECONDS_PER_TARGET}s)" >> "$SUMMARY
 
 # Esito accumulato. Lo smoke ESEGUE tutti i target — fermarsi al primo
 # fallimento nasconderebbe gli altri — ma deve terminare non-zero se almeno
-# uno fallisce: prima registrava l'errore nel riepilogo e usciva 0, quindi un
-# target inesistente o crashato passava per uno smoke riuscito.
+# uno fallisce: registrando l'errore nel riepilogo e uscendo 0, un target
+# inesistente o crashato passerebbe per uno smoke riuscito.
 falliti=()
 
 for target in "${TARGETS[@]}"; do

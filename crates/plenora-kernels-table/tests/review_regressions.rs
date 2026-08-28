@@ -1,7 +1,9 @@
-//! Regressioni della review statica 2026-08-16 sui kernel tabellari.
+//! Oracoli di difetti chiusi sui kernel tabellari.
 //!
-//! Ogni test qui sotto fallisce sul codice precedente alla correzione: sono
-//! l'oracolo dei difetti trovati, non una copertura generica.
+//! Ogni test qui sotto isola una proprieta' che un difetto reale ha violato,
+//! e cade se quella proprieta' torna a mancare. Non e' copertura generica: se
+//! una proprieta' vale in generale, il suo posto e' accanto al kernel che la
+//! garantisce.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -25,14 +27,14 @@ fn batch(fields: Vec<Field>, columns: Vec<ArrayRef>) -> RecordBatch {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 3 — `to_f64()` non e' un test di rappresentabilita'
+// `to_f64()` non e' un test di rappresentabilita'
 // ---------------------------------------------------------------------------
 
 #[test]
 fn le_conversioni_esatte_rifiutano_cio_che_to_f64_arrotondava() {
     // `ToPrimitive::to_f64()` restituisce sempre `Some` per gli interi: ogni
-    // `value.to_f64().ok_or_else(|| "non rappresentabile")` era un controllo
-    // che non scattava mai.
+    // `value.to_f64().ok_or_else(|| "non rappresentabile")` e' un controllo
+    // che non scatta mai.
     assert_eq!(exact_f64_from_i64(0), Some(0.0));
     assert_eq!(
         exact_f64_from_i64(9_007_199_254_740_992),
@@ -61,7 +63,7 @@ fn le_conversioni_esatte_rifiutano_cio_che_to_f64_arrotondava() {
 
 #[test]
 fn il_sort_su_interi_oltre_2_53_non_li_collassa() {
-    // Con la conversione a f64 i due valori diventavano lo stesso double.
+    // Con la conversione a f64 i due valori diventano lo stesso double.
     let values: ArrayRef = Arc::new(Int64Array::from(vec![
         9_007_199_254_740_993_i64,
         9_007_199_254_740_992,
@@ -85,7 +87,7 @@ fn il_sort_su_interi_oltre_2_53_non_li_collassa() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 4 — `max_rows` del join applicato al totale, prima di allocare
+// `max_rows` del join applicato al totale, prima di allocare
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -128,9 +130,9 @@ fn il_join_applica_max_rows_al_totale_non_al_singolo_chunk() {
 
 #[test]
 fn il_join_right_conta_anche_le_righe_destre_non_abbinate() {
-    // Le righe destre senza match venivano aggiunte DOPO l'allocazione, e il
-    // totale si controllava a valle: il limite arrivava quando le righe erano
-    // gia' in memoria. Ora entrano nel conteggio della prima fase.
+    // Aggiungere le righe destre senza match DOPO l'allocazione, e
+    // controllare il totale a valle, fa scattare il limite quando le righe
+    // sono gia' in memoria: entrano invece nel conteggio del primo passo.
     let left = batch(
         vec![Field::new("k", DataType::Int64, false)],
         vec![Arc::new(Int64Array::from(vec![1_i64]))],
@@ -190,12 +192,12 @@ fn il_join_outer_produce_lo_stesso_output_del_percorso_generico() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 5 — comparatori nativi al posto della forma testuale
+// Comparatori nativi al posto della forma testuale
 // ---------------------------------------------------------------------------
 
 #[test]
 fn i_decimal_si_ordinano_per_valore_non_per_stringa() {
-    // "10.00" < "9.00" lessicograficamente: il ripiego testuale invertiva
+    // "10.00" < "9.00" lessicograficamente: il ripiego testuale inverte
     // l'ordine di ogni coppia con numero di cifre diverso.
     let decimals: ArrayRef = Arc::new(
         Decimal128Array::from(vec![1_000_i128, 900, -1_000])
@@ -216,7 +218,7 @@ fn i_decimal_si_ordinano_per_valore_non_per_stringa() {
 
 #[test]
 fn i_timestamp_si_ordinano_per_istante_non_per_ora_locale() {
-    // Con timezone, la forma testuale era l'ora LOCALE: attorno al cambio
+    // Con timezone, la forma testuale e' l'ora LOCALE: attorno al cambio
     // d'ora l'ordine delle stringhe non e' quello degli istanti UTC.
     let values: ArrayRef = Arc::new(
         TimestampMillisecondArray::from(vec![1_698_541_200_000_i64, 1_698_544_800_000])
@@ -230,7 +232,7 @@ fn i_timestamp_si_ordinano_per_istante_non_per_ora_locale() {
 
 #[test]
 fn il_binario_si_ordina_per_byte_anche_se_non_e_utf8() {
-    // Il ripiego testuale pretendeva UTF-8 valido e falliva su una colonna
+    // Il ripiego testuale pretende UTF-8 valido e fallisce su una colonna
     // binaria qualunque (una geometria WKB, per esempio).
     let values: ArrayRef = Arc::new(BinaryArray::from(vec![
         [0x01_u8, 0xff].as_slice(),
@@ -243,7 +245,7 @@ fn il_binario_si_ordina_per_byte_anche_se_non_e_utf8() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 6 — errore del sort deterministico
+// Errore del sort deterministico
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -275,15 +277,15 @@ fn il_sort_rifiuta_le_colonne_non_ordinabili_prima_di_confrontare() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 10 — `ne` non passa su valori non interpretabili
+// `ne` non passa su valori non interpretabili
 // ---------------------------------------------------------------------------
 
 #[test]
 fn la_regola_ne_fallisce_sui_valori_non_interpretabili() {
     // Colonna Binary: la riga 0 e' UTF-8 leggibile, la riga 1 no. La lettura
     // scalare della riga 1 fallisce, e trasformare quell'errore in
-    // `equal = false` faceva PASSARE la regola `ne` proprio sulle righe che
-    // il kernel non era riuscito a leggere — l'opposto di quanto la regola
+    // `equal = false` farebbe PASSARE la regola `ne` proprio sulle righe che
+    // il kernel non riesce a leggere — l'opposto di quanto la regola
     // documenta («qualunque valore non interpretabile e' un fallimento»).
     let values: ArrayRef = Arc::new(BinaryArray::from(vec![
         b"atteso".as_slice(),
@@ -312,16 +314,16 @@ fn la_regola_ne_fallisce_sui_valori_non_interpretabili() {
 }
 
 // ---------------------------------------------------------------------------
-// Quarto giro, finding 3 — zeri non significativi contati come cifre
+// Zeri non significativi contati come cifre
 // ---------------------------------------------------------------------------
 
 #[test]
 fn gli_zeri_non_significativi_non_fanno_ricadere_un_decimale_su_f64() {
     // Quaranta zeri e una cifra: 41 caratteri, ma UNA cifra significativa.
-    // Contandoli si sforava il tetto di 38 e il letterale finiva in `f64`,
+    // Contandoli si sfora il tetto di 38 e il letterale finisce in `f64`,
     // dove `0.1` non e' esatto: il confronto con una colonna `Decimal128`
-    // diventava corretto rispetto al double e sbagliato rispetto al
-    // letterale scritto.
+    // diventa corretto rispetto al double e sbagliato rispetto al letterale
+    // scritto.
     let molti_zeri = format!("{}.1", "0".repeat(40));
     assert_eq!(
         NumericBound::parse(&molti_zeri),
@@ -373,7 +375,7 @@ fn gli_zeri_non_significativi_non_fanno_ricadere_un_decimale_su_f64() {
 }
 
 // ---------------------------------------------------------------------------
-// Sesto giro, finding 1 — il letterale decimale non si arrotonda MAI per
+// Il letterale decimale non si arrotonda MAI per
 // confrontarlo, nemmeno contro una colonna Float64
 // ---------------------------------------------------------------------------
 
@@ -381,8 +383,8 @@ fn gli_zeri_non_significativi_non_fanno_ricadere_un_decimale_su_f64() {
 fn una_soglia_decimale_non_viene_arrotondata_per_confrontarla_con_un_double() {
     // `0.100000000000000001` e' STRETTAMENTE minore del double `1e-1`
     // (0.1000000000000000055511151231257827...). Convertendo la soglia con
-    // `10^-scale` i due diventavano uguali, e un filtro `> soglia` escludeva
-    // una riga che il letterale include.
+    // `10^-scale` i due diventano uguali, e un filtro `> soglia` esclude una
+    // riga che il letterale include.
     let soglia = NumericBound::parse("0.100000000000000001").expect("decimale");
     assert!(matches!(soglia, NumericBound::Decimal { .. }), "{soglia:?}");
     assert_eq!(
@@ -407,7 +409,7 @@ fn una_soglia_decimale_non_viene_arrotondata_per_confrontarla_con_un_double() {
 fn il_filtro_su_float64_rispetta_la_soglia_decimale_esatta() {
     // Percorso generico E fast path del filtro: la riga a `1e-1` deve
     // superare la soglia `0.100000000000000001`. Con la conversione
-    // arrotondata il confronto dava «uguale» e `>` la escludeva.
+    // arrotondata il confronto darebbe «uguale» e `>` la escluderebbe.
     let colonna = Arc::new(Float64Array::from(vec![Some(0.1), Some(0.05)])) as ArrayRef;
     let input = batch(
         vec![Field::new("valore", DataType::Float64, true)],
@@ -434,7 +436,7 @@ fn il_filtro_su_float64_rispetta_la_soglia_decimale_esatta() {
 }
 
 // ---------------------------------------------------------------------------
-// Sesto giro, finding 2 — scale negative estreme e zero
+// Scale negative estreme e zero
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -455,8 +457,9 @@ fn le_scale_decimali_estreme_non_rendono_indecidibile_un_valore_arrow() {
         );
     }
 
-    // Lo zero e' esatto a qualunque scala: prima `10^|scale|` traboccava e la
-    // conversione rispondeva «non rappresentabile» sullo zero.
+    // Lo zero e' esatto a qualunque scala: senza un caso dedicato
+    // `10^|scale|` trabocca e la conversione risponde «non rappresentabile»
+    // proprio sullo zero.
     for scale in [-128_i8, -60, -39, 0, 38, 127] {
         assert_eq!(
             plenora_kernels_table::exact_f64_from_decimal128(0, scale),
@@ -481,7 +484,7 @@ fn le_scale_decimali_estreme_non_rendono_indecidibile_un_valore_arrow() {
         "10^39 ha parte dispari 5^39 > 2^53: non e' esatto"
     );
 
-    // Settimo giro, finding 6: `2^126 * 10 = 5 * 2^127` e' esattamente
+    // `2^126 * 10 = 5 * 2^127` e' esattamente
     // rappresentabile (parte dispari 5), ma il prodotto intermedio
     // `2^126 * 5` esce da `i128`. Le potenze di due vanno estratte PRIMA di
     // moltiplicare per `5^a`.
@@ -531,7 +534,7 @@ fn le_scale_decimali_estreme_non_rendono_indecidibile_un_valore_arrow() {
 }
 
 // ---------------------------------------------------------------------------
-// Sesto giro, finding 3 — null LOGICO delle DictionaryArray
+// Null LOGICO delle DictionaryArray
 // ---------------------------------------------------------------------------
 
 /// Dictionary con una chiave NON nulla che punta a una entry NULLA del
@@ -562,7 +565,8 @@ fn una_chiave_valida_verso_una_entry_nulla_e_una_riga_nulla() {
     assert!(plenora_kernels_table::is_logically_null(array.as_ref(), 2));
     assert!(!plenora_kernels_table::is_logically_null(array.as_ref(), 0));
 
-    // `scalar_as_string` restituiva la stringa vuota al posto del null.
+    // Senza il null logico `scalar_as_string` rende la stringa vuota al
+    // posto del null.
     assert_eq!(
         plenora_kernels_table::scalar_as_string(array.as_ref(), 1).expect("lettura"),
         None,
@@ -661,7 +665,7 @@ fn il_null_logico_della_dictionary_e_coerente_in_filtro_ordinamento_e_setop() {
 }
 
 // ---------------------------------------------------------------------------
-// Settimo giro, finding 1 — il null logico vale in TUTTI i kernel che
+// Il null logico vale in TUTTI i kernel che
 // decidono sulla nullita', non solo in filtro/ordinamento/setop
 // ---------------------------------------------------------------------------
 
@@ -737,7 +741,7 @@ fn il_null_logico_vale_anche_in_quality_governance_e_security() {
 }
 
 // ---------------------------------------------------------------------------
-// Ottavo giro, finding 3 — il null logico in aggregate, formula e coalesce
+// Il null logico in aggregate, formula e coalesce
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -798,8 +802,8 @@ fn il_null_logico_vale_anche_in_count_formula_e_coalesce() {
         "la riga logicamente nulla resta nulla dopo la formula"
     );
 
-    // 3. `coalesce`: il fast path vedeva `null_count() == 0` e restituiva la
-    //    prima colonna intatta, saltando il risolutore logico.
+    // 3. `coalesce`: un fast path che si fida di `null_count() == 0` rende
+    //    la prima colonna intatta, saltando il risolutore logico.
     // Stesso tipo Arrow della prima colonna — `coalesce` lo richiede — ma
     // senza null, ne' fisici ne' logici.
     let ripiego = {
@@ -813,7 +817,7 @@ fn il_null_logico_vale_anche_in_count_formula_e_coalesce() {
     };
     // Il fast path scatta solo se `null_count()` e' zero: serve una colonna
     // con la bitmap delle chiavi tutta valida e il null nascosto nel
-    // dizionario. E' esattamente il caso che il fast path leggeva come
+    // dizionario. E' esattamente il caso che il fast path legge come
     // «nessun null, restituisci la prima colonna».
     let senza_null_fisici = {
         use plenora_core::arrow::array::{
@@ -853,15 +857,15 @@ fn il_null_logico_vale_anche_in_count_formula_e_coalesce() {
 }
 
 // ---------------------------------------------------------------------------
-// Nono giro, finding 1 — il null logico nel pivot Count
+// Il null logico nel pivot Count
 // ---------------------------------------------------------------------------
 
 #[test]
 fn il_pivot_count_non_conta_una_entry_nulla_del_dizionario() {
-    // Il difetto viveva in DUE punti: il kernel e l'oracolo di parita' dei
-    // test, che ne e' una copia verbatim. Con lo stesso errore in entrambi la
-    // parita' non poteva scoprirlo — due implementazioni che sbagliano allo
-    // stesso modo concordano.
+    // Questa classe di difetto vive in DUE punti: il kernel e l'oracolo di
+    // parita' dei test, che ne e' una copia verbatim. Con lo stesso errore in
+    // entrambi la parita' non lo scopre — due implementazioni che sbagliano
+    // allo stesso modo concordano.
     //
     // Questo test non confronta il kernel con l'oracolo: dichiara il
     // risultato ATTESO a mano, riga per riga, ed e' quindi indipendente da
@@ -930,18 +934,17 @@ fn il_pivot_count_non_conta_una_entry_nulla_del_dizionario() {
 }
 
 // ---------------------------------------------------------------------------
-// Nono giro, finding 2 — la classe `ResourceLimit` chiusa nei kernel
+// La classe `ResourceLimit` chiusa nei kernel
 // ---------------------------------------------------------------------------
 
 #[test]
 #[allow(clippy::too_many_lines)] // Elenco di casi: la lunghezza e' nei dati.
 fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
-    // Il difetto: la modellazione di `ResourceLimit` era stata applicata a
-    // join, spill ed executor, ma decine di kernel continuavano a rispondere
-    // `invalid_plan` quando erano i DATI a non entrare nel budget. La stessa
-    // condizione — «il piano e' corretto, il volume no» — dava due categorie
-    // diverse a seconda del kernel che la incontrava, e quindi due exit code
-    // diversi.
+    // `ResourceLimit` vale nei kernel quanto in join, spill ed executor: un
+    // kernel che risponde `invalid_plan` quando sono i DATI a non entrare nel
+    // budget da' alla stessa condizione — «il piano e' corretto, il volume
+    // no» — una categoria diversa, e quindi un exit code diverso, a seconda
+    // di dove capita.
     //
     // Il test attraversa un kernel per famiglia; la ricerca per classe e'
     // documentata in docs/errori-e-limiti.md.
@@ -1061,16 +1064,15 @@ fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
 }
 
 // ---------------------------------------------------------------------------
-// Decimo giro, finding 1 — la classe chiusa anche dietro gli helper
+// La classe chiusa anche dietro gli helper
 // ---------------------------------------------------------------------------
 
 #[test]
 fn i_limiti_nascosti_dietro_helper_hanno_la_categoria_dedicata() {
-    // Il censimento del giro precedente cercava le occorrenze LETTERALI di
-    // `PlenoraError::InvalidPlan` e quindi non vedeva i siti che passano da
-    // un helper (`contract()` della CLI), da un costruttore di comodo
-    // (`cell_too_large` in geo) o da una conversione. Questi sono i cinque
-    // che erano rimasti indietro, uno per famiglia.
+    // Cercare le occorrenze LETTERALI di `PlenoraError::InvalidPlan` non
+    // trova i siti che passano da un helper (`contract()` della CLI), da un
+    // costruttore di comodo (`cell_too_large` in geo) o da una conversione:
+    // qui ce n'e' uno per famiglia.
     use plenora_core::ErrorCategory;
 
     let stretti = Limits {
@@ -1147,14 +1149,14 @@ fn i_limiti_nascosti_dietro_helper_hanno_la_categoria_dedicata() {
 }
 
 // ---------------------------------------------------------------------------
-// Decimo giro, finding 2 — il rifiuto PREVENTIVO, prima di allocare
+// Il rifiuto PREVENTIVO, prima di allocare
 // ---------------------------------------------------------------------------
 
 #[test]
 fn cross_join_rifiuta_prima_di_allocare_l_output() {
-    // Il controllo esisteva solo a valle: si costruiva l'output e poi lo si
-    // confrontava col budget. Con un prodotto cartesiano quel «poi» puo' non
-    // arrivare mai, perche' l'allocazione esaurisce la memoria prima.
+    // Un controllo solo a valle costruisce l'output e poi lo confronta col
+    // budget. Con un prodotto cartesiano quel «poi» puo' non arrivare mai,
+    // perche' l'allocazione esaurisce la memoria prima.
     //
     // Il test verifica la proprieta' che si puo' verificare da dentro il
     // processo: che il rifiuto avvenga con un messaggio di STIMA — cioe' dal
@@ -1169,8 +1171,8 @@ fn cross_join_rifiuta_prima_di_allocare_l_output() {
         vec![Field::new("altro", DataType::Int64, false)],
         vec![Arc::new(Int64Array::from((0..512_i64).collect::<Vec<_>>())) as ArrayRef],
     );
-    // 512 x 512 = 262 144 righe: sotto `max_rows`, quindi il vecchio
-    // controllo sulle righe non scatta e si arriva all'allocazione.
+    // 512 x 512 = 262 144 righe: sotto `max_rows`, quindi il controllo sulle
+    // sole righe non scatta e si arriva all'allocazione.
     let limiti = Limits {
         max_rows: 10_000_000,
         max_governed_memory_bytes: 64 * 1024,
@@ -1203,7 +1205,7 @@ fn cross_join_rifiuta_prima_di_allocare_l_output() {
 }
 
 // ---------------------------------------------------------------------------
-// Decimo giro, finding 3 — compare_cells_typed non e' piu' fail-open
+// `compare_cells_typed` non e' fail-open
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1214,10 +1216,10 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
     let interi: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(1_i64)]));
     let testi: ArrayRef = Arc::new(StringArray::from(vec![None, Some("a")]));
 
-    // 1. Due celle NULLE di tipi non confrontabili: prima rispondeva `Equal`,
-    //    cioe' dichiarava un ordine fra tipi che non sa confrontare. Con
-    //    valori non nulli gli stessi due tipi davano `Schema`: la stessa
-    //    coppia di colonne aveva due contratti a seconda del contenuto.
+    // 1. Due celle NULLE di tipi non confrontabili: rispondere `Equal`
+    //    dichiarerebbe un ordine fra tipi che non sa confrontare, mentre con
+    //    valori non nulli gli stessi due tipi danno `Schema` — la stessa
+    //    coppia di colonne avrebbe due contratti a seconda del contenuto.
     let esito = compare_cells_typed(&interi, 0, &testi, 0);
     assert!(
         esito.is_err(),
@@ -1234,7 +1236,8 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
         "un tipo senza confronto nativo resta un errore anche fra celle nulle"
     );
 
-    // 3. Indice fuori intervallo: era un panico di arrow su un'API pubblica.
+    // 3. Indice fuori intervallo: senza controllo e' un panico di arrow su
+    //    un'API pubblica.
     assert!(
         compare_cells_typed(&interi, 99, &interi, 0).is_err(),
         "un indice fuori dall'array e' un errore, non un panico"
@@ -1246,9 +1249,9 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
 
     // 4. Dictionary FUORI dal profilo supportato, con entrambe le celle
     //    nulle. `compare_cells_typed` risolve solo `Dictionary(Int32, Utf8)`;
-    //    su qualunque altra combinazione non ha un confronto, e prima
-    //    rispondeva `Equal` perche' i null decidevano per primi. E' la stessa
-    //    forma del difetto «dictionary incoerente mascherata dal null».
+    //    su qualunque altra combinazione non ha un confronto, e decidere sui
+    //    null per primi darebbe `Equal`. E' la stessa forma del difetto
+    //    «dictionary incoerente mascherata dal null».
     //
     //    La variante con la CHIAVE malformata — chiave valida che punta fuori
     //    dal dizionario — non e' costruibile da un test: `try_new` di arrow
@@ -1267,25 +1270,25 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
         "una dictionary fuori profilo non viene mascherata dai null"
     );
 
-    // 5. Cio' che era corretto resta corretto: stessa famiglia, null in coda.
+    // 5. Il caso conforme resta corretto: stessa famiglia, null in coda.
     assert_eq!(
         compare_cells_typed(&interi, 0, &interi, 1).expect("stesso tipo"),
         Ordering::Greater,
-        "il null va dopo il valore, come prima"
+        "il null va dopo il valore"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Settimo giro, finding 1 — la stima per operazione, non una formula unica
+// La stima per operazione, non una formula unica
 // ---------------------------------------------------------------------------
 
 /// Budget scelto FRA la stima vecchia e quella nuova.
 ///
-/// E' la forma che rende i tre test qui sotto significativi: con il modello
-/// precedente — massimo della larghezza media degli input — la stima stava
-/// SOTTO il budget e il preflight lasciava passare; col modello per
-/// operazione la stima lo supera e il rifiuto arriva prima di allocare. Un
-/// budget scelto a caso proverebbe solo che un numero grande viene rifiutato.
+/// E' la forma che rende i tre test qui sotto significativi: con una formula
+/// unica — massimo della larghezza media degli input — la stima sta SOTTO il
+/// budget e il preflight lascia passare; con la stima per operazione lo
+/// supera e il rifiuto arriva prima di allocare. Un budget scelto a caso
+/// proverebbe solo che un numero grande viene rifiutato.
 fn budget_fra(stima_vecchia: usize, stima_nuova: usize) -> Limits {
     assert!(
         stima_vecchia < stima_nuova,
@@ -1295,8 +1298,8 @@ fn budget_fra(stima_vecchia: usize, stima_nuova: usize) -> Limits {
     Limits {
         max_rows: 10_000_000,
         max_columns: 4_096,
-        // A meta' strada: sopra cio' che la vecchia formula stimava, sotto
-        // cio' che l'operazione richiede davvero.
+        // A meta' strada: sopra cio' che stima la formula unica, sotto cio'
+        // che l'operazione richiede davvero.
         max_governed_memory_bytes: stima_vecchia + (stima_nuova - stima_vecchia) / 2,
         ..Limits::default()
     }
@@ -1355,9 +1358,9 @@ fn cross_join_stima_la_somma_dei_due_lati_non_il_massimo() {
 fn concat_by_name_conta_le_colonne_portate_da_un_input_vuoto() {
     // Un input VUOTO non ha righe da misurare, ma porta le proprie colonne
     // nello schema unione: nell'output diventano colonne di null lunghe
-    // quanto le righe degli altri input. Il modello precedente misurava solo
-    // gli input e prendeva il massimo delle larghezze totali, quindi un input
-    // vuoto pesava zero — ed e' il caso peggiore, non quello trascurabile.
+    // quanto le righe degli altri input. Un modello che misura i soli input e
+    // prende il massimo delle larghezze totali da' zero a un input vuoto —
+    // ed e' il caso peggiore, non quello trascurabile.
     let pieno = batch(
         vec![Field::new("a", DataType::Int64, false)],
         vec![Arc::new(Int64Array::from((0..1_000_i64).collect::<Vec<_>>())) as ArrayRef],
@@ -1399,8 +1402,8 @@ fn concat_by_name_conta_le_colonne_portate_da_un_input_vuoto() {
 fn melt_conta_la_colonna_dei_nomi_di_colonna() {
     // `melt` crea una colonna `variable` che ripete il NOME della colonna di
     // provenienza, una volta per riga di output. Con nomi lunghi quella
-    // colonna puo' pesare piu' di tutto il resto, e il modello precedente —
-    // larghezza media del batch d'ingresso — non la contava affatto.
+    // colonna puo' pesare piu' di tutto il resto, e un modello fondato sulla
+    // larghezza media del batch d'ingresso non la conta affatto.
     let nome_lungo = "colonna_con_un_nome_deliberatamente_molto_lungo_per_il_test";
     let ingresso = batch(
         vec![
@@ -1444,15 +1447,16 @@ fn melt_conta_la_colonna_dei_nomi_di_colonna() {
 }
 
 // ---------------------------------------------------------------------------
-// Settimo giro, finding 4 — i tetti sulle colonne, prima di allocare
+// I tetti sulle colonne, prima di allocare
 // ---------------------------------------------------------------------------
 
 #[test]
 fn i_tetti_sulle_colonne_scattano_prima_delle_allocazioni() {
-    // Il numero di colonne di output si sa dagli SCHEMI. `combine_horizontal`
-    // lo verificava dopo i `take` di entrambi i lati — cioe' dopo aver
-    // materializzato esattamente le colonne che stava per rifiutare — e
-    // `concat_by_name` non lo verificava affatto.
+    // Il numero di colonne di output si sa dagli SCHEMI, e sia
+    // `combine_horizontal` sia `concat_by_name` lo verificano da li'.
+    // Verificarlo dopo i `take` dei due lati significherebbe materializzare
+    // esattamente le colonne che si sta per rifiutare; non verificarlo
+    // affatto significherebbe pubblicarle.
     let sinistra = batch(
         vec![
             Field::new("a", DataType::Int64, false),
@@ -1514,7 +1518,7 @@ fn i_tetti_sulle_colonne_scattano_prima_delle_allocazioni() {
 }
 
 // ---------------------------------------------------------------------------
-// Ottavo giro, finding 1 — le righe dei batch SENZA COLONNE
+// Le righe dei batch SENZA COLONNE
 // ---------------------------------------------------------------------------
 
 /// Batch con zero colonne e `righe` righe.
@@ -1522,9 +1526,9 @@ fn i_tetti_sulle_colonne_scattano_prima_delle_allocazioni() {
 /// Arrow lo consente e il progetto lo produce gia': una tabella puo' avere
 /// una cardinalita' senza avere attributi. Va costruito con
 /// `RecordBatchOptions`, perche' senza colonne non c'e' nulla da cui dedurre
-/// il numero di righe — ed e' esattamente la ragione per cui ricostruirlo con
-/// `try_new` non sapeva costruirlo: arrow rifiuta un batch senza colonne e
-/// senza cardinalita' dichiarata.
+/// il numero di righe — ed e' esattamente la ragione per cui `try_new` non
+/// basta: arrow rifiuta un batch senza colonne e senza cardinalita'
+/// dichiarata.
 fn batch_senza_colonne(righe: usize) -> RecordBatch {
     let opzioni = plenora_core::arrow::array::RecordBatchOptions::new().with_row_count(Some(righe));
     RecordBatch::try_new_with_options(
@@ -1537,12 +1541,10 @@ fn batch_senza_colonne(righe: usize) -> RecordBatch {
 
 #[test]
 fn le_righe_non_si_perdono_nei_batch_senza_colonne() {
-    // Le operazioni ricostruivano l'output con `RecordBatch::try_new`, che
-    // deriva le righe dalla PRIMA colonna; con zero colonne arrow RIFIUTA di
-    // costruire il batch. `concat` di due e tre righe non rispondeva cinque:
-    // non rispondeva affatto. Difetto di disponibilita', non di correttezza —
-    // la prima stesura di questo commento diceva «rispondeva zero» ed era
-    // sbagliata.
+    // Ricostruire l'output con `RecordBatch::try_new` deriva le righe dalla
+    // PRIMA colonna, e con zero colonne arrow RIFIUTA di costruire il batch:
+    // `concat` di due e tre righe non risponde cinque, non risponde affatto.
+    // Difetto di disponibilita', non di correttezza.
     let due = batch_senza_colonne(2);
     let tre = batch_senza_colonne(3);
     assert_eq!(due.num_rows(), 2, "premessa: il batch di partenza ha righe");
@@ -1598,15 +1600,15 @@ fn le_righe_non_si_perdono_nei_batch_senza_colonne() {
 }
 
 // ---------------------------------------------------------------------------
-// Ottavo giro, finding 2 — melt che converte in testo
+// Melt che converte in testo
 // ---------------------------------------------------------------------------
 
 #[test]
 fn melt_stima_la_larghezza_testuale_quando_converte_in_stringa() {
     // Con colonne eterogenee e `type_policy = "string"` i valori diventano
-    // UTF-8: un `Int64` da otto byte puo' occuparne venti come testo. Il
-    // modello misurava la larghezza binaria della sorgente, quindi
-    // sottostimava proprio il percorso che alloca di piu'.
+    // UTF-8: un `Int64` da otto byte puo' occuparne venti come testo. Un
+    // modello che misura la larghezza binaria della sorgente sottostima
+    // proprio il percorso che alloca di piu'.
     //
     // Il budget sta FRA le due stime: con quella binaria il preflight lascia
     // passare, con quella testuale rifiuta.
@@ -1661,7 +1663,7 @@ fn melt_stima_la_larghezza_testuale_quando_converte_in_stringa() {
 }
 
 // ---------------------------------------------------------------------------
-// Ottavo giro, finding 4 — le stime non saturano in silenzio
+// Le stime non saturano in silenzio
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1704,7 +1706,7 @@ fn una_stima_che_perde_il_conto_non_autorizza_l_allocazione() {
 }
 
 // ---------------------------------------------------------------------------
-// Nono giro, finding 2 — le Dictionary nel preflight di melt
+// Le Dictionary nel preflight di melt
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1781,10 +1783,11 @@ fn melt_conta_la_dictionary_dereferenziata_non_il_dizionario() {
 
 #[test]
 fn melt_rifiuta_un_tipo_non_convertibile_prima_di_allocare() {
-    // La conversione in testo falliva a META' scansione, dopo aver costruito
-    // gli indici di ripetizione e la colonna dei nomi: si allocava proprio
-    // cio' che il rifiuto doveva evitare. Ora i tipi si validano sugli
-    // SCHEMI, prima delle allocazioni proporzionali ai dati.
+    // La conversione in testo puo' fallire a META' scansione, dopo aver
+    // costruito gli indici di ripetizione e la colonna dei nomi: si
+    // allocherebbe proprio cio' che il rifiuto deve evitare. I tipi si
+    // validano quindi sugli SCHEMI, prima delle allocazioni proporzionali ai
+    // dati.
     let ingresso = batch(
         vec![
             Field::new("id", DataType::Int64, false),
@@ -1827,20 +1830,21 @@ fn melt_rifiuta_un_tipo_non_convertibile_prima_di_allocare() {
 }
 
 // ---------------------------------------------------------------------------
-// Decimo giro, finding 1 — text_convertible coincide con scalar_as_string
+// `text_convertible` coincide con `scalar_as_string`
 // ---------------------------------------------------------------------------
 
 #[test]
 fn la_prevalidazione_dei_tipi_coincide_col_formatter() {
-    // Il predicato accettava QUALUNQUE `Timestamp(_, _)` e qualunque
-    // `Decimal128(_, _)`. Il formatter e' piu' stretto: fa downcast solo su
+    // Un predicato che accetta QUALUNQUE `Timestamp(_, _)` e qualunque
+    // `Decimal128(_, _)` e' piu' largo del formatter, che fa downcast solo su
     // `TimestampMillisecondArray`, e converte la scala con `u32::try_from`
     // (che rifiuta le negative) e `10^scala` con `checked_pow` (che trabocca
     // oltre 38).
     //
-    // Un `melt` eterogeneo con quei tipi superava quindi la prevalidazione e
-    // falliva DOPO aver allocato indici e colonna `variable` — cioe' proprio
-    // cio' che la prevalidazione esiste per evitare.
+    // Un `melt` eterogeneo con quei tipi supererebbe quindi la
+    // prevalidazione e fallirebbe DOPO aver allocato indici e colonna
+    // `variable` — cioe' proprio cio' che la prevalidazione esiste per
+    // evitare.
     use plenora_core::arrow::schema::TimeUnit;
 
     // Accettati: sono quelli che il formatter sa trattare.
@@ -1937,7 +1941,7 @@ fn melt_rifiuta_timestamp_e_decimal_fuori_dal_formatter_prima_di_allocare() {
 }
 
 // ---------------------------------------------------------------------------
-// Undicesimo giro, finding 1 — i due nomi di melt non possono collidere
+// I due nomi di melt non possono collidere
 // ---------------------------------------------------------------------------
 
 /// Batch con una colonna `id` e una colonna `v`, entrambe intere.
@@ -1966,18 +1970,19 @@ fn nomi_colonne(uscita: &RecordBatch) -> Vec<String> {
 
 #[test]
 fn i_nomi_di_melt_si_risolvono_in_sequenza_e_non_collidono() {
-    // I due nomi venivano risolti INDIPENDENTEMENTE, ciascuno confrontato col
-    // solo schema di input. Con l'input che contiene `v`:
+    // Risolvere i due nomi INDIPENDENTEMENTE, ciascuno confrontato col solo
+    // schema di input, li fa collidere fra loro. Con l'input che contiene
+    // `v`:
     //
     //   var_name   = "v"   -> collide con l'input   -> "v_1"
     //   value_name = "v_1" -> non collide con `v`   -> "v_1"
     //
-    // I nomi RICHIESTI erano distinti, quindi il controllo di contratto non
-    // se ne accorgeva, e l'output usciva con due colonne omonime.
+    // I nomi RICHIESTI sono distinti, quindi il controllo di contratto non
+    // se ne accorge, e l'output uscirebbe con due colonne omonime.
     //
     // Le attese qui sotto sono scritte a MANO: confrontarle con l'oracolo di
-    // parita' non proverebbe nulla, perche' l'oracolo replicava lo stesso
-    // algoritmo — e quindi lo stesso difetto.
+    // parita' non proverebbe nulla, perche' l'oracolo replica lo stesso
+    // algoritmo — e quindi ne replicherebbe il difetto.
     let uscita = plenora_kernels_table::reshape::melt(
         &ingresso_con_v(),
         &serde_json::from_value(json!({
@@ -2056,14 +2061,15 @@ fn il_risolutore_condiviso_riserva_i_nomi_man_mano() {
 }
 
 // ---------------------------------------------------------------------------
-// Undicesimo giro, finding 2 — cio' che si sa dallo schema si rifiuta prima
+// Cio' che si sa dallo schema si rifiuta prima
 // ---------------------------------------------------------------------------
 
 #[test]
 fn melt_rifiuta_una_timezone_non_valida_dallo_schema() {
-    // La timezone sta nello SCHEMA, non nei valori: `scalar_as_string` la
-    // risolveva a ogni riga, quindi una timezone non valida faceva fallire
-    // l'operazione durante la scansione, dopo le allocazioni.
+    // La timezone sta nello SCHEMA, non nei valori, ma `scalar_as_string` la
+    // risolve a ogni riga: senza una verifica sullo schema una timezone non
+    // valida farebbe fallire l'operazione durante la scansione, dopo le
+    // allocazioni.
     use plenora_core::arrow::array::TimestampMillisecondArray;
     use plenora_core::arrow::schema::TimeUnit;
 
@@ -2109,10 +2115,10 @@ fn melt_rifiuta_una_timezone_non_valida_dallo_schema() {
 #[test]
 fn un_piano_invalido_resta_invalido_qualunque_sia_il_budget() {
     // Colonne eterogenee con `type_policy = "reject"`: la condizione e' nota
-    // dallo schema. Il rifiuto arrivava pero' in fondo, dopo il tetto sulle
-    // righe e dopo la stima: con un budget stretto usciva prima un
-    // `resource_limit`, e chi lo leggeva andava ad alzare un budget per un
-    // piano che non sarebbe comunque stato eseguibile.
+    // dallo schema. Un rifiuto in fondo, dopo il tetto sulle righe e dopo la
+    // stima, con un budget stretto lascia uscire prima un `resource_limit`,
+    // e chi lo legge va ad alzare un budget per un piano che non sarebbe
+    // comunque eseguibile.
     use plenora_core::ErrorCategory;
 
     let ingresso = batch(
@@ -2156,7 +2162,7 @@ fn un_piano_invalido_resta_invalido_qualunque_sia_il_budget() {
 }
 
 // ---------------------------------------------------------------------------
-// Dodicesimo giro, finding 1 — analisi ed esecuzione decidono insieme
+// Analisi ed esecuzione decidono insieme
 // ---------------------------------------------------------------------------
 
 /// Contratto d'ingresso per l'analisi, a partire dai campi dichiarati.
@@ -2168,10 +2174,10 @@ fn contratto(campi: Vec<Field>) -> plenora_core::contract::DataContract {
 
 #[test]
 fn l_analisi_di_melt_rifiuta_cio_che_il_kernel_rifiuterebbe() {
-    // L'analisi dichiarava `Utf8` non appena leggeva `type_policy = "string"`
-    // nella config, senza verificare che le colonne fossero davvero
-    // convertibili. Ma il kernel lo verifica, e lo fa guardando SOLO lo
-    // schema — che l'analisi ha sotto gli occhi.
+    // Dichiarare `Utf8` non appena la config dice `type_policy = "string"`,
+    // senza verificare che le colonne siano davvero convertibili, promette
+    // un output che il kernel rifiuta. E il kernel lo verifica guardando
+    // SOLO lo schema — che l'analisi ha sotto gli occhi.
     //
     // Un contratto che promette un output che l'esecuzione sa gia' di non
     // poter produrre e' peggio di un rifiuto: sposta la scoperta a runtime
@@ -2253,15 +2259,15 @@ fn l_analisi_di_melt_rifiuta_cio_che_il_kernel_rifiuterebbe() {
 }
 
 // ---------------------------------------------------------------------------
-// Dodicesimo giro, finding 2 — il nome GENERATO rispetta il limite
+// Il nome GENERATO rispetta il limite
 // ---------------------------------------------------------------------------
 
 #[test]
 fn un_nome_al_limite_che_collide_non_produce_un_nome_oltre_il_limite() {
     // `validate_output_name` impone 1024 byte. Il suffisso allunga il nome: un
-    // nome di esattamente 1024 byte che collide diventava `nome_1`, cioe'
+    // nome di esattamente 1024 byte che collide diventerebbe `nome_1`, cioe'
     // 1026 byte — oltre il limite che la validazione esiste per imporre.
-    // L'invariante si perdeva proprio nel caso che lo mette alla prova.
+    // L'invariante si perderebbe proprio nel caso che lo mette alla prova.
     let al_limite = "n".repeat(1024);
     assert_eq!(
         al_limite.len(),
@@ -2302,8 +2308,9 @@ fn un_nome_al_limite_che_collide_non_produce_un_nome_oltre_il_limite() {
 
 #[test]
 fn i_suffissi_offerti_sono_quelli_dichiarati() {
-    // Il messaggio d'errore prometteva cento suffissi e il codice ne provava
-    // novantanove. La costante e' ora una sola, e questo test verifica che
+    // Il messaggio d'errore e il ciclo che genera i suffissi leggono la STESSA
+    // costante: con due letterali, un messaggio che promette cento suffissi
+    // convive con un codice che ne prova novantanove. Il test verifica che
     // l'ultimo suffisso dichiarato sia davvero raggiungibile.
     let base = "c";
     let mut occupati: Vec<String> = vec![base.to_owned()];
@@ -2340,20 +2347,20 @@ fn i_suffissi_offerti_sono_quelli_dichiarati() {
 }
 
 // ---------------------------------------------------------------------------
-// Dodicesimo giro, ricerca della classe — la SECONDA copia del profilo
+// La SECONDA copia del profilo scalare testuale
 // ---------------------------------------------------------------------------
 
 #[test]
 fn il_profilo_testuale_dell_analizzatore_e_quello_del_formatter() {
-    // Cercando la stessa classe del finding su melt e' emersa una seconda
-    // copia del profilo scalare testuale, dentro l'analizzatore
-    // (`analyze::helpers::is_scalar_string`). Era piu' permissiva
-    // dell'originale sulle scale di `Decimal128` e non guardava la timezone:
-    // `table.lookup` su una colonna `Decimal128(38, -1)` riceveva un
-    // contratto valido e falliva in esecuzione.
+    // Una seconda copia del profilo scalare testuale, dentro l'analizzatore
+    // (`analyze::helpers::is_scalar_string`), diverge senza farlo sapere: se
+    // e' piu' permissiva dell'originale sulle scale di `Decimal128` e non
+    // guarda la timezone, `table.lookup` su una colonna
+    // `Decimal128(38, -1)` riceve un contratto valido e fallisce in
+    // esecuzione.
     //
-    // Il presidio non e' il singolo op: e' che la copia non esiste piu'. Qui
-    // si verifica dal lato osservabile, su un op che passa da
+    // Il presidio non e' il singolo op: e' che la copia non esista. Qui si
+    // verifica dal lato osservabile, su un op che passa da
     // `require_scalar_string`.
     use plenora_core::arrow::schema::TimeUnit;
 
@@ -2419,7 +2426,7 @@ fn le_set_operation_non_usano_il_profilo_testuale() {
 }
 
 // ---------------------------------------------------------------------------
-// Tredicesimo giro — matrice analyzer <-> runtime di `table.expression`
+// Matrice analyzer <-> runtime di `table.expression`
 // ---------------------------------------------------------------------------
 
 /// Verdetto atteso, scritto A MANO per ciascun caso.
@@ -2484,11 +2491,11 @@ fn batch_espressioni() -> RecordBatch {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
-    // L'analizzatore replicava a mano il sistema di tipi dell'interprete, e
-    // le due copie erano scivolate: `year` numerico invece che testuale,
+    // Un analizzatore che replica a mano il sistema di tipi dell'interprete
+    // scivola, e in piu' modi: `year` numerico invece che testuale,
     // `concat` senza controlli, `case when` senza booleano, `Timestamp` di
     // qualunque unita' trattato come numero, e — il caso piu' largo — l'AST
-    // non analizzato affatto quando `output_type` era dichiarato.
+    // non analizzato affatto quando `output_type` e' dichiarato.
     //
     // Questa matrice non confronta l'analizzatore col runtime lasciandoli
     // decidere: ogni riga porta l'attesa SCRITTA A MANO per entrambi. Un
@@ -2686,8 +2693,8 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             None,
             // Anche il kernel decide dallo SCHEMA: con `auto` un insieme
             // eterogeneo non ha un tipo di output, e il rifiuto e' lo stesso
-            // dell'analisi. Prima il kernel guardava i VALORI e su questi
-            // dati riusciva, con uno schema che dipendeva dalle righe.
+            // dell'analisi. Decidendo dai VALORI il kernel riuscirebbe su
+            // questi dati, con uno schema che dipende dalle righe.
             Verdetto::Rifiuta,
         ),
         riga(
@@ -2701,8 +2708,8 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             None,
             // Anche il kernel decide dallo SCHEMA: con `auto` un insieme
             // eterogeneo non ha un tipo di output, e il rifiuto e' lo stesso
-            // dell'analisi. Prima il kernel guardava i VALORI e su questi
-            // dati riusciva, con uno schema che dipendeva dalle righe.
+            // dell'analisi. Decidendo dai VALORI il kernel riuscirebbe su
+            // questi dati, con uno schema che dipende dalle righe.
             Verdetto::Rifiuta,
         ),
         riga(
@@ -2755,8 +2762,8 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             None,
             // Anche il kernel decide dallo SCHEMA: con `auto` un insieme
             // eterogeneo non ha un tipo di output, e il rifiuto e' lo stesso
-            // dell'analisi. Prima il kernel guardava i VALORI e su questi
-            // dati riusciva, con uno schema che dipendeva dalle righe.
+            // dell'analisi. Decidendo dai VALORI il kernel riuscirebbe su
+            // questi dati, con uno schema che dipende dalle righe.
             Verdetto::Rifiuta,
         ),
         riga(
@@ -2948,11 +2955,10 @@ fn l_eterogeneita_con_tipo_dichiarato_resta_ammessa_e_dipende_dai_dati() {
 
 #[test]
 fn il_predicato_e_l_encoder_accettano_gli_stessi_tipi() {
-    // `is_key_encodable` viveva nell'analizzatore e dichiarava di replicare
-    // il `match` di `CompactRowEncoder::try_new`. Un predicato copiato accanto
-    // a cio' che descrive e' esattamente la forma di difetto che questa serie
-    // di review ha gia' trovato tre volte, quindi ora vive nel modulo
-    // dell'encoder — e questo test lega le due cose invece di fidarsi.
+    // `is_key_encodable` vive nel modulo dell'encoder, non nell'analizzatore:
+    // un predicato che dichiara di replicare il `match` di
+    // `CompactRowEncoder::try_new` da un altro modulo e' una copia, e le
+    // copie scivolano. Questo test lega le due cose invece di fidarsi.
     use plenora_core::arrow::array::new_null_array;
     use plenora_core::arrow::schema::TimeUnit;
 
@@ -2999,9 +3005,9 @@ fn il_predicato_e_l_encoder_accettano_gli_stessi_tipi() {
 fn l_analisi_di_formula_rifiuta_la_timezone_che_il_formatter_rifiuta() {
     // `table.formula` legge come TESTO ogni colonna che non sia Int64/Float64
     // (`formula::evaluate`), quindi passa da `scalar_as_string`, che risolve
-    // la timezone con `chrono_tz` a ogni riga. L'analisi usava un predicato
-    // di solo TIPO: una timezone non risolvibile — che sta nello schema, non
-    // nei dati — otteneva un contratto valido e falliva in esecuzione.
+    // la timezone con `chrono_tz` a ogni riga. Con un predicato di solo
+    // TIPO una timezone non risolvibile — che sta nello schema, non nei
+    // dati — otterrebbe un contratto valido e fallirebbe in esecuzione.
     use plenora_core::arrow::array::TimestampMillisecondArray;
     use plenora_core::arrow::schema::TimeUnit;
 
@@ -3089,14 +3095,14 @@ fn tre_batch_stesso_schema() -> [RecordBatch; 3] {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn lo_schema_di_expression_non_dipende_dai_valori() {
-    // Il kernel risolveva `output_type = auto` osservando i valori CALCOLATI.
-    // Su un batch vuoto o tutto null non ne osservava nessuno e ripiegava su
-    // `Utf8`, anche dove l'analisi aveva dichiarato `Boolean` o `Float64`.
+    // Risolvere `output_type = auto` osservando i valori CALCOLATI non ne
+    // trova nessuno su un batch vuoto o tutto null, e ripiega su `Utf8`,
+    // anche dove l'analisi dichiara `Boolean` o `Float64`.
     //
-    // Due batch con lo stesso schema e la stessa configurazione producevano
-    // quindi schemi diversi, e nessuno dei due era necessariamente quello del
-    // contratto. Il tipo si ricava ora dallo SCHEMA, con la stessa funzione
-    // che usa l'analizzatore.
+    // Due batch con lo stesso schema e la stessa configurazione darebbero
+    // quindi schemi diversi, e nessuno dei due sarebbe necessariamente
+    // quello del contratto. Il tipo si ricava dallo SCHEMA, con la stessa
+    // funzione che usa l'analizzatore.
     let colonna = |nome: &str| json!({"kind": "column", "name": nome});
     let letterale = |valore: serde_json::Value| json!({"kind": "literal", "value": valore});
     let unario =
@@ -3137,7 +3143,7 @@ fn lo_schema_di_expression_non_dipende_dai_valori() {
         // `not` su un valore nullo torna null, ma il TIPO resta booleano:
         // «solo null» soddisfa la richiesta di un operando booleano e il
         // nodo produce comunque un booleano. Non e' il ripiego su `Utf8`
-        // che il kernel faceva quando non osservava valori.
+        // di chi decide guardando i valori.
         (
             "not di un letterale null",
             unario("not", letterale(serde_json::Value::Null)),
@@ -3256,10 +3262,10 @@ fn lo_schema_di_expression_non_dipende_dai_valori() {
 
 #[test]
 fn lo_schema_di_formula_non_dipende_dai_valori() {
-    // Il difetto simmetrico: `formula` decideva Float64 quando NESSUN valore
-    // era testo — e su un batch vuoto o tutto null nessun valore lo e'.
-    // Un'espressione testuale usciva quindi Float64 sul vuoto e Utf8 sul
-    // pieno, mentre l'analisi prometteva Utf8 in entrambi i casi.
+    // Il difetto simmetrico: decidere Float64 quando NESSUN valore e' testo
+    // — e su un batch vuoto o tutto null nessun valore lo e'.
+    // Un'espressione testuale uscirebbe quindi Float64 sul vuoto e Utf8 sul
+    // pieno, mentre l'analisi promette Utf8 in entrambi i casi.
     let casi: [(&str, &str, DataType); 4] = [
         ("aritmetica", "num * 2", DataType::Float64),
         ("concatenazione", "txt + '!'", DataType::Utf8),
@@ -3324,7 +3330,7 @@ fn lo_schema_di_formula_non_dipende_dai_valori() {
 
 #[test]
 fn due_batch_consecutivi_producono_lo_stesso_schema() {
-    // La forma in cui il difetto mordeva davvero: uno stream in cui il primo
+    // La forma in cui il difetto morde davvero: uno stream in cui il primo
     // batch e' tutto null e il secondo no. I due schemi devono coincidere,
     // altrimenti la concatenazione a valle non e' nemmeno possibile.
     let [pieno, tutto_null, vuoto] = tre_batch_stesso_schema();
@@ -3366,16 +3372,16 @@ fn due_batch_consecutivi_producono_lo_stesso_schema() {
 }
 
 // ---------------------------------------------------------------------------
-// Hotfix 2026-08-18 — la semantica esatta su cui l'oracolo fuzz si appoggia
+// La semantica esatta su cui l'oracolo fuzz si appoggia
 // ---------------------------------------------------------------------------
 
 #[test]
 fn il_confronto_di_un_estremo_decimale_e_esatto() {
-    // L'oracolo di `fuzz/fuzz_targets/diff_kernels.rs` degradava valore ed
-    // estremo a `f64` (`bound_as_f64`), replicando una semantica che il
-    // kernel ha abbandonato. Ora delega a `compare_bounds`, quindi questi
-    // casi sono il contratto su cui si appoggia: se cambiano, l'oracolo
-    // cambia con loro.
+    // L'oracolo di `fuzz/fuzz_targets/diff_kernels.rs` delega a
+    // `compare_bounds` invece di degradare valore ed estremo a `f64`, che
+    // sarebbe una semantica che il kernel non ha: questi casi sono il
+    // contratto su cui si appoggia, e se cambiano l'oracolo cambia con
+    // loro.
     use plenora_kernels_table::{compare_bounds, NumericBound};
     use std::cmp::Ordering;
 
@@ -3448,8 +3454,9 @@ fn il_confronto_di_un_estremo_decimale_e_esatto() {
 
 #[test]
 fn il_filtro_ordinato_su_colonna_testuale_non_passa_da_f64() {
-    // Il percorso NON tipizzato di `filtering` — quello che l'oracolo fuzz
-    // replicava con `bound_as_f64`. Su una colonna Utf8 il kernel confronta
+    // Il percorso NON tipizzato di `filtering` — quello che un oracolo fuzz
+    // replicherebbe con un `bound_as_f64`. Su una colonna Utf8 il kernel
+    // confronta
     // nel dominio esatto: sopra 2^53 due interi distinti restano distinti.
     use plenora_core::arrow::array::StringArray;
 

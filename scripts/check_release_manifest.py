@@ -3,15 +3,14 @@
 
 # Che cosa e' stato recuperato, e che cosa no
 
-Fino al 2026-08-18 questa verifica era eseguita da uno script di
-``PlenoraETL/plenora-contracts``, clonato in CI al tag ``v2.0-rc10``. Quel
-repository e' stato **sostituito** il 2026-08-18: storia, branch e tag non sono
-stati riportati (vedi il suo ``CUTOVER.md``).
+Questa verifica non clona ``PlenoraETL/plenora-contracts`` e non ne usa lo
+script: quel repository e' stato **sostituito**, e storia, branch e tag non
+sono stati riportati (vedi il suo ``CUTOVER.md``).
 
 Dai log dell'ultima esecuzione riuscita (run 31166125840, 2026-08-07, su
 ``4b9edda``) sono stati recuperati **due fatti soltanto**:
 
-1. la **provenienza** del pin — il tag annotato ``ba77b16…`` risolveva al
+1. la **provenienza** del pin — il tag annotato ``ba77b16…`` risolve al
    commit ``3598259bbe07d1c853453ff34ca2c1d1d28a0272``, lo stesso valore che
    tutti e cinque i manifesti dichiarano in ``icd.revision``;
 2. il **contratto osservabile** della verifica — verdetto, testo dell'avviso
@@ -27,9 +26,9 @@ perimetro e' esattamente quello elencato in ``CRITERI_AUTOMATIZZATI``.
 
 I cinque manifesti ``rc``, ``1.0.0``, ``1.0.1``, ``1.0.2``, ``1.0.3`` sono
 documenti **immutabili**: descrivono rilasci gia' avvenuti. La loro verifica
-non deve dipendere da un repository esterno — la sostituzione del 2026-08-18 ha
-mostrato che cosa succede quando ci dipende — ne' dalle regole di una linea
-normativa successiva.
+non deve dipendere da un repository esterno — la sostituzione di
+``plenora-contracts`` ha mostrato che cosa succede quando ci dipende — ne'
+dalle regole di una linea normativa successiva.
 
 Il ``plenora-contracts`` attuale e' quindi trattato come una **nuova linea
 normativa**: non viene clonato, e ne' i suoi tag ne' i suoi contenuti entrano
@@ -76,12 +75,12 @@ ICD_REVISION = "3598259bbe07d1c853453ff34ca2c1d1d28a0272"
 #: E' una **mappa locale ed esplicita**, non una deduzione: i manifesti storici
 #: non cambiano, e la catena e' un fatto del rilascio. I valori registrati sono
 #: quelli dichiarati dai manifesti stessi e confermati dai tag annotati di
-#: QUESTO repository al momento della scrittura (2026-08-18).
+#: QUESTO repository.
 #:
 #: Il confronto e' sulla **forma esatta**, non sui soli valori presenti:
 #: l'insieme delle chiavi e' parte del documento. `1.0.3` dichiara anche `tag`
 #: e `tag_object`, i tre precedenti no — e per una catena dichiarata immutabile
-#: togliere quei campi da `1.0.3`, aggiungerli dove non c'erano o introdurre
+#: togliere quei campi da `1.0.3`, aggiungerli dove non ci sono o introdurre
 #: chiavi sconosciute e' una riscrittura, non una variante ammessa.
 #:
 #: Fail-closed su tre lati: un manifesto non elencato qui e' un errore; un
@@ -185,9 +184,10 @@ def _verifica_catena(repo: Path, nome: str, supersedes: Any) -> list[str]:
     """Controlli C5.3 contro la mappa locale della catena.
 
     Il confronto e' sulla **forma esatta** del dizionario `supersedes`: chiavi,
-    presenza e valori. Verificare i soli campi presenti lasciava passare due
-    riscritture opposte — togliere `tag`/`tag_object` da `1.0.3` e aggiungerli
-    ai manifesti che non li avevano — su una catena dichiarata immutabile.
+    presenza e valori. Verificare i soli campi presenti lascerebbe passare
+    due riscritture opposte — togliere `tag`/`tag_object` da `1.0.3` e
+    aggiungerli ai manifesti che non li dichiarano — su una catena
+    dichiarata immutabile.
 
     Il registro dice CHE COSA il manifesto deve dichiarare; il repository dice
     se quella dichiarazione e' ancora vera (tag annotato presente, che si
@@ -287,9 +287,9 @@ def validate_manifest(
     # Il documento verificato deve stare nella directory canonica, e la
     # verifica avviene DOPO la risoluzione del percorso: percorsi assoluti,
     # risalite e symlink che puntano fuori sono gia' stati risolti qui, quindi
-    # un confronto sul parent risolto li coglie tutti. Senza, una copia esterna
-    # chiamata `1.0.3.json` veniva validata sul solo basename — e il basename
-    # e' cio' che decide catena e criteri.
+    # un confronto sul parent risolto li coglie tutti. Senza, una copia
+    # esterna chiamata `1.0.3.json` verrebbe validata sul solo basename — e
+    # il basename e' cio' che decide catena e criteri.
     canonica = (repo / "release").resolve()
     if manifest_path.parent != canonica:
         return (
@@ -366,7 +366,7 @@ def validate_manifest(
         else:
             # L'ICD vive in un altro repository, e quel repository e' stato
             # sostituito: l'esistenza della revisione non e' verificabile da
-            # qui e non lo era nemmeno prima. Resta un avviso, non un errore.
+            # qui. Resta un avviso, non un errore.
             avvisi.append(
                 f"C2.2: {nome}:icd.revision appartiene a un altro repository, "
                 "esistenza non verificabile da qui"

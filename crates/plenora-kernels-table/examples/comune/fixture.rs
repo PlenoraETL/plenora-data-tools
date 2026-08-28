@@ -1,8 +1,8 @@
-//! Le fixture di benchmark che piu' file costruivano allo stesso modo.
+//! Le fixture di benchmark che piu' file costruiscono allo stesso modo.
 //!
-//! Spostate **verbatim**: stesso ordine di estrazioni dal generatore, stesso
-//! schema, stessi null. Una fixture riscritta invece che spostata misurerebbe
-//! un carico diverso da quello su cui la baseline e' stata raccolta, e non
+//! Identiche a quelle su cui la baseline e' stata raccolta: stesso ordine di
+//! estrazioni dal generatore, stesso schema, stessi null. Una fixture
+//! riscritta misurerebbe un carico diverso da quello della baseline, e non
 //! ci sarebbe niente a dirlo.
 //!
 //! Cio' che resta nei singoli file: le fixture che esistono in una copia

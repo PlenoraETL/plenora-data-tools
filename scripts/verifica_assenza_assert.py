@@ -17,12 +17,11 @@ della CLI, cioe' tutto cio' che sta sotto `crates/*/src`, meno il codice di
 test. Nei test le macro di assert restano legittime: sono la loro ragione
 d'essere.
 
-**La scansione non e' per riga.** Una prima versione applicava la regex a una
-riga per volta e riconosceva i blocchi di test contando le graffe sul testo
-grezzo: aveva due falsi negativi immediati, entrambi sintassi Rust valida —
-`assert` e `!` separati da un a capo, e un `#[cfg(test)]` dentro un
-**commento**, che faceva saltare tutto il blocco successivo di codice di
-produzione. Qui il sorgente viene prima ripulito (commenti, stringhe, stringhe
+**La scansione non e' per riga.** Applicare la regex a una riga per volta e
+riconoscere i blocchi di test contando le graffe sul testo grezzo lascia
+passare due forme, entrambe sintassi Rust valida — `assert` e `!` separati
+da un a capo, e un `#[cfg(test)]` dentro un **commento**, che fa saltare
+tutto il blocco successivo di codice di produzione. Qui il sorgente viene prima ripulito (commenti, stringhe, stringhe
 grezze e letterali di carattere sostituiti da spazi, così gli offset e i
 numeri di riga restano quelli veri), poi analizzato per intero: le graffe
 dentro una stringa non contano piu', e le macro si riconoscono anche se
@@ -49,8 +48,9 @@ RADICE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # I nomi vietati fuori dai test. `debug_assert*` sono inclusi: la loro
 # assenza in release non li rende innocui, li rende invisibili.
 #
-# Si cerca il NOME, non l'invocazione. Pretendere il `!` subito dopo lasciava
-# passare tutto cio' che nomina la macro senza chiamarla sul posto: un import
+# Si cerca il NOME, non l'invocazione. Pretendere il `!` subito dopo
+# lascerebbe passare tutto cio' che nomina la macro senza chiamarla sul
+# posto: un import
 # raggruppato (`use std::{assert as check};`), un alias raw
 # (`as r#check`), o il nome passato a un'altra macro che poi lo espande
 # (`call!(assert)`). Il nome vietato non ha ragione di comparire nel codice di
@@ -75,9 +75,9 @@ PRIMA_DI_ATTRIBUTO = ';{}]'
 # `mod nome;` — dichiarazione di modulo su file, senza blocco.
 #
 # La regione fra l'attributo e il `;` deve contenere SOLO questo, niente
-# altro: cercare la sottosequenza ovunque faceva scambiare per dichiarazione
-# di modulo anche `register!(mod vittima;)`, e un file di produzione finiva
-# nell'insieme escluso senza essere mai esaminato.
+# altro: cercare la sottosequenza ovunque farebbe scambiare per
+# dichiarazione di modulo anche `register!(mod vittima;)`, e un file di
+# produzione finirebbe nell'insieme escluso senza essere mai esaminato.
 MOD_SU_FILE = re.compile(r'^\s*(?:pub\s+(?:\([^)]*\)\s*)?)?mod\s+([A-Za-z0-9_]+)\s*$')
 
 
@@ -126,11 +126,11 @@ def ripulisci(sorgente):
             continue
         # Stringa GREZZA: `r"..."`, `r#"..."#`, `br"..."`, `br#"..."#`. Il
         # prefisso deve contenere una `r`: senza, `b"..."` e' una byte
-        # string NORMALE, con gli escape. Trattarla come grezza faceva
-        # chiudere il letterale sulla quote escapata di `b"\""` e lasciava
-        # una quote orfana, che apriva una stringa fantasma e spegneva tutto
-        # il codice fino alla quote successiva del file — un assert di
-        # produzione poteva finirci dentro e sparire.
+        # string NORMALE, con gli escape. Trattarla come grezza chiuderebbe
+        # il letterale sulla quote escapata di `b"\""` e lascerebbe una
+        # quote orfana, che aprirebbe una stringa fantasma e spegnerebbe
+        # tutto il codice fino alla quote successiva del file — un assert di
+        # produzione potrebbe finirci dentro e sparire.
         if c in 'rb' and (
                 c == 'r' or (i + 1 < n and sorgente[i + 1] == 'r')):
             j = i
@@ -183,13 +183,13 @@ def ripulisci(sorgente):
 
 # Invocazione di macro (`nome!(...)`) oppure DEFINIZIONE
 # (`macro_rules! nome { ... }`). La definizione ha un identificatore fra il
-# `!` e il delimitatore, quindi il pattern dell'invocazione non la vedeva: e
+# `!` e il delimitatore, quindi il pattern dell'invocazione non la vede: e
 # il corpo di una definizione e' token puri, dove un `#[cfg(test)]` non
 # governa nulla. `macro_rules! dormant { () => { ; #[cfg(test)] ignored } }`
-# faceva prendere per blocco di test la funzione che seguiva.
+# farebbe prendere per blocco di test la funzione che segue.
 # `r#` e' ammesso sia sul nome della macro sia su quello che segue
 # `macro_rules!`: `macro_rules! r#dormant` e' Rust valido, e senza il prefisso
-# raw il corpo non veniva riconosciuto come token di macro.
+# raw il corpo non verrebbe riconosciuto come token di macro.
 INVOCAZIONE_MACRO = re.compile(
     r'(?<![A-Za-z0-9_])(?:r#)?[A-Za-z_][A-Za-z0-9_]*\s*!\s*'
     r'(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*\s*)?([({\[])')
@@ -197,8 +197,8 @@ INVOCAZIONE_MACRO = re.compile(
 # Attributo `#[path = "..."]`: dirotta il modulo su un file che NON si chiama
 # come il modulo. Il valore non e' leggibile qui — la ripulitura ha spento il
 # contenuto delle stringhe — quindi in sua presenza non si esclude nulla:
-# dedurre il file dal nome del modulo escludeva il file sbagliato, e quello
-# giusto restava fuori dalla scansione.
+# dedurre il file dal nome del modulo escluderebbe il file sbagliato, e
+# quello giusto resterebbe fuori dalla scansione.
 ATTRIBUTO_PATH = re.compile(r'#\s*\[\s*path\b')
 
 CHIUSURA = {'(': ')', '{': '}', '[': ']'}
@@ -208,10 +208,10 @@ def intervalli_macro(pulito):
     """Intervalli [inizio, fine) dei corpi delle invocazioni di macro.
 
     Dentro una macro ci sono **token**, non elementi: un `#[cfg(test)]` che
-    compare li' non governa nulla, e cercare in avanti la prima graffa lo
-    faceva scavalcare la chiusura della macro e prendere per corpo di test
-    l'elemento che seguiva. `discard! { ; #[cfg(test)] ignored } fn f() {
-    assert!(true); }` e' Rust valido e nascondeva l'assert.
+    compare li' non governa nulla, e cercare in avanti la prima graffa
+    scavalcherebbe la chiusura della macro prendendo per corpo di test
+    l'elemento che segue. `discard! { ; #[cfg(test)] ignored } fn f() {
+    assert!(true); }` e' Rust valido, e nasconderebbe l'assert.
     """
     intervalli = []
     for invocazione in INVOCAZIONE_MACRO.finditer(pulito):
@@ -273,9 +273,9 @@ def file_di_produzione(sorgente, pulito, percorso):
 
     Serve a non escludere mai un file che, oltre a essere incluso come
     modulo di test da qualche parte, e' incluso anche come modulo di
-    produzione altrove. L'esclusione era per percorso e globale: bastava un
-    `#[cfg(test)] mod condiviso;` in un file perche' `condiviso.rs` sparisse
-    dalla scansione, anche quando un altro lo includeva davvero in
+    produzione altrove. Con un'esclusione per percorso e globale basterebbe
+    un `#[cfg(test)] mod condiviso;` in un file perche' `condiviso.rs`
+    sparisca dalla scansione, anche quando un altro lo include davvero in
     produzione con `#[path = "condiviso.rs"] pub mod produzione;`.
 
     Il valore di `#[path]` si legge dal sorgente ORIGINALE: nel testo
@@ -294,7 +294,7 @@ def file_di_produzione(sorgente, pulito, percorso):
     def registra(nome_file):
         # `os.path.normpath` prima del confronto: `./condiviso.rs` e
         # `sotto/../condiviso.rs` indicano lo stesso file di
-        # `condiviso.rs`, e confrontarli come testo lasciava il file
+        # `condiviso.rs`, e confrontarli come testo lascerebbe il file
         # nell'insieme escluso senza mai reinserirlo fra quelli di
         # produzione.
         inclusi.add(os.path.normpath(os.path.join(cartella, nome_file)))
@@ -451,8 +451,8 @@ def sorgenti():
     Sono i file sotto `crates/*/src`, **piu' la chiusura** dei file che quelli
     includono per percorso letterale: un `include!("../generato.rs")` o un
     `#[path = "../altrove.rs"]` compila codice che sta fuori da `src`, e
-    fermarsi all'albero delle directory lo lasciava fuori dalla scansione pur
-    essendo compilato nella libreria.
+    fermarsi all'albero delle directory lo lascerebbe fuori dalla scansione
+    pur essendo compilato nella libreria.
     """
     trovati = []
     crates = os.path.join(RADICE, 'crates')
@@ -519,8 +519,8 @@ def autoverifica_esclusione_file():
         raise SystemExit(
             'autoverifica fallita: esclusione da una sottosequenza qualunque')
     # Con `#[path]` il file non si chiama come il modulo: dedurlo dal nome
-    # escludeva il file sbagliato e lasciava fuori dalla scansione quello
-    # giusto. In quel caso non si esclude nulla.
+    # escluderebbe il file sbagliato e lascerebbe fuori dalla scansione
+    # quello giusto. In quel caso non si esclude nulla.
     if esclusi('#[cfg(test)]\n#[path = "tests.rs"]\nmod vittima;\n'):
         raise SystemExit(
             'autoverifica fallita: esclusione dedotta dal nome del modulo '
@@ -561,7 +561,7 @@ def autoverifica_esclusione_file():
         '#[path = r"condiviso.rs"]\nmod riuso;\n',
         '#[path = r#"condiviso.rs"#]\nmod riuso;\n',
         'fn f() {\n    include!("condiviso.rs");\n}\n',
-        # Percorsi EQUIVALENTI: confrontarli come testo lasciava il file
+        # Percorsi EQUIVALENTI: confrontarli come testo lascerebbe il file
         # nell'insieme escluso senza mai reinserirlo fra quelli di
         # produzione.
         'fn f() {\n    include!("./condiviso.rs");\n}\n',
@@ -625,7 +625,7 @@ def autoverifica():
         '#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = "}";\n    }\n}\n'
         'fn f(x: u64) {\n    assert!(x > 0);\n}\n',
         # Byte string NORMALE con quote escapata: non e' grezza, e trattarla
-        # come tale spegneva il resto del file.
+        # come tale spegnerebbe il resto del file.
         'fn f() {\n    let _ = b"\\"";\n    assert!(true);\n}\n',
         'fn f() {\n    let _ = b"}\\"{";\n    debug_assert!(true);\n}\n',
         # `#[cfg(test)]` come TESTO dentro un'altra costruzione: non e' un
@@ -644,12 +644,12 @@ def autoverifica():
         # Percorso completo, senza import.
         'fn f() {\n    std::assert!(true);\n}\n',
         # `#[cfg(test)]` fra i TOKEN di una macro: non governa l'elemento che
-        # segue, e cercare la prima graffa scavalcava la chiusura della macro
-        # prendendo per corpo di test una funzione di produzione.
+        # segue, e cercare la prima graffa scavalcherebbe la chiusura della
+        # macro prendendo per corpo di test una funzione di produzione.
         'discard! { ; #[cfg(test)] ignored }\nfn f() {\n    assert!(true);\n}\n',
         'scarta!( ; #[cfg(test)] x );\nfn f() {\n    debug_assert!(true);\n}\n',
         # DEFINIZIONE di macro: il corpo e' token puri, e l'identificatore
-        # fra `!` e graffa nascondeva la definizione al riconoscitore.
+        # fra `!` e graffa nasconderebbe la definizione al riconoscitore.
         'macro_rules! dormant { () => { ; #[cfg(test)] ignored } }\n'
         'fn f() {\n    assert!(true);\n}\n',
         # ...anche con nome RAW: `macro_rules! r#dormant` e' Rust valido.

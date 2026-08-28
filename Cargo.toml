@@ -7,7 +7,7 @@ members = [
     "crates/plenora-engine",
     "crates/plenora-cli",
 ]
-# I prototipi bloccanti della fase 4 (docs/prototipi-isolamento.md) NON sono
+# I prototipi bloccanti dell'esecuzione isolata (docs/prototipi-isolamento.md) NON sono
 # membri: non sono codice di produzione, non sono coperti dai gate, e uno dei
 # due usa unsafe — che nel workspace e' proibito. Promuoverli richiede una PR
 # propria.
@@ -77,10 +77,10 @@ plenora-engine = { path = "crates/plenora-engine" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# Politica lint: si nega solo cio' che la CI applica davvero. Dopo la
-# pulizia profonda 2026-07-28 (863 -> 0 warning) tutti i gruppi sono
-# deny; ogni deviazione voluta resta possibile solo come `#[allow]`
-# mirato e motivato nel codice. Il gate anti-panic R6 resta un passo CI
+# Politica lint: si nega solo cio' che la CI applica davvero. Tutti i
+# gruppi sono deny e il codebase passa con zero warning; ogni deviazione
+# voluta resta possibile solo come `#[allow]` mirato e motivato nel
+# codice. Il gate anti-panic R6 resta un passo CI
 # dedicato con lint espliciti (piu' stretto di questa tabella).
 [workspace.lints.clippy]
 all = "deny"

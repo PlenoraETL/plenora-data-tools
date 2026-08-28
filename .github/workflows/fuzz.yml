@@ -51,7 +51,7 @@ jobs:
           - wkt_operations
           - arrow_envelope
           - arrow_ipc_decode
-          # arrow_transform e' in quarantena dal 2026-08-07. NON e' un difetto
+          # arrow_transform e' in quarantena. NON e' un difetto
           # non corretto: la barriera esiste ed e' verificata dal test
           # `ipc_decode_converte_il_panico_di_arrow_in_errore`, che asserisce
           # `ArrowTransportError::ArrowPanic` sullo stesso payload.
@@ -61,19 +61,18 @@ jobs:
           # cominci (0.4.10, src/lib.rs:92-95), deliberatamente, perche' un
           # `catch_unwind` nel codice sotto test nasconderebbe i difetti al
           # fuzzer. Il target resterebbe quindi rosso a barriera funzionante, e
-          # un job perennemente rosso smette di essere letto: e' cosi' che il
-          # disallineamento della matrice SQL Server e' sopravvissuto tre
-          # giorni e il panico WKT undici.
+          # un job perennemente rosso smette di essere letto, e con esso
+          # smettono di essere letti i difetti veri che segnala.
           #
           # Va riattivato quando arrow-rs rende fallibile la conversione dello
           # schema, cioe' quando la barriera non servira' piu'. Segnalato a
           # monte: apache/arrow-rs#10575.
           # - arrow_transform
-          # Rinominato da `plan_v4_parse` il 2026-08-20 con la v5
-          # (errori-e-limiti.md#memoria-governata): il target parsa il formato canonico, e un nome
-          # che cita la versione sbagliata manda a cercare nel posto
-          # sbagliato. Il corpus non e' versionato (.gitignore) e
-          # riparte da zero sotto il nome nuovo.
+          # Il nome cita la versione del formato canonico
+          # (errori-e-limiti.md#memoria-governata) che il target parsa: un nome che ne cita
+          # un'altra manda a cercare nel posto sbagliato. Il corpus non e'
+          # versionato (.gitignore), quindi una rinomina lo fa ripartire
+          # da zero.
           - plan_v5_parse
           - analyze_table
           - analyze_geo
@@ -85,10 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # Toolchain nightly DATATA e action pinnata a SHA: `@nightly` era un
+      # Toolchain nightly DATATA e action pinnata a SHA: `@nightly` e' un
       # ramo mobile su un canale mobile, quindi due esecuzioni della stessa
-      # campagna potevano usare compilatore e codice di action diversi e un
-      # crash poteva sparire senza che nulla fosse cambiato nel progetto.
+      # campagna userebbero compilatore e codice di action diversi, e un
+      # crash potrebbe sparire senza che nulla sia cambiato nel progetto.
       # La data si alza deliberatamente, con la stessa disciplina degli altri
       # pin del progetto.
       - name: Installa toolchain nightly (datata)
@@ -136,9 +135,9 @@ jobs:
           # La LUNGHEZZA prima del valore. `[ ... -gt ... ]` non gestisce
           # interi arbitrariamente grandi: con un input di venti cifre stampa
           # "integer expression expected" e ritorna 2, e dentro un `if` quel
-          # ritorno non fa scattare `set -e` — il confronto veniva quindi
-          # saltato, l'aritmetica riduceva il valore e una campagna con un
-          # input dichiaratamente fuori dominio partiva lo stesso.
+          # ritorno non fa scattare `set -e` — il confronto verrebbe quindi
+          # saltato, l'aritmetica ridurrebbe il valore e una campagna con un
+          # input dichiaratamente fuori dominio partirebbe lo stesso.
           if [ "${#MINUTES}" -gt 3 ]; then
             echo "minutes_per_target oltre il massimo di 720" >&2
             exit 2

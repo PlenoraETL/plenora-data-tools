@@ -1,4 +1,4 @@
-//! Benchmark autonomo per `table.assert_unique` (filone ottimizzazioni
+//! Benchmark autonomo per `table.assert_unique` (baseline
 //! kernel: quality).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep2` (seed logico 42,

@@ -804,9 +804,9 @@ fn scale_inf_plan() -> Value {
     })
 }
 
-/// (d2) scale x1e308 a meta' catena: 1e30 * 1e308 = `inf`. La specifica di partenza citava questo
-/// scenario come profilo B (errore al nodo k+1), ma con le op fondibili NON e'
-/// realizzabile: `scale` (`affine_transform` -> `validate_output`) valida il
+/// (d2) scale x1e308 a meta' catena: 1e30 * 1e308 = `inf`. Come profilo B
+/// (errore al nodo k+1) lo scenario NON e' realizzabile con le op
+/// fondibili: `scale` (`affine_transform` -> `validate_output`) valida il
 /// proprio output e rifiuta i non-finiti al produttore, in entrambi i
 /// percorsi — l'errore e' quindi attribuito al nodo `k` (stesso kernel,
 /// stessa chiamata, stessa variante). Parita' confermata nella sola forma

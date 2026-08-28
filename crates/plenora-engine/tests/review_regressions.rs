@@ -1,6 +1,7 @@
-//! Regressioni su engine e core.
+//! Oracoli di difetti chiusi su engine e core.
 //!
-//! Ogni test qui sotto fallisce sul codice precedente alla correzione.
+//! Ogni test qui sotto isola una proprieta' che un difetto reale ha
+//! violato, e cade se quella proprieta' torna a mancare.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,7 +37,7 @@ fn geometry(name: &str) -> GeometryColumnContract {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 1 — collisione del plan_hash sugli interi oltre 2^53
+// Collisione del plan_hash sugli interi oltre 2^53
 // ---------------------------------------------------------------------------
 
 fn plan_with(value: &str) -> String {
@@ -63,13 +64,13 @@ fn gli_interi_oltre_2_53_non_collassano_nel_piano_canonico() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 13 — chiavi JSON duplicate rifiutate, non risolte «last wins»
+// Chiavi JSON duplicate rifiutate, non risolte «last wins»
 // ---------------------------------------------------------------------------
 
 #[test]
 fn le_chiavi_duplicate_nel_piano_sono_rifiutate() {
-    // Senza il controllo, `serde_json` teneva l'ultima e due testi diversi
-    // producevano lo stesso piano canonico e lo stesso `plan_hash`.
+    // Senza il controllo `serde_json` tiene l'ultima, e due testi diversi
+    // producono lo stesso piano canonico e lo stesso `plan_hash`.
     let duplicated = r#"{"schema_version": 5, "inputs": ["main"], "output": "a",
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
                    "config": {"column": "id", "operator": ">", "value": 1, "value": 2}}]}"#;
@@ -93,14 +94,14 @@ fn il_json_malformato_resta_un_errore_di_mappatura() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 7 — validazione del contratto geometrico
+// Validazione del contratto geometrico
 // ---------------------------------------------------------------------------
 
 #[test]
 fn una_geometria_non_binary_e_rifiutata_dal_contratto() {
     // Ogni lettore della geometria fa downcast a `BinaryArray`: un contratto
-    // che dichiarava geometrica una colonna di tipo diverso passava il
-    // dry-run e falliva a runtime.
+    // che dichiarasse geometrica una colonna di tipo diverso passerebbe il
+    // dry-run e fallirebbe a runtime.
     let contract = DataContract {
         schema: schema(vec![Field::new("geom", DataType::Utf8, true)]),
         geometries: vec![geometry("geom")],
@@ -124,7 +125,7 @@ fn i_nomi_di_campo_ripetuti_sono_rifiutati() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 11 — limiti fuori dominio rifiutati, non corretti in silenzio
+// Limiti fuori dominio rifiutati, non corretti in silenzio
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -140,8 +141,8 @@ fn spill_partitions_sotto_il_minimo_e_rifiutato() {
 
 #[test]
 fn un_piano_con_spill_partitions_invalido_non_viene_corretto() {
-    // Il preparer applicava `.max(2)`: il piano veniva eseguito con limiti
-    // diversi da quelli dichiarati, senza che nulla lo segnalasse.
+    // Un `.max(2)` nel preparer fa eseguire il piano con limiti diversi da
+    // quelli dichiarati, senza che nulla lo segnali.
     let plan = r#"{"schema_version": 5, "inputs": ["main"], "output": "a",
         "limits": {"spill_partitions": 1},
         "nodes": [{"id": "a", "op": "table.filter", "in": ["main"],
@@ -153,14 +154,14 @@ fn un_piano_con_spill_partitions_invalido_non_viene_corretto() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 14 — contabilita' della memoria senza overflow
+// Contabilita' della memoria senza overflow
 // ---------------------------------------------------------------------------
 
 #[test]
 fn il_governor_non_avvolge_ne_va_in_panico_sui_byte_estremi() {
-    // `fetch_add(bytes) + bytes` pubblicava l'addendo e poi sommava in
-    // aritmetica non controllata: con `overflow-checks` attivo era un panico,
-    // e il contatore restava corrotto.
+    // `fetch_add(bytes) + bytes` pubblica l'addendo e poi somma in
+    // aritmetica non controllata: con `overflow-checks` attivo e' un panico,
+    // e il contatore resta corrotto.
     let governor = MemoryGovernor::new(1_024);
     let error = governor
         .try_reserve(u64::MAX, "test")
@@ -174,14 +175,14 @@ fn il_governor_non_avvolge_ne_va_in_panico_sui_byte_estremi() {
 }
 
 // ---------------------------------------------------------------------------
-// Secondo giro — limiti, coerenza del contratto, reticolo della completeness
+// Limiti, coerenza del contratto, reticolo della completeness
 // ---------------------------------------------------------------------------
 
 #[test]
 fn i_limiti_nulli_e_il_fattore_non_finito_sono_rifiutati() {
-    // `Limits::validate` controllava solo `spill_partitions`: le altre regole
-    // vivevano nel motore tabellare legacy, che i piani solo-geo non
-    // attraversano.
+    // `Limits::validate` deve coprire ogni regola, non il solo
+    // `spill_partitions`: le regole che vivessero nel motore tabellare
+    // legacy non varrebbero per i piani solo-geo, che non lo attraversano.
     let zero = |mutate: fn(&mut Limits)| {
         let mut limits = Limits::default();
         mutate(&mut limits);
@@ -204,8 +205,9 @@ fn i_limiti_nulli_e_il_fattore_non_finito_sono_rifiutati() {
 
 #[test]
 fn il_contratto_rifiuta_un_encoding_incoerente_coi_metadati() {
-    // Il contratto dichiara `wkb`, la colonna dichiara `ewkb`: prima l'errore
-    // arrivava a meta' esecuzione, dopo aver aperto gli input.
+    // Il contratto dichiara `wkb`, la colonna dichiara `ewkb`: senza il
+    // controllo di coerenza l'errore arriva a meta' esecuzione, dopo aver
+    // aperto gli input.
     let mut metadata = HashMap::new();
     metadata.insert(
         plenora_core::contract::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
@@ -256,8 +258,9 @@ fn il_contratto_rifiuta_dimensioni_incoerenti_coi_metadati() {
 
 #[test]
 fn la_fusione_dei_report_non_migliora_la_conoscenza() {
-    // `Unknown` che riceve `Partial` diventava `Partial`: la fusione
-    // MIGLIORAVA l'informazione, e il risultato dipendeva dall'ordine.
+    // `Unknown` che ricevesse `Partial` diventando `Partial` MIGLIOREREBBE
+    // l'informazione con la fusione, e il risultato dipenderebbe
+    // dall'ordine.
     let base = |completeness| RowDiagnostics {
         contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
         scope: RowDiagnosticScope::Read,
@@ -320,7 +323,7 @@ fn la_fusione_dei_report_non_migliora_la_conoscenza() {
 }
 
 // ---------------------------------------------------------------------------
-// Terzo giro, finding 15 — `into_partial` unisce i limiti, non li sostituisce
+// `into_partial` unisce i limiti, non li sostituisce
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -359,14 +362,14 @@ fn il_declassamento_a_parziale_non_cancella_i_limiti_gia_noti() {
 }
 
 // ---------------------------------------------------------------------------
-// Terzo giro, finding 11 — `-0.0` non collassa su `0` nel piano canonico
+// `-0.0` non collassa su `0` nel piano canonico
 // ---------------------------------------------------------------------------
 
 #[test]
 fn lo_zero_negativo_resta_distinto_dallo_zero_nel_piano_canonico() {
     // `-0.0 == 0.0` e `(-0.0).trunc() == -0.0`: la scorciatoia «se e' intero
-    // emettilo come intero» trasformava `-0.0` in `0`, e due piani con segni
-    // diversi ottenevano lo stesso `plan_hash`. Il segno e' osservabile
+    // emettilo come intero» trasforma `-0.0` in `0`, e due piani con segni
+    // diversi ottengono lo stesso `plan_hash`. Il segno e' osservabile
     // (divisione, atan2, formattazione): non e' un dettaglio da normalizzare.
     let negativo = PlanV5::parse_default(&plan_with("-0.0"))
         .expect("piano")
@@ -378,7 +381,7 @@ fn lo_zero_negativo_resta_distinto_dallo_zero_nel_piano_canonico() {
 }
 
 // ---------------------------------------------------------------------------
-// Terzo giro, finding 12 — una chiave canonica PRESENTE dev'essere valida
+// Una chiave canonica PRESENTE dev'essere valida
 // anche quando il contratto non dichiara il lato tipizzato
 // ---------------------------------------------------------------------------
 
@@ -399,9 +402,9 @@ fn contract_with_metadata(pairs: &[(&str, &str)]) -> DataContract {
 
 #[test]
 fn le_chiavi_canoniche_malformate_sono_rifiutate_anche_senza_lato_tipizzato() {
-    // `geometry("geom")` NON dichiara l'encoding e NON dichiara i tipi: prima
-    // il controllo si limitava ai casi in cui entrambe le fonti parlavano, e
-    // una chiave presente ma illeggibile passava indisturbata. «Assente» e
+    // `geometry("geom")` NON dichiara l'encoding e NON dichiara i tipi: un
+    // controllo limitato ai casi in cui entrambe le fonti parlano lascia
+    // passare indisturbata una chiave presente ma illeggibile. «Assente» e
     // «presente ma malformata» sono stati diversi.
     let casi: [(&str, &str, &str); 4] = [
         (
@@ -469,13 +472,14 @@ fn le_chiavi_canoniche_malformate_sono_rifiutate_anche_senza_lato_tipizzato() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding 15 — allocazione dei FieldId fallibile
+// Allocazione dei FieldId fallibile
 // ---------------------------------------------------------------------------
 
 #[test]
 fn l_allocatore_dei_field_id_fallisce_invece_di_ripetere_l_ultimo() {
-    // Con l'incremento saturante, a fondo scala l'allocatore restituiva
-    // ripetutamente lo stesso id: due colonne diverse con la stessa identita'.
+    // Con un incremento saturante, a fondo scala l'allocatore renderebbe
+    // ripetutamente lo stesso id: due colonne diverse con la stessa
+    // identita'.
     let mut allocator = FieldAllocator::new(u32::MAX - 1);
     assert_eq!(
         allocator.alloc().expect("ultimo id disponibile"),
@@ -489,7 +493,7 @@ fn l_allocatore_dei_field_id_fallisce_invece_di_ripetere_l_ultimo() {
 }
 
 // ---------------------------------------------------------------------------
-// Quarto giro — profilo stretto degli input (contratto obbligatorio)
+// Profilo stretto degli input (contratto obbligatorio)
 // ---------------------------------------------------------------------------
 
 #[test]

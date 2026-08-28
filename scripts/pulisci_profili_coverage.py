@@ -15,9 +15,9 @@ su **stderr**:
 e ogni test che pretende stderr vuoto — cioe' i golden di canale della CLI —
 fallisce per una ragione che non ha niente a che vedere con il codice.
 
-Non e' teoria. Il 2026-08-21, con 6 770 `.profraw` accumulati in `target-cov`,
-due campagne consecutive sono fallite (4 e 3 test); dopo la pulizia, zero
-errori LLVM e coverage sopra tutte le soglie. Su una macchina di sviluppo la
+Non e' teoria: con qualche migliaio di `.profraw` accumulati in `target-cov`
+campagne consecutive falliscono, e dopo la pulizia gli errori LLVM spariscono
+e la coverage torna sopra tutte le soglie. Su una macchina di sviluppo la
 directory si riempie in poche decine di esecuzioni; in CI la stessa cosa
 succede piu' lentamente, perche' `target-cov` **e' in cache** e la cache si
 conserva finche' non cambia `Cargo.lock`.

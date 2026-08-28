@@ -123,8 +123,7 @@ doc = false
 bench = false
 
 # ---------------------------------------------------------------------------
-# Nuovi target (Fase 2A: plan v4, analyze_contract, differenziale fast path,
-# executor DAG).
+# Piano v4, analyze_contract, differenziale fast path, executor DAG.
 # ---------------------------------------------------------------------------
 
 [[bin]]
@@ -163,7 +162,7 @@ doc = false
 bench = false
 
 # ---------------------------------------------------------------------------
-# Fase 4: protocollo supervisore/worker.
+# Protocollo supervisore/worker.
 # ---------------------------------------------------------------------------
 
 [[bin]]

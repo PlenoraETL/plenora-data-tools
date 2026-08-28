@@ -1,10 +1,10 @@
-//! Smoke test di Fase 1 per la CLI unificata: round-trip manuali dei comandi
+//! Smoke test della CLI: round-trip manuali dei comandi
 //! `run` (pipeline tabellare) e `transform`/`transform-arrow` (trasporti geo
 //! v2/v3), piu' i comandi informativi `catalog` e `validate`.
 //!
 //! I test geo richiedono la risoluzione CRS PROJ: sono compilati solo con la
 //! feature `proj-backend` (es. `cargo test -p plenora-cli --features
-//! full-backends`). I test end-to-end avversari arrivano con la fase 1e.
+//! full-backends`).
 
 #[cfg(feature = "proj-backend")]
 use std::collections::HashMap;

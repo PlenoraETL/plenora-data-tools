@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.join`, `table.semi_join` e
-//! `table.anti_join` (filone ottimizzazioni kernel, terzo batch).
+//! `table.anti_join`.
 //!
 //! Fixture deterministica (seed logico 42, LCG): tabella sinistra con chiave
 //! `k` (Int64/UInt64/Float64/Utf8 a seconda dello scenario) piu' payload

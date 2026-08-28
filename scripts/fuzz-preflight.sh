@@ -26,9 +26,9 @@ fuzz_preflight() {
 
     # 1. Il daemon, e per primo. `docker image inspect` fallisce allo stesso
     #    modo se l'immagine non c'e' e se il daemon non risponde: senza questo
-    #    controllo, un Docker Desktop spento veniva riportato come «immagine
-    #    mancante», e la diagnosi mandava a ricostruire un'immagine che c'era
-    #    gia'. Una causa falsa e' peggio di nessuna causa.
+    #    controllo un Docker Desktop spento verrebbe riportato come «immagine
+    #    mancante», e la diagnosi manderebbe a ricostruire un'immagine che
+    #    c'e' gia'. Una causa falsa e' peggio di nessuna causa.
     if ! docker info >/dev/null 2>&1; then
         echo "ERRORE: il daemon Docker non risponde." >&2
         echo "        Non e' un problema di immagine ne' di binario: nessuno" >&2

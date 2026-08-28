@@ -1,5 +1,4 @@
-//! Benchmark autonomo per il kernel `table.string_extract` (ultimo batch del
-//! filone ottimizzazioni kernel).
+//! Benchmark autonomo per il kernel `table.string_extract`.
 //!
 //! Fixture deterministica (seed 42, xorshift64): colonna `code` utf8 con
 //! codici tipo `LO2244_FV01_II01_GEO001` (una riga ogni 97 nulla, una ogni 89

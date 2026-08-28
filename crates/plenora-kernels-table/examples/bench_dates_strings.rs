@@ -1,7 +1,6 @@
 //! Benchmark autonomo per i kernel data (`table.date_format`, `table.date_add`,
 //! `table.date_diff`, `table.date_extract`, `table.timezone_convert`) e per
-//! `table.text_normalize` (secondo batch del filone ottimizzazioni kernel,
-//! Fase post-2A).
+//! `table.text_normalize`.
 //!
 //! Fixture deterministica (seed logico 42): `ts`/`ts2` utf8 con datetime
 //! `%Y-%m-%d %H:%M:%S` distribuiti su anni 2000-2025, `text` utf8 con case

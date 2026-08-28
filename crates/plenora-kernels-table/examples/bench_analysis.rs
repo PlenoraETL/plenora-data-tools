@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.statistics` e `table.flatten_json`
-//! (filone ottimizzazioni kernel, batch analysis).
+//! del motore tabellare.
 //!
 //! Fixture deterministiche identiche a `bench_sweep` (seed logico 42,
 //! xorshift64, stesso ordine di draw), cosi' i numeri sono confrontabili

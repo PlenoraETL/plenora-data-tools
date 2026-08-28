@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.filter` e `table.sort`
-//! (filone ottimizzazioni kernel, Fase post-2A).
+//! del motore tabellare.
 //!
 //! Fixture deterministica (seed logico 42): stessa forma di
 //! `benchmarks/baseline/harness` — `id` int64, `num` float64 (0..9999),

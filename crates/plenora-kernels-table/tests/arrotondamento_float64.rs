@@ -317,8 +317,8 @@ fn testo_non_numerico_e_tipo_non_convertibile_restano_errori_di_schema() {
 
 /// Confronto differenziale, **secondario**: gli attesi qui sopra non vengono
 /// da qui. Serve a dire che il percorso veloce (Int64/UInt64 nativi) e quello
-/// generico dello stesso accessore rispondono la stessa cosa, cosa che prima
-/// della correzione non era vera oltre 2^53.
+/// generico dello stesso accessore rispondono la stessa cosa, che oltre
+/// 2^53 non e' affatto scontato.
 #[test]
 fn il_percorso_veloce_e_quello_generico_concordano() {
     use plenora_kernels_table::scalar_as_f64_rounded;

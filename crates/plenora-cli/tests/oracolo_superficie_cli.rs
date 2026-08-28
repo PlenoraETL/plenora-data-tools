@@ -77,9 +77,9 @@ const ORACOLO_PATH: &str = concat!(
 /// che sono il contratto verso chi automatizza.
 const INVOCAZIONI: &[&[&str]] = &[
     // Superficie di aiuto. La forma per comando e' `<comando> --help`, non
-    // `help <comando>`: la prima stesura di questo oracolo usava la seconda e
-    // catturava dodici volte lo stesso envelope di comando sconosciuto, cioe'
-    // sorvegliava il nulla credendo di sorvegliare l'aiuto.
+    // `help <comando>`: con la seconda forma si catturerebbe dodici volte lo
+    // stesso envelope di comando sconosciuto, cioe' si sorveglierebbe il
+    // nulla credendo di sorvegliare l'aiuto.
     &[],
     &["--help"],
     &["-h"],
@@ -289,7 +289,7 @@ fn i_valori_attesi_sono_distinti() {
 /// Andata e ritorno: dal testo osservato al modello e viceversa.
 ///
 /// E' la proprieta' che rende la rigenerazione indipendente dalle feature —
-/// quella la cui assenza aveva reso rosso il CI.
+/// quella la cui assenza rende rosso il gate.
 #[test]
 fn il_modello_non_dipende_dalle_feature_usate_per_generarlo() {
     let osservato = oracolo_content();

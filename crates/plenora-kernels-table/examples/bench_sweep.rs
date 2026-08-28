@@ -1,5 +1,5 @@
 //! Sweep prestazionale dei kernel tabellari NON ancora ottimizzati
-//! (filone ottimizzazioni kernel, Fase post-2A): 42 op `table.*` del
+//! del motore tabellare: le op `table.*` del
 //! catalogo escluse quelle gia' ottimizzate (filter, sort, `fill_na`,
 //! coalesce, `type_cast`, aggregate, `date_add`, `date_diff`, `date_format`,
 //! `timezone_convert`, `date_extract`, `text_normalize`, join, `semi_join`,

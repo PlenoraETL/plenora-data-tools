@@ -10,8 +10,8 @@
 //! Warm-up fuori dalla misura, un `Instant::now()` per ripetizione, mediana
 //! all'indice `len / 2`, `black_box` sull'uscita: sono le convenzioni che
 //! rendono confrontabili le righe di baseline gia' raccolte. Stanno in
-//! [`cronometra`] perche' erano identiche in tutti i file, non per
-//! uniformarle adesso.
+//! [`cronometra`] perche' sono le stesse in tutti i file: il modulo le
+//! raccoglie, non le uniforma.
 //!
 //! # Tre uscite, non una
 //!
@@ -146,9 +146,9 @@ pub struct Measurement {
 /// Come [`measure`], e rende la misura a chi la riepiloga.
 ///
 /// Le due letture di `/proc` — una per il JSON, una per il valore reso —
-/// sono quelle che questi benchmark facevano gia': `VmHWM` e' monotono,
-/// quindi la seconda non puo' essere minore, e cambiarle sarebbe un cambio di
-/// comportamento travestito da riordino.
+/// sono quelle su cui poggiano le righe di baseline: `VmHWM` e' monotono,
+/// quindi la seconda non puo' essere minore, e ridurle a una sarebbe un
+/// cambio di comportamento travestito da riordino.
 pub fn measure_record(
     op: &'static str,
     rows: usize,

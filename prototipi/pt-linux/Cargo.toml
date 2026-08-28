@@ -5,7 +5,8 @@ edition = "2021"
 rust-version = "1.98"
 publish = false
 
-# Prototipo bloccante della fase 4 (docs/prototipi-isolamento.md). NON e' un
+# Prototipo bloccante dell'esecuzione isolata (docs/prototipi-isolamento.md).
+# NON e' un
 # membro del workspace: non e' codice di produzione, non e' coperto dai gate e
 # non deve essere promosso senza una PR propria.
 [workspace]

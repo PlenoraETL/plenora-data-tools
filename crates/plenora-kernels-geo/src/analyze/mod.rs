@@ -1066,7 +1066,8 @@ mod tests {
                         )
                     }
                     Ok(_) => panic!(
-                        "{}: input {dimensions} accettato: xy silenzioso (B1.3 violata)",
+                        "{}: input {dimensions} accettato: la dimensionalita' non \
+                         xy passa in silenzio come xy",
                         case.op
                     ),
                 }
@@ -1585,7 +1586,7 @@ mod tests {
         assert_eq!(
             crate::arrow_adapter::geometry_encoding_from_metadata(field),
             Some(GeometryEncoding::Ewkb),
-            "metadato riscritto coerente col contratto (B1.4)"
+            "metadato riscritto coerente col contratto"
         );
         assert_eq!(
             crate::arrow_adapter::geometry_dimensions_from_metadata(field),

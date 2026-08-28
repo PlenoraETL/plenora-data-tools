@@ -117,10 +117,10 @@ fn la_politica_sanitized_pubblica_la_forma_ma_non_il_contenuto() {
 
 #[test]
 fn la_politica_non_sopravvive_a_un_set_hook_di_terze_parti() {
-    // Nono giro, finding 4. Il modulo dichiarava che «nessuno puo'
-    // riabilitare la pubblicazione del payload». Falso: `Once` impedisce solo
-    // una seconda chiamata a `install`, e `std::panic::set_hook` resta
-    // pubblico per chiunque.
+    // La politica NON e' inamovibile: `Once` impedisce solo una seconda
+    // chiamata a `install`, e `std::panic::set_hook` resta pubblico per
+    // chiunque, quindi un hook di terze parti installato dopo il nostro
+    // puo' ripubblicare il payload.
     //
     // Il test rende il limite ESEGUIBILE invece che dichiarato: se un domani
     // qualcuno credesse di aver reso l'hook inamovibile, questo test glielo
