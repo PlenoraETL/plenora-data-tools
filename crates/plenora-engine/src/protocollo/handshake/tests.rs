@@ -504,8 +504,8 @@ fn incarico() -> Frame {
 /// Un `Incarico` prima dell'accordo e' rifiutato **col suo nome**.
 ///
 /// Non «messaggio inatteso»: e' il caso che il perimetro nomina, e chiamarlo
-/// cosi' dice a chi legge che l'handshake non era concluso, non che il
-/// messaggio fosse malformato.
+/// cosi' dice a chi legge che l'handshake non e' concluso, non che il
+/// messaggio sia malformato.
 #[test]
 fn un_incarico_prima_dell_accordo_e_rifiutato() {
     let worker = WorkerInAttesa::nuovo(locale()).expect("coerente");
@@ -722,9 +722,9 @@ fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
 ///
 /// L'handshake confronta per uguaglianza, e la stringa vuota e' uguale alla
 /// stringa vuota: due lati che non dichiarano nulla concludono l'accordo
-/// avendo confrontato il nulla col nulla. Il tetto non lo impediva — una
-/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che dica
-/// non solo «quanto grande», ma «che ci sia».
+/// avendo confrontato il nulla col nulla. Il tetto non lo impedisce — una
+/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che
+/// dica non solo «quanto grande», ma «che ci sia».
 ///
 /// Si prova su **entrambi i lati**: il rifiuto della propria descrizione
 /// arriva alla costruzione, quello della descrizione ricevuta alla verifica.
@@ -817,8 +817,8 @@ fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
 ///
 /// Il frame consegnato all'accordato puo' non essere passato dal decoder: nel
 /// crate si costruisce con `Frame::nuovo`. Senza una verifica qui, un incarico
-/// con un `plan_hash_atteso` che non e' un digest usciva intatto, e a
-/// rifiutarlo sarebbe stato chi lo esegue — cioe' piu' tardi, e altrove.
+/// con un `plan_hash_atteso` che non e' un digest uscirebbe intatto, e a
+/// rifiutarlo sarebbe chi lo esegue — cioe' piu' tardi, e altrove.
 #[test]
 fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
     // I guasti sui digest non compaiono, e non per dimenticanza: dopo che i

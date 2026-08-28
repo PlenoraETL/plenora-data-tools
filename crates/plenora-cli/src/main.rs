@@ -1764,7 +1764,8 @@ mod tests {
     #[test]
     fn discovery_rejects_malformed_geo_metadata_never_treats_it_as_missing() {
         // R5.1: un metadato `geo` illeggibile non diventa «CRS assente» —
-        // «illeggibile» non e' «assente»: errore, come prima di R4.6.3.
+        // «illeggibile» non e' «assente»: e' un errore, e R4.6.3 non lo
+        // trasforma in un CRS mancante.
         let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
         let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(result.is_err(), "metadato geo malformato -> errore");

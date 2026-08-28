@@ -218,7 +218,7 @@ fn find_footer_block(bytes: &[u8]) -> usize {
 
 #[test]
 fn il_confine_rifiuta_un_footer_che_punta_fuori_dalla_regione_dati() {
-    // E' l'aggiramento che una scansione sequenziale non vedeva: i messaggi
+    // E' l'aggiramento che una scansione sequenziale non vede: i messaggi
     // fisici restano validi, ma `FileReader` non li percorre — salta agli
     // `offset` dei blocchi del footer. Spostando un blocco fuori dalla
     // regione dati, arrow leggerebbe byte che nessuno ha validato.

@@ -11,3 +11,6 @@ __pycache__/
 
 # Scratch di lavoro degli agenti: mai committato.
 /.agent-temp/
+# Impostazioni personali degli strumenti locali: stanno sulla macchina di
+# chi le sceglie, non nella revisione.
+/.claude/

@@ -91,6 +91,11 @@ python scripts/verifica_assenza_assert.py
 # gate pin delle action (bloccante): ogni `uses:` dei workflow riferisce una
 # SHA completa con il commento della versione. Tag e rami sono mobili.
 python scripts/verifica_pin_workflow.py
+# gate commenti (bloccante): i commenti dicono il presente. Niente marcatori
+# anonimi, tappe, giri di review, stesure precedenti o difetti raccontati
+# all'imperfetto; la spiegazione tecnica resta, al controfattuale presente.
+# Le date passano solo dove fissano un pin o un atto normativo.
+python scripts/verifica_commenti.py
 # gate di coverage (soglie identiche alla CI: lines 90/functions 85/regions 89)
 scripts/coverage.sh
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:

@@ -350,7 +350,7 @@ impl std::str::FromStr for GeometryType {
 /// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
 /// chiave canonica `plenora.geometry.types_declaration`).
 ///
-/// Tre stati che la 1.x confondeva in `unknown`:
+/// Tre stati che nella 1.x collassano in `unknown`:
 ///
 /// - `Exact`: l'insieme dei tipi presenti e' noto ed e' quello elencato;
 /// - `Mixed`: la colonna ammette tipi diversi PER DICHIARAZIONE (es. una

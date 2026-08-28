@@ -84,7 +84,7 @@ pub mod migrazione_v4;
 /// esplicita ([`migrazione_v4`]).
 pub const PLAN_SCHEMA_VERSION_V5: u16 = 5;
 
-/// Versione precedente, accettata **solo** dalla migrazione.
+/// La v4, accettata **solo** dalla migrazione.
 pub const PLAN_SCHEMA_VERSION_V4: u16 = 4;
 
 /// Versione del formato che introduce `max_domain_memory_bytes`
@@ -198,9 +198,9 @@ impl LimitsOverride {
     ///
     /// La policy di parsing e' l'unica che esista davvero come argomento:
     /// `PlanV5::parse` la riceve dal chiamante, e un documento che la alzasse
-    /// deciderebbe da se' quanto puo' costare interpretarlo. `apply_to`
-    /// sostituiva i valori e basta, quindi la sotto-sezione `plan` poteva
-    /// ampliarla.
+    /// deciderebbe da se' quanto puo' costare interpretarlo: un `apply_to`
+    /// che sostituisse i valori e basta lascerebbe alla sotto-sezione `plan`
+    /// il modo di ampliarla.
     ///
     /// Sui limiti **dati/runtime** non c'e' invece alcuna policy da
     /// restringere: la base e' [`Limits::default`], cioe' il valore che vale

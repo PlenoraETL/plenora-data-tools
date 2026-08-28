@@ -389,7 +389,7 @@ impl ValidatedGraph {
     /// Versione del formato **canonico** di questo grafo: `5` o `6`.
     ///
     /// Per un piano v4 vale `5`: la v4 e' migrata nel canonico v5 e ne
-    /// condivide l'identita'. Diceva «(4)» — un numero che nessun grafo
+    /// condivide l'identita'. Non «(4)»: e' un numero che nessun grafo
     /// validato porta.
     #[must_use]
     pub const fn plan_format_version(&self) -> u16 {
@@ -862,7 +862,7 @@ pub fn check_input_compatibility(
         // Il contratto fornito va validato PRIMA di confrontarne il
         // fingerprint: un contratto strutturalmente invalido — geometria non
         // Binary, nomi di campo ripetuti, tipi incoerenti coi metadati — ha
-        // comunque un fingerprint, e senza questo passo poteva superare il
+        // comunque un fingerprint, e senza questo passo supererebbe il
         // controllo di compatibilita' per poi fallire a runtime.
         contract
             .validate()

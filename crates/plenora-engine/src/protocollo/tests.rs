@@ -1967,7 +1967,7 @@ fn ogni_tipo_ha_una_sola_direzione() {
 /// «unknown field `…`» — e su questo canale quel valore lo sceglie l'altro
 /// capo. Un frame malformato ad arte sarebbe un modo di far scrivere testo
 /// arbitrario nel log di chi indaga; e poiche' il `Saluto` porta il
-/// `commit_token`, il testo arbitrario poteva essere il token.
+/// `commit_token`, il testo arbitrario potrebbe essere il token.
 ///
 /// Cio' che resta e' dove, non che cosa: categoria, riga e colonna. Chi indaga
 /// ha il frame in mano.
@@ -1977,7 +1977,7 @@ fn nessun_errore_del_decoder_riporta_cio_che_ha_letto() {
     const NUMERICA: &str = "8675309124816324";
 
     let casi = [
-        // Valore di tipo sbagliato: il valore finiva in `Unexpected::Str`.
+        // Valore di tipo sbagliato: il valore finirebbe in `Unexpected::Str`.
         format!(
             r#"{{"protocol_version":"{SENTINELLA}","tipo":"annulla","corpo":{{"motivo":"x"}}}}"#
         ),

@@ -557,7 +557,7 @@ pub(super) fn run_binary_blocking(
     // segmento binario emette un solo batch, quindi non esiste
     // necessariamente un confine successivo dove un heartbeat fermo da
     // troppo tempo diventerebbe un errore. Senza questo controllo l'output
-    // poteva essere pubblicato con il lock ormai stantio.
+    // potrebbe essere pubblicato con il lock ormai stantio.
     state.verifica_heartbeat()?;
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().ok_or_else(|| {

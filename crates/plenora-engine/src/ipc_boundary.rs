@@ -36,8 +36,8 @@
 //! time-of-use: fra i due c'e' una finestra. Il confine la restringe usando
 //! un solo handle aperto una volta ([`validated_handle`] restituisce il file
 //! riavvolto, mai il percorso), il che esclude la sostituzione del path —
-//! rename, symlink swap, ricreazione — ma non uno scrittore concorrente che
-//! riscriva lo stesso inode. In quel caso resta attiva la barriera
+//! rename, symlink swap, ricreazione — ma non uno scrittore concorrente sullo
+//! stesso inode. In quel caso resta attiva la barriera
 //! anti-panico e decade il tetto sulle allocazioni, che vale solo sui byte
 //! effettivamente controllati. La condizione e' dichiarata in errori-e-limiti.md#limiti-dichiarati
 //! (`docs/errori-e-limiti.md`) con il requisito operativo corrispondente.

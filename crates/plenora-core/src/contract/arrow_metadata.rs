@@ -582,7 +582,7 @@ pub fn canonical_geometry_metadata(
             definition_format,
         } => {
             // R4.6.4: le dichiarazioni originali sono ri-emesse invariate —
-            // l'incoerenza arriva al bordo di scrittura com'era, mai persa
+            // l'incoerenza arriva al bordo di scrittura com'e', mai persa
             // e mai conciliata. `axis_order` e' emesso come per `resolved`
             // (obbligatorio per la tabella R2.2 quando `crs_id` o
             // `crs_definition` e' presente): qui NON c'e' un `ResolvedCrs`
@@ -729,8 +729,8 @@ fn insert_resolved_crs_keys(
 /// Blocco canonico R2.2 da una definizione CRS gia' risolta al bordo del
 /// produttore, senza un [`ResolvedCrs`].
 ///
-/// BLOCK-06 (decisione owner 2026-07-30 — parita' del percorso legacy col
-/// v4, errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
+/// BLOCK-06 (parita' del percorso legacy col v4,
+/// errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
 /// al livello comandi (risoluzione PROJ obbligatoria in `publish.rs`) e
 /// trasporta la sola definizione; un `ResolvedCrs` richiederebbe una
 /// risoluzione che il trasporto non esegue.

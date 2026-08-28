@@ -297,7 +297,8 @@ mod tests {
                     Some(1),
                     Some(20_000),
                 ])),
-                // 1970-01-04 05:01:01.007 UTC, epoca, pre-1970, 2023-11-14.
+                // 1970-01-04 05:01:01.007 UTC, epoca, pre-1970,
+                // 2023-11-14 UTC.
                 Arc::new(TimestampMillisecondArray::from(vec![
                     Some(86_400_000 * 3 + 3_600_000 * 5 + 61_000 + 7),
                     None,
@@ -889,7 +890,7 @@ mod tests {
     #[test]
     fn date_trunc_valori_e_tipi_nativi() {
         let batch = fixture();
-        // Date32: year/month sul 2022-01-08 (19000) -> 2022-01-01 (18993).
+        // Date32: year/month sul 2022-01-08 = 19000 -> 2022-01-01 = 18993.
         let cfg = config(func("date_trunc", vec![lit(json!("year")), col("d")]), None);
         let output = expression(&batch, &cfg).expect("date_trunc year");
         let values = output

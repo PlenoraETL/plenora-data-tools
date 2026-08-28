@@ -184,7 +184,7 @@ pub(super) fn run_streaming_chain(
     // potrebbe pubblicare.
     //
     // **Nessun ripiego su una nuova prenotazione.** Un ritaglio fallito
-    // significa che il maggiorante era sbagliato, cioe' un'invariante nostra
+    // significa che il maggiorante e' sbagliato, cioe' un'invariante nostra
     // rotta: rilasciare e riprenotare la nasconderebbe e reintrodurrebbe
     // proprio la finestra che il permesso esiste per chiudere. Si propaga
     // l'errore.

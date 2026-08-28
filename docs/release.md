@@ -3,7 +3,7 @@
 ## Gate
 
 Nessuno di questi è facoltativo. La CI li esegue tutti a ogni PR e a ogni push
-su `main`: **quindici job**, e un rosso qualsiasi ferma il rilascio.
+su `main`: **sedici job**, e un rosso qualsiasi ferma il rilascio.
 
 | gate | comando |
 |---|---|
@@ -12,6 +12,7 @@ su `main`: **quindici job**, e un rosso qualsiasi ferma il rilascio.
 | **anti-panico (R6)** | `cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable -D clippy::todo -D clippy::unimplemented` |
 | **assert nel codice di produzione** | `python scripts/verifica_assenza_assert.py` |
 | **pin delle action** | `python scripts/verifica_pin_workflow.py` |
+| **commenti al presente** | `python scripts/verifica_commenti.py` |
 | lint | `cargo clippy --workspace --all-targets --locked` |
 | backend nativi | gli stessi, con `--features full-backends`, solo Linux |
 | coverage | `cargo llvm-cov report --fail-under-lines 90 --fail-under-functions 85 --fail-under-regions 89` |

@@ -147,7 +147,7 @@ pub enum ClasseEvidenzaMemoria {
     Incoerente,
     /// Tutti e quattro osservati e positivi: l'unica riga che attribuisce.
     Attribuita,
-    /// Tutti e quattro `Some(0)`: letto, e non c'era nulla.
+    /// Tutti e quattro `Some(0)`: letto, e non c'e' nulla.
     Assente,
     /// Almeno una pressione **osservata**, prova insufficiente.
     NonAttribuita,
@@ -240,7 +240,7 @@ pub fn classifica_evidenza(evidenza: &EvidenzaDiLimite) -> ClasseEvidenzaMemoria
 /// Prima della quiescenza `esito_worker: None` sarebbe ambiguo fra «morto
 /// senza esito» e «sta ancora lavorando», e l'evidenza sarebbe una lettura
 /// parziale: il prototipo ha misurato un dominio in cui, al ritorno della
-/// `wait`, l'evidenza valeva zero e duecento millisecondi dopo valeva uno.
+/// `wait`, l'evidenza vale zero e duecento millisecondi dopo vale uno.
 ///
 /// I campi sono privati e si passa da [`Self::dopo_la_quiescenza`], cosi'
 /// chi costruisce questi fatti deve nominare la condizione sotto cui sono
@@ -344,7 +344,7 @@ pub enum EsitoClassificato {
 }
 
 impl EsitoClassificato {
-    /// L'evidenza raccolta, se c'era.
+    /// L'evidenza raccolta, se c'e'.
     pub fn evidenza(&self) -> Option<&EvidenzaDiLimite> {
         match self {
             Self::LimiteAttribuito(prova)

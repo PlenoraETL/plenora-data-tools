@@ -50,7 +50,7 @@
 //!   appartenga — e un token che non e' canonico non e' un token.
 //!
 //! Che il token sia **obbligatorio** e' una proprieta' del percorso isolato,
-//! non di questa funzione: qui si dice cosa c'e', non se doveva esserci.
+//! non di questa funzione: qui si dice cosa c'e', non se debba esserci.
 
 use std::io::Write;
 

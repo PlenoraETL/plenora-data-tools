@@ -13,7 +13,7 @@
 //! consumatore successivo lo riceve come `Replayed`: sa che sta guardando la
 //! ripetizione di un errore gia' accaduto, non un secondo guasto. Senza quella
 //! distinzione N consumatori produrrebbero N errori indistinguibili, e chi
-//! legge i log conterebbe N guasti dove ce n'era uno.
+//! legge i log conterebbe N guasti dove ce n'e' uno.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

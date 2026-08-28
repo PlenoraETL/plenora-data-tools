@@ -11,7 +11,7 @@
 //!
 //! L'asimmetria e' voluta: leggere e scrivere sono due responsabilita'
 //! diverse, e imporre la simmetria significherebbe o normalizzare in lettura
-//! (perdendo cio' che la sorgente dichiarava) o accettare l'ambiguita' in
+//! (perdendo cio' che la sorgente dichiara) o accettare l'ambiguita' in
 //! scrittura.
 //!
 //! # Perche' l'autorita' e' qui
@@ -242,7 +242,7 @@ pub fn contract_from_arrow_schema(
 ///
 /// [`PlenoraError::InvalidPlan`] se la dichiarazione e' contraddittoria:
 /// `crs_resolution` valorizzata senza alcuna rappresentazione, oppure una
-/// definizione che non si risolve dove il produttore la dichiarava risolta.
+/// definizione che non si risolve dove il produttore la dichiara risolta.
 pub fn contract_crs_from_keys(
     field_name: &str,
     geo_metadata: Option<&String>,
@@ -436,7 +436,7 @@ pub fn geometry_contract_from_field(
 // si emette la forma canonica e una divergenza preesistente e' un errore.
 //
 // L'asimmetria e' voluta. Renderle speculari costringerebbe a scegliere: o
-// normalizzare in lettura, perdendo cio' che la sorgente diceva, o accettare
+// normalizzare in lettura, perdendo cio' che la sorgente dice, o accettare
 // l'ambiguita' in scrittura, pubblicando uno schema che non dice quale delle
 // due versioni vale.
 // ---------------------------------------------------------------------------

@@ -184,9 +184,9 @@ DEFINIZIONE = re.compile(
     % (FAMIGLIE, FAMIGLIE), re.M)
 
 # Dove ogni famiglia si definisce. Un puntatore vive dove la cosa che
-# nomina e' descritta, non in un registro unico: `M3` e' una milestone
-# della roadmap. L'esempio eseguibile non ha un identificatore: un
-# puntatore che nessuno cita e' un archivio di una voce sola.
+# nomina e' descritta, non in un registro unico: `M3` sta nella roadmap.
+# L'esempio eseguibile non ha un identificatore: un puntatore che nessuno
+# cita e' un archivio di una voce sola.
 DOVE_SI_DEFINISCE = [
     'docs/architettura.md',
     'docs/stato-e-roadmap.md',

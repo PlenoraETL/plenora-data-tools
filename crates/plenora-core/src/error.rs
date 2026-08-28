@@ -114,7 +114,7 @@ pub enum FormaDegliAntenatiInvalida {
         MAX_ANTENATI_OSSERVATI
     )]
     TroppiLivelli {
-        /// Quanti ne erano stati dichiarati.
+        /// Quanti ne sono stati dichiarati.
         dichiarati: usize,
     },
     /// Una lettura in uno slot dichiarato inesistente.
@@ -136,7 +136,7 @@ pub enum FormaDegliAntenatiInvalida {
     /// a eccedere, qui sono le letture fornite.
     #[error("letture fornite: {fornite}, capacita': {}", MAX_ANTENATI_OSSERVATI)]
     TroppeLetture {
-        /// Quante ne erano state fornite.
+        /// Quante ne sono state fornite.
         fornite: usize,
     },
     /// Antenati oltre la capacita' senza che l'array sia pieno.
@@ -144,7 +144,7 @@ pub enum FormaDegliAntenatiInvalida {
     /// Se ne esistono altri oltre gli otto, allora gli otto ci sono tutti.
     #[error("dichiarati antenati oltre la capacita' con soli {livelli_presenti:?} livelli")]
     TroncamentoSenzaSaturazione {
-        /// Quanti livelli erano stati dichiarati presenti.
+        /// Quanti livelli sono stati dichiarati presenti.
         livelli_presenti: Option<usize>,
     },
 }
@@ -197,7 +197,7 @@ pub struct PressioneDegliAntenati {
     /// radice, cioe' affermerebbe che sopra non c'e' nessuno proprio quando
     /// non lo si sa.
     livelli_presenti: Option<usize>,
-    /// Antenati che esistevano **oltre** la capacita' del tipo.
+    /// Antenati esistenti **oltre** la capacita' del tipo.
     ///
     /// Diverso da zero significa che l'evidenza e' **troncata**: un antenato
     /// non osservato non e' un antenato senza pressione, e senza questo
@@ -522,7 +522,7 @@ impl core::fmt::Display for EvidenzaDiLimite {
     /// diagnostica dopo e dichiarata tale: chi legge il messaggio deve
     /// vedere la stessa separazione che vede chi legge il tipo.
     ///
-    /// `n/d` dove il contatore non era osservabile — mai `0`, che direbbe
+    /// `n/d` dove il contatore non e' osservabile — mai `0`, che direbbe
     /// un'altra cosa.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -644,12 +644,12 @@ pub enum PlenoraError {
     /// Una scadenza dichiarata e' passata senza che l'attesa si chiudesse.
     ///
     /// Non dice che l'altro capo sia morto: dice che non ha risposto entro
-    /// il tempo che gli era stato dato. Chi sceglie la scadenza deve
+    /// il tempo che gli e' stato dato. Chi sceglie la scadenza deve
     /// nominarla nel testo, altrimenti l'errore non e' diagnosticabile.
     #[error("timeout: {0}")]
     Timeout(String),
 
-    /// Lo stato osservato al commit non e' quello su cui la decisione era
+    /// Lo stato osservato al commit non e' quello su cui la decisione e'
     /// stata presa.
     ///
     /// Il caso concreto e' il no-clobber del publish: la destinazione e'
@@ -717,7 +717,7 @@ pub enum PlenoraError {
     UnattributedMemoryPressure {
         /// Dove e quando la pressione e' stata osservata. Strutturale.
         contesto: String,
-        /// Cio' che i contatori dicevano, e cio' che non dicevano.
+        /// Cio' che i contatori dicono, e cio' che non dicono.
         ///
         /// # Perche' in un `Box`
         ///
@@ -1372,7 +1372,7 @@ impl PlenoraError {
             // Tutte deterministiche o comunque non ritentabili in cieco.
             //
             // `Timeout` merita la giustificazione, perche' e' l'unica che
-            // *sembra* transitoria: il chiamante non sa se l'altro capo era
+            // *sembra* transitoria: il chiamante non sa se l'altro capo sia
             // lento o morto, e un ritentativo automatico su un worker che
             // sta ancora lavorando ne avvia un secondo accanto al primo. La
             // decisione di riprovare richiede di stabilire prima che il
@@ -1517,7 +1517,7 @@ impl PlenoraError {
     ///
     /// ```text
     ///     RowDiagnostics -> Tagged(Read) -> causa
-    ///     diventava
+    ///     diventerebbe
     ///     Tagged(Write) -> RowDiagnostics -> Tagged(Read) -> causa
     /// ```
     ///
@@ -1549,7 +1549,7 @@ impl PlenoraError {
     /// La forma canonica non e' una forma in piu': e' il contratto dichiarato
     /// poche righe sopra — primo tag vince, nessun annidamento — che senza
     /// l'attraversamento del wrapper non varrebbe appena c'e' un wrapper di
-    /// mezzo. La rottura di compatibilita' verso chi osservava una catena
+    /// mezzo. La rottura di compatibilita' verso chi osserva una catena
     /// annidata e' registrata in `docs/release.md`.
     ///
     /// **`RowDiagnostics` e' l'unico altro wrapper trasparente**: sono le

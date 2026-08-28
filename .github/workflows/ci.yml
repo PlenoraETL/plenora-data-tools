@@ -197,6 +197,41 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_target_fuzz.py
 
+  # Terzo gate sui sorgenti, e per la stessa ragione degli altri due in un job
+  # PROPRIO: un commento che racconta non deve nascondere un pin mobile.
+  #
+  # Guarda la PROSA di tutto il codice — commenti Rust, docstring Python,
+  # commenti di shell, YAML e TOML — e pretende che dica il presente: niente
+  # marcatori anonimi, tappe di campagna, `giro di review`, stesure
+  # precedenti o difetti raccontati all'imperfetto. La spiegazione tecnica resta e vale
+  # quanto il codice: va scritta al controfattuale presente.
+  #
+  # Non ha un elenco di deroghe per file: le uniche ammissioni sono leggibili
+  # nel testo stesso — una data che fissa un pin o un atto normativo, un
+  # artefatto immutabile citato per identificatore, un puntatore che il gate
+  # documentale definisce. Quelle definizioni le importa da
+  # `verifica_documentazione.py` invece di ricopiarle.
+  gate-commenti:
+    name: gate commenti al presente
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify candidate revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Gate commenti al presente
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_commenti.py
+
   # Backend nativi (GEOS static, PROJ bundled): i rami feature-gated di
   # reproject/make_valid e i test CLI proj-gated. Senza questo job quei
   # rami sarebbero verificati solo localmente: un lint pedantic su pair.rs

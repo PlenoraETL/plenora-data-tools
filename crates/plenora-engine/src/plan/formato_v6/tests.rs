@@ -313,7 +313,7 @@ fn il_documento_v6_fa_il_giro_completo() {
         "il campo della v6 sopravvive al giro"
     );
     // Un limite assente non compare, come nella v5: altrimenti il
-    // documento riscritto dichiarerebbe `null` dove l'originale taceva.
+    // documento riscritto dichiarerebbe `null` dove l'originale tace.
     let scarno: PlanV6 =
         serde_json::from_str(&piano(PLAN_SCHEMA_VERSION_V6, &json!({}))).expect("v6");
     let emesso = serde_json::to_value(&scarno).expect("valore");

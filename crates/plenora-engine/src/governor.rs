@@ -383,7 +383,7 @@ impl MemoryGovernor {
     ///
     /// Il permesso va **tenuto**: scartarlo lo rilascia immediatamente e la
     /// quota torna disponibile, che e' quasi sempre il contrario di quello
-    /// che chi lo ha chiesto voleva. Da qui `#[must_use]`.
+    /// che chi lo ha chiesto vuole. Da qui `#[must_use]`.
     ///
     /// # Errors
     ///

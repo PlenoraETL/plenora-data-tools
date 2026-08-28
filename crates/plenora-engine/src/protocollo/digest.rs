@@ -59,7 +59,7 @@ pub enum FormaDigestNonValida {
     ///
     /// Una variante sola dove il `commit_token` ne ha due: qui la maiuscola e
     /// la spazzatura portano alla stessa azione — riscrivere il campo — mentre
-    /// per il token la distinzione dice a chi legge che il valore poteva
+    /// per il token la distinzione dice a chi legge che il valore puo'
     /// essere giusto e la grafia no.
     NonEsadecimaleMinuscolo {
         /// Posizione, in byte dall'inizio.

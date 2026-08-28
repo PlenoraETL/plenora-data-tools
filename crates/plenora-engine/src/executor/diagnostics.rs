@@ -1,4 +1,4 @@
-//! Diagnostica di riga: dire QUALE riga, senza dire che cosa conteneva.
+//! Diagnostica di riga: dire QUALE riga, senza dire che cosa contiene.
 //!
 //! Quando un'operazione scarta righe, il chiamante ha diritto di sapere quante e
 //! quali — per indice, mai per contenuto. E' la stessa disciplina degli errori
@@ -10,7 +10,7 @@
 //!
 //! `RowDiagnosticsCompleteness` esiste perche' un elenco troncato che non dice
 //! di esserlo e' peggio di nessun elenco: chi lo legge conclude che le righe
-//! scartate erano quelle e basta.
+//! scartate sono quelle e basta.
 
 use std::rc::Rc;
 

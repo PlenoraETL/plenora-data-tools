@@ -596,7 +596,7 @@ fn evidenza_incoerente_o_indeterminata_non_diventa_da_verificare() {
 #[test]
 fn evidenza_assente_non_sovrascrive_l_esito_del_worker() {
     // La classe `Assente` NON e' un livello di precedenza: e' una lettura
-    // riuscita in cui non c'era nulla, quindi non contraddice il worker.
+    // riuscita in cui non c'e' nulla, quindi non contraddice il worker.
     // Farne un livello direbbe «difetto interno» ogni volta che il dominio e'
     // stato letto e stava bene.
     let esito = classifica(FattiDopoLaQuiescenza::dopo_la_quiescenza(

@@ -711,8 +711,8 @@ impl WorkerAccordato {
         };
         // La forma, per la stessa ragione del `Saluto` e della `Risposta`: il
         // frame puo' non essere passato dal decoder. Senza, un incarico con un
-        // `plan_hash_atteso` che non e' un digest usciva di qui intatto, e a
-        // rifiutarlo sarebbe stato chi lo esegue — cioe' dopo.
+        // `plan_hash_atteso` che non e' un digest uscirebbe di qui intatto, e
+        // a rifiutarlo sarebbe chi lo esegue — cioe' dopo.
         super::codifica::verifica_incarico(&incarico)?;
         Ok((*incarico, self.commit_token))
     }
