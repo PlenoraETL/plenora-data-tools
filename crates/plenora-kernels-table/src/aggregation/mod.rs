@@ -1,8 +1,7 @@
 //! Kernel di ordinamento, selezione, deduplicazione, aggregazione e
 //! funzioni finestra del motore tabellare.
 //!
-//! Split meccanico del modulo originario in sottomoduli (logica invariata,
-//! spostamenti verbatim):
+//! I sottomoduli e cio' che ciascuno possiede:
 //!
 //! - [`compare`]: confronto tipizzato tra celle condiviso da sort e spill;
 //! - [`sort`]: `table.sort`, `table.top_n`, `table.distinct`,
@@ -34,8 +33,8 @@ pub use window::{
 // ristretto qui — altrimenti un dettaglio interno diventa API.
 pub(crate) use window::{strategia, Strategia};
 
-// Simboli usati solo dai test-oracolo (`mod tests` li importa con
-// `use super::*`, come nel modulo originario).
+// Simboli usati solo dai test-oracolo, che li importano con
+// `use super::*`.
 #[cfg(test)]
 use crate::{
     column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
@@ -488,12 +487,14 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test-oracolo di `aggregate` (fast path, secondo batch ottimizzazioni):
-    // l'output deve essere byte-identico al percorso generico originale,
-    // copiato verbatim qui sotto come riferimento indipendente.
+    // Test-oracolo del fast path di `aggregate`: l'output dev'essere
+    // byte-identico a quello dell'implementazione di riferimento qui
+    // sotto, che non passa dal percorso ottimizzato.
     // -------------------------------------------------------------------
 
-    /// Copia verbatim dell'implementazione generica pre-ottimizzazione.
+    /// Oracolo del fast path: implementazione di riferimento indipendente
+    /// dello stesso contratto. Non passa dal percorso ottimizzato, cosi' una
+    /// sua deviazione resta osservabile.
     #[allow(clippy::too_many_lines)]
     fn aggregate_reference(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
         let group_indices = config
@@ -886,11 +887,11 @@ mod tests {
 
     #[test]
     fn quantile_fuori_range_rifiutato_prima_dei_dati() {
-        // Regressione (analisi 2026-07-28): quantile > 1.0 produceva un
-        // indice oltre il gruppo ordinato — panic out-of-bounds nel
-        // percorso lib, invisibile al gate R6 (indicizzazione, non
-        // primitiva esplicita) e mascherato dall'oracolo a specchio. Ora
-        // il range e' validato fail-closed prima di toccare i dati.
+        // Regressione: un quantile > 1.0 darebbe un indice oltre il gruppo
+        // ordinato — panic out-of-bounds nel percorso lib, invisibile al
+        // gate R6 perche' e' un'indicizzazione e non una primitiva
+        // esplicita. Il range e' validato fail-closed prima di toccare i
+        // dati.
         let batch = numeric_batch(&[Some(1.0), Some(2.0), Some(3.0)]);
         for quantile in [-0.5, 1.5, f64::NAN, f64::INFINITY] {
             let config = Aggregate {
@@ -1655,12 +1656,12 @@ mod tests {
 
     // -------------------------------------------------------------------
     // Test-oracolo di `distinct`/`dedup_advanced`/`window_function`/
-    // `rolling_window` (batch 4 ottimizzazioni): output byte-identico alle
-    // implementazioni pre-ottimizzazione, copiate verbatim qui sotto come
-    // riferimento indipendente.
+    // `rolling_window`: output byte-identico alle implementazioni di
+    // riferimento qui sotto, indipendenti dal percorso ottimizzato.
     // -------------------------------------------------------------------
 
-    /// Copia verbatim dell'implementazione pre-ottimizzazione di `distinct`.
+    /// Oracolo indipendente di `distinct`: stesso contratto, percorso
+    /// diverso.
     fn distinct_reference(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
         let indices = if config.subset.is_empty() {
             (0..batch.num_columns()).collect()
@@ -1696,8 +1697,8 @@ mod tests {
         select_rows(batch, &rows)
     }
 
-    /// Copia verbatim dell'implementazione pre-ottimizzazione di
-    /// `dedup_advanced` (delegava a `sort` + `distinct`).
+    /// Oracolo indipendente di `dedup_advanced`: compone `sort` e `distinct`
+    /// invece di attraversare il percorso ottimizzato dell'operazione.
     fn dedup_advanced_reference(
         batch: &RecordBatch,
         config: &DedupAdvanced,
@@ -1730,8 +1731,8 @@ mod tests {
         )
     }
 
-    /// Copia verbatim dell'implementazione pre-ottimizzazione di
-    /// `rolling_window` (finestra ricostruita in un `Vec` a ogni riga).
+    /// Oracolo indipendente di `rolling_window`: ricostruisce la finestra in
+    /// un `Vec` a ogni riga, invece di attraversare il percorso ottimizzato.
     fn rolling_window_reference(
         batch: &RecordBatch,
         config: &RollingWindow,
@@ -1825,8 +1826,9 @@ mod tests {
         )
     }
 
-    /// Copia verbatim dell'implementazione pre-ottimizzazione di
-    /// `window_function` (partizioni in `BTreeMap` su `Option<String>`).
+    /// Oracolo indipendente di `window_function`: partiziona in un
+    /// `BTreeMap` su `Option<String>`, invece di attraversare il percorso
+    /// ottimizzato.
     #[allow(clippy::too_many_lines)]
     fn window_function_reference(
         batch: &RecordBatch,
@@ -2539,9 +2541,9 @@ mod tests {
 
     #[test]
     fn sort_orders_i64_beyond_f64_precision_exactly() {
-        // Regressione (bug 6): 2^53 e 2^53+1 collassano sullo stesso double
-        // (9007199254740992): il vecchio confronto via f64 li considerava
-        // uguali e ricadeva sull'indice di riga, ordinando silenziosamente
+        // Regressione: 2^53 e 2^53+1 collassano sullo stesso double
+        // (9007199254740992), quindi un confronto via f64 li direbbe
+        // uguali e ricadrebbe sull'indice di riga, ordinando in silenzio
         // male. Il confronto nativo `i64::cmp` li distingue.
         let big: i64 = 1 << 53;
         let batch = RecordBatch::try_new(
@@ -2575,8 +2577,8 @@ mod tests {
 
     #[test]
     fn sort_and_top_n_order_u64_numerically() {
-        // Regressione (bug 7): UInt64 cadeva nel fallback testuale
-        // ("10" < "9"); il confronto nativo `u64::cmp` ordina numericamente.
+        // Regressione: senza confronto nativo UInt64 cade nel fallback
+        // testuale ("10" < "9"); `u64::cmp` ordina numericamente.
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, false),

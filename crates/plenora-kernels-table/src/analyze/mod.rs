@@ -1,5 +1,5 @@
-//! Inferenza a secco del `DataContract` di output per le 71 operazioni
-//! `table.*` del catalogo (Fase 2A-2, architettura.md e 6.1, architettura.md#planner-ed-executor).
+//! Inferenza a secco del `DataContract` di output per le operazioni
+//! `table.*` del catalogo (architettura.md e 6.1, architettura.md#planner-ed-executor).
 //!
 //! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
 //! (fail-closed: config non valida -> errore `InvalidPlan` puntuale), replica le
@@ -103,7 +103,7 @@ use self::strings::{
 };
 
 /// Inferisce il `DataContract` di output di un'operazione `table.*` a secco
-/// (Fase 1 `validate`, architettura.md passo 6).
+/// (in `validate`, architettura.md passo 6).
 ///
 /// `op` accetta id canonici e alias legacy (risolti via catalogo);
 /// `inputs` deve rispettare l'arieta' dichiarata dal catalogo (unaria,
@@ -459,7 +459,7 @@ mod tests {
     fn passthrough_preserves_geometry_dimensions_and_encoding() {
         use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 
-        // B1.3: le op tabellari sono passthrough byte-preserving — la
+        // Le op tabellari sono passthrough byte-preserving — la
         // dimensionalita' (anche `Unknown`, R3.4) e l'encoding del contratto
         // di input attraversano invariati filtri e rinomine; MAI un xy
         // silenzioso.
@@ -1826,9 +1826,9 @@ mod tests {
 
     #[test]
     fn expression_uses_declared_or_inferred_output_type() {
-        // Questo caso era ACCETTATO: una colonna Utf8 dichiarata booleana.
-        // Il runtime applica `boolean()`, che non converte, quindi ogni riga
-        // non nulla falliva. Il tipo dichiarato non e' un lasciapassare.
+        // Una colonna Utf8 dichiarata booleana non passa. Il runtime
+        // applica `boolean()`, che non converte, quindi ogni riga non nulla
+        // fallirebbe: il tipo dichiarato non e' un lasciapassare.
         let incompatibile = err(
             "table.expression",
             &[tabular_contract()],

@@ -230,7 +230,7 @@ pub(in crate::analyze) fn analyze_from_coords(
         field_id,
         name: name.to_owned(),
         crs: ContractCrs::Resolved(crs),
-        // Produttore (B1.3): `from_coords` costruisce punti XY — dichiara Xy.
+        // Produttore: `from_coords` costruisce punti XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: None,
         nullable: false,
@@ -328,7 +328,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
         field_id,
         name: name.to_owned(),
         crs: ContractCrs::Resolved(crs),
-        // Produttore (B1.3): il parser WKT decodifica in `Geometry<f64>` —
+        // Produttore: il parser WKT decodifica in `Geometry<f64>` —
         // dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: Some(GeometryEncoding::Wkb),
@@ -452,7 +452,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
         crs: ContractCrs::Resolved(crs),
-        // Produttore (B1.3): le celle griglia sono poligoni XY — dichiara Xy.
+        // Produttore: le celle griglia sono poligoni XY — dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: Some(GeometryEncoding::Wkb),
         nullable: false,

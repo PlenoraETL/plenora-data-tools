@@ -5,8 +5,7 @@
 //! `plenora_core::crs` ed e' qui riesportato. Questo modulo aggiunge:
 //! - il wrapper tipizzato su `geo::Geometry` per la validazione di dominio;
 //! - dietro la feature `proj-backend`, la risoluzione PROJ (`resolve_crs`)
-//!   contro il database bundled, portata verbatim dal sorgente
-//!   (`crs.rs` di plenora-geo-tools-arrow).
+//!   contro il database bundled.
 
 use geo::{CoordsIter, Geometry};
 pub use plenora_core::crs::{

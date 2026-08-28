@@ -164,7 +164,7 @@ fn parse_datetime(value: &str, explicit_format: Option<&str>) -> Option<NaiveDat
     None
 }
 
-// Fast path `date_extract` (secondo batch filone ottimizzazioni kernel):
+// Fast path `date_extract`:
 // formati chrono compilati una volta e loop sui `&str` nativi della colonna
 // Utf8; per gli altri tipi Arrow si ricade sul percorso generico.
 
@@ -426,7 +426,8 @@ mod tests {
 
     use super::*;
 
-    /// Percorso generico pre-ottimizzazione: riferimento per l'equivalenza
+    /// Percorso generico, indipendente dal fast path: riferimento per
+    /// l'equivalenza
     /// semantica (oracolo) del fast path di `date_extract`.
     fn generic_date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;

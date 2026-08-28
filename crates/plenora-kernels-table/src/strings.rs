@@ -156,9 +156,8 @@ pub struct StringExtract {
     pub extract_all: bool,
 }
 
-// Fast path `string_extract` (ultimo batch filone ottimizzazioni kernel): la
-// regex era gia' compilata una sola volta per chiamata; qui si eliminano i
-// costi per riga rimasti:
+// Fast path `string_extract`. La regex e' compilata una sola volta per
+// chiamata; qui si eliminano i costi che restano per riga:
 // - gruppi nominati: una sola ricerca per riga (prima una per gruppo) con
 //   `CaptureLocations` riusato, e scrittura delle slice direttamente negli
 //   `StringBuilder` senza `String` intermedie;
@@ -210,8 +209,8 @@ pub fn string_extract(
         .collect();
     if !named.is_empty() {
         // Validazione dei nomi in anticipo nello stesso ordine del percorso
-        // originale: la costruzione dei valori non puo' fallire, quindi il
-        // primo nome non valido produceva (e produce) lo stesso errore.
+        // generico: la costruzione dei valori non puo' fallire, quindi il
+        // primo nome non valido produce lo stesso errore nei due percorsi.
         for (_, name) in &named {
             validate_output_name(name)?;
         }
@@ -330,7 +329,7 @@ const fn default_true() -> bool {
     true
 }
 
-// Fast path `text_normalize` (secondo batch filone ottimizzazioni kernel):
+// Fast path `text_normalize`:
 // le regole di normalizzazione scrivono in un buffer riusato tra le righe,
 // senza allocazioni intermedie (niente `Vec<char>` per carattere in title
 // case, niente `Vec<&str>` + join nel collapse, passata unica nfkd + filtro
@@ -473,7 +472,8 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Implementazioni pre-ottimizzazione: riferimento per l'equivalenza
+    // Implementazioni generiche, indipendenti dai fast path: riferimento
+    // per l'equivalenza
     // semantica (oracolo) del fast path di `text_normalize`.
     // -----------------------------------------------------------------------
 
@@ -565,7 +565,8 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Implementazione pre-ottimizzazione di `string_extract`: riferimento per
+    // Implementazione di riferimento di `string_extract`, indipendente dal
+    // fast path: per
     // l'equivalenza semantica (oracolo) del fast path.
     // -----------------------------------------------------------------------
 

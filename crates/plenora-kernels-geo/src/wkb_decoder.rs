@@ -155,8 +155,8 @@ fn decode_geometry(
                 }
                 // Il primo anello e' l'esterno, i successivi gli interni.
                 // Mai `exterior.take()` nel discriminante: con un secondo
-                // anello scarterebbe il primo (bug trovato il 2026-07-29 —
-                // l'oracolo copriva solo poligoni a un anello).
+                // anello scarterebbe il primo, e un oracolo che si ferma ai
+                // poligoni a un anello solo non lo vedrebbe.
                 if exterior.is_none() {
                     exterior = Some(LineString::from(ring));
                 } else {
@@ -308,8 +308,8 @@ mod tests {
         payload
     }
 
-    /// Poligono con anelli interni (la parita' multi-anello e' la classe del
-    /// bug 2026-07-29: l'esterno andava perso con un secondo anello).
+    /// Poligono con anelli interni: e' la forma su cui un decoder che
+    /// gestisse un solo anello perderebbe l'esterno.
     fn polygon_with_interiors_wkb_le(
         exterior: &[(f64, f64)],
         interiors: &[&[(f64, f64)]],
@@ -397,8 +397,8 @@ mod tests {
             ]),
             "geometrycollection annidata",
         );
-        // Poligoni multi-anello (classe del bug 2026-07-29: l'oracolo
-        // copriva solo poligoni a un anello e l'esterno andava perso).
+        // Poligoni multi-anello: coprendo solo il caso a un anello,
+        // l'oracolo non vedrebbe un esterno perso.
         let exterior = [
             (0.0, 0.0),
             (10.0, 0.0),

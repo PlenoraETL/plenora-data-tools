@@ -76,8 +76,8 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
     // `KeyHasher` (FxHash+splitmix64, deterministico per costruzione) al
     // posto di SHA-256: la scelta della partizione non e' osservabile —
     // la correttezza richiede solo "stessa chiave -> stessa partizione"
-    // (il riordino canonico usa i byte di chiave, mai la partizione) e un
-    // hash crittografico per riga era il costo dominante dello spill.
+    // (il riordino canonico usa i byte di chiave, mai la partizione), e un
+    // hash crittografico per riga sarebbe il costo dominante dello spill.
     let mut hasher = KeyHasher::default();
     hasher.write(key);
     let divisor = partitions as u64;
@@ -187,8 +187,8 @@ fn read_record(
     // I tre errori qui sotto riguardano l'INTEGRITA' di un file temporaneo
     // scritto da noi: non sono limiti di risorsa (il chiamante non ha nulla
     // da rilanciare con piu' budget) ne' piani sbagliati. Sono un'invariante
-    // nostra violata, quindi `Internal`. Erano `InvalidPlan` per eredita';
-    // il giro precedente lo aveva dichiarato come residuo, questo lo chiude.
+    // nostra violata, quindi `Internal`: `InvalidPlan` manderebbe il
+    // chiamante a correggere un piano che non c'entra.
     let length = read_u64(reader)?
         .ok_or_else(|| PlenoraError::Internal("record spill senza lunghezza".into()))?;
     let length = usize::try_from(length)
@@ -405,7 +405,7 @@ pub fn execute_set_operation(
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato a righe complete (M2a Fase 2B, architettura.md#memoria "Spill
+// Spill generalizzato a righe complete (architettura.md#memoria "Spill
 // selettivo"): sort, distinct e hash aggregation.
 //
 // Formato su disco: Arrow IPC *stream* per partizione/run. Scelta rispetto a
@@ -498,8 +498,8 @@ pub struct RowSpillWorkspace {
     bytes_read: Rc<Cell<u64>>,
     /// Vero se un contatore ha raggiunto il fondo scala. Vive nello stato
     /// CONDIVISO perche' a saturare sono i writer e i reader conteggiati, non
-    /// il workspace: senza, `SpillMetrics::saturated` restava `false` mentre
-    /// `bytes_written` era gia' a `u64::MAX`.
+    /// il workspace. Tenendolo altrove, `SpillMetrics::saturated`
+    /// resterebbe `false` con `bytes_written` gia' a `u64::MAX`.
     ///
     /// Sono DUE stati distinti perche' hanno conseguenze diverse: la
     /// saturazione dei byte SCRITTI invalida la quota (`check_quota` non puo'
@@ -1305,9 +1305,9 @@ mod tests {
 
     #[test]
     fn i_contatori_dello_spill_dichiarano_la_saturazione_e_non_riaprono_la_quota() {
-        // Sesto giro, finding 9: i contatori sorgente saturavano in silenzio e
-        // `SpillMetrics::saturated` restava `false` — il flag introdotto per
-        // dichiarare la degradazione non lo diceva mai.
+        // I contatori sorgente possono saturare, e `SpillMetrics::saturated`
+        // deve dirlo: un flag che dichiara la degradazione e resta `false`
+        // e' peggio di nessun flag.
         let contatore = Rc::new(Cell::new(u64::MAX - 4));
         let saturo = Rc::new(Cell::new(false));
         accumula(&contatore, &saturo, 4);
@@ -1358,10 +1358,10 @@ mod tests {
 
     #[test]
     fn l_accumulo_delle_metriche_di_spill_dichiara_la_saturazione() {
-        // I contatori di spill saturavano in silenzio, quindi
-        // `ExecutionMetrics::counters_saturated` poteva restare `false` con
-        // `bytes_written` gia' a fondo scala: un flag che smentiva i numeri
-        // accanto a se'.
+        // I contatori di spill possono saturare, e `counters_saturated` di
+        // `ExecutionMetrics` deve dirlo: restando `false` con
+        // `bytes_written` gia' a fondo scala sarebbe un flag che smentisce i
+        // numeri accanto a se'.
         let mut totale = SpillMetrics::default();
         totale.accumulate(SpillMetrics {
             bytes_written: 10,
@@ -1475,7 +1475,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Oracoli memoria-vs-spill (M2a Fase 2B): input piccoli deterministici,
+    // Oracoli memoria-vs-spill: input piccoli deterministici,
     // output esattamente identico al percorso in memoria.
     // ------------------------------------------------------------------
 

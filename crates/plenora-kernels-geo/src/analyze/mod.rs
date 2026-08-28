@@ -1,5 +1,5 @@
 //! Inferenza a secco dei `DataContract` per le 75 operazioni `geo.*`
-//! (architettura.md e 6.1, architettura.md#planner-ed-executor — Fase 2A-2b).
+//! (architettura.md e 6.1, architettura.md#planner-ed-executor).
 //!
 //! [`analyze_geo_contract`] e' l'`analyze_contract` del catalogo per la
 //! famiglia geo: dato l'id dell'operazione, i contratti di input, la config
@@ -134,7 +134,7 @@
 //! senza feature `proj-backend` fallisce chiuso (`CRS_BACKEND_UNAVAILABLE`),
 //! come nel sorgente.
 //!
-//! # Dimensionalita' (B1.3)
+//! # Dimensionalita'
 //!
 //! Ogni kernel geo che consuma una geometria la decodifica in
 //! `geo::Geometry<f64>` (XY): l'analisi rifiuta a compile-plan
@@ -146,7 +146,7 @@
 //! contratto di output. Il trasporto byte-preserving delle dimensionalita'
 //! estese resta affidato alle op tabellari (passthrough).
 //!
-//! # Encoding (B1.4)
+//! # Encoding
 //!
 //! I writer dei metadati `geo` di output scrivono la chiave `encoding` solo
 //! quando il contratto la dichiara (`Some`) e la omettono con `None`
@@ -272,7 +272,7 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 /// colonna geometria attiva (v1); la colonna geometria non e' identificabile
 /// dal trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche,
 /// piano-v5.md#contratti-di-input decisione 8); la geometria di input non e' `Xy` per un kernel
-/// che la elabora (B1.3); il `crs_requirement` non e' soddisfatto;
+/// che la elabora; il `crs_requirement` non e' soddisfatto;
 /// la config non supera deserializzazione stretta o domini dei parametri;
 /// una colonna prodotta collide con una esistente; il CRS di output non e'
 /// risolvibile.
@@ -974,7 +974,7 @@ mod tests {
         assert_eq!(catalog_ops, case_ops);
     }
 
-    /// Come `geo_contract`, con la dimensionalita' dichiarata (fixture B1.3).
+    /// Come `geo_contract`, con la dimensionalita' dichiarata.
     fn geo_contract_with_dimensions(
         crs: ResolvedCrs,
         dimensions: GeometryDimensions,
@@ -986,7 +986,7 @@ mod tests {
 
     #[test]
     fn dimensions_propagation_table_for_all_catalog_geo_ops() {
-        // (a) B1.3: per OGNI op geo del catalogo, un input con dimensionalita'
+        // (a) per OGNI op geo del catalogo, un input con dimensionalita'
         // estesa o non risolta -> rifiuto esplicito a compile-plan (kernel
         // elaboranti) oppure Xy dichiarato dal produttore; MAI un xy
         // silenzioso. La tabella `cases()` copre tutte e sole le 75 op.
@@ -1015,7 +1015,7 @@ mod tests {
                     "{}: metadato output coerente col contratto",
                     case.op
                 );
-                // B1.4: il produttore ricodifica WKB ISO XY — nessun encoding
+                // Il produttore ricodifica WKB ISO XY — nessun encoding
                 // dichiarato, chiave omessa dal metadato.
                 assert_eq!(
                     crate::arrow_adapter::geometry_encoding_from_metadata(field),
@@ -1560,11 +1560,11 @@ mod tests {
 
     #[test]
     fn reprojection_preserves_a_declared_encoding_in_the_rewritten_metadata() {
-        // B1.4: un contratto con encoding dichiarato (EWKB puro-XY: type
+        // Un contratto con encoding dichiarato (EWKB puro-XY: type
         // code byte-identici a ISO, quindi ammesso dal gate `xy`) che
         // attraversa `reproject` conserva la chiave `encoding` nel metadato
-        // riscritto — coerenza contratto↔metadato. Prima di B1.4 il writer
-        // riscriveva solo `dimensions` e la chiave andava persa.
+        // riscritto — coerenza contratto↔metadato. Un writer che
+        // riscrivesse solo `dimensions` perderebbe la chiave.
         let mut input = geo_contract(geographic_crs());
         input.geometries[0].encoding = Some(GeometryEncoding::Ewkb);
         let plan = projected_crs();

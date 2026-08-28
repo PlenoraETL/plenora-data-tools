@@ -24,12 +24,12 @@ use super::sort::default_true;
 /// Cardinalita' di un gruppo come `i64`, in modo **fallibile**.
 ///
 /// La colonna `count` e' dichiarata non-nullable: convertire con
-/// `i64::try_from(..).ok()` trasformava un fallimento di conversione in un
-/// `null`, cioe' in una violazione silenziosa dello schema appena dichiarato.
-/// Il caso e' irraggiungibile sulle piattaforme correnti — non esiste un
-/// `Vec` con piu' di `i64::MAX` elementi — ma «irraggiungibile» non e' «esatto
-/// per costruzione», e la stessa forma era duplicata su due percorsi di
-/// aggregazione. Qui la conversione o riesce o produce un errore esplicito.
+/// `i64::try_from(..).ok()` trasformerebbe un fallimento di conversione in
+/// un `null`, cioe' in una violazione silenziosa dello schema appena
+/// dichiarato. Il caso e' irraggiungibile sulle piattaforme correnti — non
+/// esiste un `Vec` con piu' di `i64::MAX` elementi — ma «irraggiungibile»
+/// non e' «esatto per costruzione», e la stessa forma vive su due percorsi
+/// di aggregazione. Qui la conversione o riesce o produce un errore esplicito.
 ///
 /// # Errors
 ///

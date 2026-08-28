@@ -106,19 +106,19 @@ pub(in crate::analyze) fn short_id(op: &str) -> &str {
 ///
 /// # Perche' sui byte e non su `&str`
 ///
-/// La versione precedente affettava la stringa per indici di byte
-/// (`&hex[index..index + 2]`) dopo aver controllato che la LUNGHEZZA IN BYTE
-/// fosse pari. Le due cose non si implicano: `"a\u{e9}b"` e' lungo quattro
+/// Affettare la stringa per indici di byte (`&hex[index..index + 2]`) dopo
+/// aver controllato che la LUNGHEZZA IN BYTE sia pari non basta: le due cose
+/// non si implicano. `"a\u{e9}b"` e' lungo quattro
 /// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di `\u{e9}`,
 /// e affettare fuori da un confine di carattere e' un **panic**, non un
 /// errore. L'input arriva dalla configurazione di un piano, quindi da fuori.
 ///
 /// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
 /// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
-/// non lo copriva: non c'e' nessun `unwrap`/`expect`/`panic!`, il panic e'
-/// dentro l'indicizzazione.
+/// non copre questa classe: non c'e' nessun `unwrap`/`expect`/`panic!`, il
+/// panic e' dentro l'indicizzazione.
 ///
-/// Ora ogni byte e' esaminato per se': non ASCII o non esadecimale e' un
+/// Ogni byte e' quindi esaminato per se': non ASCII o non esadecimale e' un
 /// errore esplicito, mai un panic.
 ///
 /// # Errors
@@ -166,7 +166,7 @@ pub(in crate::analyze) fn single_geometry<'a>(
 /// Estensione `geoarrow.wkb` OPPURE sole chiavi canoniche
 /// (`plenora.geometry.*`), lo stesso criterio del trasporto
 /// ([`crate::arrow_adapter::field_declares_wkb_geometry`]). Il rifiuto vive
-/// QUI, in analisi del piano — il modello e' il rifiuto dimensionale B1.3 di
+/// QUI, in analisi del piano — lo stesso modello del rifiuto dimensionale di
 /// [`require_xy_dimensions`]: una colonna che il trasporto non saprebbe
 /// identificare e' fermata a compile-plan, mai scoperta a meta' esecuzione
 /// (architettura.md#geometrie).
@@ -346,8 +346,8 @@ pub(in crate::analyze) fn geometry_field(
 }
 
 /// Nuovo campo geometria con metadati di estensione `geoarrow.wkb` +
-/// `geo.crs` + `geo.dimensions` (B1.3: la dimensionalita' scritta e' quella
-/// del contratto di output, mai un `xy` silenzioso) + `geo.encoding` (B1.4:
+/// `geo.crs` + `geo.dimensions` (la dimensionalita' scritta e' quella
+/// del contratto di output, mai un `xy` silenzioso) + `geo.encoding` (
 /// la chiave e' scritta solo quando il contratto la dichiara — `Some` — e
 /// omessa con `None`: fingerprint e retrocompatibilita' invariati).
 pub(in crate::analyze) fn new_geometry_field(
@@ -370,8 +370,8 @@ pub(in crate::analyze) fn new_geometry_field(
 }
 
 /// Aggiorna il metadato `geo.crs` del campo geometria (solo `reproject`),
-/// preservando dimensionalita' ed encoding dichiarati dal contratto (B1.3 /
-/// B1.4: il metadato riscritto resta coerente col contratto — un encoding
+/// preservando dimensionalita' ed encoding dichiarati dal contratto (il
+/// metadato riscritto resta coerente col contratto — un encoding
 /// dichiarato non si perde attraversando il kernel).
 pub(in crate::analyze) fn set_geometry_crs(
     fields: &mut [Field],
@@ -399,7 +399,7 @@ pub(in crate::analyze) fn set_geometry_crs(
     )))
 }
 
-/// Rifiuto a compile-plan (B1.3) per i kernel geo che ELABORANO la geometria
+/// Rifiuto a compile-plan per i kernel geo che ELABORANO la geometria
 /// decodificandola in `geo::Geometry<f64>` (XY): ogni dimensionalita' diversa
 /// da `Xy` — Z/M dichiarate oppure `Unknown` (R3.4: mai mappata a Xy) — e'
 /// rifiutata qui, in validazione del piano, mai scoperta a meta' esecuzione
@@ -428,7 +428,7 @@ pub(in crate::analyze) fn require_xy_dimensions(
 /// verificare i domini e non l'ordine (una coppia (lat, lon) italiana cade
 /// dentro il dominio lon/lat). L'unico segnale disponibile e' la chiave
 /// canonica `plenora.geometry.axis_order` dichiarata dal produttore, letta
-/// qui fail-closed (R5.1) e finora ignorata. Con una dichiarazione
+/// qui fail-closed (R5.1) e non usata per decidere. Con una dichiarazione
 /// divergente `geo.reproject` sbaglierebbe in due modi, entrambi silenziosi:
 ///
 /// - source == target: il backend non costruisce alcuna pipeline e
@@ -503,8 +503,8 @@ pub(in crate::analyze) fn resolve_crs_backend(definition: &str) -> Result<Resolv
 mod tests {
     use super::validate_wkb_hex;
 
-    /// Il percorso completo dell'analizzatore, non solo la decodifica: e' da
-    /// qui che il fuzzer `analyze_geo` arrivava al panic.
+    /// Il percorso completo dell'analizzatore, non solo la decodifica: e'
+    /// da qui che un input ostile di config raggiunge il decoder.
     #[test]
     fn il_wkb_di_config_ostile_e_un_errore_di_piano() {
         for ostile in [

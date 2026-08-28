@@ -66,8 +66,8 @@ pub(in crate::analyze) fn analyze_melt(
         // `Utf8` perche' `type_policy = "string"` e' scritto nella config non
         // basta: il kernel rifiuta i tipi che il formatter non sa convertire
         // e le timezone non risolvibili, e lo fa guardando SOLO lo schema.
-        // L'analisi, che guarda lo stesso schema, accettava quindi piani che
-        // l'esecuzione sapeva gia' impossibili — e un contratto che promette
+        // L'analisi guarda lo stesso schema: senza replicarla accetterebbe
+        // piani che l'esecuzione sa gia' impossibili — e un contratto che promette
         // un output che non verra' mai prodotto e' peggio di un rifiuto.
         //
         // La categoria resta `Schema`: e' il tipo della colonna a non essere
@@ -197,7 +197,7 @@ pub(in crate::analyze) fn analyze_explode(
     check_output_name(op, &output_name)?;
     let mut output = analyze_append(input, fields, &[(output_name, element_type, true)])?;
     // Le righe cambiano (una per elemento); l'espansione puo' rompere
-    // l'ordinamento se la colonna esplosa era una chiave: conservativo.
+    // l'ordinamento se la colonna esplosa e' una chiave: conservativo.
     output.properties = ContractProperties::default();
     Ok(output)
 }

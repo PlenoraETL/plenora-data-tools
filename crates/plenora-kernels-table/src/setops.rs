@@ -118,8 +118,7 @@ impl KeyColumn<'_> {
 /// significherebbe rifiutare in validazione piani che il kernel esegue.
 ///
 /// Vive QUI, accanto all'encoder che descrive, e non nell'analizzatore: una
-/// copia del `match` altrove e' una copia che puo' divergere, ed e' la classe
-/// di difetti che questa serie di review ha gia' trovato tre volte.
+/// copia del `match` altrove e' una copia che diverge senza dirlo.
 /// `CompactRowEncoder::try_new` e questo predicato sono tenuti allineati da
 /// `il_predicato_e_l_encoder_accettano_gli_stessi_tipi`, e un tipo dichiarato
 /// codificabile che nessun ramo dell'encoder gestisce produce un errore
@@ -482,7 +481,7 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Oracolo: copia verbatim dell'implementazione pre-ottimizzazione
+    // Oracolo: implementazione di riferimento indipendente
     // (ondata stabilizzazione setops). I test confrontano il fast path con
     // l'oracolo in modo rigoroso: schema (nomi, tipi, nullability, metadata),
     // valori, null, bit f64 e ordine delle righe (via uguaglianza degli

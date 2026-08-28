@@ -213,7 +213,8 @@ fn best_rotation(open: &[Coord<f64>]) -> Vec<Coord<f64>> {
 
 /// Canonizzazione di un anello: punto iniziale = vertice minimo,
 /// orientamento = sequenza lessicograficamente minima tra i due sensi di
-/// percorrenza. L'anello resta chiuso (ultimo vertice = primo) se lo era.
+/// percorrenza. L'anello resta chiuso (ultimo vertice = primo) se lo e' in
+/// ingresso.
 fn normalize_ring(ring: &LineString<f64>) -> LineString<f64> {
     let coords = &ring.0;
     let closed = coords.len() >= 2 && coords.first() == coords.last();

@@ -22,9 +22,9 @@ use crate::aggregation;
 /// Le colonne di ordinamento esistono e hanno un confronto nativo.
 ///
 /// Il runtime rifiuta i tipi senza confronto nativo (`validate_sortable`);
-/// senza questo controllo il piano superava la validazione e falliva solo in
-/// esecuzione, cioe' dopo aver aperto gli input e forse dopo aver gia'
-/// prodotto lavoro. `is_sortable` e' lo stesso elenco di tipi del
+/// senza questo controllo il piano supererebbe la validazione e fallirebbe
+/// solo in esecuzione, cioe' dopo aver aperto gli input e forse dopo aver
+/// gia' prodotto lavoro. `is_sortable` e' lo stesso elenco di tipi del
 /// comparatore, letto a secco dallo schema.
 fn require_sortable(op: &str, input: &DataContract, columns: &[String]) -> Result<()> {
     for name in columns {

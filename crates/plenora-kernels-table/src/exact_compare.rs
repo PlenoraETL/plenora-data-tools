@@ -25,8 +25,8 @@
 //! `scale > 38`, quindi `Decimal128(38, -100)` e' un tipo valido e i suoi
 //! valori vanno confrontati, non dichiarati indecidibili. Con `scale = -128`
 //! il fattore e' `5^128 < 2^298`, che moltiplicato per `|u| < 2^127` arriva a
-//! **425 bit**: i 256 bit della versione precedente non bastavano e la
-//! funzione restituiva `None` — «non so rispondere» su un valore legittimo.
+//! **425 bit**: con 256 bit la funzione renderebbe `None` — «non so
+//! rispondere» su un valore legittimo.
 //!
 //! Si usano quindi 512 bit. Entrambi i lati nascono da un `u128` moltiplicato
 //! ripetutamente per 5, quindi non serve un prodotto fra numeri grandi: basta
@@ -237,10 +237,10 @@ mod tests {
 
     #[test]
     fn il_decimale_non_collassa_sul_double() {
-        // Il caso della review: `1e-1` come double vale
+        // Il caso che questo test fissa: `1e-1` come double vale
         // 0.1000000000000000055511151231257827…, quindi
-        // 0.100000000000000001 e' STRETTAMENTE minore. Convertendo il decimal
-        // a double i due risultavano uguali.
+        // 0.100000000000000001 e' STRETTAMENTE minore. Convertendo il
+        // decimal a double i due risulterebbero uguali.
         let sotto = decimal(100_000_000_000_000_001, 18);
         assert_eq!(sotto(0.1), Some(Ordering::Less));
         // E un decimale appena sopra il valore binario esatto e' maggiore.
@@ -289,9 +289,9 @@ mod tests {
     #[test]
     fn le_scale_negative_estreme_restano_decidibili() {
         // Arrow rifiuta solo `scale > 38`: non c'e' limite inferiore, quindi
-        // `Decimal128(38, -100)` e' un tipo valido. Con i 256 bit precedenti
-        // `5^|scale|` non entrava e la funzione rispondeva `None` — cioe' «non
-        // so» su un valore legittimo, che per un comparatore e' peggio di un
+        // `Decimal128(38, -100)` e' un tipo valido. Con 256 bit `5^|scale|`
+        // non entrerebbe e la funzione risponderebbe `None` — cioe' «non so»
+        // su un valore legittimo, che per un comparatore e' peggio di un
         // errore.
         for scale in [-56_i8, -80, -100, -128] {
             let esito = compare_decimal_with_f64(1, scale, 1.0);
@@ -399,7 +399,7 @@ mod tests {
     /// si arrende — restituendo `None` — proprio nella regione che il
     /// comparatore risolve con l'aritmetica a 512 bit: scale estreme,
     /// `unscaled` a fondo scala, double vicini a `f64::MAX` o subnormali. Li'
-    /// il comparatore non aveva un giudice.
+    /// il comparatore resterebbe senza giudice.
     ///
     /// Questo oracolo non ha un dominio: rappresenta le magnitudini come cifre
     /// in base 2^32 su un `Vec` che cresce quanto serve, moltiplica per dieci
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn l_oracolo_esatto_giudica_anche_la_regione_a_512_bit() {
-        // Qui vivono i casi che l'oracolo razionale non poteva giudicare:
+        // Qui vivono i casi che l'oracolo razionale non puo' giudicare:
         // `unscaled` a fondo scala, tutto il dominio della scala `i8`, double
         // agli estremi dei normali e dei subnormali.
         let unscaled_estremi = [
@@ -586,7 +586,7 @@ mod tests {
 
         // Campagna pseudo-casuale su `unscaled` a 128 bit PIENI, scala su
         // tutto il dominio `i8` e double presi dai bit: e' la parte che
-        // l'oracolo razionale scartava per traboccamento.
+        // l'oracolo razionale scarta per traboccamento.
         let mut stato: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut casuali = 0_u32;
         let mut magnitudine = 0_u32;

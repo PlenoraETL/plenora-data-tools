@@ -260,8 +260,8 @@ fn evaluate(expression: &Expr, batch: &RecordBatch, row: usize) -> Result<Evalua
         Expr::Text(value) => Evaluated::Text(value.clone()),
         Expr::Column(name) => {
             let index = column_index(batch, name)?;
-            // Null LOGICO: senza, una cella dictionary nulla entrava nella
-            // formula come stringa vuota invece che come null.
+            // Null LOGICO: senza, una cella dictionary nulla entrerebbe
+            // nella formula come stringa vuota invece che come null.
             if crate::is_logically_null(batch.column(index).as_ref(), row) {
                 Evaluated::Null
             } else if matches!(
@@ -324,7 +324,7 @@ fn display(value: Evaluated) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path compilato (ottimizzazione kernel `table.formula`, ultimo batch).
+// Fast path compilato di `table.formula`.
 //
 // L'AST viene compilato UNA VOLTA in bytecode postfix: indici di colonna
 // risolti e downcast degli array fatti in compilazione, letterali
@@ -548,8 +548,8 @@ impl<'a> FastProgram<'a> {
         // Underflow dello stack: il programma e' costruito dal parser, che
         // garantisce l'arieta' di ogni operatore. Uno stack vuoto qui e'
         // quindi un difetto NOSTRO, e va segnalato: mascherarlo con
-        // `unwrap_or_default()` trasformava un'invariante violata in uno zero
-        // silenzioso, pubblicato come risultato della formula.
+        // `unwrap_or_default()` trasformerebbe un'invariante violata in uno
+        // zero silenzioso, pubblicato come risultato della formula.
         let underflow = || PlenoraError::Internal("stack della formula in underflow".to_owned());
         stack.clear();
         for op in &self.ops {
@@ -882,11 +882,11 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
     let expression = parse(&config.formula)?;
     // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
-    // osservati. Deciderlo dai valori significava che un batch vuoto o tutto
-    // null produceva un tipo diverso dallo stesso piano su dati pieni — e
-    // diverso da quello che l'analisi aveva dichiarato nel contratto.
+    // osservati. Deciderlo dai valori darebbe a un batch vuoto o tutto null
+    // un tipo diverso da quello dello stesso piano su dati pieni — e
+    // diverso da quello che l'analisi ha dichiarato nel contratto.
     //
-    // Conseguenza voluta: una formula che nomina una colonna assente ora
+    // Conseguenza voluta: una formula che nomina una colonna assente
     // fallisce anche su un batch VUOTO. Senza risolvere le colonne non
     // esiste un tipo di output da dichiarare, quindi non esiste una risposta
     // giusta da dare.
@@ -996,10 +996,10 @@ fn formula_generic(
 }
 
 // ---------------------------------------------------------------------------
-// Fase 2A: analisi statica del tipo prodotto (analyze_contract).
+// Analisi statica del tipo prodotto (analyze_contract).
 //
-// Aggiunta `pub(crate)` senza modifiche di comportamento al kernel: riusa il
-// parser privato per classificare a secco il tipo della colonna derivata.
+// `pub(crate)`: riusa il parser privato per classificare a secco il tipo
+// della colonna derivata, senza passare dal kernel.
 // Regole identiche a `evaluate`: colonne Int64/Float64 -> Number, ogni altro
 // tipo scalare -> Text; `+` con un operando Text -> Text (concatenazione),
 // `-` `*` `/` su Text -> errore certo a runtime (fail-closed).
@@ -1155,9 +1155,9 @@ mod tests {
     /// Con un AST inferito correttamente il caso non e' raggiungibile: e'
     /// proprio per questo che il test forza il tipo, invece di cercare una
     /// formula che lo produca. L'invariante che si sta fissando e' «il tipo
-    /// dichiarato non si adatta ai dati», e vale nei due versi — prima il
-    /// ramo Text formattava in silenzio un valore numerico, e una futura
-    /// divergenza dell'inferenza sarebbe passata inosservata.
+    /// dichiarato non si adatta ai dati», e vale nei due versi: un ramo Text
+    /// che formattasse in silenzio un valore numerico lascerebbe passare
+    /// inosservata una divergenza dell'inferenza.
     #[test]
     fn la_guardia_sul_tipo_statico_e_simmetrica() {
         let batch = fixture();
@@ -1424,9 +1424,9 @@ mod tests {
         assert_eq!(via_kernel, via_generic);
 
         // Batch vuoto: il tipo di output si ricava dallo SCHEMA, quindi la
-        // colonna va risolta anche senza righe. Prima una formula con una
-        // colonna inesistente riusciva sul batch vuoto e falliva su quello
-        // pieno.
+        // colonna va risolta anche senza righe. Risolverla solo quando ci
+        // sono valori farebbe riuscire sul batch vuoto una formula che
+        // nomina una colonna inesistente, e fallire su quello pieno.
         let empty = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)])),
             vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],

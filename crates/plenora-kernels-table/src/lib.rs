@@ -1,20 +1,16 @@
 //! plenora-kernels-table — kernel tabellari puri `&RecordBatch -> Result<RecordBatch>`
 //! (architettura.md).
 //!
-//! Fase 1 "coesistenza": trasloco meccanico dei 17 moduli kernel da
-//! `plenora-nogeo-tools/src/kernels/` (`columns`, `strings`, `cleansing`,
-//! `filtering`, `dates`, `utility`, `analysis`, `aggregation`, `reshape`,
-//! `joins`, `setops`, `security`, `quality`, `governance`, `formula`,
-//! `expressions`, `spill`) con gli helper condivisi, senza modifiche di
-//! comportamento.
+//! I moduli kernel — `columns`, `strings`, `cleansing`, `filtering`,
+//! `dates`, `utility`, `analysis`, `aggregation`, `reshape`, `joins`,
+//! `setops`, `security`, `quality`, `governance`, `formula`, `expressions`,
+//! `spill` — con gli helper che condividono.
 
 use serde::{Deserialize, Serialize};
 
-/// Limiti dei kernel tabellari, traslocati identici da
-/// `plenora-nogeo-tools/src/contract.rs` (Fase 1, zero modifiche di
-/// comportamento).
+/// Limiti dei kernel tabellari.
 ///
-/// NOTA (punto aperto per la fase engine): il `Limits` unificato di
+/// NOTA (punto aperto): il `Limits` unificato di
 /// `plenora_core::limits` (decisione D19, errori-e-limiti.md) non copre `max_columns` e
 /// `max_split_columns`, e sostituisce il singolo `max_rows` con la famiglia
 /// semantica `RowLimits` (`max_input_rows` / `max_output_rows` /
@@ -44,10 +40,10 @@ pub struct Limits {
 /// invarianti dei kernel — quante colonne una `flatten_json` puo' generare,
 /// quante ne puo' produrre uno `split` — che il formato del piano non nomina.
 ///
-/// Prima erano campi di [`Limits`] riempiti da `Limits::default()` dentro
-/// l'adattatore dell'engine. Il risultato era che **un default nasceva durante
-/// una conversione**: leggendo l'adattatore sembravano ereditati dal piano, e
-/// leggendo il piano non c'erano. Ora sono dichiarati dove sono imposti.
+/// Come campi di [`Limits`] riempiti da `Limits::default()` dentro
+/// l'adattatore dell'engine, **un default nascerebbe durante una
+/// conversione**: leggendo l'adattatore sembrerebbero ereditati dal piano,
+/// e leggendo il piano non ci sarebbero. Sono dichiarati dove sono imposti.
 pub mod limiti_interni {
     /// Colonne totali che un batch puo' raggiungere dopo un'espansione.
     pub const MAX_COLUMNS: usize = 4_096;
@@ -133,7 +129,7 @@ pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato expression non fin
 /// difetto dipende dal valore della cella (divisione per zero, numero non
 /// finito in ingresso o in uscita). Gli errori di tipo/piano (`Schema` con
 /// altri messaggi, `InvalidPlan`, `Internal`) restano non row-scoped e
-/// propagano invariati, come prima.
+/// propagano invariati.
 pub(crate) fn row_eval_failure_cause(error: &PlenoraError) -> Option<&'static str> {
     let PlenoraError::Schema(message) = error else {
         return None;
@@ -276,8 +272,8 @@ pub fn replace_or_append(
 /// Una colonna vuota non si puo' misurare, ma nell'output ne occupera'
 /// comunque: il pavimento e' la larghezza del tipo (o otto byte per i tipi a
 /// lunghezza variabile) piu' un byte di validita'. Senza il pavimento un
-/// input vuoto che porta molte colonne nello schema di uscita pesava zero
-/// nella stima — che e' esattamente il caso in cui la stima serve.
+/// input vuoto che porta molte colonne nello schema di uscita peserebbe
+/// zero nella stima — che e' esattamente il caso in cui la stima serve.
 #[must_use]
 pub fn column_bytes_per_row(array: &dyn Array) -> usize {
     let rows = array.len();
@@ -348,7 +344,8 @@ pub fn text_bytes_floor(data_type: &DataType) -> usize {
 /// **materializza per ogni riga**. Una singola stringa lunga referenziata da
 /// centomila chiavi occupa pochi byte per riga nell'input e centinaia di
 /// megabyte nell'output: la misura sull'input sottostima di ordini di
-/// grandezza, e la stima autorizza l'allocazione che doveva impedire.
+/// grandezza, e la stima autorizza proprio l'allocazione che deve
+/// impedire.
 ///
 /// Il limite superiore esatto e' la **voce piu' lunga del dizionario**: ogni
 /// chiave puo' puntarci. Il dizionario ha pochi elementi per costruzione —
@@ -379,22 +376,21 @@ pub fn text_bytes_per_row(array: &dyn Array) -> usize {
 
 /// `true` se [`scalar_as_string`] sa convertire questo tipo in testo.
 ///
-/// Serve a chi deve rifiutare PRIMA di allocare: `melt` con
-/// `type_policy = "string"` costruiva gli indici e la colonna dei nomi e solo
-/// dopo scopriva, a meta' scansione, che una colonna valore non era
+/// Serve a chi deve rifiutare PRIMA di allocare: senza, `melt` con
+/// `type_policy = "string"` costruirebbe gli indici e la colonna dei nomi
+/// per scoprire solo a meta' scansione che una colonna valore non e'
 /// convertibile.
 ///
 /// # I due tipi parametrici NON sono accettati per intero
 ///
-/// La prima versione di questo predicato accettava qualunque
-/// `Timestamp(_, _)` e qualunque `Decimal128(_, _)`. Il formatter e' piu'
-/// stretto, e la differenza non era teorica:
+/// Accettare qualunque `Timestamp(_, _)` e qualunque `Decimal128(_, _)`
+/// sarebbe piu' largo del formatter, e la differenza non e' teorica:
 ///
 /// - **Timestamp**: `scalar_as_string` fa `downcast_ref::<TimestampMillisecondArray>`,
 ///   quindi gestisce SOLO `Millisecond`. Un `Timestamp(Second, _)` o
-///   `Timestamp(Nanosecond, _)` passava la prevalidazione e falliva dopo
-///   l'allocazione — cioe' esattamente cio' che la prevalidazione esiste per
-///   evitare.
+///   `Timestamp(Nanosecond, _)` passerebbe la prevalidazione e fallirebbe
+///   dopo l'allocazione — cioe' esattamente cio' che la prevalidazione
+///   esiste per evitare.
 /// - **Decimal128**: il formatter converte la scala con `u32::try_from`, che
 ///   rifiuta le scale NEGATIVE, e calcola `10^scala` con `checked_pow`, che
 ///   trabocca oltre 38. Arrow considera `Decimal128(38, -1)` un tipo valido,
@@ -461,20 +457,20 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 
 /// Rifiuto PREVENTIVO di un output troppo grande, prima di allocarlo.
 ///
-/// I tetti dei kernel erano tutti *post*: si costruiva l'output e poi lo si
-/// confrontava con `max_rows`. Per le righe va bene — il conteggio si sa
+/// Un tetto *post* costruisce l'output e poi lo confronta con `max_rows`.
+/// Per le righe va bene — il conteggio si sa
 /// prima — ma per i BYTE no: un `cross_join` che rispetta `max_rows` puo'
 /// comunque allocare molto oltre `max_governed_memory_bytes`, e l'unico esito
 /// possibile diventa l'esaurimento della memoria, non un errore. Un tetto che
 /// si puo' verificare solo dopo aver superato il tetto non e' un tetto.
 ///
 /// `bytes_per_row` e' la larghezza di una riga di OUTPUT, e la calcola il
-/// chiamante: solo il kernel sa come si compone la propria riga. La prima
-/// versione di questa funzione la derivava da sola, prendendo il massimo
-/// fra le sorgenti — corretto per un impilamento, SBAGLIATO per un prodotto
-/// cartesiano (dove le righe si affiancano e i byte si sommano), per uno
-/// schema unione (dove compaiono colonne che nessuna sorgente misurava) e
-/// per un `melt` (dove una colonna nuova ripete i nomi delle colonne). Una
+/// chiamante: solo il kernel sa come si compone la propria riga. Derivarla
+/// qui prendendo il massimo fra le sorgenti sarebbe corretto per un
+/// impilamento e SBAGLIATO per un prodotto cartesiano (dove le righe si
+/// affiancano e i byte si sommano), per uno schema unione (dove compaiono
+/// colonne che nessuna sorgente misura) e per un `melt` (dove una colonna
+/// nuova ripete i nomi delle colonne). Una
 /// formula unica per operazioni diverse e' una formula sbagliata per quasi
 /// tutte.
 ///
@@ -532,9 +528,9 @@ pub use plenora_core::batch_with_rows;
 ///
 /// [`text_convertible`] copre il tipo; questa copre anche la **timezone**,
 /// che sta nello schema e non nei dati: `scalar_as_string` la risolve con
-/// `chrono_tz` a ogni riga, e una timezone non valida faceva fallire la
-/// conversione durante la scansione — dopo le allocazioni — pur essendo
-/// conoscibile prima di cominciare.
+/// `chrono_tz` a ogni riga, quindi senza questa verifica una timezone non
+/// valida farebbe fallire la conversione durante la scansione — dopo le
+/// allocazioni — pur essendo conoscibile prima di cominciare.
 ///
 /// Resta fuori solo cio' che dipende dal CONTENUTO della cella: un `Binary`
 /// non UTF-8, un istante o una data fuori intervallo, una chiave dictionary
@@ -579,9 +575,9 @@ pub const MAX_SUFFISSI_COLLISIONE: u32 = 99;
 /// - `v` collide con l'input e diventa `v_1`;
 /// - `v_1` non collide con l'input — che contiene solo `v` — e resta `v_1`.
 ///
-/// I due nomi RICHIESTI erano distinti, quindi nessun controllo sulla
-/// configurazione poteva accorgersene, e il risultato erano due colonne di
-/// output con lo stesso nome. Uno schema con nomi duplicati e' un contratto
+/// I due nomi RICHIESTI sono distinti, quindi nessun controllo sulla
+/// configurazione potrebbe accorgersene, e il risultato sarebbero due
+/// colonne di output con lo stesso nome. Uno schema con nomi duplicati e' un contratto
 /// rotto: chi legge per nome non sa quale colonna riceve.
 ///
 /// La versione sequenziale rende il caso impossibile per costruzione, ed e'
@@ -591,9 +587,9 @@ pub const MAX_SUFFISSI_COLLISIONE: u32 = 99;
 /// # Il nome GENERATO e' validato quanto quello richiesto
 ///
 /// Il suffisso allunga il nome: `validate_output_name` sul solo nome
-/// richiesto lasciava passare un nome di 1024 byte che, collidendo, diventava
-/// `nome_1` — 1026 byte, cioe' oltre il limite che la validazione esiste per
-/// imporre. Un invariante che si perde proprio nel caso che lo mette alla
+/// richiesto lascerebbe passare un nome di 1024 byte che, collidendo,
+/// diventa `nome_1` — 1026 byte, cioe' oltre il limite che la validazione
+/// esiste per imporre. Un invariante che si perde proprio nel caso che lo mette alla
 /// prova non e' un invariante. Ogni candidato viene quindi validato prima di
 /// essere accettato, e un candidato non valido e' scartato come se fosse
 /// occupato: se nessuno regge, il nome non e' risolvibile.
@@ -602,8 +598,8 @@ pub const MAX_SUFFISSI_COLLISIONE: u32 = 99;
 ///
 /// [`MAX_SUFFISSI_COLLISIONE`], cioe' da `_1` a `_99`. Il numero e' una
 /// costante e non un letterale sparso perche' il messaggio d'errore lo
-/// riporta: la versione precedente provava novantanove suffissi e ne
-/// dichiarava cento.
+/// riporta, e un letterale sparso finirebbe per dichiarare un numero
+/// diverso da quello provato.
 ///
 /// # Errors
 ///
@@ -667,9 +663,9 @@ pub fn validate_output_name(name: &str) -> Result<()> {
 ///
 /// `Ok(None)` significa che la riga e' nulla, e la nullita' ha DUE sorgenti:
 /// la chiave puo' essere nulla, oppure una chiave valida puo' puntare a una
-/// entry nulla del dizionario. La seconda sfuggiva a tutti i chiamanti,
-/// perche' `DictionaryArray::is_null` guarda solo la validita' delle CHIAVI:
-/// una riga logicamente nulla veniva letta come stringa vuota, e quindi
+/// entry nulla del dizionario. La seconda sfugge a chi si ferma a
+/// `DictionaryArray::is_null`, che guarda solo la validita' delle CHIAVI:
+/// una riga logicamente nulla verrebbe letta come stringa vuota, e quindi
 /// ordinata, raggruppata, filtrata e scritta come se fosse un valore.
 ///
 /// Il controllo dei limiti della chiave sta qui una volta sola: `value()` su
@@ -809,7 +805,7 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
     if let Some(values) = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>() {
         // Null logico incluso: una chiave valida che punta a una entry nulla
         // non e' la stringa vuota. Il controllo dei limiti della chiave, che
-        // qui mancava, vive nel risolutore condiviso.
+        // non sta qui, vive nel risolutore condiviso.
         return Ok(dictionary_utf8_value(values, row)?.map(ToOwned::to_owned));
     }
     Err(PlenoraError::Schema(format!(
@@ -823,10 +819,10 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
 //
 // Classe di bug chiusa: `ToPrimitive::to_f64()` NON e' un test di
 // rappresentabilita'. Per i64/u64/i128 restituisce sempre `Some`,
-// arrotondando al double piu' vicino. Ogni sito che scriveva
-// `value.to_f64().ok_or_else(|| "non rappresentabile")` dichiarava un
-// controllo che non esisteva: il ramo di errore era codice morto e il valore
-// arrotondato proseguiva nella pipeline. Sopra 2^53 due interi distinti
+// arrotondando al double piu' vicino. Un sito che scrivesse
+// `value.to_f64().ok_or_else(|| "non rappresentabile")` dichiarerebbe un
+// controllo inesistente: il ramo di errore sarebbe codice morto e il
+// valore arrotondato proseguirebbe nella pipeline. Sopra 2^53 due interi distinti
 // diventano lo stesso double — chiavi di join che collassano, filtri che
 // cambiano esito, confronti che invertono l'ordine.
 //
@@ -891,8 +887,8 @@ pub fn exact_f64_from_i128(value: i128) -> Option<f64> {
 #[must_use]
 pub fn exact_f64_from_decimal128(unscaled: i128, scale: i8) -> Option<f64> {
     // Lo zero e' esatto a QUALUNQUE scala e non richiede alcun fattore.
-    // Calcolarlo prima faceva fallire `10^|scale|` per scale oltre +-38 e
-    // rispondeva «non rappresentabile» sullo zero, che e' il valore piu'
+    // Calcolarlo dopo farebbe fallire `10^|scale|` per scale oltre +-38 e
+    // risponderebbe «non rappresentabile» sullo zero, che e' il valore piu'
     // rappresentabile che esista. Arrow non pone un limite inferiore alla
     // scala (`validate_decimal_precision_and_scale` rifiuta solo
     // `scale > 38`), quindi quelle scale arrivano davvero.
@@ -915,8 +911,8 @@ pub fn exact_f64_from_decimal128(unscaled: i128, scale: i8) -> Option<f64> {
         // Si moltiplica per `5^a` e si delega la potenza di due, che non
         // arrotonda. **Prima** pero' si estraggono le potenze di due gia'
         // presenti in `unscaled`: senza, `2^126 * 10` — che vale `5 * 2^127`
-        // ed e' perfettamente esatto in `f64` — falliva perche' il prodotto
-        // intermedio `2^126 * 5` esce da `i128`. Spostare quei fattori
+        // ed e' perfettamente esatto in `f64` — fallirebbe, perche' il
+        // prodotto intermedio `2^126 * 5` esce da `i128`. Spostare quei fattori
         // dall'intero all'esponente non cambia il valore e toglie di mezzo
         // il traboccamento.
         let due_estratti = unscaled.trailing_zeros();
@@ -1061,10 +1057,10 @@ pub fn scalar_as_f64_rounded(array: &dyn Array, row: usize) -> Result<Option<f64
 // ---------------------------------------------------------------------------
 // Confronti scalari tipizzati (filtri, regole di governance, assert_range).
 //
-// Classe di bug chiusa (review 2026-07-27, stessa classe dei comparatori di
-// `table.sort`): i confronti fatti via `scalar_as_f64` collassano interi
+// Classe di bug chiusa, la stessa dei comparatori di `table.sort`: i
+// confronti fatti via `scalar_as_f64` collassano interi
 // distinti oltre 2^53 sullo stesso double (9007199254740992 e
-// 9007199254740993 risultavano uguali) e il confronto testuale disordinava
+// 9007199254740993 risulterebbero uguali) e il confronto testuale disordina
 // gli UInt64 ("10" < "9"). Il predicato condiviso qui sotto e' esatto per
 // costruzione: nessuna conversione a f64 quando un lato e' un intero.
 //
@@ -1115,7 +1111,7 @@ impl NumericBound {
     /// Parse del valore atteso: intero esatto se il testo e' un letterale
     /// intero, DECIMALE esatto se e' un letterale con virgola, altrimenti
     /// f64. `None` se il testo non e' numerico: il chiamante lo traduce nello
-    /// stesso errore di contratto del percorso storico (che parsava solo f64,
+    /// stesso errore di contratto del percorso storico, che parsa solo f64:
     /// un sottoinsieme stretto di questi casi).
     ///
     /// La forma decimale e' quella che rende esatti i confronti con le
@@ -1131,9 +1127,9 @@ impl NumericBound {
             return Some(Self::U64(value));
         }
         // Interi oltre `u64` (o negativi oltre `i64`): restano esatti come
-        // decimali a scala zero. Prima cadevano su `f64`, e
+        // decimali a scala zero. Ricadendo su `f64`,
         // `18446744073709551617` — perfettamente rappresentabile in `i128` —
-        // veniva arrotondato.
+        // verrebbe arrotondato.
         if let Ok(value) = text.parse::<i128>() {
             return Some(Self::Decimal {
                 unscaled: value,
@@ -1165,10 +1161,10 @@ impl NumericBound {
             return None;
         }
         // Zeri NON significativi via prima di misurare precisione e scala.
-        // Contarli faceva ricadere su `f64` letterali perfettamente esatti:
+        // Contarli farebbe ricadere su `f64` letterali perfettamente esatti:
         // `0000…0.1` (quaranta zeri) e' `unscaled = 1, scale = 1`, ma le sue
-        // 41 cifre sforavano il tetto e il confronto con una colonna
-        // `Decimal128` finiva nel dominio dei double — corretto rispetto al
+        // 41 cifre sforerebbero il tetto e il confronto con una colonna
+        // `Decimal128` finirebbe nel dominio dei double — corretto rispetto al
         // double, sbagliato rispetto al letterale scritto.
         //
         // Gli zeri iniziali della PARTE FRAZIONARIA restano: sono la scala,
@@ -1252,7 +1248,7 @@ pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
 /// dei double: il dato resta il double della colonna, ma la soglia scritta
 /// dall'utente non viene arrotondata per confrontarla. Con
 /// `column > 0.100000000000000001` e la colonna a `1e-1` la conversione
-/// rendeva i due uguali, escludendo una riga che il letterale include.
+/// renderebbe i due uguali, escludendo una riga che il letterale include.
 pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
     match bound {
         NumericBound::I64(expected) => compare_i64_f64(expected, actual).map(Ordering::reverse),
@@ -1481,8 +1477,8 @@ fn compare_decimal128_f64(unscaled: i128, scale: i8, expected: f64) -> Option<Or
         return Some(compare_scaled_i128(unscaled, scale, expected as i128));
     }
     // Double frazionario: confronto RAZIONALE esatto, senza convertire il
-    // decimal. La conversione collassava valori distinti — `1e-1` e
-    // `0.100000000000000001` risultavano uguali — perche' portava il decimal
+    // decimal. La conversione collasserebbe valori distinti — `1e-1` e
+    // `0.100000000000000001` risulterebbero uguali — perche' porta il decimal
     // sul reticolo dei double invece di confrontare i due razionali.
     exact_compare::compare_decimal_with_f64(unscaled, scale, expected)
 }
@@ -1656,10 +1652,10 @@ mod tests {
 
     #[test]
     fn il_default_governato_e_lo_stesso_di_plenora_core() {
-        // I due default erano due letterali distinti e potevano divergere
-        // senza che nulla lo notasse: due componenti dello stesso processo
-        // avrebbero applicato budget diversi allo stesso piano. Ora c'e'
-        // un'autorita' sola, e questo test lo verifica su ENTRAMBI i lati
+        // Due letterali distinti potrebbero divergere senza che nulla lo
+        // noti: due componenti dello stesso processo applicherebbero budget
+        // diversi allo stesso piano. L'autorita' e' una sola, e questo test
+        // lo verifica su ENTRAMBI i lati
         // invece di confrontare il letterale con se stesso.
         assert_eq!(
             Limits::default().max_governed_memory_bytes as u64,
@@ -1675,11 +1671,11 @@ mod tests {
 
     #[test]
     fn anche_gli_altri_due_default_condivisi_vengono_dall_autorita() {
-        // Stessa classe: `max_temp_bytes` e `spill_partitions` erano
-        // anch'essi due letterali distinti nei due crate. Il percorso legacy
-        // porta QUESTI valori negli override del piano, quindi una
-        // divergenza si sarebbe vista come un piano eseguito sotto limiti
-        // che nessuno ha dichiarato.
+        // Stessa classe: `max_temp_bytes` e `spill_partitions` vengono
+        // dalle costanti di `plenora-core`, non da letterali propri. Il
+        // percorso legacy porta QUESTI valori negli override del piano,
+        // quindi una divergenza si vedrebbe come un piano eseguito sotto
+        // limiti che nessuno ha dichiarato.
         let nostri = Limits::default();
         let del_piano = plenora_core::limits::Limits::default();
         assert_eq!(nostri.max_temp_bytes, del_piano.max_temp_bytes);
@@ -1815,7 +1811,7 @@ mod tests {
     #[test]
     fn la_conversione_decimal_f64_e_esatta_o_errore() {
         // `1` con scala `1` vale 0.1: nessun double lo rappresenta, e
-        // verificare il solo `unscaled` lo lasciava passare.
+        // verificare il solo `unscaled` lo lascerebbe passare.
         assert_eq!(exact_f64_from_decimal128(1, 1), None);
         // `5` con scala `1` vale 0.5: potenza di due, esatto.
         assert_eq!(exact_f64_from_decimal128(5, 1), Some(0.5));

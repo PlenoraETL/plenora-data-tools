@@ -43,19 +43,19 @@ pub(in crate::aggregation) fn row_key(
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nel
 /// dominio NATIVO di ogni tipo supportato, mai sulla forma testuale.
 ///
-/// Il ripiego testuale che copriva tutti i tipi diversi da
-/// Int64/UInt64/Float64 dava un ordine sbagliato dove contava di piu':
+/// Un ripiego testuale per tutti i tipi diversi da Int64/UInt64/Float64
+/// darebbe un ordine sbagliato dove conta di piu':
 ///
 /// - **Decimal128** — "10" ordina prima di "9", e i negativi si dispongono
 ///   al contrario del loro valore;
 /// - **Timestamp con timezone** — la stringa e' l'ora LOCALE, e all'ora
 ///   legale l'ordine lessicografico delle ore locali non e' l'ordine degli
 ///   istanti UTC;
-/// - **Binary** — il ripiego pretendeva UTF-8 valido e falliva su qualunque
-///   colonna binaria che non lo fosse (una geometria WKB, per esempio).
+/// - **Binary** — pretenderebbe UTF-8 valido e fallirebbe su qualunque
+///   colonna binaria che non lo sia (una geometria WKB, per esempio).
 ///
 /// Lo stesso comparatore alimenta `sort`, il top-N e il merge k-way dello
-/// spill, quindi l'errore si propagava a tutti e tre. I confronti nativi
+/// spill, quindi l'errore si propagherebbe a tutti e tre. I confronti nativi
 /// eliminano anche la costruzione di stringhe e il parsing della timezone
 /// dentro un sort O(n log n).
 ///
@@ -86,12 +86,12 @@ pub fn compare_cells_typed(
     right: &ArrayRef,
     right_row: usize,
 ) -> Result<Ordering> {
-    // ORDINE DEI CONTROLLI. Prima il dominio, poi i null. Il contrario era
-    // fail-open: decidere sui null in testa faceva rispondere `Equal` a due
+    // ORDINE DEI CONTROLLI. Prima il dominio, poi i null. Il contrario e'
+    // fail-open: decidendo sui null in testa si risponderebbe `Equal` a due
     // celle nulle di tipi INCOMPATIBILI o non ordinabili, cioe' proprio dove
     // la funzione deve rifiutare — e con gli stessi tipi, ma valori non
-    // nulli, rispondeva `Schema`. La stessa coppia di colonne dava quindi due
-    // contratti diversi a seconda del contenuto delle celle. Un difetto
+    // nulli, si risponderebbe `Schema`. La stessa coppia di colonne darebbe
+    // due contratti diversi a seconda del contenuto delle celle. Un difetto
     // mascherato dai null e' un difetto che si manifesta piu' tardi, altrove.
     //
     // 1. Indici. L'API e' pubblica e prende due array e due indici
@@ -127,14 +127,14 @@ pub fn compare_cells_typed(
 
     // 3. Integrita' della cella, ENTRAMBE. `is_logically_null` risponde
     //    `false` su una chiave dictionary malformata — per non trasformare un
-    //    difetto in un silenzio — ma qui il silenzio arrivava lo stesso: se
-    //    l'altra cella era nulla si usciva prima di risolvere questa. Ora la
-    //    risoluzione e' fallibile e avviene per tutte e due le celle prima di
-    //    qualunque uscita anticipata.
+    //    difetto in un silenzio. Uscendo prima di risolvere questa cella
+    //    perche' l'altra e' nulla, il silenzio tornerebbe: la risoluzione
+    //    e' fallibile e avviene per ENTRAMBE le celle prima di qualunque
+    //    uscita anticipata.
     let left_null = cella_logicamente_nulla(left, left_row)?;
     let right_null = cella_logicamente_nulla(right, right_row)?;
 
-    // 4. Solo adesso l'ordinamento dei null. Match esaustivo sulle quattro
+    // 4. Solo a questo punto l'ordinamento dei null. Match esaustivo sulle quattro
     //    combinazioni: il caso (false, false) prosegue con il confronto
     //    tipizzato, nessun braccio impossibile.
     match (left_null, right_null) {
@@ -146,11 +146,10 @@ pub fn compare_cells_typed(
 
     // 5. Dispatch sulla FAMIGLIA, non su una catena di `downcast_ref`. Il
     //    match e' esaustivo: aggiungere una variante a `ComparisonFamily`
-    //    senza aggiungere il braccio corrispondente non compila. Prima
-    //    l'elenco dei tipi esisteva in tre copie — la tabella, questa catena
-    //    e `validate_sortable` — e la doc si limitava a raccomandare di
-    //    tenerle allineate. Una raccomandazione non e' un vincolo: ora la
-    //    tabella e' una sola e il compilatore fa rispettare la copertura.
+    //    senza aggiungere il braccio corrispondente non compila. L'elenco
+    //    dei tipi vive in un posto solo: in tre copie — la tabella, questa
+    //    catena e `validate_sortable` — resterebbe allineato per
+    //    raccomandazione, e una raccomandazione non e' un vincolo.
     match left_family {
         ComparisonFamily::Int64 => {
             let (left_values, right_values) = coppia::<Int64Array>(left, right)?;
@@ -287,9 +286,9 @@ enum ComparisonFamily {
 /// La usano [`compare_cells_typed`] (dispatch), [`is_sortable`] e
 /// [`validate_sortable`]: l'elenco dei tipi esiste in un punto solo, e i due
 /// dispatch sono `match` ESAUSTIVI sulla famiglia, quindi aggiungere una
-/// variante senza aggiungere i bracci non compila. Prima erano tre elenchi
-/// scritti a mano e la doc raccomandava di tenerli allineati; una
-/// raccomandazione non impedisce nulla.
+/// variante senza aggiungere i bracci non compila. Tre elenchi scritti a
+/// mano resterebbero allineati per raccomandazione, e una raccomandazione
+/// non impedisce nulla.
 const fn comparison_family(data_type: &DataType) -> Option<ComparisonFamily> {
     match data_type {
         DataType::Int64 => Some(ComparisonFamily::Int64),

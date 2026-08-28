@@ -124,8 +124,8 @@ fn validate_key_types(
 /// `true` se una delle colonne indicate e' nulla nella riga.
 ///
 /// Null LOGICO: `reconcile` e `assert_foreign_key` decidono da qui se una
-/// riga partecipa al confronto, e una dictionary con chiave valida verso una
-/// entry nulla partecipava come se avesse un valore.
+/// riga partecipa al confronto, e una dictionary con chiave valida verso
+/// una entry nulla parteciperebbe come se avesse un valore.
 fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
     indices
         .iter()
@@ -133,7 +133,7 @@ fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path chiavi di riga (batch 4 ottimizzazioni kernel: `reconcile`,
+// Fast path delle chiavi di riga (`reconcile`,
 // `assert_foreign_key`).
 //
 // `RowKeyEncoder` prepara una sola volta il tag di tipo per colonna e itera
@@ -570,9 +570,8 @@ struct CompiledRule {
     expected: String,
     /// Estremi in forma esatta (letterale intero preservato).
     ///
-    /// Sono l'UNICA forma degli estremi numerici: la copia in `f64` che
-    /// affiancava questi campi collassava gli interi oltre 2^53 ed e' stata
-    /// rimossa insieme ai confronti che la usavano.
+    /// Sono l'UNICA forma degli estremi numerici: una copia in `f64` che li
+    /// affiancasse collasserebbe gli interi oltre 2^53.
     expected_bound: Option<NumericBound>,
     expected_high_bound: Option<NumericBound>,
     regex: Option<regex::Regex>,
@@ -784,9 +783,9 @@ const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Opt
 /// confronto NON DEFINITO (un solo lato NaN) segue la semantica IEEE: `ne`
 /// resta vero. Una cella NON INTERPRETABILE — errore di conversione, estremo
 /// assente — fa invece fallire la regola per OGNI operatore, `ne` compreso.
-/// Appiattendo i due casi su un solo `equal = false`, come faceva la versione
-/// precedente, `ne` passava proprio sui valori che il kernel non era riuscito
-/// a leggere: l'opposto di quanto la regola documenta.
+/// Appiattendo i due casi su un solo `equal = false`, `ne` passerebbe
+/// proprio sui valori che il kernel non e' riuscito a leggere: l'opposto di
+/// quanto la regola documenta.
 #[derive(Clone, Copy)]
 enum RuleComparison {
     /// Ordine definito fra cella ed estremo.
@@ -1047,11 +1046,10 @@ pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Rec
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
-    // Test-oracolo di `reconcile`/`assert_foreign_key` (batch 4
-    // ottimizzazioni kernel): le implementazioni pre-ottimizzazione sono
-    // copiate verbatim qui sotto come riferimento indipendente, e i byte
-    // delle chiavi dell'encoder sono confrontati direttamente con
-    // `quality::key_for_row` (rimasta invariata).
+    // Test-oracolo di `reconcile`/`assert_foreign_key`: le implementazioni
+    // di riferimento stanno qui sotto, indipendenti dal percorso
+    // ottimizzato, e i byte delle chiavi dell'encoder sono confrontati
+    // direttamente con `quality::key_for_row`.
     // -------------------------------------------------------------------
 
     use super::*;
@@ -1060,8 +1058,8 @@ mod tests {
         BinaryArray, Date32Array, Decimal128Array, TimestampMillisecondArray,
     };
 
-    /// Copia verbatim dell'implementazione di `frequencies`
-    /// pre-ottimizzazione (riferimento di `reconcile_reference`).
+    /// Oracolo indipendente di `frequencies`, usato da
+    /// `reconcile_reference`.
     fn frequencies_reference(
         batch: &RecordBatch,
         indices: &[usize],
@@ -1105,7 +1103,8 @@ mod tests {
         Ok(output)
     }
 
-    /// Copia verbatim dell'implementazione di `reconcile` pre-ottimizzazione.
+    /// Oracolo indipendente di `reconcile`: stesso contratto, percorso
+    /// diverso.
     fn reconcile_reference(
         left: &RecordBatch,
         right: &RecordBatch,
@@ -1180,8 +1179,8 @@ mod tests {
         )?)
     }
 
-    /// Copia verbatim dell'implementazione di `assert_foreign_key`
-    /// pre-ottimizzazione.
+    /// Oracolo indipendente di `assert_foreign_key`: stesso contratto,
+    /// percorso diverso.
     fn assert_foreign_key_reference(
         left: &RecordBatch,
         right: &RecordBatch,

@@ -1,8 +1,7 @@
 //! Kernel `table.expression`: valutazione di espressioni scalari su colonne
 //! (interprete generico e fast path compilato, stessa semantica).
 //!
-//! Split meccanico del modulo originario in sottomoduli (logica invariata,
-//! spostamenti verbatim):
+//! I sottomoduli e cio' che ciascuno possiede:
 //!
 //! - [`scalar`]: valore scalare generico (`Scalar`) con coercizioni,
 //!   confronti e aritmetica/logica dell'interprete;
@@ -208,8 +207,8 @@ pub enum Function {
     DateTrunc,
 }
 
-// Simboli usati solo dai test-oracolo (`mod tests` li importa con
-// `use super::*`, come nel modulo originario).
+// Simboli usati solo dai test-oracolo, che li importano con
+// `use super::*`.
 #[cfg(test)]
 use fast::FastProgram;
 #[cfg(test)]
@@ -655,10 +654,10 @@ mod tests {
         assert_equivalent(&batch, left_deep, None);
 
         // Batch vuoto: il tipo di output si ricava dallo SCHEMA, quindi le
-        // colonne vanno risolte anche senza righe da valutare. Prima un
-        // batch vuoto accettava una colonna inesistente e un letterale non
-        // scalare, cioe' lo stesso piano riusciva o falliva a seconda dei
-        // dati.
+        // colonne vanno risolte anche senza righe da valutare: altrimenti un
+        // batch vuoto accetterebbe una colonna inesistente e un letterale
+        // non scalare, cioe' lo stesso piano riuscirebbe o fallirebbe a
+        // seconda dei dati.
         let empty = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("n", DataType::Float64, true)])),
             vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
@@ -1038,8 +1037,8 @@ mod tests {
         // Radice non date_trunc: il tipo viene dallo SCHEMA, non dai valori
         // osservati. Una colonna Date32 letta direttamente e' un numero per
         // il runtime, quindi l'output e' Float64 — su batch vuoto come su
-        // batch pieno. Prima qui usciva Utf8, cioe' uno schema diverso a
-        // parita' di configurazione e di schema d'ingresso.
+        // batch pieno. Deciderlo dai valori darebbe Utf8, cioe' uno schema
+        // diverso a parita' di configurazione e di schema d'ingresso.
         let cfg = config(col("d"), None);
         let output = expression(&empty, &cfg).expect("vuoto non temporale");
         assert_eq!(

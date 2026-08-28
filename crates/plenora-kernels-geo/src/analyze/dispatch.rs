@@ -283,7 +283,7 @@ pub(in crate::analyze) fn analyze_unary(
     // trasporto (estensione `geoarrow.wkb` o sole chiavi canoniche) —
     // rifiuto a compile-plan, mai a meta' esecuzione (architettura.md#geometrie).
     require_identifiable_geometry(op, input, geometry)?;
-    // B1.3: ogni op unaria che consuma una geometria la decodifica in XY —
+    // Ogni op unaria che consuma una geometria la decodifica in XY —
     // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
     require_xy_dimensions(op, geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {
@@ -473,7 +473,7 @@ pub(in crate::analyze) fn analyze_binary(
     // colonna verificata a compile-plan su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;
     require_identifiable_geometry(op, right, right_geometry)?;
-    // B1.3: come per le unarie — entrambi gli operandi devono essere XY.
+    // Come per le unarie: entrambi gli operandi devono essere XY.
     require_xy_dimensions(op, left_geometry)?;
     require_xy_dimensions(op, right_geometry)?;
     let requirement = descriptor.crs_requirement.ok_or_else(|| {

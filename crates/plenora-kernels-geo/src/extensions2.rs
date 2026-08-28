@@ -489,8 +489,8 @@ fn chunk_line_string(line: &LineString<f64>, max_vertices: usize) -> Vec<Geometr
         )));
         start += max_vertices - 1;
     }
-    // Il ciclo garantisce almeno due vertici residui (parte precedente
-    // terminava con `count - start > max_vertices`).
+    // Il ciclo garantisce almeno due vertici residui: si ferma quando
+    // `count - start > max_vertices` smette di valere.
     parts.push(Geometry::LineString(LineString::new(
         line.0[start..].to_vec(),
     )));
