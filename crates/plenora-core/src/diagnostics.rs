@@ -252,12 +252,12 @@ impl RowDiagnostics {
     /// a `examples_limit`, completeness degradata se un contributo qualunque
     /// non e' completo.
     ///
-    /// Vive qui, accanto al tipo, perche' la stessa procedura serviva due
-    /// percorsi — l'executor del DAG e il runner fuso del trasporto geo — e
-    /// ne esistevano due copie parallele, identiche riga per riga a meno del
-    /// tipo di errore. E' logica di contratto (R9.9: mai un indice inventato,
-    /// mai un overflow silenzioso): due copie sono due occasioni di divergere
-    /// su un report che finisce in output.
+    /// Vive qui, accanto al tipo, perche' la stessa procedura serve due
+    /// percorsi — l'executor del DAG e il runner fuso del trasporto geo — ed
+    /// e' logica di contratto (R9.9: mai un indice inventato, mai un
+    /// overflow silenzioso). Due copie parallele, fossero anche identiche
+    /// riga per riga, sarebbero due occasioni di divergere su un report che
+    /// finisce in output.
     ///
     /// # Errors
     ///
@@ -328,12 +328,12 @@ impl RowDiagnostics {
         // Reticolo esplicito della completeness: `Unknown` > `Partial` >
         // `Complete`, e la fusione tiene il PEGGIORE dei due.
         //
-        // L'assegnazione diretta era dipendente dall'ordine: `Unknown` che
-        // riceveva `Partial` diventava `Partial`, cioe' migliorava
-        // illegittimamente l'informazione — «non so quanto ho visto» tornava
-        // «ho visto una parte» — mentre nell'ordine opposto restava
-        // `Unknown`. Due stream con gli stessi contributi in ordine diverso
-        // producevano due report diversi.
+        // L'assegnazione diretta dipenderebbe dall'ordine: `Unknown` che
+        // riceve `Partial` diventerebbe `Partial`, cioe' migliorerebbe
+        // illegittimamente l'informazione — «non so quanto ho visto»
+        // tornerebbe «ho visto una parte» — mentre nell'ordine opposto
+        // resterebbe `Unknown`. Due stream con gli stessi contributi in
+        // ordine diverso darebbero due report diversi.
         merged.completeness = worst_completeness(merged.completeness, incoming.completeness);
         if incoming.completeness != RowDiagnosticsCompleteness::Complete {
             let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();
@@ -370,9 +370,9 @@ impl RowDiagnostics {
             worst_completeness(self.completeness, RowDiagnosticsCompleteness::Partial);
         self.total = None;
         // I limiti gia' registrati si UNISCONO, non si sostituiscono:
-        // rimpiazzarli con un singoletto cancellava conoscenza gia' acquisita
-        // — il report diceva un solo motivo di incompletezza dove ce n'erano
-        // piu' d'uno.
+        // rimpiazzarli con un singoletto cancellerebbe conoscenza gia'
+        // acquisita — il report direbbe un solo motivo di incompletezza dove
+        // ce n'e' piu' d'uno.
         let mut limits = self.knowledge_limits.take().unwrap_or_default();
         if !limits.iter().any(|limit| limit == knowledge_limit) {
             limits.push(knowledge_limit.to_owned());

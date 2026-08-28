@@ -4,25 +4,27 @@
 //! motivo), mai valori. La modalità diagnostica opt-in (errori-e-limiti.md) è aggiunta
 //! dall'executor, non da queste varianti.
 //!
-//! Fase 2B, errori arricchiti (errori-e-limiti.md): ogni errore espone una [`ErrorCategory`] stabile
+//! Ogni errore espone una [`ErrorCategory`] stabile
 //! ([`PlenoraError::category`]); `Execution` e `Cancelled` portano
 //! l'`execution_id` dell'esecuzione che li ha prodotti (vuoto se costruiti
 //! fuori da un'esecuzione DAG, es. percorso legacy `table_engine` — il
 //! Display lo omette in quel caso).
 //!
-//! Milestone D (contratti trasversali v2.0-rc10 §9, proposta in attesa di
-//! ratifica — andra' in piano-v5.md#contratti-di-input): l'errore porta i quattro assi
-//! indipendenti di R9.1. Categoria ([`PlenoraError::category`]) esiste
-//! dalla prima tassonomia; qui si aggiungono la fase ([`PlenoraError::phase`], [`ErrorPhase`]),
-//! l'effetto remoto ([`PlenoraError::remote_effect`], [`RemoteEffect`]) e
-//! la disposizione di retry ([`PlenoraError::retry_disposition`],
-//! [`RetryDisposition`]), tutti da enumerazioni canoniche condivise
-//! (R9.5/R9.6: sottoinsieme ammesso, valori propri vietati — con **una
-//! deviazione dichiarata** per le categorie, vedi [`ErrorCategory`]). R9.7
-//! sostituisce il booleano `retryable()` della prima tassonomia — insufficiente e
-//! pericoloso: un timeout in lettura e' ritentabile, lo stesso timeout
-//! dopo l'invio di un commit non lo e' — con una disposizione calcolata
-//! da fase, effetto e idempotenza, mai dalla sola categoria.
+//! I quattro assi INDIPENDENTI di R9.1 (contratti trasversali v2.0-rc10 §9,
+//! proposta in attesa di ratifica — andra' in piano-v5.md#contratti-di-input):
+//! categoria ([`PlenoraError::category`]), fase ([`PlenoraError::phase`],
+//! [`ErrorPhase`]), effetto remoto ([`PlenoraError::remote_effect`],
+//! [`RemoteEffect`]) e disposizione di retry
+//! ([`PlenoraError::retry_disposition`], [`RetryDisposition`]), tutti da
+//! enumerazioni canoniche condivise (R9.5/R9.6: sottoinsieme ammesso, valori
+//! propri vietati — con **una deviazione dichiarata** per le categorie, vedi
+//! [`ErrorCategory`]).
+//!
+//! Perche' quattro assi e non un booleano `retryable()`: quel booleano e'
+//! insufficiente e pericoloso, perche' un timeout in lettura e' ritentabile e
+//! lo stesso timeout dopo l'invio di un commit non lo e'. R9.7 pretende una
+//! disposizione calcolata da fase, effetto e idempotenza, mai dalla sola
+//! categoria.
 //!
 //! Tagging di fase ai confini (piano-v5.md#contratti-di-input, BLOCK-03): la fase derivata per
 //! variante e' raffinata nei punti in cui il confine conosce il momento
@@ -179,7 +181,7 @@ pub enum FormaDegliAntenatiInvalida {
 ///
 /// La §10.0-ter e' esplicita: `Oa` dice che un antenato ha registrato
 /// pressione, **non** che sia stata la causa di questa terminazione — e
-/// tanto meno se quell'antenato conteneva altri domini concorrenti, nel qual
+/// tanto meno se quell'antenato contiene altri domini concorrenti, nel qual
 /// caso la pressione puo' venire da un vicino. Entra nell'evidenza
 /// riportata, non nella classificazione.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,13 +310,13 @@ impl PressioneDegliAntenati {
     ///
     /// Fuori dalla capacita' del tipo la risposta e' [`LivelloAntenato::NonOsservato`]
     /// quando il troncamento dice che quel livello esiste, e
-    /// [`LivelloAntenato::Inesistente`] quando la gerarchia finiva prima.
+    /// [`LivelloAntenato::Inesistente`] quando la gerarchia finisce prima.
     #[must_use]
     pub const fn livello(&self, distanza: usize) -> LivelloAntenato {
         // La distanza 0 e' il dominio stesso: i suoi segnali sono `Ol`,
         // `Kl`, `Kh` e `G`, non `Oa`. Non e' un antenato a **nessuna**
         // profondita', quindi la risposta non dipende dall'averla stabilita:
-        // controllare prima la profondita' faceva rispondere
+        // controllare prima la profondita' farebbe rispondere
         // `ProfonditaNonStabilita` a una domanda che non riguarda gli
         // antenati.
         if distanza == 0 {
@@ -390,10 +392,11 @@ pub struct DiagnosticaSupplementare {
 /// # Che cosa NON fa
 ///
 /// Non classifica. La matrice della §10.0-bis — e la regola per cui solo il
-/// group kill locale autorizza l'attribuzione al dominio — appartiene a
-/// `PR-3`, che consuma questo tipo. Qui c'e' la forma dell'evidenza, perche'
-/// e' superficie pubblica e va decisa una volta sola; la decisione su cosa
-/// significhi arriva dopo, e in un posto solo.
+/// group kill locale autorizza l'attribuzione al dominio — appartiene al
+/// classificatore (`plenora_engine::classificazione`), che consuma questo
+/// tipo. Qui c'e' la forma dell'evidenza, perche' e' superficie pubblica e va
+/// decisa una volta sola; che cosa significhi si decide in un posto solo, e
+/// non e' questo.
 ///
 /// # Perche' non una `String`
 ///
@@ -478,9 +481,10 @@ impl core::fmt::Display for PressioneDegliAntenati {
     /// Rende **solo** i livelli che esistono, e dichiara a parte cio' che si
     /// e' perso.
     ///
-    /// La versione precedente stampava tutti e otto gli slot con `n/d` in
-    /// quelli vuoti, e diceva quindi «otto livelli, sei illeggibili» di una
-    /// gerarchia che ne aveva due.
+    /// Stampare tutti e otto gli slot, con `n/d` in quelli vuoti, direbbe
+    /// «otto livelli, sei illeggibili» di una gerarchia che ne ha due: la
+    /// profondita' osservata e i livelli non letti sono cose diverse, e il
+    /// messaggio non deve confonderle.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let Some(presenti) = self.livelli_presenti else {
             return write!(f, "profondita' non stabilita");
@@ -613,9 +617,10 @@ pub enum PlenoraError {
     /// non estetica: `invalid_plan` dice «il piano e' sbagliato, correggilo»,
     /// mentre qui il piano e' corretto e sono i DATI a non entrare nel budget
     /// dichiarato. Chi orchestra reagisce diversamente ai due casi — il primo
-    /// si corregge, il secondo si rilancia con piu' budget o meno dati — e
-    /// senza questa variante la categoria `resource_limit` di R9.1 non era
-    /// prodotta da nulla: l'exit code corrispondente era irraggiungibile.
+    /// si corregge, il secondo si rilancia con piu' budget o meno dati. E'
+    /// anche l'unica variante che produce la categoria `resource_limit` di
+    /// R9.1: senza, quella categoria e il suo exit code sarebbero
+    /// irraggiungibili.
     #[error("resource limit: {0}")]
     ResourceLimit(String),
 
@@ -627,7 +632,7 @@ pub enum PlenoraError {
     ///
     /// Il messaggio atteso non e' arrivato, e' arrivato in una forma che il
     /// contratto non ammette, o e' arrivato quando lo stato non lo
-    /// prevedeva. Riguarda la **conversazione**, non il supporto: un canale
+    /// prevede. Riguarda la **conversazione**, non il supporto: un canale
     /// che si chiude a meta' e' [`PlenoraError::Io`], un canale che parla
     /// male e' questo.
     ///
@@ -657,7 +662,7 @@ pub enum PlenoraError {
 
     /// La configurazione dell'ambiente, non il piano, e' incoerente.
     ///
-    /// Divide cio' che [`PlenoraError::InvalidPlan`] teneva insieme: il
+    /// Divide cio' che [`PlenoraError::InvalidPlan`] terrebbe insieme: il
     /// piano descrive **cosa** calcolare ed e' portabile, la configurazione
     /// descrive **dove** e non lo e'. Chi orchestra corregge due cose
     /// diverse, in due posti diversi, e la categoria glielo dice.
@@ -729,8 +734,8 @@ pub enum PlenoraError {
     },
 
     /// Invariante interna violata: uno stato che per costruzione non
-    /// dovrebbe esistere (categoria `Internal` di par. 9, finora senza
-    /// variante). Sostituisce le primitive di panic (`unreachable!`,
+    /// dovrebbe esistere (categoria `Internal` di par. 9). Sta al posto
+    /// delle primitive di panic (`unreachable!`,
     /// `expect`) nei punti in cui il compilatore non puo' dimostrare
     /// l'esaustivita': il caso "impossibile" diventa un errore esplicito,
     /// mai un panic (R6). Il testo porta il contesto strutturale, mai
@@ -832,8 +837,8 @@ impl From<serde_json::Error> for PlenoraError {
 /// Genera insieme l'enum delle categorie, l'elenco completo, l'indice e il
 /// nome stabile: **una sola dichiarazione**, quattro derivati.
 ///
-/// Non e' zucchero sintattico. Le quattro cose erano scritte a mano e
-/// tenerle allineate era una raccomandazione:
+/// Non e' zucchero sintattico. Scritte a mano, le quattro cose resterebbero
+/// allineate solo per raccomandazione:
 ///
 /// - un `match` esaustivo (`index`, `as_str`) costringe il compilatore a
 ///   pretendere un braccio per ogni variante nuova, ma NON costringe nessuno
@@ -861,7 +866,7 @@ macro_rules! categorie_errore {
         /// componente (R9.5, mai valori propri), due sono estensioni locali
         /// dichiarate qui sotto.
         ///
-        /// # Deviazione dichiarata: due estensioni locali della Fase 4
+        /// # Deviazione dichiarata: due estensioni locali
         ///
         /// Diciotto valori vengono dalla **fonte congelata** (contratti
         /// trasversali v2.0-rc10, R9.5) e sono il sottoinsieme che il
@@ -870,8 +875,8 @@ macro_rules! categorie_errore {
         /// - `isolation_unavailable`
         /// - `unattributed_memory_pressure`
         ///
-        /// Sono **estensioni locali** introdotte dall'isolamento della Fase
-        /// 4, e vanno chiamate cosi'. Il canone esterno, alla versione
+        /// Sono **estensioni locali** richieste dall'esecuzione isolata, e
+        /// vanno chiamate cosi'. Il canone esterno, alla versione
         /// congelata, non le contiene: presentarle come se ne facessero
         /// parte direbbe a chi legge che un altro componente le
         /// riconoscera', e non e' vero.
@@ -940,8 +945,8 @@ macro_rules! categorie_errore {
             /// Categoria dal nome stabile, l'inverso di [`Self::as_str`].
             ///
             /// Si chiama `from_stable_name` e non `from_canonical` perche'
-            /// accetta anche le due estensioni locali: il nome precedente
-            /// prometteva che ogni stringa riconosciuta appartenesse al
+            /// accetta anche le due estensioni locali: `from_canonical`
+            /// prometterebbe che ogni stringa riconosciuta appartenga al
             /// canone congelato, e non e' cosi'.
             ///
             /// Generata dalla stessa lista dell'enum: una variante nuova e'
@@ -1028,7 +1033,7 @@ categorie_errore! {
 }
 
 /// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
-/// R9.1 (contratti trasversali v2.0-rc10 §9, milestone D).
+/// R9.1 (contratti trasversali v2.0-rc10 §9).
 ///
 /// Enumerazione canonica (R9.5): sono ammessi solo questi dieci valori —
 /// data-tools ne usa un sottoinsieme e non ne definisce di propri. Il
@@ -1094,7 +1099,7 @@ impl fmt::Display for ErrorPhase {
 
 /// Effetto restato sul sistema remoto o sul supporto quando l'operazione
 /// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6
-/// (contratti trasversali v2.0-rc10 §9, milestone D).
+/// (contratti trasversali v2.0-rc10 §9).
 ///
 /// L'esito ignoto NON e' una categoria d'errore (R9.3): [`RemoteEffect::Unknown`]
 /// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
@@ -1200,13 +1205,13 @@ impl PlenoraError {
     ///
     /// # Perche' esiste, e perche' il match e' esaustivo
     ///
-    /// La stessa selezione di varianti era scritta a mano in due punti —
-    /// `planner::at_node` e la scoperta dei contratti della CLI — e le due
-    /// copie erano identiche per coincidenza, non per costruzione. Una
-    /// variante nuova sarebbe stata dimenticata da entrambe, e l'errore
-    /// avrebbe perso il contesto **senza che nulla lo segnalasse**: il
-    /// chiamante avrebbe letto «CRS non risolvibile» senza sapere di quale
-    /// nodo o quale input.
+    /// La stessa selezione di varianti serve in due punti —
+    /// `planner::at_node` e la scoperta dei contratti della CLI — e scritta a
+    /// mano in ciascuno sarebbe identica per coincidenza, non per
+    /// costruzione. Una variante nuova verrebbe dimenticata da entrambe, e
+    /// l'errore perderebbe il contesto **senza che nulla lo segnali**: il
+    /// chiamante leggerebbe «CRS non risolvibile» senza sapere di quale nodo
+    /// o quale input.
     ///
     /// Il `match` qui sotto non ha un ramo di default. Aggiungere una
     /// variante a [`PlenoraError`] costringe a decidere se il contesto le si
@@ -1282,8 +1287,8 @@ impl PlenoraError {
     /// enumerazione canonica R9.7): calcolata da fase
     /// ([`PlenoraError::phase`]), effetto ([`PlenoraError::remote_effect`])
     /// e idempotenza dell'operazione — MAI dalla sola categoria.
-    /// Sostituisce il booleano `retryable()` della prima tassonomia, rimosso perche'
-    /// insufficiente e pericoloso (R9.7).
+    /// Un booleano `retryable()` non basta e inganna: la stessa categoria e'
+    /// ritentabile o no a seconda della fase e dell'effetto (R9.7).
     ///
     /// Calcolo per data-tools (la variante porta gia' fase ed effetto per
     /// mapping dichiarato; la tabella segue):
@@ -1355,28 +1360,29 @@ impl PlenoraError {
         }
     }
 
-    /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1,
-    /// milestone D): derivazione dichiarata per variante, RAFFINATA dal
+    /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1):
+    /// derivazione dichiarata per variante, RAFFINATA dal
     /// tagging esplicito ai confini ([`PlenoraError::Tagged`], piano-v5.md#contratti-di-input —
     /// BLOCK-03). Un errore taggato riporta la fase dichiarata dal confine
     /// che lo ha prodotto; uno non taggato la fase derivata dalla variante.
     ///
-    /// Confini che taggano (attuazione 2026-07-30):
+    /// Confini che taggano:
     ///
     /// - lettura degli input → [`ErrorPhase::Read`]: costruttori
     ///   `Input::read_ipc_*`, stream d'ingresso dell'executor
     ///   (`Network::input_stream`) e sonde dell'header IPC nella CLI — gli
     ///   errori `Io`/`DataMapping`/`Schema` che nascono leggendo una
-    ///   sorgente (prima emergevano come `Write`);
+    ///   sorgente, che senza il tag emergerebbero come `Write`, la fase
+    ///   derivata dalla variante;
     /// - publish (errori-e-limiti.md#publish-e-cleanup, `geo_transport::publish`): riconoscimento della
     ///   destinazione (filesystem non supportato, directory inesistente) →
     ///   [`ErrorPhase::Probe`]; creazione del tempfile →
     ///   [`ErrorPhase::Write`]; flush e sync del writer →
     ///   [`ErrorPhase::Finalize`]; check no-clobber «output gia' esistente»
     ///   e rename atomico (`persist`) → [`ErrorPhase::Commit`]. La
-    ///   destinazione non supportata torna cosi' a `Probe`, la fase che
-    ///   aveva come variante dedicata prima della fusione §9 in
-    ///   `Unsupported`. Gli errori della closure di scrittura (batch → IPC)
+    ///   destinazione non supportata cade cosi' su `Probe`, che e' la fase in
+    ///   cui la si scopre, e non su quella della variante `Unsupported` in cui
+    ///   e' confluita. Gli errori della closure di scrittura (batch → IPC)
     ///   NON sono taggati: restano derivati (`Write` per `Io`/`DataMapping`,
     ///   gia' corretti). Nessun errore di cleanup e' prodotto: il tempfile
     ///   e' ripulito via `Drop`, infallibile.
@@ -1450,7 +1456,7 @@ impl PlenoraError {
             // scritto nulla.
             Self::InvalidConfiguration(_) | Self::IsolationUnavailable(_) => ErrorPhase::Prepare,
             // Il conflitto e' per definizione al commit: e' li' che lo stato
-            // osservato smentisce quello su cui si era deciso.
+            // osservato smentisce quello su cui si e' deciso.
             Self::Conflict(_) => ErrorPhase::Commit,
             Self::Replayed(error) => error.phase,
             // Il tag del confine vince sulla derivazione per variante.
@@ -1468,9 +1474,10 @@ impl PlenoraError {
     ///
     /// # Il tag va SOTTO i wrapper trasparenti
     ///
-    /// La difesa contro l'annidamento guardava solo la variante esterna, e
-    /// bastava un wrapper in mezzo per aggirarla: un errore gia' taggato ma
-    /// avvolto in [`PlenoraError::RowDiagnostics`] veniva taggato di nuovo,
+    /// Una difesa contro l'annidamento che guardasse la sola variante
+    /// esterna sarebbe aggirata da un wrapper in mezzo: un errore gia'
+    /// taggato ma avvolto in [`PlenoraError::RowDiagnostics`] verrebbe
+    /// taggato di nuovo,
     ///
     /// ```text
     ///     RowDiagnostics -> Tagged(Read) -> causa
@@ -1492,24 +1499,22 @@ impl PlenoraError {
     ///
     /// e mai il contrario.
     ///
-    /// ## Che cosa resta invariato, e che cosa no
+    /// ## Che cosa e' invariante, e che cosa e' osservabile
     ///
-    /// Una stesura precedente di questo commento diceva che l'ordine «non
-    /// cambia nulla di osservabile». **E' falso**: `PlenoraError` e' un enum
-    /// pubblico, quindi la sua struttura si osserva — con il pattern
-    /// matching, con `Debug`, e percorrendo la catena di
-    /// [`std::error::Error::source`].
+    /// La canonizzazione **si vede**: `PlenoraError` e' un enum pubblico,
+    /// quindi la sua struttura si osserva — con il pattern matching, con
+    /// `Debug`, e percorrendo la catena di [`std::error::Error::source`].
     ///
     /// | | |
     /// |---|---|
-    /// | **invariati** | testo `Display`, categoria, fase finale, effetto, disposizione di retry, contesto DAG e payload diagnostico: tutti gli assi attraversano i due wrapper in modo simmetrico |
-    /// | **cambia, ed e' voluto** | la **struttura pubblica**, che viene canonizzata nella forma sopra. Un consumatore che faceva `match` sull'ordine dei wrapper, o che percorreva `source()` contando i livelli, vede una catena diversa |
+    /// | **invarianti** | testo `Display`, categoria, fase finale, effetto, disposizione di retry, contesto DAG e payload diagnostico: tutti gli assi attraversano i due wrapper in modo simmetrico |
+    /// | **osservabile, ed e' voluto** | la **struttura pubblica**, canonizzata nella forma sopra. Chi facesse `match` sull'ordine dei wrapper, o percorresse `source()` contando i livelli, vede questa catena e nessun'altra |
     ///
-    /// Il cambiamento non introduce una forma nuova: **ripristina il
-    /// contratto gia' documentato** poche righe sopra — primo tag vince,
-    /// nessun annidamento — che l'implementazione precedente violava appena
-    /// c'era un wrapper di mezzo. La rottura e' registrata in
-    /// `docs/release.md`.
+    /// La forma canonica non e' una forma in piu': e' il contratto dichiarato
+    /// poche righe sopra — primo tag vince, nessun annidamento — che senza
+    /// l'attraversamento del wrapper non varrebbe appena c'e' un wrapper di
+    /// mezzo. La rottura di compatibilita' verso chi osservava una catena
+    /// annidata e' registrata in `docs/release.md`.
     ///
     /// **`RowDiagnostics` e' l'unico altro wrapper trasparente**: sono le
     /// sole due varianti di questo enum che contengono un `Box<Self>`. Se ne
@@ -1900,7 +1905,7 @@ mod tests {
     #[test]
     fn internal_display_and_axes() {
         // R6: la variante Internal raccoglie le violazioni di invariante che
-        // prima erano primitive di panic; gli assi sono quelli dichiarati.
+        // altrimenti sarebbero panic; gli assi sono quelli dichiarati.
         let error = PlenoraError::Internal("stato impossibile".into());
         assert_eq!(error.to_string(), "internal error: stato impossibile");
         assert_eq!(error.category(), ErrorCategory::Internal);
@@ -1928,7 +1933,11 @@ mod tests {
     #[test]
     fn retry_disposition_names_are_exactly_the_canonical_five() {
         // R9.7: solo i cinque valori canonici, snake_case; nessun valore
-        // proprio di data-tools. La tabella e' esaustiva per costruzione.
+        // proprio di data-tools. Il test fissa la coppia variante -> nome
+        // stabile e `Display` = `as_str`. NON dimostra che l'enum non abbia
+        // altre varianti: `RetryDisposition` non espone un elenco da
+        // iterare, quindi il confronto e' fra due letterali e la copertura
+        // di questa tabella resta una convenzione.
         let all = [
             (RetryDisposition::Never, "never"),
             (RetryDisposition::Safe, "safe"),
@@ -1957,7 +1966,7 @@ mod tests {
     }
 
     /// Una istanza per variante costruibile direttamente, con la fase
-    /// attesa (milestone D, R9.1); le conversioni `From` esterne sono
+    /// attesa (R9.1); le conversioni `From` esterne sono
     /// coperte a parte, come in [`samples`].
     fn phase_samples() -> Vec<(PlenoraError, ErrorPhase)> {
         vec![
@@ -2028,11 +2037,11 @@ mod tests {
 
     #[test]
     fn l_elenco_completo_e_coerente_con_gli_indici_e_i_nomi() {
-        // Che `ALL` contenga TUTTE le varianti non e' piu' una proprieta' da
-        // verificare: enum ed elenco nascono dalla stessa lista della macro
-        // `categorie_errore`, quindi non possono divergere per costruzione.
-        // La versione precedente di questo test lo prometteva senza poterlo
-        // fare — iterava `ALL`, e una variante fuori da `ALL` non veniva
+        // Che `ALL` contenga TUTTE le varianti non e' una proprieta' da
+        // verificare qui: enum ed elenco nascono dalla stessa lista della
+        // macro `categorie_errore`, quindi non possono divergere per
+        // costruzione. Un test che lo promettesse iterando `ALL` prometterebbe
+        // piu' di quanto puo': una variante fuori da `ALL` non sarebbe
         // nominata da nessuno.
         //
         // Restano da verificare le proprieta' che la macro NON garantisce da
@@ -2092,12 +2101,12 @@ mod tests {
         // rigenerazione parte da `execution_reason`: qualunque dettaglio che
         // vivesse solo in `message` verrebbe cancellato.
         //
-        // E' successo davvero: la diagnostica opt-in dell'executor aggiungeva
-        // l'indice di batch al solo `message`, e la chiamata immediatamente
-        // successiva lo faceva sparire — la funzione risultava attiva senza
-        // aggiungere nulla. Il contratto e' quindi: chi arricchisce un
-        // `Replayed` deve scrivere in ENTRAMBI i campi, e questo test lo
-        // fissa dal lato che rigenera.
+        // Il caso concreto: la diagnostica opt-in dell'executor che
+        // aggiungesse l'indice di batch al solo `message` lo vedrebbe sparire
+        // alla chiamata successiva, e risulterebbe attiva senza aggiungere
+        // nulla. Il contratto e' quindi: chi arricchisce un `Replayed` deve
+        // scrivere in ENTRAMBI i campi, e questo test lo fissa dal lato che
+        // rigenera.
         let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
             category: ErrorCategory::Execution,
             phase: ErrorPhase::Write,
@@ -2162,10 +2171,10 @@ mod tests {
     /// group kill, e il dominio **alla radice** — cioe' `Oa` vuoto perche'
     /// non ci sono antenati, non perche' non li si sia letti.
     ///
-    /// Il commento precedente diceva «tutti e cinque i segnali osservati» e
-    /// costruiva gli antenati con un `default()` che li lasciava tutti a
-    /// `None`: descriveva come osservato cio' che era assente, che e'
-    /// precisamente la confusione contro cui questi tipi esistono.
+    /// La distinzione non e' pedanteria: costruire gli antenati con
+    /// `default()` li lascerebbe tutti a `None`, cioe' descriverebbe come
+    /// osservato cio' che e' assente — precisamente la confusione contro cui
+    /// questi tipi esistono.
     fn evidenza() -> EvidenzaDiLimite {
         EvidenzaDiLimite {
             oom_locali: Some(1),
@@ -2254,10 +2263,11 @@ mod tests {
 
     #[test]
     fn l_evidenza_entra_nel_messaggio_senza_perdere_la_separazione() {
-        // NOME PRECEDENTE: «i messaggi delle varianti nuove non portano
-        // dati». Non lo dimostrava e non poteva: le varianti portano una
-        // `String` libera, quindi una sentinella messa nel `contesto`
-        // uscirebbe dal `Display` e il test resterebbe verde. Un test non
+        // Il nome dice cio' che il test dimostra davvero. «I messaggi delle
+        // varianti nuove non portano dati» sarebbe indimostrabile qui: le
+        // varianti portano una `String` libera, quindi una sentinella messa
+        // nel `contesto` uscirebbe dal `Display` e il test resterebbe
+        // verde. Un test non
         // puo' provare l'assenza di dati finche' il canale che li
         // trasporterebbe e' aperto — servirebbero motivi chiusi, e la
         // privacy va verificata nei punti di COSTRUZIONE, che qui non ci
@@ -2299,8 +2309,8 @@ mod tests {
     fn il_group_kill_e_l_unico_segnale_causale_e_resta_distinguibile() {
         // La §10.0-ter appoggia l'attribuzione su `G` soltanto. Confondere
         // «non letto» con «non e' scattato» romperebbe la matrice in
-        // entrambi i versi, e la matrice e' di `PR-3`: qui si garantisce che
-        // il tipo le arrivi in grado di distinguerli.
+        // entrambi i versi, e la matrice sta nel classificatore: qui si
+        // garantisce che il tipo gli arrivi in grado di distinguerli.
         let non_letto = EvidenzaDiLimite {
             group_kill_locale: None,
             ..evidenza()
@@ -2319,9 +2329,9 @@ mod tests {
 
     #[test]
     fn il_dominio_alla_radice_non_e_una_gerarchia_illeggibile() {
-        // I due casi producevano la stessa struttura, ed e' il difetto che
-        // ha imposto `livelli_presenti`: «sopra non c'e' nessuno» e «non so
-        // quanto sia alta» sono affermazioni opposte.
+        // Senza `livelli_presenti` i due casi avrebbero la stessa struttura,
+        // ed e' precisamente cio' che quel campo impedisce: «sopra non c'e'
+        // nessuno» e «non so quanto sia alta» sono affermazioni opposte.
         let radice = PressioneDegliAntenati::alla_radice();
         let ignota = PressioneDegliAntenati::profondita_non_stabilita();
         assert_ne!(radice, ignota);
@@ -2338,7 +2348,7 @@ mod tests {
         // La distanza 0 e' il dominio stesso: i suoi segnali sono `Ol`,
         // `Kl`, `Kh` e `G`. La risposta non puo' dipendere dall'aver
         // stabilito la profondita' della gerarchia, perche' la domanda non
-        // riguarda gli antenati — e controllare prima la profondita' faceva
+        // riguarda gli antenati: controllare prima la profondita' farebbe
         // rispondere `ProfonditaNonStabilita` proprio nel caso in cui la
         // risposta e' nota con certezza.
         for antenati in [
@@ -2542,9 +2552,11 @@ mod tests {
     #[test]
     fn phase_names_are_exactly_the_canonical_ten() {
         // R9.5: solo i dieci valori canonici, snake_case; nessun valore
-        // proprio di data-tools. La tabella e' esaustiva per costruzione:
-        // aggiungere una variante all'enum senza toccare questo test lo
-        // farebbe fallire sul conteggio.
+        // proprio di data-tools. Il test fissa la coppia variante -> nome
+        // stabile e `Display` = `as_str`. NON dimostra che l'enum non abbia
+        // altre varianti: `ErrorPhase` non espone un elenco da iterare,
+        // quindi il confronto sul conteggio e' fra due letterali e la
+        // copertura di questa tabella resta una convenzione.
         let all = [
             (ErrorPhase::Validate, "validate"),
             (ErrorPhase::Connect, "connect"),
@@ -2567,7 +2579,9 @@ mod tests {
     #[test]
     fn remote_effect_names_are_exactly_the_canonical_five() {
         // R9.6: solo i cinque valori canonici; l'esito ignoto e' un effetto
-        // (`unknown`), non una categoria (R9.3).
+        // (`unknown`), non una categoria (R9.3). Come per le fasi e le
+        // disposizioni, il test fissa i nomi stabili e non la completezza
+        // dell'enum: `RemoteEffect` non espone un elenco da iterare.
         let all = [
             (RemoteEffect::None, "none"),
             (RemoteEffect::RolledBack, "rolled_back"),
@@ -2615,23 +2629,17 @@ mod tests {
     fn i_nomi_stabili_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti() {
         // I nomi stabili pubblici delle categorie. Diciotto sono anche
         // canonici §9 (R9.5, il sottoinsieme usato dal componente); due sono
-        // estensioni locali della Fase 4, e la tabella qui sotto non fa
-        // differenza perche' verifica la STABILITA' del nome, che vale per
-        // tutti e venti — non la sua autorita', che e' dichiarata altrove.
+        // estensioni locali, e la tabella qui sotto non fa differenza perche'
+        // verifica la STABILITA' del nome, che vale per tutte — non la sua
+        // autorita', che e' dichiarata altrove.
         //
-        // Il commento precedente diceva che «la tabella e' esaustiva per
-        // costruzione: aggiungere una variante senza toccare questo test lo
-        // farebbe fallire». Non era vero, e si e' visto: sono state aggiunte
-        // due categorie e questo test e' rimasto verde, perche' iterava la
-        // PROPRIA tabella e ne confrontava la lunghezza con un numero
-        // scritto accanto. Una categoria nuova non compariva da nessuna
-        // parte, ed e' precisamente il modo in cui una verifica non
-        // fallisce mai.
-        //
-        // La tabella resta scritta a mano — e' la seconda opinione su
-        // `as_str`, e derivarla renderebbe il test una tautologia — ma ora
-        // si itera `ErrorCategory::ALL` e le si CHIEDE di nominare ogni
-        // categoria supportata.
+        // La tabella e' scritta a mano: e' la seconda opinione su `as_str`, e
+        // derivarla renderebbe il test una tautologia. Il verso del giro fa
+        // il resto: si itera `ErrorCategory::ALL` e si CHIEDE alla tabella di
+        // nominare ogni categoria. Iterando invece la tabella e
+        // confrontandone la lunghezza con un numero scritto accanto, una
+        // categoria nuova non comparirebbe da nessuna parte — che e'
+        // precisamente il modo in cui una verifica non fallisce mai.
         let all = [
             (ErrorCategory::InvalidPlan, "invalid_plan"),
             (ErrorCategory::InvalidConfiguration, "invalid_configuration"),

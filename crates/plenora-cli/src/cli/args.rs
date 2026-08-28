@@ -166,8 +166,8 @@ pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
 /// - flag sconosciuto (`--boh`), anche in forma breve (`-x`);
 /// - flag a valore singolo ripetuto;
 /// - **posizionale inatteso** (`run pippo --plan ...`);
-/// - **flag usato come valore** (`--plan --output`), che silenziosamente
-///   rendeva `--output` il nome del piano;
+/// - **flag usato come valore** (`--plan --output`), che senza questo
+///   controllo renderebbe `--output` il nome del piano;
 /// - **argomenti extra** dopo `--version` e `--help`.
 ///
 /// # Errors
@@ -178,8 +178,8 @@ pub fn reject_unknown_flags(comando: &str, args: &[String]) -> Result<(), Plenor
     // e' un'invocazione che non si sta eseguendo.
     if matches!(comando, "--help" | "-h" | "--version" | "-V") {
         // `--json` e' il modificatore di formato di `--version` E SOLO SUO:
-        // su `--help` veniva accettato e ignorato, cioe' un'invocazione che
-        // il parser non eseguiva ma dichiarava valida.
+        // accettarlo e ignorarlo su `--help` significherebbe dichiarare
+        // valida un'invocazione che il parser non esegue.
         let ammette_json = matches!(comando, "--version" | "-V");
         let mut json_visto = false;
         for argument in args.iter().skip(1) {
@@ -206,8 +206,8 @@ pub fn reject_unknown_flags(comando: &str, args: &[String]) -> Result<(), Plenor
             // invocazione con un token estraneo.
             //
             // `--help` e `-h` sono lo STESSO flag: si registra la forma
-            // canonica, altrimenti `run --help -h` non risultava una
-            // ripetizione e passava.
+            // canonica, altrimenti `run --help -h` non risulterebbe una
+            // ripetizione e passerebbe.
             if visti.contains(&"--help") {
                 return Err(contract(format!(
                     "flag `{argument}` ripetuto: `{comando}` ne accetta una sola occorrenza"
@@ -265,15 +265,15 @@ pub fn reject_unknown_flags(comando: &str, args: &[String]) -> Result<(), Plenor
             continue;
         }
         // Flag a valore singolo: il valore deve esserci e NON deve essere un
-        // altro flag. `--plan --output out.arrow` prendeva `--output` come
-        // nome del piano e falliva molto piu' tardi, con un errore che non
-        // parlava del vero problema.
+        // altro flag. Senza questo controllo `--plan --output out.arrow`
+        // prenderebbe `--output` come nome del piano e fallirebbe molto piu'
+        // tardi, con un errore che non parla del vero problema.
         let Some(valore) = args.get(indice) else {
             return Err(contract(format!("valore mancante per {argument}")));
         };
-        // Anche la forma breve e' un flag: `--plan -x` consumava `-x` come
-        // nome del piano e falliva molto piu' tardi, con un errore che non
-        // parlava del vero problema.
+        // Anche la forma breve e' un flag: senza questo controllo `--plan -x`
+        // consumerebbe `-x` come nome del piano, con lo stesso fallimento
+        // tardivo e lo stesso errore fuori bersaglio.
         if valore.starts_with('-') && valore.len() > 1 {
             return Err(contract(format!(
                 "valore mancante per {argument}: `{valore}` e' un flag, non un valore"

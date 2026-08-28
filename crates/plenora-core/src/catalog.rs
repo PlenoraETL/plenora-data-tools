@@ -148,8 +148,9 @@ pub enum DeterminismPolicy {
 /// nessuna ambiguita' su NaN/-0.0 nel fingerprint del catalogo (piano-v5.md#identita-e-fingerprint).
 #[derive(Debug, Clone, Copy)]
 pub enum ExpansionConstraint {
-    /// `output / (left + right)`: default, retrocompatibile con la base
-    /// fissa left+right della prima implementazione.
+    /// `output / (left + right)`: default. E' la base fissa su cui e' tarato
+    /// `max_expansion_factor`, quindi un'operazione che non dichiara un
+    /// vincolo proprio resta misurata come lo sono le soglie.
     SumRelative,
     /// `output / left`: operazioni lookup-style (output <= left).
     LeftRelative,
@@ -166,8 +167,8 @@ pub enum ExpansionConstraint {
     /// **soglia** effettiva e' il fattore dichiarato, che sovrascrive
     /// `max_expansion_factor` per la sola operazione — vedi
     /// [`ExpansionConstraint::binding_threshold`]. Il fattore deve essere
-    /// finito e positivo (costante di catalogo, verificata in review; non
-    /// e' un input esterno). Nessuna op v1 lo usa: e' riservato a op
+    /// finito e positivo: e' una costante di catalogo, non un input
+    /// esterno. Nessuna op v1 lo usa, ed e' riservato a op
     /// future guidate da stime.
     Custom(f64),
 }
@@ -222,7 +223,7 @@ impl ExpansionConstraint {
     /// decomposto ([`crate::limits::expansion_exceeded`]). Decidere sul
     /// rapporto in doppia precisione arrotonda i conteggi, e con
     /// `left = right = 2^53` e `output = 2^53+1` il rapporto reale — maggiore
-    /// di 1 — diventava esattamente `1.0`: il limite non scattava. Le
+    /// di 1 — diventa esattamente `1.0`, e il limite non scatterebbe. Le
     /// metriche restano osservabili, ma non decidono.
     ///
     /// Base per vincolo: la somma degli input (`SumRelative`, `Custom`), il
@@ -541,27 +542,21 @@ impl OperationDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogo unificato delle 146 operazioni (Fase 1, decisione D17/D20; +4
-// estensioni geo v1.1: from_wkt, geometry_accessors, collect,
-// line_locate_point; +4 estensioni table v1.1: select_columns, limit, top_n,
-// stable_fingerprint; +3 estensioni geo v1.2: generate_grid, subdivide,
-// snap; +4 estensioni table v1.2: align_schema, concat_by_name,
-// hmac_sha256, validate_rules; +3 estensioni geo v1.3: coverage_validate,
-// shared_paths, cluster_dbscan; +1 estensione table v1.3: fuzzy_join).
+// Catalogo unificato delle operazioni (decisione D17/D20).
 //
-// Sorgenti dei metadati:
-// - `plenora-nogeo-tools/src/catalog.rs`  (62 op tabellari -> `table.*`);
-// - `plenora-geo-tools-arrow/src/catalog.rs` (65 op geografiche -> `geo.*`).
+// Le voci sono raggruppate per famiglia e, dentro ciascuna, per versione di
+// estensione. I separatori dentro `CATALOG` sono l'unico indice: un elenco
+// riepilogativo qui sopra divergerebbe dal contenuto in silenzio.
 //
-// Mapping documentato in piano-v5.md#alias-legacy:
+// Mapping degli id documentato in piano-v5.md#alias-legacy:
 // - tabellari: id storico invariato sotto il namespace `table.`;
 // - geografiche `geo_*`: il prefisso storico diventa il namespace
 //   (`geo_buffer` -> `geo.buffer`);
 // - predicati DE-9IM: `predicate_*` -> `geo.predicate_*`;
 // - estensioni geo nude: `<id>` -> `geo.<id>`.
 //
-// Scelte conservative dove il sorgente non dichiara il metadato:
-// - `arity` geo: i descrittori sorgente non contano gli input; `BinaryOrdered`
+// Scelte conservative dove i descrittori storici non dichiarano il metadato:
+// - `arity` geo: quei descrittori non contano gli input; `BinaryOrdered`
 //   solo per le op intrinsecamente binarie (join/overlay/filtri spaziali su
 //   due input); predicati, distanze a due colonne e `split` restano `Unary`
 //   (due colonne dello stesso input);
@@ -697,7 +692,7 @@ macro_rules! op {
     };
 }
 
-/// Catalogo unificato: 71 operazioni tabellari + 75 geografiche.
+/// Catalogo unificato delle operazioni, tabellari e geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
     // --- Tabellari Manipola-compat (37) -----------------------------------
     op!(
@@ -1512,10 +1507,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol
     ),
-    // expression v2 (Fase estensione funzioni/temporali): nuove funzioni
-    // (substring, regex_replace, between, in, greatest, least, floor, ceil,
-    // power) e date_trunc con output Date32/TimestampMs nativi -> tutte e 4
-    // le versioni incrementate (piano-v5.md#identita-e-fingerprint).
+    // `table.expression`: la grammatica comprende substring, regex_replace,
+    // between, in, greatest, least, floor, ceil e power, e `date_trunc` rende
+    // Date32/TimestampMs nativi. Ciascuna di quelle capacita' e' osservabile
+    // da fuori, quindi tutte e quattro le componenti di versione sono
+    // dichiarate esplicitamente invece di restare al default
+    // (piano-v5.md#identita-e-fingerprint).
     op!(
         "table.expression",
         Table,
@@ -3297,7 +3294,8 @@ mod tests {
     fn la_decisione_binaria_e_esatta_anche_dove_le_metriche_arrotondano() {
         // `left = right = 2^53`, `output = 2^53+1`,
         // fattore 1: il rapporto reale e' > 1, ma `output as f64` arrotonda a
-        // 2^53 e la metrica diventa esattamente 1.0 — il limite NON scattava.
+        // 2^53 e la metrica diventa esattamente 1.0. Se decidesse la
+        // metrica, il limite NON scatterebbe.
         const DUE_53: u64 = 1 << 53;
         let output = DUE_53 + 1;
         let metrica = JoinExpansion::compute(output, DUE_53, DUE_53);
@@ -3447,8 +3445,8 @@ mod tests {
             ])
         );
         for op in CATALOG {
-            // Esplicitamente fuori perimetro (M3 incluso): check di tipo
-            // per-riga, candidati a una milestone futura.
+            // Fuori dal perimetro della fusione: fonderle richiederebbe un
+            // controllo di tipo per-riga, che il runner non fa.
             if matches!(op.id, "geo.line_substring" | "geo.line_interpolate_point") {
                 assert_eq!(op.geo_fusion, GeoFusion::NotFusible, "{}", op.id);
             }

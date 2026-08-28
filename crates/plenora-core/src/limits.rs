@@ -46,12 +46,11 @@ impl Default for RowLimits {
 ///
 /// # Perche' e' una costante e non un letterale ripetuto
 ///
-/// Il valore era scritto due volte in codice di produzione — qui e nei
-/// default dei kernel tabellari — e le due copie potevano divergere senza che
-/// nulla lo notasse. Non e' un rischio ipotetico introdotto da una versione
-/// futura del formato: e' gia' possibile oggi, e sarebbe emerso come due
-/// componenti dello stesso processo che applicano budget diversi allo stesso
-/// piano.
+/// Il default serve in due punti — qui e nei kernel tabellari — e due
+/// letterali indipendenti divergerebbero senza che nulla lo noti. Non e' un
+/// rischio ipotetico che arriverebbe con una versione futura del formato: si
+/// manifesterebbe come due componenti dello stesso processo che applicano
+/// budget diversi allo stesso piano.
 ///
 /// Chi aggiunge un terzo sito deve puntare qui.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE as u64;
@@ -86,10 +85,10 @@ pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 /// Quota di spill su disco applicata quando il piano non la dichiara:
 /// **8 GiB**.
 ///
-/// Stessa classe di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: era scritta due
-/// volte in codice di produzione, qui e nei default dei kernel tabellari, e
-/// il percorso legacy porta la seconda copia negli override del piano. Due
-/// letterali uguali per convenzione, non per costruzione.
+/// Stessa classe di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: serve qui e nei
+/// kernel tabellari, che la referenziano, e il percorso legacy la porta fino
+/// agli override del piano. Due letterali indipendenti potrebbero divergere
+/// senza che nulla lo noti; una costante sola lo rende impossibile.
 pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Partizioni di spill applicate quando il piano non le dichiara: **64**.
@@ -180,13 +179,13 @@ impl Limits {
 
     /// Validazione dei limiti effettivi, in un punto solo.
     ///
-    /// Un limite fuori dominio va RIFIUTATO, non corretto. Il preparer
-    /// applicava `spill_partitions.max(2)` in silenzio: un piano che
-    /// dichiarava `spill_partitions: 1` veniva eseguito con 2, cioe' con
-    /// limiti diversi da quelli dichiarati e senza che nulla lo segnalasse.
-    /// Per un componente fail-closed la correzione silenziosa di un input e'
-    /// il verso sbagliato, e sparpagliata sui punti d'uso non copriva i piani
-    /// che quel percorso non attraversano (i piani solo-geo).
+    /// Un limite fuori dominio va RIFIUTATO, non corretto. Una correzione
+    /// silenziosa al preparer — `spill_partitions.max(2)` — farebbe eseguire
+    /// con 2 un piano che dichiara 1, cioe' con limiti diversi da quelli
+    /// dichiarati e senza che nulla lo segnali. Per un componente
+    /// fail-closed la correzione silenziosa di un input e' il verso
+    /// sbagliato, e sparpagliata sui punti d'uso non coprirebbe i piani che
+    /// quel percorso non attraversano (i piani solo-geo).
     ///
     /// Le regole ricalcano quelle del motore tabellare legacy — un limite a
     /// zero rende il componente incapace di fare alcunche', e va detto subito
@@ -252,10 +251,10 @@ impl Limits {
         // per un piano **pass-through** (`nodes: []`, `output` che riferisce
         // un input), che questo formato documenta e testa come valido: una
         // policy che ammette solo pass-through e' una policy sensata.
-        // Rifiutarli in blocco la rendeva impossibile, e faceva di peggio —
-        // il parse accettava il piano (zero nodi non superano un tetto di
-        // zero) e la validazione dei limiti lo rifiutava dopo: due verdetti
-        // discordi sullo stesso documento.
+        // Rifiutarli in blocco la renderebbe impossibile, e farebbe di
+        // peggio: il parse accetterebbe il piano (zero nodi non superano un
+        // tetto di zero) e la validazione dei limiti lo rifiuterebbe dopo —
+        // due verdetti discordi sullo stesso documento.
         //
         // Restano incompatibili con qualunque documento: un piano ha dei
         // byte, ha almeno un input da cui leggere, e ha identificatori non
@@ -314,9 +313,9 @@ impl Default for Limits {
 ///
 /// Calcolare la soglia come `(base_rows as f64) * factor` arrotonda i
 /// CONTEGGI: con `base_rows = output_rows = 2^53+1` e fattore `1` una
-/// cardinalita' valida veniva rifiutata, e — nel verso opposto, quello che
+/// cardinalita' valida verrebbe rifiutata, e — nel verso opposto, quello che
 /// conta per un limite — `base = 2^53`, `output = 2^53+1` e fattore `1`
-/// collassavano sullo stesso double, lasciando passare un'espansione oltre
+/// collasserebbero sullo stesso double, lasciando passare un'espansione oltre
 /// la soglia.
 ///
 /// Un fattore non finito o non positivo e' **fail-closed**: la funzione
@@ -373,8 +372,8 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
         // l'output non lo e' (espansione da niente) e zero altrimenti — la
         // stessa convenzione di `JoinExpansion::compute`. Va deciso qui,
         // prima degli spostamenti: con un fattore enorme l'esponente esce
-        // dai 128 bit e la guardia sullo shift rispondeva «non superato»
-        // anche se la soglia era zero.
+        // dai 128 bit e la guardia sullo shift risponderebbe «non superato»
+        // anche con la soglia a zero.
         return output_rows > 0;
     }
     if exponent >= 0 {
@@ -430,9 +429,10 @@ mod tests {
 
     #[test]
     fn un_limite_di_piano_a_zero_e_rifiutato() {
-        // Gli otto tetti strutturali restavano fuori da `validate`: un piano
-        // poteva dichiararne uno a zero, entrare nella forma canonica e
-        // quindi nel `plan_hash`, e nessuno lo diceva.
+        // Gli otto tetti strutturali passano da `validate`. Se non ci
+        // passassero, un piano potrebbe dichiararne uno a zero, entrare
+        // nella forma canonica e quindi nel `plan_hash`, senza che nessuno
+        // lo dica.
         fn azzerato(muta: impl FnOnce(&mut PlanLimits)) -> Limits {
             let mut limits = Limits::default();
             muta(&mut limits.plan);

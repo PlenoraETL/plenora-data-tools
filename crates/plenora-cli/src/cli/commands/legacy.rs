@@ -1,20 +1,20 @@
-//! I comandi ereditati dai due binari di origine.
+//! I comandi a compatibilita' congelata.
 //!
-//! `run` sui piani `schema_version <= 3` (port da
-//! `plenora-nogeo-tools`), il trasporto WKB v2 e v3 — `transform`,
-//! `spatial-join`, `transform-arrow`, `pair-arrow` — (port dal livello
-//! comandi di `plenora-geo-tools-arrow`), e `self-test`.
+//! `run` sui piani `schema_version <= 3`, il trasporto WKB v2 e v3 —
+//! `transform`, `spatial-join`, `transform-arrow`, `pair-arrow` — e
+//! `self-test`.
 //!
 //! # Perche' stanno insieme, e perche' qui
 //!
-//! Non sono un'accozzaglia: sono cio' che la fase 5 del refactor prevede di
-//! ridurre a un **confine di migrazione** — i piani traducibili instradati nel
-//! DAG v5, gli altri isolati — e poi rimuovere nella prossima major. Averli in
-//! un modulo solo rende quel confine visibile: si vede che cosa dovra' sparire
-//! e che cosa no, invece di doverlo dedurre.
+//! Sono il lato legacy di un dispatch: un piano con `schema_version <= 3`
+//! arriva qui, uno con una versione DAG va al planner/executor. Tenere quel
+//! lato in un modulo solo rende il confine visibile — si vede che cosa e'
+//! congelato e che cosa no, invece di doverlo dedurre.
 //!
-//! Il comportamento e' invariato rispetto ai sorgenti. Non e' codice da
-//! migliorare: e' codice da tenere fermo finche' non lo si toglie.
+//! Formato sul filo, messaggi ed exit code sono superficie compatibile: chi
+//! invoca questi comandi si aspetta esattamente quelli. Non e' codice da
+//! migliorare — una miglioria qui e' una rottura per qualcuno — e' codice da
+//! tenere fermo.
 
 use std::error::Error;
 use std::fs::{File, OpenOptions};
@@ -56,7 +56,7 @@ use crate::{
 /// restituendo il consumo che resta vivo dopo la concatenazione.
 ///
 /// Il budget dev'essere globale, non per input: con la contabilita' per
-/// singolo input i due lati di un piano binario potevano occupare ciascuno
+/// singolo input i due lati di un piano binario potrebbero occupare ciascuno
 /// l'intero `max_governed_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
 /// scala il residuo e passa quello.
 ///
@@ -65,12 +65,11 @@ use crate::{
 /// verifica il PICCO, non solo la somma dei batch accumulati.
 /// Memoria che resta del budget dichiarato dal piano dopo `trattenuti` byte.
 ///
-/// Fallisce CHIUSO, e la soglia e' lo ZERO, non il segno. La versione
-/// precedente rifiutava solo la sottrazione negativa e restituiva `0` quando
-/// il budget era esattamente esaurito: il passo successivo partiva comunque e
-/// veniva fermato piu' tardi, da `with_memory_budget(0)`. Fra i due momenti
-/// c'era spazio per allocare. Zero memoria residua e' gia' l'esaurimento:
-/// l'errore va dato qui.
+/// Fallisce CHIUSO, e la soglia e' lo ZERO, non il segno. Rifiutare la sola
+/// sottrazione negativa, rendendo `0` a budget esattamente esaurito, farebbe
+/// partire comunque il passo successivo, fermato piu' tardi da
+/// `with_memory_budget(0)`: fra i due momenti c'e' spazio per allocare. Zero
+/// memoria residua e' gia' l'esaurimento, e l'errore va dato qui.
 ///
 /// Il testo dice chi ha trattenuto la memoria, perche' e' l'informazione che
 /// serve a chi deve alzare il budget.
@@ -92,8 +91,8 @@ fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, Plen
 ///
 /// Il nome dice cosa e' e cosa non e'. L'output e' memoria trattenuta:
 /// finche' non e' pubblicato convive con gli input, quindi la somma
-/// dev'essere dentro il budget dichiarato, e senza questo controllo il
-/// caricamento era limitato e la produzione no. Ma il controllo avviene
+/// dev'essere dentro il budget dichiarato: senza questo controllo il
+/// caricamento sarebbe limitato e la produzione no. Ma il controllo avviene
 /// **dopo l'allocazione**: se il kernel alloca oltre la memoria disponibile,
 /// il processo esaurisce la memoria e questo errore non viene mai raggiunto.
 ///
@@ -157,9 +156,9 @@ fn load_complete_within(
         }
         // Questo percorso MATERIALIZZA l'intero input (i piani blocking e
         // binari lo richiedono): il budget di memoria va quindi verificato
-        // mentre si accumula, non dopo. Prima nessuno lo guardava e un file
-        // grande a piacere veniva concatenato in memoria fino all'esaurimento
-        // della macchina.
+        // mentre si accumula, non dopo: senza questo conteggio un file
+        // grande a piacere verrebbe concatenato in memoria fino
+        // all'esaurimento della macchina.
         bytes = bytes
             .checked_add(batch.get_array_memory_size())
             .ok_or_else(|| limite_risorsa("overflow nel conteggio dei byte"))?;
@@ -229,8 +228,8 @@ pub fn run_pipeline(
     if plan.requires_secondary() || plan.requires_blocking() {
         // Contabilita' GLOBALE del budget, non per input: il secondo lato
         // riceve cio' che resta dopo il primo. Chiamando due volte
-        // `load_complete` ciascun lato riceveva l'intero `max_governed_memory_bytes`,
-        // cioe' il doppio del dichiarato.
+        // `load_complete` ciascun lato riceverebbe l'intero
+        // `max_governed_memory_bytes`, cioe' il doppio del dichiarato.
         //
         // ATTENZIONE a cosa questo garantisce. Il CARICAMENTO e' limitato
         // davvero: i batch si contano mentre si accumulano e si smette prima
@@ -331,7 +330,7 @@ pub fn run_pipeline(
 }
 
 // ---------------------------------------------------------------------------
-// Trasporto WKB v2 (port dal livello comandi di plenora-geo-tools-arrow)
+// Trasporto WKB v2 (framing `PLNGEO2`)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
