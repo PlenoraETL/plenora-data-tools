@@ -1,4 +1,4 @@
-//! Executor del DAG — fase 2 `execute`.
+//! Executor del DAG — `execute`.
 //!
 //! Vincoli che governano questo modulo: streaming reale, hot path minimale,
 //! materializzazione minima, e osservabilita' per nodo anche dentro ai
@@ -19,7 +19,7 @@
 //! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
 //! nascosto.
 //!
-//! Fase 2B, cancellazione cooperativa (errori-e-limiti.md#cancellazione):
+//! Cancellazione cooperativa (errori-e-limiti.md#cancellazione):
 //! il chiamante passa un
 //! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
 //! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
@@ -37,18 +37,18 @@
 //! comodo `collect_batches`/`write_ipc_file*` consumano l'`Output`: con
 //! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
 //!
-//! Fase 2B, errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
+//! Errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
 //! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
 //! nessuna versione nuova) riportato negli errori `Execution`/`Cancelled` e nel
 //! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
 //! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
-//! gli assi §9; R9.7 ha sostituito il `retryable()` della prima tassonomia). La modalita'
+//! gli assi §9; R9.7 non ammette un booleano `retryable()`). La modalita'
 //! diagnostica opt-in
 //! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
 //! motivazione contesto strutturale — indice di batch, riga, colonna dove
 //! disponibile — MAI valori; a flag spento i messaggi sono invariati.
 //!
-//! Fase 2B — `TempStore` (errori-e-limiti.md): `execute` esegue lo scavenging
+//! `TempStore` (errori-e-limiti.md): `execute` esegue lo scavenging
 //! best-effort delle directory orfane all'avvio (sulla radice configurata,
 //! default temp di sistema) e crea lo store dell'esecuzione **fail-closed**
 //! (decisione documentata: niente degrado a tempdir semplice — lo store e'
@@ -58,7 +58,7 @@
 //! passa dal conteggio metriche) con throttle di
 //! [`HEARTBEAT_MIN_INTERVAL`]; il cleanup e' RAII al `Drop` dello stato.
 //!
-//! Fase 2B, governor della memoria — resource accounting (architettura.md#memoria) e sequenza logica
+//! Governor della memoria — resource accounting (architettura.md#memoria) e sequenza logica
 //! (architettura.md#determinismo): i batch attraversano gli archi come [`GovernedBatch`]
 //! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_governed_memory_bytes`
 //! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
@@ -140,7 +140,8 @@
 //! qualunque altro: il publish atomico non e' raggiunto (nessun publish
 //! dopo panic) e il cleanup (tempfile, buffer degli archi) avviene comunque
 //! via `Drop`. I confini `UnwindSafe` dichiarati per il DAG parallelo
-//! (worker, cancellazione globale, spill) restano Fase 2B.
+//! (worker, cancellazione globale, spill) valgono soltanto quando esistera'
+//! uno scheduler che li attraversi (M3).
 
 mod blocking;
 mod diagnostics;
@@ -253,7 +254,7 @@ use input::BatchStream;
 // Output
 // ---------------------------------------------------------------------------
 
-/// Fase 2 `execute` (architettura.md, architettura.md#planner-ed-executor): accetta solo il
+/// `execute` (architettura.md, architettura.md#planner-ed-executor): accetta solo il
 /// prodotto di [`crate::planner::validate`] (type-state), esegue
 /// internamente `prepare` + `execute_physical`.
 ///
@@ -292,8 +293,8 @@ pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) 
     // `max_parallelism` si applica QUI, prima di qualunque uso di Rayon:
     // dimensiona il pool del processo, l'unica leva che vincola davvero tutti
     // i percorsi paralleli dei kernel (errori-e-limiti.md, errori-e-limiti.md#limiti-dichiarati). Farlo solo nella
-    // CLI lasciava il limite inapplicato per chi incorpora l'engine come
-    // libreria — cioe' proprio dove nessuno lo avrebbe notato.
+    // CLI lascerebbe il limite inapplicato per chi incorpora l'engine come
+    // libreria — cioe' proprio dove nessuno lo noterebbe.
     crate::parallelism::configure(graph.effective_limits().max_parallelism)?;
     let plan = Rc::new(prepare(graph, &runtime)?);
     execute_physical(&plan, graph, inputs, &runtime)
@@ -348,8 +349,9 @@ fn execute_physical(
         let provided = input.schema()?;
         // Schema COMPLETO, metadati compresi: i metadati di campo portano le
         // chiavi canoniche della geometria (encoding, dimensioni, CRS), che
-        // confrontando i soli `fields()` restavano fuori — due sorgenti con
-        // gli stessi campi e metadati geometrici diversi passavano identiche.
+        // confrontando i soli `fields()` resterebbero fuori — due sorgenti
+        // con gli stessi campi e metadati geometrici diversi passerebbero per
+        // identiche.
         if provided.fields() != contract.schema.fields()
             || provided.metadata() != contract.schema.metadata()
         {
@@ -426,11 +428,11 @@ fn execute_physical(
         //
         // I tre `run_*` non bastano: un piano pass-through (`nodes: []`) non
         // ne attraversa nessuno — l'output e' direttamente lo stream
-        // dell'input — quindi non rinnovava mai il lock e non inizializzava
-        // nemmeno il conteggio dei fallimenti, rendendo inefficace qualunque
-        // controllo finale. Un pass-through geometrico usa staging
-        // temporaneo, e su un'esecuzione lunga se lo vedeva classificare
-        // orfano. Qui passa ogni batch di ogni piano.
+        // dell'input — quindi non rinnoverebbe mai il lock e non
+        // inizializzerebbe nemmeno il conteggio dei fallimenti, rendendo
+        // inefficace qualunque controllo finale. Un pass-through geometrico
+        // usa staging temporaneo, e su un'esecuzione lunga se lo vedrebbe
+        // classificare orfano. Qui passa ogni batch di ogni piano.
         output_state.heartbeat();
         output_state.verifica_heartbeat()?;
         let batch = &governed.batch;
@@ -463,7 +465,7 @@ fn execute_physical(
     })) as BatchStream;
 
     let contract = graph.output_contract()?.clone();
-    // Milestone C: lo schema IPC (blocco canonico R2.2 + versione R2.5) e'
+    // Lo schema IPC (blocco canonico R2.2 + versione R2.5) e'
     // calcolato una sola volta qui — fail-fast su divergenze R2.6, prima di
     // toccare i dati.
     let schema = canonical_output_schema(&contract)?;
@@ -610,11 +612,11 @@ impl Network {
                 let limits = &state.plan.limits();
                 // Fase `Read` per tutti e tre: questi tetti scattano mentre
                 // si LEGGE la sorgente, allo stesso confine dei tetti del
-                // trasporto (`ipc_boundary::read_error`). Prima uscivano come
-                // `Validate` per derivazione di variante, e al medesimo
-                // confine due limiti sulla stessa lettura dichiaravano fasi
-                // diverse: un tetto di byte diceva «lettura», un tetto di
-                // righe diceva «validazione». Il tag esplicito vince sulla
+                // trasporto (`ipc_boundary::read_error`). Per derivazione di
+                // variante uscirebbero come `Validate`, e al medesimo confine
+                // due limiti sulla stessa lettura dichiarerebbero fasi
+                // diverse: un tetto di byte direbbe «lettura», un tetto di
+                // righe direbbe «validazione». Il tag esplicito vince sulla
                 // derivazione, come stabilito in piano-v5.md#contratti-di-input.
                 if entry.0 > limits.rows.max_input_rows {
                     return Err(PlenoraError::ResourceLimit(format!(
@@ -707,7 +709,7 @@ impl Network {
                             "segmento blocking senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // architettura.md#memoria (Fase 2B, spill generalizzato): verso un kernel spill-capable
+                    // architettura.md#memoria (spill generalizzato): verso un kernel spill-capable
                     // la quota governor dei batch drenati e' rilasciata
                     // subito. La soglia di attivazione dello spill ha la
                     // stessa grandezza del budget (byte stimati dell'input vs
@@ -802,10 +804,10 @@ pub(super) fn panic_step_error(
     let forma = plenora_core::panic_policy::forma_payload(payload);
     // Categoria `Internal`, non `InvalidPlan`. Un panico dentro un kernel e'
     // un difetto NOSTRO — o di una dipendenza che usiamo — e il chiamante non
-    // ha nulla da correggere nel proprio piano. Finche' `step_error`
-    // avvolgeva tutto in `Execution` la classificazione qui sotto era
-    // invisibile; da quando le categorie si conservano, dire `invalid_plan`
-    // manderebbe chi legge a cercare un errore che non ha commesso.
+    // ha nulla da correggere nel proprio piano. La classificazione conta
+    // perche' `step_error` conserva le categorie invece di avvolgere tutto in
+    // `Execution`: dire `invalid_plan` manderebbe chi legge a cercare un
+    // errore che non ha commesso.
     step_error(
         kernel,
         PlenoraError::Internal(format!("panic nel kernel: {forma}")),

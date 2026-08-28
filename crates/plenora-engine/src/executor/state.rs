@@ -60,11 +60,11 @@ pub(super) struct ExecState {
     /// Store temporaneo dell'esecuzione (errori-e-limiti.md): heartbeat al punto
     /// centrale, cleanup RAII al `Drop`.
     pub(super) temp_store: RefCell<TempStore>,
-    /// Directory di spill condivisa (architettura.md#memoria, Fase 2B, spill generalizzato): `spill/`
+    /// Directory di spill condivisa (architettura.md#memoria, spill generalizzato): `spill/`
     /// sotto il `TempStore`, risolta UNA volta alla costruzione (hot path minimale) —
     /// il path e' fisso per tutta l'esecuzione.
     pub(super) spill_directory: PathBuf,
-    /// Metriche di spill aggregate (architettura.md#memoria, Fase 2B, spill generalizzato): alimentate dai
+    /// Metriche di spill aggregate (architettura.md#memoria, spill generalizzato): alimentate dai
     /// percorsi `*_spilled` attivati nei nodi tabellari.
     pub(super) spill_metrics: RefCell<SpillMetrics>,
     /// Istante dell'ultimo heartbeat scritto (throttle).
@@ -106,10 +106,10 @@ pub(super) const HEARTBEAT_MAX_FAILURE: Duration = Duration::from_secs(300);
 
 /// Aggiunge il contesto strutturale al testo di un errore.
 ///
-/// Estratta da `ExecState::with_diagnostics` per poter essere verificata
-/// **insieme** a `with_execution_id`, che e' il punto in cui il difetto
-/// viveva: le due funzioni vanno esercitate in sequenza, e un test che
-/// costruisse a mano lo stato gia' corretto non proverebbe nulla.
+/// Separata da `ExecState::with_diagnostics` per poter essere verificata
+/// **insieme** a `with_execution_id`: e' la SEQUENZA delle due a poter
+/// perdere il dettaglio, e un test che costruisse a mano lo stato gia'
+/// corretto non proverebbe nulla.
 ///
 /// Il dettaglio e' contesto STRUTTURALE — indice di batch, riga, colonna —
 /// mai un valore.
@@ -247,7 +247,7 @@ impl ExecState {
         metrics
     }
 
-    /// Directory di spill condivisa dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
+    /// Directory di spill condivisa dell'esecuzione (architettura.md#memoria, spill generalizzato):
     /// sotto-directory `spill/` del `TempStore` — creata dal workspace di
     /// spill al primo uso, ripulita dei file a fine operazione e rimossa
     /// interamente dal `Drop` RAII dello store. Risolta in `new` (hot path minimale).

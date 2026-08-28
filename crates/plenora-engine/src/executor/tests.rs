@@ -1,4 +1,4 @@
-//! Test dell'executor (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor;
+//! Test dell'executor (architettura.md, architettura.md#planner-ed-executor;
 //! architettura.md: streaming reale, segmenti lineari senza code,
 //! parallelismo solo dove conviene, materializzazione minima).
 
@@ -310,11 +310,11 @@ fn stored_edge_error_preserves_row_diagnostics_and_axes() {
 
 /// Attribuzione di un errore di passo: nodo, operazione e testo.
 ///
-/// Dopo che la propagazione ha smesso di sostituire la categoria con
-/// `Execution`, il contesto del passo viaggia nei CAMPI di `Replayed` invece
-/// che nel testo di `Execution`. I test che verificavano l'attribuzione
-/// leggendo la stringa non possono piu' farlo: leggono i campi, che e' anche
-/// cio' che finisce nel blocco `context` dell'envelope.
+/// La propagazione non sostituisce la categoria con `Execution`: il contesto
+/// del passo viaggia nei CAMPI di `Replayed`, non nel testo. Un test che
+/// leggesse l'attribuzione dalla stringa guarderebbe il posto sbagliato —
+/// questi leggono i campi, che sono anche cio' che finisce nel blocco
+/// `context` dell'envelope.
 fn attribuzione(error: &PlenoraError) -> (String, String, String) {
     match error {
         PlenoraError::Replayed(inner) => (
@@ -337,15 +337,15 @@ fn attribuzione(error: &PlenoraError) -> (String, String, String) {
 
 #[test]
 fn il_dettaglio_diagnostico_sopravvive_all_assegnazione_dell_execution_id() {
-    // Nono giro, finding 3. `with_diagnostics` aggiungeva il suffisso al solo
-    // `message`; `with_execution_id`, chiamata subito dopo, RIGENERA il
-    // messaggio da `execution_reason` per le categorie `Execution` e
-    // `Cancelled` — e il suffisso spariva.
+    // `with_execution_id` RIGENERA il messaggio da `execution_reason` per
+    // le categorie `Execution` e `Cancelled`. Un `with_diagnostics` che
+    // scrivesse il suffisso nel solo `message` lo vedrebbe sparire alla
+    // chiamata successiva.
     //
     // Il test esercita la SEQUENZA reale delle due funzioni, non uno stato
     // costruito a mano: partendo da un `Replayed` senza suffisso, applica
-    // l'arricchimento e poi l'assegnazione dell'id. Ripristinando la vecchia
-    // implementazione — che scriveva solo in `message` — cade.
+    // l'arricchimento e poi l'assegnazione dell'id. Scrivendo il suffisso
+    // nel solo `message`, cade.
     //
     // Nota di raggiungibilita': con la politica di propagazione attuale non
     // ho individuato un percorso in cui un errore che passa da
@@ -780,12 +780,11 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
 
 #[test]
 fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
-    // 4 batch validi, ciascuno sotto il budget di
-    // memoria, ma con output cumulativi SOPRA budget. Prima del fix gli
-    // accepted restavano in RAM con lease trattenuti fino a fine scan e lo
-    // stream valido veniva rifiutato ("budget esaurito"): ora gli accepted
-    // sono staged su IPC bounded (lease rilasciato per batch, ri-riserva al
-    // replay dopo lo scan completo).
+    // 4 batch validi, ciascuno sotto il budget di memoria, ma con output
+    // cumulativi SOPRA budget. Gli accepted sono staged su IPC bounded —
+    // lease rilasciato per batch, ri-riserva al replay dopo lo scan
+    // completo. Trattenendoli in RAM con i lease vivi fino a fine scan,
+    // questo stream valido verrebbe rifiutato per «budget esaurito».
     let schema = Arc::new(Schema::new(vec![Field::new(
         "effective_date",
         DataType::Utf8,
@@ -951,9 +950,9 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
         // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
         // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
-        // quota temporanea non verrebbe nemmeno interrogata. Il fatto che
-        // questo test **debba** ora dichiararlo e' la prova che la modalita'
-        // memoria e' quella predefinita.
+        // quota temporanea non verrebbe nemmeno interrogata. Doverlo
+        // dichiarare e' cio' che rende visibile quale sia la modalita'
+        // predefinita: la memoria.
         "limits": {"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576},
         "nodes": [{
             "id": "cast",
@@ -1355,7 +1354,7 @@ fn late_wkb_rejections_are_complete_absolute_and_publish_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// Dimensionalita' (B1.3): gate stride-aware e passthrough tabellare
+// Dimensionalita': gate stride-aware e passthrough tabellare
 // ---------------------------------------------------------------------------
 
 /// Schema geo con dimensionalita' XYZ dichiarata nei metadati `geo`.
@@ -1399,7 +1398,7 @@ fn geo_batch_xyz(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
 
 #[test]
 fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
-    // (c) B1.3: il gate in lettura valida con la dimensionalita' del
+    // (c) il gate in lettura valida con la dimensionalita' del
     // contratto dell'arco — una cella XY su un contratto XYZ e' l'errore
     // dedicato di mismatch, prima di qualunque output.
     let plan = nodeless_plan();
@@ -1419,7 +1418,7 @@ fn wkb_type_code_incoherent_with_contract_dimensions_fails_at_the_gate() {
 
 #[test]
 fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
-    // (e) B1.3: batch xyz -> filtro tabellare (passthrough) -> celle xyz
+    // (e) batch xyz -> filtro tabellare (passthrough) -> celle xyz
     // intatte byte-per-byte; i metadati di output dichiarano ancora xyz.
     let plan = json!({
         "schema_version": 5,
@@ -1475,7 +1474,7 @@ fn ewkb_srid_point_wkb(srid: u32, x: f64, y: f64) -> Vec<u8> {
     payload
 }
 
-/// Come `geo_contract`, con encoding EWKB dichiarato (fixture B1.4).
+/// Come `geo_contract`, con encoding EWKB dichiarato.
 fn geo_contract_ewkb() -> DataContract {
     let mut contract = geo_contract();
     contract.geometries[0].encoding = Some(GeometryEncoding::Ewkb);
@@ -1673,12 +1672,12 @@ fn conflicting_field_and_contract_encodings_fail_as_schema_error() {
         Ok(_) => panic!("encoding field/contratto incoerenti accettati"),
     };
     assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
-    // Il rifiuto arriva ora dalla validazione del contratto, PRIMA di aprire
+    // Il rifiuto arriva dalla validazione del contratto, PRIMA di aprire
     // gli input: `DataContract::validate` confronta l'encoding dichiarato dal
     // contratto con quello dei metadati canonici della colonna. Il controllo
-    // dell'executor su field/contratto resta come difesa in profondita', ma
-    // non e' piu' raggiungibile da un piano — ed e' il verso giusto: la
-    // stessa incoerenza si vedeva solo dopo aver cominciato a leggere.
+    // dell'executor su field/contratto resta come difesa in profondita' e non
+    // e' raggiungibile da un piano — ed e' il verso giusto: raggiungendolo,
+    // la stessa incoerenza si vedrebbe solo dopo aver cominciato a leggere.
     assert!(
         error.to_string().contains("encoding del contratto"),
         "{error}"
@@ -1778,7 +1777,7 @@ fn matching_ewkb_srid_still_fails_at_geometry_kernel_decode() {
 
 #[test]
 fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
-    // (f) B1.4, comportamento dichiarato: un payload EWKB senza flag Z/M e
+    // (f) comportamento dichiarato: un payload EWKB senza flag Z/M e
     // senza SRID ha type code identici a WKB ISO — indistinguibile sul filo.
     // Con `encoding: ewkb` dichiarato e dimensionalita' `xy` il gate lo
     // accetta e i byte passano invariati (la validazione resta sui type
@@ -2097,7 +2096,7 @@ fn ipc_roundtrip_through_publish_atomic() {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone C: blocco canonico R2.2/R2.5 nello schema IPC di output
+// Blocco canonico R2.2/R2.5 nello schema IPC di output
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -2607,9 +2606,9 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
 fn reproject_replaces_canonical_crs_keys_end_to_end() {
     // Reperto 2, end-to-end: il campo di input porta le chiavi canoniche
     // della SORGENTE (`crs_id=EPSG:32632`, `srid`, `axis_order`); il
-    // contratto validato dice il target. Prima del fix il guard R2.6
-    // rifiutava l'output; ora la sostituzione avviene nel contratto
-    // (analyze) e l'esecuzione arriva in fondo.
+    // contratto validato dice il target. La sostituzione delle chiavi
+    // avviene nel contratto (analyze), quindi il guard R2.6 non vede una
+    // divergenza e l'esecuzione arriva in fondo.
     let schema: SchemaRef = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
         geometry_output_field("geom", "EPSG:32632")
@@ -3699,7 +3698,7 @@ fn from_wkt_and_generate_grid_fail_closed_on_crs_without_proj_backend() {
 }
 
 // ---------------------------------------------------------------------------
-// Regressioni review engine: limiti cablati, tee errori, blocking fail-closed
+// Limiti cablati, tee degli errori, blocking fail-closed
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -4036,10 +4035,10 @@ fn blocking_concat_error_is_attributed_to_the_node() {
         vec![GovernedBatch::new(wrong, None, None)],
     )
     .expect_err("concat con schema incoerente");
-    // Errore Arrow dentro il kernel: la categoria che portava — `Arrow`,
-    // mappata su `data_mapping` — viene ora CONSERVATA, e il contesto del
-    // passo si aggiunge invece di sostituirla. Prima l'errore usciva come
-    // `execution` e la sua natura si perdeva.
+    // Errore Arrow dentro il kernel: la categoria che porta — `Arrow`,
+    // mappata su `data_mapping` — e' CONSERVATA, e il contesto del passo si
+    // aggiunge invece di sostituirla. Sostituendola, l'errore uscirebbe come
+    // `execution` e la sua natura si perderebbe.
     let (node, operation, reason) = attribuzione(&error);
     assert_eq!(node, "g", "attribuzione al nodo");
     assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
@@ -4796,8 +4795,8 @@ fn diagnostics_on_enriches_step_error_with_batch_index() {
         !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
         "il testo del panic non va pubblicato: {reason}"
     );
-    // Il contesto strutturale (indice di batch) resta nel testo, che ora e'
-    // quello del `Replayed` invece di quello di `Execution`: l'arricchimento
+    // Il contesto strutturale (indice di batch) resta nel testo, che e'
+    // quello del `Replayed` e non quello di `Execution`: l'arricchimento
     // segue l'errore, non l'involucro.
     assert!(
         reason.contains("[batch_seq=0]"),
@@ -4844,7 +4843,7 @@ fn diagnostics_on_wkb_error_adds_column_context_without_values() {
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato (architettura.md#memoria, Fase 2B): attivazione preventiva al
+// Spill generalizzato (architettura.md#memoria): attivazione preventiva al
 // dispatch, TempStore condiviso, metriche e quota temp.
 // ---------------------------------------------------------------------------
 
@@ -5224,8 +5223,8 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     };
     let (fused_error, fused_metrics) = run(true);
     let (plain_error, plain_metrics) = run(false);
-    // Il panic nasce nel kernel centrale del gruppo: il gruppo era **entrato**,
-    // e resta contato. E' la promessa scritta su `geo_fusion_groups_started`,
+    // Il panic nasce nel kernel centrale del gruppo: il gruppo e'
+    // **entrato**, e resta contato. E' la promessa scritta su `geo_fusion_groups_started`,
     // e senza questo caso resterebbe soltanto scritta.
     assert_gruppi_avviati(&fused_metrics, &plain_metrics, 1);
     for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
@@ -5455,9 +5454,8 @@ fn input_batch_schema_mismatch_is_tagged_read() {
 
 #[test]
 fn i_tetti_di_risorsa_sull_input_dichiarano_la_fase_di_lettura() {
-    // Ottavo giro, finding 2. Prima: nessun tag e fase derivata `Validate`,
-    // perche' il limite era modellato come vincolo del piano. Da quando i
-    // limiti di risorsa hanno una variante propria, questo tetto scatta
+    // Senza tag, la fase sarebbe `Validate` per derivazione dalla variante,
+    // come se il limite fosse un vincolo del piano. Ma questo tetto scatta
     // LEGGENDO la sorgente, allo stesso confine dei tetti del trasporto — che
     // dichiarano `Read`. Due limiti sulla stessa lettura non possono
     // dichiarare fasi diverse: il tag esplicito vince sulla derivazione
@@ -5967,16 +5965,16 @@ fn atomic_input_gate_rejects_late_invalid_with_zero_accepted_over_budget() {
 }
 
 // ---------------------------------------------------------------------------
-// Quinto giro — un errore di `Inputs` non deve lasciare tracce
+// Un errore di `Inputs` non deve lasciare tracce
 // ---------------------------------------------------------------------------
 
 #[test]
 fn un_inserimento_duplicato_lascia_inputs_invariato() {
-    // `insert` scriveva PRIMA di accorgersi del duplicato: la chiamata
-    // restituiva `Err` ma il reader precedente era gia' stato sostituito, e
-    // con `add_with_contract` restava appaiato al contratto vecchio. Il test
-    // guarda lo stato interno perche' e' esattamente li' che il difetto
-    // viveva: `is_err()` da solo lo mancava.
+    // `insert` scriverebbe PRIMA di accorgersi del duplicato: renderebbe
+    // `Err` avendo gia' sostituito il reader, e con `add_with_contract` lo
+    // lascerebbe appaiato al contratto vecchio. Il test guarda lo stato
+    // interno perche' e' esattamente li' che quel difetto vivrebbe:
+    // `is_err()` da solo lo mancherebbe.
     let primo =
         || Input::from_batches(vec![geo_batch(&[1], &[Some(point_wkb(1.0, 1.0))])]).expect("primo");
     let secondo = || {
@@ -6601,12 +6599,12 @@ fn m2d_dictionary_e_nested() {
 
 #[test]
 fn m2d_budget_stretto_non_regredisce_a_resource_limit() {
-    // Il rischio dichiarato dello staging memory-first: trattenere i lease potrebbe trasformare
-    // un input prima eseguibile in un falso `ResourceLimit`. La soglia lo
-    // impedisce facendo scattare il disco PRIMA della passata che non
-    // starebbe nel budget. Qui il budget e' molto piu' stretto del tetto per
-    // batch (64 MiB), quindi la modalita' disco parte dal primo batch e il
-    // comportamento e' identico a quello precedente allo staging memory-first: il piano riesce.
+    // Il rischio dichiarato dello staging memory-first: trattenere i lease
+    // puo' trasformare un input eseguibile in un falso `ResourceLimit`. La
+    // soglia lo impedisce facendo scattare il disco PRIMA della passata che
+    // non starebbe nel budget. Qui il budget e' molto piu' stretto del tetto
+    // per batch (64 MiB), quindi la modalita' disco parte dal primo batch e
+    // il piano riesce — come riuscirebbe senza staging in memoria.
     for budget in [64_u64 * 1024, 256 * 1024, 1024 * 1024] {
         let piano = json!({
             "schema_version": 5,
@@ -6673,8 +6671,8 @@ fn m2d_fanout_batch(indice: usize) -> RecordBatch {
 /// Mentre il primo ramo viene drenato, `EdgeShared` conserva i batch gia'
 /// prelevati per il secondo e ne **trattiene i lease** (buffer del tee,
 /// `executor.rs`). Quelle prenotazioni sono vive nel governor ma invisibili a
-/// qualunque contatore locale del ramo: e' la classe che la prima soglia dello staging memory-first
-/// non copriva.
+/// qualunque contatore locale del ramo: e' la classe che una soglia basata
+/// sul solo contatore locale non coprirebbe.
 ///
 /// I rami usano `table.type_cast` da testo a intero — operazione
 /// row-diagnostics — perche' **riduce** i byte: trenta caratteri diventano
@@ -6749,15 +6747,14 @@ fn m2d_fanout_nessun_falso_resource_limit() {
     // disco riesce, deve riuscire anche quello che puo' scegliere la memoria,
     // con lo stesso risultato e senza sfondare il budget.
     //
-    // COPERTURA, detta com'e'. Questo test **non discrimina** fra la soglia
-    // attuale e quella precedente: eseguito con la vecchia ripristinata,
-    // passa ugualmente. La ragione e' strutturale ed e' emersa misurando: in
-    // un fan-out i due rami devono riconvergere, e in v1 sempre attraverso un
-    // nodo che materializza (`concat`/`join` binari, `BinaryBlocking`).
-    // Quel nodo drena e trattiene comunque tutti i batch del ramo, quindi il
-    // picco governato e' lo STESSO nelle due modalita' — misurato: 143 744
-    // byte in entrambe. Dove il tee trattiene, la memoria non aggiunge nulla
-    // al picco.
+    // COPERTURA, detta com'e'. Questo test **non discrimina** fra due
+    // soglie diverse: passa con l'una e con l'altra. La ragione e'
+    // strutturale, ed e' misurata: in un fan-out i due rami devono
+    // riconvergere, e in v1 sempre attraverso un nodo che materializza
+    // (`concat`/`join` binari, `BinaryBlocking`). Quel nodo drena e trattiene
+    // comunque tutti i batch del ramo, quindi il picco governato e' lo STESSO
+    // nelle due modalita' — 143 744 byte in entrambe. Dove il tee trattiene,
+    // la memoria non aggiunge nulla al picco.
     //
     // Il test resta come guardia dell'invariante: se comparisse un binario
     // streaming, uno scheduler parallelo o un altro punto di ritenzione,

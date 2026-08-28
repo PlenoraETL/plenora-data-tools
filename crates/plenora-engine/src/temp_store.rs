@@ -308,10 +308,10 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
         //   un heartbeat piu' vecchio della grazia significa che *quel*
         //   processo non sta scrivendo — chiunque sia il PID.
         //
-        // Interrogare il PID su un heartbeat FRESCO era il difetto: bastava
-        // un hostname omonimo su una `temp_root` condivisa perche' un PID
-        // inesistente qui — ma vivo altrove — motivasse la cancellazione di
-        // un'esecuzione che stava scrivendo in quel momento.
+        // Il PID NON si interroga su un heartbeat fresco: basterebbe un
+        // hostname omonimo su una `temp_root` condivisa perche' un PID
+        // inesistente qui — ma vivo altrove — motivi la cancellazione di
+        // un'esecuzione che sta scrivendo in quel momento.
         if eta_heartbeat > GRAZIA_PID.as_secs()
             && hostname_confrontabile(&lock.hostname)
             && !process_alive(lock.pid)

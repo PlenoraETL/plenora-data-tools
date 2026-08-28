@@ -29,10 +29,9 @@
 //!
 //! # Come si separano le identita'
 //!
-//! La v6 non collassa nel canonico v5, e non lo fa **cambiando la versione a
-//! un piano v5**: quella era una stesura precedente, e produceva un `PlanV5`
-//! che dichiarava `6` senza portare il tetto — un valore che nessun parser
-//! puo' generare.
+//! La v6 non collassa nel canonico v5, e non ci si arriva **cambiando la
+//! versione a un piano v5**: quello produrrebbe un `PlanV5` che dichiara `6`
+//! senza portare il tetto, cioe' un valore che nessun parser puo' generare.
 //!
 //! Qui il documento validato e' un [`super::ValidatedPlanV6`], che conserva
 //! un [`PlanV6`] intero. La sua forma canonica dichiara `schema_version: 6`,
@@ -120,8 +119,8 @@ pub struct LimitsOverrideV6 {
 }
 
 impl LimitsOverrideV6 {
-    /// Separa gli override della v6 nei due pezzi che il resto della fase 1
-    /// tratta diversamente: quelli **condivisi** con la v5, e il tetto del
+    /// Separa gli override della v6 nei due pezzi che il resto della
+    /// validazione tratta diversamente: quelli **condivisi** con la v5, e il tetto del
     /// dominio, che la v5 non ha.
     ///
     /// E' una costruzione per campi, non una riscrittura di chiavi: se

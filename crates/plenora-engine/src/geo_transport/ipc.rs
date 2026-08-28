@@ -21,11 +21,11 @@ use super::transport::{
 /// puo' superare `usize` su piattaforme a 32 bit e gli offset non vanno mai
 /// troncati.
 ///
-/// Fallisce in overflow invece di saturare. `saturating_add(7) & !7` sembrava
-/// prudente ed era il contrario: vicino a `u64::MAX` la somma satura su
+/// Fallisce in overflow invece di saturare. `saturating_add(7) & !7` sembra
+/// prudente ed e' il contrario: vicino a `u64::MAX` la somma satura su
 /// `u64::MAX` e il mascheramento la riporta **sotto** il valore di partenza —
-/// l'offset allineato risultava minore di quello da allineare, e la
-/// monotonicita' su cui poggia l'avanzamento del parsing cadeva in silenzio.
+/// l'offset allineato risulterebbe minore di quello da allineare, e la
+/// monotonicita' su cui poggia l'avanzamento del parsing cadrebbe in silenzio.
 /// Con `checked_add` un offset che non e' allineabile a 64 bit e' un
 /// messaggio malformato, cioe' un errore di framing esplicito.
 const fn align8_u64(value: u64) -> Option<u64> {
@@ -76,8 +76,8 @@ const MAX_FLATBUFFER_DEPTH: usize = 64;
 
 /// Nodi totali (campi, figli compresi) ammessi in uno Schema IPC.
 ///
-/// `MAX_COLUMNS` limita i soli campi di primo livello: i vettori `children`
-/// venivano invece percorsi senza alcun tetto. Milioni di figli stanno
+/// `MAX_COLUMNS` limita i soli campi di primo livello, e senza questo tetto
+/// i vettori `children` sarebbero percorsi senza alcuno. Milioni di figli stanno
 /// comodamente dentro il tetto sui metadati, e un `FlatBuffer` costruito a mano
 /// puo' far puntare piu' entry allo STESSO sottoalbero — il validatore lo
 /// visiterebbe una volta per riferimento, con crescita esponenziale fino alla
@@ -266,26 +266,27 @@ fn fb_string(buf: &[u8], pos: usize) -> Result<&[u8], ArrowTransportError> {
 ///
 /// # Perche' restituisce invece di scartare
 ///
-/// La versione precedente validava e buttava via, e non poteva fare
-/// altrimenti: i duplicati sono una proprieta' dell'INSIEME, e chi vede un
-/// elemento per volta non li vedra' mai. Restituire le due stringhe sposta il
-/// controllo dove c'e' l'informazione per farlo ([`fb_custom_metadata`]).
+/// Validare e buttare via non basterebbe, e non potrebbe: i duplicati sono
+/// una proprieta' dell'INSIEME, e chi vede un elemento per volta non li
+/// vedra' mai. Restituire le due stringhe sposta il controllo dove c'e'
+/// l'informazione per farlo ([`fb_custom_metadata`]).
 ///
 /// # Che cosa rifiuta, e perche' non e' pedanteria
 ///
-/// La versione precedente accettava chiave o valore **assenti**: se l'offset
-/// era zero non validava e proseguiva. `arrow-ipc` legge pero' i custom
-/// metadata del FOOTER con `key().unwrap()` e `value().unwrap()`, quindi una
-/// voce senza chiave o senza valore raggiungeva una primitiva di panic dentro
-/// la dipendenza — esattamente cio' che questo confine esiste per impedire.
-/// Il percorso dello SCHEMA e' invece difensivo (`if let`), il che rendeva la
-/// lacuna invisibile finche' nessuno leggeva il footer.
+/// Chiave e valore **assenti** sono un rifiuto, non un salto: trattando
+/// l'offset zero come «niente da validare» si proseguirebbe. `arrow-ipc`
+/// legge pero' i custom metadata del FOOTER con `key().unwrap()` e
+/// `value().unwrap()`, quindi una voce senza chiave o senza valore
+/// raggiungerebbe una primitiva di panic dentro la dipendenza — esattamente
+/// cio' che questo confine esiste per impedire. Il percorso dello SCHEMA e'
+/// invece difensivo (`if let`), e questo rende una lacuna del genere
+/// invisibile finche' nessuno legge il footer.
 fn fb_key_value(buf: &[u8], table: usize) -> Result<(&str, &str), ArrowTransportError> {
     /// Che cosa pretendere da uno dei due campi di una coppia.
     ///
     /// Chiave e valore hanno tetti, diagnosi ed esiti diversi: fonderli in un
-    /// ciclo con `if index == 0` li rendeva due validazioni travestite da una,
-    /// con due rami irraggiungibili per convincere il compilatore.
+    /// ciclo con `if index == 0` li renderebbe due validazioni travestite da
+    /// una, con due rami irraggiungibili per convincere il compilatore.
     struct Attesa {
         indice: usize,
         limite: usize,
@@ -595,10 +596,10 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
     };
     // `bodyLength` si legge PRIMA di validare l'header: e' il solo metro con
     // cui verificare i buffer, sia di un RecordBatch sia del RecordBatch
-    // interno a un DictionaryBatch. La versione precedente validava il
-    // dictionary contro `metadata.len()` — la lunghezza dei METADATI, che con
-    // il body non ha alcun rapporto: rifiutava dictionary legittime con
-    // metadati corti e accettava buffer ben oltre il body dichiarato.
+    // interno a un DictionaryBatch. Validare il dictionary contro
+    // `metadata.len()` userebbe la lunghezza dei METADATI, che con il body non
+    // ha alcun rapporto: rifiuterebbe dictionary legittime con metadati corti
+    // e accetterebbe buffer ben oltre il body dichiarato.
     let body_len_offset = fb_field(metadata, vtable, vtable_len, 3)?;
     let body_len = if body_len_offset == 0 {
         0
@@ -775,9 +776,9 @@ pub struct IpcLimits {
     ///
     /// Uno stream con un solo record batch contiene almeno lo schema e il
     /// batch, e con le colonne dictionary anche un `DictionaryBatch` per
-    /// campo: confondere i due conteggi — come faceva la versione precedente,
-    /// che assegnava `max_messages = max_batches` — rifiutava qualunque
-    /// stream non vuoto con `max_batches = 1`.
+    /// campo: confondere i due conteggi — assegnando `max_messages =
+    /// max_batches` — rifiuterebbe qualunque stream non vuoto con
+    /// `max_batches = 1`.
     pub max_messages: usize,
 }
 
@@ -864,7 +865,7 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
         };
         if metadata_len == 0 {
             // Fine stream: il marcatore deve CHIUDERE la regione. Uscire qui
-            // senza guardare cosa segue lasciava passare byte e messaggi
+            // senza guardare cosa segue lascerebbe passare byte e messaggi
             // interi dopo l'EOS — validati da nessuno e ignorati dal reader,
             // che e' esattamente la forma dello smuggling.
             let after = offset
@@ -927,8 +928,8 @@ fn validate_message_at<S: IpcSource + ?Sized>(
     // descrive un file ROTTO, non un file troppo grande: nessuno supera un
     // budget con byte che non esistono. La verifica di disponibilita' viene
     // quindi prima del tetto, altrimenti diciannove byte di spazzatura — i
-    // cui primi quattro si leggono come una lunghezza enorme — uscivano come
-    // `resource_limit`, cioe' «rilancia con piu' budget» per un file che non
+    // cui primi quattro si leggono come una lunghezza enorme — uscirebbero
+    // come `resource_limit`, cioe' «rilancia con piu' budget» per un file che non
     // e' un file IPC. E' pura aritmetica su `end_limit`: nessun byte viene
     // letto prima del tetto, quindi la proprieta' di non materializzare una
     // finestra arbitraria resta intatta.
@@ -1089,8 +1090,8 @@ fn fb_footer_blocks(
 /// `FileReader` non percorre i messaggi in sequenza: legge il footer e salta
 /// direttamente agli `offset` dei suoi blocchi. Una scansione sequenziale che
 /// si ferma al primo EOS valida quindi una regione che arrow potrebbe non
-/// leggere mai, e lascia non validata quella che leggera' davvero: bastava un
-/// footer che puntasse altrove per aggirare l'intero confine.
+/// leggere mai, e lascia non validata quella che leggera' davvero: basterebbe
+/// un footer che punti altrove per aggirare l'intero confine.
 ///
 /// La validazione segue percio' la stessa mappa di arrow — magic, trailer,
 /// footer, blocchi — e per ogni blocco verifica offset, allineamento,
@@ -1116,8 +1117,8 @@ pub fn validate_ipc_file_framing<S: IpcSource + ?Sized>(
 ///
 /// E' la stessa funzione di [`validate_ipc_file_framing`], non una seconda
 /// lettura: il valore esce dalla traversata rinforzata, quindi non esiste un
-/// modo di ottenerlo saltando i controlli. Era la scelta da fare — leggere il
-/// token con `FileReader::custom_metadata` avrebbe aperto una terza strada nel
+/// modo di ottenerlo saltando i controlli. Leggere il token con
+/// `FileReader::custom_metadata` aprirebbe invece una terza strada nel
 /// footer, e quella non e' rinforzata.
 ///
 /// # Errors
@@ -1232,9 +1233,9 @@ fn parse_footer_estraendo<'a>(
     }
     // Campo 4: custom metadata del footer. Arrow li legge, e li legge con
     // `key().unwrap()` / `value().unwrap()`: una voce senza chiave o senza
-    // valore panica dentro la dipendenza. Prima di questa riga il campo non
-    // era percorso affatto — non lo leggeva nessuno, quindi nessuno lo
-    // vedeva.
+    // valore panica dentro la dipendenza. Senza questa riga il campo non
+    // sarebbe percorso affatto: non lo leggerebbe nessuno, quindi nessuno lo
+    // vedrebbe.
     let custom = fb_field(footer, vtable, vtable_len, 4)?;
     let trovato = fb_custom_metadata_estraendo(footer, root, custom, cercata)?;
     Ok((blocks, trovato))
@@ -1268,7 +1269,7 @@ fn validate_footer_blocks<S: IpcSource + ?Sized>(
         }
         // Il tetto sui metadati si applica alla lunghezza del BLOCCO, perche'
         // e' quella che arrow legge e alloca. Limitare solo il prefisso
-        // lasciava fuori proprio il numero usato.
+        // lascerebbe fuori proprio il numero usato.
         if block.metadata_len > to_u64(limits.max_metadata_bytes)? {
             return Err(ArrowTransportError::IpcMetadataTooLarge(
                 usize::try_from(block.metadata_len).unwrap_or(usize::MAX),
@@ -1283,9 +1284,9 @@ fn validate_footer_blocks<S: IpcSource + ?Sized>(
         }
         // Il tetto semantico sui RECORD BATCH vale anche qui. Nel file
         // format i blocchi di dizionari e di record batch confluiscono in un
-        // vettore solo, e fermarsi a `max_messages` non applicava
+        // vettore solo, e fermarsi a `max_messages` non applicherebbe
         // `max_batches` del piano: un file con cento batch e un piano che ne
-        // ammette uno superava il confine, e veniva fermato solo dopo la
+        // ammette uno supererebbe il confine, e sarebbe fermato solo dopo la
         // materializzazione del secondo. Si conta per TIPO DI HEADER letto
         // dal messaggio, non per campo del footer: e' lo stesso criterio del
         // percorso stream, quindi i due non possono divergere.
@@ -1351,10 +1352,10 @@ fn validate_footer_block<S: IpcSource + ?Sized>(
     // Le due lunghezze devono COINCIDERE, non solo starci dentro.
     //
     // Arrow legge il blocco usando `metaDataLength` e `bodyLength` del Block,
-    // NON le lunghezze del prefisso: con la relazione `<=` un file poteva
-    // dichiarare un prefisso piccolo — che il validatore limitava — e un
-    // `Block.metaDataLength` enorme, che arrow avrebbe letto e allocato. Il
-    // tetto valeva quindi su un numero diverso da quello effettivamente usato.
+    // NON le lunghezze del prefisso: con la relazione `<=` un file potrebbe
+    // dichiarare un prefisso piccolo — che il validatore limita — e un
+    // `Block.metaDataLength` enorme, che arrow leggerebbe e allocherebbe. Il
+    // tetto varrebbe su un numero diverso da quello effettivamente usato.
     //
     // Per la specifica del formato incapsulato `metaDataLength` comprende il
     // prefisso e il padding a 8 byte, quindi l'uguaglianza esatta e'
@@ -1578,8 +1579,8 @@ mod custom_metadata {
     enum Campo<'a> {
         /// Stringa presente, con questi byte esatti — anche non UTF-8.
         Byte(&'a [u8]),
-        /// Campo assente dalla vtable: e' l'offset zero che la versione
-        /// precedente lasciava passare, e che fa panicare `arrow-ipc` quando
+        /// Campo assente dalla vtable: e' l'offset zero che una validazione
+        /// distratta lascia passare, e che fa panicare `arrow-ipc` quando
         /// legge i custom metadata del footer.
         Assente,
     }
@@ -1607,9 +1608,9 @@ mod custom_metadata {
         let mut buf: Vec<u8> = Vec::new();
         // Riempimento: il campo vive all'offset 4, perche' l'offset zero
         // significa «campo assente» e la validazione tornerebbe Ok senza
-        // guardare niente. La prima stesura di questo banco lo passava a
-        // zero, e i dieci casi negativi lo hanno scoperto: i tre positivi da
-        // soli sarebbero passati a vuoto.
+        // guardare niente. Con l'offset a zero i tre casi positivi
+        // passerebbero a vuoto: sono i dieci negativi a rendere visibile la
+        // differenza.
         buf.extend_from_slice(&0_u32.to_le_bytes());
         buf.extend_from_slice(&4_u32.to_le_bytes());
         let n = u32::try_from(coppie.len()).expect("conteggio entro u32");
@@ -1777,7 +1778,7 @@ mod custom_metadata {
         assert!(valida(&[coppia("k", &al_limite)]).is_ok());
     }
 
-    // --- 4-5: i campi assenti, che facevano panicare arrow ----------------
+    // --- 4-5: i campi assenti, che fanno panicare arrow -------------------
 
     #[test]
     fn caso_4_chiave_assente() {
@@ -1987,7 +1988,7 @@ mod footer_end_to_end {
 
 // ---------------------------------------------------------------------------
 // I tre fratelli della stessa classe: campi che arrow dereferenzia con
-// `unwrap` e che il confine trattava come opzionali.
+// `unwrap` e che un confine distratto tratterebbe come opzionali.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -2111,10 +2112,10 @@ mod campi_pretesi {
 // La barriera anti-panico, con una prova sua.
 // ---------------------------------------------------------------------------
 
-/// `PR-0` ha chiuso quattro punti in cui `arrow-ipc` dereferenzia con `unwrap`
-/// un campo che il confine trattava come opzionale. Nel farlo ha tolto la
-/// copertura della barriera: l'artefatto di fuzz che la esercitava viene ora
-/// rifiutato prima, in modo strutturato.
+/// Il confine pretende esplicitamente i quattro campi che `arrow-ipc`
+/// dereferenzia con `unwrap` pur trattandoli come opzionali. Cosi' facendo
+/// toglie copertura alla barriera: l'artefatto di fuzz che l'avrebbe
+/// esercitata e' rifiutato prima, in modo strutturato.
 ///
 /// La barriera resta pero' necessaria, perche' un quinto punto e' aperto:
 /// `convert.rs` pretende i figli dei tipi annidati e ha una ventina fra

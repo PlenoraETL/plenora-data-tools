@@ -82,7 +82,7 @@ use super::{LimitsOverride, PlanLimitsOverride, PLAN_SCHEMA_VERSION_V4, PLAN_SCH
 #[cfg(test)]
 mod tests;
 
-/// Override dei limiti **come li scriveva la v4**: con `max_memory_bytes`.
+/// Override dei limiti nella forma della v4: con `max_memory_bytes`.
 ///
 /// Esiste solo per essere deserializzata dalla migrazione, e non e' esposta:
 /// nessun percorso di esecuzione la vede. `deny_unknown_fields` e' cio' che
@@ -157,8 +157,9 @@ impl LimitsOverrideV4 {
             max_rows_per_edge,
             max_expansion_factor,
             plan,
-            // L'unico campo che cambia nome. Il valore non si tocca: era
-            // gia' un budget di ammissione, solo chiamato male (errori-e-limiti.md#memoria-governata).
+            // L'unico campo che cambia nome. Il valore non si tocca: e' lo
+            // stesso budget di ammissione, con un nome che lo dice
+            // (errori-e-limiti.md#memoria-governata).
             max_governed_memory_bytes: max_memory_bytes,
             max_temp_bytes,
             spill_partitions,

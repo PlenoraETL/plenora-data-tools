@@ -51,7 +51,7 @@ use super::unary::{
     expect_point, geometry_column_index, geometry_output_field, spatial_predicate_name,
 };
 
-// --- Forma binary + lineage (Fase C) ---------------------------------------
+// --- Forma binary + lineage -----------------------------------------------
 
 /// Operazioni binarie su due envelope v3 (left/right).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -264,8 +264,9 @@ pub struct PairParameterValues {
 /// # Errors
 ///
 /// Come [`PairArrowSchema::validate_parameters`].
-// Tabella parametri per operazione intenzionalmente in un'unica funzione;
-// la scomposizione strutturale e' rimandata a una fase dedicata.
+// Tabella parametri per operazione, intenzionalmente in un'unica funzione:
+// ogni braccio e' una riga della tabella, e spezzarla renderebbe piu'
+// difficile vedere che le righe ci sono tutte.
 #[allow(clippy::too_many_lines)]
 pub fn validate_pair_parameters(
     operation_kind: PairOperation,
@@ -776,7 +777,8 @@ fn replace_geometry_batches(
 ///   (`encode_ipc`, `EnvelopeWriter`).
 // Pipeline unica su tutte le PairOperation: la lunghezza e' data dalla
 // sequenza lineare dei casi del dispatcher sul contratto v3, non da
-// complessita' logica (fase di pulizia: niente refactor strutturali).
+// complessita' logica, e spezzarla in funzioni artificiali
+// peggiorerebbe solo la leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn pair_arrow(
     left_reader: impl Read,

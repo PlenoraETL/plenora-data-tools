@@ -12,7 +12,7 @@
 //!   esplicita: catene massimali di nodi `Streaming` fusi in un unico
 //!   segmento (`LinearStreaming`, oppure `GeoFused` se tutti i nodi sono
 //!   geo — nella v1 eseguito come `LinearStreaming`, ma la struttura per
-//!   kernel [`GeoRole`] predispone la cache di decode di Fase 2C, vincolo
+//!   kernel [`GeoRole`] e' il punto di aggancio per una cache di decode, vincolo
 //!   decode/encode geo minimizzato); ogni nodo `Blocking`/`BinaryBlocking` e' un segmento a se';
 //! - [`PreparedKernel`] per ogni nodo: configurazione deserializzata,
 //!   tipizzata e gia' rivalidata, indici di colonna e CRS risolti — niente
@@ -25,8 +25,8 @@
 //! Statistiche di runtime (architettura.md#planner-ed-executor): [`RuntimeStatistic::Unknown`] e' il
 //! default e impone scelte conservative. Nella v1 seriale le statistiche
 //! `Known`/`Estimated` non cambiano ancora nessuna decisione fisica (il
-//! parallelismo adattivo e' Fase 2B): sono validate, propagate nel piano per
-//! osservabilita' e pronte per le scelte migliorative future.
+//! parallelismo adattivo non esiste): sono validate, propagate nel piano per
+//! osservabilita' e pronte per chi le usera'.
 //!
 //! Limitazioni v1 (fail-closed in `prepare`, mai a meta' esecuzione): il
 //! dispatch copre le trasformazioni geo 1:1 in place, le misure "add
@@ -37,7 +37,7 @@
 //! (`geo.sjoin`, `geo.nearest`, `geo.within`,
 //! `geo.count_points_in_polygons`); le altre op geo — es. `geo.dissolve`,
 //! `geo.explode`, predicati, distanze, i binari geo con ri-encode (clip,
-//! overlay, booleane pairwise: secondo cantiere D14.1) — e le op tabellari
+//! overlay, booleane pairwise: il ri-encode di D14.1 non e' implementato) — e le op tabellari
 //! N-arie con piu' di due input sono rifiutate con `PlenoraError::Unsupported`.
 
 use std::collections::{BTreeMap, HashMap};
@@ -108,7 +108,7 @@ pub struct RuntimeContext {
     pub statistics: BTreeMap<String, InputStatistics>,
     /// Grado massimo di parallelismo offerto dall'ambiente. La v1 esegue
     /// sempre seriale (`SerialFused`, parallelismo solo dove conviene): il valore e' registrato nel piano
-    /// e sara' usato dalle strategie parallele di Fase 2B.
+    /// e lo useranno le strategie parallele, quando esisteranno.
     pub max_parallelism: u32,
     /// Dimensionamento dei batch (tetto in byte per batch).
     pub batch_target: BatchTarget,
@@ -203,14 +203,14 @@ pub enum SegmentMode {
 ///
 /// La v1 sceglie sempre `SerialFused` per i segmenti streaming e
 /// `BlockingSingleTask` per quelli blocking: il parallelismo si attiva solo
-/// con benefici misurati (Fase 2B).
+/// con benefici misurati.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParallelismStrategy {
     /// Segmento eseguito serialmente, kernel fusi sul singolo batch (segmenti lineari senza code).
     SerialFused,
-    /// Parallelismo per batch (Fase 2B).
+    /// Parallelismo per batch. Nessun percorso lo sceglie ancora.
     ParallelPerBatch,
-    /// Parallelismo per ramo del DAG (Fase 2B).
+    /// Parallelismo per ramo del DAG. Richiede lo scheduler parallelo (M3).
     ParallelPerBranch,
     /// Operazione blocking come task singolo.
     BlockingSingleTask,
@@ -219,7 +219,7 @@ pub enum ParallelismStrategy {
 /// Ruolo di un kernel geo dentro a un segmento `GeoFused`: decode/encode geo
 /// minimizzato, con le configurazioni gia' preparate.
 ///
-/// E' il punto di aggancio della cache di decode di Fase 2C: i kernel
+/// E' il punto di aggancio per una cache di decode: i kernel
 /// `TransformInPlace` possono condividere le geometrie decodificate lungo la
 /// catena; nella v1 ognuno decodifica/encoda via `transform_batches`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,7 +248,7 @@ pub enum GeoRole {
     BinaryBlocking,
 }
 
-/// Misura geo v1 con semantica "aggiungi colonna" (Fase 2A-4).
+/// Misura geo v1 con semantica "aggiungi colonna".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeasureKind {
     /// `geo.area` → colonna `Float64`.
@@ -489,10 +489,10 @@ pub enum PreparedGeoKernel {
 ///
 /// # Perche' due enum e non uno
 ///
-/// Prima era un enum solo con quindici varianti, e l'executor le smistava
-/// tutte: conosceva il tipo di configurazione di OGNI operazione delle due
-/// famiglie. Separarle sposta quella conoscenza dentro la famiglia che la
-/// possiede, e lascia all'orchestrazione le tre cose che la riguardano
+/// Un enum solo con quindici varianti costringerebbe l'executor a smistarle
+/// tutte, cioe' a conoscere il tipo di configurazione di OGNI operazione
+/// delle due famiglie. Separarle tiene quella conoscenza dentro la famiglia
+/// che la possiede, e lascia all'orchestrazione le tre cose che la riguardano
 /// davvero — classe di esecuzione, contratto, cancellazione.
 #[derive(Debug)]
 pub enum PreparedConfig {
@@ -607,15 +607,15 @@ pub struct PreparedKernel {
     pub node_id: String,
     /// Identita' dell'operazione, tipizzata.
     ///
-    /// Era una `&'static str`, e ogni consumatore che voleva ragionarci
-    /// sopra doveva riconvertirla. La stringa si ottiene con `as_str()` ed
-    /// e' cio' che va in serializzazione, metriche ed errori — non nelle
-    /// decisioni.
+    /// Tipizzata e non `&'static str`: ogni consumatore che debba ragionarci
+    /// sopra dovrebbe altrimenti riconvertirla. La stringa si ottiene con
+    /// `as_str()` ed e' cio' che va in serializzazione, metriche ed errori —
+    /// non nelle decisioni.
     pub operation: OperationId,
     /// Famiglia dell'operazione.
     pub family: Family,
-    /// Ruolo geo dentro a un segmento `GeoFused` (punto di aggancio della
-    /// cache di decode di Fase 2C); `None` per i kernel tabellari.
+    /// Ruolo geo dentro a un segmento `GeoFused` (punto di aggancio per una
+    /// cache di decode); `None` per i kernel tabellari.
     pub geo_role: Option<GeoRole>,
     /// Indice risolto della colonna geometria attiva nel batch di input
     /// del nodo (hot path minimale: nessuna ricerca per nome a runtime).
@@ -634,8 +634,9 @@ pub struct PreparedKernel {
     pub expansion_factor_exempt: bool,
     /// Vincolo di espansione dichiarato dal catalogo, risolto in preparazione.
     ///
-    /// L'executor lo rileggeva dal catalogo a ogni verifica, con una ricerca
-    /// lineare su 146 descrittori per una proprieta' che non cambia mai.
+    /// Non risolverlo qui costringerebbe l'executor a rileggerlo dal
+    /// catalogo a ogni verifica, con una ricerca lineare su tutti i
+    /// descrittori per una proprieta' che non cambia mai.
     pub expansion_constraint: ExpansionConstraint,
     /// Fondibilita' dichiarata in catalogo (architettura.md#geometrie D12.2), risolta in
     /// `prepare` come `cancellation_behavior`.
@@ -810,7 +811,7 @@ pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<Execu
 ///
 /// # Panics
 ///
-/// Solo su invarianti interne gia' garantite dalla fase 1 `validate` (op
+/// Solo su invarianti interne gia' garantite da `validate` (op
 /// risolta, arco inferito, ogni nodo in esattamente un segmento): mai su
 /// input esterno.
 pub(crate) fn prepare(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
@@ -1225,11 +1226,10 @@ fn prepare_kernel(
 /// mapparli sul `max_rows` legacy li farebbe scattare per batch, non per
 /// arco.
 fn limiti_dei_kernel_tabellari(limits: &Limits) -> Result<table_engine::Limits> {
-    // Le conversioni verso `usize` sono fail-closed. Prima erano
-    // `unwrap_or(usize::MAX)`: su una piattaforma dove `usize` e' piu' stretto
-    // di `u64`, un budget che non ci sta diventava il massimo rappresentabile —
-    // cioe' un tetto di sicurezza ALLARGATO in silenzio, nella direzione
-    // sbagliata. Un limite che non si puo' onorare e' una configurazione da
+    // Le conversioni verso `usize` sono fail-closed. Con `unwrap_or(usize::MAX)`,
+    // su una piattaforma dove `usize` e' piu' stretto di `u64`, un budget che
+    // non ci sta diventerebbe il massimo rappresentabile — cioe' un tetto di
+    // sicurezza ALLARGATO in silenzio, nella direzione sbagliata. Un limite che non si puo' onorare e' una configurazione da
     // rifiutare, non da arrotondare.
     let stretto = |valore: u64, nome: &str| -> Result<usize> {
         usize::try_from(valore).map_err(|_| {
@@ -1241,9 +1241,9 @@ fn limiti_dei_kernel_tabellari(limits: &Limits) -> Result<table_engine::Limits> 
     Ok(table_engine::Limits {
         max_rows: stretto(limits.rows.max_input_rows, "max_input_rows")?,
         // NON derivati dal piano: sono limiti interni dei kernel, dichiarati
-        // dove sono imposti (`plenora_kernels_table::limiti_interni`). Prima
-        // arrivavano da `Limits::default()` qui dentro, e leggendo questa
-        // funzione sembravano ereditati.
+        // dove sono imposti (`plenora_kernels_table::limiti_interni`).
+        // Prendendoli da `Limits::default()` qui dentro sembrerebbero
+        // ereditati dal piano.
         max_columns: plenora_kernels_table::limiti_interni::MAX_COLUMNS,
         max_split_columns: plenora_kernels_table::limiti_interni::MAX_SPLIT_COLUMNS,
         max_string_bytes: limits.max_string_bytes,
@@ -1451,7 +1451,7 @@ struct GeoBinaryOutputColumnConfig {
 
 /// Binari geo di architettura.md#geometrie (D14.1: nessuna ri-encode).
 /// `None` se l'op non e' nel perimetro (clip, overlay, booleane pairwise:
-/// secondo cantiere — restano `Unsupported`).
+/// richiedono il ri-encode, e restano `Unsupported`).
 ///
 /// D14.6: il tetto assoluto per-op NON e' una manopola
 /// di nodo ne' un campo di catalogo — e' il tetto righe del piano gia' in
@@ -1791,7 +1791,8 @@ fn prepare_geo(
 /// `None` se l'op non e' un'estensione coperta.
 // Dispatcher esaustivo sulle estensioni v1.1-v1.3: la lunghezza e' data
 // dalla sequenza lineare dei casi (config tipizzata + validazione per op),
-// non da complessita' logica (fase di pulizia: niente refactor strutturali).
+// non da complessita' logica, e spezzarla in funzioni artificiali
+// peggiorerebbe solo la leggibilita'.
 #[allow(clippy::too_many_lines)]
 fn prepare_geo_extension(
     node: &NodeV5,

@@ -558,10 +558,9 @@ fn l_evidenza_sopravvive_a_ogni_classificazione() {
 
 #[test]
 fn evidenza_incoerente_o_indeterminata_non_diventa_da_verificare() {
-    // Il blocker: `Incoerente` e `Indeterminata` ricadevano sull'esito del
-    // worker, e con un worker che dichiara successo producevano
-    // `DaVerificare` — cioe' «prosegui» mentre una lettura del dominio e'
-    // rotta o mancante. La §10.0-bis dice che NESSUNA delle cinque classi
+    // Se `Incoerente` e `Indeterminata` ricadessero sull'esito del worker,
+    // con un worker che dichiara successo produrrebbero `DaVerificare` —
+    // cioe' «prosegui» mentre una lettura del dominio e' rotta o mancante. La §10.0-bis dice che NESSUNA delle cinque classi
     // autorizza la pubblicazione, e proseguire alla verifica e' il primo
     // passo verso di essa.
     for classe in [
@@ -647,8 +646,9 @@ fn solo_il_publish_pubblica() {
 
 #[test]
 fn la_classificazione_e_ripetibile() {
-    // NOME PRECEDENTE: «l'ordine di arrivo e' irrilevante». Non lo provava:
-    // esegue due volte gli STESSI fatti, quindi verifica la ripetibilita'.
+    // Il nome dice cio' che il test fa: esegue due volte gli STESSI fatti,
+    // quindi verifica la ripetibilita'. «L'ordine di arrivo e' irrilevante»
+    // sarebbe una promessa piu' grande, e questo test non la mantiene.
     //
     // Che l'ordine sia irrilevante e' una proprieta' del TIPO, non di questo
     // test: `FattiDopoLaQuiescenza` non porta timestamp ne' sequenza, e non

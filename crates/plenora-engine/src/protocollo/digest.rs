@@ -6,8 +6,9 @@
 //! Quattro campi del protocollo portano l'uscita testuale di uno SHA-256 —
 //! l'identita' dell'artefatto, il digest dell'insieme delle risorse, il
 //! `plan_hash_atteso` e il fingerprint del contratto d'ingresso. Con una
-//! `String` la loro forma dipendeva da un controllo scritto altrove: quattro
-//! chiamate che qualcuno poteva dimenticare di aggiungere al quinto campo.
+//! `String` la loro forma dipenderebbe da un controllo scritto altrove:
+//! quattro chiamate che qualcuno puo' dimenticare di aggiungere al quinto
+//! campo.
 //!
 //! Qui la forma e' del tipo. Non esiste un `DigestSha256` non canonico, quindi
 //! non c'e' un controllo da ricordare: c'e' un costruttore che rifiuta.

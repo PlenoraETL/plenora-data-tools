@@ -136,10 +136,10 @@ pub struct AtteseSupervisore {
 /// risultino diverse.
 ///
 /// La riduzione avviene **una volta**, alla costruzione dello stato, e non
-/// dentro ogni confronto su un clone: due ordinamenti e due copie per
-/// handshake, con la forma ridotta buttata via subito dopo mentre quella
-/// spedita restava quella d'origine. Cosi' invece la forma canonica e' anche
-/// quella che viaggia.
+/// dentro ogni confronto su un clone: farla li' costerebbe due ordinamenti e
+/// due copie per handshake, butterebbe via la forma ridotta subito dopo, e
+/// lascerebbe viaggiare quella d'origine. Cosi' invece la forma canonica e'
+/// anche quella che viene spedita.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AmbienteCanonico(Ambiente);
 

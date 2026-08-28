@@ -1,13 +1,13 @@
-//! Planner del DAG — fase 1 `validate`
-//! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint)
-//! — Fase 2A-3.
+//! Planner del DAG — `validate`
+//! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint).
 //!
 //! [`validate`] e' una funzione pura e a secco: legge il piano JSON e i
 //! contratti di input (schemi Arrow dagli header IPC, nessuna riga di dati) e
 //! produce un [`ValidatedGraph`] immutabile contenente **solo decisioni
 //! semantiche stabili** — struttura, tipi, CRS, ordini dichiarati, identita'
-//! (piano-v5.md#identita-e-fingerprint). Nessuna decisione fisica: `prepare`/`ExecutionPlan` sono Fase 2A-4
-//! (architettura.md#planner-ed-executor) e NON sono implementati qui.
+//! (piano-v5.md#identita-e-fingerprint). Nessuna decisione fisica: quelle
+//! stanno in `prepare`/`ExecutionPlan`
+//! (architettura.md#planner-ed-executor), non qui.
 //!
 //! Passi (architettura.md):
 //!
@@ -65,9 +65,9 @@
 //! # Type-state
 //!
 //! [`ValidatedGraph`] non ha costruttori pubblici: si ottiene solo da
-//! [`validate`]. La futura `execute` (Fase 2A-4) accettera' esclusivamente
-//! `&ValidatedGraph` — nessun percorso non validato puo' raggiungere
-//! l'esecuzione (architettura.md#planner-ed-executor).
+//! [`validate`], e `execute` accetta esclusivamente `&ValidatedGraph`:
+//! nessun percorso non validato puo' raggiungere l'esecuzione
+//! (architettura.md#planner-ed-executor).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -123,7 +123,7 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// funzione di hash siano disgiunti fra le due regole — uno ha il prefisso,
 /// l'altro no. Da input disgiunti non segue che gli output lo siano: un
 /// digest uguale fra i due domini **richiederebbe una collisione SHA-256**.
-/// E' la stessa assunzione su cui il `plan_hash` poggiava gia' prima; il
+/// E' la stessa assunzione su cui il `plan_hash` poggia comunque; il
 /// dominio la riusa, non la rafforza, e non abolisce la crittografia.
 ///
 /// La difesa vera contro il riuso di un grafo validato sotto un'altra
@@ -332,10 +332,10 @@ pub struct ValidatedGraph {
     // --- Decisioni semantiche stabili ---
     /// Il piano validato **con la propria versione di formato**.
     ///
-    /// Era un `ValidatedPlanV5`. Non poteva restare: un grafo costruito da un
-    /// piano v6 avrebbe rappresentato come v5 un documento che v5 non e', e
-    /// chi ne avesse ricavato la forma canonica avrebbe ottenuto un
-    /// `plan_hash` del dominio sbagliato.
+    /// Un `ValidatedPlanV5` non basterebbe: un grafo costruito da un piano
+    /// v6 rappresenterebbe come v5 un documento che v5 non e', e chi ne
+    /// ricavasse la forma canonica otterrebbe un `plan_hash` del dominio
+    /// sbagliato.
     plan: PianoValidato,
     /// Contratti per arco, chiave = nome input o id nodo (namespace unico,
     /// garantito dalla validazione strutturale).
@@ -456,12 +456,12 @@ impl ValidatedGraph {
     }
 }
 
-/// Fase 1 `validate` del DAG (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
+/// `validate` del DAG (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
 /// Un piano `schema_version: 4` entra da qui attraverso la migrazione
 /// esplicita (errori-e-limiti.md#memoria-governata). Le versioni DAG restano
 /// due — la v5 e la v6 non collassano l'una nell'altra — ma la **struttura**
-/// che il resto della fase 1 attraversa e' una sola.
+/// che il resto della validazione attraversa e' una sola.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
 /// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
@@ -505,8 +505,8 @@ pub fn validate(
     let plan = crate::plan::valida_per_versione(plan_json, &plan_limits)?;
     // Validazione dei limiti effettivi in un punto solo, prima di qualunque
     // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
-    // che non passano dal preparer tabellare dove il controllo viveva prima
-    // (e dove correggeva in silenzio invece di rifiutare).
+    // che non passano dal preparer tabellare — dove un controllo del genere
+    // correggerebbe in silenzio invece di rifiutare, e non coprirebbe loro.
     plan.effective_limits().validate()?;
     let plan_ref = plan.struttura_condivisa();
     let plan_ref = plan_ref.as_ref();
@@ -735,9 +735,9 @@ pub fn check_compatibility(
 
     // Per primo, prima di qualunque altra cosa: se il grafo e' stato
     // validato sotto un'altra versione del formato piano, tutto cio' che
-    // segue lo interpreta con regole che non sono le sue. Il campo era
-    // registrato in `ValidatedGraph` ma non veniva confrontato con nulla —
-    // un'identita' scritta e mai letta e' una garanzia solo apparente.
+    // segue lo interpreta con regole che non sono le sue. Registrare il
+    // campo in `ValidatedGraph` senza confrontarlo con nulla ne farebbe
+    // un'identita' scritta e mai letta, cioe' una garanzia solo apparente.
     if graph.plan_format_version != PLAN_SCHEMA_VERSION_V5
         && graph.plan_format_version != PLAN_SCHEMA_VERSION_V6
     {
@@ -1079,7 +1079,7 @@ fn contract_canonical(contract: &DataContract) -> Value {
                 "dimensions": geometry.dimensions.as_str(),
                 "nullable": geometry.nullable,
             });
-            // B1.3: `encoding` entra nel fingerprint SOLO quando dichiarato —
+            // `encoding` entra nel fingerprint SOLO quando dichiarato —
             // un contratto senza encoding produce lo stesso JSON di prima
             // (stabilita' dei fingerprint esistenti).
             if let Some(encoding) = geometry.encoding {
@@ -1092,10 +1092,10 @@ fn contract_canonical(contract: &DataContract) -> Value {
             }
             // La dichiarazione dei tipi geometrici e' parte del contratto, non
             // un'identita' interna del grafo: entra nel fingerprint quando c'e'.
-            // Restandone fuori, due contratti che dichiaravano tipi diversi —
-            // `exact:point` e `exact:polygon` — condividevano il fingerprint, e
-            // un grafo validato sul primo veniva riusato sul secondo senza
-            // rivalidazione. Come per `encoding`, un contratto che non dichiara
+            // Restandone fuori, due contratti che dichiarano tipi diversi —
+            // `exact:point` e `exact:polygon` — condividerebbero il
+            // fingerprint, e un grafo validato sul primo sarebbe riusato sul
+            // secondo senza rivalidazione. Come per `encoding`, un contratto che non dichiara
             // nulla produce lo stesso JSON di prima.
             if let Some(types) = geometry.types.value() {
                 if let Value::Object(map) = &mut canonical {

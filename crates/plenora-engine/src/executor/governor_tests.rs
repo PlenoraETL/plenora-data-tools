@@ -1,5 +1,5 @@
 //! Test del resource accounting (architettura.md#memoria) e della sequenza logica
-//! (architettura.md#determinismo) nell'executor — Fase 2B, milestone del governor.
+//! (architettura.md#determinismo) nell'executor, sorvegliato dal governor.
 
 use std::sync::Arc;
 
@@ -279,8 +279,9 @@ fn memory_budget_exhaustion_fails_fast_with_contract_error() {
     let error = output
         .collect_batches()
         .expect_err("budget esaurito: fail-fast");
-    // Nono giro: categoria `resource_limit`, non `invalid_plan`. Attraversa
-    // gli involucri, quindi si guarda `category()` e non la variante esterna.
+    // Categoria `resource_limit`, non `invalid_plan`. La categoria
+    // attraversa gli involucri, quindi si guarda `category()` e non la
+    // variante esterna.
     assert_eq!(
         error.category(),
         plenora_core::ErrorCategory::ResourceLimit,

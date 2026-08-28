@@ -1,8 +1,8 @@
 //! Engine tabellare: contratto del piano, validazione fail-closed ed
 //! esecuzione della catena di kernel su `RecordBatch`.
 //!
-//! Port Fase 1 ("coesistenza") da `plenora-nogeo-tools/src/contract.rs` ed
-//! `engine.rs`, senza modifiche di comportamento:
+//! Superficie a compatibilita' congelata — messaggi ed esiti sono quelli
+//! che chi invoca questo percorso si aspetta:
 //!
 //! - `Plan`/`Step`/`ValidatedPlan` e la validazione del contratto
 //!   (`schema_version`, limiti, regola "catena binaria = 1 step", config
@@ -32,9 +32,9 @@
 //!   (11 `BinaryOrdered` + `concat` `NAry`); `execution != Streaming`
 //!   corrisponde a `execution_class != Streaming`.
 //!
-//! L'unificazione con il trasporto geo in un DAG unico e' Fase 2.
+//! L'unificazione con il trasporto geo avviene nel DAG, non qui.
 //!
-//! Fase 2B, spill generalizzato (architettura.md#memoria): selezione preventiva dello spill per
+//! Spill generalizzato (architettura.md#memoria): selezione preventiva dello spill per
 //! `sort`/`distinct`/`aggregate` — sopra la soglia deterministica "byte
 //! stimati dell'input > `max_governed_memory_bytes`" (la stessa del set-op spilled) il
 //! passo usa la variante `*_spilled` di `plenora_kernels_table::spill`.

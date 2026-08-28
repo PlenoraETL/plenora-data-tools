@@ -620,8 +620,8 @@ fn canonical_json_normalizes_numbers() {
     );
 
     // Regressione (collisione plan_hash): 2^53+1 non ha un f64 esatto e
-    // arrotonda su 2^53. Canonicalizzare passando per f64 collassava i due
-    // interi sulla stessa forma canonica. Gli interi devono restare distinti
+    // arrotonda su 2^53. Canonicalizzare passando per f64 collasserebbe i due
+    // interi sulla stessa forma canonica; gli interi devono restare distinti
     // e conservare le cifre esatte.
     let odd_int = PlanV5::parse_default(&plan_with(json!(9_007_199_254_740_993_u64)))
         .unwrap()
@@ -698,8 +698,8 @@ fn i_limiti_dati_runtime_si_dichiarano_in_entrambi_i_versi() {
     assert!(validato.effective_limits().validate().is_err());
 }
 
-/// I limiti di piano dichiarati governano il piano che li dichiara: prima
-/// finivano nel `plan_hash` senza che nulla li applicasse.
+/// I limiti di piano dichiarati governano il piano che li dichiara: senza
+/// questo, finirebbero nel `plan_hash` senza che nulla li applichi.
 #[test]
 fn i_limiti_di_piano_dichiarati_governano_il_piano_che_li_dichiara() {
     // Due nodi, tetto dichiarato a uno.
@@ -815,7 +815,7 @@ fn il_canonico_non_dipende_dalla_policy_di_chi_valida() {
 
     // ...compreso il caso in cui il piano DICHIARA un limite di piano: il
     // valore dichiarato dev'essere quello che entra nel canonico, non
-    // quello del chiamante. Sostituirlo cambiava il `plan_hash` di ogni
+    // quello del chiamante. Sostituirlo cambierebbe il `plan_hash` di ogni
     // piano che lo dichiara, senza cambio di dominio.
     for (campo, valore) in [
         ("max_plan_json_bytes", 4096_u64),

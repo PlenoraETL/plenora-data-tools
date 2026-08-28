@@ -118,7 +118,7 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
     decodifica(&frame).map(Some)
 }
 
-/// I quattro byte del prefisso, o `None` se la sorgente era gia' finita.
+/// I quattro byte del prefisso, o `None` se la sorgente e' gia' finita.
 fn leggi_prefisso<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<[u8; BYTE_PREFISSO]>> {
     let mut prefisso = [0_u8; BYTE_PREFISSO];
     match leggi_esatti(sorgente, &mut prefisso) {
@@ -147,7 +147,7 @@ enum ErroreLettura {
 /// leggere.
 ///
 /// Scritta a mano invece di `Read::read_exact` per una ragione sola: quella
-/// rende un `io::Error` di `UnexpectedEof` che **non dice quanti byte erano
+/// rende un `io::Error` di `UnexpectedEof` che **non dice quanti byte sono
 /// arrivati**. Su un prefisso quel numero e' la differenza fra «la
 /// conversazione e' finita» e «si e' interrotta a meta'».
 fn leggi_esatti<R: Read + ?Sized>(

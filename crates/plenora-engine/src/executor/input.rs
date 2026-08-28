@@ -34,9 +34,10 @@ use crate::ipc_boundary::{self, IpcFormat, IpcLimits};
 ///
 /// L'enum e' **opaco**: si costruisce solo dai costruttori, che sono l'unico
 /// punto in cui l'invariante «`Batches` non e' mai vuoto» viene imposta.
-/// Finche' la variante era pubblica un chiamante poteva scrivere
-/// `Input::Batches(vec![])` aggirando [`Input::from_batches`], e [`Input::schema`]
-/// indicizzava `batches[0]` andando in panico su un'API pubblica.
+/// Con la variante costruibile da fuori, un chiamante potrebbe scrivere
+/// `Input::Batches(vec![])` aggirando [`Input::from_batches`], e
+/// [`Input::schema`] indicizzerebbe `batches[0]` andando in panico su
+/// un'API pubblica.
 pub enum Input {
     /// Batch gia' in memoria. Invariante: mai vuoto (vedi
     /// [`Input::from_batches`]).
@@ -313,10 +314,10 @@ impl Inputs {
     ) -> Result<()> {
         let name = name.into();
         // Il duplicato si rileva PRIMA di scrivere: con `insert` il secondo
-        // inserimento restituiva `Err` ma aveva gia' sostituito il reader —
-        // e qui avrebbe lasciato il vecchio contratto appaiato al nuovo
-        // reader, cioe' proprio la coppia incoerente che il contratto serve
-        // a impedire. Un errore deve lasciare `Inputs` invariato.
+        // inserimento renderebbe `Err` avendo gia' sostituito il reader, e
+        // lascerebbe il vecchio contratto appaiato al nuovo — cioe' proprio
+        // la coppia incoerente che il contratto serve a impedire. Un errore
+        // deve lasciare `Inputs` invariato.
         if self.readers.contains_key(&name) {
             return Err(PlenoraError::InvalidPlan(format!(
                 "input duplicato `{name}`"

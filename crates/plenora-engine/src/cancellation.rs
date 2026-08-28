@@ -1,4 +1,4 @@
-//! Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione, Fase 2B).
+//! Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione).
 //!
 //! Decisione di dipendenza: valutata la crate `cancellation-token`
 //! (piccola, senza `unsafe`), ma oggi il token e' un semplice flag

@@ -11,10 +11,10 @@
 //!
 //! # Perche' una facciata e non il modulo
 //!
-//! La stesura precedente esponeva `pub mod protocollo` sotto la stessa
-//! feature. Era API pubblica a tutti gli effetti quando la feature era
-//! attiva — e il crate `fuzz/` e' precisamente un consumatore che la attiva.
-//! «Privato tranne che per chi lo usa» non e' privato.
+//! Esporre `pub mod protocollo` sotto la stessa feature lo renderebbe API
+//! pubblica a tutti gli effetti ogni volta che la feature e' attiva — e il
+//! crate `fuzz/` e' precisamente un consumatore che la attiva. «Privato
+//! tranne che per chi lo usa» non e' privato.
 //!
 //! Qui invece escono due cose sole, e nessun DTO del protocollo:
 //!

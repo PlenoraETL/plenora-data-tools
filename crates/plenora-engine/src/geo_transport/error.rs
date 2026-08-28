@@ -25,19 +25,20 @@ use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS};
 
 /// # Compatibilita' della superficie pubblica
 ///
-/// Questo enum e' `pub` e riesportato da `plenora-engine`. `PR-0` gli aggiunge
-/// cinque varianti, il che **rompe** ogni `match` esaustivo scritto fuori dal
-/// workspace: la rottura e' accettata formalmente, ed e' il prezzo di
-/// distinguere le nuove diagnosi invece di comprimerle in una variante
-/// generica — i tre tetti sui custom metadata devono essere superabili
-/// separatamente, altrimenti un test non puo' dire quale abbia parato.
+/// Questo enum e' `pub`, riesportato da `plenora-engine` e
+/// `#[non_exhaustive]`: un consumatore esterno deve prevedere un ramo
+/// generico, e aggiungere una variante non e' una rottura.
 ///
-/// Da qui in avanti l'enum e' `#[non_exhaustive]`, cosi' e' l'ultima volta:
-/// un consumatore esterno deve prevedere un ramo generico, e le varianti
-/// future smettono di essere una rottura. Dentro il workspace non cambia
-/// nulla — nessun `match` era esaustivo, verificato compilando — e la
-/// disciplina dei mapping esaustivi resta dove serve, cioe' sulla
-/// corrispondenza variante -> categoria.
+/// Non lo e' sempre stato. Le cinque diagnosi sui tetti dei custom metadata
+/// hanno rotto i `match` esaustivi scritti fuori dal workspace — rottura
+/// accettata formalmente, ed e' il prezzo di distinguerle invece di
+/// comprimerle in una variante generica: i tre tetti devono essere superabili
+/// separatamente, altrimenti un test non puo' dire quale abbia parato.
+/// `#[non_exhaustive]` e' cio' che rende quella l'ultima volta.
+///
+/// Dentro il workspace nessun `match` su questo enum e' esaustivo, e la
+/// disciplina dei mapping esaustivi resta dove serve: sulla corrispondenza
+/// variante -> categoria.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArrowTransportError {
@@ -100,8 +101,8 @@ pub enum ArrowTransportError {
     },
     /// Metadati oltre il tetto EFFETTIVO (`{1}`), che non e' sempre il
     /// default: quando i limiti derivano da un piano, il tetto e' il budget
-    /// di memoria. Il messaggio riportava la costante invece del valore
-    /// applicato, e diceva quindi «168 oltre il limite 16777216».
+    /// di memoria. Riportare la costante invece del valore applicato farebbe
+    /// dire al messaggio «168 oltre il limite 16777216».
     #[error("metadati messaggio IPC da {0} byte oltre il limite {1}")]
     IpcMetadataTooLarge(usize, usize),
     #[error("stream IPC troncato o non allineato")]
@@ -308,8 +309,7 @@ impl ArrowTransportError {
 }
 
 /// Conversione dagli errori del kernel WKB (`geometry_from_wkb`,
-/// `transform_wkb`, `validate_wkb_contract`): nel sorgente restituivano
-/// `GeoEngineError` (variante `Geometry`), ora restituiscono `PlenoraError`.
+/// `transform_wkb`, `validate_wkb_contract`), che rendono `PlenoraError`.
 /// Le varianti `InvalidPlan`/`Unsupported`/`Schema` di `PlenoraError`
 /// portano nel payload la stringa ESATTA dell'errore originale, quindi
 /// vanno in `Geometry` preservando il messaggio. `Io` conserva l'errore

@@ -29,7 +29,7 @@
 pub const ENVELOPE_MAGIC: &[u8; 8] = b"PLNGEO3\0";
 pub const ENVELOPE_TRAILER_MAGIC: &[u8; 8] = b"GEOEND3\0";
 // Costanti dei metadati GeoArrow: casa unica in `arrow_adapter`
-// (unificazione B1.1), qui ri-esportate per compatibilita' di percorso.
+// e qui ri-esportate perche' il percorso storico resti valido.
 pub use plenora_kernels_geo::arrow_adapter::{
     DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
 };
@@ -101,7 +101,7 @@ pub const MAX_CELL_BYTES: u64 = 64 * 1024 * 1024;
 /// Coordinate massime per cella: una cella da 64 MiB contiene al piu' 16 byte
 /// per coordinata XY.
 ///
-/// Scelta B1.3 (come in `arrow_adapter::MAX_CELL_COORDINATES`): bound
+/// Scelta dichiarata (come in `arrow_adapter::MAX_CELL_COORDINATES`): bound
 /// conservativo non stride-aware — con Z/M il reale e' minore, quindi il
 /// bound e' permissivo ma sicuro; `Unknown` (R3.4) non ha stride garantito.
 pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
@@ -1080,9 +1080,8 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        // Adattamento Fase 1: il crate `wkt` non e' una dipendenza di
-        // plenora-engine (nel sorgente il WKT veniva ri-parsato con
-        // `wkt::TryFromWkt` e confrontato con la geometria attesa); qui il
+        // Il crate `wkt` non e' una dipendenza di plenora-engine, quindi il
+        // WKT non si ri-parsa per confrontarlo con la geometria attesa: il
         // confronto usa il kernel `to_wkt` come riferimento canonico.
         let expected_wkt = to_wkt(&geometry_from_wkb(&line).unwrap()).expect("wkt atteso");
         assert_eq!(values.value(0), expected_wkt);
@@ -1433,16 +1432,15 @@ mod tests {
         ));
     }
 
-    /// Regressione fuzz: un artefatto che **prima** faceva panicare
-    /// `arrow-ipc` viene ora rifiutato dal confine, in modo strutturato.
+    /// Regressione fuzz: un artefatto capace di far panicare `arrow-ipc` e'
+    /// rifiutato dal confine, in modo strutturato.
     ///
-    /// # L'esito e' cambiato
+    /// # Che cosa NON verifica
     ///
-    /// Fino a `PR-0` questo test verificava la **barriera anti-panico**: lo
-    /// schema dell'artefatto arrivava a `fb_to_schema`, che panicava, e la
-    /// barriera convertiva il panico in `ArrowPanic`. Ora il confine pretende
-    /// il campo `fields` — che `arrow-ipc` legge con `fields().unwrap()` — e
-    /// l'artefatto non arriva piu' cosi' avanti.
+    /// La **barriera anti-panico**. Il confine pretende il campo `fields` —
+    /// che `arrow-ipc` legge con `fields().unwrap()` — quindi lo schema
+    /// dell'artefatto non arriva fino a `fb_to_schema` e non c'e' nessun
+    /// panico da convertire in `ArrowPanic`.
     ///
     /// La barriera resta necessaria, perche' `convert.rs` ha una ventina di
     /// `panic!`/`unimplemented!` sui codici di tipo che il confine non copre
@@ -1466,11 +1464,10 @@ mod tests {
         /// commento sul troncamento, piu' sotto.
         const FINE_STREAM: usize = 52;
 
-        // 81 byte trovati dalla campagna schedulata del 2026-08-07, artefatto
-        // crash-c20d19d3e3323f54d3831c09d611143c5d8f82c1. Superano il framing
-        // e fanno arrivare ad `arrow-ipc` uno schema FlatBuffer con un valore
-        // di enum che `convert::fb_to_schema` non riconosce: la funzione ha
-        // venti `panic!`/`unimplemented!` e i reader la chiamano sempre.
+        // Ottantuno byte che superano il framing e fanno arrivare ad
+        // `arrow-ipc` uno schema FlatBuffer con un valore di enum che
+        // `convert::fb_to_schema` non riconosce: quella funzione ha venti
+        // `panic!`/`unimplemented!` e i reader la chiamano sempre.
         let payload = [
             0x2c, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x04, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x3d, 0x08, 0x00, 0x22, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
@@ -1480,27 +1477,24 @@ mod tests {
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        // L'artefatto originale porta 29 byte DOPO il marcatore di fine
-        // stream, che il confine ora rifiuta come smuggling (il reader li
-        // ignorerebbe, il validatore non li ha visti). Il messaggio che fa
-        // panicare arrow e' il primo — lo Schema, byte 0..48 — seguito
-        // dall'EOS a 48: si tronca li', cosi' il framing e' pulito e il
-        // payload arriva ad `arrow-ipc` esattamente come prima. La barriera
-        // resta l'oggetto del test, non il framing.
+        // I 29 byte DOPO il marcatore di fine stream sono smuggling, e il
+        // confine li rifiuta come tali: il reader li ignorerebbe, il
+        // validatore non li ha visti. Qui pero' l'oggetto del test e' lo
+        // schema, non il framing, quindi si tronca all'EOS — il messaggio
+        // interessante e' il primo, lo Schema nei byte 0..48.
         let payload = &payload[..FINE_STREAM];
 
-        // Nessuna sostituzione dell'hook di panico: questo input non panica
-        // piu'. La versione precedente lo silenziava perche' l'artefatto
-        // arrivava ad `arrow-ipc`; ora viene rifiutato prima, quindi non c'e'
-        // nulla da silenziare — e mutare stato globale del processo mentre gli
-        // altri test girano in parallelo sarebbe stato un costo senza piu'
-        // alcun beneficio.
+        // Nessuna sostituzione dell'hook di panico: questo input non panica.
+        // Silenziare l'hook servirebbe solo se l'artefatto arrivasse ad
+        // `arrow-ipc`, ed e' rifiutato prima — e mutare stato globale del
+        // processo mentre gli altri test girano in parallelo sarebbe un costo
+        // senza alcun beneficio.
         let esito = decode_ipc(payload);
 
-        // L'esito e' CAMBIATO, ed e' migliorato: lo Schema che l'artefatto
-        // porta non ha il campo `fields`, e `fb_to_schema` lo legge con
-        // `fields().unwrap()`. Il confine ora lo pretende, quindi il rifiuto e'
-        // strutturato invece di essere un panico intercettato.
+        // Lo Schema che l'artefatto porta non ha il campo `fields`, e
+        // `fb_to_schema` lo legge con `fields().unwrap()`. Il confine lo
+        // pretende, quindi il rifiuto e' strutturato invece di essere un
+        // panico intercettato.
         //
         // La barriera anti-panico resta necessaria — `convert.rs` ha una
         // ventina di `panic!`/`unimplemented!` sui codici di tipo, non ancora
@@ -1517,16 +1511,16 @@ mod tests {
     #[test]
     fn ipc_decode_rejects_oversized_metadata_and_truncation_without_oom() {
         // Regressione fuzz (OOM): 4 byte che dichiarano ~709 MiB di metadati
-        // in formato legacy; prima della pre-validazione arrow-rs allocava
-        // quanto dichiarato. Il rifiuto avviene ancora leggendo solo il
-        // prefisso — e' la proprieta' che questa regressione difende.
+        // in formato legacy. Senza pre-validazione arrow-rs allocherebbe
+        // quanto dichiarato; il rifiuto avviene leggendo il solo prefisso, ed
+        // e' la proprieta' che questa regressione difende.
         //
-        // Ottavo giro: la DIAGNOSI e' cambiata. Quattro byte che dichiarano
-        // 709 MiB descrivono un payload troncato, non un payload troppo
-        // grande: nessuno supera un tetto con byte che non esistono. La
-        // verifica di disponibilita' precede ora quella del tetto, cosi' un
-        // input ostile minuscolo non esce piu' come `resource_limit`, che
-        // avrebbe suggerito al chiamante di rilanciare con piu' budget.
+        // La DIAGNOSI e' «troncato», non «troppo grande»: quattro byte che
+        // dichiarano 709 MiB descrivono un payload che non c'e', e nessuno
+        // supera un tetto con byte che non esistono. La verifica di
+        // disponibilita' precede quella del tetto, cosi' un input ostile
+        // minuscolo non esce come `resource_limit` — che suggerirebbe al
+        // chiamante di rilanciare con piu' budget.
         let oom_input = [0x5b, 0x74, 0x32, 0x2a];
         assert!(matches!(
             decode_ipc(&oom_input),
@@ -1543,7 +1537,7 @@ mod tests {
             Err(ArrowTransportError::IpcTruncated)
         ));
         // Metadati oltre il tetto assoluto, con i byte REALMENTE presenti nel
-        // payload: e' l'unico modo di raggiungere il tetto adesso che la
+        // payload: e' l'unico modo di raggiungere il tetto, dato che la
         // disponibilita' viene verificata per prima, ed e' anche l'unico caso
         // in cui `resource_limit` e' la diagnosi giusta — il payload esiste,
         // e' solo piu' grande di quanto ammettiamo.
@@ -1629,7 +1623,7 @@ mod tests {
 
     #[test]
     fn geo_metadata_json_is_byte_identical_to_arrow_adapter() {
-        // Unificazione B1.1: il trasporto delega l'assemblaggio JSON ad
+        // Casa unica del formato: il trasporto delega l'assemblaggio JSON ad
         // `arrow_adapter`; l'output deve essere identico byte-per-byte.
         for crs in [CRS, r#"{"type":"ProjectedCRS","name":"demo"}"#] {
             assert_eq!(
@@ -1637,7 +1631,7 @@ mod tests {
                 plenora_kernels_geo::arrow_adapter::geo_metadata_json(crs).expect("adapter")
             );
         }
-        // Il campo di output dichiara anche la dimensionalita' (B1.1).
+        // Il campo di output dichiara anche la dimensionalita'.
         let field = geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("field");
         let geo: serde_json::Value = serde_json::from_str(
             field

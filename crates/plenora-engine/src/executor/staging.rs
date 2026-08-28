@@ -153,7 +153,7 @@ pub(super) fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     plenora_core::batch_with_rows(batch.schema(), columns, batch.num_rows())
 }
 
-/// Validazione atomica dell'input geometrico (D8/B1.3) con memoria BOUNDED:
+/// Validazione atomica dell'input geometrico (D8) con memoria BOUNDED:
 /// i batch accettati sono staged su IPC entro la quota `max_temp_bytes`
 /// dichiarata dal piano e il lease governor e' rilasciato subito; solo a
 /// validazione completata senza rifiuti i batch sono riletti uno alla

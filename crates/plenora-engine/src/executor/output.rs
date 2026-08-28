@@ -53,7 +53,7 @@ pub(super) use plenora_core::contract::arrow_schema::arrow_schema_from_contract 
 pub struct Output {
     pub(super) contract: DataContract,
     /// Schema IPC emesso: quello del contratto piu' il blocco canonico
-    /// R2.2/R2.5 (milestone C), calcolato una sola volta alla costruzione
+    /// R2.2/R2.5, calcolato una sola volta alla costruzione
     /// ([`canonical_output_schema`], fail-fast su divergenze R2.6).
     pub(super) schema: SchemaRef,
     pub(super) stream: BatchStream,
@@ -69,7 +69,7 @@ pub struct Output {
 impl Output {
     /// Schema Arrow dell'output: quello del contratto inferito in
     /// validazione arricchito del blocco canonico R2.2 e della versione
-    /// R2.5 (milestone C) — lo stesso schema scritto nell'header IPC da
+    /// R2.5 — lo stesso schema scritto nell'header IPC da
     /// [`Output::write_ipc_file`].
     #[must_use]
     pub fn schema(&self) -> SchemaRef {
@@ -129,8 +129,9 @@ impl Output {
 
     /// Drena lo stream conservando i wrapper governati (lease + sequenza).
     ///
-    /// Seam interno per i test del governor (architettura.md#determinismo e #memoria): in questa
-    /// milestone nessun consumatore pubblico riordina per `BatchSequence`.
+    /// Seam interno per i test del governor (architettura.md#determinismo e
+    /// #memoria): nessun consumatore pubblico riordina per `BatchSequence`,
+    /// quindi la sequenza logica si osserva solo da qui.
     #[cfg(test)]
     pub(crate) fn collect_governed(self) -> Result<(Vec<GovernedBatch>, ExecutionMetrics)> {
         let batches = self.stream.collect::<Result<Vec<_>>>()?;
@@ -146,7 +147,7 @@ impl Output {
     ///
     /// L'header IPC porta lo schema di [`Output::schema`]: quello del
     /// contratto piu' il blocco canonico R2.2 per ogni colonna geometrica e
-    /// la versione R2.5 nei metadati dello schema (milestone C); le chiavi
+    /// la versione R2.5 nei metadati dello schema; le chiavi
     /// `GeoArrow` legacy restano (coesistenza coerente, R2.6).
     ///
     /// # Errors

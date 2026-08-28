@@ -547,8 +547,9 @@ impl TransformArrowSchema {
     /// presente uno non previsto dall'operazione,
     /// `ArrowTransportError::InvalidParameter` se un valore e' fuori dominio.
     // Dispatch per operazione intenzionalmente in un'unica funzione: la
-    // tabella parametri ammessi/obbligatori resta leggibile come tabella;
-    // la scomposizione strutturale e' rimandata a una fase dedicata.
+    // tabella dei parametri ammessi e obbligatori resta leggibile come
+    // tabella, e spezzarla renderebbe piu' difficile vedere che le righe ci
+    // sono tutte.
     #[allow(clippy::too_many_lines)]
     pub fn validate_parameters(&self) -> Result<(), ArrowTransportError> {
         let operation = self.operation.name();

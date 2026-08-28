@@ -1,5 +1,5 @@
-//! Contratto del piano tabellare (port da
-//! `plenora-nogeo-tools/src/contract.rs`).
+//! Contratto del piano tabellare: il formato lineare a compatibilita'
+//! congelata (`schema_version <= 3`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,8 +30,8 @@ pub fn dispatch_name(operation: &str) -> &str {
     operation.strip_prefix("table.").unwrap_or(operation)
 }
 
-/// Validazione dei valori dei limiti (metodo `Limits::validate` del
-/// sorgente, spostato qui perche' la struct vive in `plenora-kernels-table`).
+/// Validazione dei valori dei limiti. Vive qui, e non accanto a [`Limits`],
+/// perche' quella struct sta in `plenora-kernels-table`.
 fn validate_limits(limits: &Limits) -> Result<()> {
     if limits.max_rows == 0
         || limits.max_columns == 0
@@ -71,8 +71,9 @@ pub struct Plan {
 
 /// Il blocco `limits` del formato lineare **v1**, sul filo.
 ///
-/// errori-e-limiti.md#memoria-governata ha rinominato il budget di memoria della libreria, e il tipo Rust
-/// [`Limits`] porta il nome nuovo. Il formato v1 **no**: e' un formato
+/// Il budget di memoria della libreria si chiama `max_governed_memory_bytes`
+/// (errori-e-limiti.md#memoria-governata), ed e' il nome che porta il tipo Rust
+/// [`Limits`]. Il formato v1 **no**: e' un formato
 /// pubblicato, distinguibile dagli altri proprio da `schema_version: 1`, e un
 /// piano gia' scritto non cambia perche' noi abbiamo cambiato idea sul nome.
 /// Riscriverlo retroattivamente sarebbe stato peggio di un alias: un alias

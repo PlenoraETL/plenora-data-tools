@@ -25,8 +25,8 @@
 //!
 //! # Niente di questo esce dal crate, e niente `serde`
 //!
-//! `PR-4` possiede il formato sul filo. Rendere questi tipi pubblici o
-//! serializzabili adesso significherebbe decidere quel formato senza dirlo, e
+//! Il formato sul filo appartiene al modulo `protocollo`. Rendere questi tipi
+//! pubblici o serializzabili significherebbe deciderlo qui, senza dirlo, e
 //! poi doverlo cambiare rompendo qualcuno.
 //!
 //! A tenerli dentro e' **il modulo**, dichiarato `mod classificazione;` senza
@@ -58,9 +58,9 @@ pub enum EsitoWorker {
     /// Un errore tipizzato, **intero**.
     ///
     /// Non i quattro assi soli: quelli scarterebbero messaggio sanitizzato,
-    /// contesto DAG, `execution_id` e diagnostica di riga prima che `PR-4`
-    /// abbia deciso che cosa passa sul filo. Gli assi si leggono
-    /// dall'errore, non lo sostituiscono.
+    /// contesto DAG, `execution_id` e diagnostica di riga prima che il
+    /// modulo `protocollo` abbia deciso che cosa passa sul filo. Gli assi si
+    /// leggono dall'errore, non lo sostituiscono.
     Errore(PlenoraError),
     /// Un panico, con la sola **forma** del payload.
     Panic { forma: FormaDelPayload },
@@ -70,11 +70,12 @@ pub enum EsitoWorker {
 ///
 /// # Perche' un tipo e non una `&'static str`
 ///
-/// Una stringa statica accetta qualunque stringa statica. Il commento
-/// prometteva l'autorita' di [`plenora_core::panic_policy::forma_payload`], e
-/// il tipo non la imponeva: bastava scrivere un letterale — o passare una
-/// stringa che qualcuno aveva costruito altrove — perche' del contenuto
-/// finisse dove il progetto dichiara che non finisce mai.
+/// Una stringa statica accetta qualunque stringa statica: un commento
+/// potrebbe promettere l'autorita' di
+/// [`plenora_core::panic_policy::forma_payload`], ma il tipo non la
+/// imporrebbe. Basterebbe un letterale — o una stringa costruita altrove —
+/// perche' del contenuto finisca dove il progetto dichiara che non finisce
+/// mai.
 ///
 /// Qui il campo e' privato e l'unico costruttore e' [`Self::di`], che chiama
 /// quell'autorita'. Il contenuto non puo' entrare **per costruzione**, non
@@ -307,10 +308,10 @@ pub enum EsitoClassificato {
     PressioneNonAttribuita(Box<EvidenzaDiLimite>),
     /// L'evidenza c'e' e **non e' utilizzabile**: incoerente o indeterminata.
     ///
-    /// E' terminale, e viene prima dell'esito dichiarato dal worker. Una
-    /// stesura precedente la lasciava ricadere sull'esito del worker, e con
-    /// un worker che dichiara successo produceva `DaVerificare`: cioe'
-    /// «prosegui» mentre una lettura del dominio e' rotta o mancante. La
+    /// E' terminale, e viene prima dell'esito dichiarato dal worker.
+    /// Lasciandola ricadere su quell'esito, un worker che dichiara successo
+    /// produrrebbe `DaVerificare`: cioe' «prosegui» mentre una lettura del
+    /// dominio e' rotta o mancante. La
     /// §10.0-bis dice che **nessuna** delle cinque classi autorizza la
     /// pubblicazione, e proseguire alla verifica e' il primo passo verso di
     /// essa.

@@ -1,4 +1,4 @@
-//! Test del preparer (Fase 2A-4, architettura.md, architettura.md#planner-ed-executor).
+//! Test del preparer (architettura.md, architettura.md#planner-ed-executor).
 
 use crate::prepare::{PreparedGeoKernel, PreparedTableKernel};
 use std::sync::Arc;
@@ -842,7 +842,7 @@ fn reproject_joins_fusion_groups() {
 // Dispatch fail-closed e rivalidazione fisica delle estensioni geo (configurazioni preparate)
 // ---------------------------------------------------------------------------
 //
-// La fase 1 (`planner::validate` via `analyze`) pre-valida le config; le
+// `planner::validate` (via `analyze`) pre-valida le config; le
 // rivalidazioni di `prepare` sono difesa in profondita': qui sono esercitate
 // chiamando direttamente le funzioni interne con contratti da fixture, per
 // verificare che il secondo livello resti fail-closed anche se il primo si
@@ -1339,14 +1339,14 @@ fn geo_binary_caps_follow_edge_position_and_plan_limits() {
 #[test]
 fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
     // `max_output_rows = 0` descrive un piano che non puo' emettere nulla.
-    // Prima veniva accettato in validazione e intercettato solo in `prepare`,
-    // dalla rivalidazione fisica dei parametri della coppia (`max_pairs > 0`),
-    // con un messaggio che parlava del kernel invece che del limite.
+    // `Limits::validate` lo rifiuta all'ingresso del planner, per TUTTI i
+    // piani — geo compresi, che il preparer tabellare non attraversano.
     //
-    // Ora `Limits::validate` lo rifiuta all'ingresso del planner, per TUTTI i
-    // piani — geo compresi, che il preparer tabellare non attraversano. La
-    // rivalidazione in `prepare` resta come difesa in profondita': non e' piu'
-    // raggiungibile da un piano, ed e' il verso giusto.
+    // Lasciandolo passare, a intercettarlo sarebbe la rivalidazione fisica
+    // dei parametri della coppia in `prepare` (`max_pairs > 0`), con un
+    // messaggio che parla del kernel invece che del limite. Quella
+    // rivalidazione resta come difesa in profondita': non e' raggiungibile da
+    // un piano, ed e' il verso giusto.
     let error = validate(
         &json!({
             "schema_version": 5,
@@ -1373,7 +1373,8 @@ fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
 
 #[test]
 fn geo_binary_outside_m1_perimeter_stays_unsupported() {
-    // Secondo cantiere D14.1 (ri-encode): il rifiuto e' invariato.
+    // Fuori dal perimetro dei binari geo: il ri-encode di D14.1 non e'
+    // implementato, e il rifiuto resta `Unsupported`.
     let cases: [(&str, serde_json::Value); 6] = [
         ("geo.clip", json!({})),
         ("geo.overlay", json!({"mode": "union"})),
@@ -1402,11 +1403,10 @@ fn geo_binary_outside_m1_perimeter_stays_unsupported() {
 
 /// I limiti INTERNI dei kernel non dipendono da cio' che il piano dichiara.
 ///
-/// Prima arrivavano da `Limits::default()` dentro l'adattatore, e leggendo
-/// quella funzione sembravano ereditati dal piano. Un lettore che avesse
-/// cercato `max_columns` nel formato del piano non l'avrebbe trovato, e
-/// avrebbe concluso che il valore veniva da qualche parte — senza sapere
-/// dove.
+/// Facendoli arrivare da `Limits::default()` dentro l'adattatore
+/// sembrerebbero ereditati dal piano. Chi cercasse `max_columns` nel formato
+/// del piano non lo troverebbe, e concluderebbe che il valore viene da
+/// qualche parte — senza sapere dove.
 #[test]
 fn i_limiti_interni_dei_kernel_non_vengono_dal_piano() {
     let mut estremi = Limits::default();

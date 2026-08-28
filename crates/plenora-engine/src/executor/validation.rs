@@ -343,10 +343,10 @@ pub(super) fn check_join_expansion(
     output_rows: u64,
 ) -> Result<()> {
     // Entrambe le proprieta' sono STATICHE dell'operazione e risolte in
-    // preparazione. Prima si rileggevano dal catalogo a ogni verifica, con una
-    // ricerca lineare su 146 descrittori per una risposta che non cambia mai —
-    // e con un `map_or` che, se il descrittore fosse mancato, avrebbe
-    // silenziosamente applicato il vincolo di default invece di dirlo.
+    // preparazione. Rileggerle dal catalogo a ogni verifica costerebbe una
+    // ricerca lineare su tutti i descrittori per una risposta che non cambia
+    // mai — e un `map_or` sul descrittore mancante applicherebbe in silenzio
+    // il vincolo di default invece di dirlo.
     if kernel.expansion_factor_exempt {
         return Ok(());
     }
@@ -357,7 +357,8 @@ pub(super) fn check_join_expansion(
     }
     // Le metriche si calcolano solo per RACCONTARE l'esito: la decisione e'
     // gia' presa sui conteggi interi, e i rapporti `f64` che seguono sono
-    // arrotondati sopra 2^53 righe — cioe' proprio dove il difetto stava.
+    // arrotondati sopra 2^53 righe — cioe' proprio dove una decisione non
+    // puo' permetterselo.
     let expansion = JoinExpansion::compute(output_rows, left_rows, right_rows);
     let factor = constraint.binding_threshold(max_expansion_factor);
     Err(PlenoraError::ResourceLimit(format!(
@@ -393,21 +394,21 @@ pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> Plenor
     }
     // Un limite di RISORSA non diventa `Execution`: la categoria e' cio' su
     // cui il chiamante decide (rilanciare con piu' budget, non correggere il
-    // piano), e avvolgerla in `Execution` la faceva sparire — l'errore usciva
-    // come `execution`/exit 6 invece di `resource_limit`/exit 4. Si conserva
+    // piano), e avvolgerla in `Execution` la farebbe sparire — l'errore
+    // uscirebbe come `execution`/exit 6 invece di `resource_limit`/exit 4. Si conserva
     // la categoria e si aggiunge il contesto del nodo tramite `Replayed`, che
     // e' il portatore tipizzato di categoria + attribuzione.
     // Il riconoscimento passa da `category()`, non da un `matches!` sulla
     // variante ESTERNA: un `ResourceLimit` puo' arrivare dentro un involucro
     // trasparente — `Tagged` (fase dichiarata da un confine) o un `Replayed`
-    // gia' costruito da un livello piu' interno — e in quel caso il match
-    // sulla variante non lo vedeva, quindi la categoria si perdeva
-    // esattamente nei casi in cui era stata dichiarata con piu' cura.
+    // gia' costruito da un livello piu' interno — e in quel caso un match
+    // sulla variante non lo vedrebbe, quindi la categoria si perderebbe
+    // esattamente nei casi in cui e' stata dichiarata con piu' cura.
     // `category()` attraversa gli involucri per costruzione.
     //
     // QUALI categorie si preservano lo decide `error_propagation`, non questa
     // funzione: il gemello legacy fa la stessa scelta, e due elenchi scritti
-    // a mano in due file erano gia' divergenti.
+    // a mano in due file divergerebbero.
     if crate::error_propagation::categoria_preservata(error.category()) {
         return PlenoraError::Replayed(Box::new(ReplayedError {
             category: error.category(),

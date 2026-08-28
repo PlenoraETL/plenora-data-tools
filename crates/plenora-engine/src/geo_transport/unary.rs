@@ -112,7 +112,7 @@ pub(in crate::geo_transport) fn geometry_column_index(
 /// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
-/// Unificazione B1.1: l'assemblaggio JSON e' unico in
+/// Casa unica del formato: l'assemblaggio JSON e' unico in
 /// [`plenora_kernels_geo::arrow_adapter::geo_metadata_json`] (stesso output
 /// byte-per-byte); qui restano solo le validazioni con le varianti
 /// d'errore strutturate del trasporto.
@@ -135,18 +135,18 @@ pub(in crate::geo_transport) fn geometry_output_field(
 ) -> Result<Field, ArrowTransportError> {
     // Validazione CRS con le varianti strutturate del trasporto; la
     // costruzione del campo (metadati geoarrow.wkb + geo.crs +
-    // geo.dimensions) e' unica in `arrow_adapter` (unificazione B1.1).
+    // geo.dimensions) e' unica in `arrow_adapter`.
     // BLOCK-06: il blocco canonico `plenora.geometry.*` NON e' aggiunto qui
     // ma nel post-processo centrale `canonical_legacy_output` (entry point
     // `transform_arrow`/`pair_arrow`), che copre anche i campi propagati
     // invariati dalle op pass-through.
     geo_metadata_json(crs)?;
-    // B1.3: la dimensionalita' dichiarata e' Xy ESPLICITO, non un default
+    // La dimensionalita' dichiarata e' Xy ESPLICITO, non un default
     // silenzioso — ogni output di questo trasporto e' prodotto decodificando
     // in `Geometry<f64>` e ricodificando `to_wkb(CoordDimensions::xy())`,
     // quindi le celle sono sempre WKB 2D; gli input Z/M sono rifiutati a
     // compile-plan (`analyze_geo_contract`) prima di arrivare qui.
-    // B1.4: per lo stesso motivo l'encoding e' `None` — le celle ricodificate
+    // Per lo stesso motivo l'encoding e' `None` — le celle ricodificate
     // sono WKB ISO XY e la chiave `encoding` e' omessa (mai ereditata
     // dall'input, fingerprint invariato).
     plenora_kernels_geo::arrow_adapter::geometry_output_field_with_encoding(
@@ -159,9 +159,9 @@ pub(in crate::geo_transport) fn geometry_output_field(
 }
 
 // ---------------------------------------------------------------------------
-// BLOCK-06 (decisione owner 2026-07-30 — parita' col percorso v4, errori-e-limiti.md#limiti-dichiarati
-// estesa): doppia emissione delle chiavi canoniche `plenora.geometry.*` e
-// `plenora.contract.version` anche sugli output del trasporto legacy.
+// BLOCK-06 (errori-e-limiti.md#limiti-dichiarati): doppia emissione delle
+// chiavi canoniche `plenora.geometry.*` e `plenora.contract.version` anche
+// sugli output del trasporto legacy, per parita' col percorso v4.
 // ---------------------------------------------------------------------------
 
 /// Campo di output arricchito del blocco canonico R2.2 (BLOCK-06).
@@ -502,7 +502,7 @@ enum ResolvedTransform {
         grid_size: f64,
     },
     /// `make_valid` (architettura.md#geometrie M3): ammette input OGC-invalido — e' cio' che
-    /// ripara; la validazione che lo precede e' SOLO strutturale (trappola
+    /// ripara; la validazione che lo precede e' SOLO
     /// 1, vedi [`accepts_ogc_invalid_input`]).
     #[cfg(feature = "geos-backend")]
     MakeValid,
@@ -517,7 +517,7 @@ enum ResolvedTransform {
 }
 
 /// L'operazione ammette input OGC-invalido in ingresso? Solo `make_valid`
-/// (architettura.md#geometrie M3, trappola 1): nel percorso non fuso il suo "decode" e' il
+/// (architettura.md#geometrie M3): nel percorso non fuso il suo "decode" e' il
 /// SOLO gate strutturale di `make_valid_wkb` (`validate_wkb_contract`,
 /// nessun check OGC — l'input invalido e' esattamente cio' che l'operazione
 /// ripara). Il runner fuso riproduce la stessa semantica: decode iniziale
@@ -912,9 +912,9 @@ fn transform_cells_fusible(
     })?))
 }
 
-// Dispatch per operazione intenzionalmente monolitico: ogni braccio e' un
-// caso della tabella operazione -> kernel; la scomposizione strutturale e'
-// rimandata a una fase dedicata.
+// Dispatch per operazione intenzionalmente monolitico: ogni braccio e' una
+// riga della tabella operazione -> kernel, e spezzarla renderebbe piu'
+// difficile vedere che le righe ci sono tutte.
 #[allow(clippy::too_many_lines)]
 fn transform_cells(
     params: &TransformArrowSchema,
@@ -1202,9 +1202,9 @@ pub fn transform_batches(
 /// Handle prepared delle operazioni 1:1 (hot path minimale).
 ///
 /// Indice di colonna e schema di output sono risolti UNA volta per kernel,
-/// non per batch — il lavoro che `one_to_one_batches` rifaceva a ogni
-/// chiamata (clone dei `Field` con le mappe metadata, serializzazione JSON
-/// del metadato `geo`, ricerca per nome).
+/// non per batch: risolverli per batch rifarebbe a ogni chiamata il clone dei
+/// `Field` con le mappe metadata, la serializzazione JSON del metadato `geo`
+/// e la ricerca per nome.
 pub struct OneToOnePrepared {
     geometry_index: usize,
     output_schema: SchemaRef,
@@ -1436,7 +1436,7 @@ struct FusedCells {
 /// - profilo B con un kernel i+1 nel gruppo: `validate_geometry_structural`
 ///   poi `check_geometry_valid` (il fallimento del decode del nodo
 ///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1.
-///   ECCEZIONE M3 (trappola 1): se il kernel i+1 e' `make_valid` il check
+///   ECCEZIONE (M3): se il kernel i+1 e' `make_valid` il check
 ///   OGC e' OMESSO — nel percorso non fuso quel nodo legge l'input col solo
 ///   gate strutturale di `make_valid_wkb` (l'OGC-invalido e' cio' che
 ///   ripara); la validazione strutturale resta;
@@ -1450,7 +1450,7 @@ struct FusedCells {
 ///
 /// Il decode iniziale (con il check `MAX_CELL_BYTES` sull'input, pattern di
 /// `map_nullable`) e' attribuito al primo kernel del gruppo, l'encode finale
-/// all'ultimo — come nel percorso non fuso. ECCEZIONE M3 (trappola 1): se il
+/// all'ultimo — come nel percorso non fuso. ECCEZIONE (M3): se il
 /// PRIMO kernel e' `make_valid` il decode iniziale e' SOLO strutturale
 /// (`wkb_decoder::decode_validated`, la stessa camminata validante senza il
 /// check OGC) — nel percorso non fuso quel nodo non chiama affatto
@@ -1485,7 +1485,7 @@ fn transform_cells_fused(
     }
     // Decode UNA volta: errori attribuiti al primo kernel del gruppo (come il
     // fallimento di `geometry_from_wkb` al primo nodo del percorso non fuso).
-    // M3 (trappola 1): con `make_valid` in testa il gate e' SOLO strutturale.
+    // M3: con `make_valid` in testa il gate e' SOLO strutturale.
     let first_repairs = group
         .first()
         .is_some_and(|params| accepts_ogc_invalid_input(params));
@@ -1505,7 +1505,7 @@ fn transform_cells_fused(
         // e stessa attribuzione anche a batch vuoto.
         let resolved =
             resolve_transform(params).map_err(|error| FusedStepError::Kernel { index, error })?;
-        // M3 (trappola 1): davanti a un nodo `make_valid` la validazione
+        // M3: davanti a un nodo `make_valid` la validazione
         // inter-passo e' SOLO strutturale (vedi la tabella sopra).
         let successor_repairs = group
             .get(index + 1)
@@ -1569,7 +1569,7 @@ fn transform_cells_fused(
 /// report completo, e il successivo non partirebbe mai). La tabella di
 /// attribuzione e' quella di [`transform_cells_fused`].
 /// `successor_accepts_ogc_invalid` e' vero solo quando il kernel successivo
-/// e' `make_valid` (M3, trappola 1): la validazione inter-passo resta
+/// e' `make_valid` (M3): la validazione inter-passo resta
 /// strutturale ma omette il check OGC.
 fn apply_fused_kernel(
     resolved: &ResolvedTransform,
@@ -1610,7 +1610,7 @@ fn apply_fused_kernel(
                         validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
                             .map_err(ArrowTransportError::from)
                             .map_err(FusedCellFailure::Successor)?;
-                        // M3 (trappola 1): il check OGC e' omesso SOLO
+                        // M3: il check OGC e' omesso SOLO
                         // davanti a `make_valid` — il suo "decode" non fuso
                         // e' il solo gate strutturale di `make_valid_wkb`.
                         if !successor_accepts_ogc_invalid {
@@ -3578,7 +3578,7 @@ mod tests {
         }
     }
 
-    /// M3, trappola 1 — il caso centrale: `make_valid` in testa al gruppo
+    /// M3, il caso centrale: `make_valid` in testa al gruppo
     /// riceve un input OGC-INVALIDO (il farfalla, che supera il solo gate
     /// strutturale). Il percorso fuso NON deve rifiutarlo al decode iniziale
     /// (nessun check OGC davanti a `make_valid`): riparato identico nei due
