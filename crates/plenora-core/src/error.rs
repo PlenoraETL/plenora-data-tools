@@ -1032,155 +1032,197 @@ categorie_errore! {
     Internal => "internal",
 }
 
-/// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
-/// R9.1 (contratti trasversali v2.0-rc10 §9).
-///
-/// Enumerazione canonica (R9.5): sono ammessi solo questi dieci valori —
-/// data-tools ne usa un sottoinsieme e non ne definisce di propri. Il
-/// canonico non ha una fase «Execute»: l'esecuzione dei nodi del DAG ricade
-/// in [`ErrorPhase::Write`] (produzione dell'output), vedi la decisione
-/// progettuale in [`PlenoraError::phase`]. Mappatura sul ciclo di
-/// data-tools; per i bordi filesystem vale §9: `Connect` = acquisizione
-/// dell'handle/lease sulla risorsa, `Probe` = ispezione preliminare del
-/// formato, `Commit` = rename atomico di publish (errori-e-limiti.md#publish-e-cleanup).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ErrorPhase {
-    /// Validazione: parse del piano (JSON), contratti, schema, CRS,
-    /// capability, limiti del governor.
-    Validate,
-    /// Acquisizione dell'handle/lease sulla risorsa (bordo filesystem, §9).
-    Connect,
-    /// Ispezione preliminare del formato o della risorsa di destinazione
-    /// (es. riconoscimento fail-closed del filesystem, errori-e-limiti.md#publish-e-cleanup).
-    Probe,
-    /// Preparazione di kernel e risorse prima dell'esecuzione.
-    Prepare,
-    /// Lettura dei dati di input dal supporto.
-    Read,
-    /// Produzione dell'output: esecuzione dei nodi del DAG e scrittura del
-    /// tempfile di publish.
-    Write,
-    /// Finalizzazione dello stream di output (chiusura del writer).
-    Finalize,
-    /// Commit dell'effetto: rename atomico di publish
-    /// (errori-e-limiti.md#publish-e-cleanup, ICD §9).
-    Commit,
-    /// Annullamento dell'effetto, con conferma.
-    Rollback,
-    /// Pulizia di risorse e residui.
-    Cleanup,
+/// Segnaposto per il carico di una variante nei `match` generati: il nome
+/// stabile non dipende dal payload, quindi il pattern lo ignora.
+macro_rules! carico_ignorato {
+    ($carico:ty) => {
+        _
+    };
 }
 
-impl ErrorPhase {
-    /// Nome stabile della fase (telemetria, report JSON): `snake_case`
-    /// canonico §9.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Validate => "validate",
-            Self::Connect => "connect",
-            Self::Probe => "probe",
-            Self::Prepare => "prepare",
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Finalize => "finalize",
-            Self::Commit => "commit",
-            Self::Rollback => "rollback",
-            Self::Cleanup => "cleanup",
+/// Genera insieme l'enum di un asse canonico R9.1, il nome stabile di ogni
+/// valore e l'elenco completo delle varianti: **una sola dichiarazione**, tre
+/// derivati.
+///
+/// # Perche' non tre dichiarazioni separate
+///
+/// Enum, `as_str` ed elenco devono nominare le stesse varianti, e il
+/// compilatore garantisce solo le prime due: un `match` esaustivo pretende un
+/// braccio per ogni variante nuova, ma **nessuno obbliga** ad aggiungerla
+/// anche a un elenco scritto a mano. Un elenco incompleto non rompe niente e
+/// non si vede — rende semplicemente invisibile la variante a chiunque lo
+/// iteri, oracoli compresi, che smettono di guardarla senza fallire.
+///
+/// Nascendo dalla stessa lista, elenco ed enum non possono divergere per
+/// costruzione: e' l'unica forma di garanzia che valga la pena dichiarare.
+macro_rules! asse_canonico {
+    (
+        $(#[$meta_enum:meta])*
+        $nome_enum:ident => $elenco:ident, nota_nome_stabile = $nota:literal {
+            $(
+                $(#[$attributo:meta])*
+                $variante:ident $(($carico:ty) = $rappresentante:expr)? => $nome:literal
+            ),+ $(,)?
         }
-    }
-}
-
-impl fmt::Display for ErrorPhase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Effetto restato sul sistema remoto o sul supporto quando l'operazione
-/// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6
-/// (contratti trasversali v2.0-rc10 §9).
-///
-/// L'esito ignoto NON e' una categoria d'errore (R9.3): [`RemoteEffect::Unknown`]
-/// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
-/// effetto sempre [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]);
-/// il caso «publish riuscito, durabilita' non confermata» non e' un errore
-/// ma un esito tipizzato (`PublishOutcome`, errori-e-limiti.md#publish-e-cleanup) che si mappa su questo
-/// asse senza duplicarlo in una variante d'errore.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RemoteEffect {
-    /// L'operazione non ha prodotto alcun effetto osservabile.
-    None,
-    /// L'effetto e' stato annullato, con conferma.
-    RolledBack,
-    /// Una parte dell'effetto e' visibile e una no.
-    Partial,
-    /// L'effetto e' definitivo, benche' l'operazione riporti un errore.
-    Committed,
-    /// L'effetto non e' determinabile con i mezzi disponibili.
-    Unknown,
-}
-
-impl RemoteEffect {
-    /// Nome stabile dell'effetto (telemetria, report JSON): `snake_case`
-    /// canonico R9.6.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::RolledBack => "rolled_back",
-            Self::Partial => "partial",
-            Self::Committed => "committed",
-            Self::Unknown => "unknown",
+    ) => {
+        $(#[$meta_enum])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $nome_enum {
+            $(
+                $(#[$attributo])*
+                $variante $(($carico))?,
+            )+
         }
+
+        impl $nome_enum {
+            /// Nome stabile del valore (telemetria, report JSON), in
+            /// `snake_case`.
+            ///
+            #[doc = $nota]
+            ///
+            /// Generato dalla stessa lista dell'enum: un nome nuovo non puo'
+            /// mancare ne' divergere dalle varianti.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variante $((carico_ignorato!($carico)))? => $nome,)+
+                }
+            }
+
+            /// Elenco completo delle varianti dichiarate, in ordine di
+            /// dichiarazione; le varianti con un carico compaiono con un
+            /// **rappresentante** esplicito, perche' l'elenco serve a
+            /// nominarle, non a enumerarne i payload.
+            ///
+            /// Vive sotto `cfg(test)` ed e' privato: e' il presidio che
+            /// permette a un oracolo di iterare le varianti dichiarate e
+            /// pretendere che la propria tabella le nomini tutte. Non e'
+            /// superficie pubblica, e nessun percorso di produzione lo legge.
+            #[cfg(test)]
+            const $elenco: &'static [Self] = &[
+                $(asse_canonico!(@valore Self::$variante $(, $rappresentante)?)),+
+            ];
+        }
+
+        impl fmt::Display for $nome_enum {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    };
+    (@valore $variante:expr) => {
+        $variante
+    };
+    (@valore $variante:expr, $rappresentante:expr) => {
+        $rappresentante
+    };
+}
+
+asse_canonico! {
+    /// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
+    /// R9.1 (contratti trasversali v2.0-rc10 §9).
+    ///
+    /// Enumerazione canonica (R9.5): sono ammessi solo questi dieci valori —
+    /// data-tools ne usa un sottoinsieme e non ne definisce di propri. Il
+    /// canonico non ha una fase «Execute»: l'esecuzione dei nodi del DAG ricade
+    /// in [`ErrorPhase::Write`] (produzione dell'output), vedi la decisione
+    /// progettuale in [`PlenoraError::phase`]. Mappatura sul ciclo di
+    /// data-tools; per i bordi filesystem vale §9: `Connect` = acquisizione
+    /// dell'handle/lease sulla risorsa, `Probe` = ispezione preliminare del
+    /// formato, `Commit` = rename atomico di publish (errori-e-limiti.md#publish-e-cleanup).
+    ///
+    /// Enum, [`ErrorPhase::as_str`] ed elenco delle varianti nascono da
+    /// un'unica dichiarazione: vedi la macro `asse_canonico`.
+    ErrorPhase => FASI_DICHIARATE, nota_nome_stabile = "`snake_case` canonico §9." {
+        /// Validazione: parse del piano (JSON), contratti, schema, CRS,
+        /// capability, limiti del governor.
+        Validate => "validate",
+        /// Acquisizione dell'handle/lease sulla risorsa (bordo filesystem, §9).
+        Connect => "connect",
+        /// Ispezione preliminare del formato o della risorsa di destinazione
+        /// (es. riconoscimento fail-closed del filesystem, errori-e-limiti.md#publish-e-cleanup).
+        Probe => "probe",
+        /// Preparazione di kernel e risorse prima dell'esecuzione.
+        Prepare => "prepare",
+        /// Lettura dei dati di input dal supporto.
+        Read => "read",
+        /// Produzione dell'output: esecuzione dei nodi del DAG e scrittura del
+        /// tempfile di publish.
+        Write => "write",
+        /// Finalizzazione dello stream di output (chiusura del writer).
+        Finalize => "finalize",
+        /// Commit dell'effetto: rename atomico di publish
+        /// (errori-e-limiti.md#publish-e-cleanup, ICD §9).
+        Commit => "commit",
+        /// Annullamento dell'effetto, con conferma.
+        Rollback => "rollback",
+        /// Pulizia di risorse e residui.
+        Cleanup => "cleanup",
     }
 }
 
-impl fmt::Display for RemoteEffect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+asse_canonico! {
+    /// Effetto restato sul sistema remoto o sul supporto quando l'operazione
+    /// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6
+    /// (contratti trasversali v2.0-rc10 §9).
+    ///
+    /// L'esito ignoto NON e' una categoria d'errore (R9.3): [`RemoteEffect::Unknown`]
+    /// vive su questo asse. In data-tools un [`PlenoraError`] ha per costruzione
+    /// effetto sempre [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]);
+    /// il caso «publish riuscito, durabilita' non confermata» non e' un errore
+    /// ma un esito tipizzato (`PublishOutcome`, errori-e-limiti.md#publish-e-cleanup) che si mappa su questo
+    /// asse senza duplicarlo in una variante d'errore.
+    ///
+    /// Enum, [`RemoteEffect::as_str`] ed elenco delle varianti nascono da
+    /// un'unica dichiarazione: vedi la macro `asse_canonico`.
+    RemoteEffect => EFFETTI_DICHIARATI, nota_nome_stabile = "`snake_case` canonico R9.6." {
+        /// L'operazione non ha prodotto alcun effetto osservabile.
+        None => "none",
+        /// L'effetto e' stato annullato, con conferma.
+        RolledBack => "rolled_back",
+        /// Una parte dell'effetto e' visibile e una no.
+        Partial => "partial",
+        /// L'effetto e' definitivo, benche' l'operazione riporti un errore.
+        Committed => "committed",
+        /// L'effetto non e' determinabile con i mezzi disponibili.
+        Unknown => "unknown",
     }
 }
 
-/// Disposizione al ritentativo di un'operazione fallita: asse
-/// «ritentativo» di R9.1, enumerazione canonica R9.7 (contratti trasversali
-/// v2.0-rc10 §9).
-///
-/// Sostituisce il booleano `retryable` della 1.x, insufficiente e
-/// pericoloso (R9.7: un timeout in lettura e' ritentabile, lo stesso
-/// timeout dopo l'invio di un commit non lo e'). La disposizione e'
-/// calcolata da fase, effetto e idempotenza dell'operazione — mai dalla
-/// sola categoria — in [`PlenoraError::retry_disposition`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RetryDisposition {
-    /// Ritentare e' sempre errato (causa deterministica o volontaria).
-    Never,
-    /// L'operazione e' idempotente o priva di effetti: si puo' ritentare.
-    Safe,
-    /// Ritentabile solo con una chiave che deduplichi l'effetto.
-    RequiresIdempotencyKey,
-    /// Prima di ritentare occorre accertare lo stato reale.
-    RequiresRecovery,
-    /// Ritentabile non prima della durata indicata.
-    After(Duration),
+asse_canonico! {
+    /// Disposizione al ritentativo di un'operazione fallita: asse
+    /// «ritentativo» di R9.1, enumerazione canonica R9.7 (contratti trasversali
+    /// v2.0-rc10 §9).
+    ///
+    /// Sostituisce il booleano `retryable` della 1.x, insufficiente e
+    /// pericoloso (R9.7: un timeout in lettura e' ritentabile, lo stesso
+    /// timeout dopo l'invio di un commit non lo e'). La disposizione e'
+    /// calcolata da fase, effetto e idempotenza dell'operazione — mai dalla
+    /// sola categoria — in [`PlenoraError::retry_disposition`].
+    ///
+    /// Enum, [`RetryDisposition::as_str`] ed elenco delle varianti nascono da
+    /// un'unica dichiarazione: vedi la macro `asse_canonico`.
+    RetryDisposition => DISPOSIZIONI_DICHIARATE,
+    nota_nome_stabile = "Per [`RetryDisposition::After`] e' il solo nome del \
+                         valore (`after`); la durata e' esposta da \
+                         [`RetryDisposition::delay`]." {
+        /// Ritentare e' sempre errato (causa deterministica o volontaria).
+        Never => "never",
+        /// L'operazione e' idempotente o priva di effetti: si puo' ritentare.
+        Safe => "safe",
+        /// Ritentabile solo con una chiave che deduplichi l'effetto.
+        RequiresIdempotencyKey => "requires_idempotency_key",
+        /// Prima di ritentare occorre accertare lo stato reale.
+        RequiresRecovery => "requires_recovery",
+        /// Ritentabile non prima della durata indicata.
+        ///
+        /// Nell'elenco delle varianti dichiarate compare con una durata
+        /// qualunque: e' il valore a essere enumerato, non il ritardo.
+        After(Duration) = Self::After(Duration::from_millis(0)) => "after",
+    }
 }
 
 impl RetryDisposition {
-    /// Nome stabile della disposizione (telemetria, report JSON):
-    /// `snake_case` canonico R9.7. Per [`RetryDisposition::After`] e' il
-    /// solo nome del valore (`after`); la durata e' esposta da
-    /// [`RetryDisposition::delay`].
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Never => "never",
-            Self::Safe => "safe",
-            Self::RequiresIdempotencyKey => "requires_idempotency_key",
-            Self::RequiresRecovery => "requires_recovery",
-            Self::After(_) => "after",
-        }
-    }
-
     /// Durata minima prima del retry: presente solo per
     /// [`RetryDisposition::After`], `None` per gli altri valori.
     #[must_use]
@@ -1191,12 +1233,6 @@ impl RetryDisposition {
                 None
             }
         }
-    }
-}
-
-impl fmt::Display for RetryDisposition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -1793,6 +1829,10 @@ pub type Result<T> = std::result::Result<T, PlenoraError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Il confronto fra elenco dichiarato e tabella attesa e' per
+    // DISCRIMINANTE: `RetryDisposition::After` porta una durata, e la tabella
+    // non deve dover indovinare quella del rappresentante.
+    use core::mem::discriminant;
 
     fn step(execution_id: &str) -> PlenoraError {
         PlenoraError::Execution {
@@ -1931,14 +1971,17 @@ mod tests {
     }
 
     #[test]
-    fn retry_disposition_names_are_exactly_the_canonical_five() {
+    fn ogni_disposizione_dichiarata_ha_il_nome_stabile_atteso() {
         // R9.7: solo i cinque valori canonici, snake_case; nessun valore
-        // proprio di data-tools. Il test fissa la coppia variante -> nome
-        // stabile e `Display` = `as_str`. NON dimostra che l'enum non abbia
-        // altre varianti: `RetryDisposition` non espone un elenco da
-        // iterare, quindi il confronto e' fra due letterali e la copertura
-        // di questa tabella resta una convenzione.
-        let all = [
+        // proprio di data-tools.
+        //
+        // La tabella e' scritta a mano APPOSTA: e' la seconda opinione su
+        // `as_str`, e derivarla renderebbe il test una tautologia. Il verso
+        // del giro fa il resto: si itera `DISPOSIZIONI_DICHIARATE`, che nasce
+        // dalla stessa dichiarazione dell'enum, e si PRETENDE che la tabella
+        // nomini ogni valore. Una variante aggiunta alla dichiarazione e non
+        // qui fa fallire questo test.
+        let attesi: &[(RetryDisposition, &str)] = &[
             (RetryDisposition::Never, "never"),
             (RetryDisposition::Safe, "safe"),
             (
@@ -1948,14 +1991,22 @@ mod tests {
             (RetryDisposition::RequiresRecovery, "requires_recovery"),
             (RetryDisposition::After(Duration::from_millis(250)), "after"),
         ];
+        for dichiarata in RetryDisposition::DISPOSIZIONI_DICHIARATE {
+            assert!(
+                attesi
+                    .iter()
+                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarata)),
+                "{dichiarata:?} e' dichiarata ma la tabella attesa non la nomina"
+            );
+        }
         assert_eq!(
-            all.len(),
-            5,
-            "l'enumerazione canonica ha cinque disposizioni"
+            attesi.len(),
+            RetryDisposition::DISPOSIZIONI_DICHIARATE.len(),
+            "la tabella attesa nomina valori che la dichiarazione non contiene"
         );
-        for (disposition, name) in all {
-            assert_eq!(disposition.as_str(), name);
-            assert_eq!(disposition.to_string(), name, "Display = as_str canonico");
+        for (disposition, name) in attesi {
+            assert_eq!(disposition.as_str(), *name);
+            assert_eq!(disposition.to_string(), *name, "Display = as_str canonico");
         }
         // `after(durata)` trasporta la durata minima prima del retry.
         assert_eq!(
@@ -2550,14 +2601,15 @@ mod tests {
     }
 
     #[test]
-    fn phase_names_are_exactly_the_canonical_ten() {
+    fn ogni_fase_dichiarata_ha_il_nome_stabile_atteso() {
         // R9.5: solo i dieci valori canonici, snake_case; nessun valore
-        // proprio di data-tools. Il test fissa la coppia variante -> nome
-        // stabile e `Display` = `as_str`. NON dimostra che l'enum non abbia
-        // altre varianti: `ErrorPhase` non espone un elenco da iterare,
-        // quindi il confronto sul conteggio e' fra due letterali e la
-        // copertura di questa tabella resta una convenzione.
-        let all = [
+        // proprio di data-tools.
+        //
+        // Tabella scritta a mano — seconda opinione su `as_str` — e giro
+        // sull'elenco dichiarato: e' `FASI_DICHIARATE` a decidere che cosa
+        // dev'essere nominato, non questa tabella a decidere che cosa
+        // guardare.
+        let attesi: &[(ErrorPhase, &str)] = &[
             (ErrorPhase::Validate, "validate"),
             (ErrorPhase::Connect, "connect"),
             (ErrorPhase::Probe, "probe"),
@@ -2569,30 +2621,55 @@ mod tests {
             (ErrorPhase::Rollback, "rollback"),
             (ErrorPhase::Cleanup, "cleanup"),
         ];
-        assert_eq!(all.len(), 10, "l'enumerazione canonica ha dieci fasi");
-        for (phase, name) in all {
-            assert_eq!(phase.as_str(), name);
-            assert_eq!(phase.to_string(), name, "Display = as_str canonico");
+        for dichiarata in ErrorPhase::FASI_DICHIARATE {
+            assert!(
+                attesi
+                    .iter()
+                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarata)),
+                "{dichiarata:?} e' dichiarata ma la tabella attesa non la nomina"
+            );
+        }
+        assert_eq!(
+            attesi.len(),
+            ErrorPhase::FASI_DICHIARATE.len(),
+            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        );
+        for (phase, name) in attesi {
+            assert_eq!(phase.as_str(), *name);
+            assert_eq!(phase.to_string(), *name, "Display = as_str canonico");
         }
     }
 
     #[test]
-    fn remote_effect_names_are_exactly_the_canonical_five() {
+    fn ogni_effetto_dichiarato_ha_il_nome_stabile_atteso() {
         // R9.6: solo i cinque valori canonici; l'esito ignoto e' un effetto
-        // (`unknown`), non una categoria (R9.3). Come per le fasi e le
-        // disposizioni, il test fissa i nomi stabili e non la completezza
-        // dell'enum: `RemoteEffect` non espone un elenco da iterare.
-        let all = [
+        // (`unknown`), non una categoria (R9.3).
+        //
+        // Stesso impianto delle fasi: tabella indipendente, giro
+        // sull'elenco dichiarato.
+        let attesi: &[(RemoteEffect, &str)] = &[
             (RemoteEffect::None, "none"),
             (RemoteEffect::RolledBack, "rolled_back"),
             (RemoteEffect::Partial, "partial"),
             (RemoteEffect::Committed, "committed"),
             (RemoteEffect::Unknown, "unknown"),
         ];
-        assert_eq!(all.len(), 5, "l'enumerazione canonica ha cinque effetti");
-        for (effect, name) in all {
-            assert_eq!(effect.as_str(), name);
-            assert_eq!(effect.to_string(), name, "Display = as_str canonico");
+        for dichiarato in RemoteEffect::EFFETTI_DICHIARATI {
+            assert!(
+                attesi
+                    .iter()
+                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarato)),
+                "{dichiarato:?} e' dichiarato ma la tabella attesa non lo nomina"
+            );
+        }
+        assert_eq!(
+            attesi.len(),
+            RemoteEffect::EFFETTI_DICHIARATI.len(),
+            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        );
+        for (effect, name) in attesi {
+            assert_eq!(effect.as_str(), *name);
+            assert_eq!(effect.to_string(), *name, "Display = as_str canonico");
         }
     }
 
