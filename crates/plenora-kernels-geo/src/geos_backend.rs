@@ -128,7 +128,7 @@ pub fn make_valid_wkb(
 
 /// Variante di [`make_valid_wkb`] su geometria gia' decodificata.
 ///
-/// Fusione dei segmenti geo (architettura.md#geometrie M3): l'input resta ammesso OGC-invalido
+/// Fusione dei segmenti geo (architettura.md#geometrie D12.1): l'input resta ammesso OGC-invalido
 /// — e' esattamente cio' che l'operazione ripara. Il WKB intermedio e' la
 /// stessa forma canonica XY che il percorso non fuso consegnerebbe al nodo,
 /// quindi gate strutturale, riparazione GEOS e rivalidazione dell'output
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn make_valid_geometry_matches_the_wkb_path() {
-        // architettura.md#geometrie M3: la variante su forma decodificata deve produrre la
+        // architettura.md#geometrie D12.1: la variante su forma decodificata deve produrre la
         // STESSA geometria del percorso WKB (che la fusione sostituisce),
         // sull'input OGC-invalido che l'operazione esiste per riparare.
         let input = bow_tie_wkb();

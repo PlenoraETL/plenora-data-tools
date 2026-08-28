@@ -718,7 +718,7 @@ impl Network {
                     // del dispatch). La memoria di lavoro dell'operatore e'
                     // auto-limitata dallo spill su disco; approssimazione v1:
                     // la materializzazione dell'input resta in RAM (lo spill
-                    // in streaming durante il drenaggio e' M3).
+                    // in streaming durante il drenaggio non e' implementato).
                     let spill_capable = spill_capable_unary(kernel);
                     // errori-e-limiti.md#cancellazione: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che

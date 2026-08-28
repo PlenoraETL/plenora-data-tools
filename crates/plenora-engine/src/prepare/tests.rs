@@ -776,7 +776,7 @@ fn geo_fusion_kill_switch_disables_groups() {
     assert_eq!(fusion_groups(&plan), vec![None, None, None]);
 }
 
-/// M3: `make_valid` (capability `TransformInPlace`) forma gruppi come le
+/// D12.2: `make_valid` (capability `TransformInPlace`) forma gruppi come le
 /// altre op del perimetro. La validazione fail-closed (capability `geos`)
 /// rende irraggiungibile questo piano a feature spenta, quindi il caso
 /// "nessun gruppo senza backend" non ha bisogno di un gate in `prepare`.
@@ -807,7 +807,7 @@ fn make_valid_joins_fusion_groups() {
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0), Some(0)]);
 }
 
-/// M3: `reproject` forma gruppi e puo' stare in qualunque posizione del run
+/// D12.2: `reproject` forma gruppi e puo' stare in qualunque posizione del run
 /// (qui in testa, con cambio di CRS a meta' catena gestito dal runner). Il
 /// target e' EPSG:3857 (proiettato): i transform a valle richiedono un CRS
 /// proiettato (`CrsRequirement::Projected`).

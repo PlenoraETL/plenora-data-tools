@@ -2038,8 +2038,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         expansion_constraint = LeftRelative
     ),
     // architettura.md#geometrie: `make_valid` entra nel perimetro di fusione come
-    // TransformInPlace; l'ammissione di input OGC-invalido (trappola 1) e'
-    // una proprieta' del suo gate di decode, gestita dal runner fuso con
+    // TransformInPlace; l'ammissione di input OGC-invalido e' una
+    // proprieta' del suo gate di decode, gestita dal runner fuso con
     // l'eccezione documentata in architettura.md#geometrie D12.4 — non richiede una
     // variante di capability dedicata (la relazione di raggruppamento e'
     // identica: 1:1 in place sulla stessa colonna).

@@ -19,12 +19,12 @@
 //! (`geo_fusion_falls_back_when_the_governor_rejects_the_reservation`) e non
 //! e' duplicato.
 //!
-//! Casi M3 (`geo.reproject`/`geo.make_valid`, backend feature-gated): (m3-a)
+//! Casi con backend feature-gated (`geo.reproject`/`geo.make_valid`): (a)
 //! input OGC-invalido -> `make_valid` in testa al gruppo, riparato senza
-//! errori (trappola 1); (m3-b) catena con reproject e cambio di CRS;
-//! (m3-c) `make_valid` a meta' catena; (m3-d) cancellazione con `make_valid`
-//! `NonInterruptible` nel gruppo. I casi (m3-a/c/d) sono gated su
-//! `geos-backend`, (m3-b) su `proj-backend`; il caso "feature spente" e'
+//! errori; (b) catena con reproject e cambio di CRS; (c) `make_valid` a
+//! meta' catena; (d) cancellazione con `make_valid` `NonInterruptible` nel
+//! gruppo. I casi (a/c/d) sono gated su `geos-backend`, (b) su
+//! `proj-backend`; il caso "feature spente" e'
 //! senza gate e verifica l'esito identico nei due percorsi in OGNI
 //! configurazione di build.
 
@@ -35,7 +35,7 @@ use geo::{
     Polygon,
 };
 use plenora_core::arrow::array::RecordBatch;
-// Solo i casi M3 leggono le celle come binario, e stanno dietro il backend:
+// Solo quei casi leggono le celle come binario, e stanno dietro il backend:
 // senza il gate questo sarebbe un import inutilizzato in ogni build senza
 // GEOS, cioe' in tutte quelle locali.
 #[cfg(feature = "geos-backend")]
@@ -1165,10 +1165,10 @@ fn ogc_invalid_input_with_terminal_measure_attributed_to_first_node() {
 }
 
 // ---------------------------------------------------------------------------
-// M3 — reproject / make_valid (backend feature-gated)
+// reproject / make_valid (backend feature-gated)
 // ---------------------------------------------------------------------------
 
-/// Piano M3: `make_valid` in TESTA al gruppo (trappola 1): l'input
+/// Piano con `make_valid` in TESTA al gruppo: l'input
 /// OGC-invalido arriva dall'arco (gate strutturale) direttamente al nodo
 /// che esiste per ripararlo.
 fn make_valid_first_plan() -> Value {
@@ -1184,7 +1184,7 @@ fn make_valid_first_plan() -> Value {
     })
 }
 
-/// Piano M3: `make_valid` a meta' catena, con successore.
+/// Piano con `make_valid` a meta' catena, con successore.
 #[cfg(feature = "geos-backend")]
 fn make_valid_mid_chain_plan() -> Value {
     json!({
@@ -1200,7 +1200,7 @@ fn make_valid_mid_chain_plan() -> Value {
     })
 }
 
-/// Piano M3: `reproject` (EPSG:32632 -> EPSG:3857) seguito da un altro
+/// Piano con `reproject` (EPSG:32632 -> EPSG:3857) seguito da un altro
 /// transform — cambio di CRS a meta' catena. Il target e' proiettato:
 /// i transform successivi richiedono `CrsRequirement::Projected` (verso un
 /// target geografico come EPSG:4326 la catena prosegue solo con op
@@ -1219,7 +1219,7 @@ fn reproject_chain_plan() -> Value {
     })
 }
 
-/// Piano M3: `reproject` verso un CRS GEOGRAFICO (EPSG:4326) con misura
+/// Piano con `reproject` verso un CRS GEOGRAFICO (EPSG:4326) con misura
 /// terminale `to_wkt` (requisito CRS `Known`) in coda al gruppo.
 #[cfg(feature = "proj-backend")]
 fn reproject_geographic_measure_plan() -> Value {
@@ -1253,7 +1253,7 @@ fn invalid_then_valid_batches() -> Vec<RecordBatch> {
     ]
 }
 
-/// (m3-a) architettura.md#geometrie M3, trappola 1 — il caso centrale: input OGC-INVALIDO ->
+/// (a) architettura.md#geometrie D12.4 — il caso centrale: input OGC-INVALIDO ->
 /// `make_valid` in testa al gruppo. Nel percorso non fuso il nodo legge col
 /// SOLO gate strutturale di `make_valid_wkb` e ripara; il percorso fuso NON
 /// deve rifiutare l'intermedio/ingresso OGC-invalido (decode iniziale solo
@@ -1315,7 +1315,7 @@ fn ogc_invalid_input_to_make_valid_repaired_identically() {
     }
 }
 
-/// (m3-a2) Confine del gruppo subito dopo `make_valid` (gruppo con sola
+/// (a2) Confine del gruppo subito dopo `make_valid` (gruppo con sola
 /// misura a valle): nel percorso non fuso il nodo emette i byte WKB di GEOS
 /// (o il passthrough dell'input valido); il runner fuso ri-encoda la forma
 /// decodificata — i byte di confine e la colonna misura devono coincidere
@@ -1347,7 +1347,7 @@ fn make_valid_then_measure_boundary_bytes_match() {
     );
 }
 
-/// (m3-b) architettura.md#geometrie M3: catena con `reproject` — EPSG:32632 -> EPSG:3857 ->
+/// (b) architettura.md#geometrie D12.5: catena con `reproject` — EPSG:32632 -> EPSG:3857 ->
 /// translate. Output byte-per-byte identico nei due percorsi e schema di
 /// confine col CRS TARGET (il runner fuso costruisce il batch sullo schema
 /// dell'ultima trasformazione: il cambio di CRS a meta' gruppo e' fisico,
@@ -1385,7 +1385,7 @@ fn reproject_chain_byte_per_byte_with_target_crs_schema() {
     );
 }
 
-/// (m3-b2) architettura.md#geometrie: `reproject` verso un CRS GEOGRAFICO con misura
+/// (b2) architettura.md#geometrie: `reproject` verso un CRS GEOGRAFICO con misura
 /// terminale in coda al gruppo — la colonna geometria sopravvive col CRS
 /// target e la misura e' byte-per-byte identica.
 #[cfg(feature = "proj-backend")]
@@ -1412,7 +1412,7 @@ fn reproject_to_geographic_with_terminal_measure() {
     );
 }
 
-/// (m3-c) architettura.md#geometrie M3: `make_valid` a meta' catena seguito da altro op —
+/// (c) architettura.md#geometrie D12.4: `make_valid` a meta' catena seguito da altro op —
 /// su input valido e' un passthrough byte-identico e la validazione
 /// inter-passo standard (strutturale + OGC) resta in vigore davanti al
 /// successore (l'output riparato e' valido per contratto del kernel).
@@ -1444,7 +1444,7 @@ fn make_valid_mid_chain_byte_per_byte() {
     }
 }
 
-/// (m3-d) architettura.md#geometrie M3: con input geometrico la validazione WKB atomica drena
+/// (d) architettura.md#geometrie D12.6: con input geometrico la validazione WKB atomica drena
 /// i batch prima del gruppo. La cancellazione iniettata dal reader e'
 /// quindi osservata deterministicamente a `main`, prima che `make_valid`
 /// `NonInterruptible` inizi; i percorsi fuso e non fuso devono produrre la
@@ -1493,7 +1493,7 @@ fn cancellation_with_non_interruptible_make_valid_same_node() {
     );
 }
 
-/// M3 a feature spente, SENZA cfg gate: un piano con `make_valid` o
+/// D12.6 a feature spente, SENZA cfg gate: un piano con `make_valid` o
 /// `reproject` ha lo STESSO esito con fusione attiva e kill switch spento
 /// in qualunque configurazione di build — a feature spente il rifiuto
 /// fail-closed in validazione (capability `geos`/`proj` mancante, mai un
