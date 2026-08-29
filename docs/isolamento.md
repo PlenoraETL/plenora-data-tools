@@ -1,8 +1,8 @@
 # Esecuzione isolata — progetto tecnico della fase 4
 
-Progetto, non implementazione. Alla data di questo documento **non esiste
-codice** di worker, supervisore, protocollo o limiti di processo: qui c'è che
-cosa dovranno fare e perché.
+Questo documento descrive il progetto tecnico completo, comprese parti già
+realizzate. Lo stato di avanzamento e il lavoro residuo sono dichiarati
+esclusivamente in [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 La scelta architetturale è presa e non si riapre: la correttezza viene
 dall'**isolamento**, non dalla previsione. Il ragionamento è in
@@ -13,9 +13,10 @@ smentito o da ciò che una rilettura ha trovato contraddittorio.
 
 Baseline strutturale: commit `922aea3`, tag `baseline-pre-fase-4`.
 
-I prototipi sono stati eseguiti in **due cicli**: le misure stanno in
-[`prototipi-isolamento.md`](prototipi-isolamento.md), e dove un paragrafo qui
-sotto riporta un numero, quel numero viene da lì.
+I prototipi sono stati eseguiti in **quattro cicli**: le misure stanno in
+[`prototipi-isolamento.md`](prototipi-isolamento.md), che è l'autorità sul
+loro numero e sul loro esito, e dove un paragrafo qui sotto riporta un numero,
+quel numero viene da lì.
 
 Nascita vincolata e contenimento sono dimostrati su entrambe le piattaforme.
 **L'attribuzione no.** Su Linux regge solo se il dominio è reso foglia dal

@@ -22,7 +22,8 @@ proprietà e cleanup. Dettaglio in [`isolamento.md`](isolamento.md).
 Il core è una release candidate credibile: i formati DAG sono **due** — il
 piano v5 e il piano v6, che aggiunge `max_domain_memory_bytes` e ha un dominio
 d'identità proprio — la CLI è l'eseguibile distribuito, le 146 operazioni del
-catalogo sono documentate, e la CI verifica Linux e Windows con quindici job.
+catalogo sono documentate, e la CI verifica Linux e Windows con sedici job —
+il conteggio lo dichiara [`release.md`](release.md), che è l'autorità sui gate.
 
 Il v4 continua a funzionare, migrato nel canonico v5, di cui condivide il
 `plan_hash`; il confine d'identità è fra v5 e v6, e lì soltanto.
@@ -87,7 +88,7 @@ linearizzabile. Servono al secondo livello, non al primo.
 
 Il costo dichiarato di questa scelta: è un lavoro più grande di un preflight,
 e la ragione per farlo comunque è che il preflight non risolverebbe il
-problema. I meccanismi sono stati **prototipati in due cicli** — nascita
+problema. I meccanismi sono stati **prototipati in quattro cicli** — nascita
 vincolata e contenimento sono dimostrati, l'attribuzione solo sotto le
 condizioni dette più sotto — e su **macOS** il profilo isolato resta non
 supportato finché un prototipo non dimostri copertura *e* attribuzione.
@@ -109,16 +110,28 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | due cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
-| 5 | il legacy ridotto a un confine di migrazione | sì | |
-| 6 | superficie pubblica e commenti | no | |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | quattro cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
+| 5 | il legacy ridotto a un confine di migrazione | sì | **aperta**: 0 criteri completati |
+| 6 | superficie pubblica e commenti | no | **aperta**: 2 criteri su 3 completati |
 
-**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano:
+**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano. Lo stato di
+ciascuno è verificabile, e nessuna delle due fasi si dichiara chiusa finché
+tutte le righe che la riguardano non lo sono:
 
-| fase | è chiusa quando |
-|---|---|
-| 5 | esiste **un solo executor** per tutti i piani semanticamente traducibili; i piani non traducibili sono in un modulo isolato con la matrice di ciò che li rende tali; la rimozione è pianificata per una major dichiarata |
-| 6 | nessun modulo fuori dall'API è pubblico; i `lib.rs` espongono facciate ristrette; nessun commento di produzione dichiara uno stato di avanzamento («fase», «in corso», «milestone»), mentre restano le condizioni di rientro e le ragioni `D*`/`R*`; un gate lo tiene, con la distinzione fra cronologia e hazard scritta nella sua doc |
+| fase | è chiusa quando | oggi |
+|---|---|---|
+| 5 | esiste **un solo executor** per tutti i piani semanticamente traducibili | **no**: `plenora-cli` dispatcha ancora i piani `schema_version <= 3` sul percorso di `cli::commands::legacy`, che è un secondo executor |
+| 5 | i piani non traducibili sono in un modulo isolato con la matrice di ciò che li rende tali | **parziale**: modulo isolato sì, matrice no |
+| 5 | la rimozione è pianificata per una major dichiarata | **no** |
+| 6 | nessun modulo fuori dall'API è pubblico, e i `lib.rs` espongono facciate ristrette | **no**: il solo `plenora-engine` dichiara dodici `pub mod` |
+| 6 | nessun commento di produzione dichiara uno stato di avanzamento («fase», «in corso», «milestone»), mentre restano le condizioni di rientro e le ragioni `D*`/`R*` | **sì**, per il perimetro che il gate copre |
+| 6 | un gate lo tiene, con la distinzione fra cronologia e hazard scritta nella sua doc | **sì**: `scripts/verifica_commenti.py`, job `gate-commenti` della CI |
+
+Che un criterio di uscita sia soddisfatto non anticipa la chiusura della fase:
+la fase 6 resta aperta finché la superficie pubblica non è ristretta, ed è
+l'unico dei suoi tre criteri ancora da fare. Il gate sui commenti è entrato
+prima del resto perché presidia una regressione — un commento che racconta il
+passato — non perché l'ordine delle fasi sia cambiato.
 
 ### Baseline pre-fase-4 — freeze strutturale
 
@@ -228,8 +241,9 @@ non ha ancora un chiamante fuori da sé. Il perimetro e la condizione di
 rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
-I prototipi hanno avuto **due cicli**, e sono **evidenza esplorativa**: le
-misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md).
+I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
+misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è
+l'autorità sul loro numero e sul loro esito.
 
 Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
 
