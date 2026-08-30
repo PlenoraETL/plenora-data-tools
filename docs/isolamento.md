@@ -56,7 +56,7 @@ peggio di una che si sa di non avere.
 | **NG-6** | Su macOS **non c'è contenimento**: il profilo isolato non è supportato finché un prototipo non dimostri contenimento *e* attribuzione. |
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
 | **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
-| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
+| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero richiede una **sandbox del filesystem**. Passare handle già aperti al posto dei percorsi **non basta**: un handle non nasconde né revoca l'autorità di chi lo riceve, che resta libero di raggiungere per altra via ciò che la propria identità gli consente — e su Linux il percorso è per giunta ricavabile dal descrittore attraverso `/proc/self/fd`. Il passaggio di handle toglie un modo di scoprire il percorso, non il diritto di usarlo. |
 | **NG-10** | **Contenere non significa terminare.** Su Linux il kernel uccide; altre piattaforme possono negare l'allocazione lasciando il processo vivo ([`prototipi-isolamento.md`](prototipi-isolamento.md)). Non garantiamo un modo unico di fermarsi: garantiamo che il tetto sia imposto e che l'evento sia leggibile. |
 | **NG-11** | Il tetto del dominio **non protegge dalle richieste**, solo dagli addebiti. Su Linux una richiesta da 64 TiB non toccata è stata accettata senza generare alcun evento. Un worker non può difendersi interrogando l'allocatore. |
 | **NG-12** | **L'attribuzione dipende dal sigillo del dominio.** Se il worker riesce a creare discendenti, l'uccisione avviene altrove e l'evidenza locale non la registra. Il sigillo è verificato nel preflight (§9-bis): senza, il profilo isolato non parte. |
@@ -2224,6 +2224,10 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-10** | sequenza di verifica da 1 a 9 — 8-bis compreso — publish no-clobber con rilevazione del residuo, e **`risolvi_commit`** con l'enum delle osservazioni | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; e le cinque osservazioni su destinazioni costruite a mano |
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
+| **PR-13a** | infrastruttura di confronto shadow con **candidato sintetico**. **Preceduta dal gate bloccante `PT-shadow`**: prima del suo esito non è implementabile | **qualificato**, vedi la sezione dedicata | le garanzie di quella sezione: preparazione fallita equivalente a `off`, piano incapace di abilitare o aumentare lo shadow, record conforme al contratto privacy, e i quattro guasti del candidato senza effetto canonico |
+| **PR-13b** | `polygonize` sul comparatore reale | **nessun cambiamento canonico**; cambia l'osservabilità shadow | trasparenza del prefisso derivato, per questo kernel |
+| **PR-13c** | `split` | idem | idem |
+| **PR-13d** | `make_valid` | idem | idem |
 
 ### `PR-0` non è lavoro di isolamento, ed è la ragione per cui viene prima
 
@@ -2288,3 +2292,126 @@ attivo, e ognuna può essere fermata senza lasciare il sistema a metà.
 Il criterio di uscita della fase 4 (`F4-5`) si verifica su PR-12: nessun
 percorso noto produce un'allocazione critica prima dell'autorizzazione, oppure
 il piano viene rifiutato esplicitamente.
+
+---
+
+## 12. Confronto shadow — il progetto di `PR-13`
+
+Progetto, e a un livello deliberatamente alto: nulla di ciò che segue esiste nel
+codice, e i **meccanismi non sono decisi qui**. Li decide la progettazione di
+`PR-13a`, dopo che `PT-shadow` avrà dato un provider reale e i vincoli che quel
+provider impone. Fissarli prima significherebbe scrivere la soluzione a un
+problema di cui non si conoscono ancora i confini.
+
+`PR-13` **non è «l'integrazione di `memory-lab`»**: è l'**infrastruttura di
+confronto shadow** fra un kernel candidato e il backend autorevole, di cui i
+tre kernel Rust del laboratorio sono i primi clienti. Il catalogo empirico
+della memoria **è uscito dal perimetro**: le sue misure sono Windows-only, il
+profilo isolato è Linux, e non c'è una grandezza comune da consumare.
+
+### 12.1 `PT-shadow`, il gate bloccante
+
+Un prototipo, non una PR, e **`PR-13a` non è implementabile prima del suo
+esito**. Deve dimostrare quattro proprietà; se una manca, nessun profilo shadow
+viene offerto e il disegno torna in review con la proprietà mancante
+dichiarata.
+
+| | proprietà |
+|---|---|
+| **1** | **sandbox del filesystem**: un provider reale — mount namespace, Landlock o equivalente — che confini il candidato alla propria directory privata. Identità distinta e handle già aperti **non bastano**, per la ragione scritta in `NG-9` |
+| **2** | **quota sullo spazio temporaneo**: una sandbox governa *dove* si scrive, non *quanti byte*. Senza una quota effettiva il tetto dichiarato è una nota |
+| **3** | **dominio separato**: processo e cgroup propri, con le regole del dominio del worker. Mai un thread — in cgroup v2 il controller `memory` è di dominio, l'addebito segue la `mm` condivisa fra i thread, e con `memory.oom.group = 1` un candidato co-locato porterebbe via il lavoro canonico insieme a sé |
+| **4** | **incapacità di influire sul canonico**: nessun limite, panic, timeout o esaurimento del candidato può cambiare artefatto o esito dell'esecuzione osservata |
+
+Se il provider richiede una dipendenza nuova, questa segue `AGENTS.md`:
+motivazione documentata, pin esatto, revisione, e nessun `unsafe` nel
+workspace.
+
+### 12.2 L'architettura
+
+Quattro scelte, e sono le uniche che il prototipo non può rimettere in
+discussione, perché non dipendono dal provider.
+
+**Lo snapshot precede l'esecuzione canonica.** Una copia fatta dopo
+congelerebbe uno stato del file che nessuna esecuzione ha letto. Worker
+canonico e confronto leggono gli stessi byte.
+
+**Il confronto è fuori banda, dopo il commit point.** Non esiste un arco del
+grafo di stati in cui il suo esito sia ingresso della decisione di pubblicare,
+quindi l'indipendenza è strutturale invece che affidata a una regola. Una
+preparazione fallita disabilita l'osservazione, e l'esecuzione canonica
+prosegue nel profilo `off`.
+
+**Il confronto è fra candidato e GEOS rieseguito sul prefisso.** L'output GEOS
+originale non è conservato: la ritenzione per nodo richiederebbe di rompere la
+fusione dei segmenti geo, cioè di cambiare il piano fisico canonico. Il nodo si
+identifica per `id`, e il piano derivato è **un piano diverso, con `plan_hash`
+proprio**.
+
+**GEOS resta autorevole.** Il risultato restituito è sempre il suo, per tutta
+la fase shadow.
+
+### 12.3 La policy è dell'host
+
+**Il profilo predefinito è `off`**: lo shadow non si attiva se nessuno lo
+abilita, e `off` è l'unico profilo che non cambia nulla.
+
+Il piano **non può** abilitare lo shadow né alzarne alcun limite: se potesse,
+un input deciderebbe quanto l'host spende per osservarlo. La politica appartiene
+al dispiegamento, non viaggia nel piano né nel protocollo, e se non è
+configurata il profilo non è disponibile.
+
+Governa almeno memoria del dominio, concorrenza, timeout e spazio temporaneo.
+La concorrenza è la voce che rende finita la somma a livello di host, dove i
+domini shadow **si sommano** invece di alternarsi: l'uguaglianza per invocazione
+del profilo isolato vale fra staging, worker e verificatore, che non
+coesistono, e non copre un confronto fuori banda. L'insieme completo delle voci
+si fissa con `PR-13a`.
+
+### 12.4 Garanzie e non-garanzie
+
+| | |
+|---|---|
+| **esito del tentativo osservato** | **invariato**: artefatto, exit code e sezione canonica dell'envelope coincidono con `off`. È ciò che gli oracoli di `PR-13a` devono dimostrare |
+| **envelope** | la sezione canonica è identica a `off`; l'esito shadow vive in una **sezione propria**, assente nel profilo `off`, così l'envelope preesistente resta byte-identico |
+| **latenza del tentativo osservato** | **cambia**: lo staging precede lo spawn, e il suo costo si paga anche quando poi fallisce |
+| **tentativi concorrenti** | **possibile interferenza operativa**: CPU e I/O non sono governati. Il tetto sulla concorrenza e una priorità più bassa la attenuano, non la escludono |
+| **finestra fra commit e risposta** | **si allarga**, del lavoro necessario ad accodare l'osservazione. Resta la classe di `NG-13`, con una finestra più larga |
+| **autorità sul filesystem** | promessa **solo** sotto il provider di contenimento. Senza, il candidato conserva l'autorità della propria identità |
+| **immutabilità durante la copia** | è una **precondizione esterna**, e non basta dichiararla: il canonico legge quella copia, quindi una mutazione concorrente produrrebbe uno **stato misto** che nessuno rileverebbe. Se il dispiegamento non può garantirla e il provider non offre uno snapshot point-in-time, **il profilo shadow non è disponibile**. Dopo la copia, lo snapshot è immutabile per costruzione fino alla conclusione del confronto, e chiude il TOCTOU fra esecuzione canonica e replay |
+| **trasparenza del prefisso** | il piano derivato fonde diversamente dal canonico. L'uguaglianza del valore di nodo poggia sul determinismo di livello 1, ed è una proprietà da **verificare per ogni kernel reale**, non da assumere |
+
+Sono dichiarazioni **di progetto**: finché `PR-13a` non esiste non sono limiti
+del prodotto, e non appartengono al registro dei limiti dichiarati. Vi entrano
+il giorno in cui il codice le rende vere.
+
+### 12.5 Privacy del confronto
+
+| | |
+|---|---|
+| mai in chiaro | WKB, coordinate, aree, cardinalità, valori: nessun dato dell'utente né una sua trascrizione leggibile |
+| classe della divergenza | da **enum chiuso**: dice *che tipo* di differenza, mai *quale* valore |
+| digest dei dati | **nessuno per default**: la geometria applicativa ha spazio d'ingresso prevedibile, quindi un digest permette dizionario e correlazione |
+| localizzazione | solo se il dispiegamento configura una chiave, e allora HMAC |
+| errori | **sempre privi di dati**, senza eccezione diagnostica: il confronto shadow non deroga alla regola di `AGENTS.md` |
+| telemetria | canale **separato dagli errori**, con la propria ritenzione |
+
+Il `commit_token` non compare in nomi, log, errori o metriche.
+
+### 12.6 Suddivisione e criteri di uscita
+
+| | contenuto | è chiusa quando |
+|---|---|---|
+| `PT-shadow` | prototipo, evidenza esplorativa | le quattro proprietà sono dimostrate, oppure il disegno torna in review con quella mancante dichiarata |
+| `PR-13a` | infrastruttura con **candidato sintetico** | sono dimostrate le garanzie fissate qui sopra — architettura, policy, garanzie e privacy — e in particolare: una **preparazione fallita** lascia il canonico equivalente a `off`; il **piano non può** abilitare lo shadow né aumentarne i limiti; il **record di confronto** è conforme al contratto privacy; e i **quattro guasti del candidato** — sfonda il tetto, panica, non termina, diverge — non hanno alcun effetto canonico |
+| `PR-13b` | `polygonize` | trasparenza del prefisso dimostrata per questo kernel, con GEOS autorevole |
+| `PR-13c` | `split` | idem |
+| `PR-13d` | `make_valid` | idem |
+
+`PR-13a` non contiene alcun kernel geo: un candidato che fallisce su ordine
+dimostra il meccanismo, non `polygonize`.
+
+L'uscita dalla fase shadow è un gate a sé e non appartiene a queste PR: serve un
+**corpus applicativo reale e anonimizzato** con manifest revisionato, perché
+dati sintetici non lo chiudono. Solo dopo si valutano canary, `default-rust` e
+il ritiro di GEOS, ciascuno con criteri approvati sul traffico reale.

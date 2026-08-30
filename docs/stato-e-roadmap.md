@@ -666,22 +666,48 @@ diagnosticarlo sposta il problema, non lo risolve.
 
 ---
 
-## `PR-13` — le implementazioni nuove che vengono da `memory-lab`
+## `PR-13` — il confronto shadow, condizionato a un prototipo
 
-**Esiste come voce di piano, e non come lavoro iniziato.** È dichiarata qui
-perché non venga confusa con `PR-12`: sono due PR distinte, con contenuti
-distinti, e `PR-13` **segue**.
+**`PR-13` è condizionata all'esito di `PT-shadow`: senza un provider
+filesystem approvato, `PR-13a` non è implementabile e nessun profilo shadow
+viene offerto.**
 
-`memory-lab` **esiste**, fuori da questo repository. Ciò che non esiste è la
-sua **integrazione qui**: nessun codice, nessun documento normativo, nessuna
-dipendenza — e la distinzione conta, perché «non implementato» direbbe una cosa
-falsa su un lavoro che è stato fatto altrove.
+È la prima voce di questo documento che non è né fatta né semplicemente da
+fare: è **subordinata a un prototipo che non è stato eseguito**, e potrebbe non
+essere mai realizzabile. Va letta così e non come lavoro pianificato.
 
-Nessuna PR di questa fase lo anticipa, e nessuna delle correzioni in corso lo
-presuppone. Questa voce dice quindi due cose: che il numero è occupato, e che
-l'integrazione non è cominciata. Che cosa esattamente `PR-13` porti dentro va
-scritto in [`isolamento.md`](isolamento.md) insieme alle altre PR della
-sequenza, prima che qualcuno lo implementi.
+**Che cosa è, e che cosa non è più.** `PR-13` è l'**infrastruttura di confronto
+shadow** fra un kernel candidato e il backend autorevole. Non è
+«l'integrazione di `memory-lab`»: quel nome descriveva un contenitore, non un
+lavoro, e progettarla ha diviso quel contenitore in tre parti con destini
+diversi.
+
+| che cosa | destino |
+|---|---|
+| i tre kernel Geo Rust — `polygonize`, `split`, `make_valid` | i **primi clienti** dell'infrastruttura, uno per PR, con GEOS sempre autorevole |
+| i ventiquattro fast path table e Geo | **rinviati**, uno per PR ciascuno, ognuno col proprio oracolo differenziale |
+| il **catalogo empirico della memoria** | **fuori dal perimetro**: le misure sono Windows-only e il profilo isolato è Linux, quindi non esiste una grandezza comune da consumare. Rientra solo dopo una campagna Linux con una metrica coerente col dominio |
+
+`memory-lab` **esiste**, fuori da questo repository, e nulla di esso è stato
+importato: nessun codice, nessun dato, nessuna dipendenza. Il repository del
+prodotto **non ha** una dipendenza di percorso verso di esso, e non deve
+averla; la provenienza si **cita** — commit immutabile e hash degli artefatti —
+non si copia, perché un artefatto di provenienza copiato descriverebbe misure
+che non importiamo e sarebbe vecchio alla campagna successiva.
+
+**La sequenza**, e nessun passo salta il precedente:
+
+| | |
+|---|---|
+| `PT-shadow` | prototipo bloccante: provider di contenimento filesystem e impossibilità del candidato |
+| `PR-13a` | infrastruttura con candidato sintetico |
+| `PR-13b` … `PR-13d` | `polygonize`, `split`, `make_valid` |
+
+`PR-13` **segue `PR-12`**, e questo non è cambiato. Il progetto — prerequisito,
+architettura, policy, garanzie, privacy e criteri di uscita — è in
+[`isolamento.md`](isolamento.md), nella sezione dedicata al confronto shadow. I
+meccanismi non vi sono fissati: li decide la progettazione di `PR-13a`, dopo che
+il prototipo avrà dato un provider reale e i suoi vincoli.
 
 ## Debito dichiarato, senza data
 
