@@ -576,10 +576,70 @@ diversi che non si distinguono con una sostituzione meccanica.
 Alla chiusura del punto 2, non prima: una campagna cambia significato se il
 codice sotto è ancora in movimento.
 
-Non è l'unica campagna: la cadenza ordinaria — smoke dei target coinvolti
-prima di ogni merge, campagna completa dopo, campagne lunghe alle scadenze
-fissate — sta in [`release.md`](release.md). Questa è quella **finale**, che
-precede il rilascio e non sostituisce le altre.
+Non è l'unica campagna: la cadenza ordinaria — gate deterministici e suite
+completa prima di ogni commit, smoke dei target coinvolti prima del merge,
+campagna da 30 minuti dopo — sta in [`release.md`](release.md).
+
+Questa è però l'**unica scadenza lunga** del ciclo di rilascio, e le due cose
+coincidono: la campagna finale di cui parla questo punto **è** quella che
+`release.md` colloca dopo `PR-12`. Non ce n'è una seconda alle tappe
+intermedie, perché una campagna lunga misura l'albero su cui gira e quegli
+alberi sono destinati a cambiare. Vale sul candidato congelato, su VM
+qualificata e con watchdog esterno al processo — e ogni modifica al candidato
+la invalida, perché l'albero misurato non è più quello che si rilascia.
+
+### Criterio aperto: il watchdog non è ancora nel repository
+
+`release.md` rende il watchdog esterno **obbligatorio** per la campagna
+lunga. Oggi quel guardiano esiste come script fuori dal repository, provato a
+mano: la procedura è quindi **descritta ma non riproducibile**, e una
+qualificazione che dipende da uno strumento non versionato non è verificabile
+da nessun altro.
+
+**Prima della campagna finale**, e non dopo, va colmato:
+
+| | |
+|---|---|
+| **che cosa entra** | lo script del watchdog in `scripts/`, con i suoi test, come qualunque altro gate del progetto |
+| **conseguenza se non entra** | la campagna finale non è qualificante, perché il suo esito dipenderebbe da uno strumento che il repository non contiene e che nessuno può rieseguire |
+
+**Che cosa devono coprire i test.** Ognuno corrisponde a un modo in cui la
+procedura è già fallita a mano, o a una distinzione che sbagliata falserebbe
+l'esito:
+
+| il test | perché |
+|---|---|
+| l'arresto avviene al **muro di tempo** | è l'unica condizione di arresto ammessa |
+| il silenzio del log **non** provoca arresto | fermare al silenzio ucciderebbe run sani e li archivierebbe come blocchi |
+| corpus e artefatti sono **recuperati prima** dell'arresto | vivono nel `tmpfs` del container e muoiono con lui: è già successo |
+| gli artefatti sono contati sulla **directory giusta** | un conteggio su una directory inesistente rende `0` e sembra un successo |
+| i file salvati portano il **nome del bersaglio** | una variabile sovrascritta li ha già battezzati con un TID |
+| un target che scrive **un artefatto ed esce non-zero** è classificato **`rilievo`** | è la distinzione che protegge il risultato: senza, un crash verrebbe archiviato come `incompleta` e il difetto andrebbe perso |
+| un **artefatto preesistente** non viene attribuito al run nuovo | una directory che conserva l'artefatto di ieri produrrebbe un rilievo che nessuno ha trovato oggi, e bloccherebbe la release su un difetto già chiuso |
+
+**L'attribuzione degli artefatti.** Un artefatto vale come rilievo solo se
+l'ha prodotto **questo** run. Le directory di `fuzz/artifacts/` sono
+persistenti e accumulano, quindi contarne il contenuto non basta. Lo strumento
+deve garantire una delle due:
+
+| | |
+|---|---|
+| **directory isolata** | artefatti in una directory propria del run, **vuota all'inizio**: tutto ciò che c'è dentro alla fine è di questo run |
+| **confronto prima/dopo** | inventario all'avvio e alla chiusura, e conta solo la differenza — affidabile, cioè per contenuto e non per numero, perché un artefatto rimosso e uno aggiunto lascerebbero il conteggio invariato |
+
+**Il preflight della VM.** «Non ha già mostrato wedge» è necessario e non
+sufficiente: qualificherebbe a vuoto una macchina mai usata. Lo strumento
+versionato deve **registrare e verificare**, e allegare all'esito:
+
+| | |
+|---|---|
+| **kernel** | versione e linea, perché l'esclusione di un host è per ora l'unica difesa contro un blocco non attribuito |
+| **risorse** | CPU, memoria e `shm` assegnate al container, e quelle della macchina |
+| **configurazione** | immagine e versione di `cargo-fuzz`, con i pin di `release.md` |
+| **esclusività** | che durante la campagna non giri nient'altro di significativo sulla macchina: una campagna in contesa misura anche il vicino |
+
+Finché il criterio è aperto, ogni campagna eseguita con lo strumento fuori
+repository vale come **evidenza**, non come qualificazione.
 
 Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
 ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target

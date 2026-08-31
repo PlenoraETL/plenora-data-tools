@@ -245,13 +245,131 @@ difetti che una corsa breve avrebbe visto.
 | **Prima del commit** | i gate deterministici, suite completa del workspace inclusa |
 | **Prima del merge** | test mirati, coverage, **compilazione** del crate `fuzz/` e **smoke dei soli target coinvolti** dalla modifica |
 | **Dopo il merge** | campagna completa — **30 minuti per target**, il default di `fuzz.yml` — in parallelo alla PR successiva |
-| **Obbligatoria e lunga** | **almeno 1 ora per target**, il default di `fuzz-campaign.sh`: dopo **`PR-6`**, **`PR-10`**, **`PR-12`**, **`PR-13`**, e prima di ogni release candidate |
+| **Obbligatoria e lunga** | **almeno 1 ora per target**, il default di `fuzz-campaign.sh`: **una sola scadenza ordinaria per ciclo di rilascio**, dopo **`PR-12`**, sul candidato congelato, su VM qualificata e con watchdog esterno |
 
 Le due durate non sono scelte qui: sono i default degli strumenti che le
 eseguono (`minutes_per_target: 30` in `.github/workflows/fuzz.yml`,
 `FUZZ_HOURS_PER_TARGET=1` in `scripts/fuzz-campaign.sh`). Scriverne altre
 significherebbe avere due numeri per la stessa cosa, e uno dei due sarebbe
 falso.
+
+#### Una scadenza per ciclo, e perché dopo `PR-12`
+
+Una campagna lunga misura l'albero su cui gira. Ripeterla a ogni tappa
+significa spendere ore su alberi **destinati a cambiare**, e nessuna di quelle
+ore dice qualcosa su ciò che verrà rilasciato: la sola campagna che parla del
+prodotto è quella che gira sul codice congelato.
+
+La garanzia non è tolta, è **spostata**: nessun rilascio esce senza una
+campagna lunga completa eseguita esattamente sul codice che si rilascia. Ciò
+che sparisce è la ripetizione su alberi intermedi, non la copertura.
+
+Quelle tappe non restano scoperte. Fra un commit e il rilascio agiscono i tre
+gradini sopra — gate deterministici e suite completa prima del commit, smoke
+dei target coinvolti prima del merge, campagna da 30 minuti dopo — e il
+gradino lungo arriva quando il bersaglio smette di muoversi.
+
+**«Una» conta le scadenze, non le esecuzioni.** L'esito vale per l'albero su
+cui è stato ottenuto, e **qualunque modifica al candidato lo invalida**: una
+campagna che trova un difetto obbliga a una correzione, e quella correzione
+produce un albero nuovo, da rifuzzare per intero. Non esiste un esito
+ereditato da un albero precedente, e non esiste una ripetizione parziale sui
+soli target «interessati» dalla correzione. Il ciclo si chiude quando una
+campagna completa passa su un candidato che da quel momento non cambia più.
+
+`PR-13`, se sarà realizzata dopo il rilascio, appartiene al **ciclo
+successivo** e porta la scadenza di quel ciclo: la sua campagna lunga precede
+la **sua** release, non questa.
+
+#### Le due condizioni, e perché sono nella regola
+
+La campagna lunga vale **solo** su una VM qualificata e con un watchdog
+esterno al processo. Non sono raccomandazioni: senza, una campagna può
+apparire in corso per ore senza esserlo.
+
+I due limiti che il fuzzer si porta dentro non bastano.
+`-max_total_time` è valutato **dentro** il ciclo di fuzzing: se il ciclo non
+gira, il limite non viene mai guardato. `-timeout` arriva come **segnale**, e
+un task in stato `D` non lo gestisce: il segnale resta **pendente** finché
+dura il blocco. Un processo fermo fuori dal ciclo sfugge a entrambi, e la
+campagna resta immobile senza dichiararsi tale.
+
+**Il watchdog arresta a una sola condizione: il muro di tempo**, cioè il
+limite per target più la grazia. Nient'altro.
+
+La regola è volutamente povera. La tentazione è di riconoscere il blocco
+mentre accade — poca CPU, un task in stato `D`, uno stack fermo in una `mmap`
+— e fermare prima. Ma quella non è una regola esatta: «poca CPU» non ha una
+soglia, una fotografia coglie un istante e non dimostra che quell'istante
+duri, e `mmap` descrive i blocchi **osservati finora**, non tutti quelli
+possibili. Un criterio così arresta anche run sani, e li archivia come
+blocchi: l'errore peggiore, perché produce un esito falso invece di
+un'assenza di esito.
+
+Il silenzio del log, in particolare, non è un battito mancato. `libFuzzer`
+stampa `pulse` a potenze di due del numero di ingressi, e `NEW`/`REDUCE` solo
+quando scopre copertura: un target sano e già maturo può tacere a lungo, e
+tanto più a lungo quanto più ha girato, perché la distanza fra due potenze di
+due cresce con esse.
+
+Il silenzio serve lo stesso, ma per un'altra cosa: **innesca la fotografia
+diagnostica**. Stack, stato dei task, consumo, pressioni. Costa nulla, e un
+blocco non fotografato è un blocco perso — mentre un blocco fotografato e
+lasciato correre fino al muro costa solo tempo di macchina.
+
+#### I tre esiti di un target
+
+Alla scadenza si tirano le somme, e gli esiti possibili sono **tre**. Non due:
+un'uscita non-zero non è la stessa cosa in tutti i casi, e trattarla come
+un'unica categoria cancellerebbe proprio il risultato che il fuzzing esiste
+per produrre.
+
+| esito | quando | che cosa comporta |
+|---|---|---|
+| **riuscita** | durata richiesta completata, uscita **autonoma** con `rc=0`, **zero** artefatti | il target è qualificato |
+| **rilievo** | crash, diagnosi del sanitizer o di `libFuzzer`, oppure un artefatto scritto | **blocca la release** e apre riproduzione e minimizzazione |
+| **incompleta** | arresto al muro, interruzione infrastrutturale, o uscita prematura non classificabile | il target **non** è qualificato, e va rieseguito |
+
+La distinzione che conta è fra le ultime due. Un crash è una campagna
+**conclusa con un risultato**: ha trovato qualcosa, e quel qualcosa vale più
+di un'ora di verde. Un arresto al muro è una campagna **che non ha finito di
+guardare**, e non dice niente né in un senso né nell'altro. Archiviare la
+prima come la seconda vorrebbe dire buttare via un difetto.
+
+**Il codice d'uscita da solo non distingue le tre categorie**, in nessuna
+direzione. Un artefatto vale come rilievo **anche con `rc=0`**: il target può
+aver scritto l'ingresso che lo fa cadere e poi essere uscito ordinatamente.
+Un'uscita prematura **con `rc=0`** può essere incompleta: un processo che
+termina pulito ma prima della durata richiesta non ha guardato quanto doveva.
+E un'uscita non-zero può essere l'una o l'altra.
+
+Quello che decide sono i **fatti del run**: l'artefatto, la diagnosi, la
+durata effettiva. Il codice d'uscita è uno dei dati, non il criterio.
+
+Fra questi, l'artefatto è il più affidabile e va guardato **per primo**: un
+target che ha scritto un artefatto è un rilievo anche se il processo è poi
+morto in modo confuso. Ma va attribuito **a questo run** — vedi il criterio
+aperto in [`stato-e-roadmap.md`](stato-e-roadmap.md) — perché una directory
+che conserva l'artefatto di ieri produrrebbe un rilievo che nessuno ha
+trovato oggi.
+
+Una campagna incompleta va registrata per quello che è: **eseguita in parte,
+non completata**. Ha girato, ha prodotto corpus, log ed evidenza, e quel
+materiale si conserva — ma **non vale come qualificazione**, perché la
+qualificazione è la copertura dell'ora intera, non l'essere partiti.
+
+#### Che cosa rende qualificata una VM
+
+Non basta che l'host non abbia mostrato blocchi non attribuiti: quel criterio
+è **necessario e non sufficiente**, e da solo qualificherebbe a vuoto una
+macchina mai usata, dove l'assenza di blocchi non è un fatto ma una mancanza
+di osservazioni.
+
+Servono anche i dati dell'ambiente — configurazione, versione del kernel,
+risorse assegnate, ed **esclusività**: che nient'altro di significativo giri
+sulla macchina durante la campagna — registrati insieme all'esito e verificati
+dallo strumento, non attestati a mano. Il come sta nel criterio aperto in
+[`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 «Target coinvolti» si legge dal codice toccato, non dal nome della PR: chi
 modifica il decoder del protocollo passa da `protocollo_frame` anche se la PR
@@ -327,11 +445,10 @@ rosso a barriera funzionante, e un job perennemente rosso smette di essere
 letto. Va riattivato quando `arrow-rs` renderà fallibile la conversione dello
 schema (`apache/arrow-rs#10575`).
 
-Le campagne lunghe hanno ora una cadenza fissa — la tabella qui sopra — invece
-di un'unica scadenza legata alla chiusura del lavoro sulla memoria governata.
-Quel lavoro resta il contesto in cui la prima è maturata, ed è descritto in
-[`stato-e-roadmap.md`](stato-e-roadmap.md); non è più la sola occasione in cui
-una campagna completa viene eseguita.
+La campagna lunga ha **una scadenza per ciclo di rilascio**, dopo `PR-12`, sul
+candidato congelato: la tabella qui sopra è l'unico posto in cui quella
+scadenza è scritta. Il lavoro sulla memoria governata resta il contesto in cui
+è maturata, ed è descritto in [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 ## Prestazioni
 
