@@ -242,9 +242,11 @@ passo 9 non c'è.
 Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
 protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
 feature `internals`, perché non hanno ancora un chiamante di produzione — che
-per entrambi arriva con `PR-10`. E il tetto sui dizionari è un **parametro
-obbligatorio** del verificatore, non una policy: chi lo deriva dalla politica
-dell'host è il supervisore. Perimetro e condizioni di rientro stanno in
+per entrambi arriva con `PR-10`. E il tetto sui dizionari vive in
+`IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
+costruttori dei limiti lo restringono secondo il budget disponibile.
+`verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una
+policy separati. Perimetro e condizioni di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
 I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
