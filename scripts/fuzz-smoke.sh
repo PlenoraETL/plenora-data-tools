@@ -21,7 +21,7 @@ ALL_TARGETS=(
     reshape_policies extended_ops advanced_ops
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
-    protocollo_frame
+    protocollo_frame verifica_artefatto
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
@@ -41,6 +41,12 @@ echo "== smoke $(date -Is): ${TARGETS[*]} (${SECONDS_PER_TARGET}s)" >> "$SUMMARY
 # inesistente o crashato passerebbe per uno smoke riuscito.
 falliti=()
 
+# `TMPDIR=/dev/shm` e non il `/tmp` del container: un target che scrive
+# file temporanei — l'harness del verificatore lo fa — li mette nel tmpfs
+# invece che su ext4 della VM, che e' la stessa disciplina della campagna.
+# `/dev/shm` esiste gia' in ogni container, quindi non serve crearlo ne'
+# avvolgere il comando in una shell: l'invocazione resta diretta e docker
+# conserva i confini degli argomenti.
 for target in "${TARGETS[@]}"; do
     mkdir -p "$PROJECT_ROOT/fuzz/artifacts/$target"
     log="$PROJECT_ROOT/fuzz/campaign-logs/smoke-$target.log"
@@ -48,6 +54,7 @@ for target in "${TARGETS[@]}"; do
         -v "$PROJECT_ROOT:/work" \
         -v "$FUZZBIN_HOST:/fuzzbin:ro" \
         -w /work/fuzz -e CARGO_TERM_COLOR=never \
+        -e TMPDIR=/dev/shm \
         "$IMAGE" \
         "$CARGO_FUZZ" fuzz run "$target" -- \
             -max_total_time="$SECONDS_PER_TARGET" \

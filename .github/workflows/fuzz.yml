@@ -79,6 +79,7 @@ jobs:
           - diff_kernels
           - executor_dag
           - protocollo_frame
+          - verifica_artefatto
     env:
       MINUTES: ${{ github.event.inputs.minutes_per_target || '30' }}
     steps:

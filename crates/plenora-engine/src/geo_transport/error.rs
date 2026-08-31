@@ -112,6 +112,16 @@ pub enum ArrowTransportError {
     /// fare, perche' misura un `RecordBatch` gia' materializzato.
     #[error("body del messaggio IPC da {declared} byte oltre il limite {limit}")]
     IpcBodyTooLarge { declared: u64, limit: u64 },
+    /// Somma dei body dei blocchi dizionario oltre il tetto del verificatore.
+    ///
+    /// E' un tetto **cumulativo**, e non lo copre `IpcBodyTooLarge`: mille
+    /// dizionari da un megabyte stanno ciascuno sotto `max_body_bytes` e
+    /// insieme trattengono un gigabyte, perche' `FileReader` li decodifica
+    /// tutti all'apertura e li tiene vivi per l'intera scansione. Il
+    /// controllo e' sui `bodyLength` DICHIARATI nel footer, quindi avviene
+    /// prima che arrow ne decodifichi uno.
+    #[error("body dei dizionari IPC da {declared} byte oltre il limite {limit}")]
+    IpcRetainedDictionariesTooLarge { declared: u64, limit: u64 },
     /// Messaggi (o blocchi del footer) oltre il numero ammesso.
     #[error("messaggi IPC {0} oltre il limite {1}")]
     IpcTooManyMessages(usize, usize),

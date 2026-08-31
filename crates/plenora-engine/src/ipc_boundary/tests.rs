@@ -431,6 +431,207 @@ fn il_confine_applica_il_tetto_sui_record_batch_anche_al_file_format() {
     );
 }
 
+/// Batch con **due** colonne dictionary indipendenti: il file format emette
+/// allora due `DictionaryBatch`, uno per campo.
+///
+/// Serve a distinguere «un dizionario viene contato» da «i dizionari vengono
+/// **sommati**»: con una colonna sola le due affermazioni sono
+/// indistinguibili.
+fn due_dizionari() -> RecordBatch {
+    let prima = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![0, 1]),
+        Arc::new(StringArray::from(vec!["alfa", "beta", "gamma"])),
+    )
+    .expect("dictionary valido");
+    // Valori DIVERSI dalla prima e di lunghezza uguale: diversi perche' due
+    // colonne con lo stesso dizionario non dimostrerebbero che i dizionari
+    // contati sono due, di lunghezza uguale perche' altrimenti il fallimento
+    // del file con due potrebbe venire da uno solo, e il caso non direbbe piu'
+    // niente sulla somma.
+    let seconda = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![1, 0]),
+        Arc::new(StringArray::from(vec!["onda", "riva", "pesca"])),
+    )
+    .expect("dictionary valido");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("prima", prima.data_type().clone(), false),
+        Field::new("seconda", seconda.data_type().clone(), false),
+    ]));
+    RecordBatch::try_new(schema, vec![Arc::new(prima), Arc::new(seconda)]).expect("batch valido")
+}
+
+/// La sola seconda colonna di [`due_dizionari`], per la controprova.
+///
+/// Deve portare **quel** dizionario e non un altro: serve a dire che ciascuno
+/// dei due, da solo, sta sotto la soglia, e con un dizionario diverso non
+/// direbbe niente su quello vero.
+fn solo_seconda() -> RecordBatch {
+    let seconda = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![1, 0]),
+        Arc::new(StringArray::from(vec!["onda", "riva", "pesca"])),
+    )
+    .expect("dictionary valido");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "seconda",
+        seconda.data_type().clone(),
+        false,
+    )]));
+    RecordBatch::try_new(schema, vec![Arc::new(seconda)]).expect("batch valido")
+}
+
+/// Scrive un batch nel formato chiesto e rende il percorso.
+fn scrivi(
+    directory: &std::path::Path,
+    nome: &str,
+    batch: &RecordBatch,
+    formato: IpcFormat,
+) -> std::path::PathBuf {
+    let percorso = directory.join(nome);
+    let file = fs::File::create(&percorso).expect("create");
+    match formato {
+        IpcFormat::File => {
+            let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
+            writer.write(batch).expect("write");
+            writer.finish().expect("finish");
+        }
+        IpcFormat::Stream => {
+            let mut writer =
+                plenora_core::arrow::ipc::writer::StreamWriter::try_new(file, &batch.schema())
+                    .expect("writer");
+            writer.write(batch).expect("write");
+            writer.finish().expect("finish");
+        }
+    }
+    percorso
+}
+
+/// Il tetto sui dizionari e' **cumulativo**, e vale sugli **ingressi
+/// pubblici**.
+///
+/// # Che cosa dimostra, e che cosa non basterebbe
+///
+/// Un tetto a zero su un file con dizionari dimostra soltanto che **almeno
+/// un** dizionario viene contato: lo supererebbe anche un controllo sul
+/// massimo, o sul primo che passa. La cumulativita' si dimostra solo con un
+/// tetto che **ciascun body rispetta e la loro somma no**.
+///
+/// Il caso lo costruisce cosi': un file con un dizionario e uno con due, e il
+/// tetto piu' stretto al quale il primo si apre ancora. A quel tetto ogni
+/// singolo dizionario del secondo file sta dentro — sono della stessa taglia —
+/// e solo la somma lo supera. Se il codice guardasse il massimo invece della
+/// somma, il secondo file si aprirebbe e il test fallirebbe.
+///
+/// # Perche' il tetto si cerca invece di scriverlo
+///
+/// Perche' un numero scritto qui sarebbe la taglia che i dizionari hanno
+/// **oggi**, con questa versione di arrow e queste stringhe: cambierebbe sotto
+/// il test senza che il test se ne accorga, e diventerebbe o inefficace o
+/// rosso per la ragione sbagliata. Cercarlo lo lega alla realta' misurata.
+///
+/// # Perche' vale sugli ingressi pubblici
+///
+/// Perche' `open` e `open_with_format` aprono lo stesso formato con lo stesso
+/// lettore di arrow, che i dizionari li decodifica dentro `try_new` e li
+/// trattiene. Una difesa che copre un percorso e non i suoi gemelli non e' una
+/// difesa, e' una coincidenza.
+#[test]
+fn il_tetto_sui_dizionari_e_cumulativo_anche_sugli_ingressi_pubblici() {
+    use plenora_core::error::ErrorCategory;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+
+    for formato in [IpcFormat::File, IpcFormat::Stream] {
+        let suffisso = match formato {
+            IpcFormat::File => "arrow",
+            IpcFormat::Stream => "arrows",
+        };
+        let uno = scrivi(
+            directory.path(),
+            &format!("uno.{suffisso}"),
+            &dictionary_batch(&[0, 1]),
+            formato,
+        );
+        let due = scrivi(
+            directory.path(),
+            &format!("due.{suffisso}"),
+            &due_dizionari(),
+            formato,
+        );
+
+        // Il tetto piu' stretto al quale il file con UN dizionario si apre
+        // ancora. Tutti gli altri limiti restano al default: se a fermare il
+        // secondo file fosse un tetto diverso, l'asserzione sul messaggio lo
+        // direbbe.
+        let stretto = |tetto: u64| IpcLimits {
+            max_retained_dictionary_body_bytes: tetto,
+            ..IpcLimits::default()
+        };
+        // Ricerca binaria fra zero e il tetto di default. L'estremo alto e' il
+        // default e non un numero scelto qui: e' il piu' grande valore che il
+        // confine ammette senza configurazione, quindi se la soglia non ci
+        // stesse dentro non ci sarebbe niente da cercare.
+        //
+        // L'apertura e' monotona nel tetto: un file che si apre a un certo
+        // valore si apre anche a tutti quelli maggiori. La bisezione e' lecita
+        // per questo.
+        let apre = |tetto: u64| open_with_format(&uno, formato, &stretto(tetto)).is_ok();
+        assert!(
+            apre(IpcLimits::default().max_retained_dictionary_body_bytes),
+            "al tetto di default il file con un dizionario deve aprirsi"
+        );
+        let mut basso = 0_u64;
+        let mut alto = IpcLimits::default().max_retained_dictionary_body_bytes;
+        while basso < alto {
+            let mezzo = basso + (alto - basso) / 2;
+            if apre(mezzo) {
+                alto = mezzo;
+            } else {
+                basso = mezzo + 1;
+            }
+        }
+        let soglia = basso;
+
+        let limiti = stretto(soglia);
+        // La prova che il fallimento viene dalla SOMMA e non da un dizionario
+        // troppo grande: un file con la sola seconda colonna, alla stessa
+        // soglia, si apre. Senza questa riga il caso reggerebbe anche se a
+        // fermare il file fosse un singolo dizionario fuori misura.
+        let seconda_sola = scrivi(
+            directory.path(),
+            &format!("seconda.{suffisso}"),
+            &solo_seconda(),
+            formato,
+        );
+        assert!(
+            open_with_format(&seconda_sola, formato, &limiti).is_ok(),
+            "ciascun dizionario, da solo, deve stare sotto la soglia"
+        );
+
+        let errore = open_with_format(&due, formato, &limiti)
+            .expect_err("due dizionari sommati devono superare il tetto che uno rispetta");
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::ResourceLimit,
+            "un tetto superato e' un limite, non un file rotto: {errore}"
+        );
+        assert!(
+            errore.to_string().contains("dizionari"),
+            "deve essere il tetto sui dizionari, non un altro: {errore}"
+        );
+
+        // Le due meta' che passano: senza, il caso sopra varrebbe anche a
+        // difesa assente o per un tetto diverso.
+        assert!(
+            open_with_format(&uno, formato, &limiti).is_ok(),
+            "alla soglia il file con un dizionario deve ancora aprirsi"
+        );
+        assert!(
+            open_with_format(&due, formato, &IpcLimits::default()).is_ok(),
+            "col tetto di default anche due dizionari devono aprirsi"
+        );
+    }
+}
+
 #[test]
 fn il_confine_rifiuta_un_file_troppo_corto_per_il_trailer() {
     let directory = tempfile::tempdir().expect("tempdir");
@@ -533,6 +734,15 @@ fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
         ArrowTransportError::IpcTooManyMetadataPairs(300, 256),
         ArrowTransportError::IpcMetadataKeyTooLarge(200, 128),
         ArrowTransportError::IpcMetadataValueTooLarge(70_000, 65_536),
+        // Il tetto cumulativo sui dizionari e' un tetto come gli altri, e
+        // deve tradursi come gli altri: senza questa riga la variante nuova
+        // potrebbe finire in `DataMapping` — mandando chi legge a cercare un
+        // file corrotto dove c'e' un limite superato — e nessun test se ne
+        // accorgerebbe.
+        ArrowTransportError::IpcRetainedDictionariesTooLarge {
+            declared: 1 << 30,
+            limit: 1 << 20,
+        },
     ];
     for errore in limiti {
         let tradotto = read_error(errore);

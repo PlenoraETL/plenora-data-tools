@@ -227,18 +227,24 @@ il formato piano v6 con `max_domain_memory_bytes` (`PR-2`); la classificazione
 deterministica degli esiti e la matrice §10 (`PR-3`); la forma sul filo del
 protocollo (`PR-4`) con i conteggi obbligatori dell'`Esito` (`PR-4b`); il
 `commit_token` tipizzato, il lettore limitato di frame, l'handshake come
-macchina a stati e la scrittura del token nel footer (`PR-5`). Più il
-rafforzamento dei custom metadata IPC nel confine ostile (`PR-0`).
+macchina a stati e la scrittura del token nel footer (`PR-5`); il
+**verificatore dell'artefatto in streaming**, con i passi da 3 a 8-bis, il
+passo 5-bis dell'integrità e il tetto cumulativo sui dizionari trattenuti
+(`PR-6`). Più il rafforzamento dei custom metadata IPC nel confine ostile
+(`PR-0`).
 
 **Non esiste ancora nel codice** ciò che richiede due processi: worker,
 supervisore, spawn, pipe e limiti di processo restano **progettati** in
-[`isolamento.md`](isolamento.md) e non implementati. Anche la verifica
-dell'artefatto (`PR-6`) e la sequenza di publish (`PR-10`) sono progetto.
+[`isolamento.md`](isolamento.md) e non implementati. Resta progetto anche la
+sequenza di publish (`PR-10`), di cui `PR-6` ha portato la sola verifica: il
+passo 9 non c'è.
 
-Una conseguenza pratica, dichiarata perché non si deduca il contrario: il
-protocollo si compila solo sotto `test` e sotto la feature `internals`, perché
-non ha ancora un chiamante fuori da sé. Il perimetro e la condizione di
-rientro stanno in
+Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
+protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
+feature `internals`, perché non hanno ancora un chiamante di produzione — che
+per entrambi arriva con `PR-10`. E il tetto sui dizionari è un **parametro
+obbligatorio** del verificatore, non una policy: chi lo deriva dalla politica
+dell'host è il supervisore. Perimetro e condizioni di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
 I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le

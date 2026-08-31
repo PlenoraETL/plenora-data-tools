@@ -134,10 +134,63 @@ confine ostile per Arrow IPC che il progetto ha già
 che arrow veda i byte: la verifica ne eredita la disciplina e vi aggiunge il
 proprio tetto sui batch trattenuti.
 
-Il tetto dev'essere **dimostrabile**, non asserito: la verifica alloca una
-quantità funzione del solo schema e del batch corrente, mai del numero di
-righe o di batch. Una verifica che debba tenere tutto in memoria per
-rispondere non è accettabile in questo disegno.
+Il tetto dev'essere **dimostrabile**, non asserito. Una stesura precedente
+diceva «una quantità funzione del solo schema e del batch corrente, mai del
+numero di righe o di batch», ed era una promessa **non mantenibile da nessuna
+implementazione**: `FileReader` decodifica tutti i dizionari all'apertura e li
+trattiene per l'intera scansione — e non è un difetto di quella libreria, è il
+formato, perché un batch dictionary-encoded non è decodificabile senza il suo
+dizionario — e tiene un indice di 24 byte per record batch.
+
+La promessa corretta è un **limite conservativo per componente**:
+
+```
+    schema limitato
+  + custom metadata limitati
+  + indice dei blocchi        limitato da max_record_batches / max_messages
+  + body dei dizionari        limitato da max_retained_dictionary_body_bytes
+  + un solo record batch corrente, limitato
+  + overhead strutturale limitato
+```
+
+Ogni componente ha un tetto **imposto prima della decodifica**; nessun record
+batch precedente resta vivo; e il picco non può superare quella formula. Il
+tetto sui dizionari è **cumulativo** e si applica alla somma controllata dei
+`bodyLength`, durante la traversata e prima che Arrow ne decodifichi uno: il
+tetto per singolo body non lo copre, perché mille dizionari da un megabyte lo
+rispettano tutti e insieme trattengono un gigabyte. Overflow della somma e
+superamento del tetto sono entrambi un rifiuto, mai una saturazione.
+
+Il tetto vive in `IpcLimits`, cioè fra i limiti del **confine**, e non come
+parametro del verificatore: gli ingressi pubblici aprono lo stesso formato con
+lo stesso lettore, e un tetto che protegge un percorso solo lascia aperta la
+classe invece di chiuderla. Si applica in due punti complementari — la
+traversata dei messaggi, che vede i dizionari incontrati percorrendo la
+regione, e i blocchi del footer, che sono quelli che `FileReader` leggerà
+davvero.
+
+**I dizionari delta sono rifiutati**, e la formula dipende da quel rifiuto. Su
+un `DictionaryBatch` con `isDelta`, Arrow non trattiene il body dichiarato:
+concatena il dizionario precedente con il nuovo in un buffer ulteriore, mentre
+entrambi gli originali sono ancora vivi. Il picco si avvicina al **doppio**
+della somma dei `bodyLength`, e la riga «body dei dizionari» qui sopra
+sarebbe falsa proprio quando il tetto dice che va tutto bene. Il rifiuto è in
+prevalidazione, comune a tutti i lettori; il nostro `FileWriter` non ne
+produce, quindi non perde nessun ingresso legittimo. Il giorno in cui
+servissero, il tetto va rifatto sul picco della concatenazione e non sulla
+somma dei body — non basta allargarlo.
+
+Nello stesso ramo il campo `data` del `DictionaryBatch` è **preteso**: Arrow lo
+legge con `unwrap()`, quindi un messaggio che non ce l'ha fa panicare la
+dipendenza invece di rendere un errore.
+
+L'ultima riga è l'unica non misurabile in byte di IPC: è l'overhead delle
+strutture di Arrow, limitato da schema, metadati e numero massimo di messaggi.
+Non si promette uguaglianza fra i `bodyLength` del footer e l'heap esatto di
+Arrow — sono due grandezze diverse.
+
+Una verifica che debba tenere tutto in memoria per rispondere non è comunque
+accettabile in questo disegno.
 
 **2. La verifica ha a sua volta un dominio.** Se la verifica in streaming
 fallisse comunque, non deve portarsi via il processo che classifica. Il suo
@@ -852,6 +905,7 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 | 3 | **presenza** | l'artefatto non esiste |
 | 4 | **sigillo** | il sigillo manca o non corrisponde: l'artefatto è troncato |
 | 5 | **framing** | il file non è un contenitore Arrow IPC leggibile dal confine ostile esistente |
+| 5-bis | **integrità dell'artefatto** | lo SHA-256 dell'intero file finalizzato, footer compreso, non coincide col digest dichiarato nell'`Esito` |
 | 6 | **schema** | `contract_from_arrow_schema` fallisce, **con il resolver negoziato** |
 | 7 | **contratto** | il contratto letto non corrisponde a quello atteso dal piano validato |
 | 8 | **completezza** | i conteggi dichiarati nell'`Esito` non corrispondono a quelli osservati |
@@ -860,6 +914,19 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 
 Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
 alcun effetto osservabile all'esterno.
+
+Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
+assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
+non aveva un passo in cui esercitarla. **In v1 l'algoritmo ammesso è
+esclusivamente `sha256`**, col valore in forma canonica — 64 esadecimali
+minuscoli — e la forma di `DigestArtefatto` sul filo resta invariata: è il
+verificatore a imporre la coerenza, non il messaggio a cambiarla. Ammetterne un
+secondo è una PR esplicita.
+
+Il passo costa **una passata sequenziale in più** sull'artefatto, a memoria
+costante. È un costo di I/O dichiarato: il digest copre i byte, e i byte vanno
+letti. Non sostituisce il passo 8 — un artefatto integro può essere incompleto,
+e il digest non ha nulla da obiettare.
 
 Il passo 6 è il punto in cui `F4-4` diventa concreto: la lettura usa **lo
 stesso resolver** che il worker ha usato per scrivere, perché l'handshake l'ha
@@ -1315,12 +1382,19 @@ Due cose distinte che la stesura precedente confondeva:
 | **autorità normativa** | [`errori-e-limiti.md`](errori-e-limiti.md), il registro unico imposto da [`AGENTS.md`](../AGENTS.md). Ogni limite vi **andrà** registrato con regola, perimetro, pericolo e condizione di rientro. Al momento non c'è: è un criterio d'uscita di `PR-0`, non un fatto |
 | **autorità runtime** | `IpcLimits`, la struttura che il trasporto consulta a ogni lettura. È il posto da cui il codice legge, non il registro che dichiara perché |
 
-**I tre tetti non diventano campi di `IpcLimits`.** La struttura è **pubblica
-e riesportata** da `plenora-engine`, quindi aggiungere campi romperebbe ogni
-inizializzazione letterale che un consumatore abbia scritto. Ma soprattutto:
-`IpcLimits` esiste per i limiti che un piano può **modulare** — quanti batch,
-quanto grande un body — mentre questi sono **tetti duri contro l'abuso**, e
-un tetto contro l'abuso che il chiamante può alzare non è un tetto.
+**I tre tetti non diventano campi di `IpcLimits`.** Non per la
+compatibilità — da `PR-6` la struttura è `#[non_exhaustive]`, quindi
+aggiungere un campo non rompe più nessuna inizializzazione letterale, che da
+fuori il crate non è più scrivibile. La ragione è l'altra, ed è quella che
+conta: `IpcLimits` esiste per i limiti che un piano può **modulare** — quanti
+batch, quanto grande un body — mentre questi sono **tetti duri contro
+l'abuso**, e un tetto contro l'abuso che il chiamante può alzare non è un
+tetto.
+
+Il tetto cumulativo sui dizionari, che `PR-6` aggiunge, sta dall'altra parte
+di questa linea: è un limite di risorsa che deve seguire il budget del piano,
+come `max_body_bytes`, non un'asserzione contro l'abuso. Per questo è un campo
+e questi tre no.
 
 Restano quindi costanti interne, non ampliabili e non configurabili. La
 decisione è presa qui perché altrimenti emergerebbe durante l'implementazione,
@@ -2217,7 +2291,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-3** | tipi dell'esito e della **classificazione**: `EsitoWorker`, la matrice §10 come `match` esaustivo, la precedenza §10.3. **Consuma** `EvidenzaDiLimite`, che `PR-1` ha già introdotto perché è superficie pubblica e va decisa una volta sola; qui vive la regola per cui solo `G` autorizza l'attribuzione al dominio | no | test di tabella sulla matrice e sulle corse |
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | vettori di byte scritti a mano per ogni messaggio, round-trip come prova secondaria, rifiuto di ogni forma malformata |
 | **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei **custom metadata del footer IPC**; e `CommitToken` come tipo chiuso | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo; i **quattro casi del token** della §7-quater — assente, canonico, non canonico, oracoli del footer |
-| **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
+| **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process; e il **tetto cumulativo sui dizionari** con il rifiuto dei **delta** e degli header/`data` assenti, nel confine IPC comune | **sì**, per due ragioni distinte: cambia quali input IPC sono accettati (fail-closed), e `IpcLimits` guadagna un campo e diventa `#[non_exhaustive]` | ogni componente trattenuta ha un tetto imposto **prima della decodifica**; nessun record batch precedente resta vivo; il picco non può superare la formula dei limiti dichiarati; e il tetto sui dizionari è **cumulativo** — provato con un tetto che ciascun body rispetta e la loro somma no — su **entrambi** i formati e dagli ingressi pubblici |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |

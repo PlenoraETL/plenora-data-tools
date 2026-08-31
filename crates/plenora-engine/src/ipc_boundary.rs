@@ -80,7 +80,7 @@ pub enum IpcFormat {
 ///
 /// La fase resta `Read` per entrambi: il tag del confine vince sulla
 /// derivazione per variante, e questi errori nascono leggendo.
-fn read_error(error: ArrowTransportError) -> PlenoraError {
+pub(crate) fn read_error(error: ArrowTransportError) -> PlenoraError {
     // Il tag di fase si applica **una volta sola**, qui.
     //
     // Applicandolo dentro la traduzione, il ramo ricorsivo della
@@ -128,6 +128,7 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
         | E::CellTooLarge(_)
         | E::IpcMetadataTooLarge(_, _)
         | E::IpcBodyTooLarge { .. }
+        | E::IpcRetainedDictionariesTooLarge { .. }
         | E::IpcTooManyMessages(_, _)
         | E::IpcSchemaTooComplex(_)
         | E::IpcTooManyRecordBatches(_, _)
@@ -395,6 +396,134 @@ pub fn open_with_format(
     })
 }
 
+/// Un artefatto Arrow IPC **file format** il cui framing e' stato convalidato,
+/// ancora aperto sullo stesso handle.
+///
+/// # Che cosa il tipo garantisce
+///
+/// Che non esista un modo di averne uno **senza essere passati dalla
+/// convalida**: il campo e' privato, non c'e' costruttore, e l'unica funzione
+/// che ne rende uno e' [`convalida_artefatto`], che il framing lo verifica.
+/// Non e' un wrapper nominalmente «validato» — quello sarebbe una promessa
+/// scritta nella doc e non nel tipo — e' l'uscita della verifica.
+///
+/// Ne segue che il resto del percorso non puo' sbagliare handle: digest e
+/// consegna ad arrow prendono **questo**, e riferiscono per costruzione allo
+/// stesso file che e' stato convalidato.
+///
+/// Resta la non-garanzia dichiarata altrove: un handle aperto difende dalla
+/// **sostituzione** del percorso, non dalla **mutazione in place** dei byte.
+// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
+// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
+// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
+// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
+// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
+// tracciata a meta'.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+pub(crate) struct ArtefattoConvalidato {
+    sorgente: crate::geo_transport::ipc::SeekSource<File>,
+    byte_totali: u64,
+}
+
+#[cfg(any(test, feature = "internals"))]
+impl ArtefattoConvalidato {
+    /// I byte del file, misurati all'apertura.
+    pub(crate) const fn byte_totali(&self) -> u64 {
+        self.byte_totali
+    }
+
+    /// Legge una finestra per offset, senza spostare cio' che arrow leggera'.
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::Io` taggato [`ErrorPhase::Read`].
+    pub(crate) fn leggi_a(&mut self, offset: u64, len: usize, out: &mut Vec<u8>) -> Result<()> {
+        use crate::geo_transport::ipc::IpcSource as _;
+        self.sorgente.read_at(offset, len, out).map_err(read_error)
+    }
+
+    /// Riavvolge e consegna i batch ad arrow, dentro la barriera anti-panico.
+    ///
+    /// Il riavvolgimento avviene qui e non a carico del chiamante: dimenticarlo
+    /// darebbe ad arrow un handle a meta' file, e non e' un errore che si
+    /// debba poter fare.
+    ///
+    /// # Errors
+    ///
+    /// Come [`open_with_format`], meno gli errori di apertura.
+    pub(crate) fn in_batches(self) -> Result<(SchemaRef, BoundaryBatches)> {
+        let file = self.sorgente.rewind().map_err(read_error)?;
+        guarded(move || {
+            let reader = FileReader::try_new(file, None)
+                .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
+            let schema = reader.schema();
+            Ok((
+                schema,
+                BoundaryBatches {
+                    reader: BoundaryReader::File(Box::new(reader)),
+                    poisoned: false,
+                },
+            ))
+        })
+    }
+}
+
+/// Apre un artefatto, ne convalida il framing e ne estrae la chiave richiesta
+/// dai custom metadata del footer, **in una traversata sola**.
+///
+/// E' l'unico costruttore di [`ArtefattoConvalidato`], ed e' cio' che rende
+/// quel tipo una prova invece di un'etichetta.
+///
+/// # Perche' non basta [`open`]
+///
+/// Quella riapre per percorso a ogni passo. Il verificatore deve riferire
+/// framing, estrazione del token, digest e consegna ad arrow **allo stesso
+/// handle**: fra due aperture, il percorso puo' puntare altrove.
+///
+/// Resta **`pub(crate)`**: la superficie pubblica del confine non cambia.
+///
+/// # Errors
+///
+/// Gli errori del confine, taggati [`ErrorPhase::Read`]: `Io` sull'apertura,
+/// `ResourceLimit` sui tetti — compreso quello cumulativo sui dizionari —
+/// `DataMapping` sul framing malformato.
+// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
+// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
+// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
+// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
+// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
+// tracciata a meta'.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+pub(crate) fn convalida_artefatto(
+    percorso: &Path,
+    limits: &IpcLimits,
+    chiave: &str,
+) -> Result<(Option<String>, ArtefattoConvalidato)> {
+    use crate::geo_transport::ipc::{valida_file_ed_estrai, SeekSource};
+
+    let file = File::open(percorso)
+        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?;
+    let byte_totali = file
+        .metadata()
+        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?
+        .len();
+    let mut sorgente = SeekSource::new(file, byte_totali);
+    let trovato = valida_file_ed_estrai(&mut sorgente, limits, Some(chiave)).map_err(read_error)?;
+    Ok((
+        trovato,
+        ArtefattoConvalidato {
+            sorgente,
+            byte_totali,
+        },
+    ))
+}
+
 /// Apre un ingresso IPC riconoscendone il formato dal magic.
 ///
 /// # Errors
@@ -454,6 +583,11 @@ pub fn limits_from_plan(
         max_body_bytes: tetto,
         max_record_batches: usize::try_from(limits.max_batches).unwrap_or(usize::MAX),
         max_messages: default.max_messages,
+        // Anche i dizionari sono un'allocazione dentro il budget, e a
+        // differenza dei batch restano vivi tutti insieme: lasciarli al
+        // massimale ammetterebbe 64 MiB di dizionari sotto un budget di 1 MiB.
+        max_retained_dictionary_body_bytes: default.max_retained_dictionary_body_bytes.min(tetto),
+        ..IpcLimits::default()
     }
 }
 
@@ -478,6 +612,8 @@ pub fn limits_from_memory_budget(max_governed_memory_bytes: usize) -> IpcLimits 
         max_body_bytes: default.max_body_bytes.min(tetto),
         max_record_batches: default.max_record_batches,
         max_messages: default.max_messages,
+        max_retained_dictionary_body_bytes: default.max_retained_dictionary_body_bytes.min(tetto),
+        ..IpcLimits::default()
     }
 }
 

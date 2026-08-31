@@ -41,6 +41,9 @@ const CONTINUATION_MARKER: u32 = 0xFFFF_FFFF;
 /// Valore di `MessageHeader` per un `RecordBatch` (union dello standard IPC).
 const IPC_HEADER_RECORD_BATCH: u8 = 3;
 
+/// Header di un `DictionaryBatch`.
+const IPC_HEADER_DICTIONARY_BATCH: u8 = 2;
+
 /// Magic del **file format** Arrow IPC, in testa e in coda al file.
 const ARROW_FILE_MAGIC: &[u8; 6] = b"ARROW1";
 
@@ -569,8 +572,12 @@ fn fb_schema(buf: &[u8], table: usize) -> Result<(), ArrowTransportError> {
 }
 
 /// Valida i metadati flatbuffer di un messaggio IPC e ritorna la lunghezza
-/// del body dichiarata (`bodyLength`). Header Tensor/SparseTensor sono
-/// rifiutati: il trasporto non li usa e nessun produttore onesto li emette.
+/// del body dichiarata (`bodyLength`).
+///
+/// I tipi di header oltre il terzo — `Tensor`, `SparseTensor` e i valori che il
+/// formato non ha ancora assegnato — sono rifiutati: il trasporto non li usa e
+/// nessun produttore onesto li emette. `MessageHeader::NONE` senza header e'
+/// invece un messaggio vuoto, e passa.
 fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTransportError> {
     if metadata.len() < 8 {
         return Err(ArrowTransportError::IpcTruncated);
@@ -611,24 +618,113 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
         usize::try_from(value).map_err(|_| ArrowTransportError::IpcTruncated)?
     };
 
-    if let Some(header_table) = header_table {
-        match header_type {
-            1 => fb_schema(metadata, header_table)?,
-            2 => {
-                // DictionaryBatch: data (RecordBatch) al campo 1.
-                let (dict_vtable, dict_vtable_len) = fb_table(metadata, header_table)?;
-                let data = fb_field(metadata, dict_vtable, dict_vtable_len, 1)?;
-                if data != 0 {
-                    let batch = fb_indirect(metadata, header_table, data)?;
-                    fb_record_batch(metadata, batch, body_len)?;
+    // Il tipo e la presenza dell'header si decidono INSIEME, in un match
+    // solo.
+    //
+    // Un header assente non e' un messaggio piu' semplice: e' un messaggio che
+    // salta ogni controllo di questa funzione e arriva ad arrow, che lo legge
+    // con `unwrap()` — `header_as_schema()`,
+    // `header_as_dictionary_batch()`, `header_as_record_batch()`.
+    //
+    // Diviso in due — un `if` sulla presenza e un `match` sul tipo — resta
+    // scoperta la combinazione che nessuno dei due guarda: un tipo non
+    // supportato **senza** header non entra nel primo, perche' il primo
+    // pretende l'header solo per i tipi noti, e non entra nel secondo, perche'
+    // il secondo gira solo quando l'header c'e'. Passa in mezzo. Un match
+    // sulla coppia non ha un «in mezzo»: ogni combinazione ha il suo ramo, e
+    // il compilatore pretende che ci siano tutti.
+    match (header_type, header_table) {
+        (1, Some(header_table)) => fb_schema(metadata, header_table)?,
+        (2, Some(header_table)) => {
+            // DictionaryBatch: id al campo 0, data (RecordBatch) al campo
+            // 1, isDelta al campo 2.
+            let (dict_vtable, dict_vtable_len) = fb_table(metadata, header_table)?;
+
+            // Un dizionario DELTA non e' governato dal tetto cumulativo.
+            //
+            // Il tetto somma i `bodyLength` dichiarati, e su un delta
+            // arrow non tiene quel body: concatena il dizionario
+            // precedente con il nuovo in un buffer ulteriore, mentre
+            // entrambi gli originali sono ancora vivi. Il picco si
+            // avvicina al doppio della somma, e la formula della memoria
+            // trattenuta — quella di `verifica.rs` e di
+            // isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite — diventerebbe falsa senza che niente
+            // lo segnali.
+            //
+            // Si rifiutano invece di rialzare il tetto, ed e' una
+            // DEVIAZIONE dal formato, non una pulizia: un dizionario delta e'
+            // un ingresso Arrow stream perfettamente valido, e questo confine
+            // lo esclude deliberatamente. Cio' che si perde e' un ingresso
+            // legittimo che nessuno dei nostri produttori genera — il
+            // `FileWriter` non ne emette — quindi il costo oggi e' nullo, ma
+            // il costo esiste.
+            //
+            // Il giorno in cui servisse leggerli, il rientro non e' «alzare
+            // il tetto»: e' rifarlo sul picco della concatenazione, non sulla
+            // somma dei body.
+            let is_delta = fb_field(metadata, dict_vtable, dict_vtable_len, 2)?;
+            if is_delta != 0 {
+                let posizione = fb_somma(header_table, is_delta)?;
+                let valore = *metadata
+                    .get(posizione)
+                    .ok_or(ArrowTransportError::IpcTruncated)?;
+                if valore != 0 {
+                    return Err(ArrowTransportError::IpcSchemaInvalid(
+                        "dictionary delta non supportato",
+                    ));
                 }
             }
-            3 => fb_record_batch(metadata, header_table, body_len)?,
-            _ => {
-                return Err(ArrowTransportError::Arrow(
-                    "header IPC Tensor/SparseTensor non supportato".to_owned(),
-                ))
+
+            // `data` e' obbligatorio: `read_dictionary` lo legge con
+            // `batch.data().unwrap()`, quindi un DictionaryBatch che non
+            // ce l'ha fa panicare arrow invece di rendere un errore. La
+            // barriera anti-panico lo tradurrebbe, ma un panico attraversato
+            // e' comunque uno stato che non vogliamo raggiungere.
+            let data = fb_field(metadata, dict_vtable, dict_vtable_len, 1)?;
+            if data == 0 {
+                return Err(ArrowTransportError::IpcSchemaInvalid(
+                    "DictionaryBatch senza data",
+                ));
             }
+            let batch = fb_indirect(metadata, header_table, data)?;
+            fb_record_batch(metadata, batch, body_len)?;
+        }
+        (3, Some(header_table)) => fb_record_batch(metadata, header_table, body_len)?,
+        // Zero e' `MessageHeader::NONE`, non un Tensor: e' un messaggio che
+        // non porta contenuto, e arrow lo attraversa senza fare niente. Non
+        // c'e' niente da validare e non c'e' niente da rifiutare.
+        //
+        // Rifiutarlo sarebbe una deviazione in piu' dal formato, e presa per
+        // effetto collaterale della forma del match invece che per decisione:
+        // il ramo esiste per dire che l'assenza qui e' legittima, non per
+        // dimenticanza.
+        (0, None) => {}
+        // NONE che pero' un header ce l'ha: il tipo dichiara «nessun
+        // contenuto» e il messaggio ne porta uno. Non e' un no-op, e' una
+        // dichiarazione che contraddice se stessa.
+        (0, Some(_)) => {
+            return Err(ArrowTransportError::IpcSchemaInvalid(
+                "messaggio IPC di tipo NONE con un header",
+            ))
+        }
+        // Il tipo si rifiuta PRIMA di guardare l'header: che un Tensor porti o
+        // no il suo header non cambia che non lo sappiamo leggere, e dire
+        // «senza header» di un messaggio che comunque rifiuteremmo manderebbe
+        // chi legge a cercare la cosa sbagliata.
+        //
+        // Il messaggio non nomina Tensor e SparseTensor: sono il 4 e il 5, ma
+        // questo ramo prende anche il 6 e oltre, che nel formato non
+        // significano ancora niente. Nominarli sarebbe falso su tutto il resto
+        // del ramo.
+        (4.., _) => {
+            return Err(ArrowTransportError::Arrow(
+                "tipo di header IPC non supportato".to_owned(),
+            ))
+        }
+        (1..=3, None) => {
+            return Err(ArrowTransportError::IpcSchemaInvalid(
+                "messaggio IPC senza header",
+            ))
         }
     }
 
@@ -762,6 +858,25 @@ pub enum EndOfData {
 /// l'allocazione che dovrebbe impedire. Questi si applicano sulle lunghezze
 /// DICHIARATE, prima che una sola pagina venga allocata.
 #[derive(Debug, Clone, Copy)]
+// Costruibile solo con `..Default::default()` da fuori dal crate.
+//
+// # Che cosa si perde, una volta sola
+//
+// Il `struct literal` esaustivo da fuori. Oggi nessuno lo scrive — il
+// workspace non e' pubblicato e l'unico consumatore esterno al modulo usa
+// `IpcLimits::default()` — quindi il costo effettivo e' zero, e il costo
+// dichiarato e' comunque una volta sola.
+//
+// # Che cosa si guadagna, per sempre
+//
+// Che aggiungere un limite smetta di essere una rottura. Questo confine ha
+// gia' quattro tetti e ne guadagna un quinto: il prossimo non deve riaprire la
+// stessa discussione, ne' costringere a scegliere fra proteggere una risorsa e
+// non rompere un'API.
+//
+// Il campo che ha reso necessaria la decisione e' `max_retained_dictionary_body_bytes`,
+// ed e' registrato in errori-e-limiti.md#il-tetto-cumulativo-sui-dizionari.
+#[non_exhaustive]
 pub struct IpcLimits {
     /// Tetto sui metadati di un singolo messaggio (e sul footer del file).
     pub max_metadata_bytes: usize,
@@ -780,6 +895,20 @@ pub struct IpcLimits {
     /// max_batches` — rifiuterebbe qualunque stream non vuoto con
     /// `max_batches = 1`.
     pub max_messages: usize,
+    /// Tetto sulla **somma** dei body dei dizionari.
+    ///
+    /// E' l'unico tetto cumulativo del confine, e serve perche' i dizionari
+    /// sono l'unica cosa che il lettore trattiene tutta insieme: `FileReader`
+    /// li decodifica dentro `try_new` e li tiene per l'intera scansione, e uno
+    /// `StreamReader` accumula quelli che incontra. Il tetto per singolo body
+    /// non li governa — mille dizionari da un megabyte lo rispettano tutti e
+    /// insieme trattengono un gigabyte.
+    ///
+    /// Sta qui, fra i limiti del confine, e non come parametro di un
+    /// chiamante: un tetto che protegge un percorso solo lascia scoperti gli
+    /// altri lettori dello stesso formato, e la classe del difetto resterebbe
+    /// aperta.
+    pub max_retained_dictionary_body_bytes: u64,
 }
 
 impl Default for IpcLimits {
@@ -791,6 +920,7 @@ impl Default for IpcLimits {
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             max_record_batches: MAX_BATCHES,
             max_messages: MAX_TOTAL_IPC_MESSAGES,
+            max_retained_dictionary_body_bytes: MAX_RETAINED_DICTIONARY_BODY_BYTES,
         }
     }
 }
@@ -812,6 +942,10 @@ impl IpcLimits {
             max_body_bytes: MAX_STREAM_BYTES,
             max_record_batches: MAX_BATCHES,
             max_messages: MAX_TOTAL_IPC_MESSAGES,
+            // Il profilo del trasporto alza `max_body_bytes` a
+            // `MAX_STREAM_BYTES` per ragioni sue, ma i dizionari non c'entrano
+            // con quella scelta: restano al massimale.
+            max_retained_dictionary_body_bytes: MAX_RETAINED_DICTIONARY_BODY_BYTES,
         }
     }
 }
@@ -819,6 +953,14 @@ impl IpcLimits {
 /// Default del tetto sul body: stesso valore di `BatchTarget::max_batch_bytes`
 /// (64 MiB), che e' il limite con cui l'executor misura il batch risultante.
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Massimale assoluto sulla somma dei body dei dizionari trattenuti: 64 MiB.
+///
+/// Stesso ordine di grandezza di un singolo body, e non un suo multiplo: i
+/// dizionari restano vivi tutti insieme per l'intera scansione, mentre di
+/// record batch ne vive uno per volta. Un tetto piu' largo qui costerebbe piu'
+/// del tetto per-batch pur sembrando simile.
+pub const MAX_RETAINED_DICTIONARY_BODY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Tetto sui messaggi TOTALI di uno stream: i record batch piu' lo schema e i
 /// `DictionaryBatch`. Il fattore rispetto a `MAX_BATCHES` copre uno schema e
@@ -842,6 +984,18 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
     let mut offset = start;
     let mut messages = 0_usize;
     let mut record_batches = 0_usize;
+    // La somma dei body dei dizionari incontrati.
+    //
+    // E' l'unico accumulatore della traversata, e c'e' perche' i dizionari
+    // sono l'unica cosa che il lettore trattiene tutta insieme: di record
+    // batch ne vive uno per volta, di dizionari vivono tutti. Il tetto per
+    // singolo body non li governa.
+    //
+    // Sta QUI, nella traversata comune, e non nel solo percorso che legge il
+    // footer: e' la traversata che tutti i lettori ostili attraversano —
+    // stream e file, ingressi pubblici e verifica dell'artefatto — e un tetto
+    // applicato a valle ne proteggerebbe uno lasciando aperti gli altri.
+    let mut dizionari_trattenuti = 0_u64;
     loop {
         if offset >= end_limit {
             return match end_of_data {
@@ -892,6 +1046,30 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
                     record_batches,
                     limits.max_record_batches,
                 ));
+            }
+        }
+        if header_type == IPC_HEADER_DICTIONARY_BATCH {
+            // Somma controllata: il trabocco e' un rifiuto, mai una
+            // saturazione. Saturare direbbe «il tetto e' rispettato» a un
+            // ingresso che ha dichiarato piu' di quanto un `u64` rappresenti.
+            //
+            // L'errore e' `IpcTruncated` e non `IpcFooterInvalid`: qui si sta
+            // percorrendo la REGIONE DEI MESSAGGI, e un footer puo' non
+            // esserci affatto — lo stream non ne ha uno. Nominare una
+            // struttura assente manderebbe chi legge a cercarla. Il conteggio
+            // sui blocchi del footer, che il footer ce l'ha per definizione,
+            // rende invece `IpcFooterInvalid`: due percorsi, due errori, e
+            // nessuno dei due porta un numero, perche' una somma che trabocca
+            // non ne ha uno onesto.
+            dizionari_trattenuti = dizionari_trattenuti
+                .checked_add(body_len)
+                .ok_or(ArrowTransportError::IpcTruncated)?;
+            let tetto = limits.max_retained_dictionary_body_bytes;
+            if dizionari_trattenuti > tetto {
+                return Err(ArrowTransportError::IpcRetainedDictionariesTooLarge {
+                    declared: dizionari_trattenuti,
+                    limit: tetto,
+                });
             }
         }
         let metadata_bytes = to_u64(metadata_len)?;
@@ -1124,6 +1302,29 @@ pub fn validate_ipc_file_framing<S: IpcSource + ?Sized>(
 /// # Errors
 ///
 /// Come [`validate_ipc_file_framing`].
+/// # Il tetto cumulativo sui dizionari
+///
+/// Si applica **sempre**, e viene da [`IpcLimits`]: e' un limite del confine,
+/// non una richiesta di un chiamante.
+///
+/// `FileReader` decodifica **tutti** i dizionari dentro `try_new` e li
+/// trattiene per l'intera scansione: sono l'unica ritenzione che non e'
+/// funzione ne' dello schema ne' del batch corrente, e il tetto per singolo
+/// body non li governa perche' e' la loro SOMMA a restare viva.
+///
+/// Il controllo e' sui `bodyLength` **dichiarati nel footer**, quindi cade
+/// prima che arrow ne decodifichi uno: e' l'unico punto in cui rifiutare costa
+/// zero allocazioni. Ed e' complementare all'accumulo che la traversata dei
+/// messaggi fa gia': quello vede i dizionari che incontra percorrendo la
+/// regione, questo vede i blocchi che **arrow leggera' davvero**, che sono
+/// quelli del footer.
+///
+/// # Errors
+///
+/// [`ArrowTransportError::IpcRetainedDictionariesTooLarge`] se la somma supera
+/// il tetto, e [`ArrowTransportError::IpcFooterInvalid`] se la somma
+/// **trabocca**: sono due fatti diversi, e riusare il primo costringerebbe a
+/// riportare una somma che non esiste.
 pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
     source: &mut S,
     limits: &IpcLimits,
@@ -1183,11 +1384,34 @@ pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
         usize::try_from(footer_len).map_err(|_| ArrowTransportError::IpcTruncated)?,
         &mut footer,
     )?;
-    let (blocks, trovato) = parse_footer_estraendo(&footer, limits, chiave)?;
+    let (blocks, dizionari, trovato) = parse_footer_estraendo(&footer, limits, chiave)?;
     // Il valore si copia **prima** di continuare: `footer` e' un buffer locale
     // e `trovato` lo presta.
     let trovato = trovato.map(str::to_owned);
+    // **Prima si valida, poi si limita**, e l'ordine e' una decisione.
+    //
+    // Un blocco troncato, disallineato o che esce dalla regione dati e' un file
+    // **rotto**: dichiara lunghezze che non descrivono niente. Sommarne i
+    // `bodyLength` prima di sapere che quei blocchi esistano davvero
+    // classificherebbe un file rotto come `ResourceLimit` — «hai chiesto troppo»
+    // invece di «questo non e' un artefatto» — e manderebbe chi legge ad alzare
+    // un tetto per un file che nessun tetto puo' salvare.
     validate_footer_blocks(source, &blocks, footer_start, limits)?;
+    {
+        let tetto = limits.max_retained_dictionary_body_bytes;
+        // `get` che ripiega su una fetta vuota sarebbe **fail-open**: un
+        // indice incoerente disattiverebbe il tetto invece di fermare la
+        // lettura, ed e' il modo di non applicare un limite che nessuno nota.
+        // L'incoerenza e' impossibile per costruzione — `dizionari` viene da
+        // `blocks.len()` prima del secondo campo — quindi qui e' un difetto
+        // nostro, non un file malformato.
+        let dizionari = blocks
+            .get(..dizionari)
+            .ok_or(ArrowTransportError::Internal(
+                "indice dei blocchi dizionario oltre i blocchi del footer",
+            ))?;
+        verifica_tetto_dizionari(dizionari, tetto)?;
+    }
     Ok(trovato)
 }
 
@@ -1203,16 +1427,17 @@ fn parse_footer(
     footer: &[u8],
     limits: &IpcLimits,
 ) -> Result<Vec<FooterBlock>, ArrowTransportError> {
-    parse_footer_estraendo(footer, limits, None).map(|(blocks, _)| blocks)
+    parse_footer_estraendo(footer, limits, None).map(|(blocks, _, _)| blocks)
 }
 
 /// Percorre il footer — lo Schema e i vettori di `Block` — e rende anche il
-/// valore della chiave cercata fra i custom metadata del footer.
+/// numero di blocchi DIZIONARIO in testa a `blocks` e il valore della chiave
+/// cercata fra i custom metadata del footer.
 fn parse_footer_estraendo<'a>(
     footer: &'a [u8],
     limits: &IpcLimits,
     cercata: Option<&str>,
-) -> Result<(Vec<FooterBlock>, Option<&'a str>), ArrowTransportError> {
+) -> Result<(Vec<FooterBlock>, usize, Option<&'a str>), ArrowTransportError> {
     let root = fb_u32(footer, 0)? as usize;
     let (vtable, vtable_len) = fb_table(footer, root)?;
     // Campo 1: lo Schema del footer, OBBLIGATORIO.
@@ -1228,9 +1453,15 @@ fn parse_footer_estraendo<'a>(
     fb_schema(footer, fb_indirect(footer, root, schema_offset)?)?;
     let mut blocks: Vec<FooterBlock> = Vec::new();
     // Campo 2: dizionari. Campo 3: record batch. Arrow legge entrambi.
-    for field in [2_usize, 3] {
-        fb_footer_blocks(footer, root, vtable, vtable_len, field, &mut blocks, limits)?;
-    }
+    //
+    // I due campi confluiscono in un vettore solo perche' la validazione dei
+    // blocchi e' identica per entrambi. Il CONFINE fra i due si conserva
+    // pero' come indice: i dizionari sono `blocks[..dizionari]`, e servono
+    // distinti al verificatore, che ha un tetto cumulativo sui loro body e
+    // non ne ha uno sui record batch (§2-ter).
+    fb_footer_blocks(footer, root, vtable, vtable_len, 2, &mut blocks, limits)?;
+    let dizionari = blocks.len();
+    fb_footer_blocks(footer, root, vtable, vtable_len, 3, &mut blocks, limits)?;
     // Campo 4: custom metadata del footer. Arrow li legge, e li legge con
     // `key().unwrap()` / `value().unwrap()`: una voce senza chiave o senza
     // valore panica dentro la dipendenza. Senza questa riga il campo non
@@ -1238,7 +1469,58 @@ fn parse_footer_estraendo<'a>(
     // vedrebbe.
     let custom = fb_field(footer, vtable, vtable_len, 4)?;
     let trovato = fb_custom_metadata_estraendo(footer, root, custom, cercata)?;
-    Ok((blocks, trovato))
+    Ok((blocks, dizionari, trovato))
+}
+
+/// Somma controllata dei body dei blocchi dizionario, contro il tetto.
+///
+/// # Perche' la somma e non il massimo
+///
+/// `FileReader` decodifica **tutti** i dizionari all'apertura e li trattiene
+/// per l'intera scansione: e' la loro somma a restare viva, non il piu' grande.
+/// Il tetto per singolo body non la governa — mille dizionari da un megabyte lo
+/// rispettano tutti e trattengono un gigabyte.
+///
+/// # Perche' l'overflow e' un rifiuto e non una saturazione
+///
+/// Un `saturating_add` confronterebbe col tetto un numero che non e' piu' la
+/// somma: direbbe «troppo grande» per una ragione diversa da quella vera, e su
+/// un tetto pari a `u64::MAX` direbbe «accettabile» per un insieme che non lo
+/// e'.
+///
+/// # Perche' l'overflow ha un errore proprio
+///
+/// Perche' non esiste una somma da riportare. Riusare l'errore del tetto
+/// costringerebbe a metterci un numero — il tetto, `u64::MAX`, qualunque cosa —
+/// e quel numero sarebbe **inventato**: direbbe a chi legge «hai dichiarato
+/// tanto» quando cio' che e' successo e' che la dichiarazione non e'
+/// sommabile. Sono due fatti diversi e hanno due errori diversi.
+///
+/// # Errors
+///
+/// - [`ArrowTransportError::IpcRetainedDictionariesTooLarge`] se la somma
+///   supera il tetto: porta la somma **vera** e il tetto;
+/// - [`ArrowTransportError::IpcFooterInvalid`] se la somma trabocca: nessun
+///   numero, perche' non ce n'e' uno onesto.
+fn verifica_tetto_dizionari(
+    dizionari: &[FooterBlock],
+    tetto: u64,
+) -> Result<(), ArrowTransportError> {
+    let mut somma = 0_u64;
+    for block in dizionari {
+        somma = somma
+            .checked_add(block.body_len)
+            .ok_or(ArrowTransportError::IpcFooterInvalid(
+                "somma dei body dei blocchi dizionario fuori intervallo",
+            ))?;
+    }
+    if somma > tetto {
+        return Err(ArrowTransportError::IpcRetainedDictionariesTooLarge {
+            declared: somma,
+            limit: tetto,
+        });
+    }
+    Ok(())
 }
 
 /// Verifica i blocchi del footer: contenimento nella regione dati,
@@ -2312,6 +2594,489 @@ mod somme_al_limite {
         assert!(matches!(
             fb_string(&buf, usize::MAX),
             Err(ArrowTransportError::IpcTruncated)
+        ));
+    }
+}
+
+/// Il tetto cumulativo sui body dei dizionari: l'aritmetica, provata sui
+/// blocchi invece che su un file.
+///
+/// Il caso che conta — la somma che trabocca — non e' costruibile con un
+/// artefatto reale: servirebbero tre blocchi da `i64::MAX` byte dichiarati, e
+/// nessun writer li produce. Provarlo qui, dove i blocchi si costruiscono a
+/// mano, e' l'unico modo di esercitarlo davvero invece di dichiararlo
+/// irraggiungibile.
+#[cfg(test)]
+mod tetto_dizionari {
+    use std::sync::Arc;
+
+    use plenora_core::arrow::array::RecordBatch;
+    use plenora_core::arrow::ipc::writer::FileWriter;
+    use plenora_core::arrow::schema::{DataType, Field, Schema};
+
+    use super::{
+        valida_file_ed_estrai, validate_ipc_message_metadata, verifica_tetto_dizionari,
+        ArrowTransportError, FooterBlock, IpcLimits, ARROW_FILE_MAGIC, FOOTER_BLOCK_BYTES,
+    };
+
+    /// Un file Arrow IPC valido con **una colonna dictionary-encoded**, quindi
+    /// con almeno un blocco di dizionario nel footer.
+    fn artefatto_con_dizionario() -> Vec<u8> {
+        use plenora_core::arrow::array::{types::Int32Type, DictionaryArray};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "citta",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let colonna: DictionaryArray<Int32Type> =
+            vec!["milano", "torino", "milano"].into_iter().collect();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(colonna)])
+            .expect("batch valido");
+        let mut byte = Vec::new();
+        {
+            let mut writer = FileWriter::try_new(&mut byte, &schema).expect("writer");
+            writer.write(&batch).expect("scrittura");
+            writer.finish().expect("chiusura");
+        }
+        byte
+    }
+
+    /// Il primo blocco DIZIONARIO del footer, letto con lo stesso parser che il
+    /// confine usa: il difetto va iniettato dove il codice lo leggera'.
+    fn primo_blocco_dizionario(byte: &[u8]) -> FooterBlock {
+        let (footer, _) = regione_del_footer(byte);
+        let (blocchi, dizionari, _) =
+            super::parse_footer_estraendo(&footer, &IpcLimits::default(), None)
+                .expect("footer leggibile");
+        assert!(
+            dizionari >= 1,
+            "l'artefatto di prova deve avere un dizionario"
+        );
+        blocchi[0]
+    }
+
+    /// Footer del file e offset a cui comincia.
+    fn regione_del_footer(byte: &[u8]) -> (Vec<u8>, usize) {
+        let fine_trailer = byte.len() - ARROW_FILE_MAGIC.len();
+        let lunghezza = i32::from_le_bytes(
+            byte[fine_trailer - 4..fine_trailer]
+                .try_into()
+                .expect("quattro byte"),
+        );
+        let lunghezza = usize::try_from(lunghezza).expect("lunghezza positiva");
+        let inizio = fine_trailer - 4 - lunghezza;
+        (byte[inizio..inizio + lunghezza].to_vec(), inizio)
+    }
+
+    /// Riscrive il `bodyLength` del blocco dato, dentro il footer del file.
+    ///
+    /// Il `Block` e' uno struct flatbuffer di 24 byte — offset `i64`,
+    /// `metaDataLength` `i32` con quattro di padding, `bodyLength` `i64` — e si
+    /// individua per il suo contenuto, che nel footer e' unico.
+    fn sostituisci_body_len(byte: &mut [u8], blocco: FooterBlock, nuovo: u64) {
+        let (footer, inizio_footer) = regione_del_footer(byte);
+        let mut atteso = Vec::with_capacity(FOOTER_BLOCK_BYTES);
+        atteso.extend_from_slice(&i64::try_from(blocco.offset).expect("offset").to_le_bytes());
+        atteso.extend_from_slice(
+            &i32::try_from(blocco.metadata_len)
+                .expect("metadata_len")
+                .to_le_bytes(),
+        );
+        atteso.extend_from_slice(&[0_u8; 4]);
+        atteso.extend_from_slice(
+            &i64::try_from(blocco.body_len)
+                .expect("body_len")
+                .to_le_bytes(),
+        );
+
+        let posizione = footer
+            .windows(FOOTER_BLOCK_BYTES)
+            .position(|finestra| finestra == atteso.as_slice())
+            .expect("blocco presente nel footer");
+        let inizio_body = inizio_footer + posizione + 16;
+        let nuovo = i64::try_from(nuovo).expect("entro i64");
+        byte[inizio_body..inizio_body + 8].copy_from_slice(&nuovo.to_le_bytes());
+    }
+
+    fn blocco(body_len: u64) -> FooterBlock {
+        FooterBlock {
+            offset: 8,
+            metadata_len: 8,
+            body_len,
+        }
+    }
+
+    #[test]
+    fn nessun_dizionario_non_trattiene_niente() {
+        assert!(verifica_tetto_dizionari(&[], 0).is_ok());
+    }
+
+    #[test]
+    fn la_somma_esattamente_al_tetto_e_accettata() {
+        // Il confine e' `>`, non `>=`: un insieme che sta esattamente nel
+        // budget concesso lo rispetta.
+        let dizionari = [blocco(400), blocco(600)];
+        assert!(verifica_tetto_dizionari(&dizionari, 1000).is_ok());
+    }
+
+    #[test]
+    fn singolarmente_sotto_il_tetto_ma_cumulativamente_oltre_e_respinto() {
+        // Nessuno dei tre supererebbe un tetto per singolo body: e' la somma
+        // a sforare, ed e' la ragione per cui questo controllo esiste.
+        let dizionari = [blocco(400), blocco(400), blocco(400)];
+        let esito = verifica_tetto_dizionari(&dizionari, 1000);
+        assert!(matches!(
+            esito,
+            Err(ArrowTransportError::IpcRetainedDictionariesTooLarge {
+                declared: 1200,
+                limit: 1000
+            })
+        ));
+    }
+
+    /// Un `DictionaryBatch` **delta** e' rifiutato in prevalidazione.
+    ///
+    /// # Perche' non basta il tetto
+    ///
+    /// Il tetto cumulativo somma i `bodyLength` dichiarati, e su un delta
+    /// quella somma non descrive cio' che resta vivo: arrow concatena il
+    /// dizionario precedente con il nuovo in un buffer ulteriore, mentre
+    /// entrambi gli originali sono ancora allocati. Il picco si avvicina al
+    /// **doppio** della somma, e la formula della memoria trattenuta —
+    /// `verifica.rs`, isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite — sarebbe falsa proprio quando il
+    /// tetto dice che va tutto bene.
+    ///
+    /// # Perche' il caso discrimina
+    ///
+    /// Lo stesso messaggio con `isDelta` a **false** deve passare. Senza quella
+    /// meta', un rifiuto per qualunque altra ragione — un flatbuffer malformato
+    /// dalla manipolazione, per dire — farebbe passare il test senza che il
+    /// controllo esista.
+    #[test]
+    fn un_dictionary_delta_e_rifiutato_e_uno_normale_no() {
+        for (delta, atteso_rifiuto) in [(0_u8, false), (1_u8, true)] {
+            let metadata = messaggio_dictionary(Some(delta), true);
+            let esito = validate_ipc_message_metadata(&metadata);
+            if atteso_rifiuto {
+                assert!(
+                    matches!(
+                        esito,
+                        Err(ArrowTransportError::IpcSchemaInvalid(
+                            "dictionary delta non supportato"
+                        ))
+                    ),
+                    "isDelta=true va rifiutato: {esito:?}"
+                );
+            } else {
+                assert!(esito.is_ok(), "isDelta=false deve passare: {esito:?}");
+            }
+        }
+
+        // E senza il campo affatto: assente significa false, quindi passa.
+        let esito = validate_ipc_message_metadata(&messaggio_dictionary(None, true));
+        assert!(
+            esito.is_ok(),
+            "isDelta assente vale false e deve passare: {esito:?}"
+        );
+    }
+
+    /// Un messaggio che dichiara `header_type` e **non porta l'header** e'
+    /// rifiutato.
+    ///
+    /// # Perche' e' un caso a se'
+    ///
+    /// I controlli su `data` e su `isDelta` stanno dentro il ramo che l'header
+    /// ce l'ha. Un messaggio senza header non li attraversa nemmeno: passa la
+    /// prevalidazione intatto e arriva ad arrow, che legge
+    /// `header_as_dictionary_batch()` con `unwrap()`. Il tipo dichiarato basta
+    /// a scegliere il percorso; l'header no.
+    ///
+    /// # Perche' discrimina
+    ///
+    /// Lo stesso messaggio **con** l'header passa, e il caso vale per tutti e
+    /// tre i tipi che sappiamo leggere: dichiararne uno e ometterlo e' la
+    /// stessa manovra qualunque sia il numero.
+    #[test]
+    fn un_messaggio_senza_header_e_rifiutato() {
+        let esito = validate_ipc_message_metadata(&messaggio_dictionary_con(Some(0), true, false));
+        assert!(
+            matches!(
+                esito,
+                Err(ArrowTransportError::IpcSchemaInvalid(
+                    "messaggio IPC senza header"
+                ))
+            ),
+            "header dichiarato e assente va rifiutato: {esito:?}"
+        );
+
+        let esito = validate_ipc_message_metadata(&messaggio_dictionary_con(Some(0), true, true));
+        assert!(esito.is_ok(), "con l'header deve passare: {esito:?}");
+    }
+
+    /// `MessageHeader::NONE` senza header e' un messaggio vuoto, e passa.
+    ///
+    /// Arrow lo attraversa senza fare niente, e il confine fa lo stesso:
+    /// rifiutarlo sarebbe una deviazione dal formato in piu', decisa da
+    /// nessuno e presa per effetto collaterale della forma del `match`.
+    ///
+    /// Con un header, invece, no: il tipo dichiara «nessun contenuto» e il
+    /// messaggio ne porta uno. La meta' che rifiuta e' anche cio' che
+    /// distingue questo caso da «tutto passa».
+    #[test]
+    fn il_tipo_none_e_un_messaggio_vuoto_solo_se_e_davvero_vuoto() {
+        let esito = validate_ipc_message_metadata(&messaggio_con_tipo(0, false));
+        assert!(esito.is_ok(), "NONE senza header e' un no-op: {esito:?}");
+
+        let esito = validate_ipc_message_metadata(&messaggio_con_tipo(0, true));
+        assert!(
+            matches!(
+                esito,
+                Err(ArrowTransportError::IpcSchemaInvalid(
+                    "messaggio IPC di tipo NONE con un header"
+                ))
+            ),
+            "NONE con un header si contraddice: {esito:?}"
+        );
+    }
+
+    /// Un tipo **non supportato** senza header non passa in mezzo ai due
+    /// controlli.
+    ///
+    /// # La combinazione che due controlli separati lasciano scoperta
+    ///
+    /// Con un `if` sulla presenza dell'header e un `match` sul tipo, un
+    /// `header_type` ignoto e un header assente non entrano ne' nell'uno —
+    /// che l'header lo pretende solo per i tipi noti — ne' nell'altro, che
+    /// gira solo quando l'header c'e'. Il messaggio attraversa la
+    /// prevalidazione intatto. Il match sulla coppia non ha un «in mezzo».
+    ///
+    /// # Perche' l'errore e' quello del tipo e non quello dell'header
+    ///
+    /// Perche' il tipo si rifiuta comunque: che un Tensor porti o no il suo
+    /// header non cambia che non lo sappiamo leggere, e dire «senza header»
+    /// manderebbe chi legge a cercare la cosa sbagliata.
+    #[test]
+    fn un_tipo_non_supportato_senza_header_e_rifiutato() {
+        // Zero non e' qui: e' `MessageHeader::NONE`, che ha il suo caso.
+        for tipo in [4_u8, 5, 6, 200] {
+            for con_header in [false, true] {
+                let esito = validate_ipc_message_metadata(&messaggio_con_tipo(tipo, con_header));
+                assert!(
+                    matches!(esito, Err(ArrowTransportError::Arrow(_))),
+                    "il tipo {tipo} va rifiutato, con header={con_header}: {esito:?}"
+                );
+            }
+        }
+    }
+
+    /// Un `DictionaryBatch` senza `data` e' rifiutato prima di arrivare ad
+    /// arrow.
+    ///
+    /// `read_dictionary` lo legge con `batch.data().unwrap()`: senza questo
+    /// controllo il messaggio farebbe panicare la dipendenza. La barriera
+    /// anti-panico lo tradurrebbe in errore, ma un panico attraversato resta
+    /// uno stato che non vogliamo raggiungere — e la barriera e' l'ultima
+    /// difesa, non la prima.
+    ///
+    /// Discrimina per costruzione: lo stesso messaggio **con** `data` passa.
+    #[test]
+    fn un_dictionary_batch_senza_data_e_rifiutato() {
+        let esito = validate_ipc_message_metadata(&messaggio_dictionary(Some(0), false));
+        assert!(
+            matches!(
+                esito,
+                Err(ArrowTransportError::IpcSchemaInvalid(
+                    "DictionaryBatch senza data"
+                ))
+            ),
+            "un DictionaryBatch senza data va rifiutato: {esito:?}"
+        );
+
+        let esito = validate_ipc_message_metadata(&messaggio_dictionary(Some(0), true));
+        assert!(esito.is_ok(), "con data deve passare: {esito:?}");
+    }
+
+    /// Costruisce i metadati di un messaggio `DictionaryBatch`, byte per byte.
+    ///
+    /// A mano e non con `FileWriter`: arrow non emette ne' delta ne' messaggi
+    /// senza `data`, quindi i due casi che qui contano non sono producibili
+    /// dallo scrittore. E' lo stesso idioma di
+    /// `dictionary_senza_index_type_respinto`, per la stessa ragione.
+    ///
+    /// `delta`: `None` = slot assente, `Some(v)` = slot presente col valore.
+    /// `con_data`: se lo slot `data` punta al `RecordBatch` interno.
+    /// `con_header`: se lo slot `header` del Message punta alla tabella.
+    ///
+    /// Assente e presente-a-zero non sono la stessa cosa, ed e' precisamente
+    /// la differenza che i casi devono poter esprimere: `isDelta` assente vale
+    /// `false` e deve passare, `data` assente fa panicare arrow.
+    fn messaggio_dictionary(delta: Option<u8>, con_data: bool) -> Vec<u8> {
+        messaggio_con(2, delta, con_data, true)
+    }
+
+    /// Un messaggio con l'`header_type` che si vuole, header presente o no.
+    fn messaggio_con_tipo(tipo: u8, con_header: bool) -> Vec<u8> {
+        messaggio_con(tipo, Some(0), true, con_header)
+    }
+
+    /// La forma completa: tipo dichiarato, header presente o no, e i due
+    /// campi del `DictionaryBatch`.
+    fn messaggio_dictionary_con(delta: Option<u8>, con_data: bool, con_header: bool) -> Vec<u8> {
+        messaggio_con(2, delta, con_data, con_header)
+    }
+
+    fn messaggio_con(tipo: u8, delta: Option<u8>, con_data: bool, con_header: bool) -> Vec<u8> {
+        let mut buf: Vec<u8> = vec![0; 4];
+
+        // --- Message: slot 0 version, 1 header_type, 2 header, 3 bodyLength,
+        //     4 custom_metadata. Presenti l'1, il 2 e il 3.
+        let vt_messaggio = buf.len();
+        buf.extend_from_slice(&14_u16.to_le_bytes()); // 4 + 5 slot x 2
+        buf.extend_from_slice(&20_u16.to_le_bytes()); // soffset + 4 + 4 + 8
+        for offset in [0_u16, 4, if con_header { 8 } else { 0 }, 12, 0] {
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        let messaggio = buf.len();
+        let soff_messaggio = i32::try_from(messaggio - vt_messaggio).expect("soffset");
+        buf.extend_from_slice(&soff_messaggio.to_le_bytes());
+        buf.push(tipo);
+        buf.extend_from_slice(&[0_u8; 3]);
+        let slot_header = buf.len();
+        buf.extend_from_slice(&0_u32.to_le_bytes()); // riscritto sotto
+        buf.extend_from_slice(&0_i64.to_le_bytes()); // bodyLength
+
+        // --- DictionaryBatch: slot 0 id, 1 data, 2 isDelta.
+        //
+        // La vtable si accorcia quando `isDelta` e' assente: un campo oltre la
+        // vtable e' un campo che non c'e', ed e' cosi' che il formato dice
+        // «assente» invece di «zero».
+        let vt_dizionario = buf.len();
+        let slot_dict: &[u16] = if delta.is_some() {
+            &[0, if con_data { 4 } else { 0 }, 8]
+        } else {
+            &[0, if con_data { 4 } else { 0 }]
+        };
+        let vtable_len = u16::try_from(4 + slot_dict.len() * 2).expect("vtable");
+        buf.extend_from_slice(&vtable_len.to_le_bytes());
+        buf.extend_from_slice(&12_u16.to_le_bytes()); // soffset + 4 + 4
+        for offset in slot_dict {
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        let dizionario = buf.len();
+        let relativo = u32::try_from(dizionario - slot_header).expect("offset");
+        buf[slot_header..slot_header + 4].copy_from_slice(&relativo.to_le_bytes());
+        let soff_dizionario = i32::try_from(dizionario - vt_dizionario).expect("soffset");
+        buf.extend_from_slice(&soff_dizionario.to_le_bytes());
+        let slot_data = buf.len();
+        buf.extend_from_slice(&0_u32.to_le_bytes()); // riscritto sotto
+        buf.push(delta.unwrap_or(0));
+        buf.extend_from_slice(&[0_u8; 3]);
+
+        // --- RecordBatch interno: tabella vuota. Zero nodi, zero buffer,
+        //     nessuna compressione: strutturalmente valida e senza body.
+        let vt_batch = buf.len();
+        buf.extend_from_slice(&14_u16.to_le_bytes());
+        buf.extend_from_slice(&4_u16.to_le_bytes());
+        buf.extend_from_slice(&[0_u8; 10]);
+        let batch = buf.len();
+        if con_data {
+            let relativo = u32::try_from(batch - slot_data).expect("offset");
+            buf[slot_data..slot_data + 4].copy_from_slice(&relativo.to_le_bytes());
+        }
+        let soff_batch = i32::try_from(batch - vt_batch).expect("soffset");
+        buf.extend_from_slice(&soff_batch.to_le_bytes());
+
+        let radice = u32::try_from(messaggio).expect("radice");
+        buf[0..4].copy_from_slice(&radice.to_le_bytes());
+        buf.resize(buf.len() + 16, 0);
+        buf
+    }
+
+    /// La convalida dei blocchi **precede** il tetto cumulativo, e il caso lo
+    /// **discrimina**.
+    ///
+    /// L'artefatto ha un dizionario vero, quindi la somma dei body non e' zero
+    /// e un tetto a zero la supererebbe. Il difetto iniettato — il `bodyLength`
+    /// del blocco dizionario portato oltre la regione dati — e' rilevato da
+    /// `validate_footer_blocks` e **non** dal parsing, che i body non li
+    /// guarda.
+    ///
+    /// Ne segue che l'errore dice quale dei due controlli e' corso per primo:
+    /// col tetto davanti sarebbe `IpcRetainedDictionariesTooLarge`, con la
+    /// convalida davanti e' `IpcFooterInvalid`. Invertire i due nel codice fa
+    /// fallire questo test, che e' cio' che un test sull'ordine deve fare.
+    #[test]
+    fn il_framing_invalido_vince_sul_tetto_dei_dizionari() {
+        let mut byte = artefatto_con_dizionario();
+        let blocco_dizionario = primo_blocco_dizionario(&byte);
+        // Un `bodyLength` enorme ma positivo: il parsing lo accetta (rifiuta i
+        // negativi), la convalida lo respinge perche' il blocco finirebbe oltre
+        // l'inizio del footer.
+        let gonfiato = 1_u64 << 40;
+        sostituisci_body_len(&mut byte, blocco_dizionario, gonfiato);
+
+        let mut sorgente: &[u8] = &byte;
+        // Tetto a zero: se corresse per primo, la somma gonfiata lo
+        // supererebbe e l'errore sarebbe suo.
+        let esito = valida_file_ed_estrai(
+            &mut sorgente,
+            &IpcLimits {
+                max_retained_dictionary_body_bytes: 0,
+                ..IpcLimits::default()
+            },
+            None,
+        );
+        assert!(
+            matches!(esito, Err(ArrowTransportError::IpcFooterInvalid(_))),
+            "il framing rotto deve vincere sul tetto: {esito:?}"
+        );
+    }
+
+    /// Lo stesso artefatto **senza** il difetto: qui il tetto tocca a lui, e
+    /// con un tetto a zero deve essere lui a rifiutare.
+    ///
+    /// E' la meta' che dimostra che il caso qui sopra non passa per un motivo
+    /// diverso dall'ordine: senza, un artefatto sempre rotto lo farebbe passare
+    /// comunque.
+    #[test]
+    fn senza_difetti_di_framing_il_tetto_dei_dizionari_rifiuta() {
+        let byte = artefatto_con_dizionario();
+        let mut sorgente: &[u8] = &byte;
+        let esito = valida_file_ed_estrai(
+            &mut sorgente,
+            &IpcLimits {
+                max_retained_dictionary_body_bytes: 0,
+                ..IpcLimits::default()
+            },
+            None,
+        );
+        assert!(
+            matches!(
+                esito,
+                Err(ArrowTransportError::IpcRetainedDictionariesTooLarge { limit: 0, .. })
+            ),
+            "senza difetti di framing tocca al tetto: {esito:?}"
+        );
+    }
+
+    #[test]
+    fn la_somma_che_trabocca_e_un_rifiuto_esplicito_non_una_saturazione() {
+        // Tre blocchi da `i64::MAX`: due soli non basterebbero, perche' la
+        // loro somma e' `u64::MAX - 1`.
+        let massimo = u64::try_from(i64::MAX).expect("i64::MAX entra in u64");
+        let dizionari = [blocco(massimo), blocco(massimo), blocco(massimo)];
+        // Il tetto e' `u64::MAX`: con una saturazione la somma diventerebbe
+        // `u64::MAX`, non supererebbe il tetto, e l'insieme verrebbe
+        // ACCETTATO. E' il caso che distingue il rifiuto dalla saturazione.
+        //
+        // L'errore e' quello del footer e **non** quello del tetto: non c'e'
+        // una somma da dichiarare, e riusare il secondo obbligherebbe a
+        // inventarne una.
+        let esito = verifica_tetto_dizionari(&dizionari, u64::MAX);
+        assert!(matches!(
+            esito,
+            Err(ArrowTransportError::IpcFooterInvalid(_))
         ));
     }
 }

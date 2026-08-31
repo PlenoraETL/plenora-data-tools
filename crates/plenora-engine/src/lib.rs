@@ -131,6 +131,21 @@ pub mod prepare;
 mod protocollo;
 pub mod table_engine;
 pub mod temp_store;
+// Il verificatore dell'artefatto ha lo stesso perimetro del protocollo, e per
+// la stessa ragione: **non ha ancora un chiamante di produzione**. Chi lo
+// chiamera' e' la sequenza di verifica e publish, con `PR-10`; finche' non
+// esiste, il modulo si
+// compila dove qualcuno lo usa davvero — i test e la facciata `interni`, da
+// cui il fuzzer lo raggiunge.
+//
+// Privato senza eccezioni: e' il verificatore di un percorso interno, e
+// renderlo pubblico prima che il percorso esista sarebbe la promessa di non
+// cambiarlo.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+mod verifica;
 
 pub use cancellation::CancellationToken;
 pub use commit_token::{CommitToken, FormaTokenNonValida};

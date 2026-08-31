@@ -864,26 +864,37 @@ interno.
 
 ### Moduli compilati solo sotto `test` e `internals`
 
-**La regola.** `plenora_engine::protocollo` è compilato solo con
-`#[cfg(any(test, feature = "internals"))]`;
+**La regola.** `plenora_engine::protocollo` e `plenora_engine::verifica` sono
+compilati solo con `#[cfg(any(test, feature = "internals"))]`;
 `plenora_engine::commit_footer::leggi_commit_token` e
 `geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
 un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
 chiamante di produzione**.
 
 **Il perimetro.** Il modulo `protocollo` per intero — messaggi, codifica,
-lettore limitato, handshake — la sola funzione di lettura del token dal
-footer, e la forma breve di `parse_footer` (da quando la convalida estrae anche
-un custom metadata, la produzione passa tutta per `parse_footer_estraendo`).
-`commit_footer::scrivi_commit_token` è invece incondizionato, perché il writer in-process lo
-chiama davvero (con `None`).
+lettore limitato, handshake — il modulo `verifica`, che esegue i passi da 3 a
+8-bis della sequenza di [`isolamento.md`](isolamento.md), la sola funzione di
+lettura del token dal footer, e la forma breve di `parse_footer` (da quando la
+convalida estrae anche un custom metadata, la produzione passa tutta per
+`parse_footer_estraendo`). `commit_footer::scrivi_commit_token` è invece
+incondizionato, perché il writer in-process lo chiama davvero (con `None`).
 
-**Perché due `cfg` diversi e non uno.** `protocollo` porta anche l'arm
-`internals` perché la facciata `interni` è il modo in cui il fuzzer lo
-raggiunge. `commit_footer` e `ipc` sono `pub(crate)`: la feature non porterebbe loro
-nessun chiamante in più, porterebbe un `dead_code` nella build che la abilita.
-Un `cfg` più largo del necessario dichiara una condizione falsa, ed è il modo
-educato di riaprire l'avviso che il `cfg` esisteva per chiudere.
+Il perimetro include anche il **supporto esclusivo del verificatore**, che ha
+lo stesso stato — nessun chiamante di produzione fino a `PR-10` — e che senza
+`cfg` sposterebbe altrove gli avvisi che il `cfg` doveva chiudere:
+`commit_footer::interpreta_commit_token`, `Esadecimale32::dai_byte`,
+`ipc_boundary::ArtefattoConvalidato` con i suoi metodi, e
+`ipc_boundary::convalida_artefatto`. Un `cfg` sul modulo che lascia scoperto
+ciò che solo quel modulo usa non è un perimetro, è una linea tracciata a
+metà.
+
+**Perché due `cfg` diversi e non uno.** `protocollo` e `verifica` portano anche
+l'arm `internals` perché la facciata `interni` è il modo in cui il fuzzer li
+raggiunge. `commit_footer::leggi_commit_token` e `ipc::parse_footer` sono
+`pub(crate)`: la feature non porterebbe loro nessun chiamante in più,
+porterebbe un `dead_code` nella build che la abilita. Un `cfg` più largo del
+necessario dichiara una condizione falsa, ed è il modo educato di riaprire
+l'avviso che il `cfg` esisteva per chiudere.
 
 **Perché non un `allow(dead_code)`.** Sono due modi di trattare lo stesso
 fatto, e non sono equivalenti. Un `allow` **zittisce** l'avviso e lascia il
@@ -909,8 +920,19 @@ worker fittizio. Non con `PR-5`: l'handshake che `PR-5` aggiunge sta *dentro*
 toglierlo lì rimetterebbe in piedi le decine di `dead_code` che il `cfg`
 evita — verificato rimuovendolo e leggendo l'output, non dedotto.
 
-Il `cfg` su `leggi_commit_token` sparisce con **`PR-6`**, la verifica
-streaming dell'artefatto, che è il suo primo lettore reale.
+Il `cfg` su `verifica` sparisce con **`PR-10`**, che è la PR della sequenza di
+verifica e publish: è lì che il verificatore acquista un chiamante di
+produzione, non con `PR-8`, che porta il ciclo di vita del supervisore e un
+worker fittizio.
+
+Il `cfg` su `leggi_commit_token` sparisce anch'esso con **`PR-10`**, e non con
+`PR-6` come questo registro prevedeva: il verificatore deve riferire framing,
+token, digest e consegna ad Arrow **a un solo handle**, mentre quella funzione
+fa una traversata propria — chiamarla significherebbe convalidare due volte,
+con una finestra in mezzo. Il verificatore estrae quindi il token durante la
+**propria** traversata, e condivide con quella funzione la sola parte che
+potrebbe divergere: l'interpretazione del testo trovato, in
+`interpreta_commit_token`.
 
 Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
 torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
@@ -1048,6 +1070,79 @@ assente insieme.
 Se un giorno `deny_unknown_fields` coprisse anche le varianti unitarie, le
 graffe vuote diventerebbero rumore e si potrebbero togliere — ma solo con un
 test che mostri il rifiuto senza di esse.
+
+### Il tetto cumulativo sui dizionari
+
+**La regola.** `IpcLimits::max_retained_dictionary_body_bytes` limita la
+**somma** dei `bodyLength` dei `DictionaryBatch`, non il più grande. È l'unico
+tetto cumulativo del confine, e c'è perché i dizionari sono l'unica cosa che
+il lettore trattiene tutta insieme: `FileReader` li decodifica dentro
+`try_new` e li tiene per l'intera scansione, uno `StreamReader` accumula
+quelli che incontra. Il tetto per singolo body non li governa: mille dizionari
+da un megabyte lo rispettano tutti e insieme trattengono un gigabyte.
+
+Si applica in **due punti complementari**, e nessuno dei due sostituisce
+l'altro:
+
+| dove | che cosa vede |
+|---|---|
+| la traversata dei messaggi | i `DictionaryBatch` incontrati percorrendo la regione dati — vale per lo stream, per il file e per ogni lettore ostile |
+| i blocchi del footer | quelli che `FileReader` leggerà **davvero**, saltando agli offset senza percorrere la regione |
+
+Superamento e **trabocco** della somma sono cose diverse e hanno errori
+diversi. Il superamento rende sempre `IpcRetainedDictionariesTooLarge`, con la
+somma vera e il tetto. Il trabocco non porta nessun numero — non ce n'è uno
+onesto — e la variante dipende da **dove** è avvenuto:
+
+| percorso | trabocco |
+|---|---|
+| traversata dei messaggi | `IpcTruncated`: si sta percorrendo la regione dei messaggi, e un footer può non esserci affatto — lo stream non ne ha uno |
+| conteggio dei blocchi del footer | `IpcFooterInvalid`: lì il footer c'è per definizione, ed è la struttura incoerente |
+
+Nominare una struttura assente manderebbe chi legge a cercarla.
+
+**La sovrastima dichiarata.** La traversata somma **tutti** i
+`DictionaryBatch`, anche quando lo stream **sostituisce** un dizionario già
+visto — stesso `id`, valori nuovi. Arrow in quel caso ne tiene uno solo, quindi
+la nostra somma è maggiore di ciò che resta vivo, e uno stream con molte
+sostituzioni può essere rifiutato pur restando entro il consumo reale.
+
+È una sovrastima **conservativa e voluta**: distinguere i `dictionary id` in
+prevalidazione significherebbe tenere una mappa `id → ultimo bodyLength` e
+fidarsi che il lettore a valle faccia la stessa scelta di rimpiazzo che noi
+prevediamo. Preferiamo rifiutare qualcosa di accettabile piuttosto che
+ammettere un consumo che non abbiamo misurato. La condizione di rientro: il
+giorno in cui un carico reale usi sostituzioni ripetute, la somma diventa per
+`id` — e allora va provato che la regola di rimpiazzo coincide con quella del
+lettore, non assunto.
+
+**I dizionari delta sono rifiutati.** Con `isDelta`, Arrow non trattiene il
+body dichiarato: concatena il dizionario precedente con il nuovo in un buffer
+ulteriore, mentre entrambi gli originali sono ancora vivi. Il picco si avvicina
+al **doppio** della somma, e la formula della memoria trattenuta di
+[`isolamento.md`](isolamento.md) sarebbe falsa proprio quando il tetto dice che
+va tutto bene.
+
+Il rifiuto è in prevalidazione, comune a tutti i lettori, ed è una
+**deviazione dal formato**: un dizionario delta è un ingresso Arrow stream
+perfettamente valido, e questo confine lo esclude deliberatamente. Ciò che si
+perde è un ingresso legittimo che nessuno dei nostri produttori genera — il
+`FileWriter` non ne emette — quindi il costo oggi è nullo, ma il costo esiste e
+un lettore esterno che ce ne mandasse uno verrebbe rifiutato senza aver
+sbagliato niente. Il rientro non è «alzare il tetto»: è rifarlo sul picco della
+concatenazione.
+
+**`header` e `data` sono obbligatori.** Un messaggio che dichiara
+`header_type` senza portare l'`header` salta ogni controllo della
+prevalidazione e arriva ad Arrow, che lo legge con `unwrap()`; un
+`DictionaryBatch` senza `data` fa lo stesso dentro `read_dictionary`. Entrambi
+sono rifiutati: la barriera anti-panico tradurrebbe il panico in errore, ma è
+l'ultima difesa e non la prima.
+
+**Il pericolo che copre.** Un ingresso che dichiara molti dizionari piccoli, o
+un delta, e fa trattenere al lettore molto più di quanto qualunque tetto
+per-messaggio ammetta — con la formula della memoria che continua a dire che
+il picco è limitato.
 
 ### Fuzzing su toolchain nightly
 

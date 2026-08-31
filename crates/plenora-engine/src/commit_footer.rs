@@ -57,13 +57,51 @@ use std::io::Write;
 use plenora_core::arrow::ipc::writer::FileWriter;
 
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
-// Servono soltanto a `leggi_commit_token`, che e' dietro un `cfg`: portano lo
-// stesso, o la build ordinaria della lib segnala tre import inutilizzati — e un
-// warning tollerato e' un warning che smette di essere letto.
-#[cfg(test)]
+// Ogni import porta il `cfg` di chi lo usa, o la build ordinaria segnala un
+// import inutilizzato — e un warning tollerato e' un warning che smette di
+// essere letto.
+//
+// `ArrowTransportError` serve a `interpreta_commit_token` e a
+// `leggi_commit_token`, che stanno dietro `cfg` diversi: `test` e' il piu'
+// largo dei due, e la condizione dell'import e' l'unione, non l'intersezione.
+#[cfg(any(test, feature = "internals"))]
 use crate::geo_transport::error::ArrowTransportError;
+// Questi soltanto a `leggi_commit_token`.
 #[cfg(test)]
 use crate::geo_transport::ipc::{valida_file_ed_estrai, IpcLimits, IpcSource};
+
+/// Interpreta il testo trovato sotto la chiave del token.
+///
+/// # Perche' e' una funzione e non due righe ripetute
+///
+/// Ha due chiamanti che arrivano da strade diverse — chi traversa il footer
+/// solo per il token, e il verificatore che lo estrae durante la propria
+/// traversata — e la regola che applica e' la stessa: un token presente ma non
+/// canonico si **rifiuta**, sempre, in ogni percorso. Scritta due volte, la
+/// regola avrebbe avuto due occasioni di cambiare in una sola.
+///
+/// # Errors
+///
+/// [`ArrowTransportError::IpcMetadataInvalid`] se il testo non e' canonico. Il
+/// messaggio e' un `&'static str`, quindi **non puo'** portare il valore: non
+/// e' una disciplina da ricordare, e' il tipo che non lo consente.
+// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
+// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
+// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
+// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
+// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
+// tracciata a meta'.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+pub fn interpreta_commit_token(testo: &str) -> Result<CommitToken, ArrowTransportError> {
+    CommitToken::da_esadecimale(testo).map_err(|_| {
+        ArrowTransportError::IpcMetadataInvalid(
+            "commit token del footer non canonico: atteso esadecimale minuscolo di 64 caratteri",
+        )
+    })
+}
 
 /// Scrive il `commit_token` nel footer, se c'e'.
 ///
@@ -99,17 +137,18 @@ pub fn scrivi_commit_token<W: Write>(scrittore: &mut FileWriter<W>, token: Optio
 ///
 /// # Perche' e' dietro un `cfg`
 ///
-/// Non ha ancora un chiamante di produzione: il token si sa scrivere e si sa
-/// rileggere, e le quattro forme del footer sono provate, ma chi rilegge per
-/// **decidere** qualcosa non esiste. Il `cfg` dichiara quella condizione
-/// invece di lasciare che un `dead_code` la dica peggio. Regola, perimetro e
-/// condizione di rientro stanno in
-/// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+/// Non ha ancora un chiamante di produzione, e **il verificatore non lo e'**:
+/// deve riferire framing, token, digest e consegna ad arrow **a un solo
+/// handle**, mentre questa funzione fa una traversata propria. Chiamarla
+/// significherebbe convalidare due volte, con una finestra in mezzo. Il primo
+/// lettore reale e' quindi la sequenza di verifica e publish, con `PR-10`.
 ///
-/// **`test` e non `any(test, internals)`**, a differenza di `protocollo`:
-/// questo modulo e' `pub(crate)`, quindi la facciata `interni` non lo
-/// raggiunge e la feature non gli porterebbe nessun chiamante. Le porterebbe
-/// un `dead_code` nella build che la abilita, cioe' quella del fuzzer.
+/// Cio' che i due condividono e' l'unica parte che avrebbe potuto divergere —
+/// l'interpretazione del testo trovato — ed e' in
+/// [`interpreta_commit_token`].
+///
+/// Regola, perimetro e condizione di rientro stanno in
+/// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(test)]
 pub fn leggi_commit_token<S: IpcSource + ?Sized>(
     sorgente: &mut S,
@@ -119,11 +158,7 @@ pub fn leggi_commit_token<S: IpcSource + ?Sized>(
     let Some(testo) = trovato else {
         return Ok(None);
     };
-    CommitToken::da_esadecimale(&testo).map(Some).map_err(|_| {
-        ArrowTransportError::IpcMetadataInvalid(
-            "commit token del footer non canonico: atteso esadecimale minuscolo di 64 caratteri",
-        )
-    })
+    interpreta_commit_token(&testo).map(Some)
 }
 
 #[cfg(test)]
