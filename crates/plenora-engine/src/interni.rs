@@ -20,6 +20,8 @@
 //!
 //! - [`verifica_giro_del_frame`], che esercita codificatore e decodificatore
 //!   **dall'interno** e restituisce un verdetto, non una struttura;
+//! - [`verifica_lettore_frame_geo`], che esercita il lettore dello stream
+//!   `PLNGEO2` e rende un verdetto, non i frame letti;
 //! - [`verifica_artefatto_ostile`], che esercita il verificatore
 //!   dell'artefatto su byte arbitrari e rende accettato/rifiutato, con
 //!   [`artefatto_di_prova`], [`schema_di_prova`] e [`TOKEN_DI_PROVA`] a
@@ -94,6 +96,167 @@ pub fn verifica_giro_del_frame(byte: &[u8]) -> Result<(), String> {
         return Err("codifica non deterministica".to_owned());
     }
     Ok(())
+}
+
+/// La richiesta di lettura piu' grande che il lettore dei frame puo' fare.
+///
+/// E' il buffer fisso di `geo_transport::protocol`, non ri-derivato: quel
+/// buffer e' privato al modulo, e questo numero e' la promessa che sorveglia,
+/// non una seconda definizione della stessa cosa. Se il buffer cresce senza
+/// che cresca anche questo, il gate diventa piu' severo del codice — cioe'
+/// rosso, che e' il verso giusto in cui sbagliare.
+const RICHIESTA_MASSIMA_AMMESSA: usize = 16 * 1024;
+
+/// Sorgente in memoria che **registra la fetta piu' grande** che le viene
+/// passata.
+///
+/// La misura non e' lo heap: e' la taglia che il lettore chiede a
+/// `Read::read`. E' cio' che distingue un lettore incrementale da uno che
+/// dimensiona sul dichiarato, ed e' osservabile senza agganciare l'allocatore.
+struct SorgenteSorvegliata<'a> {
+    byte: &'a [u8],
+    letto: usize,
+    massima: &'a std::cell::Cell<usize>,
+}
+
+impl std::io::Read for SorgenteSorvegliata<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        self.massima.set(self.massima.get().max(out.len()));
+        let resto = self.byte.len() - self.letto;
+        let quanti = resto.min(out.len());
+        out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+        self.letto += quanti;
+        Ok(quanti)
+    }
+}
+
+/// Esaurisce il lettore dello stream `PLNGEO2` su byte arbitrari e rende un
+/// verdetto.
+///
+/// `schema_rows` e' un ingresso del chiamante, non dello stream: il lettore
+/// pretende che coincida con il contatore dichiarato nell'header, quindi
+/// arriva come parametro e permette di esercitare sia il ramo che accetta sia
+/// quello che rifiuta.
+///
+/// Un ingresso che non e' uno stream **non e' un guasto**: la gran parte di
+/// cio' che produce un fuzzer non lo e', e restituisce `Ok(())`.
+///
+/// # Errors
+///
+/// Descrive quale invariante e' saltata:
+///
+/// - una lettura ha chiesto piu' di [`RICHIESTA_MASSIMA_AMMESSA`];
+/// - un frame reso porta piu' byte di quanti la sorgente ne contenesse;
+/// - la somma dei frame resi supera i byte della sorgente;
+/// - il lettore rende ancora un frame dopo aver dichiarato la fine.
+///
+/// La prima e' la difesa sull'**amplificazione**, ed e' l'unica che la
+/// sorveglia: `length` arriva dallo stream e puo' dichiarare fino a
+/// `MAX_GEOMETRY_BYTES`, ma la fetta passata a `Read::read` resta il buffer
+/// fisso. Un lettore che dimensionasse sul dichiarato la romperebbe **anche
+/// quando poi fallisce**, perche' la richiesta precede l'EOF che la delude:
+/// per questo il controllo si fa alla fine, sul massimo osservato, e vale su
+/// tutti i percorsi compresi quelli d'errore.
+///
+/// Non misura lo heap. Misura la taglia richiesta, che e' cio' che il lettore
+/// decide; quanto l'allocatore poi tocchi non e' una scelta di questo codice.
+///
+/// La seconda e la terza sono un'altra promessa: un frame accettato non
+/// materializza byte che la sorgente non ha consegnato. Proteggono dalla
+/// duplicazione, non dall'allocazione anticipata, e le due cose restano
+/// distinte.
+///
+/// La quarta chiude il ciclo: un lettore che tornasse a rendere frame dopo
+/// `Ok(None)` non avrebbe una fine, e la campagna girerebbe per sempre su un
+/// ingresso da poche decine di byte.
+pub fn verifica_lettore_frame_geo(byte: &[u8], schema_rows: u64) -> Result<(), String> {
+    let massima = std::cell::Cell::new(0_usize);
+    let esito = esaurisci_lo_stream(
+        SorgenteSorvegliata {
+            byte,
+            letto: 0,
+            massima: &massima,
+        },
+        byte.len(),
+        schema_rows,
+    );
+
+    // Prima della promessa sui frame, e fuori dal ramo che li legge: una
+    // lettura sovradimensionata e' un guasto anche quando lo stream finisce
+    // male, ed e' proprio li' che un lettore dimensionato sul dichiarato
+    // sfuggirebbe a un controllo fatto sul solo esito riuscito.
+    if massima.get() > RICHIESTA_MASSIMA_AMMESSA {
+        return Err(format!(
+            "una lettura ha chiesto {} byte, oltre i {RICHIESTA_MASSIMA_AMMESSA} della finestra fissa",
+            massima.get()
+        ));
+    }
+    esito
+}
+
+/// La fetta piu' grande che il lettore ha chiesto su questo ingresso.
+///
+/// Esiste per mostrare che [`verifica_lettore_frame_geo`] **non e' vacuo**.
+/// «Nessuna lettura oltre 16 KiB» sarebbe vero anche se nessuna lettura
+/// avvenisse, e un oracolo che non puo' fallire non e' un oracolo: un test lo
+/// interroga sul caso che dichiara molto e consegna poco, e pretende di
+/// vedere il buffer fisso al posto della lunghezza dichiarata.
+#[cfg(test)]
+#[must_use]
+pub fn massima_richiesta_di_lettura(byte: &[u8], schema_rows: u64) -> usize {
+    let massima = std::cell::Cell::new(0_usize);
+    let _ = esaurisci_lo_stream(
+        SorgenteSorvegliata {
+            byte,
+            letto: 0,
+            massima: &massima,
+        },
+        byte.len(),
+        schema_rows,
+    );
+    massima.get()
+}
+
+/// Il giro sui frame, separato perche' il suo esito non e' l'ultima parola:
+/// la sorveglianza sulle letture vale anche quando questo rende `Ok`.
+fn esaurisci_lo_stream(
+    sorgente: SorgenteSorvegliata<'_>,
+    disponibili: usize,
+    schema_rows: u64,
+) -> Result<(), String> {
+    use crate::geo_transport::protocol::{Frame, FrameReader};
+
+    let Ok(mut lettore) = FrameReader::new(sorgente, schema_rows) else {
+        return Ok(());
+    };
+
+    let mut resi: usize = 0;
+    loop {
+        match lettore.next_frame() {
+            Ok(Some(Frame::Wkb(payload))) => {
+                if payload.len() > disponibili {
+                    return Err(format!(
+                        "un frame reso porta {} byte, la sorgente ne conteneva {disponibili}",
+                        payload.len()
+                    ));
+                }
+                resi += payload.len();
+                if resi > disponibili {
+                    return Err(format!(
+                        "i frame resi sommano {resi} byte, la sorgente ne conteneva {disponibili}"
+                    ));
+                }
+            }
+            Ok(Some(Frame::Null)) => {}
+            Ok(None) => break,
+            Err(_) => return Ok(()),
+        }
+    }
+
+    match lettore.next_frame() {
+        Ok(None) | Err(_) => Ok(()),
+        Ok(Some(_)) => Err("il lettore rende un frame dopo aver dichiarato la fine".to_owned()),
+    }
 }
 
 /// Esercita il **verificatore dell'artefatto** su byte arbitrari e rende un

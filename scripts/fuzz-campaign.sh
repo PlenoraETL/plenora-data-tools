@@ -44,10 +44,13 @@ ALL_TARGETS=(
     reshape_policies extended_ops advanced_ops
     # Trasporto geo e contratto WKB
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
+    geo_frame_stream
     # Piano, analisi dei contratti, differenziale dei kernel, executor DAG
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
     # Protocollo supervisore/worker
-    protocollo_frame verifica_artefatto
+    protocollo_frame
+    # Verificatore dell'artefatto
+    verifica_artefatto
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 

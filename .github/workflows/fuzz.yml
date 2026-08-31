@@ -80,6 +80,7 @@ jobs:
           - executor_dag
           - protocollo_frame
           - verifica_artefatto
+          - geo_frame_stream
     env:
       MINUTES: ${{ github.event.inputs.minutes_per_target || '30' }}
     steps:

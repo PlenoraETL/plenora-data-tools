@@ -410,6 +410,59 @@ allocazioni**, che vale solo sui byte effettivamente pre-validati.
 Il rientro richiede uno snapshot immutabile disponibile su tutte le
 piattaforme supportate, senza imporre una copia dei dati.
 
+### Lo spill dimensiona un buffer su una lunghezza dichiarata
+
+**La regola.** Nei confini che leggono da una sorgente **non fidata** — il
+lettore dell'envelope `PLNGEO3` e quello dei frame `PLNGEO2` — la memoria
+cresce con i byte che una `read` ha davvero reso, mai con la lunghezza che
+l'ingresso dichiara: buffer fisso, piccolo, riusato.
+
+**Il perimetro.** `plenora-kernels-table::spill` **non** segue quella regola:
+rilegge la lunghezza di un record e dimensiona il buffer prima che quei byte
+siano provati. La differenza è il confine di fiducia, e la decisione è di
+tenerla così:
+
+| | |
+|---|---|
+| che cosa legge | file di spill **che abbiamo scritto noi**, nella directory temporanea di questa esecuzione |
+| che cosa fa fuori tetto | `PlenoraError::Internal`, non un errore del chiamante: il writer non può produrre un record oltre `max_record_bytes`, quindi rileggerne uno più grande significa che il file non è quello che abbiamo scritto |
+| che cosa **non** garantisce | il riuso del buffer non toglie l'amplificazione. `key.resize(length, 0)` tocca `length` byte **prima** che `read_exact` li provi, e il tetto che li governa è `max_temp_bytes`, non 16 KiB |
+
+**I due pericoli, distinti.**
+
+Il primo è **il consumo**, e c'è già oggi. Un solo record troncato o corrotto,
+con una lunghezza qualsiasi **entro** `max_record_bytes`, fa crescere il
+buffer fino a quella misura e poi incontra l'EOF. Il riuso fra i record non
+impone un'allocazione a ogni record — ma non la esclude, perché un record che
+supera la capacità già allocata la fa crescere di nuovo — e soprattutto non
+evita il picco:
+per raggiungerlo basta un record solo, e la memoria toccata resta legata a un
+numero che sta scritto nel file, non ai byte che il file contiene. Il confine
+di fiducia riduce **chi** può scrivere quel numero; non riduce quanto costa
+quando è sbagliato.
+
+Il secondo è **la classificazione**. Se quei file diventassero raggiungibili
+da altri — una directory temporanea condivisa, un supervisore che li passa fra
+processi, uno spill che sopravvive all'esecuzione — la lunghezza smetterebbe di
+essere un'invariante nostra e diventerebbe un ingresso. Il codice non se ne
+accorgerebbe: continuerebbe a rispondere `Internal`, cioè «difetto nostro», a
+un dato che ha scelto qualcun altro.
+
+**Le condizioni di rientro**, tecniche e indipendenti fra loro:
+
+- **sul consumo**: il lettore adotta una delle due discipline — lettura
+  incrementale su buffer fisso, come `PLNGEO3` e `PLNGEO2`, oppure verifica
+  preventiva che i byte dichiarati stiano nella finestra residua del file
+  prima di dimensionare. La prima non richiede di conoscere la lunghezza del
+  file; la seconda sì, ed è praticabile qui perché la sorgente è un `File` di
+  cui sappiamo la taglia;
+- **sulla classificazione**: il giorno in cui i file di spill escono dal
+  processo che li ha scritti, il tetto smette di essere un'asserzione interna e
+  diventa un errore del confine.
+
+Fino ad allora entrambi i rischi residui sono **accettati e dichiarati qui**,
+non risolti.
+
 ### Hasher delle chiavi non keyed
 
 `KeyHasher` non è keyed: il costo peggiore dipende dai dati. I limiti di riga
