@@ -104,6 +104,42 @@ pub mod governor;
 #[doc(hidden)]
 pub mod interni;
 pub mod ipc_boundary;
+// Il dominio di isolamento ha lo stesso perimetro di `protocollo` e
+// `verifica`, e **due** condizioni di rientro invece di una: la visibilita'
+// cade quando esiste un supervisore che lo chiama in produzione; il `cfg` di
+// piattaforma resta finche' non esiste un secondo dominio supportato.
+//
+// Sono indipendenti, e vanno scritte separate: se fossero una condizione
+// sola, la rimozione della prima porterebbe via anche la seconda.
+//
+// L'orchestrazione e i suoi casi sono **multipiattaforma** — provano la
+// procedura, non l'ambiente — quindi il `cfg` di piattaforma sta sui soli
+// sottomoduli che toccano il kernel. Un `cfg(target_os)` sul modulo intero
+// renderebbe i casi deterministici non compilati altrove, cioe' verdi per
+// assenza.
+//
+// Regola, perimetro e condizioni di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+mod isolamento;
+// Il perimetro di qualificazione, che esiste solo quando `rustc` riceve
+// `--cfg qualificazione_isolamento`.
+//
+// Non e' una feature, e la differenza sta in come si accende: una feature la si
+// abilita dichiarandola fra le dipendenze, e l'unificazione la propaga anche a
+// chi non l'ha chiesta, quindi una build di produzione potrebbe ritrovarsela
+// addosso perche' un'altra cosa nell'albero l'ha voluta. Un `cfg` non si
+// propaga: nessun crate dipendente puo' accenderlo.
+//
+// Cio' che non garantisce: chi controlla il comando di build lo puo' mettere in
+// `RUSTFLAGS`. La garanzia e' che non ci si arrivi **per sbaglio**, non che non
+// ci si possa arrivare.
+//
+// Che cosa espone: l'immagine che il gate ostile riesegue, e la giuntura con la
+// barriera fra l'accertamento dell'immagine e lo `spawn`. Nessuna delle due
+// deve poter essere raggiunta da codice che non sia quel gate.
+#[cfg(all(target_os = "linux", qualificazione_isolamento, feature = "internals"))]
+pub use isolamento::qualificazione;
 pub mod parallelism;
 pub mod plan;
 pub mod planner;

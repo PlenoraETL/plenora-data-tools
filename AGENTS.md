@@ -107,6 +107,13 @@ python scripts/verifica_commenti.py
 scripts/coverage.sh
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
 scripts/fuzz-smoke.sh
+# gate ostile dell'isolamento Linux (F4-15). NON e' un passo di CI, e non
+# perche' se ne sia dimenticato qualcuno: vuole root e una gerarchia cgroup v2
+# con sottoalbero delegato, e il verde autoritativo arriva solo da una VM Linux
+# dedicata. Il runner condiviso della CI non e' quella macchina, e farcelo
+# girare darebbe un verde che non parla di isolamento. Fallisce quando un
+# prerequisito manca, invece di saltare.
+sudo scripts/verifica_isolamento_linux.sh [directory-evidenza]
 # gate clippy anche per il target Windows (la CI gira su Linux+Windows e
 # il codice cfg(windows)/cfg(not(unix)) non compila nel container Linux):
 rustup target add x86_64-pc-windows-msvc

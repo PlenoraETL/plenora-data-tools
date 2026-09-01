@@ -991,6 +991,105 @@ Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
 torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
 test e sta scritto che lo è.
 
+**Il dominio di isolamento ha lo stesso perimetro, e due condizioni di rientro
+invece di una.** `plenora_engine::isolamento` sta sotto
+`#[cfg(any(test, feature = "internals"))]` come `protocollo` e `verifica`, e la
+sua visibilità cade quando esiste un supervisore che lo chiama in produzione,
+cioè con **`PR-8`**. Il `cfg` di piattaforma sui sottomoduli che toccano il
+kernel resta invece finché non esiste un secondo dominio supportato. Sono
+indipendenti, e vanno scritte separate: se fossero una condizione sola, la
+rimozione della prima porterebbe via anche la seconda.
+
+L'orchestrazione e i suoi casi sono **multipiattaforma** — provano la
+procedura, non l'ambiente — quindi `cfg(target_os = "linux")` sta sui soli
+sottomoduli. Un `cfg` di piattaforma sul modulo intero renderebbe i casi
+deterministici non compilati altrove, cioè verdi per assenza.
+
+### Isolamento Linux: tre deviazioni dello spawner
+
+Sono scelte che si allontanano dalla forma ovvia, e ciascuna ha una condizione
+di rientro propria. Il contesto è la sequenza di
+[`isolamento.md`](isolamento.md#9-bis-preflight-del-dominio-scrivere-non-e-configurare).
+
+**1. Sui descrittori si verifica e si rifiuta, non si chiude.** Un descrittore
+già aperto in scrittura sul filesystem del control plane sopravvive al cambio
+d'identità: il controllo dei permessi avviene all'apertura, non a ogni
+scrittura. La risposta ovvia sarebbe chiuderlo. Chiudere un descrittore
+ereditato per numero richiede però di costruirne un proprietario da un intero
+grezzo, e ogni via per farlo è `unsafe`, che questo progetto non ammette.
+
+Rifiutare è fail-closed e non richiede niente: un ambiente che ci passa un
+descrittore sul control plane non è un ambiente in cui possiamo isolare, e
+chiuderlo di nascosto nasconderebbe che qualcuno ce lo ha dato. *Rientro:* una
+via sicura per chiudere un descrittore ereditato, o una decisione esplicita sul
+perimetro `unsafe`.
+
+**2. Lo spawner deve essere monothread, e lo accerta.**
+`rustix::thread::{set_thread_groups, set_thread_res_gid, set_thread_res_uid}`
+sono i syscall **per-thread**: cambiano le credenziali del solo thread
+chiamante, non del processo. Il wrapper di glibc le propaga a tutti i thread
+con un segnale; queste no.
+
+In un processo monothread la differenza non esiste — c'è un thread solo, e la
+`exec` conserva le credenziali del chiamante uccidendo gli altri. In un
+processo multithread è un buco: gli altri thread restano privilegiati, e uno di
+essi può fare ciò che al thread spogliato è vietato. Da qui il primo passo
+della sequenza, che conta `/proc/self/task` e rifiuta se i task non sono
+esattamente uno, e il divieto: **queste API valgono solo lì**. *Rientro:* una
+API sicura che cambi le credenziali del processo intero.
+
+**3. Il passo 7 rilegge le credenziali, non l'identità intera.** Nella finestra
+fra il cambio d'identità e la `exec` il kernel azzera *dumpable* e passa
+`/proc/<pid>` a root: `ns` non è più attraversabile dal processo stesso.
+Namespace e descrittori si portano avanti dalla lettura del passo 4, ed è
+lecito perché in mezzo stanno solo `prctl` e le `setres*id`, che non aprono
+descrittori e non cambiano namespace.
+
+Riaprire l'accesso richiederebbe di rimettere *dumpable*, che è anche ciò che
+permette a un altro processo dello stesso uid di fare `ptrace` su questo:
+guadagnare uno specchio al prezzo di una porta. *Rientro:* nessuno previsto; la
+misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`, e un
+kernel che concedesse la lettura anche lì renderebbe la scelta non obbligata,
+non sbagliata.
+
+### Il perimetro di qualificazione dell'isolamento
+
+**La regola.** Il gate ostile ha bisogno di due cose che la produzione non deve
+poter avere: l'immagine che riesegue sé stessa nei tre modi, e una barriera fra
+l'accertamento dell'immagine e lo `spawn`. Vivono entrambe sotto
+`#[cfg(qualificazione_isolamento)]`, che **non è una feature di Cargo**.
+
+**Perché non una feature.** Una feature la si abilita dichiarandola fra le
+dipendenze, e l'unificazione la propaga anche a chi non l'ha chiesta: una build
+di produzione potrebbe ritrovarsela addosso perché un'altra cosa nell'albero
+l'ha voluta. Un `cfg` non si propaga — nessun crate dipendente può accenderlo — e
+non arriva mai come effetto collaterale.
+
+**Che cosa questo non garantisce.** Chi controlla il comando di build può
+mettere `--cfg qualificazione_isolamento` in `RUSTFLAGS` e ottenere il
+perimetro di qualificazione anche in una build che chiama di produzione.
+Scrivere che «la produzione non può selezionarlo» sarebbe falso: la garanzia è
+che non ci si arrivi **per sbaglio**, non che non ci si possa arrivare. Un
+perimetro contro l'incidente, non contro l'intenzione — e nessun `cfg`, nessuna
+feature e nessun attributo fanno di più, perché chi costruisce il binario
+decide che cosa ci mette dentro.
+
+Il `cfg` è dichiarato in `[workspace.lints.rust]` con `check-cfg`, perché un
+`cfg` non dichiarato non rompe la build: spegne silenziosamente il codice.
+
+**Che cosa la barriera può e non può fare.** Non può saltare l'accertamento —
+quando corre, quello è già avvenuto — né cambiare l'inode che `/proc/self/exe`
+raggiunge. Può invece rendere obsolete le osservazioni sul nome, ed è
+esattamente ciò che il gate le chiede: rinominando il pathname invalida la
+fotografia ` (deleted)` appena scattata. Ciò che regge non è quel controllo, ma
+l'esecuzione dell'inode.
+
+**L'immagine è un esempio, non un `bin`.** `cargo install` gli esempi non li
+produce. Costruita fuori dal perimetro, il suo `main` di ripiego rifiuta di
+girare invece di girare a metà: un binario che girasse a metà darebbe al gate
+la diagnosi sbagliata — «non ho osservato niente» invece di «sono stato
+costruito male».
+
 ### Il `commit_token`: forma canonica unica, e valore mai mostrato
 
 **La regola.** Un `commit_token` è esattamente 64 caratteri esadecimali

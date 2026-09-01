@@ -64,7 +64,15 @@ ctrlc = "=3.5.2"
 # Linux) e kill(pid, 0) per lo scavenging dei temp store (errori-e-limiti.md, feature
 # "process"): stessa versione gia' presente nel lockfile come dipendenza di
 # tempfile; API safe (unsafe_code e' proibito nel workspace).
-rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs", "process"] }
+# La feature `thread` espone, in forma SICURA, le sole operazioni con cui lo
+# spawner si spoglia dell'autorita': `set_no_new_privs`, `set_thread_groups`,
+# `set_thread_res_gid`, `set_thread_res_uid`. Non e' una dipendenza nuova e il
+# pin non cambia: e' la feature minima che le rende disponibili senza `unsafe`.
+#
+# Sono i syscall PER-THREAD, non i wrapper di glibc che li propagano a tutti i
+# thread: si usano soltanto in uno spawner monothread, che lo verifica prima di
+# chiamarle. Il perimetro sta in errori-e-limiti.md.
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs", "process", "thread"] }
 # Dev
 proptest = "=1.11.0"
 
@@ -76,6 +84,11 @@ plenora-engine = { path = "crates/plenora-engine" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# `qualificazione_isolamento` non e' una feature di Cargo ed e' voluto:
+# si passa a `rustc` e nessuna unificazione di feature lo accende. Va pero'
+# dichiarato qui, altrimenti `unexpected_cfgs` lo tratta come un refuso — e un
+# refuso di `cfg` non rompe la build, spegne silenziosamente il codice.
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(qualificazione_isolamento)'] }
 
 # Politica lint: si nega solo cio' che la CI applica davvero. Tutti i
 # gruppi sono deny e il codebase passa con zero warning; ogni deviazione
