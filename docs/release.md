@@ -396,9 +396,8 @@ panicked at geo-0.33.1/src/algorithm/simplify.rs:108:5
 assertion `left != right` failed — left: 0, right: 0
 ```
 
-L'ingresso è un WKT `polyGon((2444…4444` con coordinate separate da ``, `
-`
-e `	`. Il parser lo accetta, ne esce una geometria degenere, e `simplify` di
+L'ingresso è un WKT `polyGon((2444…4444` con coordinate separate dai byte di
+ritorno a capo, avanzamento riga e tabulazione — `\r`, `\n` e `\t`. Il parser lo accetta, ne esce una geometria degenere, e `simplify` di
 `geo` ci inciampa con un'`assert_ne!`.
 
 È un **panic di una dipendenza raggiungibile da ingresso non fidato**: il
