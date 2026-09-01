@@ -125,10 +125,17 @@ pulisci() {
   # La delega globale si rimette **solo** se e' stata accesa qui, e la rimozione
   # si rilegge: lasciare acceso un controllore che il gate ha acceso cambia la
   # macchina per chiunque venga dopo, e lo fa senza dirlo.
+  # Il ripristino si giudica **rileggendo tutta** la delega e confrontandola con
+  # quella di partenza. Un `grep` che non riesce a leggere il file cadrebbe nello
+  # stesso ramo dell'assenza di `memory`, e «non ho potuto guardare» si
+  # leggerebbe come «e' a posto».
   if [ "$MEMORY_ABILITATO_DA_NOI" = "1" ] && [ -n "$PUNTO" ]; then
     echo "-memory" >"$PUNTO/cgroup.subtree_control" 2>/dev/null
-    if grep -qw memory "$PUNTO/cgroup.subtree_control" 2>/dev/null; then
-      fallisce "pulizia: memory resta abilitato in $PUNTO/cgroup.subtree_control"
+    local _delega
+    if ! _delega="$(cat "$PUNTO/cgroup.subtree_control" 2>/dev/null)"; then
+      fallisce "pulizia: $PUNTO/cgroup.subtree_control non si rilegge, quindi non si sa in che stato resti"
+    elif [ "$_delega" != "$SUBTREE_PRIMA" ]; then
+      fallisce "pulizia: $PUNTO/cgroup.subtree_control vale «$_delega» invece di «$SUBTREE_PRIMA»"
     fi
   fi
   if [ -n "$TEMPORANEA" ] && [ -d "$TEMPORANEA" ]; then
@@ -187,20 +194,51 @@ nota() {
 
 # Il valore di una chiave nell'evidenza del helper.
 #
-# La chiave dev'essere **unica**: prendere l'ultima occorrenza sceglierebbe
-# secondo l'ordine delle righe, che qui non ha quel significato. Due righe con
-# la stessa chiave vogliono dire che il programma ha riportato due volte cose
-# diverse, e leggerne una sola nasconde l'altra — che e' esattamente il modo in
-# cui un rapporto contraddittorio si legge come coerente.
+# # Perche' non valida qui dentro
+#
+# Perche' questa funzione si chiama dentro `$(...)`, cioe' in una **subshell**:
+# un `FALLIMENTI=$((FALLIMENTI + 1))` fatto qui incrementerebbe una copia che
+# muore con la sostituzione, e il gate resterebbe verde. Peggio: rendendo un
+# segnaposto al posto del valore, quel segnaposto sarebbe «non zero» per il
+# controllo sulle capability e «diverso» per quello sui namespace, e due
+# controlli pensati per fallire passerebbero.
+#
+# L'unicita' delle chiavi si accerta quindi **nel processo padre**, una volta
+# per file, con [`chiavi_uniche`]. Qui si legge e basta.
+#
+# # Perche' il confronto e' letterale
+#
+# Perche' le chiavi contengono punti — `tentativo_controllo_memory.max` — e in
+# un'espressione regolare il punto vale qualunque carattere: `memory.max`
+# troverebbe anche `memoryXmax`, e due chiavi diverse si leggerebbero come la
+# stessa. `index($0, chiave) == 1` e' un confronto di prefisso, e i punti li
+# tratta per quello che sono.
+#
+# Non prende «l'ultima»: se le righe fossero due, il valore risulterebbe di due
+# righe e ogni confronto fallirebbe. E' la seconda rete, dopo `chiavi_uniche`.
 valore() {
-  local _quante
-  _quante="$(grep -c "^QI $2=" "$1" 2>/dev/null || true)"
-  if [ "$_quante" != "1" ]; then
-    fallisce "evidenza: la chiave «$2» compare $_quante volte in $(basename "$1"), attesa una sola"
-    printf '<<chiave non unica>>'
-    return
-  fi
-  sed -n "s/^QI $2=//p" "$1"
+  awk -v chiave="QI $2=" 'index($0, chiave) == 1 { print substr($0, length(chiave) + 1) }' "$1"
+}
+
+# Quante volte una chiave compare, con confronto letterale.
+conta_chiave() {
+  awk -v chiave="QI $2=" 'index($0, chiave) == 1 { n++ } END { print n + 0 }' "$1"
+}
+
+# Che nessuna chiave del file compaia due volte.
+#
+# Si chiama nel padre, subito dopo ogni corsa del helper: due righe con la
+# stessa chiave vogliono dire che il programma ha riportato due volte cose
+# diverse, e leggerne una sola nasconde l'altra — che e' il modo in cui un
+# rapporto contraddittorio si legge come coerente.
+chiavi_uniche() {
+  local _file="$1" _duplicate _chiave
+  _duplicate="$(sed -n 's/^QI \([^=]*\)=.*/\1/p' "$_file" | sort | uniq -d)"
+  [ -z "$_duplicate" ] && return
+  while IFS= read -r _chiave; do
+    [ -n "$_chiave" ] \
+      && fallisce "evidenza: la chiave «$_chiave» compare piu' volte in $(basename "$_file")"
+  done <<<"$_duplicate"
 }
 
 inode_di() {
@@ -218,7 +256,8 @@ uguali() {
 [ "$(uname -s)" = "Linux" ] || manca "questo gate vale solo su Linux"
 [ "$(id -u)" = "0" ] || manca "serve root: il control plane crea il dominio e cambia identita'"
 
-for STRUMENTO in cargo mkfifo timeout stat getent awk sed grep; do
+for STRUMENTO in cargo rustc mkfifo timeout stat getent awk sed grep sort uniq \
+  sha256sum cut find xargs basename; do
   command -v "$STRUMENTO" >/dev/null || manca "$STRUMENTO non c'e'"
 done
 
@@ -322,16 +361,23 @@ fi
 # nessuno ha letto.
 SUBTREE_PRIMA="$(cat "$PUNTO/cgroup.subtree_control")" \
   || manca "$PUNTO/cgroup.subtree_control non si legge: la delega non e' accertabile"
-if grep -qw memory <<<"$SUBTREE_PRIMA"; then
+case " $SUBTREE_PRIMA " in
+*" memory "*)
   nota "memory gia' delegato in $PUNTO: il gate non tocca la delega globale"
-else
+  ;;
+*)
   nota "abilito memory in $PUNTO/cgroup.subtree_control (la pulizia lo toglie)"
   echo "+memory" >"$PUNTO/cgroup.subtree_control" \
     || manca "$PUNTO/cgroup.subtree_control non accetta +memory: delega assente"
-  grep -qw memory "$PUNTO/cgroup.subtree_control" \
-    || manca "+memory scritto ma non riletto in $PUNTO/cgroup.subtree_control"
+  SUBTREE_DOPO="$(cat "$PUNTO/cgroup.subtree_control")" \
+    || manca "$PUNTO/cgroup.subtree_control non si rilegge dopo +memory"
+  case " $SUBTREE_DOPO " in
+  *" memory "*) : ;;
+  *) manca "+memory scritto ma non riletto in $PUNTO/cgroup.subtree_control" ;;
+  esac
   MEMORY_ABILITATO_DA_NOI=1
-fi
+  ;;
+esac
 
 mkdir "$RADICE_ASSOLUTA"
 echo "+memory" >"$RADICE_ASSOLUTA/cgroup.subtree_control" \
@@ -366,20 +412,104 @@ copia_immagine() {
 # non lo e'. Dove non c'e' un repository — il gate gira anche su un albero
 # copiato — si registra l'assenza e si ripiega sull'impronta dei sorgenti, che
 # identifica lo stesso cio' che e' stato compilato.
-impronta_dell_albero() {
+# L'identita' di cio' che si qualifica si calcola **nel processo padre**.
+#
+# # Perche' non dentro una sostituzione di comando
+#
+# Perche' `$( ... )` e' una subshell, e un `manca` chiamato li' dentro esce
+# **dalla subshell**: il messaggio compare, il campo resta vuoto, e il gate
+# prosegue fino a stampare «qualificato». E' lo stesso difetto per cui la
+# lettura dell'evidenza non valida da sola, e vale identico qui.
+#
+# Quindi: ogni valore si assegna a una variabile, e la si giudica subito dopo,
+# dove un `exit` ferma davvero il gate.
+#
+# # Perche' un'impronta assente e' un prerequisito, non un braccio rosso
+#
+# Perche' un'evidenza che non identifica cio' che ha misurato non e' evidenza
+# incompleta: e' evidenza di niente. Non c'e' un esito da registrare, e
+# proseguire produrrebbe un file che sembra un rapporto.
+verifica_impronta() {
+  local _nome="$1" _valore="$2"
+  [ "${#_valore}" -eq 64 ] || manca "$_nome: impronta di ${#_valore} caratteri invece di 64"
+  case "$_valore" in
+  *[!0-9a-f]*) manca "$_nome: impronta non esadecimale «$_valore»" ;;
+  esac
+}
+
+verifica_non_vuoto() {
+  local _nome="$1" _valore="$2"
+  [ -n "$_valore" ] \
+    || manca "$_nome: valore assente, e un'evidenza che non identifica non e' evidenza"
+}
+
+# Le variabili dell'identita', riempite da `calcola_identita`.
+ID_COMMIT=""
+ID_DIFF=""
+ID_NON_TRACCIATI=""
+ID_ALBERO_PULITO=""
+ID_SORGENTI=""
+ID_VERSIONATO=""
+ID_IMMAGINE=""
+ID_GATE=""
+ID_RUSTC=""
+ID_CARGO=""
+
+calcola_identita() {
   if command -v git >/dev/null && git rev-parse --git-dir >/dev/null 2>&1; then
-    printf 'commit=%s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'ignoto')"
-    printf 'diff_non_committato=%s\n' "$(git diff HEAD 2>/dev/null | sha256sum | cut -d' ' -f1)"
-    printf 'non_tracciati=%s\n' \
-      "$(git ls-files --others --exclude-standard 2>/dev/null | sort | xargs -r sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)"
-    printf 'albero_pulito=%s\n' \
-      "$([ -z "$(git status --porcelain 2>/dev/null)" ] && printf 'si' || printf 'no')"
+    ID_VERSIONATO=si
+    ID_COMMIT="$(git rev-parse HEAD)" || manca "commit: git rev-parse non riesce"
+    verifica_non_vuoto commit "$ID_COMMIT"
+    # `--binary` perche' un file non testuale comparirebbe altrimenti come
+    # «Binary files differ», senza il contenuto: due alberi diversi darebbero la
+    # stessa impronta. `--no-ext-diff` perche' un driver di diff configurato
+    # dall'utente renderebbe l'impronta dipendente dalla sua configurazione.
+    ID_DIFF="$(git diff --binary --no-ext-diff HEAD | sha256sum | cut -d' ' -f1)"
+    verifica_impronta diff_non_committato "$ID_DIFF"
+    ID_NON_TRACCIATI="$(git ls-files --others --exclude-standard | sort | xargs -r sha256sum | sha256sum | cut -d' ' -f1)"
+    verifica_impronta non_tracciati "$ID_NON_TRACCIATI"
+    if [ -z "$(git status --porcelain)" ]; then ID_ALBERO_PULITO=si; else ID_ALBERO_PULITO=no; fi
+  else
+    ID_VERSIONATO=no
+    ID_SORGENTI="$(find crates scripts Cargo.toml Cargo.lock rust-toolchain.toml -type f | sort | xargs -r sha256sum | sha256sum | cut -d' ' -f1)"
+    verifica_impronta impronta_sorgenti "$ID_SORGENTI"
+  fi
+
+  [ -f "$SORGENTE_IMMAGINE" ] || manca "sha256_immagine: $SORGENTE_IMMAGINE non e' un file"
+  ID_IMMAGINE="$(sha256sum "$SORGENTE_IMMAGINE" | cut -d' ' -f1)"
+  verifica_impronta sha256_immagine "$ID_IMMAGINE"
+
+  [ -f "$0" ] || manca "sha256_gate: $0 non e' un file"
+  ID_GATE="$(sha256sum "$0" | cut -d' ' -f1)"
+  verifica_impronta sha256_gate "$ID_GATE"
+
+  ID_RUSTC="$(rustc --version)" || manca "rustc: non risponde"
+  verifica_non_vuoto rustc "$ID_RUSTC"
+  ID_CARGO="$(cargo --version)" || manca "cargo: non risponde"
+  verifica_non_vuoto cargo "$ID_CARGO"
+  verifica_non_vuoto rustflags_effettivi "$RUSTFLAGS_EFFETTIVI"
+}
+
+stampa_identita() {
+  if [ "$ID_VERSIONATO" = "si" ]; then
+    printf 'commit=%s\n' "$ID_COMMIT"
+    printf 'diff_non_committato=%s\n' "$ID_DIFF"
+    printf 'non_tracciati=%s\n' "$ID_NON_TRACCIATI"
+    printf 'albero_pulito=%s\n' "$ID_ALBERO_PULITO"
   else
     printf 'commit=assente (albero non versionato)\n'
-    printf 'impronta_sorgenti=%s\n' \
-      "$(find crates scripts Cargo.toml Cargo.lock rust-toolchain.toml -type f 2>/dev/null | sort | xargs -r sha256sum | sha256sum | cut -d' ' -f1)"
+    printf 'impronta_sorgenti=%s\n' "$ID_SORGENTI"
   fi
+  printf 'sha256_immagine=%s\n' "$ID_IMMAGINE"
+  printf 'sha256_gate=%s\n' "$ID_GATE"
+  printf 'rustc=%s\n' "$ID_RUSTC"
+  printf 'cargo=%s\n' "$ID_CARGO"
+  printf 'rustflags_ereditati=%s\n' "$RUSTFLAGS_EREDITATI"
+  printf 'rustflags_effettivi=%s\n' "$RUSTFLAGS_EFFETTIVI"
 }
+
+# Prima di scrivere: i valori si calcolano e si giudicano qui, nel padre.
+calcola_identita
 
 {
   printf 'kernel=%s\n' "$(uname -r)"
@@ -393,13 +523,7 @@ impronta_dell_albero() {
   printf 'profilo=%s\n' "$PROFILO"
   printf 'subtree_control_prima=%s\n' "$SUBTREE_PRIMA"
   printf 'memory_abilitato_dal_gate=%s\n' "$MEMORY_ABILITATO_DA_NOI"
-  impronta_dell_albero
-  printf 'sha256_immagine=%s\n' "$(sha256sum "$SORGENTE_IMMAGINE" | cut -d' ' -f1)"
-  printf 'sha256_gate=%s\n' "$(sha256sum "$0" | cut -d' ' -f1)"
-  printf 'rustc=%s\n' "$(rustc --version 2>/dev/null || printf 'ignoto')"
-  printf 'cargo=%s\n' "$(cargo --version 2>/dev/null || printf 'ignoto')"
-  printf 'rustflags_ereditati=%s\n' "$RUSTFLAGS_EREDITATI"
-  printf 'rustflags_effettivi=%s\n' "$RUSTFLAGS_EFFETTIVI"
+  stampa_identita
 } >"$DOVE/preflight.txt"
 
 : >"$DOVE/stato.txt"
@@ -433,6 +557,12 @@ nota "  uscita=$USCITA_OSTILE"
 stato_dei_bersagli dopo_ostile
 
 OSTILE="$DOVE/braccio-ostile.txt"
+chiavi_uniche "$OSTILE"
+# I tre processi hanno scritto: se uno dei tre manca, il rapporto e' di due
+# processi e il gate leggerebbe l'assenza come un valore che non c'e'.
+for MODO in modo_supervisore modo_spawner modo_ostile; do
+  uguali "il rapporto porta $MODO" "avviato" "$(valore "$OSTILE" "$MODO")"
+done
 uguali "uscita del supervisore ostile" "0" "$USCITA_OSTILE"
 uguali "preflight" "riuscito" "$(valore "$OSTILE" preflight)"
 uguali "avvio" "riuscito" "$(valore "$OSTILE" avvio)"
@@ -452,10 +582,13 @@ for ATTESO in tentativo_controllo_memory.max tentativo_controllo_memory.swap.max
   tentativo_controllo_memory.oom.group tentativo_controllo_cgroup.max.depth \
   tentativo_fuga_padre tentativo_fuga_vicino tentativo_unshare \
   tentativo_dopo_unshare tentativo_dopo_unshare_fuga tentativo_dopo_unshare_fuga_vicino; do
-  grep -q "^QI $ATTESO=" "$OSTILE" || fallisce "braccio 3: manca il tentativo $ATTESO"
+  [ "$(conta_chiave "$OSTILE" "$ATTESO")" = "1" ] \
+    || fallisce "braccio 3: il tentativo $ATTESO non compare esattamente una volta"
 done
-grep -q "^QI tentativo_fuga_vicino=bersaglio=$VICINO/cgroup.procs " "$OSTILE" \
-  || fallisce "braccio 3: il worker non ha tentato la via d'uscita su $VICINO"
+case "$(valore "$OSTILE" tentativo_fuga_vicino)" in
+"bersaglio=$VICINO/cgroup.procs "*) : ;;
+*) fallisce "braccio 3: il worker non ha tentato la via d'uscita su $VICINO" ;;
+esac
 
 # --- stato invariato: si confronta, non si deduce ----------------------------
 # I nove tentativi che portano `prima`/`dopo`: i quattro controlli, le due vie
@@ -476,12 +609,12 @@ CON_PRIMA_E_DOPO=(
 
 nota "stato invariato: confronto prima/dopo di ogni tentativo"
 for CHIAVE in "${CON_PRIMA_E_DOPO[@]}"; do
-  QUANTE="$(grep -c "^QI $CHIAVE=" "$OSTILE" || true)"
+  QUANTE="$(conta_chiave "$OSTILE" "$CHIAVE")"
   if [ "$QUANTE" != "1" ]; then
     fallisce "stato invariato: «$CHIAVE» compare $QUANTE volte, attesa una sola"
     continue
   fi
-  RIGA="$(grep "^QI $CHIAVE=" "$OSTILE")"
+  RIGA="$(valore "$OSTILE" "$CHIAVE")"
   case "$RIGA" in
   *"prima=«"*"» dopo=«"*) : ;;
   *)
@@ -659,6 +792,7 @@ set +e
 USCITA_FINESTRA=$?
 set -e
 nota "  uscita=$USCITA_FINESTRA"
+chiavi_uniche "$DOVE/finestra.txt"
 uguali "uscita della misura della finestra" "0" "$USCITA_FINESTRA"
 uguali "misura della finestra" "conclusa" "$(valore "$DOVE/finestra.txt" finestra)"
 grep '^QI proc_leggibile_' "$DOVE/finestra.txt" >>"$DOVE/stato.txt" || true
@@ -739,6 +873,8 @@ uguali "uscita del worker in 2b" "0" \
 stato_dei_bersagli fine
 
 # --- giudizio sul braccio 2 ---------------------------------------------------
+chiavi_uniche "$DOVE/braccio-sostituzione-prima.txt"
+chiavi_uniche "$DOVE/braccio-sostituzione-dopo.txt"
 CAUSA_2A="$(valore "$DOVE/braccio-sostituzione-prima.txt" errore)"
 uguali "braccio 2a, avvio" "fallito" "$(valore "$DOVE/braccio-sostituzione-prima.txt" avvio)"
 case "$CAUSA_2A" in

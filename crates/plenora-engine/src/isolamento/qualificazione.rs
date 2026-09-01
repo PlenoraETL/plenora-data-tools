@@ -40,6 +40,20 @@
 //! distinguere cio' che il programma **afferma** da cio' che stampa per gli
 //! umani, e un formato riconoscibile e' l'unico modo in cui un rapporto
 //! troncato o interrotto non si legge come un rapporto completo.
+//!
+//! # Ogni chiave compare una volta sola, e non e' una convenzione
+//!
+//! Nello stesso file scrivono **tre processi**: il supervisore, lo spawner che
+//! ne eredita lo stdout, e il worker che nasce dallo spawner. Il gate li legge
+//! come un flusso unico, e su un flusso unico due righe con la stessa chiave
+//! sono ambigue: leggerne una nasconde l'altra, ed e' il modo in cui un
+//! rapporto contraddittorio si legge come coerente.
+//!
+//! Per questo non esiste una chiave `modo` che ogni processo riempie a modo
+//! suo: esistono `modo_supervisore`, `modo_spawner`, `modo_ostile`,
+//! `modo_finestra`. Vale anche per le due fasi di un'attesa, che sono due
+//! chiavi e non due valori della stessa. Il gate rifiuta i duplicati, quindi
+//! una chiave riusata non passa inosservata — diventa rossa.
 
 use std::ffi::OsString;
 use std::io::Write as _;
@@ -83,7 +97,7 @@ fn modo_spawner(argomenti: &[OsString]) -> ExitCode {
     // La sentinella. Si stampa **prima** di ogni altra cosa, cosi' il gate la
     // legge anche quando il resto fallisce: un dispatch tardivo non si vede
     // dagli esiti, si vede da qui.
-    dichiara("modo", "spawner");
+    dichiara("modo_spawner", "avviato");
     match conta_task() {
         Ok(quanti) => dichiara("sentinella_task", &quanti.to_string()),
         Err(motivo) => dichiara("sentinella_task", &format!("illeggibile: {motivo}")),
@@ -121,7 +135,7 @@ fn modo_spawner(argomenti: &[OsString]) -> ExitCode {
 /// li' una giuntura serve: e' il braccio in cui la sostituzione arriva dopo il
 /// controllo, e in cui deve partire lo stesso l'inode iniziale.
 fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
-    dichiara("modo", "supervisore");
+    dichiara("modo_supervisore", "avviato");
     let Some(taglio) = argomenti.iter().position(|pezzo| pezzo == "--") else {
         return lamenta("manca il separatore -- fra il supervisore e il worker");
     };
@@ -149,11 +163,11 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
 
     // L'attesa iniziale, prima del preflight e prima di qualunque lettura.
     if let Some((pronto, via)) = iniziale {
-        dichiara("attesa_iniziale", "in corso");
+        dichiara("attesa_iniziale_in_corso", "si");
         if let Err(errore) = attendi(&pronto, &via) {
             return lamenta(&format!("attesa iniziale: {errore}"));
         }
-        dichiara("attesa_iniziale", "conclusa");
+        dichiara("attesa_iniziale_conclusa", "si");
     }
 
     let [_, _, dominio, radice, tetto, uid, gid, ..] = testa else {
@@ -185,7 +199,7 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
     let esito = match barriera {
         None => avvia(preparato, &da_eseguire),
         Some((pronto, via)) => avvia_con_barriera(preparato, &da_eseguire, || {
-            dichiara("barriera", "in attesa");
+            dichiara("barriera_in_attesa", "si");
             attendi(&pronto, &via)
         }),
     };
@@ -228,7 +242,7 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
 /// decide; questo modo riporta e basta. Un'uscita non a zero resta riservata a
 /// cio' che gli impedisce di riportare.
 fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
-    dichiara("modo", "ostile");
+    dichiara("modo_ostile", "avviato");
     let [_, _, dominio, radice] = argomenti else {
         return lamenta("ostile vuole dominio e radice");
     };
@@ -398,7 +412,7 @@ fn riporta_leggibilita_di_proc(quando: &str) {
 /// processo muore subito dopo aver riportato. Non c'e' nessun worker da
 /// avviare, e avviarlo confonderebbe due misure.
 fn modo_finestra(argomenti: &[OsString]) -> ExitCode {
-    dichiara("modo", "finestra");
+    dichiara("modo_finestra", "avviato");
     let [_, _, uid, gid] = argomenti else {
         return lamenta("finestra vuole uid e gid");
     };
