@@ -1875,6 +1875,139 @@ La finestra si chiude con la `exec`, che rimette *dumpable*: il worker, dopo,
 si legge senza problemi. La misura sta nel gate, che riporta la leggibilità
 prima e dopo il cambio nello stesso processo.
 
+### Le mutazioni sul supervisore: la batteria discrimina, oppure non prova
+
+`scripts/mutazioni_supervisore.py` è l'altra qualificazione manuale, e risponde
+a una domanda che il verde non risponde. Una batteria verde dice che il codice
+passa i propri casi; non dice che i casi **distinguano**. Un caso che non guarda
+la proprietà che dichiara resta verde anche quando quella proprietà sparisce.
+
+Lo script rompe una decisione per volta — trentadue, con identificativi
+canonici `M01`–`M32` — e pretende che qualcuno se ne accorga. Chi sopravvive non
+è un difetto del codice: è un difetto della batteria, e indica esattamente quale
+proprietà nessun caso sta guardando.
+
+Non entra in CI: ogni mutante ricompila `plenora-engine`, e un gate che dura
+mezz'ora smette di essere eseguito. Si esegue su una macchina Linux dedicata,
+come il gate ostile.
+
+**Le due impronte non sono la stessa cosa.** Quella che governa lo script è
+l'**impronta dell'albero Rust**: i soli `.rs` sotto `crates/`, che sono i file
+che i mutanti toccano. L'**impronta del delta** di una PR comprende anche
+documenti, manifesti Cargo e lo script stesso, e serve a verificare un
+trasferimento. Confonderle darebbe una falsa sicurezza in tutte e due le
+direzioni: una modifica a un documento farebbe rifiutare una baseline valida, e
+una modifica a un `.rs` fuori da `crates/` passerebbe inosservata.
+
+Le regole che lo rendono una misura invece di un rituale, ognuna imparata da un
+modo di sbagliarla:
+
+- **il giudizio è sul codice di uscita, in due fasi**, mai sul testo. Prima
+  `cargo test --no-run`: se non compila, il mutante è stato rifiutato dal
+  compilatore, e si conta a parte perché una vittoria del compilatore non è una
+  vittoria della batteria. Poi l'esecuzione dei casi. Cercare `error[E`
+  nell'output sarebbe un giudizio sul testo travestito: un caso che stampasse
+  quella stringa — riportando ciò che ha osservato — si farebbe contare come
+  errore di compilazione;
+- **l'uscita di cargo va su un file, mai su una pipe.** Leggere da una pipe
+  aspetta l'EOF, non l'uscita del processo: un nipote che sopravvive alla
+  mutazione tiene aperto quel descrittore, e il tetto di tempo misura la vita
+  del nipote invece dell'esecuzione — il mutante sembra allora *appeso* invece
+  che ucciso;
+- **dopo ogni uscita di cargo si guarda il gruppo**, non solo dopo un tetto di
+  tempo scaduto. `cargo` che finisce ordinatamente non dice niente sui nipoti: un
+  caso mutato può terminare lasciando vivo un `/bin/sleep` che avrebbe dovuto
+  uccidere — è esattamente la classe di difetto che questi mutanti cercano nel
+  supervisore, e sarebbe assurdo che l'harness la lasciasse passare su di sé. Se
+  il gruppo è ancora abitato lo si ferma, prima del ripristino;
+
+- **quando lo si ferma: si ferma il gruppo, si raccoglie il figlio diretto, e si
+  pretende che il gruppo si svuoti.** La formulazione è esatta apposta: gli
+  unici processi che lo script può *raccogliere* sono i propri figli, e `cargo`
+  è l'unico; di `rustc` e dei binari di test si può soltanto chiedere la fine e
+  verificarla, perché sono nipoti e chi li aspetta è `cargo`. Scrivere
+  «raccoglie il gruppo» prometterebbe una cosa che nessun processo può fare per
+  i figli altrui.
+
+  Il gruppo si nomina con il pid del figlio, che `start_new_session` rende
+  leader: chiederlo con `getpgid` aggiungerebbe un modo di sbagliare, perché se
+  il leader se ne fosse già andato la chiamata direbbe «non esiste» e la si
+  leggerebbe come «gruppo vuoto» mentre i discendenti sono ancora lì. Il figlio
+  si raccoglie **dentro** l'attesa, perché uno zombie terrebbe vivo il gruppo e
+  il ciclo scadrebbe per la propria omissione; e un `PermissionError` significa
+  che il gruppo **esiste** e non è nostro, non che sia sparito.
+
+  Se il gruppo non si svuota, i sorgenti **non** si ripristinano e il giro si
+  ferma: rimetterli con dei superstiti vivi romperebbe proprio l'invariante che
+  la regola esiste per tenere. L'albero resta mutato, e la riparazione del giro
+  successivo lo riconosce;
+- **l'elenco è canonico**: la tabella deve corrispondere agli identificativi per
+  numero, nome e ordine. Un mutante cancellato per sbaglio farebbe altrimenti
+  scendere il denominatore, e il punteggio salirebbe *perché si misura di meno*.
+  Per la stessa ragione il blocco richiesto deve produrre **esattamente** il
+  numero di risultati che copre, e gli estremi ammessi sono solo quelli
+  canonici: un intervallo vuoto eseguirebbe zero mutanti e finirebbe con
+  successo, che è il peggiore dei verdi;
+- **la riparazione è fail-closed, e non scrive per scoprire.** Si confronta
+  l'impronta corrente con quella di tutti e trentadue gli alberi mutati
+  **virtuali**, calcolati senza toccare niente, e si ripristina solo se la
+  corrispondenza è **esattamente una**. Zero significa che c'è dell'altro oltre
+  alla mutazione; più di una, che due mutanti non si distinguono. In entrambi i
+  casi si dichiara e non si tocca: sovrascrivere un albero che non si sa cosa
+  sia cancellerebbe una modifica vera insieme a una mutazione;
+- **l'impronta identifica l'insieme dei file, non il loro numero.** Entrano nel
+  digest i percorsi effettivamente presenti e i loro contenuti: un file
+  sostituito con un altro cambia l'impronta, mentre un conteggio la lascerebbe
+  uguale — stesso numero, stessi digest, e due alberi diversi con la stessa
+  firma.
+
+  Ogni pezzo entra **preceduto dalla propria lunghezza**: concatenare senza
+  confini strutturali lascerebbe che la fine di un contenuto e l'inizio del
+  percorso successivo si spartiscano diversamente fra due alberi che darebbero
+  lo stesso digest, e un separatore che il contenuto può contenere non è un
+  confine. Una radice senza `crates/`, o senza nemmeno un sorgente, è un
+  rifiuto dichiarato: l'hash dell'insieme vuoto è un valore perfettamente
+  valido, e sarebbe il verde più facile da ottenere per sbaglio;
+
+- **i trentadue alberi mutati devono essere distinti**, e lo si accerta prima di
+  cominciare. È la precondizione perché il conteggio delle corrispondenze nella
+  riparazione significhi qualcosa: due mutanti che producessero lo stesso albero
+  lascerebbero, dopo una campagna interrotta, uno stato che la riparazione non
+  sa attribuire — e si fermerebbe su un albero che invece saprebbe rimettere a
+  posto. Un mutante che producesse la baseline è l'altro caso: non muta niente,
+  e nessun caso può accorgersene;
+- **l'impronta si riverifica dopo ogni mutante**, e alla prima differenza il
+  giro si ferma.
+
+`scripts/test_mutazioni_supervisore.py` prova queste difese su un albero finto
+costruito dalla tabella dei mutanti stessa: dura secondi, non compila niente, e
+si esegue ovunque: **30/30 difese eseguibili su Linux, 0 saltate**, e **27/27
+su Windows, una saltata**.
+
+Il conteggio distingue tre stati e non due. Un caso che qui non si può eseguire
+— i gruppi di processi sono di POSIX — non ha misurato niente, e contarlo fra i
+verdi gonfierebbe il punteggio esattamente come farebbe un mutante sparito dalla
+tabella: sta fuori dal numeratore **e** dal denominatore, e si dichiara a parte.
+
+Due meritano una nota, perché una difesa si prova contro ciò che sostituisce.
+Quella sulla codifica costruisce **due alberi diversi che la vecchia
+concatenazione rendeva identici** — uno con due file, l'altro con un file solo
+il cui contenuto porta dentro di sé il percorso del secondo, `NUL` compreso — e
+pretende che le lunghezze prefissate li distinguano. Quella sui superstiti fa
+uscire con successo un comando che lascia vivo un discendente, e pretende che
+l'harness lo trovi e lo tolga prima di dichiarare il gruppo svuotato. Serve perché una difesa non provata è una promessa, e la
+campagna vera — che le userebbe — costa mezz'ora e una macchina dedicata.
+
+**I permessi non rendono immutabile la baseline.** Toglierne la scrittura ferma
+gli incidenti, ma il proprietario può rimetterla e `root` non li guarda.
+L'autorità è il manifesto: l'impronta stabilita *prima* di `--prepara` e passata
+sulla riga di comando — una baseline che si autocertifica non certifica niente.
+A ogni avvio si verifica che la **copia** corrisponda ancora al proprio
+manifesto, ricalcolandola dai suoi file invece di rileggere il valore che
+dichiara. Una baseline già presente si verifica o si rifiuta, e non si
+sovrascrive mai: quella sul disco può essere l'unica copia di riferimento di un
+giro in corso.
+
 ### Il gate ostile: che cosa prova, e i due esiti ammessi della `unshare`
 
 `scripts/verifica_isolamento_linux.sh` prova le tre cose che i casi
