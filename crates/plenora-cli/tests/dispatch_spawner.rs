@@ -18,9 +18,8 @@
 
 use std::process::Command;
 
-const fn eseguibile() -> &'static str {
-    env!("CARGO_BIN_EXE_plenora-data-tools")
-}
+mod comune;
+use comune::{eseguibile, ricaduta_nel_parser};
 
 /// Che cosa il binario ha scritto, unito: l'envelope va su stdout, ma un
 /// messaggio che finisse su stderr non deve sfuggire al caso.
@@ -65,7 +64,7 @@ fn una_richiesta_malformata_fallisce_nello_spawner() {
         "l'errore non viene dallo spawner: {testo}"
     );
     assert!(
-        !testo.contains("sconosciuto") && !testo.contains("unknown"),
+        !ricaduta_nel_parser(&testo),
         "la richiesta e' ricaduta nel parser della CLI: {testo}"
     );
 }
@@ -88,7 +87,7 @@ fn le_altre_versioni_del_namespace_sono_rifiuti_che_si_nominano() {
             "«{versione}»: il rifiuto non nomina la versione attesa: {testo}"
         );
         assert!(
-            !testo.contains("sconosciuto") && !testo.contains("unknown"),
+            !ricaduta_nel_parser(&testo),
             "«{versione}» e' ricaduta nel parser della CLI: {testo}"
         );
     }
