@@ -572,7 +572,19 @@ Direzione worker → supervisore:
 | messaggio | quando | contenuto |
 |---|---|---|
 | `Risposta` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, capability del backend |
-| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch, nodi completati); **mai** dati |
+| `Progresso` | facoltativo, ripetibile | contatori deterministici **cumulativi** (righe, batch, nodi completati); **mai** dati |
+
+I contatori del `Progresso` sono **totali osservati fin lì**, non incrementi, e
+i tre assi sono di conseguenza **non decrescenti**. Un valore più piccolo del
+precedente è una violazione del protocollo, non un rapporto strano.
+
+La ragione è che gli incrementi andrebbero sommati, e una somma su `u64` può
+traboccare. Le due uscite da un traboccamento sono entrambe cattive: saturare
+rende `u64::MAX` indistinguibile da un conteggio esatto pari a `u64::MAX` — una
+perdita silenziosa, che è la peggiore — e andare in panico metterebbe il
+supervisore in ginocchio per un numero scelto dall'altro lato. Con i totali non
+c'è niente da sommare: chi riceve conserva l'ultimo, e l'unica aritmetica è un
+confronto.
 | `Esito` | ultimo | successo col digest dell'artefatto **e i conteggi** (righe, batch), errore tipizzato con i quattro assi, oppure **forma** del panico |
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
@@ -2444,6 +2456,26 @@ punto di linearizzazione precede il commit point ed è così definito:
    successo, e la riga 1 della precedenza è soddisfatta da un fatto, non da una
    regola. Fallisce: si torna all'esito congelato al punto 4, oppure alla riga
    15 se il fallimento è del publish.
+
+**La quiescenza si legge dopo aver raccolto i fatti già fermi.** Fra il punto
+2 e il punto 3 c'è una finestra che il testo dei passi non nomina, e in cui si
+perde esattamente ciò che i passi servono a non perdere.
+
+L'osservatore della quiescenza vive in un thread suo, e accoda `DominioQuiescente`
+quando lo vede. Il consumatore smette di interrogare la coda nell'istante in cui
+decide di chiudere: se la quiescenza è stata accodata **subito dopo**
+quell'istante e prima che il thread venga fermato, il fatto è in coda ma il
+consumatore non lo sa ancora. Chi decide se leggere l'evidenza guardando il
+proprio stato trova «dominio abitato» e la salta; il drain successivo applica la
+quiescenza; e la conclusione trova la barriera completa e classifica **senza
+evidenza**. La stessa esecuzione, uccisa dall'OOM, si chiama «tempo scaduto».
+
+La regola è quindi: **fermati i produttori e attesi con `join`, si raccoglie ciò
+che è già in coda, e solo allora si decide.** Non è il «guarda se è vuota»
+vietato altrove — quella sarebbe una domanda sul futuro travestita da domanda sul
+presente. Qui i produttori sono già stati aspettati, e `join` stabilisce che
+tutto ciò che hanno accodato è già visibile: non c'è un fatto in volo che una
+seconda lettura troverebbe.
 
 **Un OOM tardivo non è un'avvertenza.** La prima stesura degradava a
 diagnostica gli eventi che arrivano dopo la chiusura: era possibile solo

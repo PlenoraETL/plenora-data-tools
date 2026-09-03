@@ -59,11 +59,34 @@ use std::path::{Path, PathBuf};
 use plenora_core::error::{ErrorPhase, PlenoraError, Result};
 
 #[cfg(target_os = "linux")]
+mod canale;
+#[cfg(target_os = "linux")]
 mod dominio;
+// La guardia sul figlio non ha niente di Linux: `std::process::Child` esiste
+// ovunque, e cio' che la guardia fissa — le due porte e la sentinella — e' una
+// regola di proprieta', non di sistema. I suoi casi su processi veri restano
+// sotto `cfg(unix)`, perche' quelli il sistema lo toccano.
+#[cfg(any(test, feature = "internals"))]
+mod figlio;
 #[cfg(target_os = "linux")]
 mod identita;
+// La macchina a stati non ha niente di Linux: e' una riduzione di fatti, e i
+// suoi casi girano ovunque.
+//
+// **Condizione di rientro.** Il `cfg` cade quando il supervisore viene
+// **davvero attivato** — cioe' quando una policy lo sceglie e un worker reale
+// gli parla — non quando diventa `pub`. Rendere pubblica una funzione che
+// nessuno chiama toglie l'avviso di codice morto senza togliere il codice
+// morto: e' la scorciatoia che il registro vieta, e la vieta perche' sposta il
+// problema dal compilatore a chi legge.
+//
+// Con un worker soltanto fittizio non esiste ancora un'API di produzione
+// onesta: il lato supervisore del protocollo avra' il suo primo chiamante reale
+// con il worker di `PR-9`.
 #[cfg(target_os = "linux")]
 mod lettura;
+#[cfg(any(test, feature = "internals"))]
+mod macchina;
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
 #[cfg(target_os = "linux")]
@@ -256,6 +279,48 @@ struct Montaggio {
     dispositivo: String,
 }
 
+// # Perche' meta' di questo modulo porta un `cfg` e meta' no
+//
+// Perche' meta' ha un chiamante di produzione e meta' no, e un `cfg` dichiara
+// **quale** delle due.
+//
+// Il dispatch anticipato dello spawner rende raggiungibile tutto cio' che sta
+// fra `dal_confine` e la `exec`: la richiesta, la rivalidazione, il possesso, i
+// namespace, la sequenza in sette passi. Quello e' codice di produzione, e non
+// porta nessun `cfg`.
+//
+// Cio' che serve **solo al supervisore** — preparare il dominio, il token, la
+// transizione, l'avvio, il giudizio sull'immagine da rieseguire — non ha ancora
+// chi lo chiami, e lo dichiara con `cfg(any(test, feature = "internals"))`.
+//
+// **La condizione di rientro e' una sola, e vale per tutti**: quei `cfg`
+// spariscono quando esiste un supervisore che li chiama in produzione. Non e'
+// una data ne' il nome di una PR: e' un fatto verificabile, e si verifica
+// togliendo i `cfg` e costruendo senza `internals` con `-D dead-code`.
+//
+// Registro: errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+
+// # Perche' meta' di questo modulo porta un `cfg` e meta' no
+//
+// Perche' meta' ha un chiamante di produzione e meta' no, e un `cfg` dichiara
+// **quale** delle due.
+//
+// Il dispatch anticipato dello spawner rende raggiungibile tutto cio' che sta
+// fra `dal_confine` e la `exec`: la richiesta, la rivalidazione, il possesso, i
+// namespace, la sequenza in sette passi. Quello e' codice di produzione, e non
+// porta nessun `cfg`.
+//
+// Cio' che serve **solo al supervisore** — preparare il dominio, il token, la
+// transizione, l'avvio, il giudizio sull'immagine da rieseguire — non ha ancora
+// chi lo chiami, e lo dichiara con `cfg(any(test, feature = "internals"))`.
+//
+// **La condizione di rientro e' una sola, e vale per tutti**: quei `cfg`
+// spariscono quando esiste un supervisore che li chiama in produzione. Non e'
+// una data ne' il nome di una PR: e' un fatto verificabile, e si verifica
+// togliendo i `cfg` e costruendo senza `internals` con `-D dead-code`.
+//
+// Registro: errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+
 /// Cio' che una superficie puo' non riuscire a fare.
 ///
 /// Non e' un `PlenoraError`: il difetto qui e' meccanico, e diventa
@@ -277,6 +342,9 @@ struct Montaggio {
 #[derive(Debug)]
 enum DifettoSuperficie {
     /// La scrittura non e' riuscita.
+    ///
+    /// Solo il supervisore scrive: lo spawner rilegge e basta.
+    #[cfg(any(test, feature = "internals"))]
     Scrittura { cosa: String, causa: std::io::Error },
     /// La lettura non e' riuscita.
     Lettura { cosa: String, causa: std::io::Error },
@@ -291,9 +359,9 @@ impl DifettoSuperficie {
     /// Se il difetto dice che l'oggetto **non c'e'**.
     fn e_assenza(&self) -> bool {
         match self {
-            Self::Lettura { causa, .. } | Self::Scrittura { causa, .. } => {
-                matches!(causa.kind(), std::io::ErrorKind::NotFound)
-            }
+            Self::Lettura { causa, .. } => matches!(causa.kind(), std::io::ErrorKind::NotFound),
+            #[cfg(any(test, feature = "internals"))]
+            Self::Scrittura { causa, .. } => matches!(causa.kind(), std::io::ErrorKind::NotFound),
             Self::Forma(_) => false,
         }
     }
@@ -307,6 +375,7 @@ impl DifettoSuperficie {
     }
 
     /// Un difetto di scrittura con la sua causa.
+    #[cfg(any(test, feature = "internals"))]
     fn scrittura(cosa: impl Into<String>, causa: std::io::Error) -> Self {
         Self::Scrittura {
             cosa: cosa.into(),
@@ -318,6 +387,7 @@ impl DifettoSuperficie {
 impl std::fmt::Display for DifettoSuperficie {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(any(test, feature = "internals"))]
             Self::Scrittura { cosa, causa } => write!(f, "scrittura fallita: {cosa}: {causa}"),
             Self::Lettura { cosa, causa } => write!(f, "lettura fallita: {cosa}: {causa}"),
             Self::Forma(motivo) => write!(f, "forma inattesa: {motivo}"),
@@ -375,6 +445,7 @@ trait SuperficieDominio {
     /// # Errors
     ///
     /// [`DifettoSuperficie::Lettura`].
+    #[cfg(any(test, feature = "internals"))]
     fn namespace(&self) -> Esito<Vec<(String, String)>>;
 
     /// Scrive un valore nel file del controllo.
@@ -382,6 +453,7 @@ trait SuperficieDominio {
     /// # Errors
     ///
     /// [`DifettoSuperficie::Scrittura`].
+    #[cfg(any(test, feature = "internals"))]
     fn scrivi(&mut self, controllo: Controllo, valore: &str) -> Esito<()>;
 
     /// Rilegge il file del controllo, senza interpretarlo.
@@ -421,6 +493,7 @@ trait SuperficieDominio {
 /// Non e' un booleano: un preflight riuscito ha **osservato** delle cose, e
 /// alcune servono allo spawner o a chi legge l'evidenza dopo. Ridurle a «e'
 /// andata bene» le butterebbe via nel momento in cui costano meno.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug, PartialEq, Eq)]
 struct DominioPreparato {
     /// Il dominio, **canonico**: e' su questo che si scrive, e non sul
@@ -578,6 +651,7 @@ fn accerta_quiescenza<S: SuperficieDominio>(superficie: &S) -> Result<()> {
 ///
 /// [`PlenoraError::IsolationUnavailable`], in fase [`ErrorPhase::Prepare`], con
 /// il nome di cio' che ha ceduto e in che modo.
+#[cfg(any(test, feature = "internals"))]
 fn prepara_dominio<S: SuperficieDominio>(
     superficie: &mut S,
     tetto_byte: u64,
@@ -627,13 +701,131 @@ fn prepara_dominio<S: SuperficieDominio>(
     })
 }
 
+/// Un descrittore letto dalla riga di comando, in **forma canonica**.
+///
+/// # Perche' una forma sola e non tutte quelle che `parse` accetta
+///
+/// Perche' il produttore e' uno solo — il supervisore, che scrive
+/// `i32::to_string()` — e accettare piu' forme della sua significa accettare
+/// scritture che quel produttore non emette mai. Da dove verrebbero, allora?
+/// Da qualcun altro. E un ingresso che il produttore dichiarato non produce e'
+/// esattamente cio' che un confine deve rifiutare.
+///
+/// Le forme che `str::parse` accetterebbe e qui sono rifiutate:
+///
+/// | forma | perche' no |
+/// |---|---|
+/// | `+3` | il segno positivo non compare mai in `to_string()` |
+/// | `03` | uno zero iniziale non compare mai |
+/// | `-0` | la forma canonica di zero e' `0` |
+/// | `-01` | uno zero iniziale, di nuovo |
+/// | ` 3` o `3 ` | `parse` rifiuta gia' gli spazi, e qui non si tolgono |
+///
+/// # Che cosa **non** decide
+///
+/// Se il numero vada bene. `-1` ha forma canonica ed e' un valore che il
+/// supervisore non emette: lo rifiuta [`canale::numero_ammissibile`], con la ragione
+/// giusta — «non e' un descrittore» invece di «non e' un numero». Le due
+/// domande sono diverse e i due messaggi mandano in due posti diversi.
+///
+/// # Errors
+///
+/// Il motivo, in forma di frase.
+fn descrittore_canonico(testo: &str) -> std::result::Result<i32, String> {
+    let cifre = testo.strip_prefix('-').unwrap_or(testo);
+    if cifre.is_empty() || !cifre.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("«{testo}» non e' un numero decimale"));
+    }
+    if cifre.len() > 1 && cifre.starts_with('0') {
+        return Err(format!(
+            "«{testo}» ha uno zero iniziale, che la forma canonica non ha"
+        ));
+    }
+    if testo == "-0" {
+        return Err("«-0» non e' la forma canonica di zero".to_owned());
+    }
+    testo
+        .parse()
+        .map_err(|_| format!("«{testo}» non entra in un descrittore"))
+}
+
+/// Il prefisso che marca il **namespace riservato** della riga di comando.
+///
+/// # Perche' serve un namespace e non la sola versione
+///
+/// Perche' un `argv[1]` che comincia cosi' dichiara un'intenzione: «questo
+/// processo e' uno spawner». Se il riconoscimento guardasse solo la versione
+/// esatta, una versione **diversa** — piu' vecchia, piu' nuova, o scritta male
+/// — non verrebbe riconosciuta affatto, e cadrebbe nel parser degli argomenti
+/// della CLI, che si lamenterebbe di un comando sconosciuto.
+///
+/// Sarebbe la diagnosi sbagliata su un fatto grave: un supervisore che parla
+/// una versione che questo binario non conosce, e che si vedrebbe rispondere
+/// «comando sconosciuto» invece di «versione non supportata».
+///
+/// Chi entra in questo namespace, quindi, **non torna indietro**: o e' la
+/// versione supportata, o e' un rifiuto che la nomina.
+const PREFISSO_RISERVATO: &str = "plenora-spawner-";
+
 /// La versione della richiesta che attraversa il confine.
 ///
 /// Cambia quando cambiano i campi o il loro significato. Lo spawner rifiuta
 /// tutto cio' che non porta **esattamente** questa stringa: un supervisore e
 /// uno spawner di versioni diverse non sono lo stesso programma, e
 /// interpretare gli argomenti dell'altro significherebbe indovinare.
-const VERSIONE_RICHIESTA: &str = "plenora-spawner-1";
+///
+/// La `2` porta i due descrittori delle pipe, che la `1` non aveva.
+const VERSIONE_RICHIESTA: &str = "plenora-spawner-2";
+
+/// Che cosa dice il primo argomento.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Riconoscimento {
+    /// Non e' del namespace riservato: il programma prosegue per la sua strada.
+    NonSpawner,
+    /// E' la versione supportata.
+    Supportata,
+    /// E' del namespace riservato ma non e' la versione supportata.
+    ///
+    /// # Perche' non porta la stringa trovata
+    ///
+    /// Perche' quella stringa e' `argv` — contenuto che il chiamante sceglie —
+    /// e riprodurla in un messaggio significherebbe copiare un ingresso
+    /// arbitrario in un errore che finisce nei log: puo' contenere ritorni a
+    /// capo che spezzano una riga di log in due, o byte che non sono UTF-8.
+    ///
+    /// E non servirebbe alla diagnosi. Chi ha scritto quella riga sa che cosa
+    /// ha scritto; cio' che non sa e' **quale versione serve**, ed e' l'unica
+    /// cosa che il rifiuto deve dire.
+    ///
+    /// La variante non porta nemmeno una copia: clonare l'argomento sarebbe
+    /// amplificazione di un ingresso non fidato prima ancora che esista un
+    /// dominio a governarla.
+    VersioneNonSupportata,
+}
+
+/// Che cosa dice `argv[1]`.
+///
+/// E' una funzione pura e **multipiattaforma**: il riconoscimento e' una
+/// regola, non un fatto dell'ambiente, e provarla solo dove lo spawner gira
+/// significherebbe non provarla dove qualcuno potrebbe cambiarla.
+fn riconosci(primo: Option<&std::ffi::OsString>) -> Riconoscimento {
+    let Some(primo) = primo else {
+        return Riconoscimento::NonSpawner;
+    };
+    if primo == VERSIONE_RICHIESTA {
+        return Riconoscimento::Supportata;
+    }
+    // Il confronto sul prefisso e' sui **byte**: un `argv` non e' tenuto a
+    // essere UTF-8, e passare per `to_str()` farebbe cadere nel parser della
+    // CLI una riga che nel namespace riservato ci sta eccome.
+    if primo
+        .as_encoded_bytes()
+        .starts_with(PREFISSO_RISERVATO.as_bytes())
+    {
+        return Riconoscimento::VersioneNonSupportata;
+    }
+    Riconoscimento::NonSpawner
+}
 
 /// Quello che attraversa il confine fra supervisore e spawner.
 ///
@@ -665,10 +857,22 @@ struct RichiestaSpawner {
     uid: u32,
     gid: u32,
     tetto_byte: u64,
+    /// Il descrittore da cui il worker **legge** cio' che il supervisore gli
+    /// manda.
+    ///
+    /// Passa come numero perche' un descrittore non ha altra forma sul filo:
+    /// attraversa le due `exec` in quanto tale, e cio' che il supervisore puo'
+    /// dire e' quale numero abbia. Che quel numero sia davvero l'estremo giusto
+    /// non e' affermato qui — e' **riverificato** a ogni stadio.
+    worker_legge: i32,
+    /// Il descrittore su cui il worker **scrive** cio' che manda al
+    /// supervisore.
+    worker_scrive: i32,
 }
 
 impl RichiestaSpawner {
     /// Gli argomenti con cui lo spawner viene avviato.
+    #[cfg(any(test, feature = "internals"))]
     fn in_argomenti(&self) -> Vec<std::ffi::OsString> {
         vec![
             std::ffi::OsString::from(VERSIONE_RICHIESTA),
@@ -677,6 +881,8 @@ impl RichiestaSpawner {
             std::ffi::OsString::from(self.uid.to_string()),
             std::ffi::OsString::from(self.gid.to_string()),
             std::ffi::OsString::from(self.tetto_byte.to_string()),
+            std::ffi::OsString::from(self.worker_legge.to_string()),
+            std::ffi::OsString::from(self.worker_scrive.to_string()),
         ]
     }
 
@@ -693,9 +899,9 @@ impl RichiestaSpawner {
     ///
     /// Il motivo, in forma di frase.
     fn da_argomenti(argomenti: &[std::ffi::OsString]) -> std::result::Result<Self, String> {
-        let [versione, dominio, radice, uid, gid, tetto] = argomenti else {
+        let [versione, dominio, radice, uid, gid, tetto, legge, scrive] = argomenti else {
             return Err(format!(
-                "la richiesta ha {} argomenti invece di 6",
+                "la richiesta ha {} argomenti invece di 8",
                 argomenti.len()
             ));
         };
@@ -738,12 +944,27 @@ impl RichiestaSpawner {
                 return Err(format!("{nome} non e' un percorso assoluto"));
             }
         }
+        // I due descrittori si leggono come **interi con segno**, e non come
+        // numeri naturali: un `-1` sulla riga di comando e' una cosa che puo'
+        // arrivare, e leggerlo come «non e' un numero» manderebbe a cercare un
+        // errore di sintassi invece di un descrittore che non esiste. Il
+        // giudizio su quel valore sta in `canale::numero_ammissibile`, che ha
+        // un messaggio per ciascuna ragione.
+        let descrittore =
+            |campo: &std::ffi::OsString, nome: &str| -> std::result::Result<i32, String> {
+                let scritto = campo
+                    .to_str()
+                    .ok_or_else(|| format!("{nome} non e' testo decodificabile"))?;
+                descrittore_canonico(scritto).map_err(|motivo| format!("{nome}: {motivo}"))
+            };
         Ok(Self {
             dominio,
             radice,
             uid: u32::try_from(numero(uid, "l'uid")?).map_err(|_| "l'uid non entra in u32")?,
             gid: u32::try_from(numero(gid, "il gid")?).map_err(|_| "il gid non entra in u32")?,
             tetto_byte: numero(tetto, "il tetto")?,
+            worker_legge: descrittore(legge, "il descrittore di lettura del worker")?,
+            worker_scrive: descrittore(scrive, "il descrittore di scrittura del worker")?,
         })
     }
 }
@@ -773,6 +994,7 @@ impl RichiestaSpawner {
 /// niente di quanto sta qui: trasmetterla lo inviterebbe a crederci, e uno
 /// spawner che crede a cio' che gli viene detto non aggiunge nessuna garanzia a
 /// quella del mittente.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EvidenzaPreflight {
     /// Il dominio canonico su cui il preflight ha scritto.
@@ -791,6 +1013,23 @@ struct EvidenzaPreflight {
     eventi_locali: bool,
 }
 
+/// I numeri dei due estremi destinati al worker.
+///
+/// # Perche' un tipo e non due `i32`
+///
+/// Perche' due interi si scambiano d'ordine senza che niente protesti, e uno
+/// scambio manderebbe al worker il descrittore di lettura come se fosse quello
+/// di scrittura. Qui i due campi hanno un nome, e chi li costruisce e' uno
+/// solo: la guardia che possiede gli estremi. La produzione non ha altro modo
+/// di ottenerne uno, quindi non ha modo di inventarne i valori.
+#[cfg(any(test, feature = "internals"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NumeriDelCanale {
+    legge: i32,
+    scrive: i32,
+}
+
+#[cfg(any(test, feature = "internals"))]
 impl DominioPreparato {
     /// Smonta il token nelle sue due meta': la richiesta e l'evidenza.
     ///
@@ -801,13 +1040,41 @@ impl DominioPreparato {
     ///
     /// L'evidenza esce di qui perche' il chiamante la tenga: e' l'unico momento
     /// in cui esiste, e dopo la transizione non c'e' piu' modo di ricostruirla.
-    fn consuma(self) -> (RichiestaSpawner, EvidenzaPreflight) {
+    ///
+    /// # Perche' vuole il canale
+    ///
+    /// Perche' la richiesta porta i numeri dei due estremi del worker, e senza
+    /// il canale non ci sarebbero: una richiesta costruita prima e riempita
+    /// dopo renderebbe rappresentabile una richiesta senza canale. Il tipo
+    /// impedisce di scriverla.
+    /// Solo l'evidenza, per il cammino in cui il canale **non si e' aperto**.
+    ///
+    /// Non esiste una richiesta con descrittori finti: senza canale non c'e'
+    /// niente da chiedere, e inventarne i numeri renderebbe rappresentabile una
+    /// richiesta che nomina estremi che non esistono. Cio' che serve, li', e'
+    /// l'evidenza — perche' il dominio e' gia' configurato e qualcuno deve
+    /// smontarlo.
+    fn solo_evidenza(self) -> EvidenzaPreflight {
+        EvidenzaPreflight {
+            dominio: self.dominio,
+            radice: self.radice,
+            worker: self.worker,
+            tetto_byte: self.tetto_byte,
+            montaggio: self.montaggio,
+            namespace_attesi: self.namespace_attesi,
+            eventi_locali: self.eventi_locali,
+        }
+    }
+
+    fn consuma(self, canale: NumeriDelCanale) -> (RichiestaSpawner, EvidenzaPreflight) {
         let richiesta = RichiestaSpawner {
             dominio: self.dominio.clone(),
             radice: self.radice.clone(),
             uid: self.worker.uid,
             gid: self.worker.gid,
             tetto_byte: self.tetto_byte,
+            worker_legge: canale.legge,
+            worker_scrive: canale.scrive,
         };
         let evidenza = EvidenzaPreflight {
             dominio: self.dominio,
@@ -876,6 +1143,7 @@ impl DominioPreparato {
 ///
 /// [`PlenoraError::IsolationUnavailable`], col nome del percorso e la
 /// condizione che manca.
+#[cfg(any(test, feature = "internals"))]
 fn spawner_ammissibile(
     percorso: &Path,
     regolare: bool,
@@ -883,7 +1151,11 @@ fn spawner_ammissibile(
     worker: IdentitaWorker,
 ) -> Result<()> {
     let nome = percorso.display().to_string();
-    if percorso.as_os_str().as_encoded_bytes().ends_with(b" (deleted)") {
+    if percorso
+        .as_os_str()
+        .as_encoded_bytes()
+        .ends_with(b" (deleted)")
+    {
         return Err(non_disponibile(
             &nome,
             "l'immagine in esecuzione e' stata rimossa o sostituita: il control plane \
@@ -911,10 +1183,20 @@ fn spawner_ammissibile(
 }
 
 /// L'avvio riuscito: il figlio, e cio' che il preflight ha osservato.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug)]
 struct TransizioneRiuscita {
     figlio: std::process::Child,
     evidenza: EvidenzaPreflight,
+    /// L'estremo da cui il supervisore **legge** cio' che il worker manda.
+    ///
+    /// Sta nell'esito riuscito e non altrove perche' e' li' che serve, e
+    /// perche' un canale senza un figlio a cui appartenga non ha niente da
+    /// portare: sul cammino fallito i due estremi cadono, e la pipe muore con
+    /// loro invece di restare aperta a non leggere niente.
+    supervisore_legge: std::io::PipeReader,
+    /// L'estremo su cui il supervisore **scrive** cio' che manda al worker.
+    supervisore_scrive: std::io::PipeWriter,
 }
 
 /// L'avvio fallito: la causa, e cio' che il preflight ha osservato.
@@ -937,10 +1219,58 @@ struct TransizioneRiuscita {
 /// butterebbe via l'evidenza in silenzio — cioe' rifarebbe esattamente il
 /// difetto che questo tipo esiste per chiudere. Chi vuole l'errore lo prende
 /// da `causa`, e in quel momento ha l'evidenza in mano.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug)]
 struct TransizioneFallita {
     causa: PlenoraError,
     evidenza: EvidenzaPreflight,
+    /// Che cosa va storto **mentre si chiude**, se qualcosa.
+    ///
+    /// # Perche' accanto alla causa e non al suo posto
+    ///
+    /// Perche' sono due fatti diversi e servono a due persone diverse. La causa
+    /// dice perche' la transizione non e' avvenuta; il difetto di pulizia dice
+    /// che cosa e' rimasto in giro. Sostituire il primo col secondo — o
+    /// tenerne uno solo — vorrebbe dire scegliere per chi legge quale dei due
+    /// gli interessa, e la risposta e' entrambi: il primo per capire, il
+    /// secondo per rimediare.
+    ///
+    /// `None` quando la chiusura e' andata: non e' l'assenza di informazione,
+    /// e' l'informazione che non c'e' niente da rimediare.
+    difetto_di_pulizia: Option<String>,
+}
+
+/// Un tentativo che non e' riuscito: perche', e che cosa resta.
+///
+/// # Perche' due campi e non uno
+///
+/// Perche' un fallimento **dopo** lo `spawn` ha due facce: la ragione per cui
+/// la transizione non avviene, e l'esito della chiusura del figlio che a quel
+/// punto esiste gia'. Comprimerle in un errore solo obbligherebbe a sceglierne
+/// una, e la scelta sarebbe sbagliata in entrambi i versi.
+#[cfg(any(test, feature = "internals"))]
+#[derive(Debug)]
+struct TentativoFallito {
+    causa: PlenoraError,
+    /// `None` quando non c'e' niente da chiudere, o la chiusura e' andata.
+    difetto_di_pulizia: Option<String>,
+}
+
+/// Un errore che arriva **prima** che esista un figlio diventa un tentativo
+/// fallito senza niente da rimediare.
+///
+/// La conversione sta su `Box` e non su `TentativoFallito` perche' e' la forma
+/// che l'operatore `?` usa: il tipo e' grande — porta un `PlenoraError` e una
+/// stringa — e restituirlo per valore farebbe pagare a **ogni** chiamata la
+/// dimensione del ramo raro.
+#[cfg(any(test, feature = "internals"))]
+impl From<PlenoraError> for Box<TentativoFallito> {
+    fn from(causa: PlenoraError) -> Self {
+        Self::new(TentativoFallito {
+            causa,
+            difetto_di_pulizia: None,
+        })
+    }
 }
 
 /// I due esiti dell'avvio, costruiti dallo stesso posto.
@@ -958,19 +1288,30 @@ struct TransizioneFallita {
 /// raggiungere saltando i controlli: quelli stanno in `tenta`, che questa
 /// funzione non chiama e che nessun parametro sostituisce.
 ///
+/// # Perche' e' generica sull'esito riuscito
+///
+/// Perche' non lo guarda. La sua regola e' come si compone un fallimento, e
+/// vale uguale qualunque cosa il tentativo renda: il parametro lo dice, e
+/// impedisce a questa funzione di cominciare un domani a toccare il figlio.
+///
 /// # Errors
 ///
 /// [`TransizioneFallita`], che porta la causa **e** l'evidenza. E' in un `Box`
 /// perche' porta tutto cio' che il preflight ha osservato — percorsi, montaggio,
 /// namespace — ed e' quindi molto piu' grande dell'esito riuscito: senza,
 /// **ogni** chiamata pagherebbe in pila la dimensione del ramo raro.
-fn esito(
-    tentativo: Result<std::process::Child>,
+#[cfg(any(test, feature = "internals"))]
+fn esito<T>(
+    tentativo: std::result::Result<T, Box<TentativoFallito>>,
     evidenza: EvidenzaPreflight,
-) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
+) -> std::result::Result<(T, EvidenzaPreflight), Box<TransizioneFallita>> {
     match tentativo {
-        Ok(figlio) => Ok(TransizioneRiuscita { figlio, evidenza }),
-        Err(causa) => Err(Box::new(TransizioneFallita { causa, evidenza })),
+        Ok(figlio) => Ok((figlio, evidenza)),
+        Err(fallito) => Err(Box::new(TransizioneFallita {
+            causa: fallito.causa,
+            evidenza,
+            difetto_di_pulizia: fallito.difetto_di_pulizia,
+        })),
     }
 }
 
@@ -1077,6 +1418,39 @@ fn rivalida<S: SuperficieDominio>(
     })
 }
 
+/// L'ingresso dello spawner, quando la riga di comando dice che lo e'.
+///
+/// # Perche' il riconoscimento sta qui e non nel chiamante
+///
+/// Perche' il chiamante non deve conoscere la stringa. Se la conoscesse, la
+/// scriverebbe: due copie di una versione sono due versioni che possono
+/// divergere, e il giorno che una cambia il programma si riconoscerebbe
+/// spawner secondo una e non secondo l'altra.
+///
+/// # Errors
+///
+/// `Some` col motivo se questo processo e' uno spawner e la sequenza non
+/// regge; `None` se non lo e'.
+#[cfg(target_os = "linux")]
+pub fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> Option<PlenoraError> {
+    match riconosci(argomenti.get(1)) {
+        Riconoscimento::NonSpawner => None,
+        // Il messaggio e' **costante**: non riporta cio' che ha trovato, e non
+        // per reticenza — la versione trovata e' `argv`, e un errore che la
+        // ripetesse porterebbe nei log un ingresso arbitrario.
+        Riconoscimento::VersioneNonSupportata => Some(non_disponibile(
+            "spawner",
+            &format!("versione della richiesta non supportata: serve «{VERSIONE_RICHIESTA}»"),
+        )),
+        Riconoscimento::Supportata => match spawner::dal_confine(&argomenti[1..]) {
+            // `dal_confine` non rende mai `Ok`: se la `exec` riesce, questo
+            // processo non esiste piu'.
+            Ok(mai) => match mai {},
+            Err(errore) => Some(errore),
+        },
+    }
+}
+
 /// Se il dominio e' popolato, secondo `cgroup.events`.
 ///
 /// # Perche' non basta trovare il campo
@@ -1127,6 +1501,7 @@ fn popolato(eventi: &str) -> std::result::Result<bool, &'static str> {
 /// Confronto per **elemento** e non per sottostringa: `memory_localevents`
 /// comparirebbe dentro un'ipotetica `no_memory_localevents`, e una difesa che
 /// si lascia ingannare da un prefisso non e' una difesa.
+#[cfg(any(test, feature = "internals"))]
 fn opzione_presente(opzioni: &str, cercata: &str) -> bool {
     opzioni.split(',').any(|opzione| opzione.trim() == cercata)
 }

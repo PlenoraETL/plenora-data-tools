@@ -99,7 +99,7 @@ fn attese() -> AtteseSupervisore {
 ///
 /// Rende anche i due stati accordati, perche' quasi ogni altro test parte da
 /// qui.
-fn giro_nominale() -> (super::HandshakeAccettato, super::WorkerAccordato) {
+pub fn giro_nominale() -> (super::HandshakeAccettato, super::WorkerAccordato) {
     let supervisore = SupervisoreInAttesa::nuovo(attese()).expect("attese coerenti");
     let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
 

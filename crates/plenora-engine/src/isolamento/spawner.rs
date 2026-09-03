@@ -112,13 +112,24 @@ use std::path::{Path, PathBuf};
 use plenora_core::error::{PlenoraError, Result};
 use rustix::process::{Gid, Uid};
 
+use super::canale;
 use super::dominio::Gerarchia;
+#[cfg(any(test, feature = "internals"))]
+use super::figlio as figlio_guardia;
+#[cfg(any(test, feature = "internals"))]
+use super::figlio::FiglioVivo;
 use super::identita::{leggi_identita, namespace_del_padre, rileggi_credenziali, Identita};
 use super::lettura::leggi_limitato;
 use super::{
-    esito, non_disponibile, spawner_ammissibile, DominioPreparato, DominioRivalidato,
-    IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner, TransizioneFallita,
-    TransizioneRiuscita, VERSIONE_RICHIESTA,
+    non_disponibile, DominioRivalidato, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner,
+    VERSIONE_RICHIESTA,
+};
+// Cio' che serve al solo avvio: il supervisore non ha ancora un chiamante di
+// produzione, e l'import lo dichiara insieme a cio' che importa.
+#[cfg(any(test, feature = "internals"))]
+use super::{
+    esito, spawner_ammissibile, DominioPreparato, TentativoFallito, TransizioneFallita,
+    TransizioneRiuscita,
 };
 
 /// Avvia lo spawner sul dominio appena preparato.
@@ -170,18 +181,22 @@ use super::{
 /// perche' porta tutto cio' che il preflight ha osservato — percorsi, montaggio,
 /// namespace — ed e' quindi molto piu' grande dell'esito riuscito: senza,
 /// **ogni** chiamata pagherebbe in pila la dimensione del ramo raro.
+#[cfg(any(test, feature = "internals"))]
 pub(super) fn avvia(
     preparato: DominioPreparato,
     da_eseguire: &DaEseguire<'_>,
 ) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
-    let (richiesta, evidenza) = preparato.consuma();
-    // Nessuna barriera: la callback vuota e' cio' che la produzione passa, e
-    // l'unica cosa che il chiamante puo' variare e' se aspettare, mai se
-    // controllare.
-    let figlio = tenta(&richiesta, evidenza.worker, da_eseguire, || Ok(()));
-    esito(figlio, evidenza)
+    // Nessuna giuntura: le callback vuote sono cio' che la produzione passa, e
+    // l'unica cosa che un chiamante di qualificazione puo' variare e' **se**
+    // fermarsi o fallire in quei due punti, mai che cosa si controlla.
+    avvia_interno(preparato, da_eseguire, || Ok(()), || Ok(()))
 }
 
+/// Il corpo condiviso fra [`avvia`] e la sua variante con barriera.
+///
+/// Sta qui e non dentro `avvia` perche' la variante con barriera vive nel
+/// perimetro di qualificazione, e due copie della sequenza sarebbero due
+/// sequenze che possono divergere — proprio quella che il gate misura.
 /// Il tentativo vero e proprio.
 ///
 /// # L'ordine dei due, e perche' non e' invertibile
@@ -220,28 +235,69 @@ pub(super) fn avvia(
 /// un binario solo di qualificazione, mai dietro una feature — perche' una
 /// feature l'unificazione la propaga, e ci si arriverebbe senza averlo
 /// chiesto.
+#[cfg(any(test, feature = "internals"))]
 fn tenta(
     richiesta: &RichiestaSpawner,
     worker: IdentitaWorker,
     da_eseguire: &DaEseguire<'_>,
     dopo_accertamento: impl FnOnce() -> Result<()>,
-) -> Result<std::process::Child> {
+    estremi: &canale::EstremiDelWorker,
+) -> std::result::Result<FiglioVivo<std::process::Child>, Box<TentativoFallito>> {
     accerta_immagine(worker)?;
     dopo_accertamento()?;
-    // Si esegue `/proc/self/exe`, non il nome che quel collegamento risolve:
-    // il nome puo' essere sostituito fra il giudizio e questa riga — una
-    // `rename` e' atomica — mentre il collegamento resta legato all'immagine di
-    // questo processo.
-    std::process::Command::new(IMMAGINE)
+
+    // 1. Il comando si costruisce **mentre tutto e' ancora `CLOEXEC`**.
+    //
+    // Non e' un ordine di comodo: costruire gli argomenti dopo aver reso
+    // ereditabili i descrittori allungherebbe la finestra di tutto cio' che
+    // serve a costruirli — allocazioni, formattazioni, e ogni loro possibile
+    // fallimento.
+    //
+    // Si esegue `/proc/self/exe`, non il nome che quel collegamento risolve: il
+    // nome puo' essere sostituito fra il giudizio e questa riga — una `rename`
+    // e' atomica — mentre il collegamento resta legato all'immagine di questo
+    // processo.
+    let mut comando = std::process::Command::new(IMMAGINE);
+    comando
         .args(richiesta.in_argomenti())
         .arg("--")
         .arg(da_eseguire.eseguibile)
-        .args(da_eseguire.argomenti)
+        .args(da_eseguire.argomenti);
+
+    // 2. Il monothread si accerta **adesso**, immediatamente prima della prima
+    //    modifica: fra l'avvio e questo punto un thread puo' essere nato.
+    canale::accerta_monothread()?;
+
+    // 3. `CLOEXEC` via ai due estremi del worker, e a nient'altro.
+    estremi.rendi_ereditabili()?;
+
+    // Il braccio «spawn»: il fallimento arriva **con entrambi gli estremi
+    // ereditabili**, che e' lo stato piu' esposto della sequenza.
+    #[cfg(qualificazione_isolamento)]
+    canale::guasto_richiesto("spawn").map_err(Box::<TentativoFallito>::from)?;
+
+    // 4. Lo `spawn`, subito. Fra il passo 3 e questa riga non c'e' niente.
+    //
+    //    Il figlio nasce **dentro la guardia**, nella stessa espressione che lo
+    //    crea. Non e' uno stile: fra lo `spawn` e un incapsulamento fatto una
+    //    riga dopo ci sarebbe un tratto in cui il processo esiste e nessuno lo
+    //    custodisce, ed e' precisamente il tratto in cui un `?` aggiunto un
+    //    domani lo lascerebbe andare.
+    comando
         .spawn()
-        .map_err(|errore| passo("avvio", &errore.to_string()))
+        .map(FiglioVivo::nuovo)
+        .map_err(|errore| Box::<TentativoFallito>::from(passo("avvio", &errore.to_string())))
+
+    // 5. Il rilascio degli estremi non sta qui ma nel chiamante, che li lascia
+    //    cadere su **entrambi** i cammini. Farlo qui vorrebbe dire prendere la
+    //    guardia per valore, e allora un ritorno anticipato prima del passo 3
+    //    la consumerebbe senza che nessuno l'abbia ancora resa ereditabile:
+    //    corretto, ma per un motivo diverso da quello che serve. Cosi' invece
+    //    la regola e' una sola, e vale per tutti i cammini.
 }
 
 /// Il collegamento che il kernel tiene legato all'immagine di questo processo.
+#[cfg(any(test, feature = "internals"))]
 const IMMAGINE: &str = "/proc/self/exe";
 
 /// Che l'immagine in esecuzione sia rieseguibile.
@@ -263,6 +319,7 @@ const IMMAGINE: &str = "/proc/self/exe";
 ///
 /// [`PlenoraError::IsolationUnavailable`] se `/proc/self/exe` non si legge o
 /// non si interroga, o se una delle tre condizioni manca.
+#[cfg(any(test, feature = "internals"))]
 fn accerta_immagine(worker: IdentitaWorker) -> Result<()> {
     let percorso = Path::new(IMMAGINE);
     let bersaglio = std::fs::read_link(percorso)
@@ -307,6 +364,21 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
     let (grezza, da_eseguire) = spacca(argomenti)?;
     let richiesta =
         RichiestaSpawner::da_argomenti(grezza).map_err(|motivo| passo("richiesta", &motivo))?;
+
+    // Stadio 2: i due descrittori ereditati si riguardano **qui**, prima di
+    // entrare nel dominio e prima di spogliarsi dell'autorita'.
+    //
+    // Prima, perche' un canale che non regge e' un motivo per non proseguire, e
+    // proseguire vorrebbe dire configurare un dominio e cambiare identita' per
+    // poi accorgersene dopo — quando rifiutare costa un rimedio invece di un
+    // ritorno.
+    //
+    // E si **riguardano**, non si ricevono: cio' che attraversa il confine sono
+    // due numeri, che non affermano niente. Il supervisore li ha verificati nel
+    // proprio processo, ma quella verifica riguarda i **suoi** descrittori; qui
+    // sono altri numeri in un'altra tabella, e l'unica cosa che li lega e'
+    // un'affermazione del chiamante.
+    let _ = canale::accerta_coppia(richiesta.worker_legge, richiesta.worker_scrive)?;
     // La superficie si costruisce **dalla richiesta**, e non arriva da un
     // chiamante: e' l'unica forma in cui «lo spawner rivalida da se'» non
     // dipende da chi lo ha invocato. `Gerarchia::nuova` canonicalizza, e
@@ -346,14 +418,119 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
 ///
 /// [`TransizioneFallita`], che porta la causa e l'evidenza.
 #[cfg(qualificazione_isolamento)]
-pub(super) fn avvia_con_barriera(
+pub(super) fn avvia_con_giunture(
     preparato: DominioPreparato,
     da_eseguire: &DaEseguire<'_>,
-    barriera: impl FnOnce() -> Result<()>,
+    prima_dello_spawn: impl FnOnce() -> Result<()>,
+    dopo_lo_spawn: impl FnOnce() -> Result<()>,
 ) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
-    let (richiesta, evidenza) = preparato.consuma();
-    let figlio = tenta(&richiesta, evidenza.worker, da_eseguire, barriera);
-    esito(figlio, evidenza)
+    avvia_interno(preparato, da_eseguire, prima_dello_spawn, dopo_lo_spawn)
+}
+
+#[cfg(any(test, feature = "internals"))]
+fn avvia_interno(
+    preparato: DominioPreparato,
+    da_eseguire: &DaEseguire<'_>,
+    prima_dello_spawn: impl FnOnce() -> Result<()>,
+    dopo_lo_spawn: impl FnOnce() -> Result<()>,
+) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
+    // Il canale nasce **prima** della richiesta, perche' la richiesta ne porta
+    // i numeri. Se non si apre, non c'e' niente da chiedere: resta l'evidenza,
+    // perche' il dominio e' gia' configurato.
+    let (sup_legge, sup_scrive, estremi) = match canale::apri() {
+        Ok(canale) => canale,
+        Err(causa) => {
+            return Err(Box::new(TransizioneFallita {
+                causa,
+                evidenza: preparato.solo_evidenza(),
+                // Nessun figlio e' mai esistito: non c'e' niente da rimediare,
+                // e dirlo e' un'informazione, non un'assenza.
+                difetto_di_pulizia: None,
+            }));
+        }
+    };
+    let (richiesta, evidenza) = preparato.consuma(estremi.numeri());
+    let tentativo = tenta(
+        &richiesta,
+        evidenza.worker,
+        da_eseguire,
+        prima_dello_spawn,
+        &estremi,
+    );
+    // Gli estremi del worker cadono **qui**, su entrambi i cammini: la guardia
+    // esce di scena prima che l'esito venga costruito, quindi non c'e' ritorno
+    // che li lasci vivi nel supervisore.
+    drop(estremi);
+    // `esito` resta puro — non conosce ne' le pipe ne' il figlio, ed e' generico
+    // proprio per questo: la sua regola e' come si compone un fallimento, e non
+    // cambia con cio' che il tentativo rende.
+    //
+    // Il `?` qui e' sicuro perche' su questo cammino **nessun figlio esiste**:
+    // `tenta` fallisce prima dello `spawn` o sullo `spawn` stesso.
+    let (figlio, evidenza) = esito(tentativo, evidenza)?;
+
+    // Da qui in poi un fallimento ha un figlio da chiudere, e ci si passa da
+    // **un punto solo**. Non e' eleganza: due punti di rimedio sono due
+    // occasioni di divergere, e quella che diverge e' sempre la seconda.
+    if let Err(causa) = dopo_lo_spawn() {
+        // Si conservano **entrambi** i difetti. La causa dice perche' la
+        // transizione non e' riuscita; il difetto di pulizia dice che cosa e'
+        // rimasto — e sono due fatti diversi, che il supervisore usa in due
+        // momenti diversi. Sostituire il primo col secondo direbbe che il
+        // problema e' la pulizia, che e' la diagnosi sbagliata.
+        // L'uscita non serve qui: su questo cammino la transizione non e'
+        // avvenuta, e **come** il figlio e' morto non aggiunge niente a
+        // «l'avvio e' fallito». Chi la usa e' il supervisore, che raccoglie un
+        // figlio che ha lavorato.
+        let difetto_di_pulizia = match figlio.termina_e_raccogli(
+            figlio_guardia::LIMITE_DI_RACCOLTA,
+            &figlio_guardia::OrologioDiSistema::nuovo(figlio_guardia::PASSO_DI_RACCOLTA),
+        ) {
+            figlio_guardia::Chiusura::Raccolto { difetti, .. } => {
+                (!difetti.is_empty()).then(|| difetti.join("; "))
+            }
+            figlio_guardia::Chiusura::NonRaccolto { guardia, difetti } => {
+                // Qui **non** c'e' nessuno a cui la guardia possa risalire.
+                //
+                // Cio' che questa funzione rende e' un errore tipizzato, e un
+                // errore non tiene un processo: attraversa i confini, viene
+                // convertito, e finisce in una superficie pubblica dove un
+                // `FiglioVivo` non ha posto. Farlo scendere in una riga di
+                // rapporto lascerebbe un processo che nessuno aspetta mentre
+                // l'avvio dichiara di essere fallito ordinatamente.
+                //
+                // Ci si ferma, dicendo perche'. E' l'esito peggiore tranne uno:
+                // proseguire.
+                guardia.arrenditi(&format!(
+                    "l'avvio non e' riuscito e la chiusura del figlio nemmeno: {}",
+                    difetti.join("; ")
+                ))
+            }
+        };
+        return Err(Box::new(TransizioneFallita {
+            causa,
+            evidenza,
+            difetto_di_pulizia,
+        }));
+    }
+
+    // La consegna: da qui la responsabilita' del figlio e' del chiamante.
+    let Some(figlio) = figlio.consegna() else {
+        // Irraggiungibile per costruzione — la guardia e' appena stata creata e
+        // nessuna porta e' stata attraversata — ma lo si dice col tipo
+        // invece che con una primitiva di panico, che qui non si usa.
+        return Err(Box::new(TransizioneFallita {
+            causa: passo("avvio", "la guardia del figlio era gia' vuota"),
+            evidenza,
+            difetto_di_pulizia: None,
+        }));
+    };
+    Ok(TransizioneRiuscita {
+        figlio,
+        evidenza,
+        supervisore_legge: sup_legge,
+        supervisore_scrive: sup_scrive,
+    })
 }
 
 /// La riga di comando divisa sul `--`.
@@ -373,9 +550,7 @@ pub(super) fn avvia_con_barriera(
 ///
 /// Le fette vivono quanto gli argomenti da cui vengono, che sono quelli del
 /// processo e durano fino alla `exec`: non c'e' niente da possedere.
-fn spacca(
-    argomenti: &[std::ffi::OsString],
-) -> Result<(&[std::ffi::OsString], DaEseguire<'_>)> {
+fn spacca(argomenti: &[std::ffi::OsString]) -> Result<(&[std::ffi::OsString], DaEseguire<'_>)> {
     let taglio = argomenti
         .iter()
         .position(|pezzo| pezzo == "--")
@@ -505,8 +680,7 @@ fn entra_ed_esegui(
     // richiede niente: un ambiente che ci passa un `fd` sul control plane non
     // e' un ambiente in cui possiamo isolare, e chiuderlo di nascosto
     // nasconderebbe che qualcuno ce lo ha dato.
-    let dispositivo =
-        dispositivo_di(&radice).map_err(|errore| passo("descrittori", &errore))?;
+    let dispositivo = dispositivo_di(&radice).map_err(|errore| passo("descrittori", &errore))?;
     let prima = leggi_identita().map_err(|errore| passo("descrittori", &errore))?;
     let aperti: Vec<&str> = prima
         .descrittori_scrivibili

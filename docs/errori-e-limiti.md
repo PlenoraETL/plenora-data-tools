@@ -1005,7 +1005,7 @@ procedura, non l'ambiente — quindi `cfg(target_os = "linux")` sta sui soli
 sottomoduli. Un `cfg` di piattaforma sul modulo intero renderebbe i casi
 deterministici non compilati altrove, cioè verdi per assenza.
 
-### Isolamento Linux: tre deviazioni dello spawner
+### Isolamento Linux: quattro deviazioni dello spawner
 
 Sono scelte che si allontanano dalla forma ovvia, e ciascuna ha una condizione
 di rientro propria. Il contesto è la sequenza di
@@ -1051,6 +1051,285 @@ guadagnare uno specchio al prezzo di una porta. *Rientro:* nessuno previsto; la
 misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`, e un
 kernel che concedesse la lettura anche lì renderebbe la scelta non obbligata,
 non sbagliata.
+
+**4. I due estremi del canale si riaprono, e gli ereditati restano aperti.** Il
+worker riceve i suoi due estremi come **numeri**, e un numero non si adotta
+senza `unsafe` — `OwnedFd::from_raw_fd` e `BorrowedFd::borrow_raw` lo sono
+entrambi. Ciò che si può fare senza è aprirne di nuovi attraverso
+`/proc/self/fd/<n>`, che rende descrittori posseduti e nati `CLOEXEC`.
+
+I due ereditati restano però aperti, e **non** sono `CLOEXEC`: il supervisore
+gliel'ha tolto apposta per farglieli ereditare. È misurato, non dedotto — dopo
+che il descrittore riaperto è caduto, il numero originale nomina ancora la
+stessa pipe.
+
+**La conseguenza è una non-garanzia.** «Il worker non avvia altri processi» è
+un'**invariante operativa**, non qualcosa che il codice impedisce: se un giorno
+il worker eseguisse qualcosa, se li porterebbe dietro, e un estraneo che tenesse
+aperto l'altro capo impedirebbe per sempre l'EOF del canale. Va detto qui perché
+non si deduca dal fatto che i descrittori riaperti sono puliti che lo siano
+anche gli altri. *Rientro:* lo stesso della deviazione 1 — una via sicura per
+chiudere un descrittore ereditato, o una decisione esplicita sul perimetro
+`unsafe`.
+
+**A quale condizione questa non-garanzia è accettabile.** Non da sola: una
+pipe trattenuta da un discendente deve poter produrre *un ritardo*, mai *un
+risultato sbagliato*. La condizione sta nella macchina a stati del supervisore,
+ed è vincolante:
+
+1. **`Esito` da solo non autorizza il successo.** Un messaggio che dice «ho
+   finito» è un'affermazione del worker, e un'affermazione non è una prova. Da
+   sola, autorizzerebbe a pubblicare mentre qualcosa è ancora vivo.
+2. **Servono anche le altre tre.** La morte del worker *e la sua raccolta* —
+   che sono due cose, perché un processo raccolto male resta zombie; l'**EOF**
+   del canale, che è ciò che dice che nessuno tiene più l'altro capo; e la
+   **quiescenza del dominio**, che è ciò che dice che nel cgroup non è rimasto
+   nulla. Nessuna delle quattro sostituisce le altre.
+3. **Un discendente che trattiene la pipe porta a timeout o incompletezza, mai
+   a pubblicazione.** È il modo in cui la non-garanzia si trasforma in un esito
+   dichiarato invece che in un danno silenzioso: l'EOF non arriva, il tempo
+   finisce, e l'esito dice che non si è potuto concludere — non che si è
+   concluso bene.
+
+### La proprietà del figlio non si scarica su una riga di rapporto
+
+Fra lo `spawn` e la consegna al chiamante il figlio sta sotto una **guardia**, e
+le uscite volute sono la consegna e la chiusura. La chiusura può però non
+riuscire: un processo che non si lascia raccogliere entro il limite **esiste
+ancora**, e qualcuno deve restarne responsabile.
+
+La tentazione è una terza porta che rinuncia e prosegue — pid nel rapporto,
+difetto accanto, avanti. Si legge come diligenza ed è una perdita: la riga
+descrive un processo vivo, e poi lo lascia vivo. Nessuno lo aspetta, nessuno lo
+raccoglie, e il supervisore intanto dichiara di aver finito. **Quella porta non
+esiste**, e non deve esistere: sarebbe quella che tutti userebbero.
+
+Le vie sono quindi due, e nessuna delle due è silenziosa:
+
+1. **la guardia risale** a chi può ancora riprovare. La conduzione la porta fuori
+   nel proprio contorno, insieme al difetto che dice perché: chi ha chiamato ha
+   in mano un processo vivo, e la scelta — riprovare, farla risalire ancora,
+   fermarsi — è sua. Se la lascia cadere senza deciderla, la sentinella `Drop` è
+   ancora armata: la proprietà non si perde mai in silenzio, si perde con un
+   abort;
+2. **ci si arrende**, quando sopra non c'è nessuno. È il caso dello spawner: ciò
+   che quella funzione rende è un errore tipizzato, e un errore non tiene un
+   processo — attraversa i confini, viene convertito, e finisce in una superficie
+   pubblica dove una guardia non ha posto. Allora si ferma il processo dicendo
+   che cosa è successo, con una riga **diversa** da quella della sentinella: la
+   sentinella dice «sfuggito» e manda a cercare un cammino che non passa da
+   nessuna porta; la resa dice «non si è lasciato raccogliere, e nessuno può
+   riprovare» e manda a guardare il figlio.
+
+**La resa manda la terminazione, e riporta che cosa ha potuto fare.** `abort`
+ferma **noi**, non il figlio: un processo lasciato cadere non muore, passa al
+reaper del sistema e sopravvive al supervisore che dichiarava di fermarsi per non
+lasciarlo vivo. La resa tenta quindi esplicitamente la terminazione prima di
+fermarsi. Lo fa anche la sentinella, per la stessa ragione.
+
+**Nessuna delle risposte dice «terminato».** Mandare la terminazione non è
+osservare l'uscita: nel cammino ordinario `termina()` è seguita da
+`prova_a_raccogliere` proprio perché la prima non basta. Un `SIGKILL` accettato
+dice che il segnale è partito, non che il processo sia finito — uno in attesa
+ininterrompibile lo riceve e resta finché la chiamata di sistema non ritorna. In
+un log l'affermazione più forte del vero è peggio del silenzio: chi legge
+smetterebbe di cercare un processo che c'è ancora. Le tre risposte sono quindi:
+
+| risposta di `termina()` | ciò che si riporta |
+|---|---|
+| `Ok(())` | segnale di terminazione inviato; uscita non osservata |
+| `InvalidInput` | processo non più terminabile; uscita non osservata |
+| altro errore | segnale non inviato (*motivo*); può restare vivo |
+
+Nemmeno `InvalidInput` autorizza «già uscito»: il contratto dice «non più
+terminabile», che è compatibile con un figlio finito ma non lo prova.
+
+Non si raccoglie, invece, e non è una dimenticanza: dopo l'`abort` non c'è più
+nessuno che possa aspettare. Un figlio non raccolto passa al reaper del sistema,
+che se ne occupa; un figlio a cui **non** è arrivato niente è l'altro esito, ed è
+quello che la riga deve nominare.
+
+*Rientro:* la seconda via scompare quando lo spawner avrà sopra di sé un
+responsabile del ciclo di vita capace di **tenere una guardia** — cioè un
+chiamante che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
+tecnica, non una data: vale quando è soddisfatta, da chiunque la soddisfi.
+
+### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
+
+Quando un produttore non nasce — il sistema rifiuta un thread — il tentativo non
+è «non cominciato»: il worker **esiste già**, può avere discendenti, e il primo
+produttore può avere già accodato. Chi si ritira fa quindi tutto ciò che fa una
+conduzione completa, tranne classificare: chiude il dominio, raccoglie il figlio,
+drena, e riporta.
+
+Chiudere il dominio non è però chiederne la chiusura. `cgroup.kill` è
+**asincrono**: la scrittura torna, e i processi muoiono dopo. Una rinuncia che si
+fermasse alla chiamata riporterebbe «ho chiesto» lasciando credere «è successo»,
+e i contatori di un dominio ancora abitato non sono un'osservazione. Si guarda
+quindi, fino all'attesa della quiescenza, e si accoda ciò che si è visto: la
+quiescenza se arriva, l'impossibilità se l'osservazione non riesce, e **niente**
+se il tempo finisce — perché «non si è svuotato entro» non è un fatto sul
+dominio, è l'assenza del fatto atteso, e la barriera lo tratta come tale. Il
+motivo va accanto, fra i difetti.
+
+Perché ci sia qualcuno che guarda, l'osservatore **torna indietro** dalla nascita
+mancata del sorvegliante: `Builder::spawn` lascia cadere la chiusura con tutto
+ciò che ha catturato, quindi l'osservatore viaggia in una cella condivisa e chi
+resta fuori lo ritrova lì. *Rientro:* nessuno previsto.
+
+### I quattro tempi del supervisore
+
+Sono il margine di cortesia, l'attesa della quiescenza, il tetto del drenaggio e
+l'arresto del lettore. Tutti e quattro sono limiti **governati**: costanti
+nominate nel codice, motivate lì, e registrate qui con regola, perimetro e
+condizione di rientro.
+
+Nessuno di essi è una stima di quanto ci vuole. I primi tre sono il punto oltre
+il quale continuare ad aspettare smette di essere un'attesa; il quarto non è
+un'attesa affatto, ma il passo con cui si guarda l'interruttore.
+
+**1. Il margine di cortesia dopo la decisione di chiudere: 2 secondi**
+(`MARGINE_DI_CORTESIA`). Fra la decisione di chiudere — un tempo scaduto, una
+cancellazione — e la quiescenza del dominio c'è del lavoro vero: il segnale
+arriva, i processi muoiono, il cgroup si svuota. Chiudere a zero riporterebbe
+«non quiescente» su domini che lo diventano un istante dopo, e quella riga
+manderebbe a cercare un residuo che non c'è.
+
+Non è però un'attesa: se il dominio non si svuota, non si svuoterà guardandolo
+più a lungo — c'è qualcosa che non muore, ed è un fatto da riportare. Il margine
+separa «ci ha messo un momento» da «non è successo». *Rientro:* nessuno
+previsto.
+
+**2. L'attesa della quiescenza dopo la forzatura: 500 millisecondi**
+(`ATTESA_DELLA_QUIESCENZA`). Non è il margine di cortesia con un altro nome: il
+margine si concede **prima** di forzare, a un worker che può ancora scegliere
+come chiudere; questa è il ritardo fra `cgroup.kill` e il suo effetto, e non è
+concessa a nessuno.
+
+Serve perché l'evidenza di un dominio non ancora vuoto è la fotografia di
+qualcosa che si muove. Il prototipo lo ha misurato: al ritorno della `wait`
+l'evidenza di OOM valeva zero, e duecento millisecondi dopo valeva uno. Senza
+questa attesa la stessa esecuzione diventerebbe `Timeout` oppure
+`LimiteAttribuito` secondo quando il kernel ha consegnato l'evento — e la
+differenza non starebbe nel worker.
+
+Mezzo secondo è il doppio abbondante di ciò che il prototipo ha visto, e non è
+una promessa che basti sempre. Se non basta, il dominio resta non quiescente,
+l'evidenza **non si legge**, e la conclusione dichiara la barriera incompleta:
+per un'osservazione che non si è potuta fare, dirlo è l'esito giusto.
+*Rientro:* se un giorno il kernel offrisse una notifica di svuotamento
+attendibile invece di un contatore da rileggere, l'attesa scomparirebbe con
+essa.
+
+**3. Il drenaggio della coda dei fatti: 30 secondi** (`TETTO_DEL_DRENAGGIO`).
+Alla chiusura il supervisore lascia cadere tutte le bocchette e drena finché il
+canale non dice `Disconnected` — mai fermandosi su un istante vuoto, perché fra
+la domanda e la risposta un produttore vivo può ancora accodare, e i fatti
+dell'ultimo istante sono quelli che raccontano com'è finita.
+
+Se però una delle condizioni di chiusura non è stata rispettata — una sorgente
+bloccante non resa terminabile, una bocchetta dimenticata — quell'attesa non
+finirebbe mai, e un supervisore appeso è il peggiore degli esiti: non conclude,
+non riporta, e non si distingue da uno che sta lavorando. Il tetto trasforma
+l'attesa infinita in un **difetto detto**.
+
+La scadenza è **assoluta e monotona**: si calcola una volta e non riparte
+quando arriva un fatto. Si calcola con `checked_add` e non con `+`: la somma di
+un istante e una durata può andare in overflow, e l'operatore in quel caso va in
+panico — un panico dentro la chiusura del supervisore sarebbe il posto peggiore
+in cui scoprirlo. Con trenta secondi non accade su nessuna macchina reale, ma
+un'impossibilità va **osservata** e non presunta: se accadesse, si drena ciò che
+c'è già e lo si dichiara. Con una scadenza che si rinnova a ogni consegna, un
+produttore che invia poco prima di ogni scadenza terrebbe aperto il drenaggio
+per sempre. Allo scadere, i fatti già drenati **restano nel rapporto** insieme
+al difetto: ciò che si è sentito prima di rinunciare è evidenza quanto la
+rinuncia. *Rientro:* nessuno previsto; il tetto scompare solo se la chiusura
+diventa impossibile da sbagliare.
+
+**4. L'arresto del lettore: tre cose diverse, e vanno tenute separate.** Un
+lettore fermo dentro una `read` non si sveglia perché qualcuno altrove lascia
+cadere un mandante. Il descrittore va quindi in modalità non bloccante e la
+lettura passa da un adattatore che aspetta a piccoli passi guardando un
+interruttore. Ciò che si può dire di quel meccanismo sono tre affermazioni, e
+solo la prima è una garanzia.
+
+*Le proprietà implementative*, vere sempre, e sono due — nessuna delle quali
+dice quanto dura un giro. Primo: l'interruttore viene guardato **prima di ogni
+nuova lettura e prima di ogni attesa**, e non esiste cammino in cui la lettura
+riparta senza averlo guardato, nemmeno dopo un `Interrupted`. Secondo:
+l'adattatore **non chiede mai volontariamente** un'attesa più lunga di un passo
+(`PASSO_DI_ATTESA`, 10 ms).
+
+Entrambe le garantisce il codice, e le prova un caso che non guarda l'orologio:
+con il freno già tirato la sorgente non viene interrogata nemmeno una volta.
+Scrivere invece «ogni giro dura al più un passo» sarebbe **falso**: `sleep`
+promette che l'attesa non sia più breve di quanto si chiede, non che non sia più
+lunga, e fra la richiesta e il risveglio ci sono lo scheduler e le chiamate di
+sistema.
+
+*Il presidio contro il giro a vuoto.* Il freno dà una via d'uscita, non un
+limite al consumo: una sorgente che rende `Interrupted` senza fermarsi mai
+occuperebbe un core a non fare niente finché qualcuno non frena. Dopo sedici
+interruzioni consecutive (`INTERRUZIONI_PRIMA_DEL_RESPIRO`) l'adattatore chiede
+un passo di attesa, continuando a guardare il freno a ogni giro. Il contatore
+riparte a ogni esito diverso, così i segnali sporadici — quelli veri — non
+pagano nulla.
+
+*La non-garanzia*, che va detta perché non si deduca il contrario: **nessun
+limite di tempo reale**. Fra il momento in cui l'interruttore cambia e il
+momento in cui il processo torna sulla CPU passa quanto il kernel decide, e
+senza uno scheduler real-time nessun numero scritto nel codice lo impedisce. Chi
+ha bisogno di un tetto sull'orologio da parete deve prenderlo altrove — un
+timeout di livello più alto, o un `SIGKILL` — non da qui.
+
+*La soglia di qualificazione ambientale*: 200 ms, misurati su una macchina che
+non è in ginocchio. È un attrezzo dei casi e **non un contratto**: vive sotto
+`cfg(test)` proprio perché una costante pubblica prima o poi si legge come una
+promessa, e chi la leggesse così lo farebbe in buona fede.
+
+Il caso che la usa appartiene al perimetro di qualificazione dell'ambiente, non
+alla prova di correttezza: se fallisse, la prima ipotesi da verificare è lo
+stato della macchina. La correttezza — che il freno venga guardato — è provata
+altrove, contando i giri invece del tempo. *Rientro:* un modo
+sicuro di interrompere una lettura bloccante senza sondaggio; toglierebbe il
+passo, la soglia e questa distinzione insieme.
+
+### La diagnostica di riga non attraversa il confine del worker
+
+**La regola.** L'errore che il worker dichiara arriva al supervisore con i
+quattro assi intatti: `PlenoraError::Replayed` li porta così come sono, e
+`category`, `phase`, `remote_effect` e `retry_disposition` li rendono senza
+ricalcolarli. Non c'è approssimazione, e non serve una variante nuova.
+
+**Ciò che non entra nell'errore.** La diagnostica di riga. `DiagnosticaSulFilo`
+non è isomorfa a `RowDiagnostics`: le mancano campi, e completarli con valori di
+default direbbe di aver osservato cose che nessuno ha osservato — un dato
+inventato è indistinguibile da quello vero, ed è peggio di un dato assente.
+
+**Dove sta, allora.** Nell'esito del supervisore, che la **possiede intera** e
+nella forma in cui è arrivata, accanto alla classificazione e fuori dal
+`PlenoraError`. Non è un conteggio: un conteggio conserva l'esistenza e non il
+contenuto, e dire «ce n'era una» buttandola è un modo più educato di buttarla.
+La forma del filo è limitata per costruzione — il protocollo tetta esempi e
+conteggi — quindi tenerla non apre una via a una dimensione che il chiamante
+sceglie.
+
+Le due affermazioni vanno quindi lette insieme e nessuna copre l'altra: la
+conversione dell'errore è senza perdite **sui quattro assi**, e la diagnostica
+è conservata **intera** altrove.
+
+**La decisione aperta** è solo se debba arrivare fino a `RowDiagnostics`, e con
+quale portatore tipizzato: estendere il formato sul filo perché porti i campi
+che mancano, oppure un tipo dedicato. Non giustifica in nessun caso di
+duplicare gli assi dell'errore, che un portatore ce l'hanno già. *Rientro:* la
+decisione, presa e scritta qui.
+
+Ciò che il worker **non** deve fare è credere ai due numeri. Li riguarda: che
+siano pipe anonime e non FIFO del filesystem, che il verso sia quello giusto, e
+che dopo la riapertura l'impronta `(dispositivo, inode)` coincida **e** il verso
+regga ancora. Quest'ultimo controllo non è ridondante, ed è misurato: riaprire
+in scrittura l'estremo di lettura di una pipe riesce e rende un descrittore con
+impronta **identica**, perché sono due aperture della stessa pipe.
 
 ### Il perimetro di qualificazione dell'isolamento
 

@@ -61,8 +61,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::dominio::Gerarchia;
-use super::spawner::{avvia, avvia_con_barriera, dal_confine, DaEseguire};
-use super::{prepara_dominio, Controllo, EvidenzaPreflight, IdentitaWorker, VERSIONE_RICHIESTA};
+use super::spawner::{avvia, avvia_con_giunture, dal_confine, DaEseguire};
+use super::{
+    non_disponibile, prepara_dominio, Controllo, EvidenzaPreflight, IdentitaWorker,
+    VERSIONE_RICHIESTA,
+};
 
 /// L'ingresso dell'immagine di qualificazione.
 ///
@@ -196,12 +199,35 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
         eseguibile: Path::new(eseguibile),
         argomenti: argomenti_worker,
     };
+    // La quarta iniezione non passa dalla libreria: e' la giuntura **dopo** lo
+    // spawn, e il suo fallimento e' cio' che mette alla prova l'imbuto di
+    // rimedio. Le altre tre stanno nella libreria perche' cadono in punti che
+    // dall'esterno non si raggiungono.
+    let dopo = testa
+        .iter()
+        .any(|pezzo| pezzo == "--fallisci-dopo-lo-spawn");
+    let giuntura_dopo = || {
+        if dopo {
+            dichiara("giuntura_dopo_lo_spawn", "fallisce");
+            return Err(non_disponibile(
+                "guasto di qualificazione",
+                "guasto richiesto dopo lo spawn",
+            ));
+        }
+        Ok(())
+    };
+
     let esito = match barriera {
-        None => avvia(preparato, &da_eseguire),
-        Some((pronto, via)) => avvia_con_barriera(preparato, &da_eseguire, || {
-            dichiara("barriera_in_attesa", "si");
-            attendi(&pronto, &via)
-        }),
+        None => avvia_con_giunture(preparato, &da_eseguire, || Ok(()), giuntura_dopo),
+        Some((pronto, via)) => avvia_con_giunture(
+            preparato,
+            &da_eseguire,
+            || {
+                dichiara("barriera_in_attesa", "si");
+                attendi(&pronto, &via)
+            },
+            giuntura_dopo,
+        ),
     };
 
     match esito {
@@ -211,10 +237,13 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
             dichiara("figlio_pid", &riuscita.figlio.id().to_string());
             match riuscita.figlio.wait() {
                 Ok(stato) => {
-                    dichiara("figlio_uscita", &stato.code().map_or_else(
-                        || "ucciso da un segnale".to_owned(),
-                        |codice| codice.to_string(),
-                    ));
+                    dichiara(
+                        "figlio_uscita",
+                        &stato.code().map_or_else(
+                            || "ucciso da un segnale".to_owned(),
+                            |codice| codice.to_string(),
+                        ),
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(errore) => lamenta(&format!("attesa del figlio: {errore}")),
@@ -225,9 +254,108 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
             // chi lo smonta deve sapere quale sia.
             riporta_evidenza(&fallita.evidenza);
             dichiara("avvio", "fallito");
+            // Cio' che resta **dopo** il fallimento: e' l'unica misura che
+            // distingue un rimedio da una dichiarazione di rimedio. Va scritta
+            // qui e non nel gate perche' il gate vede il processo da fuori,
+            // quando i suoi descrittori sono gia' caduti con lui: l'unico
+            // momento in cui «non e' rimasto niente» e' osservabile e' mentre il
+            // processo e' ancora vivo.
+            dichiara("pipe_residue", &pipe_residue());
+            dichiara("figli_residui", &figli_residui());
+            dichiara(
+                "difetto_di_pulizia",
+                fallita.difetto_di_pulizia.as_deref().unwrap_or("nessuno"),
+            );
             lamenta(&format!("avvio: {}", fallita.causa))
         }
     }
+}
+
+/// Quali pipe anonime restano aperte in questo processo, oltre i flussi
+/// standard.
+///
+/// # Perche' li nomina invece di contarli
+///
+/// Perche' un numero dice che qualcosa non torna, e un elenco dice **che
+/// cosa**. Quando un braccio diventa rosso, la differenza e' fra ricominciare
+/// l'indagine e leggerne il risultato.
+///
+/// # Perche' i primi tre non si guardano
+///
+/// Perche' possono essere pipe **legittimamente**, e non nostre: il gate gira
+/// dentro una pipeline, e in quel caso lo stdin del supervisore e' una pipe che
+/// gli ha dato la shell. E' misurato, non supposto.
+///
+/// Escluderli non allarga la maglia, perche' il canale non puo' stare li':
+/// `numero_ammissibile` rifiuta 0, 1 e 2 prima di ogni altra cosa. Guardarli
+/// legherebbe invece l'esito del braccio al modo in cui il gate viene invocato
+/// — verde se lanciato da un terminale, rosso dentro una pipeline — cioe' lo
+/// renderebbe una misura dell'ambiente e non del codice.
+fn pipe_residue() -> String {
+    let Ok(voci) = std::fs::read_dir("/proc/self/fd") else {
+        return "illeggibile".to_owned();
+    };
+    let mut trovate = Vec::new();
+    for voce in voci.flatten() {
+        // La lettura della directory apre essa stessa un descrittore, che non
+        // e' una pipe: non entra nell'elenco, ma va detto perche' chi lo legge
+        // non se lo chieda.
+        let Some(numero) = voce
+            .file_name()
+            .to_str()
+            .and_then(|nome| nome.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if numero < 3 {
+            continue;
+        }
+        if let Ok(bersaglio) = std::fs::read_link(voce.path()) {
+            if bersaglio.to_string_lossy().starts_with("pipe:[") {
+                trovate.push(numero.to_string());
+            }
+        }
+    }
+    if trovate.is_empty() {
+        return "nessuna".to_owned();
+    }
+    trovate.sort_unstable();
+    trovate.join(",")
+}
+
+/// I figli che questo processo ha ancora, con il loro stato.
+///
+/// # Perche' anche lo stato, e non la sola presenza
+///
+/// Perche' un figlio terminato ma non raccolto **c'e' ancora**: `/proc` gli
+/// tiene il posto finche' il padre non lo raccoglie, ed e' precisamente lo
+/// zombie che l'imbuto esiste per evitare. Un braccio che guardasse la sola
+/// assenza li chiamerebbe entrambi «rimasto», senza distinguere un figlio vivo
+/// da uno raccolto male — che sono due difetti diversi.
+fn figli_residui() -> String {
+    // Il tid del thread principale coincide col pid, e questo programma e'
+    // monothread per costruzione: `/proc/self/task/self` non esiste, mentre
+    // questa forma si'.
+    let Ok(elenco) =
+        std::fs::read_to_string(format!("/proc/self/task/{}/children", std::process::id()))
+    else {
+        return "illeggibile".to_owned();
+    };
+    let mut righe = Vec::new();
+    for pid in elenco.split_whitespace() {
+        let stato = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        // Lo stato e' il campo dopo `comm`, che puo' contenere spazi e sta fra
+        // parentesi: si taglia da li' invece di contare i campi dall'inizio.
+        let genere = stato
+            .rsplit_once(')')
+            .and_then(|(_, resto)| resto.split_whitespace().next())
+            .unwrap_or("?");
+        righe.push(format!("{pid}:{genere}"));
+    }
+    if righe.is_empty() {
+        return "nessuno".to_owned();
+    }
+    righe.join(",")
 }
 
 /// Il modo ostile: tre tentativi, e nessuno deve riuscire.
@@ -288,7 +416,11 @@ fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
         let bersaglio = vicino.join("cgroup.procs");
         dichiara(
             "tentativo_fuga_vicino",
-            &format!("bersaglio={} {}", bersaglio.display(), tentativo(&bersaglio)),
+            &format!(
+                "bersaglio={} {}",
+                bersaglio.display(),
+                tentativo(&bersaglio)
+            ),
         );
     }
 
@@ -322,7 +454,11 @@ fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
         let bersaglio = vicino.join("cgroup.procs");
         dichiara(
             "tentativo_dopo_unshare_fuga_vicino",
-            &format!("bersaglio={} {}", bersaglio.display(), tentativo(&bersaglio)),
+            &format!(
+                "bersaglio={} {}",
+                bersaglio.display(),
+                tentativo(&bersaglio)
+            ),
         );
     }
 
@@ -458,15 +594,15 @@ fn attendi(pronto: &Path, via: &Path) -> plenora_core::error::Result<()> {
     std::fs::write(pronto, b"pronto\n").map_err(|errore| {
         super::non_disponibile("barriera", &format!("{}: {errore}", pronto.display()))
     })?;
-    std::fs::read(via)
-        .map(|_| ())
-        .map_err(|errore| super::non_disponibile("barriera", &format!("{}: {errore}", via.display())))
+    std::fs::read(via).map(|_| ()).map_err(|errore| {
+        super::non_disponibile("barriera", &format!("{}: {errore}", via.display()))
+    })
 }
 
 /// Il numero di task del processo.
 fn conta_task() -> std::result::Result<usize, String> {
-    let voci =
-        std::fs::read_dir("/proc/self/task").map_err(|errore| format!("/proc/self/task: {errore}"))?;
+    let voci = std::fs::read_dir("/proc/self/task")
+        .map_err(|errore| format!("/proc/self/task: {errore}"))?;
     let mut quanti = 0_usize;
     for voce in voci {
         voce.map_err(|errore| format!("/proc/self/task: {errore}"))?;

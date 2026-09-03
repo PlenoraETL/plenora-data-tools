@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use plenora_core::error::{ErrorCategory, ErrorPhase};
 
 use super::{
-    bersagli_del_possesso, prepara_dominio, rivalida, spawner_ammissibile, Controllo,
-    DifettoSuperficie, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner,
-    SuperficieDominio, VERSIONE_RICHIESTA,
+    bersagli_del_possesso, prepara_dominio, riconosci, rivalida, spawner_ammissibile, Controllo,
+    DifettoSuperficie, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner, Riconoscimento,
+    SuperficieDominio, PREFISSO_RISERVATO, VERSIONE_RICHIESTA,
 };
 
 /// L'identita' con cui il worker gira in questi casi.
@@ -33,6 +33,16 @@ const INTOCCABILE: ProprietaFile = ProprietaFile {
 
 /// Il tetto dei casi del confine, in byte.
 const TETTO: u64 = 1_048_576;
+
+/// I due numeri del canale, per i casi che non hanno pipe vere.
+///
+/// Valgono `3` e `4` perche' sono i primi ammissibili: i casi qui provano la
+/// procedura, non l'ambiente, e due numeri qualunque servirebbero a nascondere
+/// che la procedura li tratta come opachi.
+const CANALE_DEI_CASI: super::NumeriDelCanale = super::NumeriDelCanale {
+    legge: 3,
+    scrive: 4,
+};
 
 const RADICE: &str = "/sys/fs/cgroup/plenora";
 const DOMINIO: &str = "/sys/fs/cgroup/plenora/dominio-7";
@@ -560,7 +570,7 @@ fn richiesta_di_un_preflight_riuscito() -> RichiestaSpawner {
     let mut superficie = Superficie::onesta();
     prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma()
+        .consuma(CANALE_DEI_CASI)
         .0
 }
 
@@ -632,7 +642,7 @@ fn la_rivalidazione_rilegge_e_non_riscrive() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma()
+        .consuma(CANALE_DEI_CASI)
         .0;
     superficie.registro.borrow_mut().clear();
 
@@ -681,8 +691,8 @@ fn un_controllo_riscritto_nel_frattempo_ferma_lo_spawner() {
         let mut superficie = Superficie::onesta();
         let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
             .expect("preflight")
-            .consuma()
-        .0;
+            .consuma(CANALE_DEI_CASI)
+            .0;
         superficie
             .risposte
             .borrow_mut()
@@ -704,7 +714,7 @@ fn un_dominio_popolato_nel_frattempo_ferma_lo_spawner() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma()
+        .consuma(CANALE_DEI_CASI)
         .0;
     superficie.eventi = Some("populated 1\nfrozen 0\n".to_owned());
 
@@ -732,6 +742,8 @@ fn una_richiesta_che_nomina_un_altro_dominio_e_un_rifiuto() {
             uid: WORKER.uid,
             gid: WORKER.gid,
             tetto_byte: TETTO,
+            worker_legge: 3,
+            worker_scrive: 4,
         };
         let errore = rivalida(&superficie, &richiesta, Vec::new()).expect_err(atteso);
         assert!(
@@ -752,7 +764,7 @@ fn lo_spawner_giudica_il_possesso_contro_l_identita_della_richiesta() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma()
+        .consuma(CANALE_DEI_CASI)
         .0;
     let padrone = RichiestaSpawner {
         uid: INTOCCABILE.uid,
@@ -794,7 +806,7 @@ fn l_evidenza_sopravvive_al_consumo_del_token() {
     let mut con = superficie_con_localevents();
     let (richiesta, evidenza) = prepara_dominio(&mut con, TETTO, WORKER)
         .expect("preflight")
-        .consuma();
+        .consuma(CANALE_DEI_CASI);
 
     assert!(
         evidenza.eventi_locali,
@@ -804,7 +816,10 @@ fn l_evidenza_sopravvive_al_consumo_del_token() {
     assert_eq!(evidenza.radice, PathBuf::from(RADICE));
     assert_eq!(evidenza.worker, WORKER);
     assert_eq!(evidenza.tetto_byte, TETTO);
-    assert_eq!(evidenza.montaggio, con.montaggio.clone().expect("montaggio"));
+    assert_eq!(
+        evidenza.montaggio,
+        con.montaggio.clone().expect("montaggio")
+    );
     assert_eq!(evidenza.namespace_attesi, con.namespace);
 
     // La richiesta porta invece **meno**: montaggio, namespace e opzioni non
@@ -914,6 +929,8 @@ fn un_percorso_non_utf8_attraversa_il_confine() {
         uid: WORKER.uid,
         gid: WORKER.gid,
         tetto_byte: TETTO,
+        worker_legge: 3,
+        worker_scrive: 4,
     };
     let riletta =
         RichiestaSpawner::da_argomenti(&richiesta.in_argomenti()).expect("un nome di byte");
@@ -952,12 +969,17 @@ fn l_evidenza_sopravvive_intera_all_avvio_fallito() {
     let mut superficie = superficie_con_localevents();
     let evidenza = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma()
+        .consuma(CANALE_DEI_CASI)
         .1;
     let atteso = evidenza.clone();
 
-    let fallita = super::esito(
-        Err(super::non_disponibile("immagine", "rifiuto iniettato")),
+    // Il parametro dice `()` perche' `esito` non guarda cio' che il tentativo
+    // rende: la sua regola e' come si compone un fallimento, e vale uguale per
+    // un figlio e per niente. Fissarlo qui a un tipo senza contenuto e' anche il
+    // modo di dirlo — se un domani `esito` cominciasse a toccare l'esito
+    // riuscito, questo caso smetterebbe di compilare.
+    let fallita = super::esito::<()>(
+        Err(super::non_disponibile("immagine", "rifiuto iniettato").into()),
         evidenza,
     )
     .expect_err("un tentativo fallito rende la transizione fallita");
@@ -968,4 +990,196 @@ fn l_evidenza_sopravvive_intera_all_avvio_fallito() {
         fallita.evidenza.eventi_locali,
         "un'osservazione che si perde solo nel ramo fallito si perde comunque"
     );
+}
+
+// --- il contratto del dispatch --------------------------------------------
+
+/// Un `argv[1]` come lo vede il programma.
+fn primo(testo: &str) -> std::ffi::OsString {
+    std::ffi::OsString::from(testo)
+}
+
+/// La versione supportata entra nello spawner.
+#[test]
+fn la_versione_supportata_entra_nello_spawner() {
+    assert_eq!(
+        riconosci(Some(&primo(VERSIONE_RICHIESTA))),
+        Riconoscimento::Supportata
+    );
+}
+
+/// Un comando ordinario prosegue per la sua strada, e cosi' l'assenza di
+/// argomenti.
+///
+/// E' la meta' che si dimentica: un dispatch che catturasse troppo
+/// trasformerebbe ogni invocazione della CLI in un tentativo di spawner.
+#[test]
+fn un_comando_ordinario_non_e_uno_spawner() {
+    for testo in [
+        "run", "catalog", "validate", "--help", "", "plenora", "spawner",
+    ] {
+        assert_eq!(
+            riconosci(Some(&primo(testo))),
+            Riconoscimento::NonSpawner,
+            "«{testo}» non appartiene al namespace riservato"
+        );
+    }
+    assert_eq!(riconosci(None), Riconoscimento::NonSpawner);
+}
+
+/// Ogni versione del namespace riservato che non sia quella supportata e' un
+/// **rifiuto esplicito**, non una ricaduta nel parser della CLI.
+///
+/// # Perche' e' la parte che conta
+///
+/// Perche' e' la differenza fra due diagnosi: «versione non supportata», che
+/// dice a un supervisore di un'altra generazione che cosa e' successo, e
+/// «comando sconosciuto», che manda a cercare un errore di digitazione. La
+/// seconda arriverebbe da sola se il riconoscimento guardasse la sola versione
+/// esatta.
+#[test]
+fn ogni_altra_versione_del_namespace_e_un_rifiuto() {
+    for testo in [
+        "plenora-spawner-1",
+        "plenora-spawner-3",
+        "plenora-spawner-99",
+        "plenora-spawner-",
+        "plenora-spawner-2-bis",
+        "plenora-spawner-due",
+    ] {
+        assert_eq!(
+            riconosci(Some(&primo(testo))),
+            Riconoscimento::VersioneNonSupportata,
+            "«{testo}» avrebbe dovuto essere un rifiuto"
+        );
+    }
+}
+
+/// Una versione piu' vecchia del protocollo si riconosce come tale, non come
+/// comando ignoto.
+///
+/// E' cio' che incontra per primo un supervisore che non e' stato aggiornato, e
+/// la risposta che riceve decide se sa che cosa aggiornare.
+#[test]
+fn una_versione_piu_vecchia_si_riconosce() {
+    let precedente = "plenora-spawner-1";
+    assert!(precedente.starts_with(PREFISSO_RISERVATO));
+    assert_ne!(precedente, VERSIONE_RICHIESTA);
+    assert_eq!(
+        riconosci(Some(&primo(precedente))),
+        Riconoscimento::VersioneNonSupportata
+    );
+}
+
+/// Il riconoscimento **non porta via niente** dell'argomento.
+///
+/// La variante e' senza campi, quindi non c'e' una stringa da copiare: e' la
+/// forma in cui «non amplificare l'ingresso» non dipende da chi scrive il
+/// messaggio dopo. Un `argv` che contenesse ritorni a capo o byte non UTF-8
+/// non ha nessuna strada per arrivare in un log.
+///
+/// Il caso guarda il **comportamento**: due argomenti diversi, entrambi del
+/// namespace riservato, danno lo stesso identico esito. Misurare invece la
+/// dimensione dell'enum direbbe che cosa ha scelto il compilatore per il
+/// layout, che e' un'altra cosa e potrebbe coincidere per caso.
+#[test]
+fn il_rifiuto_non_trattiene_l_argomento() {
+    let velenoso = "plenora-spawner-\nriga finta: qualcosa di inventato";
+    let innocuo = "plenora-spawner-7";
+    assert_eq!(
+        riconosci(Some(&primo(velenoso))),
+        Riconoscimento::VersioneNonSupportata
+    );
+    assert_eq!(
+        riconosci(Some(&primo(velenoso))),
+        riconosci(Some(&primo(innocuo))),
+        "due argomenti diversi devono dare lo stesso esito: cio' che li distingue non sopravvive"
+    );
+}
+
+/// Un `argv[1]` che non e' UTF-8 sta nel namespace se i suoi **byte** ci
+/// stanno.
+///
+/// Passare per `to_str()` farebbe cadere nel parser della CLI una riga che nel
+/// namespace riservato ci sta eccome, e la diagnosi tornerebbe a essere quella
+/// sbagliata.
+#[test]
+#[cfg(unix)]
+fn il_namespace_si_riconosce_sui_byte() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let mut byte = PREFISSO_RISERVATO.as_bytes().to_vec();
+    byte.extend([0xFF, 0xFE]);
+    match riconosci(Some(&std::ffi::OsString::from_vec(byte))) {
+        Riconoscimento::VersioneNonSupportata => {}
+        altro => panic!("un nome di byte nel namespace riservato e' {altro:?}"),
+    }
+}
+
+/// La versione supportata sta nel namespace riservato.
+///
+/// Sembra ovvio, e non lo e': se qualcuno cambiasse la versione senza il
+/// prefisso, il riconoscimento continuerebbe a funzionare per la versione
+/// esatta e smetterebbe di funzionare per tutte le altre — cioe' tornerebbe il
+/// difetto, invisibile.
+#[test]
+fn la_versione_supportata_appartiene_al_namespace() {
+    assert!(
+        VERSIONE_RICHIESTA.starts_with(PREFISSO_RISERVATO),
+        "«{VERSIONE_RICHIESTA}» non comincia con «{PREFISSO_RISERVATO}»"
+    );
+}
+
+// --- la forma canonica dei descrittori ------------------------------------
+
+/// La forma canonica e' quella che il supervisore produce, e nient'altro.
+///
+/// Le forme rifiutate qui sono tutte forme che `str::parse` accetterebbe:
+/// e' la differenza fra «leggere un numero» e «leggere cio' che il
+/// produttore dichiarato emette».
+#[test]
+fn solo_la_forma_canonica_di_un_descrittore() {
+    // Cio' che `i32::to_string()` produce.
+    for (testo, atteso) in [
+        ("0", 0),
+        ("3", 3),
+        ("42", 42),
+        ("-1", -1),
+        ("2147483647", i32::MAX),
+    ] {
+        assert_eq!(
+            super::descrittore_canonico(testo),
+            Ok(atteso),
+            "«{testo}» e' forma canonica"
+        );
+    }
+
+    // Cio' che `parse` accetterebbe e il supervisore non scrive mai.
+    for testo in ["+3", "03", "-0", "-01", "007", "+0"] {
+        assert!(
+            super::descrittore_canonico(testo).is_err(),
+            "«{testo}» non e' forma canonica"
+        );
+    }
+
+    // E cio' che non e' proprio un numero.
+    for testo in ["", "-", "tre", "3.0", "3a", " 3", "3 ", "0x3"] {
+        assert!(
+            super::descrittore_canonico(testo).is_err(),
+            "«{testo}» non e' un numero"
+        );
+    }
+}
+
+/// `-1` ha forma canonica: il rifiuto arriva **dopo**, sul valore.
+///
+/// Le due domande sono diverse — «e' scritto come lo scriverebbe il
+/// supervisore?» e «e' un descrittore che si puo' usare?» — e i due messaggi
+/// mandano in due posti diversi. Il giudizio sul valore vive in
+/// `canale::numero_ammissibile`, che e' di Linux; qui si fissa che la forma
+/// **non** lo anticipa.
+#[test]
+fn un_descrittore_negativo_passa_la_forma() {
+    assert_eq!(super::descrittore_canonico("-1"), Ok(-1));
+    assert_eq!(super::descrittore_canonico("-2147483648"), Ok(i32::MIN));
 }

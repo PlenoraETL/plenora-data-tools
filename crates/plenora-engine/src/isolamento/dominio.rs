@@ -88,10 +88,12 @@ impl SuperficieDominio for Gerarchia {
         })
     }
 
+    #[cfg(any(test, feature = "internals"))]
     fn namespace(&self) -> Esito<Vec<(String, String)>> {
         super::identita::namespace_di_self().map_err(DifettoSuperficie::Forma)
     }
 
+    #[cfg(any(test, feature = "internals"))]
     fn scrivi(&mut self, controllo: Controllo, valore: &str) -> Esito<()> {
         let percorso = self.dominio.join(controllo.file());
         let nome = percorso.display().to_string();

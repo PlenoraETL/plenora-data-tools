@@ -301,9 +301,14 @@ MUTANTI = [
     ('M30', "sorvegliante: l'osservatore non torna indietro", PROD,
      '        Err(errore) => Err((\n            errore,\n            cella\n                .lock()\n                .unwrap_or_else(std::sync::PoisonError::into_inner)\n                .take(),\n        )),',
      '        Err(errore) => Err((errore, None)),'),
-    ('M31', 'sorvegliante: la quiescenza si accoda in ritardo', PROD,
-     '                Ok(true) => {\n                    let _ = bocchetta.manda(Fatto::DominioQuiescente);',
-     '                Ok(true) => {\n                    std::thread::sleep(passo);\n                    let _ = bocchetta.manda(Fatto::DominioQuiescente);'),
+    # La mutazione qui e' **semantica** e non temporale. Ritardare l'accodamento
+    # della quiescenza non rompe niente: il ritardo e' esattamente cio' che la
+    # raccolta dei fatti fermi assorbe per costruzione, e un mutante che il
+    # progetto tollera non e' un mutante che i casi devono uccidere — e'
+    # equivalente, e come superstite direbbe il falso a ogni giro futuro.
+    ('M31', 'sorvegliante: dichiara quiescente un dominio abitato', PROD,
+     '                Ok(false) => std::thread::sleep(passo),',
+     '                Ok(false) => {\n                    let _ = bocchetta.manda(Fatto::DominioQuiescente);\n                    std::thread::sleep(passo);\n                }'),
 
     # --- la coda -------------------------------------------------------------
     ('M32', "coda: i fatti fermi non si possono piu' raccogliere", CODA,

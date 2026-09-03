@@ -899,6 +899,97 @@ fi
   printf 'confronti_prima_dopo=%s\n' "$CONFRONTATI"
 } >>"$DOVE/preflight.txt"
 
+# --- braccio 4: le quattro iniezioni ------------------------------------------
+#
+# La finestra in cui i due estremi del worker sono **ereditabili** e' l'unico
+# tratto in cui un fallimento puo' lasciare qualcosa dietro di se': un
+# descrittore che il prossimo `spawn` di chiunque si porterebbe via, o un figlio
+# gia' nato che nessuno chiude. I quattro punti coprono la finestra da prima che
+# si apra a dopo che si e' chiusa:
+#
+#   primo-fcntl     nessun estremo e' ancora ereditabile
+#   secondo-fcntl   il primo si', il secondo no: lo stato misto
+#   spawn           tutti e due si', e nessun figlio esiste ancora
+#   dopo-lo-spawn   il figlio esiste, ed e' l'imbuto di rimedio a doverlo chiudere
+#
+# Le prime tre si chiedono alla libreria, che le riconosce solo sotto
+# `qualificazione_isolamento`; la quarta e' una giuntura del binario, perche'
+# cade fuori dalla libreria.
+#
+# **Che cosa si misura, e perche' dall'interno.** Che non resti nessuna pipe
+# oltre i flussi standard — che possono essere pipe per conto loro, quando il
+# gate gira dentro una pipeline — e nessun figlio. Il gate non puo' guardarlo da fuori: quando il supervisore e'
+# uscito i suoi descrittori sono gia' caduti con lui, e ogni braccio sembrerebbe
+# pulito. L'unico istante in cui l'assenza si osserva e' mentre il processo e'
+# ancora vivo, quindi e' lui a dichiararla e il gate a giudicarla.
+nota "braccio 4: le quattro iniezioni nella finestra ereditabile"
+IMMAGINE_4="$TEMPORANEA/immagine-4"
+copia_immagine "$IMMAGINE_4"
+
+for PUNTO in primo-fcntl secondo-fcntl spawn dopo-lo-spawn; do
+  RAPPORTO_4="$DOVE/braccio-iniezione-$PUNTO.txt"
+  ARGOMENTO_4=""
+  GUASTO_4="$PUNTO"
+  if [ "$PUNTO" = "dopo-lo-spawn" ]; then
+    # La quarta non passa dalla variabile: se ci passasse, la libreria la
+    # rifiuterebbe come punto sconosciuto in tutti e tre i suoi controlli.
+    ARGOMENTO_4="--fallisci-dopo-lo-spawn"
+    GUASTO_4=""
+  fi
+
+  # Il worker e' `sleep` e non il tentatore ostile: nell'iniezione dopo lo spawn
+  # il figlio viene terminato mentre e' vivo, e un worker che scrivesse sullo
+  # stesso stdout del padre potrebbe lasciare una riga a meta'. Qui al figlio si
+  # chiede solo di esistere, e cio' che si misura e' che non resti.
+  stato_dei_bersagli "prima_iniezione_$PUNTO"
+  set +e
+  env ${GUASTO_4:+PLENORA_QUALIFICAZIONE_GUASTO="$GUASTO_4"} \
+    "$IMMAGINE_4" supervisore "$DOMINIO" "$RADICE_ASSOLUTA" "$TETTO_BYTE" \
+    "$WORKER_UID" "$WORKER_GID" $ARGOMENTO_4 \
+    -- /bin/sleep 30 \
+    >"$RAPPORTO_4" 2>&1
+  USCITA_4=$?
+  set -e
+  nota "  $PUNTO: uscita=$USCITA_4"
+  stato_dei_bersagli "dopo_iniezione_$PUNTO"
+
+  chiavi_uniche "$RAPPORTO_4"
+
+  # Un'uscita a zero vorrebbe dire che l'avvio e' riuscito, cioe' che
+  # l'iniezione non e' mai arrivata: il braccio avrebbe misurato il cammino
+  # ordinario credendo di misurare il rimedio.
+  if [ "$USCITA_4" -eq 0 ]; then
+    fallisce "braccio 4/$PUNTO: il supervisore e' uscito a zero, ma il guasto doveva fermarlo"
+  fi
+  uguali "braccio 4/$PUNTO, avvio" "fallito" "$(valore "$RAPPORTO_4" avvio)"
+
+  # Il rifiuto deve nominare il guasto chiesto. Senza questo controllo il
+  # braccio passerebbe anche se a fermare il supervisore fosse stata un'altra
+  # cosa — un preflight fallito, un dominio sparito — e misurerebbe la pulizia
+  # di un cammino che non e' quello in esame.
+  CAUSA_4="$(valore "$RAPPORTO_4" errore)"
+  case "$CAUSA_4" in
+  *"guasto richiesto"*) : ;;
+  *) fallisce "braccio 4/$PUNTO: il rifiuto non viene dall'iniezione, dice «$CAUSA_4»" ;;
+  esac
+
+  # Cio' che resta. «illeggibile» e' un rosso e non un'assenza: un braccio che
+  # non riesce a guardare non ha guardato.
+  uguali "braccio 4/$PUNTO, pipe residue" "nessuna" "$(valore "$RAPPORTO_4" pipe_residue)"
+  uguali "braccio 4/$PUNTO, figli residui" "nessuno" "$(valore "$RAPPORTO_4" figli_residui)"
+  uguali "braccio 4/$PUNTO, difetto di pulizia" "nessuno" \
+    "$(valore "$RAPPORTO_4" difetto_di_pulizia)"
+done
+
+# La quarta iniezione e' l'unica che ha davvero avuto un figlio da chiudere, ed
+# e' l'unica che prova l'imbuto di rimedio. Se la sua riga non dichiarasse di
+# essere passata dalla giuntura, il braccio avrebbe misurato un fallimento
+# avvenuto prima dello spawn — cioe' di nuovo uno dei tre casi precedenti.
+uguali "braccio 4, la giuntura dopo lo spawn e' stata attraversata" "fallisce" \
+  "$(valore "$DOVE/braccio-iniezione-dopo-lo-spawn.txt" giuntura_dopo_lo_spawn)"
+uguali "braccio 4, il figlio era stato avviato" "riuscito" \
+  "$(valore "$DOVE/braccio-iniezione-dopo-lo-spawn.txt" preflight)"
+
 # --- l'esito ------------------------------------------------------------------
 #
 # Non si stampa qui. Lo stampa `verdetto`, che corre su `EXIT` **dopo** la
