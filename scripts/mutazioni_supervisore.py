@@ -183,11 +183,18 @@ FIGL = f'{I}/figlio.rs'
 
 #: L'elenco **canonico**. La tabella qui sotto deve corrispondervi: e' cio' che
 #: impedisce a un mutante di sparire senza rumore.
+#:
+#: Gli identificativi sono minuscoli e col trattino, e non e' estetica: la forma
+#: `M01` appartiene alla grammatica dei puntatori dei documenti — la famiglia
+#: delle tappe — e il gate della superficie documentale li leggerebbe come
+#: riferimenti citati e mai definiti. Un identificativo che entra nel
+#: vocabolario di un altro strumento e' un identificativo che quello strumento
+#: cerchera' di risolvere.
 IDENTIFICATORI = [
-    'M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08',
-    'M09', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16',
-    'M17', 'M18', 'M19', 'M20', 'M21', 'M22', 'M23', 'M24',
-    'M25', 'M26', 'M27', 'M28', 'M29', 'M30', 'M31', 'M32',
+    'mut-01', 'mut-02', 'mut-03', 'mut-04', 'mut-05', 'mut-06', 'mut-07', 'mut-08',
+    'mut-09', 'mut-10', 'mut-11', 'mut-12', 'mut-13', 'mut-14', 'mut-15', 'mut-16',
+    'mut-17', 'mut-18', 'mut-19', 'mut-20', 'mut-21', 'mut-22', 'mut-23', 'mut-24',
+    'mut-25', 'mut-26', 'mut-27', 'mut-28', 'mut-29', 'mut-30', 'mut-31', 'mut-32',
 ]
 
 #: (identificativo, nome, file, sano, malato). Ogni `sano` deve comparire
@@ -195,110 +202,110 @@ IDENTIFICATORI = [
 #: da quello dichiarato, e il nome del mutante direbbe il falso.
 MUTANTI = [
     # --- la barriera causale -------------------------------------------------
-    ('M01', 'barriera: la quiescenza non blocca piu', MACC,
+    ('mut-01', 'barriera: la quiescenza non blocca piu', MACC,
      '        if !self.quiescente {\n            return Err(Impedimento::BarrieraIncompleta(manca));\n        }',
      '        if false {\n            return Err(Impedimento::BarrieraIncompleta(manca));\n        }'),
-    ('M02', 'barriera: i difetti non entrano piu', MACC,
+    ('mut-02', 'barriera: i difetti non entrano piu', MACC,
      '        for difetto in difetti_della_conduzione {\n            manca.push(format!("difetto della conduzione: {difetto}"));\n        }',
      '        for difetto in difetti_della_conduzione {\n            let _ = difetto;\n        }'),
-    ('M03', "barriera: la quiescenza non e' piu' richiesta al resto", MACC,
+    ('mut-03', "barriera: la quiescenza non e' piu' richiesta al resto", MACC,
      '        if !self.quiescente {\n            manca.push("il dominio non e\' quiescente".to_owned());\n        }',
      '        if false {\n            manca.push("il dominio non e\' quiescente".to_owned());\n        }'),
-    ('M04', 'barriera: da_verificare passa con la barriera incompleta', MACC,
+    ('mut-04', 'barriera: da_verificare passa con la barriera incompleta', MACC,
      '        if matches!(classificato, EsitoClassificato::DaVerificare { .. }) && !manca.is_empty() {',
      '        if matches!(classificato, EsitoClassificato::DaVerificare { .. }) && false {'),
 
     # --- la raccolta dei fatti fermi -----------------------------------------
-    ('M05', "fatti fermi: non si raccolgono prima dell'evidenza", COND,
+    ('mut-05', "fatti fermi: non si raccolgono prima dell'evidenza", COND,
      '    for fatto in coda.raccogli_i_fermi() {\n        registro.applica(fatto);\n    }',
      '    for fatto in coda.raccogli_i_fermi() {\n        let _ = fatto;\n    }'),
 
     # --- l'evidenza si legge solo su un dominio quiescente --------------------
-    ('M06', 'evidenza: si legge anche sul dominio abitato', COND,
+    ('mut-06', 'evidenza: si legge anche sul dominio abitato', COND,
      '    if !dominio_quiescente {',
      '    if false {'),
 
     # --- la forzatura e cio' che segue ---------------------------------------
-    ('M07', 'forzatura: si smette di ascoltare subito dopo', COND,
+    ('mut-07', 'forzatura: si smette di ascoltare subito dopo', COND,
      '                continue;\n            }\n            if gia_forzato && std::time::Instant::now() >= scadenza {',
      '                break;\n            }\n            if gia_forzato && std::time::Instant::now() >= scadenza {'),
-    ('M08', 'forzatura: si forza a ogni giro', COND,
+    ('mut-08', 'forzatura: si forza a ogni giro', COND,
      '            if !gia_forzato && std::time::Instant::now() >= scadenza {',
      '            if std::time::Instant::now() >= scadenza {'),
-    ('M09', 'forzatura: si forza senza aspettare il margine', COND,
+    ('mut-09', 'forzatura: si forza senza aspettare il margine', COND,
      '            if let Some(quando) = std::time::Instant::now().checked_add(margine_di_cortesia) {\n                scadenza_di_cortesia = Some(quando);',
      '            if let Some(_quando) = std::time::Instant::now().checked_add(margine_di_cortesia) {\n                scadenza_di_cortesia = Some(std::time::Instant::now());'),
-    ('M10', 'overflow: la seconda scadenza torna muta', COND,
+    ('mut-10', 'overflow: la seconda scadenza torna muta', COND,
      '                        "attesa della quiescenza: {} ms non sono rappresentabili come scadenza, e non si aspetta",',
      '                        "attesa della quiescenza: {} ms, e non si aspetta",'),
-    ('M11', 'overflow: il margine torna muto', COND,
+    ('mut-11', 'overflow: il margine torna muto', COND,
      '"margine di cortesia: {} ms non sono rappresentabili come scadenza, e si \\\n                     forza subito",',
      '"margine di cortesia: {} ms, e si forza subito",'),
 
     # --- la cancellazione ----------------------------------------------------
-    ('M12', "cancellazione: l'Annulla non parte piu' sul filo", COND,
+    ('mut-12', "cancellazione: l'Annulla non parte piu' sul filo", COND,
      '            if registro.cancellazione_richiesta() {\n                if let Err(motivo) = manda_annulla(ingresso_verso_il_worker) {',
      '            if false {\n                if let Err(motivo) = manda_annulla(ingresso_verso_il_worker) {'),
-    ('M13', "cancellazione: il tempo scaduto manda comunque l'Annulla", COND,
+    ('mut-13', "cancellazione: il tempo scaduto manda comunque l'Annulla", COND,
      '            if registro.cancellazione_richiesta() {',
      '            if registro.si_deve_chiudere() {'),
 
     # --- la conversione dell'uscita ------------------------------------------
-    ('M14', 'uscita: NonRappresentabile si scarta come None', COND,
+    ('mut-14', 'uscita: NonRappresentabile si scarta come None', COND,
      '        Some(Uscita::NonRappresentabile) => {\n            let _ = raccoglitore.manda(Fatto::OsservazioneImpossibile {',
      '        Some(Uscita::NonRappresentabile) if false => {\n            let _ = raccoglitore.manda(Fatto::OsservazioneImpossibile {'),
-    ('M15', 'uscita: il codice diventa un segnale', COND,
+    ('mut-15', 'uscita: il codice diventa un segnale', COND,
      '        Some(Uscita::Codice(codice)) => {\n            let _ = raccoglitore.manda(Fatto::UscitaDelWorker(UscitaOsservata::Codice(codice)));',
      '        Some(Uscita::Codice(codice)) => {\n            let _ = raccoglitore.manda(Fatto::UscitaDelWorker(UscitaOsservata::Segnale(codice)));'),
 
     # --- la proprieta' del figlio --------------------------------------------
-    ('M16', 'figlio: la guardia non risale (cammino ordinario)', COND,
+    ('mut-16', 'figlio: la guardia non risale (cammino ordinario)', COND,
      '            difetti.raccolta = riunisci(&quali);\n            difetti.figlio_non_raccolto = Some(guardia);\n            None',
      '            difetti.raccolta = riunisci(&quali);\n            guardia.smonta();\n            None'),
-    ('M17', 'figlio: la guardia non risale (rinuncia)', COND,
+    ('mut-17', 'figlio: la guardia non risale (rinuncia)', COND,
      '            difetti.raccolta = riunisci(&quali);\n            difetti.figlio_non_raccolto = Some(guardia);\n        }',
      '            difetti.raccolta = riunisci(&quali);\n            guardia.smonta();\n        }'),
-    ('M18', 'figlio: il processo esce dalla guardia prima della raccolta', FIGL,
+    ('mut-18', 'figlio: il processo esce dalla guardia prima della raccolta', FIGL,
      '        let Some(processo) = self.processo.as_mut() else {',
      '        let Some(mut processo_estratto) = self.processo.take() else {'),
-    ('M19', "figlio: la terminazione rifiutata non e' un difetto", FIGL,
+    ('mut-19', "figlio: la terminazione rifiutata non e' un difetto", FIGL,
      '            Err(errore) => difetti.push(format!("non si riesce a terminare il figlio: {errore}")),',
      '            Err(_errore) => (),'),
-    ('M20', 'figlio: la resa non termina', FIGL,
+    ('mut-20', 'figlio: la resa non termina', FIGL,
      '                (pid, ultimo_tentativo_di_terminazione(&mut processo))',
      '                (pid, "segnale di terminazione inviato; uscita non osservata".to_owned())'),
-    ('M21', 'figlio: la resa dice terminato', FIGL,
+    ('mut-21', 'figlio: la resa dice terminato', FIGL,
      '        Ok(()) => "segnale di terminazione inviato; uscita non osservata".to_owned(),',
      '        Ok(()) => "terminato".to_owned(),'),
-    ('M22', "figlio: InvalidInput diventa gia' uscito", FIGL,
+    ('mut-22', "figlio: InvalidInput diventa gia' uscito", FIGL,
      '            "processo non piu\' terminabile; uscita non osservata".to_owned()',
      '            "gia\' uscito".to_owned()'),
-    ('M23', 'figlio: la sentinella non termina', FIGL,
+    ('mut-23', 'figlio: la sentinella non termina', FIGL,
      '        let colpo = ultimo_tentativo_di_terminazione(&mut processo);\n        eprintln!(\n            "plenora: il figlio {pid} e\' sfuggito alla guardia',
      '        let colpo = "segnale di terminazione inviato; uscita non osservata".to_owned();\n        eprintln!(\n            "plenora: il figlio {pid} e\' sfuggito alla guardia'),
 
     # --- la rinuncia a una nascita parziale -----------------------------------
-    ('M24', 'rinuncia: non guarda la quiescenza', COND,
+    ('mut-24', 'rinuncia: non guarda la quiescenza', COND,
      '    guarda_che_si_sia_svuotato(\n        osservatore,\n        attesa_della_quiescenza,\n        &mut raccoglitore,\n        &mut difetti,\n    );',
      '    drop(osservatore);'),
-    ('M25', 'rinuncia: non chiude il dominio', COND,
+    ('mut-25', 'rinuncia: non chiude il dominio', COND,
      '    if let Err(motivo) = terminatore.termina() {\n        difetti.terminazione = Some(motivo);\n    }\n\n    // 2. E si **guarda**',
      '    if false {\n        difetti.terminazione = terminatore.termina().err();\n    }\n\n    // 2. E si **guarda**'),
-    ('M26', 'rinuncia: non drena', COND,
+    ('mut-26', 'rinuncia: non drena', COND,
      '    let (tardivi, difetto_di_drenaggio) = coda.chiudi_e_drena_entro(tetto_del_drenaggio);\n    difetti.drenaggio = difetto_di_drenaggio;\n    let mut registro = Registro::default();',
      '    let (tardivi, difetto_di_drenaggio) = (Vec::new(), None);\n    difetti.drenaggio = difetto_di_drenaggio;\n    drop(coda);\n    let mut registro = Registro::default();'),
-    ('M27', 'rinuncia: senza osservatore tace', COND,
+    ('mut-27', 'rinuncia: senza osservatore tace', COND,
      '        let _ = raccoglitore.manda(Fatto::OsservazioneImpossibile {\n            chi: "quiescenza",\n            motivo: "non c\'e\' nessuno che possa guardare il dominio".to_owned(),\n        });',
      '        ()'),
-    ('M28', 'rinuncia: il tempo finito non si riporta', COND,
+    ('mut-28', 'rinuncia: il tempo finito non si riporta', COND,
      '            difetti.resoconti.push(format!(\n                "il dominio non si e\' svuotato entro {} ms dalla forzatura",\n                entro.as_millis()\n            ));',
      '            ()'),
 
     # --- i produttori --------------------------------------------------------
-    ('M29', 'annullatore: il lucchetto avvelenato fa rinunciare', PROD,
+    ('mut-29', 'annullatore: il lucchetto avvelenato fa rinunciare', PROD,
      '        self.bocchetta\n            .lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)\n            .take()',
      '        self.bocchetta.lock().ok()?.take()'),
-    ('M30', "sorvegliante: l'osservatore non torna indietro", PROD,
+    ('mut-30', "sorvegliante: l'osservatore non torna indietro", PROD,
      '        Err(errore) => Err((\n            errore,\n            cella\n                .lock()\n                .unwrap_or_else(std::sync::PoisonError::into_inner)\n                .take(),\n        )),',
      '        Err(errore) => Err((errore, None)),'),
     # La mutazione qui e' **semantica** e non temporale. Ritardare l'accodamento
@@ -306,12 +313,12 @@ MUTANTI = [
     # raccolta dei fatti fermi assorbe per costruzione, e un mutante che il
     # progetto tollera non e' un mutante che i casi devono uccidere — e'
     # equivalente, e come superstite direbbe il falso a ogni giro futuro.
-    ('M31', 'sorvegliante: dichiara quiescente un dominio abitato', PROD,
+    ('mut-31', 'sorvegliante: dichiara quiescente un dominio abitato', PROD,
      '                Ok(false) => std::thread::sleep(passo),',
      '                Ok(false) => {\n                    let _ = bocchetta.manda(Fatto::DominioQuiescente);\n                    std::thread::sleep(passo);\n                }'),
 
     # --- la coda -------------------------------------------------------------
-    ('M32', "coda: i fatti fermi non si possono piu' raccogliere", CODA,
+    ('mut-32', "coda: i fatti fermi non si possono piu' raccogliere", CODA,
      '    pub(super) fn raccogli_i_fermi(&self) -> Vec<Fatto> {',
      '    #[allow(dead_code)]\n    pub(super) fn raccogli_i_fermi_inutile(&self) -> Vec<Fatto> {'),
 ]

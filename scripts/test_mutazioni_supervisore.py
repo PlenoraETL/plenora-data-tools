@@ -79,7 +79,7 @@ def costruisci_albero(radice):
 VINTO, PERSO, SALTATO = 'vinto', 'perso', 'saltato'
 
 
-class Verbale:
+class Referto:
     """Che cosa si e' preteso, come e' andata, e che cosa non si e' potuto fare."""
 
     def __init__(self):
@@ -116,7 +116,7 @@ class Verbale:
         return vinte == eseguibili
 
 
-def prova_gli_argomenti(verbale, radice):
+def prova_gli_argomenti(referto, radice):
     """Le forme che non devono passare.
 
     Un intervallo vuoto — `0 0`, `33 33`, gli estremi invertiti — eseguirebbe
@@ -138,10 +138,10 @@ def prova_gli_argomenti(verbale, radice):
          'non vuole altri argomenti'),
     ]:
         codice, uscita = esegui(radice, *argomenti)
-        verbale.comando(nome, atteso, testo, codice, uscita)
+        referto.comando(nome, atteso, testo, codice, uscita)
 
 
-def prova_l_impronta(verbale, radice):
+def prova_l_impronta(referto, radice):
     """Che identifichi l'albero, e che rifiuti il vuoto."""
     _, prima = esegui(radice, '--impronta')
     uno = os.path.join(radice, mutazioni.MACC)
@@ -149,21 +149,21 @@ def prova_l_impronta(verbale, radice):
     os.rename(uno, altro)
     _, dopo = esegui(radice, '--impronta')
     os.rename(altro, uno)
-    verbale.esito(
+    referto.esito(
         "rinominare un file cambia l'impronta (stesso numero, stessi contenuti)",
         prima.strip() != dopo.strip(),
         f'{prima.strip()[:12]} contro {dopo.strip()[:12]}')
 
-    prova_la_collisione(verbale)
+    prova_la_collisione(referto)
 
     vuoto = tempfile.mkdtemp(prefix='albero-vuoto-')
     try:
         codice, uscita = esegui(vuoto, '--impronta')
-        verbale.comando('una radice senza crates/ e\' rifiutata', 1,
+        referto.comando('una radice senza crates/ e\' rifiutata', 1,
                         'AlberoSenzaSorgenti', codice, uscita)
         os.makedirs(os.path.join(vuoto, 'crates'))
         codice, uscita = esegui(vuoto, '--impronta')
-        verbale.comando('una radice senza sorgenti e\' rifiutata', 1,
+        referto.comando('una radice senza sorgenti e\' rifiutata', 1,
                         'AlberoSenzaSorgenti', codice, uscita)
     finally:
         shutil.rmtree(vuoto, ignore_errors=True)
@@ -182,7 +182,7 @@ def flusso_senza_lunghezze(radice):
     return b''.join(pezzi)
 
 
-def prova_la_collisione(verbale):
+def prova_la_collisione(referto):
     """**Due alberi diversi che la vecchia codifica non distingue.**
 
     Il primo ha due file; il secondo ne ha uno solo, il cui contenuto porta
@@ -206,21 +206,21 @@ def prova_la_collisione(verbale):
         scrivi(os.path.join(uno, 'crates', 'a.rs'),
                'Z' + 'crates/b.rs' + '\0' + 'W')
 
-        verbale.esito(
+        referto.esito(
             'la vecchia codifica dava lo stesso flusso a due alberi diversi',
             flusso_senza_lunghezze(due) == flusso_senza_lunghezze(uno),
             'i due flussi differiscono: il caso non misura piu\' niente')
 
         con_due = mutazioni.impronta(due)
         con_uno = mutazioni.impronta(uno)
-        verbale.esito(
+        referto.esito(
             'le lunghezze prefissate li distinguono',
             con_due != con_uno, f'{con_due[:12]} contro {con_uno[:12]}')
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
 
-def prova_il_nipote_superstite(verbale, radice):
+def prova_il_nipote_superstite(referto, radice):
     """**Un nipote vivo dopo un'uscita ordinaria viene trovato e tolto.**
 
     E' la classe di difetto che questi mutanti cercano nel supervisore, e sarebbe
@@ -237,7 +237,7 @@ def prova_il_nipote_superstite(verbale, radice):
     inflazione che l'elenco canonico dei mutanti esiste per impedire.
     """
     if os.name != 'posix':
-        verbale.salta('il nipote superstite viene trovato e tolto',
+        referto.salta('il nipote superstite viene trovato e tolto',
                       'i gruppi di processi sono di POSIX, e qui non ci sono')
         return
 
@@ -259,28 +259,28 @@ def prova_il_nipote_superstite(verbale, radice):
         (mutazioni.COMANDO_BASE, mutazioni.RADICE, mutazioni.USCITA) = (
             comando, radice_vera, uscita_vera)
 
-    verbale.esito('il comando finto esce con successo', codice == 0, f'codice {codice}')
-    verbale.esito('e il gruppo risulta comunque raccolto', raccolto)
-    verbale.esito(
+    referto.esito('il comando finto esce con successo', codice == 0, f'codice {codice}')
+    referto.esito('e il gruppo risulta comunque raccolto', raccolto)
+    referto.esito(
         'perche\' il nipote e\' stato trovato e tolto',
         not os.path.exists(f'/proc/{nipote}'),
         f'il pid {nipote} e\' ancora li\'')
 
 
-def prova_la_baseline(verbale, radice):
+def prova_la_baseline(referto, radice):
     """Che si verifichi, e che resti dov'e' invece di essere rimpiazzata."""
     codice, uscita = esegui(radice, '--prepara', 'a' * 64)
-    verbale.comando('prepara con impronta sbagliata rifiuta', 1,
+    referto.comando('prepara con impronta sbagliata rifiuta', 1,
                     "NON E' QUELLO DICHIARATO", codice, uscita)
 
     _, vera = esegui(radice, '--impronta')
     firma = vera.strip()
     codice, uscita = esegui(radice, '--prepara', firma)
-    verbale.comando('prepara con impronta giusta fissa la baseline', 0,
+    referto.comando('prepara con impronta giusta fissa la baseline', 0,
                     'baseline fissata', codice, uscita)
 
     codice, uscita = esegui(radice, '--prepara', firma)
-    verbale.comando('prepara due volte verifica e non sovrascrive', 0,
+    referto.comando('prepara due volte verifica e non sovrascrive', 0,
                     "gia' presente, verificata", codice, uscita)
 
     copia = os.path.join(radice + '-baseline', mutazioni.MACC)
@@ -288,12 +288,12 @@ def prova_la_baseline(verbale, radice):
     originale = io.open(copia, encoding='utf-8').read()
     scrivi(copia, originale + '\n// alterazione\n')
     codice, uscita = esegui(radice, '1', '1')
-    verbale.comando('baseline alterata ferma il giro', 2, 'BASELINE ALTERATA',
+    referto.comando('baseline alterata ferma il giro', 2, 'BASELINE ALTERATA',
                     codice, uscita)
     scrivi(copia, originale)
 
 
-def prova_la_riparazione(verbale, radice):
+def prova_la_riparazione(referto, radice):
     """Che riconosca, che ripari, e che non tocchi cio' che non riconosce."""
     bersaglio = os.path.join(radice, mutazioni.MACC)
     sano = io.open(bersaglio, encoding='utf-8').read()
@@ -301,9 +301,9 @@ def prova_la_riparazione(verbale, radice):
     estraneo = sano + '\n// una modifica che nessun mutante spiega\n'
     scrivi(bersaglio, estraneo)
     codice, uscita = esegui(radice, '1', '1')
-    verbale.comando('stato non riconosciuto ferma il giro', 2,
+    referto.comando('stato non riconosciuto ferma il giro', 2,
                     'ALBERO NON RICONOSCIUTO', codice, uscita)
-    verbale.esito('e il file estraneo non viene sovrascritto',
+    referto.esito('e il file estraneo non viene sovrascritto',
                   io.open(bersaglio, encoding='utf-8').read() == estraneo)
     scrivi(bersaglio, sano)
 
@@ -312,48 +312,48 @@ def prova_la_riparazione(verbale, radice):
     testo = io.open(percorso, encoding='utf-8').read()
     scrivi(percorso, testo.replace(frammento, mutato))
     codice, uscita = esegui(radice, '1', '1')
-    verbale.esito('una mutazione nota si riconosce e si ripara',
+    referto.esito('una mutazione nota si riconosce e si ripara',
                   f'riparato: restava {identificativo}' in uscita,
                   f'codice {codice}', uscita)
-    verbale.esito('e il file torna alla baseline',
+    referto.esito('e il file torna alla baseline',
                   io.open(percorso, encoding='utf-8').read() == testo)
 
 
-def prova_i_preflight(verbale):
+def prova_i_preflight(referto):
     """Che l'elenco sia canonico, e che i trentadue alberi siano distinti.
 
     Si chiamano in diretta invece che dal processo, perche' cio' che si vuole
     provare qui e' la regola — e la regola la si legge meglio dal suo valore di
     ritorno che da una riga di testo.
     """
-    verbale.esito("l'elenco della tabella e' canonico",
+    referto.esito("l'elenco della tabella e' canonico",
                   mutazioni.elenco_e_canonico())
-    verbale.esito('i mutanti sono trentadue',
+    referto.esito('i mutanti sono trentadue',
                   len(mutazioni.MUTANTI) == len(mutazioni.IDENTIFICATORI) == 32,
                   f'{len(mutazioni.MUTANTI)} nella tabella')
 
 
-def prova_la_distinzione(verbale, radice):
+def prova_la_distinzione(referto, radice):
     """Due mutanti che producono lo stesso albero fermano il giro.
 
     Si costruisce il caso invece di sperarlo: si duplica il primo mutante con un
     identificativo suo, e si pretende che il preflight lo dica.
     """
     attesa = mutazioni.impronta(radice)
-    verbale.esito('sull\'albero finto i trentadue alberi mutati sono distinti',
+    referto.esito('sull\'albero finto i trentadue alberi mutati sono distinti',
                   mutazioni.tutti_i_mutanti_sono_distinti(radice, attesa))
 
     tabella = list(mutazioni.MUTANTI)
     identificativo, nome, relativo, sano, malato = tabella[0]
-    tabella.append(('M99', nome + ' (copia)', relativo, sano, malato))
+    tabella.append(('mut-99', nome + ' (copia)', relativo, sano, malato))
     originale = mutazioni.MUTANTI
     try:
         mutazioni.MUTANTI = tabella
-        verbale.esito('due mutanti con lo stesso albero vengono rifiutati',
+        referto.esito('due mutanti con lo stesso albero vengono rifiutati',
                       not mutazioni.tutti_i_mutanti_sono_distinti(radice, attesa))
         # E un mutante che non muta niente: la baseline stessa.
         mutazioni.MUTANTI = [(identificativo, nome, relativo, sano, sano)]
-        verbale.esito('un mutante che non muta niente viene rifiutato',
+        referto.esito('un mutante che non muta niente viene rifiutato',
                       not mutazioni.tutti_i_mutanti_sono_distinti(radice, attesa))
     finally:
         mutazioni.MUTANTI = originale
@@ -363,19 +363,19 @@ def principale():
     base = tempfile.mkdtemp(prefix='prova-mutazioni-')
     radice = os.path.join(base, 'albero')
     costruisci_albero(radice)
-    verbale = Verbale()
+    referto = Referto()
     try:
-        prova_i_preflight(verbale)
-        prova_gli_argomenti(verbale, radice)
-        prova_l_impronta(verbale, radice)
-        prova_la_distinzione(verbale, radice)
-        prova_il_nipote_superstite(verbale, radice)
-        prova_la_baseline(verbale, radice)
-        prova_la_riparazione(verbale, radice)
+        prova_i_preflight(referto)
+        prova_gli_argomenti(referto, radice)
+        prova_l_impronta(referto, radice)
+        prova_la_distinzione(referto, radice)
+        prova_il_nipote_superstite(referto, radice)
+        prova_la_baseline(referto, radice)
+        prova_la_riparazione(referto, radice)
     finally:
         shutil.rmtree(base, ignore_errors=True)
         shutil.rmtree(radice + '-baseline', ignore_errors=True)
-    return 0 if verbale.racconta() else 1
+    return 0 if referto.racconta() else 1
 
 
 if __name__ == '__main__':
