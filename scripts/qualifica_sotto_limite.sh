@@ -38,7 +38,47 @@ set -Eeuo pipefail
 RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RADICE"
 
-TARGET_PRODUZIONE="$RADICE/target-immagine-produzione"
+# Le due cache di questo script sono **root-only**, e vanno dette cosi'.
+#
+# PERCHE' NON SI RIUSANO QUELLE ORDINARIE
+#
+#   Perche' questo script gira come root, e cargo scrive gli artefatti con
+#   l'utente che lo esegue: una cache condivisa con un percorso non privilegiato
+#   torna a quel percorso piena di file di root, e il comando successivo non
+#   riesce nemmeno ad aprire `.cargo-build-lock`. Il sintomo — `Permission
+#   denied` su un lock — non somiglia alla causa, che e' una cache contaminata da
+#   un giro di prima.
+#
+#   E' la stessa forma del difetto chiuso in `coverage.sh`: chi scrive come root
+#   lascia file che l'utente non puo' togliere. Li' la pulizia e' andata dove sta
+#   lo scrittore; qui lo scrittore prende una cache sua.
+#
+# PERCHE' DUE E NON UNA
+#
+#   Perche' l'immagine di produzione si compila **senza** `internals` ed e'
+#   l'unica di cui questa qualificazione parli: condividere la cache con la build
+#   che porta `internals` le darebbe un vicino capace di sostituirle un
+#   artefatto. Il controllo sul digest se ne accorgerebbe, ma e' meglio che non
+#   possa accadere.
+#
+#   Quella di qualificazione la condivide invece con `verifica_isolamento_linux.sh`,
+#   che e' l'altro percorso privilegiato e costruisce la stessa immagine con gli
+#   stessi flag: due cache separate ricompilerebbero due volte lo stesso
+#   artefatto.
+#
+# PERCHE' RESTANO SUL DISCO
+#
+#   Perche' le mutazioni del qualificatore lanciano questo script sei volte, e
+#   ricompilare sei volte da zero non aggiunge niente a cio' che si misura. Sono
+#   artefatti ricostruibili e di root: nessun comando ordinario li nomina, ed e'
+#   cio' che li rende innocui.
+TARGET_PRODUZIONE="$RADICE/target-isolamento-root-produzione"
+TARGET_QUALIFICAZIONE="$RADICE/target-isolamento-root-qualificazione"
+
+# Niente artefatti incrementali in queste cache: crescono a ogni giro senza
+# servire a nessuna misura, e su una macchina di qualificazione il disco pieno
+# non si presenta come disco pieno.
+export CARGO_INCREMENTAL=0
 TETTO_BYTE=$((512 * 1024 * 1024))
 NOME="plenora-sotto-limite-$$"
 
@@ -236,8 +276,9 @@ echo "digest:  $DIGEST"
 
 echo "== immagine di qualificazione (supervisore e spawner) =="
 RUSTFLAGS='--cfg qualificazione_isolamento' \
+  CARGO_TARGET_DIR="$TARGET_QUALIFICAZIONE" \
   cargo build --locked --features internals --example qualificazione_isolamento
-SUPERVISORE="$RADICE/target/debug/examples/qualificazione_isolamento"
+SUPERVISORE="$TARGET_QUALIFICAZIONE/debug/examples/qualificazione_isolamento"
 
 # --- il dominio -------------------------------------------------------------
 echo "== dominio =="

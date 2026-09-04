@@ -2126,6 +2126,25 @@ due e distinte: il **supervisore** è quello di qualificazione, perché è lui c
 produzione, compilata senza `internals` in un target proprio e fissata da uno
 SHA-256, ed è l'unica di cui questa qualificazione parli.
 
+**Le cache di compilazione dei percorsi privilegiati sono separate, e
+root-only.** `cargo` scrive gli artefatti con l'utente che lo esegue: un percorso
+che gira come root e compila nella cache ordinaria la restituisce piena di file
+di root, e il primo comando non privilegiato che la tocca fallisce con
+`Permission denied` su `.cargo-build-lock` — un sintomo che non somiglia alla
+causa. È la stessa forma del difetto chiuso in `coverage.sh`, dove la pulizia è
+andata dove sta lo scrittore; qui lo scrittore prende una cache sua.
+
+I due percorsi privilegiati — la qualificazione sotto limite e il gate ostile —
+usano perciò `target-isolamento-root-qualificazione`, **condivisa** perché
+costruiscono la stessa immagine con gli stessi flag, e la qualificazione sotto
+limite usa in più `target-isolamento-root-produzione` per l'immagine senza
+`internals`: separata, così che una build con `internals` non possa sostituire un
+artefatto all'immagine che si sta qualificando. Restano sul disco perché le
+mutazioni del qualificatore rilanciano lo script sei volte; sono ricostruibili,
+sono di root, e **nessun comando ordinario le nomina**. La controprova che la
+separazione tenga è eseguire, subito dopo un giro privilegiato, `cargo test` e
+`qualifica_worker_reale.sh` da utente normale.
+
 **Perché serve root, e che cosa non implica.** Root delega il sottoalbero
 `cgroup2` e crea il dominio, che resta **del control plane**. Il worker no: gira
 con le credenziali che gli si passano, e il preflight pretende l'opposto del

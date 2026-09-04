@@ -386,13 +386,35 @@ esac
 RUSTFLAGS_EREDITATI="${RUSTFLAGS:-}"
 RUSTFLAGS_EFFETTIVI="$RUSTFLAGS_EREDITATI --cfg qualificazione_isolamento"
 
+# La cache di questa build e' **root-only**, perche' questo gate gira come root.
+#
+# PERCHE' NON IL `target/` ordinario
+#
+#   Perche' cargo scrive gli artefatti con l'utente che lo esegue: usando la
+#   cache condivisa, il giro successivo non privilegiato la ritrova piena di file
+#   di root e non riesce nemmeno ad aprire `.cargo-build-lock`. Il sintomo —
+#   `Permission denied` su un lock — non somiglia alla causa, che e' una cache
+#   contaminata da un giro di prima.
+#
+#   La cache la condivide con `qualifica_sotto_limite.sh`, che e' l'altro
+#   percorso privilegiato e costruisce la **stessa** immagine con gli stessi
+#   flag: due cache separate ricompilerebbero due volte lo stesso artefatto.
+#   Resta separata invece da quella dell'immagine di produzione, che si compila
+#   senza `internals`.
+#
+#   Un `CARGO_TARGET_DIR` esterno vince, perche' chi orchestra piu' gate puo'
+#   volerlo scegliere: e' un override, non il default.
+CACHE_ROOT="${CARGO_TARGET_DIR:-$PWD/target-isolamento-root-qualificazione}"
+
 nota "costruisco l'immagine di qualificazione ($PROFILO)"
 RUSTFLAGS="$RUSTFLAGS_EFFETTIVI" \
+  CARGO_TARGET_DIR="$CACHE_ROOT" \
+  CARGO_INCREMENTAL=0 \
   cargo build --locked --features internals --profile "$PROFILO" \
   --example qualificazione_isolamento >/dev/null \
   || manca "l'immagine di qualificazione non si costruisce"
 
-SORGENTE_IMMAGINE="${CARGO_TARGET_DIR:-target}/$SOTTODIRECTORY/examples/qualificazione_isolamento"
+SORGENTE_IMMAGINE="$CACHE_ROOT/$SOTTODIRECTORY/examples/qualificazione_isolamento"
 [ -x "$SORGENTE_IMMAGINE" ] || manca "l'immagine costruita non si trova in $SORGENTE_IMMAGINE"
 
 # --- lo spazio di lavoro ------------------------------------------------------
@@ -582,6 +604,13 @@ calcola_identita
   printf 'worker=%s:%s\n' "$WORKER_UID" "$WORKER_GID"
   printf 'tetto=%s\n' "$TETTO_BYTE"
   printf 'profilo=%s\n' "$PROFILO"
+  # La cache di compilazione, per **percorso effettivo**: il chiamante puo'
+  # imporla con `CARGO_TARGET_DIR`, ed e' un'autorita' esplicita che il referto
+  # deve riportare. Senza, chi rilegge l'evidenza non saprebbe da quale albero
+  # di artefatti e' uscita l'immagine che il gate ha misurato.
+  printf 'cache_di_compilazione=%s\n' "$CACHE_ROOT"
+  printf 'cache_imposta_dal_chiamante=%s\n' \
+    "$(if [ -n "${CARGO_TARGET_DIR:-}" ]; then echo si; else echo no; fi)"
   printf 'subtree_control_prima=%s\n' "$SUBTREE_PRIMA"
   printf 'memory_abilitato_dal_gate=%s\n' "$MEMORY_ABILITATO_DA_NOI"
   stampa_identita

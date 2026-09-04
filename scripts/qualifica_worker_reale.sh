@@ -59,6 +59,32 @@ set -Eeuo pipefail
 RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RADICE"
 
+# Questo percorso **rifiuta** root, e il rifiuto arriva prima di ogni build.
+#
+# PERCHE' NON BASTA LA CONVENZIONE
+#
+#   Perche' «questo script si lancia da utente» e' una frase, e una frase non
+#   ferma un `sudo`. Le due cache qui sotto appartengono al percorso non
+#   privilegiato; `cargo` scrive gli artefatti con l'utente che lo esegue, quindi
+#   un solo giro fatto come root le riempie di file che l'utente non puo' piu'
+#   toccare. Il comando successivo non fallisce dicendo «cache di root»: fallisce
+#   con `Permission denied` su `.cargo-build-lock`, che somiglia a tutt'altro.
+#
+# PERCHE' PRIMA DI QUALUNQUE COMPILAZIONE
+#
+#   Perche' un rifiuto che arrivasse dopo avrebbe gia' contaminato cio' che deve
+#   proteggere. Qui non si e' ancora creato niente.
+#
+#   I percorsi in cui root serve davvero — la qualificazione sotto limite e il
+#   gate ostile — hanno cache proprie, dichiarate root-only.
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "questo percorso non richiede privilegi, e come root non deve girare:" >&2
+  echo "  le due cache che usa — target-qualificazione e target-immagine-produzione —" >&2
+  echo "  appartengono al percorso non privilegiato, e root le renderebbe" >&2
+  echo "  inutilizzabili per l'utente che le trovera' dopo." >&2
+  exit 2
+fi
+
 TARGET_PRODUZIONE="$RADICE/target-immagine-produzione"
 TARGET_HARNESS="$RADICE/target-qualificazione"
 
