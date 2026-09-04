@@ -89,6 +89,8 @@ mod lettura;
 mod macchina;
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
+#[cfg(any(test, feature = "internals"))]
+mod sorgente;
 #[cfg(target_os = "linux")]
 mod spawner;
 

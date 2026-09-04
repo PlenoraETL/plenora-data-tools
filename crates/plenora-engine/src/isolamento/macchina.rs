@@ -959,7 +959,6 @@ fn forma_di_dominio(forma: FormaPanicSulFilo) -> crate::classificazione::FormaDe
 mod coda;
 mod conduzione;
 mod produttori;
-mod sorgente;
 
 #[cfg(test)]
 mod tests;

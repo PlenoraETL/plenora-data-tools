@@ -53,7 +53,7 @@ use super::produttori::{
     avvia_lettore, avvia_orologio, avvia_sorvegliante, Annullatore, CanaleOperativo, Difetto,
     Osservatore, Resoconto,
 };
-use super::sorgente::Freno;
+use crate::isolamento::sorgente::Freno;
 use super::{EsitoDelSupervisore, Fatto, Impedimento, Registro, UscitaOsservata};
 
 /// Ogni quanto il consumatore torna a guardare se e' ora di chiudere.

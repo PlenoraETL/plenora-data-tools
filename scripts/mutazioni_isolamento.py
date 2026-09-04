@@ -119,9 +119,9 @@ corso.
 
 # Uso
 
-    python3 scripts/mutazioni_supervisore.py --impronta
-    python3 scripts/mutazioni_supervisore.py --prepara <impronta-attesa>
-    python3 scripts/mutazioni_supervisore.py [primo [ultimo]]
+    python3 scripts/mutazioni_isolamento.py --impronta
+    python3 scripts/mutazioni_isolamento.py --prepara <impronta-attesa>
+    python3 scripts/mutazioni_isolamento.py [primo [ultimo]]
 
 `--impronta` stampa l'impronta dell'albero Rust corrente, che e' cio' che
 `--prepara` pretende. Senza quell'argomento `--prepara` rifiuta: una baseline
@@ -154,7 +154,7 @@ BASELINE = RADICE + '-baseline'
 USCITA = os.path.join(os.path.dirname(BASELINE), 'mutante-uscita.txt')
 
 #: Il comando della batteria. E' una costante e non una riga scritta dentro
-#: [`esegui`] perche' i casi di `test_mutazioni_supervisore.py` la sostituiscono
+#: [`esegui`] perche' i casi di `test_mutazioni_isolamento.py` la sostituiscono
 #: con un comando che lascia un nipote vivo: la regola sui superstiti si prova
 #: cosi', in un secondo, invece che sperando in un mutante che si comporti male.
 COMANDO_BASE = ['cargo', 'test', '-p', 'plenora-engine', '--lib', '--locked']

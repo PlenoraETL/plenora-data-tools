@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Le difese di `mutazioni_supervisore.py`, provate su un albero finto.
+"""Le difese di `mutazioni_isolamento.py`, provate su un albero finto.
 
 # Perche' esiste
 
@@ -20,7 +20,7 @@ non viene mai aperto in scrittura.
 
 # Uso
 
-    python3 scripts/test_mutazioni_supervisore.py
+    python3 scripts/test_mutazioni_isolamento.py
 """
 import importlib.util
 import io
@@ -31,7 +31,7 @@ import sys
 import tempfile
 
 QUI = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(QUI, 'mutazioni_supervisore.py')
+SCRIPT = os.path.join(QUI, 'mutazioni_isolamento.py')
 
 _specifica = importlib.util.spec_from_file_location('mutazioni', SCRIPT)
 mutazioni = importlib.util.module_from_spec(_specifica)

@@ -1889,7 +1889,7 @@ prima e dopo il cambio nello stesso processo.
 
 ### Le mutazioni sul supervisore: la batteria discrimina, oppure non prova
 
-`scripts/mutazioni_supervisore.py` è l'altra qualificazione manuale, e risponde
+`scripts/mutazioni_isolamento.py` è l'altra qualificazione manuale, e risponde
 a una domanda che il verde non risponde. Una batteria verde dice che il codice
 passa i propri casi; non dice che i casi **distinguano**. Un caso che non guarda
 la proprietà che dichiara resta verde anche quando quella proprietà sparisce.
@@ -1991,7 +1991,7 @@ modo di sbagliarla:
 - **l'impronta si riverifica dopo ogni mutante**, e alla prima differenza il
   giro si ferma.
 
-`scripts/test_mutazioni_supervisore.py` prova queste difese su un albero finto
+`scripts/test_mutazioni_isolamento.py` prova queste difese su un albero finto
 costruito dalla tabella dei mutanti stessa: dura secondi, non compila niente, e
 si esegue ovunque: **30/30 difese eseguibili su Linux, 0 saltate**, e **27/27
 su Windows, una saltata**.
