@@ -213,6 +213,10 @@ pub mod prepare;
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 mod protocollo;
+// Quale implementazione risolve i CRS in questa build, detto in un posto
+// solo. Privato: e' una decisione interna, e la superficie pubblica non deve
+// dipendere da quale backend c'e' sotto.
+mod risolutore;
 pub mod table_engine;
 pub mod temp_store;
 // Il verificatore dell'artefatto ha lo stesso perimetro del protocollo, e per

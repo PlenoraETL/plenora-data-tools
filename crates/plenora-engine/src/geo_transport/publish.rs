@@ -27,10 +27,10 @@ use plenora_core::catalog::{find_operation, CrsRequirement};
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
 
-#[cfg(not(feature = "proj-backend"))]
-use plenora_core::crs::resolve_crs;
-#[cfg(feature = "proj-backend")]
-use plenora_kernels_geo::crs::resolve_crs;
+// La scelta dell'implementazione sta in un posto solo: due copie di due
+// `cfg` sono due occasioni di divergere, e chi risolve i CRS deve essere chi
+// il programma dichiara di essere.
+use crate::risolutore::risolvi as resolve_crs;
 
 use super::transport::{ArrowOperation, PairArrowSchema, TransformArrowSchema};
 
